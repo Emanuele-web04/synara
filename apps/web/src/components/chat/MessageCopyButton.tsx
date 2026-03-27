@@ -9,10 +9,12 @@ export const MessageCopyButton = memo(function MessageCopyButton({ text }: { tex
   return (
     <Button
       type="button"
-      size="xs"
-      variant="outline"
+      size="icon-xs"
+      variant="ghost"
+      className="size-auto rounded-none border-0 bg-transparent p-0 text-muted-foreground/55 shadow-none hover:bg-transparent hover:text-foreground focus-visible:ring-0 focus-visible:ring-offset-0"
       onClick={() => copyToClipboard(text)}
       title="Copy message"
+      aria-label="Copy message"
     >
       {isCopied ? <CheckIcon className="size-3 text-success" /> : <CopyIcon className="size-3" />}
     </Button>

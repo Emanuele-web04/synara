@@ -43,6 +43,52 @@ beforeAll(() => {
 });
 
 describe("MessagesTimeline", () => {
+  it("renders user message metadata outside the bubble shell", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        scrollContainer={null}
+        timelineEntries={[
+          {
+            id: "entry-1",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-1"),
+              role: "user",
+              text: "ship the fix",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map([[MessageId.makeUnsafe("message-1"), 1]])}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("group flex max-w-[80%] flex-col items-end gap-1.5");
+    expect(markup).toContain("w-full rounded-2xl border border-border/70 bg-secondary px-4 py-3");
+    expect(markup).toContain("text-muted-foreground/45");
+  });
+
   it("renders inline terminal labels with the composer chip UI", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
