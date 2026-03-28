@@ -24,10 +24,16 @@ const decodeResolvedRule = Schema.decodeUnknownEffect(ResolvedKeybindingRule as 
 it.effect("parses keybinding rules", () =>
   Effect.gen(function* () {
     const parsed = yield* decode(KeybindingRule, {
+      key: "mod+b",
+      command: "sidebar.toggle",
+    });
+    assert.strictEqual(parsed.command, "sidebar.toggle");
+
+    const parsedTerminalToggle = yield* decode(KeybindingRule, {
       key: "mod+j",
       command: "terminal.toggle",
     });
-    assert.strictEqual(parsed.command, "terminal.toggle");
+    assert.strictEqual(parsedTerminalToggle.command, "terminal.toggle");
 
     const parsedClose = yield* decode(KeybindingRule, {
       key: "mod+w",
@@ -35,11 +41,29 @@ it.effect("parses keybinding rules", () =>
     });
     assert.strictEqual(parsedClose.command, "terminal.close");
 
+    const parsedWorkspaceTerminal = yield* decode(KeybindingRule, {
+      key: "mod+1",
+      command: "terminal.workspace.terminal",
+    });
+    assert.strictEqual(parsedWorkspaceTerminal.command, "terminal.workspace.terminal");
+
+    const parsedWorkspaceChat = yield* decode(KeybindingRule, {
+      key: "mod+2",
+      command: "terminal.workspace.chat",
+    });
+    assert.strictEqual(parsedWorkspaceChat.command, "terminal.workspace.chat");
+
     const parsedDiffToggle = yield* decode(KeybindingRule, {
       key: "mod+d",
       command: "diff.toggle",
     });
     assert.strictEqual(parsedDiffToggle.command, "diff.toggle");
+
+    const parsedBrowserToggle = yield* decode(KeybindingRule, {
+      key: "mod+shift+b",
+      command: "browser.toggle",
+    });
+    assert.strictEqual(parsedBrowserToggle.command, "browser.toggle");
 
     const parsedLocal = yield* decode(KeybindingRule, {
       key: "mod+shift+n",

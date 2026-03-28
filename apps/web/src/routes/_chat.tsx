@@ -4,6 +4,7 @@ import { Outlet, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect } from "react";
 
 import ThreadSidebar from "../components/Sidebar";
+import { isElectron } from "../env";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
@@ -12,7 +13,7 @@ import { selectThreadTerminalState, useTerminalStateStore } from "../terminalSta
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { resolveSidebarNewThreadEnvMode } from "~/components/Sidebar.logic";
 import { useAppSettings } from "~/appSettings";
-import { Sidebar, SidebarProvider, SidebarRail } from "~/components/ui/sidebar";
+import { Sidebar, SidebarProvider, SidebarRail, useSidebar } from "~/components/ui/sidebar";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_SIDEBAR_WIDTH_STORAGE_KEY = "chat_thread_sidebar_width";
@@ -20,6 +21,8 @@ const THREAD_SIDEBAR_MIN_WIDTH = 13 * 16;
 const THREAD_MAIN_CONTENT_MIN_WIDTH = 40 * 16;
 
 function ChatRouteGlobalShortcuts() {
+  const navigate = useNavigate();
+  const { toggleSidebar } = useSidebar();
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
   const selectedThreadIdsSize = useThreadSelectionStore((state) => state.selectedThreadIds.size);
   const { activeDraftThread, activeThread, handleNewThread, projects, routeThreadId } =
@@ -43,17 +46,26 @@ function ChatRouteGlobalShortcuts() {
         return;
       }
 
-      const projectId = activeThread?.projectId ?? activeDraftThread?.projectId ?? projects[0]?.id;
-      if (!projectId) return;
-
       const command = resolveShortcutCommand(event, keybindings, {
         context: {
           terminalFocus: isTerminalFocused(),
           terminalOpen,
         },
       });
+      if (command === "sidebar.toggle") {
+        if (!isElectron) return;
+        event.preventDefault();
+        event.stopPropagation();
+        toggleSidebar();
+        return;
+      }
+
+      if (!command) return;
 
       if (command === "chat.newLocal") {
+        const projectId =
+          activeThread?.projectId ?? activeDraftThread?.projectId ?? projects[0]?.id;
+        if (!projectId) return;
         event.preventDefault();
         event.stopPropagation();
         void handleNewThread(projectId, {
@@ -65,6 +77,8 @@ function ChatRouteGlobalShortcuts() {
       }
 
       if (command !== "chat.new") return;
+      const projectId = activeThread?.projectId ?? activeDraftThread?.projectId ?? projects[0]?.id;
+      if (!projectId) return;
       event.preventDefault();
       event.stopPropagation();
       void handleNewThread(projectId, {
@@ -74,9 +88,9 @@ function ChatRouteGlobalShortcuts() {
       });
     };
 
-    window.addEventListener("keydown", onWindowKeyDown);
+    window.addEventListener("keydown", onWindowKeyDown, { capture: true });
     return () => {
-      window.removeEventListener("keydown", onWindowKeyDown);
+      window.removeEventListener("keydown", onWindowKeyDown, { capture: true });
     };
   }, [
     activeDraftThread,
@@ -87,14 +101,9 @@ function ChatRouteGlobalShortcuts() {
     projects,
     selectedThreadIdsSize,
     terminalOpen,
+    toggleSidebar,
     appSettings.defaultThreadEnvMode,
   ]);
-
-  return null;
-}
-
-function ChatRouteLayout() {
-  const navigate = useNavigate();
 
   useEffect(() => {
     const onMenuAction = window.desktopBridge?.onMenuAction;
@@ -103,6 +112,10 @@ function ChatRouteLayout() {
     }
 
     const unsubscribe = onMenuAction((action) => {
+      if (action === "toggle-sidebar") {
+        toggleSidebar();
+        return;
+      }
       if (action !== "open-settings") return;
       void navigate({ to: "/settings" });
     });
@@ -110,15 +123,22 @@ function ChatRouteLayout() {
     return () => {
       unsubscribe?.();
     };
-  }, [navigate]);
+  }, [navigate, toggleSidebar]);
 
+  return null;
+}
+
+function ChatRouteLayout() {
   return (
     <SidebarProvider defaultOpen>
       <ChatRouteGlobalShortcuts />
       <Sidebar
         side="left"
         collapsible="offcanvas"
-        className="border-r border-border bg-card text-foreground"
+        className="text-foreground"
+        gapClassName="overflow-hidden after:absolute after:inset-y-0 after:right-0 after:w-px after:bg-white/[0.025] dark:after:bg-white/[0.03]"
+        innerClassName="border-r border-white/[0.04] dark:border-white/[0.03]"
+        transparentSurface
         resizable={{
           minWidth: THREAD_SIDEBAR_MIN_WIDTH,
           shouldAcceptWidth: ({ nextWidth, wrapper }) =>

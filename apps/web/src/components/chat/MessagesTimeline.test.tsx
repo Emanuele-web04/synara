@@ -84,8 +84,10 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("group flex max-w-[80%] flex-col items-end gap-1.5");
-    expect(markup).toContain("w-full rounded-2xl border border-border/70 bg-secondary px-4 py-3");
+    expect(markup).toContain("group flex flex-col items-end gap-1.5");
+    expect(markup).toContain(
+      "max-w-[80%] self-end rounded-2xl border border-border/70 bg-secondary px-3.5 py-2.5",
+    );
     expect(markup).toContain("text-muted-foreground/45");
   });
 

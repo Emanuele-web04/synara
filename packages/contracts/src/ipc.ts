@@ -47,6 +47,7 @@ import type {
   OrchestrationReadModel,
 } from "./orchestration";
 import { EditorId } from "./editor";
+import type { ThreadId } from "./baseSchemas";
 
 export interface ContextMenuItem<T extends string = string> {
   id: T;
@@ -95,6 +96,65 @@ export interface DesktopUpdateActionResult {
   state: DesktopUpdateState;
 }
 
+export interface BrowserTabState {
+  id: string;
+  url: string;
+  title: string;
+  status: "live" | "suspended";
+  isLoading: boolean;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  faviconUrl: string | null;
+  lastCommittedUrl: string | null;
+  lastError: string | null;
+}
+
+export interface ThreadBrowserState {
+  threadId: ThreadId;
+  open: boolean;
+  activeTabId: string | null;
+  tabs: BrowserTabState[];
+  lastError: string | null;
+}
+
+export interface BrowserOpenInput {
+  threadId: ThreadId;
+  initialUrl?: string;
+}
+
+export interface BrowserThreadInput {
+  threadId: ThreadId;
+}
+
+export interface BrowserTabInput {
+  threadId: ThreadId;
+  tabId: string;
+}
+
+export interface BrowserNavigateInput {
+  threadId: ThreadId;
+  tabId?: string;
+  url: string;
+}
+
+export interface BrowserNewTabInput {
+  threadId: ThreadId;
+  url?: string;
+  activate?: boolean;
+}
+
+export interface BrowserPanelBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface BrowserSetPanelBoundsInput {
+  threadId: ThreadId;
+  bounds: BrowserPanelBounds | null;
+}
+
 export interface DesktopBridge {
   getWsUrl: () => string | null;
   pickFolder: () => Promise<string | null>;
@@ -110,6 +170,22 @@ export interface DesktopBridge {
   downloadUpdate: () => Promise<DesktopUpdateActionResult>;
   installUpdate: () => Promise<DesktopUpdateActionResult>;
   onUpdateState: (listener: (state: DesktopUpdateState) => void) => () => void;
+  browser: {
+    open: (input: BrowserOpenInput) => Promise<ThreadBrowserState>;
+    close: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;
+    hide: (input: BrowserThreadInput) => Promise<void>;
+    getState: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;
+    setPanelBounds: (input: BrowserSetPanelBoundsInput) => Promise<ThreadBrowserState>;
+    navigate: (input: BrowserNavigateInput) => Promise<ThreadBrowserState>;
+    reload: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
+    goBack: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
+    goForward: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
+    newTab: (input: BrowserNewTabInput) => Promise<ThreadBrowserState>;
+    closeTab: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
+    selectTab: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
+    openDevTools: (input: BrowserTabInput) => Promise<void>;
+    onState: (listener: (state: ThreadBrowserState) => void) => () => void;
+  };
 }
 
 export interface NativeApi {
@@ -171,5 +247,21 @@ export interface NativeApi {
     ) => Promise<OrchestrationGetFullThreadDiffResult>;
     replayEvents: (fromSequenceExclusive: number) => Promise<OrchestrationEvent[]>;
     onDomainEvent: (callback: (event: OrchestrationEvent) => void) => () => void;
+  };
+  browser: {
+    open: (input: BrowserOpenInput) => Promise<ThreadBrowserState>;
+    close: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;
+    hide: (input: BrowserThreadInput) => Promise<void>;
+    getState: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;
+    setPanelBounds: (input: BrowserSetPanelBoundsInput) => Promise<ThreadBrowserState>;
+    navigate: (input: BrowserNavigateInput) => Promise<ThreadBrowserState>;
+    reload: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
+    goBack: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
+    goForward: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
+    newTab: (input: BrowserNewTabInput) => Promise<ThreadBrowserState>;
+    closeTab: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
+    selectTab: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
+    openDevTools: (input: BrowserTabInput) => Promise<void>;
+    onState: (callback: (state: ThreadBrowserState) => void) => () => void;
   };
 }

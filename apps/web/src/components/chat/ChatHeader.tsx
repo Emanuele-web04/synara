@@ -1,3 +1,8 @@
+// FILE: ChatHeader.tsx
+// Purpose: Renders the chat top bar with project actions and panel toggles.
+// Layer: Chat shell header
+// Depends on: project action controls, git actions, and panel toggle callbacks
+
 import {
   type EditorId,
   type ProjectScript,
@@ -6,13 +11,14 @@ import {
 } from "@t3tools/contracts";
 import { memo } from "react";
 import GitActionsControl from "../GitActionsControl";
-import { DiffIcon, TerminalSquareIcon } from "lucide-react";
+import { DiffIcon, GlobeIcon, TerminalSquareIcon } from "lucide-react";
 import { Badge } from "../ui/badge";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import ProjectScriptsControl, { type NewProjectScriptInput } from "../ProjectScriptsControl";
 import { Toggle } from "../ui/toggle";
 import { SidebarTrigger } from "../ui/sidebar";
 import { OpenInPicker } from "./OpenInPicker";
+import { isElectron } from "~/env";
 
 interface ChatHeaderProps {
   activeThreadId: ThreadId;
@@ -27,7 +33,9 @@ interface ChatHeaderProps {
   terminalAvailable: boolean;
   terminalOpen: boolean;
   terminalToggleShortcutLabel: string | null;
+  browserToggleShortcutLabel: string | null;
   diffToggleShortcutLabel: string | null;
+  browserOpen: boolean;
   gitCwd: string | null;
   diffOpen: boolean;
   onRunProjectScript: (script: ProjectScript) => void;
@@ -36,6 +44,7 @@ interface ChatHeaderProps {
   onDeleteProjectScript: (scriptId: string) => Promise<void>;
   onToggleTerminal: () => void;
   onToggleDiff: () => void;
+  onToggleBrowser: () => void;
 }
 
 export const ChatHeader = memo(function ChatHeader({
@@ -51,7 +60,9 @@ export const ChatHeader = memo(function ChatHeader({
   terminalAvailable,
   terminalOpen,
   terminalToggleShortcutLabel,
+  browserToggleShortcutLabel,
   diffToggleShortcutLabel,
+  browserOpen,
   gitCwd,
   diffOpen,
   onRunProjectScript,
@@ -60,6 +71,7 @@ export const ChatHeader = memo(function ChatHeader({
   onDeleteProjectScript,
   onToggleTerminal,
   onToggleDiff,
+  onToggleBrowser,
 }: ChatHeaderProps) {
   return (
     <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -82,26 +94,34 @@ export const ChatHeader = memo(function ChatHeader({
           </Badge>
         )}
       </div>
-      <div className="@container/header-actions flex min-w-0 flex-1 items-center justify-end gap-2 @sm/header-actions:gap-3">
+      <div className="@container/header-actions flex shrink-0 items-center justify-end gap-2 @sm/header-actions:gap-3">
         {activeProjectScripts && (
-          <ProjectScriptsControl
-            scripts={activeProjectScripts}
-            keybindings={keybindings}
-            preferredScriptId={preferredScriptId}
-            onRunScript={onRunProjectScript}
-            onAddScript={onAddProjectScript}
-            onUpdateScript={onUpdateProjectScript}
-            onDeleteScript={onDeleteProjectScript}
-          />
+          <div className="shrink-0">
+            <ProjectScriptsControl
+              scripts={activeProjectScripts}
+              keybindings={keybindings}
+              preferredScriptId={preferredScriptId}
+              onRunScript={onRunProjectScript}
+              onAddScript={onAddProjectScript}
+              onUpdateScript={onUpdateProjectScript}
+              onDeleteScript={onDeleteProjectScript}
+            />
+          </div>
         )}
         {activeProjectName && (
-          <OpenInPicker
-            keybindings={keybindings}
-            availableEditors={availableEditors}
-            openInCwd={openInCwd}
-          />
+          <div className="shrink-0">
+            <OpenInPicker
+              keybindings={keybindings}
+              availableEditors={availableEditors}
+              openInCwd={openInCwd}
+            />
+          </div>
         )}
-        {activeProjectName && <GitActionsControl gitCwd={gitCwd} activeThreadId={activeThreadId} />}
+        {activeProjectName && (
+          <div className="shrink-0">
+            <GitActionsControl gitCwd={gitCwd} activeThreadId={activeThreadId} />
+          </div>
+        )}
         <Tooltip>
           <TooltipTrigger
             render={
@@ -109,7 +129,7 @@ export const ChatHeader = memo(function ChatHeader({
                 className="shrink-0"
                 pressed={terminalOpen}
                 onPressedChange={onToggleTerminal}
-                aria-label="Toggle terminal drawer"
+                aria-label="Toggle terminal"
                 variant="outline"
                 size="xs"
                 disabled={!terminalAvailable}
@@ -122,10 +142,33 @@ export const ChatHeader = memo(function ChatHeader({
             {!terminalAvailable
               ? "Terminal is unavailable until this thread has an active project."
               : terminalToggleShortcutLabel
-                ? `Toggle terminal drawer (${terminalToggleShortcutLabel})`
-                : "Toggle terminal drawer"}
+                ? `Toggle terminal (${terminalToggleShortcutLabel})`
+                : "Toggle terminal"}
           </TooltipPopup>
         </Tooltip>
+        {isElectron ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Toggle
+                  className="shrink-0"
+                  pressed={browserOpen}
+                  onPressedChange={onToggleBrowser}
+                  aria-label="Toggle browser panel"
+                  variant="outline"
+                  size="xs"
+                >
+                  <GlobeIcon className="size-3" />
+                </Toggle>
+              }
+            />
+            <TooltipPopup side="bottom">
+              {browserToggleShortcutLabel
+                ? `Toggle in-app browser (${browserToggleShortcutLabel})`
+                : "Toggle in-app browser"}
+            </TooltipPopup>
+          </Tooltip>
+        ) : null}
         <Tooltip>
           <TooltipTrigger
             render={

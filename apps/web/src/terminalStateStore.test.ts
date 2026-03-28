@@ -1,16 +1,34 @@
 import { ThreadId } from "@t3tools/contracts";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createJSONStorage } from "zustand/middleware";
 
 import { selectThreadTerminalState, useTerminalStateStore } from "./terminalStateStore";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-1");
+const ORIGINAL_TERMINAL_STORAGE = useTerminalStateStore.persist.getOptions().storage;
 
 describe("terminalStateStore actions", () => {
   beforeEach(() => {
-    if (typeof localStorage !== "undefined") {
-      localStorage.clear();
-    }
+    const storage = new Map<string, string>();
+    const stateStorage = {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        storage.set(key, value);
+      },
+      removeItem: (key: string) => {
+        storage.delete(key);
+      },
+    };
+    useTerminalStateStore.persist.setOptions({
+      storage: createJSONStorage(() => stateStorage),
+    });
     useTerminalStateStore.setState({ terminalStateByThreadId: {} });
+  });
+
+  afterEach(() => {
+    useTerminalStateStore.persist.setOptions({
+      storage: ORIGINAL_TERMINAL_STORAGE,
+    });
   });
 
   it("returns a closed default terminal state for unknown threads", () => {
@@ -20,6 +38,8 @@ describe("terminalStateStore actions", () => {
     );
     expect(terminalState).toEqual({
       terminalOpen: false,
+      presentationMode: "drawer",
+      workspaceActiveTab: "terminal",
       terminalHeight: 280,
       terminalIds: ["default"],
       runningTerminalIds: [],
@@ -44,6 +64,35 @@ describe("terminalStateStore actions", () => {
     expect(terminalState.terminalGroups).toEqual([
       { id: "group-default", terminalIds: ["default", "terminal-2"] },
     ]);
+  });
+
+  it("restores the last-used presentation mode when reopened", () => {
+    const store = useTerminalStateStore.getState();
+    store.setTerminalPresentationMode(THREAD_ID, "workspace");
+    store.setTerminalOpen(THREAD_ID, false);
+    store.setTerminalOpen(THREAD_ID, true);
+
+    const terminalState = selectThreadTerminalState(
+      useTerminalStateStore.getState().terminalStateByThreadId,
+      THREAD_ID,
+    );
+    expect(terminalState.terminalOpen).toBe(true);
+    expect(terminalState.presentationMode).toBe("workspace");
+  });
+
+  it("enters workspace mode on the terminal tab by default", () => {
+    const store = useTerminalStateStore.getState();
+    store.setTerminalPresentationMode(THREAD_ID, "workspace");
+    store.setTerminalWorkspaceTab(THREAD_ID, "chat");
+    store.setTerminalPresentationMode(THREAD_ID, "drawer");
+    store.setTerminalPresentationMode(THREAD_ID, "workspace");
+
+    const terminalState = selectThreadTerminalState(
+      useTerminalStateStore.getState().terminalStateByThreadId,
+      THREAD_ID,
+    );
+    expect(terminalState.presentationMode).toBe("workspace");
+    expect(terminalState.workspaceActiveTab).toBe("terminal");
   });
 
   it("caps splits at four terminals per group", () => {

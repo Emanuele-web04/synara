@@ -8,10 +8,12 @@ import {
 } from "@t3tools/contracts";
 import {
   formatShortcutLabel,
+  isBrowserToggleShortcut,
   isChatNewShortcut,
   isChatNewLocalShortcut,
   isDiffToggleShortcut,
   isOpenFavoriteEditorShortcut,
+  isSidebarToggleShortcut,
   isTerminalClearShortcut,
   isTerminalCloseShortcut,
   isTerminalNewShortcut,
@@ -76,6 +78,11 @@ function compile(bindings: TestBinding[]): ResolvedKeybindingsConfig {
 }
 
 const DEFAULT_BINDINGS = compile([
+  {
+    shortcut: modShortcut("b"),
+    command: "sidebar.toggle",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
   { shortcut: modShortcut("j"), command: "terminal.toggle" },
   {
     shortcut: modShortcut("d"),
@@ -93,8 +100,23 @@ const DEFAULT_BINDINGS = compile([
     whenAst: whenIdentifier("terminalFocus"),
   },
   {
+    shortcut: modShortcut("1"),
+    command: "terminal.workspace.terminal",
+    whenAst: whenIdentifier("terminalWorkspaceOpen"),
+  },
+  {
+    shortcut: modShortcut("2"),
+    command: "terminal.workspace.chat",
+    whenAst: whenIdentifier("terminalWorkspaceOpen"),
+  },
+  {
     shortcut: modShortcut("d"),
     command: "diff.toggle",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
+  {
+    shortcut: modShortcut("b", { shiftKey: true }),
+    command: "browser.toggle",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
   { shortcut: modShortcut("o", { shiftKey: true }), command: "chat.new" },
@@ -214,6 +236,51 @@ describe("split/new/close terminal shortcuts", () => {
   });
 });
 
+describe("workspace terminal tab shortcuts", () => {
+  it("resolves Cmd/Ctrl+1 and Cmd/Ctrl+2 only while the terminal workspace is open", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "1", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalWorkspaceOpen: true },
+      }),
+      "terminal.workspace.terminal",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "2", ctrlKey: true }), DEFAULT_BINDINGS, {
+        platform: "Linux",
+        context: { terminalWorkspaceOpen: true },
+      }),
+      "terminal.workspace.chat",
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "1", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalWorkspaceOpen: false },
+      }),
+    );
+  });
+
+  it("falls back to workspace defaults when the runtime config is missing them", () => {
+    const legacyBindings = DEFAULT_BINDINGS.filter(
+      (binding) =>
+        binding.command !== "terminal.workspace.terminal" &&
+        binding.command !== "terminal.workspace.chat",
+    );
+
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "1", metaKey: true }), legacyBindings, {
+        platform: "MacIntel",
+        context: { terminalWorkspaceOpen: true },
+      }),
+      "terminal.workspace.terminal",
+    );
+    assert.strictEqual(
+      shortcutLabelForCommand(legacyBindings, "terminal.workspace.chat", "Linux"),
+      "Ctrl+2",
+    );
+  });
+});
+
 describe("shortcutLabelForCommand", () => {
   it("returns the most recent binding label", () => {
     const bindings = compile([
@@ -237,6 +304,22 @@ describe("shortcutLabelForCommand", () => {
   it("returns labels for non-terminal commands", () => {
     assert.strictEqual(shortcutLabelForCommand(DEFAULT_BINDINGS, "chat.new", "MacIntel"), "⇧⌘O");
     assert.strictEqual(shortcutLabelForCommand(DEFAULT_BINDINGS, "diff.toggle", "Linux"), "Ctrl+D");
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "sidebar.toggle", "MacIntel"),
+      "⌘B",
+    );
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "browser.toggle", "MacIntel"),
+      "⇧⌘B",
+    );
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "terminal.workspace.terminal", "MacIntel"),
+      "⌘1",
+    );
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "terminal.workspace.chat", "Linux"),
+      "Ctrl+2",
+    );
     assert.strictEqual(
       shortcutLabelForCommand(DEFAULT_BINDINGS, "editor.openFavorite", "Linux"),
       "Ctrl+O",
@@ -296,6 +379,44 @@ describe("chat/editor shortcuts", () => {
         platform: "MacIntel",
         context: { terminalFocus: true },
       }),
+    );
+  });
+
+  it("matches sidebar.toggle shortcut outside terminal focus", () => {
+    assert.isTrue(
+      isSidebarToggleShortcut(event({ key: "b", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+    );
+    assert.isFalse(
+      isSidebarToggleShortcut(event({ key: "b", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: true },
+      }),
+    );
+  });
+
+  it("matches browser.toggle shortcut outside terminal focus", () => {
+    assert.isTrue(
+      isBrowserToggleShortcut(
+        event({ key: "b", metaKey: true, shiftKey: true }),
+        DEFAULT_BINDINGS,
+        {
+          platform: "MacIntel",
+          context: { terminalFocus: false },
+        },
+      ),
+    );
+    assert.isFalse(
+      isBrowserToggleShortcut(
+        event({ key: "b", metaKey: true, shiftKey: true }),
+        DEFAULT_BINDINGS,
+        {
+          platform: "MacIntel",
+          context: { terminalFocus: true },
+        },
+      ),
     );
   });
 });

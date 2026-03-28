@@ -1,5 +1,6 @@
 import {
   type KeybindingCommand,
+  type ResolvedKeybindingRule,
   type KeybindingShortcut,
   type KeybindingWhenNode,
   type ResolvedKeybindingsConfig,
@@ -25,6 +26,39 @@ interface ShortcutMatchOptions {
   platform?: string;
   context?: Partial<ShortcutMatchContext>;
 }
+
+const WORKSPACE_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
+  {
+    command: "terminal.workspace.terminal",
+    shortcut: {
+      key: "1",
+      metaKey: false,
+      ctrlKey: false,
+      shiftKey: false,
+      altKey: false,
+      modKey: true,
+    },
+    whenAst: {
+      type: "identifier",
+      name: "terminalWorkspaceOpen",
+    },
+  },
+  {
+    command: "terminal.workspace.chat",
+    shortcut: {
+      key: "2",
+      metaKey: false,
+      ctrlKey: false,
+      shiftKey: false,
+      altKey: false,
+      modKey: true,
+    },
+    whenAst: {
+      type: "identifier",
+      name: "terminalWorkspaceOpen",
+    },
+  },
+];
 
 const TERMINAL_WORD_BACKWARD = "\u001bb";
 const TERMINAL_WORD_FORWARD = "\u001bf";
@@ -100,11 +134,11 @@ function matchesCommandShortcut(
   return resolveShortcutCommand(event, keybindings, options) === command;
 }
 
-export function resolveShortcutCommand(
+function resolveShortcutCommandFromBindings(
   event: ShortcutEventLike,
   keybindings: ResolvedKeybindingsConfig,
   options?: ShortcutMatchOptions,
-): string | null {
+): KeybindingCommand | null {
   const platform = resolvePlatform(options);
   const context = resolveContext(options);
 
@@ -115,7 +149,33 @@ export function resolveShortcutCommand(
     if (!matchesShortcut(event, binding.shortcut, platform)) continue;
     return binding.command;
   }
+
   return null;
+}
+
+function getFallbackBindings(
+  keybindings: ResolvedKeybindingsConfig,
+): ReadonlyArray<ResolvedKeybindingRule> {
+  const configuredCommands = new Set(keybindings.map((binding) => binding.command));
+  return WORKSPACE_SHORTCUT_FALLBACKS.filter((binding) => !configuredCommands.has(binding.command));
+}
+
+export function resolveShortcutCommand(
+  event: ShortcutEventLike,
+  keybindings: ResolvedKeybindingsConfig,
+  options?: ShortcutMatchOptions,
+): string | null {
+  const explicitCommand = resolveShortcutCommandFromBindings(event, keybindings, options);
+  if (explicitCommand !== null) {
+    return explicitCommand;
+  }
+
+  const fallbackBindings = getFallbackBindings(keybindings);
+  if (fallbackBindings.length === 0) {
+    return null;
+  }
+
+  return resolveShortcutCommandFromBindings(event, fallbackBindings, options);
 }
 
 function formatShortcutKeyLabel(key: string): string {
@@ -163,6 +223,10 @@ export function shortcutLabelForCommand(
     if (!binding || binding.command !== command) continue;
     return formatShortcutLabel(binding.shortcut, platform);
   }
+  for (const binding of getFallbackBindings(keybindings)) {
+    if (binding.command !== command) continue;
+    return formatShortcutLabel(binding.shortcut, platform);
+  }
   return null;
 }
 
@@ -198,12 +262,28 @@ export function isTerminalCloseShortcut(
   return matchesCommandShortcut(event, keybindings, "terminal.close", options);
 }
 
+export function isSidebarToggleShortcut(
+  event: ShortcutEventLike,
+  keybindings: ResolvedKeybindingsConfig,
+  options?: ShortcutMatchOptions,
+): boolean {
+  return matchesCommandShortcut(event, keybindings, "sidebar.toggle", options);
+}
+
 export function isDiffToggleShortcut(
   event: ShortcutEventLike,
   keybindings: ResolvedKeybindingsConfig,
   options?: ShortcutMatchOptions,
 ): boolean {
   return matchesCommandShortcut(event, keybindings, "diff.toggle", options);
+}
+
+export function isBrowserToggleShortcut(
+  event: ShortcutEventLike,
+  keybindings: ResolvedKeybindingsConfig,
+  options?: ShortcutMatchOptions,
+): boolean {
+  return matchesCommandShortcut(event, keybindings, "browser.toggle", options);
 }
 
 export function isChatNewShortcut(

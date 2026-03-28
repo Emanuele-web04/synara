@@ -160,3 +160,13 @@ export function buildExpiredTerminalContextToastCopy(
     description: "Re-add it if you want that terminal output included.",
   };
 }
+
+export function shouldRenderTerminalWorkspace(options: {
+  activeProjectExists: boolean;
+  presentationMode: "drawer" | "workspace";
+  terminalOpen: boolean;
+}): boolean {
+  return (
+    options.terminalOpen && options.presentationMode === "workspace" && options.activeProjectExists
+  );
+}

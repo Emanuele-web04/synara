@@ -49,7 +49,7 @@ import {
 } from "~/lib/terminalContext";
 import { cn } from "~/lib/utils";
 import { type TimestampFormat } from "../../appSettings";
-import { formatShortTimestamp, formatTimestamp } from "../../timestampFormat";
+import { formatShortTimestamp } from "../../timestampFormat";
 import {
   buildInlineTerminalContextText,
   formatInlineTerminalContextLabel,
@@ -361,9 +361,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const canRevertAgentWork = revertTurnCountByUserMessageId.has(row.message.id);
           return (
             <div className="flex justify-end">
-              <div className="group flex max-w-[80%] flex-col items-end gap-1.5">
+              <div className="group flex flex-col items-end gap-1">
                 {/* Keep user-message chrome outside the bubble so the message reads as one simple block. */}
-                <div className="w-full rounded-2xl border border-border/70 bg-secondary px-3.5 py-2.5">
+                <div className="max-w-[80%] self-end rounded-xl border border-border/70 bg-secondary px-4 py-2">
                   {userImages.length > 0 && (
                     <div className="mb-2 grid max-w-[420px] grid-cols-2 gap-2">
                       {userImages.map(
@@ -410,9 +410,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   )}
                 </div>
                 <div className="flex items-center justify-end gap-1.5 pr-0.5">
-                  <p className="text-right text-[10px] text-muted-foreground/45">
-                    {formatShortTimestamp(row.message.createdAt, timestampFormat)}
-                  </p>
                   <div className="flex items-center gap-1 opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover:opacity-100">
                     {displayedUserMessage.copyText && (
                       <MessageCopyButton text={displayedUserMessage.copyText} />
@@ -432,6 +429,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       </Button>
                     )}
                   </div>
+                  <p className="text-right font-mono text-[10px] text-muted-foreground/45">
+                    {formatShortTimestamp(row.message.createdAt, timestampFormat)}
+                  </p>
                 </div>
               </div>
             </div>
@@ -515,7 +515,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     </div>
                   );
                 })()}
-                <p className="mt-1.5 text-[10px] text-muted-foreground/30">
+                <p className="mt-1.5 font-mono text-[10px] text-muted-foreground/45">
                   {formatMessageMeta(
                     row.message.createdAt,
                     row.message.streaming
@@ -662,8 +662,8 @@ function formatMessageMeta(
   duration: string | null,
   timestampFormat: TimestampFormat,
 ): string {
-  if (!duration) return formatTimestamp(createdAt, timestampFormat);
-  return `${formatTimestamp(createdAt, timestampFormat)} • ${duration}`;
+  if (!duration) return formatShortTimestamp(createdAt, timestampFormat);
+  return `${formatShortTimestamp(createdAt, timestampFormat)} • ${duration}`;
 }
 
 const UserMessageTerminalContextInlineLabel = memo(
@@ -725,7 +725,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
         }
 
         return (
-          <div className="wrap-break-word whitespace-pre-wrap font-mono text-sm leading-relaxed text-foreground">
+          <div className="wrap-break-word whitespace-pre-wrap font-system-ui text-sm leading-relaxed text-foreground">
             {inlineNodes}
           </div>
         );
@@ -753,7 +753,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
     }
 
     return (
-      <div className="wrap-break-word whitespace-pre-wrap font-mono text-sm leading-relaxed text-foreground">
+      <div className="wrap-break-word whitespace-pre-wrap font-system-ui text-sm leading-relaxed text-foreground">
         {inlineNodes}
       </div>
     );
@@ -764,7 +764,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
   }
 
   return (
-    <pre className="whitespace-pre-wrap wrap-break-word font-mono text-sm leading-relaxed text-foreground">
+    <pre className="font-system-ui whitespace-pre-wrap wrap-break-word text-sm leading-relaxed text-foreground">
       {props.text}
     </pre>
   );

@@ -5,12 +5,14 @@ import { parseDiffRouteSearch } from "./diffRouteSearch";
 describe("parseDiffRouteSearch", () => {
   it("parses valid diff search values", () => {
     const parsed = parseDiffRouteSearch({
+      panel: "diff",
       diff: "1",
       diffTurnId: "turn-1",
       diffFilePath: "src/app.ts",
     });
 
     expect(parsed).toEqual({
+      panel: "diff",
       diff: "1",
       diffTurnId: "turn-1",
       diffFilePath: "src/app.ts",
@@ -24,6 +26,7 @@ describe("parseDiffRouteSearch", () => {
         diffTurnId: "turn-1",
       }),
     ).toEqual({
+      panel: "diff",
       diff: "1",
       diffTurnId: "turn-1",
     });
@@ -34,6 +37,7 @@ describe("parseDiffRouteSearch", () => {
         diffTurnId: "turn-1",
       }),
     ).toEqual({
+      panel: "diff",
       diff: "1",
       diffTurnId: "turn-1",
     });
@@ -56,6 +60,7 @@ describe("parseDiffRouteSearch", () => {
     });
 
     expect(parsed).toEqual({
+      panel: "diff",
       diff: "1",
     });
   });
@@ -68,7 +73,19 @@ describe("parseDiffRouteSearch", () => {
     });
 
     expect(parsed).toEqual({
+      panel: "diff",
       diff: "1",
+    });
+  });
+
+  it("preserves browser panel mode without diff state", () => {
+    const parsed = parseDiffRouteSearch({
+      panel: "browser",
+      diffTurnId: "turn-1",
+    });
+
+    expect(parsed).toEqual({
+      panel: "browser",
     });
   });
 });

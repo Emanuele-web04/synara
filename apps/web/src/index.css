@@ -48,7 +48,7 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground relative;
+    @apply bg-transparent text-foreground relative;
   }
 }
 
@@ -121,16 +121,17 @@
 }
 
 body {
-  font-family:
-    "DM Sans",
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    system-ui,
-    sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  letter-spacing: -0.025em;
   margin: 0;
   padding: 0;
   min-height: 100vh;
+}
+
+/* Reuse the OS UI stack on chat surfaces that should feel native and utilitarian. */
+.font-system-ui {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  letter-spacing: -0.025em;
 }
 
 html,
@@ -145,9 +146,10 @@ body,
   overscroll-behavior-y: none;
 }
 
-body::after {
+/* Noise texture — scoped to main content so it doesn't block native vibrancy on the sidebar */
+[data-slot="sidebar-inset"]::after {
   content: "";
-  position: fixed;
+  position: absolute;
   inset: 0;
   pointer-events: none;
   opacity: 0.035;

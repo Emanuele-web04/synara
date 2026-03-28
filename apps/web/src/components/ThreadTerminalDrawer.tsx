@@ -1,5 +1,13 @@
 import { FitAddon } from "@xterm/addon-fit";
-import { Plus, SquareSplitHorizontal, TerminalSquare, Trash2, XIcon } from "lucide-react";
+import {
+  Maximize2,
+  Minimize2,
+  Plus,
+  SquareSplitHorizontal,
+  TerminalSquare,
+  Trash2,
+  XIcon,
+} from "lucide-react";
 import { type ThreadId } from "@t3tools/contracts";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import {
@@ -25,8 +33,10 @@ import {
   DEFAULT_THREAD_TERMINAL_ID,
   MAX_TERMINALS_PER_GROUP,
   type ThreadTerminalGroup,
+  type ThreadTerminalPresentationMode,
 } from "../types";
 import { readNativeApi } from "~/nativeApi";
+import { cn } from "~/lib/utils";
 
 const MIN_DRAWER_HEIGHT = 180;
 const MAX_DRAWER_HEIGHT_RATIO = 0.75;
@@ -648,6 +658,8 @@ interface ThreadTerminalDrawerProps {
   cwd: string;
   runtimeEnv?: Record<string, string>;
   height: number;
+  presentationMode: ThreadTerminalPresentationMode;
+  isVisible?: boolean;
   terminalIds: string[];
   activeTerminalId: string;
   terminalGroups: ThreadTerminalGroup[];
@@ -662,11 +674,19 @@ interface ThreadTerminalDrawerProps {
   onCloseTerminal: (terminalId: string) => void;
   onHeightChange: (height: number) => void;
   onAddTerminalContext: (selection: TerminalContextSelection) => void;
+  onTogglePresentationMode: () => void;
 }
 
 interface TerminalActionButtonProps {
   label: string;
   className: string;
+  onClick: () => void;
+  children: ReactNode;
+}
+
+interface TerminalChromeActionItem {
+  disabled?: boolean;
+  label: string;
   onClick: () => void;
   children: ReactNode;
 }
@@ -693,11 +713,61 @@ function TerminalActionButton({ label, className, onClick, children }: TerminalA
   );
 }
 
+function TerminalChromeActions(props: {
+  actions: ReadonlyArray<TerminalChromeActionItem>;
+  variant: "compact" | "workspace" | "sidebar";
+}) {
+  const itemClassName =
+    props.variant === "workspace"
+      ? "rounded-md px-2 py-1 text-foreground/90 transition-colors hover:bg-accent/80"
+      : props.variant === "sidebar"
+        ? "inline-flex h-full items-center px-1 text-foreground/90 transition-colors hover:bg-accent/70"
+        : "p-1 text-foreground/90 transition-colors hover:bg-accent";
+
+  return (
+    <div
+      className={cn(
+        "inline-flex items-center",
+        props.variant === "compact"
+          ? "overflow-hidden rounded-md border border-border/80 bg-background/70"
+          : props.variant === "workspace"
+            ? "gap-1.5"
+            : "h-full items-stretch",
+      )}
+    >
+      {props.actions.map((action, index) => {
+        const shouldRenderDivider = props.variant === "compact" && index > 0;
+        return (
+          <div key={action.label} className={cn(props.variant === "workspace" ? "" : "contents")}>
+            {shouldRenderDivider ? <div className="h-4 w-px bg-border/80" /> : null}
+            <TerminalActionButton
+              className={cn(
+                itemClassName,
+                props.variant === "sidebar" && index > 0 ? "border-l border-border/70" : "",
+                action.disabled ? "cursor-not-allowed opacity-45 hover:bg-transparent" : "",
+              )}
+              onClick={() => {
+                if (action.disabled) return;
+                action.onClick();
+              }}
+              label={action.label}
+            >
+              {action.children}
+            </TerminalActionButton>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function ThreadTerminalDrawer({
   threadId,
   cwd,
   runtimeEnv,
   height,
+  presentationMode,
+  isVisible = true,
   terminalIds,
   activeTerminalId,
   terminalGroups,
@@ -712,7 +782,9 @@ export default function ThreadTerminalDrawer({
   onCloseTerminal,
   onHeightChange,
   onAddTerminalContext,
+  onTogglePresentationMode,
 }: ThreadTerminalDrawerProps) {
+  const isWorkspaceMode = presentationMode === "workspace";
   const [drawerHeight, setDrawerHeight] = useState(() => clampDrawerHeight(height));
   const [resizeEpoch, setResizeEpoch] = useState(0);
   const drawerHeightRef = useRef(drawerHeight);
@@ -866,6 +938,13 @@ export default function ThreadTerminalDrawer({
     lastSyncedHeightRef.current = clampedHeight;
   }, [height, threadId]);
 
+  useEffect(() => {
+    if (!isVisible) {
+      return;
+    }
+    setResizeEpoch((value) => value + 1);
+  }, [isVisible, presentationMode]);
+
   const handleResizePointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
     event.preventDefault();
@@ -935,49 +1014,79 @@ export default function ThreadTerminalDrawer({
     };
   }, [syncHeight]);
 
+  const workspaceTitle = (
+    <div className="flex min-w-0 items-center gap-2">
+      <div className="inline-flex h-7 items-center rounded-full border border-border/70 bg-background px-3 font-mono text-[11px] tracking-[0.16em] text-muted-foreground uppercase">
+        Terminal
+      </div>
+      <span className="truncate text-xs text-muted-foreground">
+        {terminalIds.length === 1 ? "1 shell" : `${terminalIds.length} shells`}
+      </span>
+    </div>
+  );
+  const presentationToggleLabel = isWorkspaceMode
+    ? "Collapse terminal workspace"
+    : "Expand terminal workspace";
+  const presentationToggleIcon = isWorkspaceMode ? (
+    <Minimize2 className="size-3.25" />
+  ) : (
+    <Maximize2 className="size-3.25" />
+  );
+  const chromeActions: TerminalChromeActionItem[] = [
+    {
+      label: splitTerminalActionLabel,
+      onClick: onSplitTerminalAction,
+      disabled: hasReachedSplitLimit,
+      children: <SquareSplitHorizontal className="size-3.25" />,
+    },
+    {
+      label: newTerminalActionLabel,
+      onClick: onNewTerminalAction,
+      children: <Plus className="size-3.25" />,
+    },
+    {
+      label: presentationToggleLabel,
+      onClick: onTogglePresentationMode,
+      children: presentationToggleIcon,
+    },
+    {
+      label: closeTerminalActionLabel,
+      onClick: () => onCloseTerminal(resolvedActiveTerminalId),
+      children: <Trash2 className="size-3.25" />,
+    },
+  ];
+
   return (
     <aside
-      className="thread-terminal-drawer relative flex min-w-0 shrink-0 flex-col overflow-hidden border-t border-border/80 bg-background"
-      style={{ height: `${drawerHeight}px` }}
+      className={cn(
+        "thread-terminal-drawer relative flex min-w-0 flex-col overflow-hidden bg-background",
+        isWorkspaceMode
+          ? "min-h-0 flex-1 border-t border-border/70"
+          : "shrink-0 border-t border-border/80",
+      )}
+      style={isWorkspaceMode ? undefined : { height: `${drawerHeight}px` }}
     >
-      <div
-        className="absolute inset-x-0 top-0 z-20 h-1.5 cursor-row-resize"
-        onPointerDown={handleResizePointerDown}
-        onPointerMove={handleResizePointerMove}
-        onPointerUp={handleResizePointerEnd}
-        onPointerCancel={handleResizePointerEnd}
-      />
+      {!isWorkspaceMode ? (
+        <div
+          className="absolute inset-x-0 top-0 z-20 h-1.5 cursor-row-resize"
+          onPointerDown={handleResizePointerDown}
+          onPointerMove={handleResizePointerMove}
+          onPointerUp={handleResizePointerEnd}
+          onPointerCancel={handleResizePointerEnd}
+        />
+      ) : null}
 
-      {!hasTerminalSidebar && (
+      {isWorkspaceMode ? (
+        <div className="flex h-11 items-center justify-between gap-3 border-b border-border/70 bg-muted/10 px-3">
+          {workspaceTitle}
+          <TerminalChromeActions actions={chromeActions} variant="workspace" />
+        </div>
+      ) : null}
+
+      {!hasTerminalSidebar && !isWorkspaceMode && (
         <div className="pointer-events-none absolute right-2 top-2 z-20">
-          <div className="pointer-events-auto inline-flex items-center overflow-hidden rounded-md border border-border/80 bg-background/70">
-            <TerminalActionButton
-              className={`p-1 text-foreground/90 transition-colors ${
-                hasReachedSplitLimit
-                  ? "cursor-not-allowed opacity-45 hover:bg-transparent"
-                  : "hover:bg-accent"
-              }`}
-              onClick={onSplitTerminalAction}
-              label={splitTerminalActionLabel}
-            >
-              <SquareSplitHorizontal className="size-3.25" />
-            </TerminalActionButton>
-            <div className="h-4 w-px bg-border/80" />
-            <TerminalActionButton
-              className="p-1 text-foreground/90 transition-colors hover:bg-accent"
-              onClick={onNewTerminalAction}
-              label={newTerminalActionLabel}
-            >
-              <Plus className="size-3.25" />
-            </TerminalActionButton>
-            <div className="h-4 w-px bg-border/80" />
-            <TerminalActionButton
-              className="p-1 text-foreground/90 transition-colors hover:bg-accent"
-              onClick={() => onCloseTerminal(resolvedActiveTerminalId)}
-              label={closeTerminalActionLabel}
-            >
-              <Trash2 className="size-3.25" />
-            </TerminalActionButton>
+          <div className="pointer-events-auto">
+            <TerminalChromeActions actions={chromeActions} variant="compact" />
           </div>
         </div>
       )}
@@ -1043,35 +1152,14 @@ export default function ThreadTerminalDrawer({
           </div>
 
           {hasTerminalSidebar && (
-            <aside className="flex w-36 min-w-36 flex-col border border-border/70 bg-muted/10">
+            <aside
+              className={cn(
+                "flex w-36 min-w-36 flex-col border border-border/70 bg-muted/10",
+                isWorkspaceMode ? "border-y-0 border-r-0" : "",
+              )}
+            >
               <div className="flex h-[22px] items-stretch justify-end border-b border-border/70">
-                <div className="inline-flex h-full items-stretch">
-                  <TerminalActionButton
-                    className={`inline-flex h-full items-center px-1 text-foreground/90 transition-colors ${
-                      hasReachedSplitLimit
-                        ? "cursor-not-allowed opacity-45 hover:bg-transparent"
-                        : "hover:bg-accent/70"
-                    }`}
-                    onClick={onSplitTerminalAction}
-                    label={splitTerminalActionLabel}
-                  >
-                    <SquareSplitHorizontal className="size-3.25" />
-                  </TerminalActionButton>
-                  <TerminalActionButton
-                    className="inline-flex h-full items-center border-l border-border/70 px-1 text-foreground/90 transition-colors hover:bg-accent/70"
-                    onClick={onNewTerminalAction}
-                    label={newTerminalActionLabel}
-                  >
-                    <Plus className="size-3.25" />
-                  </TerminalActionButton>
-                  <TerminalActionButton
-                    className="inline-flex h-full items-center border-l border-border/70 px-1 text-foreground/90 transition-colors hover:bg-accent/70"
-                    onClick={() => onCloseTerminal(resolvedActiveTerminalId)}
-                    label={closeTerminalActionLabel}
-                  >
-                    <Trash2 className="size-3.25" />
-                  </TerminalActionButton>
-                </div>
+                <TerminalChromeActions actions={chromeActions} variant="sidebar" />
               </div>
 
               <div className="min-h-0 flex-1 overflow-y-auto px-1 py-1">

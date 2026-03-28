@@ -18,6 +18,12 @@ import {
 import type { MenuItemConstructorOptions } from "electron";
 import * as Effect from "effect/Effect";
 import type {
+  BrowserNavigateInput,
+  BrowserNewTabInput,
+  BrowserOpenInput,
+  BrowserSetPanelBoundsInput,
+  BrowserTabInput,
+  BrowserThreadInput,
   DesktopTheme,
   DesktopUpdateActionResult,
   DesktopUpdateState,
@@ -43,6 +49,7 @@ import {
   reduceDesktopUpdateStateOnUpdateAvailable,
 } from "./updateMachine";
 import { isArm64HostRunningIntelBuild, resolveDesktopRuntimeInfo } from "./runtimeArch";
+import { DesktopBrowserManager } from "./browserManager";
 
 syncShellEnvironment();
 
@@ -56,6 +63,20 @@ const UPDATE_STATE_CHANNEL = "desktop:update-state";
 const UPDATE_GET_STATE_CHANNEL = "desktop:update-get-state";
 const UPDATE_DOWNLOAD_CHANNEL = "desktop:update-download";
 const UPDATE_INSTALL_CHANNEL = "desktop:update-install";
+const BROWSER_STATE_CHANNEL = "desktop:browser-state";
+const BROWSER_OPEN_CHANNEL = "desktop:browser-open";
+const BROWSER_CLOSE_CHANNEL = "desktop:browser-close";
+const BROWSER_HIDE_CHANNEL = "desktop:browser-hide";
+const BROWSER_GET_STATE_CHANNEL = "desktop:browser-get-state";
+const BROWSER_SET_BOUNDS_CHANNEL = "desktop:browser-set-bounds";
+const BROWSER_NAVIGATE_CHANNEL = "desktop:browser-navigate";
+const BROWSER_RELOAD_CHANNEL = "desktop:browser-reload";
+const BROWSER_GO_BACK_CHANNEL = "desktop:browser-go-back";
+const BROWSER_GO_FORWARD_CHANNEL = "desktop:browser-go-forward";
+const BROWSER_NEW_TAB_CHANNEL = "desktop:browser-new-tab";
+const BROWSER_CLOSE_TAB_CHANNEL = "desktop:browser-close-tab";
+const BROWSER_SELECT_TAB_CHANNEL = "desktop:browser-select-tab";
+const BROWSER_OPEN_DEVTOOLS_CHANNEL = "desktop:browser-open-devtools";
 const BASE_DIR = process.env.T3CODE_HOME?.trim() || Path.join(OS.homedir(), ".t3");
 const STATE_DIR = Path.join(BASE_DIR, "userdata");
 const DESKTOP_SCHEME = "t3";
@@ -91,6 +112,11 @@ let aboutCommitHashCache: string | null | undefined;
 let desktopLogSink: RotatingFileSink | null = null;
 let backendLogSink: RotatingFileSink | null = null;
 let restoreStdIoCapture: (() => void) | null = null;
+const browserManager = new DesktopBrowserManager();
+
+browserManager.subscribe((state) => {
+  mainWindow?.webContents.send(BROWSER_STATE_CHANNEL, state);
+});
 
 let destructiveMenuIconCache: Electron.NativeImage | null | undefined;
 const desktopRuntimeInfo = resolveDesktopRuntimeInfo({
@@ -610,6 +636,17 @@ function configureApplicationMenu(): void {
     {
       label: "View",
       submenu: [
+        {
+          label: "Toggle Sidebar",
+          accelerator: "CmdOrCtrl+B",
+          click: () => dispatchMenuAction("toggle-sidebar"),
+        },
+        {
+          label: "Toggle Browser",
+          accelerator: "CmdOrCtrl+Shift+B",
+          click: () => dispatchMenuAction("toggle-browser"),
+        },
+        { type: "separator" },
         { role: "reload" },
         { role: "forceReload" },
         { role: "toggleDevTools" },
@@ -1211,6 +1248,71 @@ function registerIpcHandlers(): void {
       state: updateState,
     } satisfies DesktopUpdateActionResult;
   });
+
+  ipcMain.removeHandler(BROWSER_OPEN_CHANNEL);
+  ipcMain.handle(BROWSER_OPEN_CHANNEL, async (_event, input: BrowserOpenInput) =>
+    browserManager.open(input),
+  );
+
+  ipcMain.removeHandler(BROWSER_CLOSE_CHANNEL);
+  ipcMain.handle(BROWSER_CLOSE_CHANNEL, async (_event, input: BrowserThreadInput) =>
+    browserManager.close(input),
+  );
+
+  ipcMain.removeHandler(BROWSER_HIDE_CHANNEL);
+  ipcMain.handle(BROWSER_HIDE_CHANNEL, async (_event, input: BrowserThreadInput) => {
+    browserManager.hide(input);
+  });
+
+  ipcMain.removeHandler(BROWSER_GET_STATE_CHANNEL);
+  ipcMain.handle(BROWSER_GET_STATE_CHANNEL, async (_event, input: BrowserThreadInput) =>
+    browserManager.getState(input),
+  );
+
+  ipcMain.removeHandler(BROWSER_SET_BOUNDS_CHANNEL);
+  ipcMain.handle(BROWSER_SET_BOUNDS_CHANNEL, async (_event, input: BrowserSetPanelBoundsInput) =>
+    browserManager.setPanelBounds(input),
+  );
+
+  ipcMain.removeHandler(BROWSER_NAVIGATE_CHANNEL);
+  ipcMain.handle(BROWSER_NAVIGATE_CHANNEL, async (_event, input: BrowserNavigateInput) =>
+    browserManager.navigate(input),
+  );
+
+  ipcMain.removeHandler(BROWSER_RELOAD_CHANNEL);
+  ipcMain.handle(BROWSER_RELOAD_CHANNEL, async (_event, input: BrowserTabInput) =>
+    browserManager.reload(input),
+  );
+
+  ipcMain.removeHandler(BROWSER_GO_BACK_CHANNEL);
+  ipcMain.handle(BROWSER_GO_BACK_CHANNEL, async (_event, input: BrowserTabInput) =>
+    browserManager.goBack(input),
+  );
+
+  ipcMain.removeHandler(BROWSER_GO_FORWARD_CHANNEL);
+  ipcMain.handle(BROWSER_GO_FORWARD_CHANNEL, async (_event, input: BrowserTabInput) =>
+    browserManager.goForward(input),
+  );
+
+  ipcMain.removeHandler(BROWSER_NEW_TAB_CHANNEL);
+  ipcMain.handle(BROWSER_NEW_TAB_CHANNEL, async (_event, input: BrowserNewTabInput) =>
+    browserManager.newTab(input),
+  );
+
+  ipcMain.removeHandler(BROWSER_CLOSE_TAB_CHANNEL);
+  ipcMain.handle(BROWSER_CLOSE_TAB_CHANNEL, async (_event, input: BrowserTabInput) =>
+    browserManager.closeTab(input),
+  );
+
+  ipcMain.removeHandler(BROWSER_SELECT_TAB_CHANNEL);
+  ipcMain.handle(BROWSER_SELECT_TAB_CHANNEL, async (_event, input: BrowserTabInput) =>
+    browserManager.selectTab(input),
+  );
+
+  ipcMain.removeHandler(BROWSER_OPEN_DEVTOOLS_CHANNEL);
+  ipcMain.handle(BROWSER_OPEN_DEVTOOLS_CHANNEL, async (_event, input: BrowserTabInput) => {
+    browserManager.openDevTools(input);
+  });
 }
 
 function getIconOption(): { icon: string } | Record<string, never> {
@@ -1232,6 +1334,9 @@ function createWindow(): BrowserWindow {
     title: APP_DISPLAY_NAME,
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 16, y: 18 },
+    vibrancy: "under-window",
+    visualEffectState: "active",
+    backgroundColor: "#00000000",
     webPreferences: {
       preload: Path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -1239,6 +1344,7 @@ function createWindow(): BrowserWindow {
       sandbox: true,
     },
   });
+  browserManager.setWindow(window);
 
   window.webContents.on("context-menu", (event, params) => {
     event.preventDefault();
@@ -1299,6 +1405,7 @@ function createWindow(): BrowserWindow {
     if (mainWindow === window) {
       mainWindow = null;
     }
+    browserManager.setWindow(null);
   });
 
   return window;
@@ -1337,6 +1444,7 @@ app.on("before-quit", () => {
   writeDesktopLogHeader("before-quit received");
   clearUpdatePollTimer();
   stopBackend();
+  browserManager.dispose();
   restoreStdIoCapture?.();
 });
 

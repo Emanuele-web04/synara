@@ -8,10 +8,14 @@ export const MAX_SCRIPT_ID_LENGTH = 24;
 export const MAX_KEYBINDINGS_COUNT = 256;
 
 const STATIC_KEYBINDING_COMMANDS = [
+  "sidebar.toggle",
   "terminal.toggle",
   "terminal.split",
   "terminal.new",
   "terminal.close",
+  "terminal.workspace.terminal",
+  "terminal.workspace.chat",
+  "browser.toggle",
   "diff.toggle",
   "chat.new",
   "chat.newLocal",
