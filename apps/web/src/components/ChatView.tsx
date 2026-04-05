@@ -1175,6 +1175,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     }
 
     if (composerTrigger.kind === "skill") {
+      if (selectedProvider !== "codex") return [];
       const query = normalizeSkillSearchText(composerTrigger.query);
       return providerSkills
         .filter((skill) => {
@@ -1206,8 +1207,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
         label: name,
         description: `${providerLabel} · ${slug}`,
       }));
-  }, [composerTrigger, providerSkills, searchableModelOptions, workspaceEntries]);
-  const composerMenuOpen = Boolean(composerTrigger);
+  }, [composerTrigger, providerSkills, searchableModelOptions, selectedProvider, workspaceEntries]);
+  const composerMenuOpen =
+    Boolean(composerTrigger) &&
+    !(composerTrigger?.kind === "skill" && selectedProvider !== "codex");
   const activeComposerMenuItem = useMemo(
     () =>
       composerMenuItems.find((item) => item.id === composerHighlightedItemId) ??

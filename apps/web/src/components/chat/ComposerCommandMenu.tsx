@@ -108,8 +108,8 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
       <CommandItem
         value={props.item.id}
         className={cn(
-          "cursor-pointer rounded-lg px-3 py-2",
-          props.isActive && "bg-accent/30 text-accent-foreground",
+          "cursor-pointer px-2.5 py-1.5",
+          props.isActive && "bg-accent/20",
         )}
         onMouseDown={(event) => {
           event.preventDefault();
@@ -118,24 +118,24 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
           props.onSelect(props.item);
         }}
       >
-        <div className="flex min-w-0 items-center gap-2.5">
+        <div className="flex min-w-0 items-center gap-2">
           <div
             className={cn(
-              "flex size-4 shrink-0 items-center justify-center text-muted-foreground/60",
-              props.isActive && "text-foreground/70",
+              "flex size-3.5 shrink-0 items-center justify-center text-muted-foreground/50",
+              props.isActive && "text-foreground/60",
             )}
           >
-            <HammerIcon className="size-3.5" />
+            <HammerIcon className="size-3" />
           </div>
-          <div className="min-w-0 flex flex-1 items-center gap-2">
-            <span className="truncate font-medium text-[11.5px] leading-none text-foreground/80">
+          <div className="min-w-0 flex flex-1 items-center gap-1.5">
+            <span className="truncate font-semibold text-[11px] leading-none text-foreground/80">
               {props.item.label}
             </span>
-            <span className="min-w-0 flex-1 truncate text-[11px] leading-none text-muted-foreground/55">
+            <span className="min-w-0 flex-1 truncate text-[10.5px] leading-none text-muted-foreground/45">
               {props.item.description}
             </span>
           </div>
-          <div className="shrink-0 pl-2 text-[10.5px] leading-none text-muted-foreground/45">
+          <div className="shrink-0 pl-2 text-[10px] leading-none text-muted-foreground/35">
             {formatSkillScope(props.item.skill.scope)}
           </div>
         </div>
