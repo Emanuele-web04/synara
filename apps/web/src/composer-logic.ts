@@ -230,7 +230,14 @@ export function detectComposerTrigger(text: string, cursorInput: number): Compos
           rangeEnd: cursor,
         };
       }
-      return null;
+      // `/query` that doesn't match a built-in command → treat as skill trigger
+      // so providers with slash-command skills (e.g. Claude) can show suggestions.
+      return {
+        kind: "skill",
+        query: commandQuery,
+        rangeStart: lineStart,
+        rangeEnd: cursor,
+      };
     }
 
     const modelMatch = /^\/model(?:\s+(.*))?$/.exec(linePrefix);

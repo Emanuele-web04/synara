@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   getFallbackThreadIdAfterDelete,
+  getNextVisibleSidebarThreadId,
+  getRenderedThreadsForSidebarProject,
+  getVisibleSidebarThreadIds,
   getVisibleThreadsForProject,
   getProjectSortTimestamp,
   hasUnseenCompletion,
@@ -340,6 +343,110 @@ describe("getVisibleThreadsForProject", () => {
     expect(result.visibleThreads.map((thread) => thread.id)).toEqual(
       threads.map((thread) => thread.id),
     );
+  });
+});
+
+describe("getRenderedThreadsForSidebarProject", () => {
+  it("pins only the active thread when the parent project is collapsed", () => {
+    const threads = Array.from({ length: 4 }, (_, index) =>
+      makeThread({
+        id: ThreadId.makeUnsafe(`thread-${index + 1}`),
+        title: `Thread ${index + 1}`,
+      }),
+    );
+
+    const result = getRenderedThreadsForSidebarProject({
+      project: makeProject({ expanded: false }),
+      threads,
+      activeThreadId: ThreadId.makeUnsafe("thread-4"),
+      isThreadListExpanded: false,
+      previewLimit: 2,
+    });
+
+    expect(result.hasHiddenThreads).toBe(true);
+    expect(result.renderedThreads.map((thread) => thread.id)).toEqual([
+      ThreadId.makeUnsafe("thread-4"),
+    ]);
+  });
+});
+
+describe("getVisibleSidebarThreadIds", () => {
+  it("flattens only the sidebar-visible threads in render order", () => {
+    const projects = [
+      makeProject({ id: ProjectId.makeUnsafe("project-1"), expanded: true }),
+      makeProject({ id: ProjectId.makeUnsafe("project-2"), expanded: false }),
+    ];
+    const threads = [
+      makeThread({
+        id: ThreadId.makeUnsafe("thread-1"),
+        projectId: ProjectId.makeUnsafe("project-1"),
+        createdAt: "2026-03-09T10:01:00.000Z",
+      }),
+      makeThread({
+        id: ThreadId.makeUnsafe("thread-2"),
+        projectId: ProjectId.makeUnsafe("project-1"),
+        createdAt: "2026-03-09T10:02:00.000Z",
+      }),
+      makeThread({
+        id: ThreadId.makeUnsafe("thread-3"),
+        projectId: ProjectId.makeUnsafe("project-1"),
+        createdAt: "2026-03-09T10:03:00.000Z",
+      }),
+      makeThread({
+        id: ThreadId.makeUnsafe("thread-4"),
+        projectId: ProjectId.makeUnsafe("project-2"),
+        createdAt: "2026-03-09T10:04:00.000Z",
+      }),
+      makeThread({
+        id: ThreadId.makeUnsafe("thread-5"),
+        projectId: ProjectId.makeUnsafe("project-2"),
+        createdAt: "2026-03-09T10:05:00.000Z",
+      }),
+    ];
+
+    const visibleThreadIds = getVisibleSidebarThreadIds({
+      projects,
+      threads,
+      activeThreadId: ThreadId.makeUnsafe("thread-4"),
+      expandedThreadListsByProject: new Set<ProjectId>([ProjectId.makeUnsafe("project-1")]),
+      previewLimit: 2,
+      threadSortOrder: "created_at",
+    });
+
+    expect(visibleThreadIds).toEqual([
+      ThreadId.makeUnsafe("thread-3"),
+      ThreadId.makeUnsafe("thread-2"),
+      ThreadId.makeUnsafe("thread-1"),
+      ThreadId.makeUnsafe("thread-4"),
+    ]);
+  });
+});
+
+describe("getNextVisibleSidebarThreadId", () => {
+  const visibleThreadIds = [
+    ThreadId.makeUnsafe("thread-1"),
+    ThreadId.makeUnsafe("thread-2"),
+    ThreadId.makeUnsafe("thread-3"),
+  ];
+
+  it("advances to the next visible thread and wraps at the end", () => {
+    expect(
+      getNextVisibleSidebarThreadId({
+        visibleThreadIds,
+        activeThreadId: ThreadId.makeUnsafe("thread-3"),
+        direction: "forward",
+      }),
+    ).toBe(ThreadId.makeUnsafe("thread-1"));
+  });
+
+  it("moves backward through the visible list and wraps at the start", () => {
+    expect(
+      getNextVisibleSidebarThreadId({
+        visibleThreadIds,
+        activeThreadId: ThreadId.makeUnsafe("thread-1"),
+        direction: "backward",
+      }),
+    ).toBe(ThreadId.makeUnsafe("thread-3"));
   });
 });
 

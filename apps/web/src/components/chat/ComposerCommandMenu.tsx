@@ -6,7 +6,7 @@ import {
 } from "@t3tools/contracts";
 import { memo } from "react";
 import { type ComposerSlashCommand, type ComposerTriggerKind } from "../../composer-logic";
-import { BotIcon, HammerIcon } from "~/lib/icons";
+import { BotIcon, CubeIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Badge } from "../ui/badge";
 import { Command, CommandItem, CommandList } from "../ui/command";
@@ -122,7 +122,7 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
               props.isActive && "text-foreground/60",
             )}
           >
-            <HammerIcon className="size-3" />
+            <CubeIcon className="size-3" />
           </div>
           <div className="min-w-0 flex flex-1 items-center gap-1.5">
             <span className="truncate font-semibold text-[11px] leading-none text-foreground/80">

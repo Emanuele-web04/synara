@@ -88,6 +88,18 @@ it.effect("parses keybinding rules", () =>
       command: "chat.newTerminal",
     });
     assert.strictEqual(parsedTerminal.command, "chat.newTerminal");
+
+    const parsedVisibleNext = yield* decode(KeybindingRule, {
+      key: "mod+shift+]",
+      command: "chat.visible.next",
+    });
+    assert.strictEqual(parsedVisibleNext.command, "chat.visible.next");
+
+    const parsedVisiblePrevious = yield* decode(KeybindingRule, {
+      key: "mod+shift+[",
+      command: "chat.visible.previous",
+    });
+    assert.strictEqual(parsedVisiblePrevious.command, "chat.visible.previous");
   }),
 );
 

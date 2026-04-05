@@ -19,6 +19,7 @@ import {
   IconCloudUpload,
   IconColumns2,
   IconCopy,
+  IconCube,
   IconDots,
   IconExternalLink,
   IconEye,
@@ -101,6 +102,7 @@ export const GitCommitIcon: LucideIcon = (props) => (
 export const GitForkIcon = adaptIcon(IconGitFork);
 export const GitPullRequestIcon = adaptIcon(IconGitPullRequest);
 export const GlobeIcon = adaptIcon(IconWorld);
+export const CubeIcon = adaptIcon(IconCube);
 export const HammerIcon = adaptIcon(IconTool);
 export const InfoIcon = adaptIcon(IconInfoCircle);
 export const ListChecksIcon = adaptIcon(IconListCheck);

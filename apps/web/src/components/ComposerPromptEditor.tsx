@@ -225,8 +225,9 @@ class ComposerSkillNode extends TextNode {
   }
 
   constructor(name: string, key?: NodeKey) {
-    const normalizedName = name.startsWith("$") ? name.slice(1) : name;
-    super(`$${normalizedName}`, key);
+    const normalizedName = name.startsWith("$") || name.startsWith("/") ? name.slice(1) : name;
+    const prefix = name.startsWith("/") ? "/" : "$";
+    super(`${prefix}${normalizedName}`, key);
     this.__skillName = normalizedName;
   }
 
@@ -720,7 +721,8 @@ function $setComposerEditorPrompt(
       continue;
     }
     if (segment.type === "skill") {
-      paragraph.append($createComposerSkillNode(segment.name));
+      const prefixedName = `${segment.prefix ?? "$"}${segment.name}`;
+      paragraph.append($createComposerSkillNode(prefixedName));
       continue;
     }
     if (segment.type === "terminal-context") {

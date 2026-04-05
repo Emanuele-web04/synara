@@ -239,8 +239,13 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function promptIncludesSkillMention(prompt: string, skillName: string): boolean {
-  const pattern = new RegExp(`(^|\\s)\\$${escapeRegExp(skillName)}(?=\\s|$)`, "i");
+function skillMentionPrefix(provider: string): string {
+  return provider === "claudeAgent" ? "/" : "$";
+}
+
+function promptIncludesSkillMention(prompt: string, skillName: string, provider: string): boolean {
+  const prefix = escapeRegExp(skillMentionPrefix(provider));
+  const pattern = new RegExp(`(^|\\s)${prefix}${escapeRegExp(skillName)}(?=\\s|$)`, "i");
   return pattern.test(prompt);
 }
 
@@ -1219,7 +1224,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
     }
 
     if (composerTrigger.kind === "skill") {
-      if (selectedProvider !== "codex") return [];
       const query = normalizeSkillSearchText(composerTrigger.query);
       return providerSkills
         .filter((skill) => {
@@ -1252,9 +1256,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         description: `${providerLabel} · ${slug}`,
       }));
   }, [composerTrigger, providerSkills, searchableModelOptions, selectedProvider, workspaceEntries]);
-  const composerMenuOpen =
-    Boolean(composerTrigger) &&
-    !(composerTrigger?.kind === "skill" && selectedProvider !== "codex");
+  const composerMenuOpen = Boolean(composerTrigger);
   const activeComposerMenuItem = useMemo(
     () =>
       composerMenuItems.find((item) => item.id === composerHighlightedItemId) ??
@@ -2227,14 +2229,13 @@ export default function ChatView({ threadId }: ChatViewProps) {
 
   useEffect(() => {
     setSelectedComposerSkills((existing) =>
-      existing.filter((skill) => promptIncludesSkillMention(prompt, skill.name)),
+      existing.filter((skill) => promptIncludesSkillMention(prompt, skill.name, selectedProvider)),
     );
   }, [prompt]);
 
+  // Clear selected skills when switching providers — skills are provider-specific.
   useEffect(() => {
-    if (selectedProvider !== "codex") {
-      setSelectedComposerSkills([]);
-    }
+    setSelectedComposerSkills([]);
   }, [selectedProvider]);
 
   useEffect(() => {
@@ -2873,12 +2874,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
       effort: selectedPromptEffort,
       text: messageTextForSend || IMAGE_ONLY_BOOTSTRAP_PROMPT,
     });
-    const selectedSkillsForSend =
-      selectedProvider === "codex"
-        ? selectedComposerSkills.filter((skill) =>
-            promptIncludesSkillMention(outgoingMessageText, skill.name),
-          )
-        : [];
+    const selectedSkillsForSend = selectedComposerSkills.filter((skill) =>
+      promptIncludesSkillMention(outgoingMessageText, skill.name, selectedProvider),
+    );
     const turnAttachmentsPromise = Promise.all(
       composerImagesSnapshot.map(async (image) => ({
         type: "image" as const,
@@ -3721,7 +3719,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         return;
       }
       if (item.type === "skill") {
-        const replacement = `$${item.skill.name} `;
+        const replacement = `${skillMentionPrefix(selectedProvider)}${item.skill.name} `;
         const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
           snapshot.value,
           trigger.rangeEnd,

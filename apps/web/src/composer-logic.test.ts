@@ -217,6 +217,15 @@ describe("isCollapsedCursorAdjacentToInlineToken", () => {
     expect(isCollapsedCursorAdjacentToInlineToken(text, text.length, "right")).toBe(false);
   });
 
+  it("keeps raw skill triggers non-adjacent while typing", () => {
+    expect(isCollapsedCursorAdjacentToInlineToken("hello $che", "hello $che".length, "left")).toBe(
+      false,
+    );
+    expect(isCollapsedCursorAdjacentToInlineToken("hello /che", "hello /che".length, "right")).toBe(
+      false,
+    );
+  });
+
   it("detects left adjacency only when cursor is directly after a mention", () => {
     const text = "open @AGENTS.md next";
     const mentionStart = "open ".length;

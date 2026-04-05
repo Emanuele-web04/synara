@@ -22,6 +22,8 @@ const STATIC_KEYBINDING_COMMANDS = [
   "chat.new",
   "chat.newLocal",
   "chat.newTerminal",
+  "chat.visible.next",
+  "chat.visible.previous",
   "editor.openFavorite",
 ] as const;
 

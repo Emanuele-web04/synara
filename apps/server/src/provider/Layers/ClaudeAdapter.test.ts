@@ -90,6 +90,12 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
     this.setMaxThinkingTokensCalls.push(maxThinkingTokens);
   };
 
+  readonly supportedCommands = async (): Promise<
+    Array<{ name: string; description: string; argumentHint: string }>
+  > => {
+    return [];
+  };
+
   readonly close = (): void => {
     this.closeCalls += 1;
     this.finish();

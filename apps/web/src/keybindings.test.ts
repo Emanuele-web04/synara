@@ -144,6 +144,16 @@ const DEFAULT_BINDINGS = compile([
     command: "chat.newTerminal",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
+  {
+    shortcut: modShortcut("]", { shiftKey: true }),
+    command: "chat.visible.next",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
+  {
+    shortcut: modShortcut("[", { shiftKey: true }),
+    command: "chat.visible.previous",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
   { shortcut: modShortcut("o"), command: "editor.openFavorite" },
 ]);
 
@@ -392,6 +402,14 @@ describe("shortcutLabelForCommand", () => {
       "Ctrl+2",
     );
     assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "chat.visible.next", "MacIntel"),
+      "⇧⌘]",
+    );
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "chat.visible.previous", "MacIntel"),
+      "⇧⌘[",
+    );
+    assert.strictEqual(
       shortcutLabelForCommand(DEFAULT_BINDINGS, "editor.openFavorite", "Linux"),
       "Ctrl+O",
     );
@@ -432,6 +450,43 @@ describe("chat/editor shortcuts", () => {
         context: { terminalFocus: false },
       }),
       "chat.newTerminal",
+    );
+  });
+
+  it("resolves visible chat cycle shortcuts", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "]", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "chat.visible.next",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "[", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "chat.visible.previous",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "}", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "chat.visible.next",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "{", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "chat.visible.previous",
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "]", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: true },
+      }),
     );
   });
 

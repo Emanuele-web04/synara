@@ -15,6 +15,7 @@ export type ComposerPromptSegment =
   | {
       type: "skill";
       name: string;
+      prefix?: string;
     }
   | {
       type: "terminal-context";
@@ -22,7 +23,8 @@ export type ComposerPromptSegment =
     };
 
 const MENTION_TOKEN_REGEX = /(^|\s)@([^\s@]+)(?=\s)/g;
-const SKILL_TOKEN_REGEX = /(^|\s)\$([a-zA-Z][a-zA-Z0-9_-]*)(?=\s|$)/g;
+const SKILL_TOKEN_REGEX = /(^|\s)([$/])([a-zA-Z][a-zA-Z0-9_:-]*)(?=\s)/g;
+const BUILT_IN_SLASH_COMMANDS = new Set(["default", "model", "plan"]);
 
 function pushTextSegment(segments: ComposerPromptSegment[], text: string): void {
   if (!text) return;
@@ -37,6 +39,7 @@ function pushTextSegment(segments: ComposerPromptSegment[], text: string): void 
 type InlineTokenMatch = {
   kind: "mention" | "skill";
   value: string;
+  skillPrefix?: string;
   start: number;
   end: number;
 };
@@ -58,13 +61,20 @@ function collectInlineTokenMatches(text: string): InlineTokenMatch[] {
 
   for (const match of text.matchAll(SKILL_TOKEN_REGEX)) {
     const fullMatch = match[0];
-    const prefix = match[1] ?? "";
-    const name = match[2] ?? "";
+    const whitespace = match[1] ?? "";
+    const skillPrefix = match[2] ?? "$";
+    const name = match[3] ?? "";
     const matchIndex = match.index ?? 0;
-    const start = matchIndex + prefix.length;
-    const end = start + fullMatch.length - prefix.length;
-    if (name.length > 0) {
-      matches.push({ kind: "skill", value: name, start, end });
+    const start = matchIndex + whitespace.length;
+    const end = start + fullMatch.length - whitespace.length;
+    // Keep raw `$foo` and `/foo` text editable while the user is still typing.
+    // We only chipify skill mentions once a delimiter exists, and we never
+    // reinterpret built-in slash commands as provider skills.
+    if (
+      name.length > 0 &&
+      !(skillPrefix === "/" && BUILT_IN_SLASH_COMMANDS.has(name.toLowerCase()))
+    ) {
+      matches.push({ kind: "skill", value: name, skillPrefix, start, end });
     }
   }
 
@@ -91,7 +101,10 @@ function splitPromptTextIntoComposerSegments(text: string): ComposerPromptSegmen
     if (match.kind === "mention") {
       segments.push({ type: "mention", path: match.value });
     } else {
-      segments.push({ type: "skill", name: match.value });
+      const skillSegment: ComposerPromptSegment = match.skillPrefix
+        ? { type: "skill", name: match.value, prefix: match.skillPrefix }
+        : { type: "skill", name: match.value };
+      segments.push(skillSegment);
     }
 
     cursor = match.end;

@@ -50,7 +50,7 @@ import { isElectron } from "../env";
 import { APP_VERSION } from "../branding";
 import { isLinuxPlatform, isMacPlatform, newCommandId, newProjectId } from "../lib/utils";
 import { useStore } from "../store";
-import { shortcutLabelForCommand } from "../keybindings";
+import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
 import { gitRemoveWorktreeMutationOptions, gitStatusQueryOptions } from "../lib/gitReactQuery";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
@@ -97,7 +97,9 @@ import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "
 import { isNonEmpty as isNonEmptyString } from "effect/String";
 import {
   getFallbackThreadIdAfterDelete,
-  getVisibleThreadsForProject,
+  getNextVisibleSidebarThreadId,
+  getRenderedThreadsForSidebarProject,
+  getVisibleSidebarThreadIds,
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadEnvMode,
   resolveThreadRowClassName,
@@ -113,6 +115,7 @@ import {
   resolveHandoffTargetProvider,
   resolveThreadHandoffBadgeLabel,
 } from "../lib/threadHandoff";
+import { isTerminalFocused } from "../lib/terminalFocus";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_PREVIEW_LIMIT = 6;
@@ -434,6 +437,9 @@ export default function Sidebar() {
   const isLinuxDesktop = isElectron && isLinuxPlatform(navigator.platform);
   const shouldBrowseForProjectImmediately = isElectron && !isLinuxDesktop;
   const shouldShowProjectPathEntry = addingProject && !shouldBrowseForProjectImmediately;
+  const terminalOpen = routeThreadId
+    ? selectThreadTerminalState(terminalStateByThreadId, routeThreadId).terminalOpen
+    : false;
   const projectCwdById = useMemo(
     () => new Map(projects.map((project) => [project.id, project.cwd] as const)),
     [projects],
@@ -1009,6 +1015,38 @@ export default function Sidebar() {
     ],
   );
 
+  // Keep clicks, keyboard activation, and Alt+Tab cycling aligned on the same thread-open path.
+  const activateThread = useCallback(
+    (threadId: ThreadId) => {
+      if (selectedThreadIds.size > 0) {
+        clearSelection();
+      }
+      setSelectionAnchor(threadId);
+      const threadEntryPoint = selectThreadTerminalState(
+        terminalStateByThreadId,
+        threadId,
+      ).entryPoint;
+      if (threadEntryPoint === "terminal") {
+        openTerminalThreadPage(threadId);
+      } else {
+        openChatThreadPage(threadId);
+      }
+      void navigate({
+        to: "/$threadId",
+        params: { threadId },
+      });
+    },
+    [
+      clearSelection,
+      navigate,
+      openChatThreadPage,
+      openTerminalThreadPage,
+      selectedThreadIds.size,
+      setSelectionAnchor,
+      terminalStateByThreadId,
+    ],
+  );
+
   const handleThreadClick = useCallback(
     (event: MouseEvent, threadId: ThreadId, orderedProjectThreadIds: readonly ThreadId[]) => {
       const isMac = isMacPlatform(navigator.platform);
@@ -1027,24 +1065,9 @@ export default function Sidebar() {
         return;
       }
 
-      // Plain click — clear selection, set anchor for future shift-clicks, and navigate
-      if (selectedThreadIds.size > 0) {
-        clearSelection();
-      }
-      setSelectionAnchor(threadId);
-      void navigate({
-        to: "/$threadId",
-        params: { threadId },
-      });
+      activateThread(threadId);
     },
-    [
-      clearSelection,
-      navigate,
-      rangeSelectTo,
-      selectedThreadIds.size,
-      setSelectionAnchor,
-      toggleThreadSelection,
-    ],
+    [activateThread, rangeSelectTo, toggleThreadSelection],
   );
 
   const handleProjectContextMenu = useCallback(
@@ -1165,6 +1188,24 @@ export default function Sidebar() {
     () => sortProjectsForSidebar(projects, threads, appSettings.sidebarProjectSortOrder),
     [appSettings.sidebarProjectSortOrder, projects, threads],
   );
+  const visibleSidebarThreadIds = useMemo(
+    () =>
+      getVisibleSidebarThreadIds({
+        projects: sortedProjects,
+        threads,
+        activeThreadId: routeThreadId ?? undefined,
+        expandedThreadListsByProject,
+        previewLimit: THREAD_PREVIEW_LIMIT,
+        threadSortOrder: appSettings.sidebarThreadSortOrder,
+      }),
+    [
+      appSettings.sidebarThreadSortOrder,
+      expandedThreadListsByProject,
+      routeThreadId,
+      sortedProjects,
+      threads,
+    ],
+  );
   const isManualProjectSorting = appSettings.sidebarProjectSortOrder === "manual";
 
   function renderProjectItem(
@@ -1186,19 +1227,15 @@ export default function Sidebar() {
     );
     const activeThreadId = routeThreadId ?? undefined;
     const isThreadListExpanded = expandedThreadListsByProject.has(project.id);
-    const pinnedCollapsedThread =
-      !project.expanded && activeThreadId
-        ? (projectThreads.find((thread) => thread.id === activeThreadId) ?? null)
-        : null;
-    const shouldShowThreadPanel = project.expanded || pinnedCollapsedThread !== null;
-    const { hasHiddenThreads, visibleThreads } = getVisibleThreadsForProject({
+    const { hasHiddenThreads, renderedThreads } = getRenderedThreadsForSidebarProject({
+      project,
       threads: projectThreads,
       activeThreadId,
       isThreadListExpanded,
       previewLimit: THREAD_PREVIEW_LIMIT,
     });
+    const shouldShowThreadPanel = project.expanded || renderedThreads.length > 0;
     const orderedProjectThreadIds = projectThreads.map((thread) => thread.id);
-    const renderedThreads = pinnedCollapsedThread ? [pinnedCollapsedThread] : visibleThreads;
     const renderThreadRow = (thread: (typeof projectThreads)[number]) => {
       const threadTerminalState = selectThreadTerminalState(terminalStateByThreadId, thread.id);
       const threadEntryPoint = threadTerminalState.entryPoint;
@@ -1215,13 +1252,6 @@ export default function Sidebar() {
       const handoffBadgeLabel = resolveThreadHandoffBadgeLabel(thread);
       const prStatus = prStatusIndicator(prByThreadId.get(thread.id) ?? null);
       const terminalStatus = terminalStatusFromRunningIds(threadTerminalState.runningTerminalIds);
-      const openThreadPrimarySurface = () => {
-        if (threadEntryPoint === "terminal") {
-          openTerminalThreadPage(thread.id);
-          return;
-        }
-        openChatThreadPage(thread.id);
-      };
 
       return (
         <SidebarMenuSubItem key={thread.id} className="w-full" data-thread-item>
@@ -1241,27 +1271,11 @@ export default function Sidebar() {
               isActive,
               isSelected,
             })}
-            onClick={(event) => {
-              const isMac = isMacPlatform(navigator.platform);
-              const isModClick = isMac ? event.metaKey : event.ctrlKey;
-              const isShiftClick = event.shiftKey;
-              if (!isModClick && !isShiftClick) {
-                openThreadPrimarySurface();
-              }
-              handleThreadClick(event, thread.id, orderedProjectThreadIds);
-            }}
+            onClick={(event) => handleThreadClick(event, thread.id, orderedProjectThreadIds)}
             onKeyDown={(event) => {
               if (event.key !== "Enter" && event.key !== " ") return;
               event.preventDefault();
-              if (selectedThreadIds.size > 0) {
-                clearSelection();
-              }
-              setSelectionAnchor(thread.id);
-              openThreadPrimarySurface();
-              void navigate({
-                to: "/$threadId",
-                params: { threadId: thread.id },
-              });
+              activateThread(thread.id);
             }}
             onContextMenu={(event) => {
               event.preventDefault();
@@ -1598,6 +1612,37 @@ export default function Sidebar() {
       window.removeEventListener("mousedown", onMouseDown);
     };
   }, [clearSelection, selectedThreadIds.size]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      const command = resolveShortcutCommand(event, keybindings, {
+        context: {
+          terminalFocus: isTerminalFocused(),
+          terminalOpen,
+        },
+      });
+      if (command !== "chat.visible.next" && command !== "chat.visible.previous") {
+        return;
+      }
+
+      const nextThreadId = getNextVisibleSidebarThreadId({
+        visibleThreadIds: visibleSidebarThreadIds,
+        activeThreadId: routeThreadId ?? undefined,
+        direction: command === "chat.visible.previous" ? "backward" : "forward",
+      });
+      if (!nextThreadId || nextThreadId === routeThreadId) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      activateThread(nextThreadId);
+    };
+
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, { capture: true });
+    };
+  }, [activateThread, keybindings, routeThreadId, terminalOpen, visibleSidebarThreadIds]);
 
   useEffect(() => {
     if (!isElectron) return;

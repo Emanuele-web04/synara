@@ -94,6 +94,8 @@ const TERMINAL_LINE_END = "\u0005";
 function normalizeEventKey(key: string): string {
   const normalized = key.toLowerCase();
   if (normalized === "esc") return "escape";
+  if (normalized === "{") return "[";
+  if (normalized === "}") return "]";
   return normalized;
 }
 

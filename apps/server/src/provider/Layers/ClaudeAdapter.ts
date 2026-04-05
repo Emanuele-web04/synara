@@ -17,6 +17,7 @@ import {
   type SDKResultMessage,
   type SettingSource,
   type SDKUserMessage,
+  type SlashCommand,
 } from "@anthropic-ai/claude-agent-sdk";
 import {
   ApprovalRequestId,
@@ -39,6 +40,9 @@ import {
   TurnId,
   type UserInputQuestion,
   ClaudeCodeEffort,
+  type ProviderComposerCapabilities,
+  type ProviderListSkillsInput,
+  type ProviderListSkillsResult,
 } from "@t3tools/contracts";
 import {
   hasEffortLevel,
@@ -167,6 +171,7 @@ interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
   readonly setModel: (model?: string) => Promise<void>;
   readonly setPermissionMode: (mode: PermissionMode) => Promise<void>;
   readonly setMaxThinkingTokens: (maxThinkingTokens: number | null) => Promise<void>;
+  readonly supportedCommands: () => Promise<SlashCommand[]>;
   readonly close: () => void;
 }
 
@@ -3058,6 +3063,114 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         return context !== undefined && !context.stopped;
       });
 
+    // Skill discovery cache — avoids spawning a process per query.
+    let skillsCache: { result: ProviderListSkillsResult; cwd: string } | null = null;
+    let pendingDiscovery: Promise<ProviderListSkillsResult> | null = null;
+
+    function mapCommandsToSkills(commands: SlashCommand[]): ProviderListSkillsResult {
+      return {
+        skills: commands.map((cmd) => ({
+          name: cmd.name,
+          description: cmd.description || undefined,
+          path: cmd.name,
+          enabled: true,
+        })),
+        source: "claudeAgent",
+        cached: false,
+      };
+    }
+
+    async function discoverSkillsViaTemporaryProcess(
+      cwd: string,
+    ): Promise<ProviderListSkillsResult> {
+      // Spawn a lightweight Claude Code process for skill discovery.
+      // The SDK's supportedCommands() awaits an internal initialization promise
+      // that only resolves when the async generator is iterated (driving the
+      // subprocess handshake). We iterate in the background to unblock it.
+      const tempQuery = createQuery({
+        prompt: (async function* (): AsyncIterable<SDKUserMessage> {
+          await new Promise<never>(() => {});
+        })(),
+        options: {
+          cwd,
+          pathToClaudeCodeExecutable: "claude",
+          settingSources: [...CLAUDE_SETTING_SOURCES],
+          permissionMode: "plan" as PermissionMode,
+          persistSession: false,
+        },
+      });
+
+      try {
+        // Drive the iterator so the subprocess completes its init handshake.
+        // This runs in the background; close() in the finally block stops it.
+        void (async () => {
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          for await (const _ of tempQuery) {
+            /* consume until closed */
+          }
+        })();
+
+        const commands = await tempQuery.supportedCommands();
+        return mapCommandsToSkills(commands);
+      } finally {
+        tempQuery.close();
+      }
+    }
+
+    const listSkills: NonNullable<ClaudeAdapterShape["listSkills"]> = (
+      input: ProviderListSkillsInput,
+    ) =>
+      Effect.gen(function* () {
+        // 1. Try an active session first (cheapest path).
+        const context = input.threadId
+          ? sessions.get(ThreadId.makeUnsafe(input.threadId))
+          : [...sessions.values()].find((s) => !s.stopped);
+
+        if (context && !context.stopped) {
+          const commands = yield* Effect.tryPromise({
+            try: () => context.query.supportedCommands(),
+            catch: (cause) => toRequestError(context.session.threadId, "listSkills", cause),
+          });
+          const result = mapCommandsToSkills(commands);
+          skillsCache = { result, cwd: input.cwd };
+          return result;
+        }
+
+        // 2. Return from cache if valid and not force-reloading.
+        if (skillsCache && skillsCache.cwd === input.cwd && !input.forceReload) {
+          return { ...skillsCache.result, cached: true } satisfies ProviderListSkillsResult;
+        }
+
+        // 3. Spawn a temporary process for discovery (deduplicating concurrent requests).
+        const discoveryPromise = pendingDiscovery ?? discoverSkillsViaTemporaryProcess(input.cwd);
+        pendingDiscovery = discoveryPromise;
+
+        const result = yield* Effect.tryPromise({
+          try: () => discoveryPromise,
+          catch: (cause) =>
+            new ProviderAdapterProcessError({
+              provider: PROVIDER,
+              threadId: ThreadId.makeUnsafe("discovery"),
+              detail: toMessage(cause, "Failed to discover Claude skills."),
+              cause,
+            }),
+        }).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              pendingDiscovery = null;
+            }),
+          ),
+          Effect.tapError(() =>
+            Effect.sync(() => {
+              pendingDiscovery = null;
+            }),
+          ),
+        );
+
+        skillsCache = { result, cwd: input.cwd };
+        return result;
+      });
+
     const stopAll: ClaudeAdapterShape["stopAll"] = () =>
       Effect.forEach(
         sessions,
@@ -3079,12 +3192,23 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       ).pipe(Effect.tap(() => Queue.shutdown(runtimeEventQueue))),
     );
 
+    const composerCapabilities: ProviderComposerCapabilities = {
+      provider: PROVIDER,
+      supportsSkillMentions: true,
+      supportsSkillDiscovery: true,
+      supportsRuntimeModelList: false,
+    };
+
+    const getComposerCapabilities: NonNullable<
+      ClaudeAdapterShape["getComposerCapabilities"]
+    > = () => Effect.succeed(composerCapabilities);
+
     return {
       provider: PROVIDER,
       capabilities: {
         sessionModelSwitch: "in-session",
-        supportsSkillMentions: false,
-        supportsSkillDiscovery: false,
+        supportsSkillMentions: true,
+        supportsSkillDiscovery: true,
         supportsRuntimeModelList: false,
       },
       startSession,
@@ -3098,6 +3222,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       listSessions,
       hasSession,
       stopAll,
+      getComposerCapabilities,
+      listSkills,
       streamEvents: Stream.fromQueue(runtimeEventQueue),
     } satisfies ClaudeAdapterShape;
   });

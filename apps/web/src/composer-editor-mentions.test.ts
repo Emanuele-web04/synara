@@ -18,6 +18,38 @@ describe("splitPromptIntoComposerSegments", () => {
     ]);
   });
 
+  it("does not convert an incomplete trailing dollar skill token", () => {
+    expect(splitPromptIntoComposerSegments("Use $check-code")).toEqual([
+      { type: "text", text: "Use $check-code" },
+    ]);
+  });
+
+  it("does not convert an incomplete trailing slash skill token", () => {
+    expect(splitPromptIntoComposerSegments("Use /check-code")).toEqual([
+      { type: "text", text: "Use /check-code" },
+    ]);
+  });
+
+  it("converts completed skill tokens once a trailing delimiter exists", () => {
+    expect(splitPromptIntoComposerSegments("Use $check-code please")).toEqual([
+      { type: "text", text: "Use " },
+      { type: "skill", name: "check-code", prefix: "$" },
+      { type: "text", text: " please" },
+    ]);
+    expect(splitPromptIntoComposerSegments("Use /check-code please")).toEqual([
+      { type: "text", text: "Use " },
+      { type: "skill", name: "check-code", prefix: "/" },
+      { type: "text", text: " please" },
+    ]);
+  });
+
+  it("keeps built-in slash commands as plain text", () => {
+    expect(splitPromptIntoComposerSegments("/plan ")).toEqual([{ type: "text", text: "/plan " }]);
+    expect(splitPromptIntoComposerSegments("/model spark")).toEqual([
+      { type: "text", text: "/model spark" },
+    ]);
+  });
+
   it("keeps newlines around mention tokens", () => {
     expect(splitPromptIntoComposerSegments("one\n@src/index.ts \ntwo")).toEqual([
       { type: "text", text: "one\n" },

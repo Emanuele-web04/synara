@@ -1,5 +1,5 @@
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "../appSettings";
-import type { Thread } from "../types";
+import type { Project, Thread } from "../types";
 import { cn } from "../lib/utils";
 import {
   findLatestProposedPlan,
@@ -228,6 +228,106 @@ export function getVisibleThreadsForProject(input: {
     hasHiddenThreads: true,
     visibleThreads: threads.filter((thread) => visibleThreadIds.has(thread.id)),
   };
+}
+
+// Match the exact rows the sidebar renders for one project, including folded previews.
+export function getRenderedThreadsForSidebarProject(input: {
+  project: Pick<Project, "expanded">;
+  threads: readonly Thread[];
+  activeThreadId: Thread["id"] | undefined;
+  isThreadListExpanded: boolean;
+  previewLimit: number;
+}): {
+  hasHiddenThreads: boolean;
+  renderedThreads: Thread[];
+} {
+  const { activeThreadId, isThreadListExpanded, previewLimit, project, threads } = input;
+  const pinnedCollapsedThread =
+    !project.expanded && activeThreadId
+      ? (threads.find((thread) => thread.id === activeThreadId) ?? null)
+      : null;
+  const { hasHiddenThreads, visibleThreads } = getVisibleThreadsForProject({
+    threads,
+    activeThreadId,
+    isThreadListExpanded,
+    previewLimit,
+  });
+
+  return {
+    hasHiddenThreads,
+    renderedThreads: pinnedCollapsedThread ? [pinnedCollapsedThread] : visibleThreads,
+  };
+}
+
+// Flatten the sidebar's current project/thread visibility into the same order the user sees.
+export function getVisibleSidebarThreadIds(input: {
+  projects: readonly Pick<Project, "id" | "expanded">[];
+  threads: readonly Thread[];
+  activeThreadId: Thread["id"] | undefined;
+  expandedThreadListsByProject: ReadonlySet<Project["id"]>;
+  previewLimit: number;
+  threadSortOrder: SidebarThreadSortOrder;
+}): Thread["id"][] {
+  const {
+    activeThreadId,
+    expandedThreadListsByProject,
+    previewLimit,
+    projects,
+    threadSortOrder,
+    threads,
+  } = input;
+  const visibleThreadIds: Thread["id"][] = [];
+
+  for (const project of projects) {
+    const projectThreads = sortThreadsForSidebar(
+      threads.filter((thread) => thread.projectId === project.id),
+      threadSortOrder,
+    );
+    const { renderedThreads } = getRenderedThreadsForSidebarProject({
+      project,
+      threads: projectThreads,
+      activeThreadId,
+      isThreadListExpanded: expandedThreadListsByProject.has(project.id),
+      previewLimit,
+    });
+    for (const thread of renderedThreads) {
+      visibleThreadIds.push(thread.id);
+    }
+  }
+
+  return visibleThreadIds;
+}
+
+// Resolve the next sidebar-visible thread for keyboard cycling with wraparound.
+export function getNextVisibleSidebarThreadId(input: {
+  visibleThreadIds: readonly Thread["id"][];
+  activeThreadId: Thread["id"] | undefined;
+  direction: "forward" | "backward";
+}): Thread["id"] | null {
+  const { activeThreadId, direction, visibleThreadIds } = input;
+  if (visibleThreadIds.length === 0) {
+    return null;
+  }
+
+  if (!activeThreadId) {
+    return direction === "forward"
+      ? (visibleThreadIds[0] ?? null)
+      : (visibleThreadIds.at(-1) ?? null);
+  }
+
+  const activeIndex = visibleThreadIds.findIndex((threadId) => threadId === activeThreadId);
+  if (activeIndex === -1) {
+    return direction === "forward"
+      ? (visibleThreadIds[0] ?? null)
+      : (visibleThreadIds.at(-1) ?? null);
+  }
+
+  const nextIndex =
+    direction === "forward"
+      ? (activeIndex + 1) % visibleThreadIds.length
+      : (activeIndex - 1 + visibleThreadIds.length) % visibleThreadIds.length;
+
+  return visibleThreadIds[nextIndex] ?? null;
 }
 
 function toSortableTimestamp(iso: string | undefined): number | null {
