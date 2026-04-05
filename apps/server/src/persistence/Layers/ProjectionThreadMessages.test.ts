@@ -36,6 +36,7 @@ layer("ProjectionThreadMessageRepository", (it) => {
         text: "initial",
         attachments: persistedAttachments,
         isStreaming: false,
+        source: "native",
         createdAt,
         updatedAt,
       });
@@ -47,6 +48,7 @@ layer("ProjectionThreadMessageRepository", (it) => {
         role: "user",
         text: "updated",
         isStreaming: false,
+        source: "native",
         createdAt,
         updatedAt: "2026-02-28T19:00:02.000Z",
       });
@@ -81,6 +83,7 @@ layer("ProjectionThreadMessageRepository", (it) => {
           },
         ],
         isStreaming: false,
+        source: "native",
         createdAt,
         updatedAt: "2026-02-28T19:10:01.000Z",
       });
@@ -93,6 +96,7 @@ layer("ProjectionThreadMessageRepository", (it) => {
         text: "cleared",
         attachments: [],
         isStreaming: false,
+        source: "native",
         createdAt,
         updatedAt: "2026-02-28T19:10:02.000Z",
       });

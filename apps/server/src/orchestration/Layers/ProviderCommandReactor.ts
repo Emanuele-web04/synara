@@ -5,6 +5,7 @@ import {
   EventId,
   type ModelSelection,
   type OrchestrationEvent,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ProviderKind,
   type ProviderStartOptions,
   type OrchestrationSession,
@@ -21,6 +22,7 @@ import { GitCore } from "../../git/Services/GitCore.ts";
 import { ProviderAdapterRequestError, ProviderServiceError } from "../../provider/Errors.ts";
 import { TextGeneration } from "../../git/Services/TextGeneration.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { buildHandoffBootstrapText, hasNativeAssistantMessagesBefore } from "../handoff.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ProviderCommandReactor,
@@ -74,6 +76,9 @@ const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
 const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 const WORKTREE_BRANCH_PREFIX = "t3code";
 const TEMP_WORKTREE_BRANCH_PATTERN = new RegExp(`^${WORKTREE_BRANCH_PREFIX}\\/[0-9a-f]{8}$`);
+const HANDOFF_CONTEXT_WRAPPER_OVERHEAD =
+  "<handoff_context>\n\n</handoff_context>\n\n<latest_user_message>\n\n</latest_user_message>"
+    .length;
 
 function isUnknownPendingApprovalRequestError(cause: Cause.Cause<ProviderServiceError>): boolean {
   const error = Cause.squash(cause);
@@ -351,6 +356,7 @@ const make = Effect.gen(function* () {
 
   const sendTurnForThread = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
+    readonly messageId: string;
     readonly messageText: string;
     readonly attachments?: ReadonlyArray<ChatAttachment>;
     readonly modelSelection?: ModelSelection;
@@ -372,7 +378,23 @@ const make = Effect.gen(function* () {
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
-    const normalizedInput = toNonEmptyProviderInput(input.messageText);
+    const shouldBootstrapHandoff =
+      thread.handoff?.bootstrapStatus === "pending" &&
+      !hasNativeAssistantMessagesBefore(thread, input.messageId);
+    const availableBootstrapChars = Math.max(
+      0,
+      PROVIDER_SEND_TURN_MAX_INPUT_CHARS -
+        input.messageText.length -
+        HANDOFF_CONTEXT_WRAPPER_OVERHEAD,
+    );
+    const handoffBootstrapText =
+      shouldBootstrapHandoff && availableBootstrapChars > 0
+        ? buildHandoffBootstrapText(thread, availableBootstrapChars)
+        : null;
+    const providerInput = handoffBootstrapText
+      ? `<handoff_context>\n${handoffBootstrapText}\n</handoff_context>\n\n<latest_user_message>\n${input.messageText}\n</latest_user_message>`
+      : input.messageText;
+    const normalizedInput = toNonEmptyProviderInput(providerInput);
     const normalizedAttachments = input.attachments ?? [];
     const activeSession = yield* providerService
       .listSessions()
@@ -402,6 +424,17 @@ const make = Effect.gen(function* () {
       ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
     });
+    if (handoffBootstrapText && thread.handoff !== null) {
+      yield* orchestrationEngine.dispatch({
+        type: "thread.meta.update",
+        commandId: serverCommandId("handoff-bootstrap-complete"),
+        threadId: input.threadId,
+        handoff: {
+          ...thread.handoff,
+          bootstrapStatus: "completed",
+        },
+      });
+    }
   });
 
   const maybeGenerateAndRenameWorktreeBranchForFirstTurn = Effect.fnUntraced(function* (input: {
@@ -510,6 +543,7 @@ const make = Effect.gen(function* () {
 
     yield* sendTurnForThread({
       threadId: event.payload.threadId,
+      messageId: message.id,
       messageText: message.text,
       ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
       ...(event.payload.modelSelection !== undefined

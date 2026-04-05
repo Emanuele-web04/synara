@@ -91,6 +91,7 @@ function createMinimalSnapshot(): OrchestrationReadModel {
         createdAt: NOW_ISO,
         updatedAt: NOW_ISO,
         deletedAt: null,
+        handoff: null,
         messages: [
           {
             id: "msg-1" as MessageId,
@@ -98,6 +99,7 @@ function createMinimalSnapshot(): OrchestrationReadModel {
             text: "hello",
             turnId: null,
             streaming: false,
+            source: "native",
             createdAt: NOW_ISO,
             updatedAt: NOW_ISO,
           },

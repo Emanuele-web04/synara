@@ -1,0 +1,89 @@
+import {
+  DEFAULT_MODEL_BY_PROVIDER,
+  MessageId,
+  PROVIDER_DISPLAY_NAMES,
+  type ModelSelection,
+  type ProviderKind,
+  type ThreadHandoffImportedMessage,
+} from "@t3tools/contracts";
+import { type Thread } from "../types";
+import { randomUUID } from "./utils";
+
+export function resolveHandoffTargetProvider(sourceProvider: ProviderKind): ProviderKind {
+  return sourceProvider === "claudeAgent" ? "codex" : "claudeAgent";
+}
+
+export function resolveThreadHandoffBadgeLabel(thread: Pick<Thread, "handoff">): string | null {
+  if (!thread.handoff) {
+    return null;
+  }
+  return `Handoff from ${PROVIDER_DISPLAY_NAMES[thread.handoff.sourceProvider]}`;
+}
+
+export function buildThreadHandoffImportedMessages(
+  thread: Pick<Thread, "messages">,
+): ReadonlyArray<ThreadHandoffImportedMessage> {
+  return thread.messages
+    .filter(
+      (
+        message,
+      ): message is Thread["messages"][number] & {
+        role: "user" | "assistant";
+      } => (message.role === "user" || message.role === "assistant") && message.streaming === false,
+    )
+    .map((message) => {
+      const importedMessage: ThreadHandoffImportedMessage = {
+        messageId: MessageId.makeUnsafe(randomUUID()),
+        role: message.role,
+        text: message.text,
+        createdAt: message.createdAt,
+        updatedAt: message.completedAt ?? message.createdAt,
+      };
+      const attachments =
+        message.attachments && message.attachments.length > 0
+          ? message.attachments.map((attachment) => ({
+              type: attachment.type,
+              id: attachment.id,
+              name: attachment.name,
+              mimeType: attachment.mimeType,
+              sizeBytes: attachment.sizeBytes,
+            }))
+          : null;
+      return attachments ? Object.assign(importedMessage, { attachments }) : importedMessage;
+    });
+}
+
+export function canCreateThreadHandoff(input: {
+  readonly thread: Pick<Thread, "messages" | "session">;
+  readonly isBusy?: boolean;
+  readonly hasPendingApprovals?: boolean;
+  readonly hasPendingUserInput?: boolean;
+}): boolean {
+  if (input.isBusy || input.hasPendingApprovals || input.hasPendingUserInput) {
+    return false;
+  }
+  const sessionStatus = input.thread.session?.orchestrationStatus;
+  if (sessionStatus === "starting" || sessionStatus === "running") {
+    return false;
+  }
+  return buildThreadHandoffImportedMessages(input.thread).length > 0;
+}
+
+export function resolveThreadHandoffModelSelection(input: {
+  readonly sourceThread: Pick<Thread, "modelSelection">;
+  readonly projectDefaultModelSelection: ModelSelection | null | undefined;
+  readonly stickyModelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>>;
+}): ModelSelection {
+  const targetProvider = resolveHandoffTargetProvider(input.sourceThread.modelSelection.provider);
+  const stickySelection = input.stickyModelSelectionByProvider[targetProvider];
+  if (stickySelection) {
+    return stickySelection;
+  }
+  if (input.projectDefaultModelSelection?.provider === targetProvider) {
+    return input.projectDefaultModelSelection;
+  }
+  return {
+    provider: targetProvider,
+    model: DEFAULT_MODEL_BY_PROVIDER[targetProvider],
+  };
+}

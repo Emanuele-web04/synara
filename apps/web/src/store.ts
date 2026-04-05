@@ -283,6 +283,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
             text: message.text,
             createdAt: message.createdAt,
             streaming: message.streaming,
+            source: message.source,
             ...(message.streaming ? {} : { completedAt: message.updatedAt }),
             ...(attachments && attachments.length > 0 ? { attachments } : {}),
           };
@@ -304,6 +305,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
         lastVisitedAt: existing?.lastVisitedAt ?? thread.updatedAt,
         branch: thread.branch,
         worktreePath: thread.worktreePath,
+        handoff: thread.handoff,
         turnDiffSummaries: thread.checkpoints.map((checkpoint) => ({
           turnId: checkpoint.turnId,
           completedAt: checkpoint.completedAt,

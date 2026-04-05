@@ -12,6 +12,7 @@ import {
   type ProviderApprovalDecision,
   type ProviderSkillDescriptor,
   type ProviderSkillReference,
+  PROVIDER_DISPLAY_NAMES,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   type ResolvedKeybindingsConfig,
@@ -93,6 +94,7 @@ import {
 } from "../types";
 import { basenameOfPath } from "../vscode-icons";
 import { useTheme } from "../hooks/useTheme";
+import { useThreadHandoff } from "../hooks/useThreadHandoff";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import BranchToolbar from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
@@ -191,6 +193,11 @@ import {
   SendPhase,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
+import {
+  canCreateThreadHandoff,
+  resolveHandoffTargetProvider,
+  resolveThreadHandoffBadgeLabel,
+} from "../lib/threadHandoff";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
@@ -308,6 +315,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   );
   const timestampFormat = settings.timestampFormat;
   const navigate = useNavigate();
+  const { createThreadHandoff } = useThreadHandoff();
   const rawSearch = useSearch({
     strict: false,
     select: (params) => parseDiffRouteSearch(params),
@@ -796,6 +804,25 @@ export default function ChatView({ threadId }: ChatViewProps) {
         : null,
     [activePendingDraftAnswers, activePendingUserInput],
   );
+  const handoffBadgeLabel = useMemo(
+    () => (activeThread ? resolveThreadHandoffBadgeLabel(activeThread) : null),
+    [activeThread],
+  );
+  const handoffBadgeSourceProvider = activeThread?.handoff?.sourceProvider ?? null;
+  const handoffBadgeTargetProvider = activeThread?.handoff
+    ? activeThread.modelSelection.provider
+    : null;
+  const handoffTargetProvider = useMemo(
+    () =>
+      activeThread ? resolveHandoffTargetProvider(activeThread.modelSelection.provider) : null,
+    [activeThread],
+  );
+  const handoffActionLabel = useMemo(() => {
+    if (!activeThread) {
+      return "Create handoff thread";
+    }
+    return `Handoff to ${PROVIDER_DISPLAY_NAMES[handoffTargetProvider ?? "codex"]}`;
+  }, [activeThread, handoffTargetProvider]);
   const activePendingIsResponding = activePendingUserInput
     ? respondingUserInputRequestIds.includes(activePendingUserInput.requestId)
     : false;
@@ -834,6 +861,17 @@ export default function ChatView({ threadId }: ChatViewProps) {
     pendingUserInputs.length > 0 ||
     (showPlanFollowUpPrompt && activeProposedPlan !== null);
   const composerFooterHasWideActions = showPlanFollowUpPrompt || activePendingProgress !== null;
+  const handoffDisabled = !(
+    activeThread &&
+    activeProject &&
+    isServerThread &&
+    canCreateThreadHandoff({
+      thread: activeThread,
+      isBusy: isWorking,
+      hasPendingApprovals: pendingApprovals.length > 0,
+      hasPendingUserInput: pendingUserInputs.length > 0,
+    })
+  );
   const lastSyncedPendingInputRef = useRef<{
     requestId: string | null;
     questionId: string | null;
@@ -2716,6 +2754,25 @@ export default function ChatView({ threadId }: ChatViewProps) {
     [activeThread, isConnecting, isRevertingCheckpoint, isSendBusy, phase, setThreadError],
   );
 
+  const onCreateHandoffThread = useCallback(async () => {
+    if (!activeThread || handoffDisabled) {
+      return;
+    }
+
+    try {
+      await createThreadHandoff(activeThread);
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Could not create handoff thread",
+        description:
+          error instanceof Error
+            ? error.message
+            : "An error occurred while creating the handoff thread.",
+      });
+    }
+  }, [activeThread, createThreadHandoff, handoffDisabled]);
+
   const onSend = async (e?: { preventDefault: () => void }) => {
     e?.preventDefault();
     const api = readNativeApi();
@@ -2848,6 +2905,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
         createdAt: messageCreatedAt,
         streaming: false,
+        source: "native",
       },
     ]);
     // Sending a message should always bring the latest user turn into view.
@@ -3259,6 +3317,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           text: outgoingMessageText,
           createdAt: messageCreatedAt,
           streaming: false,
+          source: "native",
         },
       ]);
       shouldAutoScrollRef.current = true;
@@ -3897,6 +3956,11 @@ export default function ChatView({ threadId }: ChatViewProps) {
           terminalToggleShortcutLabel={terminalToggleShortcutLabel}
           browserToggleShortcutLabel={browserPanelShortcutLabel}
           diffToggleShortcutLabel={diffPanelShortcutLabel}
+          handoffBadgeLabel={handoffBadgeLabel}
+          handoffActionLabel={handoffActionLabel}
+          handoffDisabled={handoffDisabled}
+          handoffBadgeSourceProvider={handoffBadgeSourceProvider}
+          handoffBadgeTargetProvider={handoffBadgeTargetProvider}
           browserOpen={browserOpen}
           gitCwd={gitCwd}
           diffOpen={diffOpen}
@@ -3909,6 +3973,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           onToggleTerminal={toggleTerminalVisibility}
           onToggleDiff={onToggleDiff}
           onToggleBrowser={onToggleBrowser}
+          onCreateHandoff={onCreateHandoffThread}
         />
       </header>
 

@@ -12,6 +12,7 @@ import {
 } from "~/lib/icons";
 import { autoAnimate } from "@formkit/auto-animate";
 import { IoFolderOutline } from "react-icons/io5";
+import { VscRepoForked } from "react-icons/vsc";
 import { HiOutlineFolderOpen } from "react-icons/hi2";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import {
@@ -32,6 +33,7 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   DEFAULT_MODEL_BY_PROVIDER,
   type DesktopUpdateState,
+  PROVIDER_DISPLAY_NAMES,
   ProjectId,
   ThreadId,
   type GitStatusResult,
@@ -56,6 +58,7 @@ import { readNativeApi } from "../nativeApi";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { ClaudeAI, OpenAI } from "./Icons";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { useThreadHandoff } from "../hooks/useThreadHandoff";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { toastManager } from "./ui/toast";
 import {
@@ -104,6 +107,12 @@ import {
   sortThreadsForSidebar,
 } from "./Sidebar.logic";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+import { cn } from "~/lib/utils";
+import {
+  canCreateThreadHandoff,
+  resolveHandoffTargetProvider,
+  resolveThreadHandoffBadgeLabel,
+} from "../lib/threadHandoff";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_PREVIEW_LIMIT = 6;
@@ -120,6 +129,38 @@ const SIDEBAR_LIST_ANIMATION_OPTIONS = {
   duration: 180,
   easing: "ease-out",
 } as const;
+
+function ProviderGlyph({
+  provider,
+  className,
+}: {
+  provider: "codex" | "claudeAgent";
+  className?: string;
+}) {
+  if (provider === "claudeAgent") {
+    return <ClaudeAI aria-hidden="true" className={cn("text-[#d97757]", className)} />;
+  }
+  return <OpenAI aria-hidden="true" className={cn("text-muted-foreground/60", className)} />;
+}
+
+function HandoffProviderGlyph({
+  sourceProvider,
+  targetProvider,
+}: {
+  sourceProvider: "codex" | "claudeAgent";
+  targetProvider: "codex" | "claudeAgent";
+}) {
+  return (
+    <div className="relative h-4.5 w-5 shrink-0">
+      <span className="absolute left-0 top-1/2 inline-flex size-3.5 -translate-y-1/2 items-center justify-center rounded-full border border-background bg-background shadow-xs">
+        <ProviderGlyph provider={sourceProvider} className="size-2.5" />
+      </span>
+      <span className="absolute right-0 top-1/2 z-10 inline-flex size-3.5 -translate-y-1/2 items-center justify-center rounded-full border border-background bg-background shadow-xs">
+        <ProviderGlyph provider={targetProvider} className="size-2.5" />
+      </span>
+    </div>
+  );
+}
 
 function formatRelativeTime(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -357,6 +398,7 @@ export default function Sidebar() {
   const isOnSettings = useLocation({ select: (loc) => loc.pathname === "/settings" });
   const { settings: appSettings, updateSettings } = useAppSettings();
   const { handleNewThread } = useHandleNewThread();
+  const { createThreadHandoff } = useThreadHandoff();
   const routeThreadId = useParams({
     strict: false,
     select: (params) => (params.threadId ? ThreadId.makeUnsafe(params.threadId) : null),
@@ -811,18 +853,46 @@ export default function Sidebar() {
       });
     },
   });
+  const handoffThread = useCallback(
+    async (thread: (typeof threads)[number]) => {
+      try {
+        await createThreadHandoff(thread);
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not create handoff thread",
+          description:
+            error instanceof Error
+              ? error.message
+              : "An error occurred while creating the handoff thread.",
+        });
+      }
+    },
+    [createThreadHandoff],
+  );
   const handleThreadContextMenu = useCallback(
     async (threadId: ThreadId, position: { x: number; y: number }) => {
       const api = readNativeApi();
       if (!api) return;
       const thread = threads.find((t) => t.id === threadId);
       if (!thread) return;
+      const hasPendingApprovals = derivePendingApprovals(thread.activities).length > 0;
+      const hasPendingUserInput = derivePendingUserInputs(thread.activities).length > 0;
+      const canHandoff = canCreateThreadHandoff({
+        thread,
+        hasPendingApprovals,
+        hasPendingUserInput,
+      });
+      const handoffLabel = canHandoff
+        ? `Handoff to ${PROVIDER_DISPLAY_NAMES[resolveHandoffTargetProvider(thread.modelSelection.provider)]}`
+        : null;
       const threadWorkspacePath =
         thread.worktreePath ?? projectCwdById.get(thread.projectId) ?? null;
       const clicked = await api.contextMenu.show(
         [
           { id: "rename", label: "Rename thread" },
           { id: "mark-unread", label: "Mark unread" },
+          ...(handoffLabel ? [{ id: "handoff", label: handoffLabel }] : []),
           { id: "copy-path", label: "Copy Path" },
           { id: "copy-thread-id", label: "Copy Thread ID" },
           { id: "delete", label: "Delete", destructive: true },
@@ -839,6 +909,10 @@ export default function Sidebar() {
 
       if (clicked === "mark-unread") {
         markThreadUnread(threadId);
+        return;
+      }
+      if (clicked === "handoff") {
+        await handoffThread(thread);
         return;
       }
       if (clicked === "copy-path") {
@@ -876,6 +950,7 @@ export default function Sidebar() {
       copyPathToClipboard,
       copyThreadIdToClipboard,
       deleteThread,
+      handoffThread,
       markThreadUnread,
       projectCwdById,
       threads,
@@ -1130,11 +1205,14 @@ export default function Sidebar() {
       const isActive = routeThreadId === thread.id;
       const isSelected = selectedThreadIds.has(thread.id);
       const isHighlighted = isActive || isSelected;
+      const hasPendingApprovals = derivePendingApprovals(thread.activities).length > 0;
+      const hasPendingUserInput = derivePendingUserInputs(thread.activities).length > 0;
       const threadStatus = resolveThreadStatusPill({
         thread,
-        hasPendingApprovals: derivePendingApprovals(thread.activities).length > 0,
-        hasPendingUserInput: derivePendingUserInputs(thread.activities).length > 0,
+        hasPendingApprovals,
+        hasPendingUserInput,
       });
+      const handoffBadgeLabel = resolveThreadHandoffBadgeLabel(thread);
       const prStatus = prStatusIndicator(prByThreadId.get(thread.id) ?? null);
       const terminalStatus = terminalStatusFromRunningIds(threadTerminalState.runningTerminalIds);
       const openThreadPrimarySurface = () => {
@@ -1205,10 +1283,25 @@ export default function Sidebar() {
           >
             {threadEntryPoint === "terminal" ? (
               <TerminalIcon aria-hidden="true" className="size-3.5 shrink-0 text-teal-600/85" />
-            ) : thread.modelSelection.provider === "claudeAgent" ? (
-              <ClaudeAI aria-hidden="true" className="size-3.5 shrink-0 text-[#d97757]" />
+            ) : handoffBadgeLabel && thread.handoff ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <span className="inline-flex shrink-0 items-center">
+                      <HandoffProviderGlyph
+                        sourceProvider={thread.handoff.sourceProvider}
+                        targetProvider={thread.modelSelection.provider}
+                      />
+                    </span>
+                  }
+                />
+                <TooltipPopup side="top">{handoffBadgeLabel}</TooltipPopup>
+              </Tooltip>
             ) : (
-              <OpenAI aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground/60" />
+              <ProviderGlyph
+                provider={thread.modelSelection.provider}
+                className="size-3.5 shrink-0"
+              />
             )}
             <div className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
               {prStatus && (
@@ -1266,6 +1359,18 @@ export default function Sidebar() {
                   {thread.title}
                 </span>
               )}
+              {handoffBadgeLabel ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <span className="inline-flex shrink-0 items-center text-muted-foreground/55">
+                        <VscRepoForked className="size-3" />
+                      </span>
+                    }
+                  />
+                  <TooltipPopup side="top">{handoffBadgeLabel}</TooltipPopup>
+                </Tooltip>
+              ) : null}
             </div>
             <div className="ml-auto flex shrink-0 items-center gap-1.5">
               {terminalStatus && (

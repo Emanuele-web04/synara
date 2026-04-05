@@ -1,9 +1,11 @@
 import type {
   ModelSelection,
+  OrchestrationMessageSource,
   OrchestrationLatestTurn,
   OrchestrationProposedPlanId,
   OrchestrationSessionStatus,
   OrchestrationThreadActivity,
+  ThreadHandoff,
   ProjectScript as ContractProjectScript,
   ThreadId,
   ProjectId,
@@ -52,6 +54,7 @@ export interface ChatMessage {
   createdAt: string;
   completedAt?: string | undefined;
   streaming: boolean;
+  source?: OrchestrationMessageSource;
 }
 
 export interface ProposedPlan {
@@ -110,6 +113,7 @@ export interface Thread {
   lastVisitedAt?: string | undefined;
   branch: string | null;
   worktreePath: string | null;
+  handoff?: ThreadHandoff | null;
   turnDiffSummaries: TurnDiffSummary[];
   activities: OrchestrationThreadActivity[];
 }

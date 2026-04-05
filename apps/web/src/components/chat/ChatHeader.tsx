@@ -6,13 +6,23 @@
 import {
   type EditorId,
   type ProjectScript,
+  type ProviderKind,
   type ResolvedKeybindingsConfig,
   type ThreadId,
 } from "@t3tools/contracts";
 import React, { memo, useEffect, useRef, useState } from "react";
+import { VscRepoForked } from "react-icons/vsc";
 import GitActionsControl from "../GitActionsControl";
-import { DiffIcon, EllipsisIcon, GlobeIcon, PlusIcon, TerminalSquareIcon } from "~/lib/icons";
+import {
+  ArrowRightIcon,
+  DiffIcon,
+  EllipsisIcon,
+  GlobeIcon,
+  PlusIcon,
+  TerminalSquareIcon,
+} from "~/lib/icons";
 import { Button } from "../ui/button";
+import { Badge } from "../ui/badge";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import ProjectScriptsControl, { type NewProjectScriptInput } from "../ProjectScriptsControl";
@@ -23,7 +33,7 @@ import { isElectron } from "~/env";
 import { cn } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import { usePreferredEditor } from "../../editorPreferences";
-import { AntigravityIcon, CursorIcon, VisualStudioCode, Zed } from "../Icons";
+import { AntigravityIcon, ClaudeAI, CursorIcon, OpenAI, VisualStudioCode, Zed } from "../Icons";
 
 /** Width (px) below which collapsible header controls fold into the ellipsis menu. */
 const HEADER_COMPACT_BREAKPOINT = 480;
@@ -50,6 +60,11 @@ interface ChatHeaderProps {
   terminalToggleShortcutLabel: string | null;
   browserToggleShortcutLabel: string | null;
   diffToggleShortcutLabel: string | null;
+  handoffBadgeLabel: string | null;
+  handoffActionLabel: string;
+  handoffDisabled: boolean;
+  handoffBadgeSourceProvider: ProviderKind | null;
+  handoffBadgeTargetProvider: ProviderKind | null;
   browserOpen: boolean;
   gitCwd: string | null;
   diffOpen: boolean;
@@ -60,6 +75,7 @@ interface ChatHeaderProps {
   onToggleTerminal: () => void;
   onToggleDiff: () => void;
   onToggleBrowser: () => void;
+  onCreateHandoff: () => void;
 }
 
 export const ChatHeader = memo(function ChatHeader({
@@ -77,6 +93,11 @@ export const ChatHeader = memo(function ChatHeader({
   terminalToggleShortcutLabel,
   browserToggleShortcutLabel,
   diffToggleShortcutLabel,
+  handoffBadgeLabel,
+  handoffActionLabel,
+  handoffDisabled,
+  handoffBadgeSourceProvider,
+  handoffBadgeTargetProvider,
   browserOpen,
   gitCwd,
   diffOpen,
@@ -87,6 +108,7 @@ export const ChatHeader = memo(function ChatHeader({
   onToggleTerminal,
   onToggleDiff,
   onToggleBrowser,
+  onCreateHandoff,
 }: ChatHeaderProps) {
   const { isMobile, state } = useSidebar();
   const needsDesktopTrafficLightInset = isElectron && !isMobile && state === "collapsed";
@@ -108,6 +130,15 @@ export const ChatHeader = memo(function ChatHeader({
   const hasCollapsibleControls = Boolean(
     activeProjectScripts || activeProjectName || terminalAvailable,
   );
+  const renderProviderIcon = (provider: ProviderKind | null, className: string) => {
+    if (provider === "claudeAgent") {
+      return <ClaudeAI className={cn("text-[#d97757]", className)} />;
+    }
+    if (provider === "codex") {
+      return <OpenAI className={cn("text-muted-foreground/75", className)} />;
+    }
+    return <VscRepoForked className={className} />;
+  };
 
   return (
     <div ref={headerRef} className="flex min-w-0 flex-1 items-center gap-2">
@@ -120,16 +151,56 @@ export const ChatHeader = memo(function ChatHeader({
         <div className="shrink-0 md:hidden">
           <SidebarTrigger className="size-7 shrink-0" />
         </div>
-        <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
           <h2
             className="max-w-[clamp(16rem,50vw,40rem)] truncate text-sm font-medium text-foreground"
             title={activeThreadTitle}
           >
             {activeThreadTitle}
           </h2>
+          {handoffBadgeLabel ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Badge
+                    variant="outline"
+                    className="hidden !h-7 shrink-0 items-center gap-2 rounded-md px-1.5 text-[10px] sm:inline-flex"
+                  >
+                    <span className="inline-flex shrink-0 items-center justify-center">
+                      {renderProviderIcon(handoffBadgeSourceProvider, "size-3.5 shrink-0")}
+                    </span>
+                    <ArrowRightIcon className="size-2.5 shrink-0 opacity-45" />
+                    <span className="inline-flex shrink-0 items-center justify-center translate-y-px">
+                      {renderProviderIcon(handoffBadgeTargetProvider, "size-3.5 shrink-0")}
+                    </span>
+                  </Badge>
+                }
+              />
+              <TooltipPopup side="bottom">{handoffBadgeLabel}</TooltipPopup>
+            </Tooltip>
+          ) : null}
         </div>
       </div>
-      <div className="flex shrink-0 items-center gap-2">
+      <div className="flex shrink-0 items-center gap-2 [-webkit-app-region:no-drag]">
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                className="shrink-0 gap-1.5"
+                aria-label={handoffActionLabel}
+                disabled={handoffDisabled}
+                onClick={onCreateHandoff}
+              >
+                <VscRepoForked className="size-3.5" />
+                <span className="truncate">{handoffActionLabel}</span>
+              </Button>
+            }
+          />
+          <TooltipPopup side="bottom">{handoffActionLabel}</TooltipPopup>
+        </Tooltip>
         {/* Inline controls — shown when there's enough room. */}
         {!compact && (
           <>
