@@ -1,4 +1,5 @@
 import { type FC, type SVGProps } from "react";
+import { PiGitCommit } from "react-icons/pi";
 import {
   IconAlertCircle,
   IconAlertTriangle,
@@ -25,7 +26,6 @@ import {
   IconFlask2,
   IconFolder,
   IconFolderOpen,
-  IconGitCommit,
   IconGitCompare,
   IconGitFork,
   IconGitPullRequest,
@@ -95,7 +95,9 @@ export const FlaskConicalIcon = adaptIcon(IconFlask2);
 export const FolderClosedIcon = adaptIcon(IconFolder);
 export const FolderIcon = adaptIcon(IconFolder);
 export const FolderOpenIcon = adaptIcon(IconFolderOpen);
-export const GitCommitIcon = adaptIcon(IconGitCommit);
+export const GitCommitIcon: LucideIcon = (props) => (
+  <PiGitCommit className={props.className} style={props.style} />
+);
 export const GitForkIcon = adaptIcon(IconGitFork);
 export const GitPullRequestIcon = adaptIcon(IconGitPullRequest);
 export const GlobeIcon = adaptIcon(IconWorld);
