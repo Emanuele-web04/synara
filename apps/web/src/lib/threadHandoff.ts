@@ -53,8 +53,17 @@ export function buildThreadHandoffImportedMessages(
     });
 }
 
+export function hasNativeThreadHandoffMessages(thread: Pick<Thread, "messages">): boolean {
+  return thread.messages.some(
+    (message) =>
+      (message.role === "user" || message.role === "assistant") &&
+      message.source !== "handoff-import" &&
+      message.streaming === false,
+  );
+}
+
 export function canCreateThreadHandoff(input: {
-  readonly thread: Pick<Thread, "messages" | "session">;
+  readonly thread: Pick<Thread, "handoff" | "messages" | "session">;
   readonly isBusy?: boolean;
   readonly hasPendingApprovals?: boolean;
   readonly hasPendingUserInput?: boolean;
@@ -66,7 +75,14 @@ export function canCreateThreadHandoff(input: {
   if (sessionStatus === "starting" || sessionStatus === "running") {
     return false;
   }
-  return buildThreadHandoffImportedMessages(input.thread).length > 0;
+  const importedMessages = buildThreadHandoffImportedMessages(input.thread);
+  if (importedMessages.length === 0) {
+    return false;
+  }
+  if (input.thread.handoff !== null) {
+    return hasNativeThreadHandoffMessages(input.thread);
+  }
+  return true;
 }
 
 export function resolveThreadHandoffModelSelection(input: {

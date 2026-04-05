@@ -3959,6 +3959,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           handoffBadgeLabel={handoffBadgeLabel}
           handoffActionLabel={handoffActionLabel}
           handoffDisabled={handoffDisabled}
+          handoffActionTargetProvider={handoffTargetProvider}
           handoffBadgeSourceProvider={handoffBadgeSourceProvider}
           handoffBadgeTargetProvider={handoffBadgeTargetProvider}
           browserOpen={browserOpen}

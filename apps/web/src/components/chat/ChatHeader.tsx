@@ -6,12 +6,13 @@
 import {
   type EditorId,
   type ProjectScript,
+  PROVIDER_DISPLAY_NAMES,
   type ProviderKind,
   type ResolvedKeybindingsConfig,
   type ThreadId,
 } from "@t3tools/contracts";
 import React, { memo, useEffect, useRef, useState } from "react";
-import { VscRepoForked } from "react-icons/vsc";
+import { FiGitBranch } from "react-icons/fi";
 import GitActionsControl from "../GitActionsControl";
 import {
   ArrowRightIcon,
@@ -63,6 +64,7 @@ interface ChatHeaderProps {
   handoffBadgeLabel: string | null;
   handoffActionLabel: string;
   handoffDisabled: boolean;
+  handoffActionTargetProvider: ProviderKind | null;
   handoffBadgeSourceProvider: ProviderKind | null;
   handoffBadgeTargetProvider: ProviderKind | null;
   browserOpen: boolean;
@@ -96,6 +98,7 @@ export const ChatHeader = memo(function ChatHeader({
   handoffBadgeLabel,
   handoffActionLabel,
   handoffDisabled,
+  handoffActionTargetProvider,
   handoffBadgeSourceProvider,
   handoffBadgeTargetProvider,
   browserOpen,
@@ -137,7 +140,7 @@ export const ChatHeader = memo(function ChatHeader({
     if (provider === "codex") {
       return <OpenAI className={cn("text-muted-foreground/75", className)} />;
     }
-    return <VscRepoForked className={className} />;
+    return <FiGitBranch className={className} />;
   };
 
   return (
@@ -164,14 +167,14 @@ export const ChatHeader = memo(function ChatHeader({
                 render={
                   <Badge
                     variant="outline"
-                    className="hidden !h-7 shrink-0 items-center gap-2 rounded-md px-1.5 text-[10px] sm:inline-flex"
+                    className="hidden !h-6 shrink-0 items-center justify-center gap-1 rounded-md px-1.5 text-[10px] sm:inline-flex"
                   >
-                    <span className="inline-flex shrink-0 items-center justify-center">
-                      {renderProviderIcon(handoffBadgeSourceProvider, "size-3.5 shrink-0")}
+                    <span className="inline-flex size-4 shrink-0 items-center justify-center">
+                      {renderProviderIcon(handoffBadgeSourceProvider, "size-3")}
                     </span>
                     <ArrowRightIcon className="size-2.5 shrink-0 opacity-45" />
-                    <span className="inline-flex shrink-0 items-center justify-center translate-y-px">
-                      {renderProviderIcon(handoffBadgeTargetProvider, "size-3.5 shrink-0")}
+                    <span className="inline-flex size-4 shrink-0 items-center justify-center">
+                      {renderProviderIcon(handoffBadgeTargetProvider, "size-3")}
                     </span>
                   </Badge>
                 }
@@ -194,8 +197,12 @@ export const ChatHeader = memo(function ChatHeader({
                 disabled={handoffDisabled}
                 onClick={onCreateHandoff}
               >
-                <VscRepoForked className="size-3.5" />
-                <span className="truncate">{handoffActionLabel}</span>
+                <FiGitBranch className="size-3.5 shrink-0" />
+                <span className="truncate">Hand off to</span>
+                {renderProviderIcon(handoffActionTargetProvider, "size-3.5 shrink-0")}
+                <span className="truncate">
+                  {PROVIDER_DISPLAY_NAMES[handoffActionTargetProvider ?? "codex"]}
+                </span>
               </Button>
             }
           />

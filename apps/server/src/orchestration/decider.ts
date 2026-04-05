@@ -6,6 +6,7 @@ import type {
 import { Effect } from "effect";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
+import { hasNativeHandoffMessages } from "./handoff.ts";
 import {
   requireProject,
   requireProjectAbsent,
@@ -196,6 +197,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `Source thread '${command.sourceThreadId}' belongs to a different project.`,
+        });
+      }
+      if (sourceThread.handoff !== null && !hasNativeHandoffMessages(sourceThread)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Source thread '${command.sourceThreadId}' must contain at least one native chat message after handoff before it can be handed off again.`,
         });
       }
 

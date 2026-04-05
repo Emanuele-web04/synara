@@ -11,8 +11,8 @@ import {
   TriangleAlertIcon,
 } from "~/lib/icons";
 import { autoAnimate } from "@formkit/auto-animate";
+import { FiGitBranch } from "react-icons/fi";
 import { IoFolderOutline } from "react-icons/io5";
-import { VscRepoForked } from "react-icons/vsc";
 import { HiOutlineFolderOpen } from "react-icons/hi2";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import {
@@ -1364,7 +1364,7 @@ export default function Sidebar() {
                   <TooltipTrigger
                     render={
                       <span className="inline-flex shrink-0 items-center text-muted-foreground/55">
-                        <VscRepoForked className="size-3" />
+                        <FiGitBranch className="size-3" />
                       </span>
                     }
                   />

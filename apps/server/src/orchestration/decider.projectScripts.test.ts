@@ -370,4 +370,282 @@ describe("decider project scripts", () => {
       },
     });
   });
+
+  it("rejects re-handoff when the source handoff thread has no native chat messages yet", async () => {
+    const now = new Date().toISOString();
+    const initial = createEmptyReadModel(now);
+    const withProject = await Effect.runPromise(
+      projectEvent(initial, {
+        sequence: 1,
+        eventId: asEventId("evt-project-create-handoff"),
+        aggregateKind: "project",
+        aggregateId: asProjectId("project-handoff"),
+        type: "project.created",
+        occurredAt: now,
+        commandId: CommandId.makeUnsafe("cmd-project-create-handoff"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-project-create-handoff"),
+        metadata: {},
+        payload: {
+          projectId: asProjectId("project-handoff"),
+          title: "Project",
+          workspaceRoot: "/tmp/project",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      }),
+    );
+    const withThread = await Effect.runPromise(
+      projectEvent(withProject, {
+        sequence: 2,
+        eventId: asEventId("evt-thread-create-handoff"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.makeUnsafe("thread-handoff"),
+        type: "thread.created",
+        occurredAt: now,
+        commandId: CommandId.makeUnsafe("cmd-thread-create-handoff"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-thread-create-handoff"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.makeUnsafe("thread-handoff"),
+          projectId: asProjectId("project-handoff"),
+          title: "Handoff",
+          modelSelection: {
+            provider: "codex",
+            model: "gpt-5-codex",
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          handoff: {
+            sourceThreadId: ThreadId.makeUnsafe("thread-original"),
+            sourceProvider: "claudeAgent",
+            importedAt: now,
+            bootstrapStatus: "pending",
+          },
+          createdAt: now,
+          updatedAt: now,
+        },
+      }),
+    );
+    const readModel = await Effect.runPromise(
+      projectEvent(withThread, {
+        sequence: 3,
+        eventId: asEventId("evt-thread-imported-message"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.makeUnsafe("thread-handoff"),
+        type: "thread.message-sent",
+        occurredAt: now,
+        commandId: CommandId.makeUnsafe("cmd-thread-imported-message"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-thread-imported-message"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.makeUnsafe("thread-handoff"),
+          messageId: asMessageId("message-imported-1"),
+          role: "user",
+          text: "Imported history",
+          turnId: null,
+          streaming: false,
+          source: "handoff-import",
+          createdAt: now,
+          updatedAt: now,
+        },
+      }),
+    );
+
+    await expect(
+      Effect.runPromise(
+        decideOrchestrationCommand({
+          command: {
+            type: "thread.handoff.create",
+            commandId: CommandId.makeUnsafe("cmd-thread-rehandoff"),
+            threadId: ThreadId.makeUnsafe("thread-handoff-copy"),
+            sourceThreadId: ThreadId.makeUnsafe("thread-handoff"),
+            projectId: asProjectId("project-handoff"),
+            title: "Handoff Copy",
+            modelSelection: {
+              provider: "claudeAgent",
+              model: "sonnet",
+            },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            importedMessages: [
+              {
+                messageId: asMessageId("message-imported-2"),
+                role: "user",
+                text: "Imported history",
+                createdAt: now,
+                updatedAt: now,
+              },
+            ],
+            createdAt: now,
+          },
+          readModel,
+        }),
+      ),
+    ).rejects.toThrow("must contain at least one native chat message after handoff");
+  });
+
+  it("allows re-handoff after the handoff thread has native chat messages", async () => {
+    const now = new Date().toISOString();
+    const initial = createEmptyReadModel(now);
+    const withProject = await Effect.runPromise(
+      projectEvent(initial, {
+        sequence: 1,
+        eventId: asEventId("evt-project-create-native-handoff"),
+        aggregateKind: "project",
+        aggregateId: asProjectId("project-native-handoff"),
+        type: "project.created",
+        occurredAt: now,
+        commandId: CommandId.makeUnsafe("cmd-project-create-native-handoff"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-project-create-native-handoff"),
+        metadata: {},
+        payload: {
+          projectId: asProjectId("project-native-handoff"),
+          title: "Project",
+          workspaceRoot: "/tmp/project",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      }),
+    );
+    const withThread = await Effect.runPromise(
+      projectEvent(withProject, {
+        sequence: 2,
+        eventId: asEventId("evt-thread-create-native-handoff"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.makeUnsafe("thread-native-handoff"),
+        type: "thread.created",
+        occurredAt: now,
+        commandId: CommandId.makeUnsafe("cmd-thread-create-native-handoff"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-thread-create-native-handoff"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.makeUnsafe("thread-native-handoff"),
+          projectId: asProjectId("project-native-handoff"),
+          title: "Handoff",
+          modelSelection: {
+            provider: "codex",
+            model: "gpt-5-codex",
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          handoff: {
+            sourceThreadId: ThreadId.makeUnsafe("thread-original"),
+            sourceProvider: "claudeAgent",
+            importedAt: now,
+            bootstrapStatus: "completed",
+          },
+          createdAt: now,
+          updatedAt: now,
+        },
+      }),
+    );
+    const withImportedMessage = await Effect.runPromise(
+      projectEvent(withThread, {
+        sequence: 3,
+        eventId: asEventId("evt-thread-native-imported-message"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.makeUnsafe("thread-native-handoff"),
+        type: "thread.message-sent",
+        occurredAt: now,
+        commandId: CommandId.makeUnsafe("cmd-thread-native-imported-message"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-thread-native-imported-message"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.makeUnsafe("thread-native-handoff"),
+          messageId: asMessageId("message-native-imported-1"),
+          role: "user",
+          text: "Imported history",
+          turnId: null,
+          streaming: false,
+          source: "handoff-import",
+          createdAt: now,
+          updatedAt: now,
+        },
+      }),
+    );
+    const readModel = await Effect.runPromise(
+      projectEvent(withImportedMessage, {
+        sequence: 4,
+        eventId: asEventId("evt-thread-native-user-message"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.makeUnsafe("thread-native-handoff"),
+        type: "thread.message-sent",
+        occurredAt: now,
+        commandId: CommandId.makeUnsafe("cmd-thread-native-user-message"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-thread-native-user-message"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.makeUnsafe("thread-native-handoff"),
+          messageId: asMessageId("message-native-user-1"),
+          role: "user",
+          text: "A real new follow-up",
+          turnId: null,
+          streaming: false,
+          source: "native",
+          createdAt: now,
+          updatedAt: now,
+        },
+      }),
+    );
+
+    const result = await Effect.runPromise(
+      decideOrchestrationCommand({
+        command: {
+          type: "thread.handoff.create",
+          commandId: CommandId.makeUnsafe("cmd-thread-native-rehandoff"),
+          threadId: ThreadId.makeUnsafe("thread-native-handoff-copy"),
+          sourceThreadId: ThreadId.makeUnsafe("thread-native-handoff"),
+          projectId: asProjectId("project-native-handoff"),
+          title: "Handoff Copy",
+          modelSelection: {
+            provider: "claudeAgent",
+            model: "sonnet",
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          importedMessages: [
+            {
+              messageId: asMessageId("message-native-imported-2"),
+              role: "user",
+              text: "Imported history",
+              createdAt: now,
+              updatedAt: now,
+            },
+            {
+              messageId: asMessageId("message-native-imported-3"),
+              role: "user",
+              text: "A real new follow-up",
+              createdAt: now,
+              updatedAt: now,
+            },
+          ],
+          createdAt: now,
+        },
+        readModel,
+      }),
+    );
+
+    const events = Array.isArray(result) ? result : [result];
+    expect(events[0]?.type).toBe("thread.created");
+    expect(events[1]?.type).toBe("thread.message-sent");
+  });
 });

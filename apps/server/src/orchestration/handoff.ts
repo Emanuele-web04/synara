@@ -38,6 +38,15 @@ export function listImportedHandoffMessages(
   );
 }
 
+export function hasNativeHandoffMessages(thread: Pick<OrchestrationThread, "messages">): boolean {
+  return thread.messages.some(
+    (message) =>
+      (message.role === "user" || message.role === "assistant") &&
+      message.source !== "handoff-import" &&
+      message.streaming === false,
+  );
+}
+
 export function hasNativeAssistantMessagesBefore(
   thread: Pick<OrchestrationThread, "messages">,
   currentMessageId: string,
