@@ -6,7 +6,7 @@ import type {
 } from "@t3tools/contracts";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
-import { ChevronDownIcon, CloudUploadIcon, GitCommitIcon, InfoIcon } from "lucide-react";
+import { ChevronDownIcon, CloudUploadIcon, GitCommitIcon, InfoIcon } from "~/lib/icons";
 import { GitHubIcon } from "./Icons";
 import {
   buildGitActionProgressStages,

@@ -1,6 +1,6 @@
 import { ProviderInteractionMode, RuntimeMode } from "@t3tools/contracts";
 import { memo, type ReactNode } from "react";
-import { EllipsisIcon, ListTodoIcon } from "lucide-react";
+import { EllipsisIcon, ListTodoIcon } from "~/lib/icons";
 import { Button } from "../ui/button";
 import {
   Menu,

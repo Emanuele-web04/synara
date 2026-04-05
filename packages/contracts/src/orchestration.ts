@@ -1,5 +1,6 @@
 import { Option, Schema, SchemaIssue, Struct } from "effect";
 import { ClaudeModelOptions, CodexModelOptions } from "./model";
+import { ProviderSkillReference } from "./providerDiscovery";
 import {
   ApprovalRequestId,
   CheckpointRef,
@@ -400,6 +401,7 @@ export const ThreadTurnStartCommand = Schema.Struct({
     role: Schema.Literal("user"),
     text: Schema.String,
     attachments: Schema.Array(ChatAttachment),
+    skills: Schema.optional(Schema.Array(ProviderSkillReference)),
   }),
   modelSelection: Schema.optional(ModelSelection),
   providerOptions: Schema.optional(ProviderStartOptions),
@@ -421,6 +423,7 @@ const ClientThreadTurnStartCommand = Schema.Struct({
     role: Schema.Literal("user"),
     text: Schema.String,
     attachments: Schema.Array(UploadChatAttachment),
+    skills: Schema.optional(Schema.Array(ProviderSkillReference)),
   }),
   modelSelection: Schema.optional(ModelSelection),
   providerOptions: Schema.optional(ProviderStartOptions),

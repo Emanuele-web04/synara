@@ -1,11 +1,11 @@
-# T3 Code
+# DP Code
 
-T3 Code is a minimal web GUI for coding agents (currently Codex and Claude, more coming soon).
+DP Code is a minimal web GUI for coding agents (currently Codex and Claude, more coming soon).
 
 ## How to use
 
 > [!WARNING]
-> You need to have [Codex CLI](https://github.com/openai/codex) installed and authorized for T3 Code to work.
+> You need to have [Codex CLI](https://github.com/openai/codex) installed and authorized for DP Code to work.
 
 ```bash
 npx t3

@@ -9,8 +9,12 @@
  */
 import type {
   ApprovalRequestId,
+  ProviderComposerCapabilities,
   ProviderApprovalDecision,
   ProviderKind,
+  ProviderListModelsResult,
+  ProviderListSkillsResult,
+  ProviderListSkillsInput,
   ProviderUserInputAnswers,
   ProviderRuntimeEvent,
   ProviderSendTurnInput,
@@ -30,6 +34,9 @@ export interface ProviderAdapterCapabilities {
    * Declares whether changing the model on an existing session is supported.
    */
   readonly sessionModelSwitch: ProviderSessionModelSwitchMode;
+  readonly supportsSkillMentions?: boolean;
+  readonly supportsSkillDiscovery?: boolean;
+  readonly supportsRuntimeModelList?: boolean;
 }
 
 export interface ProviderThreadTurnSnapshot {
@@ -123,4 +130,21 @@ export interface ProviderAdapterShape<TError> {
    * Canonical runtime event stream emitted by this adapter.
    */
   readonly streamEvents: Stream.Stream<ProviderRuntimeEvent>;
+
+  /**
+   * Read provider-specific composer capabilities.
+   */
+  readonly getComposerCapabilities?: () => Effect.Effect<ProviderComposerCapabilities, TError>;
+
+  /**
+   * List skills available for a given cwd.
+   */
+  readonly listSkills?: (
+    input: ProviderListSkillsInput,
+  ) => Effect.Effect<ProviderListSkillsResult, TError>;
+
+  /**
+   * List models directly from the provider runtime when supported.
+   */
+  readonly listModels?: () => Effect.Effect<ProviderListModelsResult, TError>;
 }

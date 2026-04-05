@@ -54,6 +54,7 @@ import { OrchestrationEngineService } from "./orchestration/Services/Orchestrati
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReactor";
 import { ProviderService } from "./provider/Services/ProviderService";
+import { ProviderDiscoveryService } from "./provider/Services/ProviderDiscoveryService";
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";
 import { clamp } from "effect/Number";
@@ -208,6 +209,7 @@ export type ServerCoreRuntimeServices =
   | CheckpointDiffQuery
   | OrchestrationReactor
   | ProviderService
+  | ProviderDiscoveryService
   | ProviderHealth;
 
 export type ServerRuntimeServices =
@@ -254,6 +256,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const terminalManager = yield* TerminalManager;
   const keybindingsManager = yield* Keybindings;
   const providerHealth = yield* ProviderHealth;
+  const providerDiscoveryService = yield* ProviderDiscoveryService;
   const git = yield* GitCore;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -893,6 +896,21 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         const body = stripRequestTag(request.body);
         const keybindingsConfig = yield* keybindingsManager.upsertKeybindingRule(body);
         return { keybindings: keybindingsConfig, issues: [] };
+      }
+
+      case WS_METHODS.providerGetComposerCapabilities: {
+        const body = stripRequestTag(request.body);
+        return yield* providerDiscoveryService.getComposerCapabilities(body);
+      }
+
+      case WS_METHODS.providerListSkills: {
+        const body = stripRequestTag(request.body);
+        return yield* providerDiscoveryService.listSkills(body);
+      }
+
+      case WS_METHODS.providerListModels: {
+        const body = stripRequestTag(request.body);
+        return yield* providerDiscoveryService.listModels(body);
       }
 
       default: {

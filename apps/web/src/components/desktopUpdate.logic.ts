@@ -47,12 +47,12 @@ export function getArm64IntelBuildWarningDescription(state: DesktopUpdateState):
 
   const action = resolveDesktopUpdateButtonAction(state);
   if (action === "download") {
-    return "This Mac has Apple Silicon, but T3 Code is still running the Intel build under Rosetta. Download the available update to switch to the native Apple Silicon build.";
+    return "This Mac has Apple Silicon, but DP Code is still running the Intel build under Rosetta. Download the available update to switch to the native Apple Silicon build.";
   }
   if (action === "install") {
-    return "This Mac has Apple Silicon, but T3 Code is still running the Intel build under Rosetta. Restart to install the downloaded Apple Silicon build.";
+    return "This Mac has Apple Silicon, but DP Code is still running the Intel build under Rosetta. Restart to install the downloaded Apple Silicon build.";
   }
-  return "This Mac has Apple Silicon, but T3 Code is still running the Intel build under Rosetta. The next app update will replace it with the native Apple Silicon build.";
+  return "This Mac has Apple Silicon, but DP Code is still running the Intel build under Rosetta. The next app update will replace it with the native Apple Silicon build.";
 }
 
 export function getDesktopUpdateButtonTooltip(state: DesktopUpdateState): string {

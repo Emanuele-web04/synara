@@ -9,7 +9,10 @@
 import {
   type CanonicalItemType,
   type CanonicalRequestType,
+  type ProviderComposerCapabilities,
   type ProviderEvent,
+  type ProviderListModelsResult,
+  type ProviderListSkillsResult,
   type ProviderRuntimeEvent,
   type ThreadTokenUsageSnapshot,
   type ProviderUserInputAnswers,
@@ -1422,6 +1425,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             const managerInput = {
               threadId: input.threadId,
               ...(input.input !== undefined ? { input: input.input } : {}),
+              ...(input.skills !== undefined ? { skills: input.skills } : {}),
               ...(input.modelSelection?.provider === "codex"
                 ? { model: input.modelSelection.model }
                 : {}),
@@ -1524,6 +1528,38 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         manager.stopAll();
       });
 
+    const getComposerCapabilities: NonNullable<CodexAdapterShape["getComposerCapabilities"]> = () =>
+      Effect.succeed(manager.getComposerCapabilities() satisfies ProviderComposerCapabilities);
+
+    const listSkills: NonNullable<CodexAdapterShape["listSkills"]> = (input) =>
+      Effect.tryPromise({
+        try: () =>
+          manager.listSkills({
+            cwd: input.cwd,
+            ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+            ...(input.forceReload !== undefined ? { forceReload: input.forceReload } : {}),
+          }),
+        catch: (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "skills/list",
+            detail: toMessage(cause, "skills/list failed"),
+            cause,
+          }),
+      }).pipe(Effect.map((result) => result satisfies ProviderListSkillsResult));
+
+    const listModels: NonNullable<CodexAdapterShape["listModels"]> = () =>
+      Effect.tryPromise({
+        try: () => manager.listModels(),
+        catch: (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "model/list",
+            detail: toMessage(cause, "model/list failed"),
+            cause,
+          }),
+      }).pipe(Effect.map((result) => result satisfies ProviderListModelsResult));
+
     const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
 
     yield* Effect.acquireRelease(
@@ -1568,6 +1604,9 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       provider: PROVIDER,
       capabilities: {
         sessionModelSwitch: "in-session",
+        supportsSkillMentions: true,
+        supportsSkillDiscovery: true,
+        supportsRuntimeModelList: true,
       },
       startSession,
       sendTurn,
@@ -1580,6 +1619,9 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       listSessions,
       hasSession,
       stopAll,
+      getComposerCapabilities,
+      listSkills,
+      listModels,
       streamEvents: Stream.fromQueue(runtimeEventQueue),
     } satisfies CodexAdapterShape;
   });

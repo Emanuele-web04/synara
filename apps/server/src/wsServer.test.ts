@@ -10,6 +10,7 @@ import { createServer } from "./wsServer";
 import WebSocket from "ws";
 import { deriveServerPaths, ServerConfig, type ServerConfigShape } from "./config";
 import { makeServerProviderLayer, makeServerRuntimeServicesLayer } from "./serverLayers";
+import { ProviderDiscoveryService } from "./provider/Services/ProviderDiscoveryService";
 
 import {
   DEFAULT_TERMINAL_ID,
@@ -486,7 +487,7 @@ describe("WebSocket Server", () => {
       authToken?: string;
       baseDir?: string;
       staticDir?: string;
-      providerLayer?: Layer.Layer<ProviderService, never>;
+      providerLayer?: Layer.Layer<ProviderService | ProviderDiscoveryService, never>;
       providerHealth?: ProviderHealthShape;
       open?: OpenShape;
       gitManager?: GitManagerShape;
@@ -1268,7 +1269,20 @@ describe("WebSocket Server", () => {
       rollbackConversation: () => unsupported(),
       streamEvents: Stream.fromPubSub(runtimeEventPubSub),
     };
-    const providerLayer = Layer.succeed(ProviderService, providerService);
+    const providerLayer = Layer.mergeAll(
+      Layer.succeed(ProviderService, providerService),
+      Layer.succeed(ProviderDiscoveryService, {
+        getComposerCapabilities: () =>
+          Effect.succeed({
+            provider: "codex" as const,
+            supportsSkillMentions: false,
+            supportsSkillDiscovery: false,
+            supportsRuntimeModelList: false,
+          }),
+        listSkills: () => Effect.succeed({ skills: [], source: "test", cached: false }),
+        listModels: () => Effect.succeed({ models: [], source: "test", cached: false }),
+      }),
+    );
 
     server = await createTestServer({
       cwd: "/test",

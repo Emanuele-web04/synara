@@ -60,6 +60,18 @@ describe("detectComposerTrigger", () => {
     });
   });
 
+  it("detects a skill trigger while typing a $skill token", () => {
+    const text = "Use $che";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "skill",
+      query: "che",
+      rangeStart: "Use ".length,
+      rangeEnd: text.length,
+    });
+  });
+
   it("detects @path trigger in the middle of existing text", () => {
     // User typed @ between "inspect " and "in this sentence"
     const text = "Please inspect @in this sentence";

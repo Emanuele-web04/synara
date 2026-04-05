@@ -146,7 +146,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(status.authStatus, "unknown");
         assert.strictEqual(
           status.message,
-          "Codex CLI v0.36.0 is too old for T3 Code. Upgrade to v0.37.0 or newer and restart T3 Code.",
+          "Codex CLI v0.36.0 is too old for DP Code. Upgrade to v0.37.0 or newer and restart DP Code.",
         );
       }).pipe(
         Effect.provide(

@@ -90,7 +90,7 @@ const DEFAULT_BINDINGS = compile([
     whenAst: whenIdentifier("terminalFocus"),
   },
   {
-    shortcut: modShortcut("d", { shiftKey: true }),
+    shortcut: modShortcut("n", { shiftKey: true }),
     command: "terminal.new",
     whenAst: whenIdentifier("terminalFocus"),
   },
@@ -98,6 +98,15 @@ const DEFAULT_BINDINGS = compile([
     shortcut: modShortcut("w"),
     command: "terminal.close",
     whenAst: whenIdentifier("terminalFocus"),
+  },
+  {
+    shortcut: modShortcut("j", { shiftKey: true }),
+    command: "terminal.workspace.newFullWidth",
+  },
+  {
+    shortcut: modShortcut("w"),
+    command: "terminal.workspace.closeActive",
+    whenAst: whenIdentifier("terminalWorkspaceOpen"),
   },
   {
     shortcut: modShortcut("1"),
@@ -119,8 +128,17 @@ const DEFAULT_BINDINGS = compile([
     command: "browser.toggle",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
-  { shortcut: modShortcut("o", { shiftKey: true }), command: "chat.new" },
-  { shortcut: modShortcut("n", { shiftKey: true }), command: "chat.newLocal" },
+  {
+    shortcut: modShortcut("o", { shiftKey: true }),
+    command: "chat.new",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
+  { shortcut: modShortcut("n"), command: "chat.new" },
+  {
+    shortcut: modShortcut("n", { shiftKey: true }),
+    command: "chat.newLocal",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
   { shortcut: modShortcut("o"), command: "editor.openFavorite" },
 ]);
 
@@ -170,7 +188,7 @@ describe("split/new/close terminal shortcuts", () => {
       }),
     );
     assert.isTrue(
-      isTerminalNewShortcut(event({ key: "d", ctrlKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+      isTerminalNewShortcut(event({ key: "n", ctrlKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
         platform: "Linux",
         context: { terminalFocus: true },
       }),
@@ -237,6 +255,31 @@ describe("split/new/close terminal shortcuts", () => {
 });
 
 describe("workspace terminal tab shortcuts", () => {
+  it("resolves the full-width terminal shortcut", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "j", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+      }),
+      "terminal.workspace.newFullWidth",
+    );
+  });
+
+  it("resolves the active workspace close shortcut only while the terminal workspace is open", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "w", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalWorkspaceOpen: true, terminalFocus: true },
+      }),
+      "terminal.workspace.closeActive",
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "w", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalWorkspaceOpen: false, terminalFocus: false },
+      }),
+    );
+  });
+
   it("resolves Cmd/Ctrl+1 and Cmd/Ctrl+2 only while the terminal workspace is open", () => {
     assert.strictEqual(
       resolveShortcutCommand(event({ key: "1", metaKey: true }), DEFAULT_BINDINGS, {
@@ -263,10 +306,25 @@ describe("workspace terminal tab shortcuts", () => {
   it("falls back to workspace defaults when the runtime config is missing them", () => {
     const legacyBindings = DEFAULT_BINDINGS.filter(
       (binding) =>
+        binding.command !== "terminal.workspace.newFullWidth" &&
+        binding.command !== "terminal.workspace.closeActive" &&
         binding.command !== "terminal.workspace.terminal" &&
         binding.command !== "terminal.workspace.chat",
     );
 
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "j", metaKey: true, shiftKey: true }), legacyBindings, {
+        platform: "MacIntel",
+      }),
+      "terminal.workspace.newFullWidth",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "w", metaKey: true }), legacyBindings, {
+        platform: "MacIntel",
+        context: { terminalWorkspaceOpen: true },
+      }),
+      "terminal.workspace.closeActive",
+    );
     assert.strictEqual(
       resolveShortcutCommand(event({ key: "1", metaKey: true }), legacyBindings, {
         platform: "MacIntel",
@@ -302,7 +360,7 @@ describe("shortcutLabelForCommand", () => {
   });
 
   it("returns labels for non-terminal commands", () => {
-    assert.strictEqual(shortcutLabelForCommand(DEFAULT_BINDINGS, "chat.new", "MacIntel"), "⇧⌘O");
+    assert.strictEqual(shortcutLabelForCommand(DEFAULT_BINDINGS, "chat.new", "MacIntel"), "⌘N");
     assert.strictEqual(shortcutLabelForCommand(DEFAULT_BINDINGS, "diff.toggle", "Linux"), "Ctrl+D");
     assert.strictEqual(
       shortcutLabelForCommand(DEFAULT_BINDINGS, "sidebar.toggle", "MacIntel"),
@@ -315,6 +373,10 @@ describe("shortcutLabelForCommand", () => {
     assert.strictEqual(
       shortcutLabelForCommand(DEFAULT_BINDINGS, "terminal.workspace.terminal", "MacIntel"),
       "⌘1",
+    );
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "terminal.workspace.newFullWidth", "MacIntel"),
+      "⇧⌘J",
     );
     assert.strictEqual(
       shortcutLabelForCommand(DEFAULT_BINDINGS, "terminal.workspace.chat", "Linux"),
@@ -330,12 +392,12 @@ describe("shortcutLabelForCommand", () => {
 describe("chat/editor shortcuts", () => {
   it("matches chat.new shortcut", () => {
     assert.isTrue(
-      isChatNewShortcut(event({ key: "o", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+      isChatNewShortcut(event({ key: "n", metaKey: true }), DEFAULT_BINDINGS, {
         platform: "MacIntel",
       }),
     );
     assert.isTrue(
-      isChatNewShortcut(event({ key: "o", ctrlKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+      isChatNewShortcut(event({ key: "n", ctrlKey: true }), DEFAULT_BINDINGS, {
         platform: "Linux",
       }),
     );

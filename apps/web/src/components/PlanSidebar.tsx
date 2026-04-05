@@ -11,7 +11,7 @@ import {
   EllipsisIcon,
   LoaderIcon,
   PanelRightCloseIcon,
-} from "lucide-react";
+} from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import type { ActivePlanState } from "../session-logic";
 import type { LatestProposedPlanState } from "../session-logic";

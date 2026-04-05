@@ -41,6 +41,18 @@ it.effect("parses keybinding rules", () =>
     });
     assert.strictEqual(parsedClose.command, "terminal.close");
 
+    const parsedWorkspaceNew = yield* decode(KeybindingRule, {
+      key: "mod+shift+j",
+      command: "terminal.workspace.newFullWidth",
+    });
+    assert.strictEqual(parsedWorkspaceNew.command, "terminal.workspace.newFullWidth");
+
+    const parsedWorkspaceClose = yield* decode(KeybindingRule, {
+      key: "mod+w",
+      command: "terminal.workspace.closeActive",
+    });
+    assert.strictEqual(parsedWorkspaceClose.command, "terminal.workspace.closeActive");
+
     const parsedWorkspaceTerminal = yield* decode(KeybindingRule, {
       key: "mod+1",
       command: "terminal.workspace.terminal",

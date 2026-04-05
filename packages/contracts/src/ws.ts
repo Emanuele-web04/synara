@@ -38,6 +38,11 @@ import { KeybindingRule } from "./keybindings";
 import { ProjectSearchEntriesInput, ProjectWriteFileInput } from "./project";
 import { OpenInEditorInput } from "./editor";
 import { ServerConfigUpdatedPayload } from "./server";
+import {
+  ProviderGetComposerCapabilitiesInput,
+  ProviderListModelsInput,
+  ProviderListSkillsInput,
+} from "./providerDiscovery";
 
 // ── WebSocket RPC Method Names ───────────────────────────────────────
 
@@ -76,6 +81,11 @@ export const WS_METHODS = {
   // Server meta
   serverGetConfig: "server.getConfig",
   serverUpsertKeybinding: "server.upsertKeybinding",
+
+  // Provider discovery
+  providerGetComposerCapabilities: "provider.getComposerCapabilities",
+  providerListSkills: "provider.listSkills",
+  providerListModels: "provider.listModels",
 } as const;
 
 // ── Push Event Channels ──────────────────────────────────────────────
@@ -141,6 +151,11 @@ const WebSocketRequestBody = Schema.Union([
   // Server meta
   tagRequestBody(WS_METHODS.serverGetConfig, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverUpsertKeybinding, KeybindingRule),
+
+  // Provider discovery
+  tagRequestBody(WS_METHODS.providerGetComposerCapabilities, ProviderGetComposerCapabilitiesInput),
+  tagRequestBody(WS_METHODS.providerListSkills, ProviderListSkillsInput),
+  tagRequestBody(WS_METHODS.providerListModels, ProviderListModelsInput),
 ]);
 
 export const WebSocketRequest = Schema.Struct({

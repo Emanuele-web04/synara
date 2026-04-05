@@ -6,7 +6,12 @@ import readline from "node:readline";
 import {
   ApprovalRequestId,
   EventId,
+  type ProviderComposerCapabilities,
   ProviderItemId,
+  type ProviderListModelsResult,
+  type ProviderListSkillsResult,
+  type ProviderSkillDescriptor,
+  type ProviderSkillReference,
   ProviderRequestKind,
   type ProviderUserInputAnswers,
   ThreadId,
@@ -73,6 +78,13 @@ interface CodexSessionContext {
   collabReceiverTurns: Map<string, TurnId>;
   nextRequestId: number;
   stopping: boolean;
+  discovery?: boolean;
+}
+
+interface CodexSkillListInput {
+  readonly cwd: string;
+  readonly forceReload?: boolean;
+  readonly threadId?: string;
 }
 
 interface JsonRpcError {
@@ -97,6 +109,19 @@ interface JsonRpcNotification {
   params?: unknown;
 }
 
+function shouldRetrySkillsListWithCwdFallback(error: unknown): boolean {
+  const message = error instanceof Error ? error.message.toLowerCase() : "";
+  return (
+    message.includes("skills/list failed") &&
+    (message.includes("invalid") ||
+      message.includes("unknown field") ||
+      message.includes("unrecognized field") ||
+      message.includes("missing field") ||
+      message.includes("expected") ||
+      message.includes("cwds"))
+  );
+}
+
 type CodexPlanType =
   | "free"
   | "go"
@@ -118,6 +143,7 @@ export interface CodexAppServerSendTurnInput {
   readonly threadId: ThreadId;
   readonly input?: string;
   readonly attachments?: ReadonlyArray<{ type: "image"; url: string }>;
+  readonly skills?: ReadonlyArray<ProviderSkillReference>;
   readonly model?: string;
   readonly serviceTier?: string | null;
   readonly effort?: string;
@@ -406,7 +432,7 @@ export function buildCodexInitializeParams() {
   return {
     clientInfo: {
       name: "t3code_desktop",
-      title: "T3 Code Desktop",
+      title: "DP Code Desktop",
       version: "0.1.0",
     },
     capabilities: {
@@ -515,6 +541,9 @@ export interface CodexAppServerManagerEvents {
 
 export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEvents> {
   private readonly sessions = new Map<ThreadId, CodexSessionContext>();
+  private readonly discoverySessions = new Map<string, CodexSessionContext>();
+  private readonly skillsCache = new Map<string, ProviderListSkillsResult>();
+  private readonly modelCache = new Map<string, ProviderListModelsResult>();
 
   private runPromise: (effect: Effect.Effect<unknown, never>) => Promise<unknown>;
   constructor(services?: ServiceMap.ServiceMap<never>) {
@@ -737,7 +766,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     context.collabReceiverTurns.clear();
 
     const turnInput: Array<
-      { type: "text"; text: string; text_elements: [] } | { type: "image"; url: string }
+      | { type: "text"; text: string; text_elements: [] }
+      | { type: "image"; url: string }
+      | { type: "skill"; name: string; path: string }
     > = [];
     if (input.input) {
       turnInput.push({
@@ -754,6 +785,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         });
       }
     }
+    for (const skill of input.skills ?? []) {
+      turnInput.push({
+        type: "skill",
+        name: skill.name,
+        path: skill.path,
+      });
+    }
     if (turnInput.length === 0) {
       throw new Error("Turn input must include text or attachments.");
     }
@@ -769,7 +807,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const turnStartParams: {
       threadId: string;
       input: Array<
-        { type: "text"; text: string; text_elements: [] } | { type: "image"; url: string }
+        | { type: "text"; text: string; text_elements: [] }
+        | { type: "image"; url: string }
+        | { type: "skill"; name: string; path: string }
       >;
       model?: string;
       serviceTier?: string | null;
@@ -1018,6 +1058,82 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     for (const threadId of this.sessions.keys()) {
       this.stopSession(threadId);
     }
+    for (const discoveryKey of this.discoverySessions.keys()) {
+      this.stopDiscoverySession(discoveryKey);
+    }
+  }
+
+  async listSkills(input: CodexSkillListInput): Promise<ProviderListSkillsResult> {
+    const cwd = input.cwd.trim();
+    const cacheKey = JSON.stringify({
+      cwd,
+      threadId: input.threadId?.trim() || null,
+    });
+    if (!input.forceReload) {
+      const cached = this.skillsCache.get(cacheKey);
+      if (cached) {
+        return {
+          ...cached,
+          cached: true,
+        };
+      }
+    }
+
+    const context = await this.resolveContextForDiscovery(input.threadId, cwd);
+    let response: Record<string, unknown>;
+    try {
+      response = await this.sendRequest<Record<string, unknown>>(context, "skills/list", {
+        cwds: [cwd],
+        ...(input.forceReload ? { forceReload: true } : {}),
+      });
+    } catch (error) {
+      if (!shouldRetrySkillsListWithCwdFallback(error)) {
+        throw error;
+      }
+      response = await this.sendRequest<Record<string, unknown>>(context, "skills/list", {
+        cwd,
+        ...(input.forceReload ? { forceReload: true } : {}),
+      });
+    }
+    const skills = this.parseSkillsListResponse(response, cwd);
+    const result: ProviderListSkillsResult = {
+      skills,
+      source: "codex-app-server",
+      cached: false,
+    };
+    this.skillsCache.set(cacheKey, result);
+    return result;
+  }
+
+  async listModels(threadId?: string): Promise<ProviderListModelsResult> {
+    const cacheKey = threadId?.trim() || "__default__";
+    const cached = this.modelCache.get(cacheKey);
+    if (cached) {
+      return {
+        ...cached,
+        cached: true,
+      };
+    }
+
+    const context = await this.resolveContextForDiscovery(threadId);
+    const response = await this.sendRequest<Record<string, unknown>>(context, "model/list", {});
+    const models = this.parseModelListResponse(response);
+    const result: ProviderListModelsResult = {
+      models,
+      source: "codex-app-server",
+      cached: false,
+    };
+    this.modelCache.set(cacheKey, result);
+    return result;
+  }
+
+  getComposerCapabilities(): ProviderComposerCapabilities {
+    return {
+      provider: "codex",
+      supportsSkillMentions: true,
+      supportsSkillDiscovery: true,
+      supportsRuntimeModelList: true,
+    };
   }
 
   private requireSession(threadId: ThreadId): CodexSessionContext {
@@ -1031,6 +1147,113 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
 
     return context;
+  }
+
+  private async resolveContextForDiscovery(
+    threadId?: string,
+    cwd?: string,
+  ): Promise<CodexSessionContext> {
+    const normalizedThreadId = threadId?.trim();
+    if (normalizedThreadId) {
+      try {
+        return this.requireSession(ThreadId.makeUnsafe(normalizedThreadId));
+      } catch {
+        // Discovery is read-only metadata, so if the current draft thread does not
+        // have a live Codex session yet we can safely fall back to any active
+        // Codex session instead of disabling skill autocomplete outright.
+      }
+    }
+    const firstActive = this.sessions.values().next().value;
+    if (firstActive) {
+      return firstActive;
+    }
+    return this.getOrCreateDiscoverySession(cwd?.trim() || process.cwd());
+  }
+
+  private async getOrCreateDiscoverySession(cwd: string): Promise<CodexSessionContext> {
+    const normalizedCwd = cwd.trim() || process.cwd();
+    const existing = this.discoverySessions.get(normalizedCwd);
+    if (existing && !existing.stopping && !existing.child.killed) {
+      return existing;
+    }
+
+    const now = new Date().toISOString();
+    this.assertSupportedCodexCliVersion({
+      binaryPath: "codex",
+      cwd: normalizedCwd,
+    });
+    const child = spawn("codex", ["app-server"], {
+      cwd: normalizedCwd,
+      env: { ...process.env },
+      stdio: ["pipe", "pipe", "pipe"],
+      shell: process.platform === "win32",
+    });
+    const output = readline.createInterface({ input: child.stdout });
+    const context: CodexSessionContext = {
+      session: {
+        provider: "codex",
+        status: "connecting",
+        runtimeMode: "full-access",
+        model: CODEX_DEFAULT_MODEL,
+        cwd: normalizedCwd,
+        threadId: ThreadId.makeUnsafe(`__codex_discovery__:${normalizedCwd}`),
+        createdAt: now,
+        updatedAt: now,
+      },
+      account: {
+        type: "unknown",
+        planType: null,
+        sparkEnabled: true,
+      },
+      child,
+      output,
+      pending: new Map(),
+      pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
+      collabReceiverTurns: new Map(),
+      nextRequestId: 1,
+      stopping: false,
+      discovery: true,
+    };
+
+    this.discoverySessions.set(normalizedCwd, context);
+    this.attachProcessListeners(context);
+    try {
+      await this.sendRequest(context, "initialize", buildCodexInitializeParams());
+      this.writeMessage(context, { method: "initialized" });
+      try {
+        const accountReadResponse = await this.sendRequest(context, "account/read", {});
+        context.account = readCodexAccountSnapshot(accountReadResponse);
+      } catch {
+        // Discovery can still function without account metadata.
+      }
+      this.updateSession(context, { status: "ready" });
+      return context;
+    } catch (error) {
+      this.stopDiscoverySession(normalizedCwd);
+      throw error;
+    }
+  }
+
+  private stopDiscoverySession(discoveryKey: string): void {
+    const context = this.discoverySessions.get(discoveryKey);
+    if (!context) {
+      return;
+    }
+
+    context.stopping = true;
+    for (const pending of context.pending.values()) {
+      clearTimeout(pending.timeout);
+      pending.reject(new Error("Discovery session stopped before request completed."));
+    }
+    context.pending.clear();
+    context.output.close();
+
+    if (!context.child.killed) {
+      killChildTree(context.child);
+    }
+
+    this.discoverySessions.delete(discoveryKey);
   }
 
   private attachProcessListeners(context: CodexSessionContext): void {
@@ -1072,7 +1295,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         lastError: code === 0 ? context.session.lastError : message,
       });
       this.emitLifecycleEvent(context, "session/exited", message);
-      this.sessions.delete(context.session.threadId);
+      if (context.discovery) {
+        const discoveryKey = context.session.cwd ?? "";
+        if (discoveryKey) {
+          this.discoverySessions.delete(discoveryKey);
+        }
+      } else {
+        this.sessions.delete(context.session.threadId);
+      }
     });
   }
 
@@ -1332,6 +1562,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   private emitLifecycleEvent(context: CodexSessionContext, method: string, message: string): void {
+    if (context.discovery) {
+      return;
+    }
     this.emitEvent({
       id: EventId.makeUnsafe(randomUUID()),
       kind: "session",
@@ -1344,6 +1577,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   private emitErrorEvent(context: CodexSessionContext, method: string, message: string): void {
+    if (context.discovery) {
+      return;
+    }
     this.emitEvent({
       id: EventId.makeUnsafe(randomUUID()),
       kind: "error",
@@ -1576,6 +1812,77 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
     const candidate = (value as Record<string, unknown>)[key];
     return typeof candidate === "boolean" ? candidate : undefined;
+  }
+
+  private parseSkillsListResponse(response: unknown, cwd: string): ProviderSkillDescriptor[] {
+    const responseRecord = this.readObject(response);
+    const resultRecord = this.readObject(responseRecord, "result") ?? responseRecord;
+    const dataItems = this.readArray(resultRecord, "data") ?? [];
+    const scopedData = dataItems.find((value) => {
+      const item = this.readObject(value);
+      const itemCwd = this.readString(item, "cwd");
+      return itemCwd === cwd;
+    });
+    const scopedSkills = this.readArray(this.readObject(scopedData), "skills");
+    const directSkills = this.readArray(resultRecord, "skills");
+    const rawSkills = scopedSkills ?? directSkills ?? [];
+
+    const parsedSkills = rawSkills
+      .map((value) => this.readObject(value))
+      .flatMap((skill) => {
+        if (!skill) return [];
+        const name = this.readString(skill, "name")?.trim();
+        const path = this.readString(skill, "path")?.trim();
+        if (!name || !path) {
+          return [];
+        }
+        const description = this.readString(skill, "description")?.trim();
+        const scope = this.readString(skill, "scope")?.trim();
+        const display = this.readObject(skill, "interface");
+        return [
+          {
+            name,
+            path,
+            enabled: skill.enabled !== false,
+            ...(description ? { description } : {}),
+            ...(scope ? { scope } : {}),
+            ...(display
+              ? {
+                  interface: {
+                    ...(this.readString(display, "displayName")
+                      ? { displayName: this.readString(display, "displayName") }
+                      : {}),
+                    ...(this.readString(display, "shortDescription")
+                      ? { shortDescription: this.readString(display, "shortDescription") }
+                      : {}),
+                  },
+                }
+              : {}),
+            ...(skill.dependencies !== undefined ? { dependencies: skill.dependencies } : {}),
+          } satisfies ProviderSkillDescriptor,
+        ];
+      });
+
+    return parsedSkills.toSorted((a, b) => a.name.localeCompare(b.name));
+  }
+
+  private parseModelListResponse(response: unknown): ProviderListModelsResult["models"] {
+    const responseRecord = this.readObject(response);
+    const resultRecord = this.readObject(responseRecord, "result") ?? responseRecord;
+    const rawModels =
+      this.readArray(resultRecord, "models") ?? this.readArray(resultRecord, "data") ?? [];
+
+    return rawModels
+      .map((value) => this.readObject(value))
+      .flatMap((model) => {
+        if (!model) return [];
+        const slug = this.readString(model, "id") ?? this.readString(model, "slug");
+        const name = this.readString(model, "name") ?? slug;
+        if (!slug || !name) {
+          return [];
+        }
+        return [{ slug, name }];
+      });
   }
 }
 

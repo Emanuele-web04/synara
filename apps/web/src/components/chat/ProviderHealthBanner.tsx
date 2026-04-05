@@ -1,7 +1,7 @@
 import { PROVIDER_DISPLAY_NAMES, type ServerProviderStatus } from "@t3tools/contracts";
 import { memo } from "react";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
-import { CircleAlertIcon } from "lucide-react";
+import { CircleAlertIcon } from "~/lib/icons";
 
 export const ProviderHealthBanner = memo(function ProviderHealthBanner({
   status,

@@ -271,6 +271,12 @@ export function createWsNativeApi(): NativeApi {
       getConfig: () => transport.request(WS_METHODS.serverGetConfig),
       upsertKeybinding: (input) => transport.request(WS_METHODS.serverUpsertKeybinding, input),
     },
+    provider: {
+      getComposerCapabilities: (input) =>
+        transport.request(WS_METHODS.providerGetComposerCapabilities, input),
+      listSkills: (input) => transport.request(WS_METHODS.providerListSkills, input),
+      listModels: (input) => transport.request(WS_METHODS.providerListModels, input),
+    },
     orchestration: {
       getSnapshot: () => transport.request(ORCHESTRATION_WS_METHODS.getSnapshot),
       dispatchCommand: (command) =>

@@ -1,5 +1,6 @@
 import type { ThreadId } from "@t3tools/contracts";
-import { FolderIcon, GitForkIcon } from "lucide-react";
+import { GitForkIcon } from "~/lib/icons";
+import { FaLaptop } from "react-icons/fa";
 import { useCallback } from "react";
 
 import { newCommandId } from "../lib/utils";
@@ -119,7 +120,7 @@ export default function BranchToolbar({
             </>
           ) : (
             <>
-              <FolderIcon className="size-3" />
+              <FaLaptop className="size-3" />
               Local
             </>
           )}
@@ -134,14 +135,14 @@ export default function BranchToolbar({
             {effectiveEnvMode === "worktree" ? (
               <GitForkIcon className="size-3" />
             ) : (
-              <FolderIcon className="size-3" />
+              <FaLaptop className="size-3" />
             )}
             <SelectValue />
           </SelectTrigger>
           <SelectPopup>
             <SelectItem value="local">
               <span className="inline-flex items-center gap-1.5">
-                <FolderIcon className="size-3" />
+                <FaLaptop className="size-3" />
                 Local
               </span>
             </SelectItem>

@@ -3083,6 +3083,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       provider: PROVIDER,
       capabilities: {
         sessionModelSwitch: "in-session",
+        supportsSkillMentions: false,
+        supportsSkillDiscovery: false,
+        supportsRuntimeModelList: false,
       },
       startSession,
       sendTurn,

@@ -11,14 +11,15 @@ import {
 } from "@t3tools/contracts";
 import { memo } from "react";
 import GitActionsControl from "../GitActionsControl";
-import { DiffIcon, GlobeIcon, TerminalSquareIcon } from "lucide-react";
+import { DiffIcon, GlobeIcon, TerminalSquareIcon } from "~/lib/icons";
 import { Badge } from "../ui/badge";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import ProjectScriptsControl, { type NewProjectScriptInput } from "../ProjectScriptsControl";
 import { Toggle } from "../ui/toggle";
-import { SidebarTrigger } from "../ui/sidebar";
+import { SidebarTrigger, useSidebar } from "../ui/sidebar";
 import { OpenInPicker } from "./OpenInPicker";
 import { isElectron } from "~/env";
+import { cn } from "~/lib/utils";
 
 interface ChatHeaderProps {
   activeThreadId: ThreadId;
@@ -73,9 +74,17 @@ export const ChatHeader = memo(function ChatHeader({
   onToggleDiff,
   onToggleBrowser,
 }: ChatHeaderProps) {
+  const { isMobile, state } = useSidebar();
+  const needsDesktopTrafficLightInset = isElectron && !isMobile && state === "collapsed";
+
   return (
     <div className="flex min-w-0 flex-1 items-center gap-2">
-      <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden sm:gap-3">
+      <div
+        className={cn(
+          "flex min-w-0 flex-1 items-center gap-2 overflow-hidden sm:gap-3",
+          needsDesktopTrafficLightInset ? "pl-[84px]" : "",
+        )}
+      >
         <SidebarTrigger className="size-7 shrink-0 md:hidden" />
         <h2
           className="min-w-0 shrink truncate text-sm font-medium text-foreground"

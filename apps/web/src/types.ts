@@ -24,6 +24,7 @@ export const DEFAULT_THREAD_TERMINAL_ID = "default";
 export const MAX_TERMINALS_PER_GROUP = 4;
 export type ThreadTerminalPresentationMode = "drawer" | "workspace";
 export type ThreadTerminalWorkspaceTab = "terminal" | "chat";
+export type ThreadTerminalWorkspaceLayout = "both" | "terminal-only";
 export type ProjectScript = ContractProjectScript;
 
 export interface ThreadTerminalGroup {

@@ -10,6 +10,8 @@ import {
   type ProjectEntry,
   type ProjectId,
   type ProviderApprovalDecision,
+  type ProviderSkillDescriptor,
+  type ProviderSkillReference,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   type ResolvedKeybindingsConfig,
@@ -32,6 +34,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { gitBranchesQueryOptions, gitCreateWorktreeMutationOptions } from "~/lib/gitReactQuery";
+import {
+  providerComposerCapabilitiesQueryOptions,
+  providerSkillsQueryOptions,
+  supportsSkillDiscovery,
+} from "~/lib/providerDiscoveryReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
 import { isElectron } from "../env";
@@ -101,7 +108,7 @@ import {
   LockIcon,
   LockOpenIcon,
   XIcon,
-} from "lucide-react";
+} from "~/lib/icons";
 import { Button } from "./ui/button";
 import { Separator } from "./ui/separator";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
@@ -150,6 +157,7 @@ import { shouldUseCompactComposerFooter } from "./composerFooterLayout";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
+import { ChatEmptyStateHero } from "./chat/ChatEmptyStateHero";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 import { ChatHeader } from "./chat/ChatHeader";
 import { ContextWindowMeter } from "./chat/ContextWindowMeter";
@@ -193,6 +201,7 @@ const IMAGE_ONLY_BOOTSTRAP_PROMPT =
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
+const EMPTY_PROVIDER_SKILLS: ProviderSkillDescriptor[] = [];
 const EMPTY_AVAILABLE_EDITORS: EditorId[] = [];
 const EMPTY_PROVIDER_STATUSES: ServerProviderStatus[] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
@@ -210,8 +219,25 @@ function formatOutgoingPrompt(params: {
   return params.text;
 }
 const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
+
+function resolveComposerSkillCwd(options: {
+  activeThreadWorktreePath: string | null;
+  activeProjectCwd: string | null;
+  serverCwd: string | null;
+}): string | null {
+  return options.activeThreadWorktreePath ?? options.activeProjectCwd ?? options.serverCwd;
+}
 const SCRIPT_TERMINAL_COLS = 120;
 const SCRIPT_TERMINAL_ROWS = 30;
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function promptIncludesSkillMention(prompt: string, skillName: string): boolean {
+  const pattern = new RegExp(`(^|\\s)\\$${escapeRegExp(skillName)}(?=\\s|$)`, "i");
+  return pattern.test(prompt);
+}
 
 const extendReplacementRangeForTrailingSpace = (
   text: string,
@@ -365,6 +391,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const [composerTrigger, setComposerTrigger] = useState<ComposerTrigger | null>(() =>
     detectComposerTrigger(prompt, prompt.length),
   );
+  const [selectedComposerSkills, setSelectedComposerSkills] = useState<ProviderSkillReference[]>(
+    [],
+  );
   const [lastInvokedScriptByProjectId, setLastInvokedScriptByProjectId] = useLocalStorage(
     LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
     {},
@@ -408,10 +437,15 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const storeSetTerminalPresentationMode = useTerminalStateStore(
     (s) => s.setTerminalPresentationMode,
   );
+  const storeSetTerminalWorkspaceLayout = useTerminalStateStore(
+    (s) => s.setTerminalWorkspaceLayout,
+  );
   const storeSetTerminalWorkspaceTab = useTerminalStateStore((s) => s.setTerminalWorkspaceTab);
   const storeSetTerminalHeight = useTerminalStateStore((s) => s.setTerminalHeight);
   const storeSplitTerminal = useTerminalStateStore((s) => s.splitTerminal);
   const storeNewTerminal = useTerminalStateStore((s) => s.newTerminal);
+  const storeOpenNewFullWidthTerminal = useTerminalStateStore((s) => s.openNewFullWidthTerminal);
+  const storeCloseWorkspaceChat = useTerminalStateStore((s) => s.closeWorkspaceChat);
   const storeSetActiveTerminal = useTerminalStateStore((s) => s.setActiveTerminal);
   const storeCloseTerminal = useTerminalStateStore((s) => s.closeTerminal);
 
@@ -1030,6 +1064,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const composerTriggerKind = composerTrigger?.kind ?? null;
   const pathTriggerQuery = composerTrigger?.kind === "path" ? composerTrigger.query : "";
   const isPathTrigger = composerTriggerKind === "path";
+  const skillTriggerQuery = composerTrigger?.kind === "skill" ? composerTrigger.query : "";
+  const isSkillTrigger = composerTriggerKind === "skill";
   const [debouncedPathQuery, composerPathQueryDebouncer] = useDebouncedValue(
     pathTriggerQuery,
     { wait: COMPOSER_PATH_QUERY_DEBOUNCE_MS },
@@ -1038,6 +1074,26 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const effectivePathQuery = pathTriggerQuery.length > 0 ? debouncedPathQuery : "";
   const branchesQuery = useQuery(gitBranchesQueryOptions(gitCwd));
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const composerSkillCwd = resolveComposerSkillCwd({
+    activeThreadWorktreePath: activeThread?.worktreePath ?? null,
+    activeProjectCwd: activeProject?.cwd ?? null,
+    serverCwd: serverConfigQuery.data?.cwd ?? null,
+  });
+  const providerComposerCapabilitiesQuery = useQuery(
+    providerComposerCapabilitiesQueryOptions(selectedProvider),
+  );
+  const providerSkillsQuery = useQuery(
+    providerSkillsQueryOptions({
+      provider: selectedProvider,
+      cwd: composerSkillCwd,
+      threadId,
+      query: skillTriggerQuery,
+      enabled:
+        isSkillTrigger &&
+        supportsSkillDiscovery(providerComposerCapabilitiesQuery.data) &&
+        composerSkillCwd !== null,
+    }),
+  );
   const workspaceEntriesQuery = useQuery(
     projectSearchEntriesQueryOptions({
       cwd: gitCwd,
@@ -1047,6 +1103,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     }),
   );
   const workspaceEntries = workspaceEntriesQuery.data?.entries ?? EMPTY_PROJECT_ENTRIES;
+  const providerSkills = providerSkillsQuery.data?.skills ?? EMPTY_PROVIDER_SKILLS;
   const composerMenuItems = useMemo<ComposerCommandItem[]>(() => {
     if (!composerTrigger) return [];
     if (composerTrigger.kind === "path") {
@@ -1093,6 +1150,25 @@ export default function ChatView({ threadId }: ChatViewProps) {
       );
     }
 
+    if (composerTrigger.kind === "skill") {
+      const query = composerTrigger.query.trim().toLowerCase();
+      return providerSkills
+        .filter((skill) => {
+          if (!query) return true;
+          return (
+            skill.name.toLowerCase().includes(query) ||
+            (skill.description?.toLowerCase().includes(query) ?? false)
+          );
+        })
+        .map((skill) => ({
+          id: `skill:${skill.path}`,
+          type: "skill",
+          skill,
+          label: skill.interface?.displayName ?? skill.name,
+          description: skill.interface?.shortDescription ?? skill.description ?? skill.path,
+        }));
+    }
+
     return searchableModelOptions
       .filter(({ searchSlug, searchName, searchProvider }) => {
         const query = composerTrigger.query.trim().toLowerCase();
@@ -1109,7 +1185,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         label: name,
         description: `${providerLabel} · ${slug}`,
       }));
-  }, [composerTrigger, searchableModelOptions, workspaceEntries]);
+  }, [composerTrigger, providerSkills, searchableModelOptions, workspaceEntries]);
   const composerMenuOpen = Boolean(composerTrigger);
   const activeComposerMenuItem = useMemo(
     () =>
@@ -1159,6 +1235,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
   );
   const closeTerminalShortcutLabel = useMemo(
     () => shortcutLabelForCommand(keybindings, "terminal.close"),
+    [keybindings],
+  );
+  const closeWorkspaceShortcutLabel = useMemo(
+    () => shortcutLabelForCommand(keybindings, "terminal.workspace.closeActive"),
     [keybindings],
   );
   const diffPanelShortcutLabel = useMemo(
@@ -1215,7 +1295,13 @@ export default function ChatView({ threadId }: ChatViewProps) {
     terminalOpen: terminalState.terminalOpen,
   });
   const terminalWorkspaceTerminalTabActive =
-    terminalWorkspaceOpen && terminalState.workspaceActiveTab === "terminal";
+    terminalWorkspaceOpen &&
+    (terminalState.workspaceLayout === "terminal-only" ||
+      terminalState.workspaceActiveTab === "terminal");
+  const terminalWorkspaceChatTabActive =
+    terminalWorkspaceOpen &&
+    terminalState.workspaceLayout === "both" &&
+    terminalState.workspaceActiveTab === "chat";
   const setThreadError = useCallback(
     (targetThreadId: ThreadId | null, error: string | null) => {
       if (!targetThreadId) return;
@@ -1300,6 +1386,13 @@ export default function ChatView({ threadId }: ChatViewProps) {
     },
     [activeThreadId, storeSetTerminalPresentationMode],
   );
+  const setTerminalWorkspaceLayout = useCallback(
+    (layout: "both" | "terminal-only") => {
+      if (!activeThreadId) return;
+      storeSetTerminalWorkspaceLayout(activeThreadId, layout);
+    },
+    [activeThreadId, storeSetTerminalWorkspaceLayout],
+  );
   const setTerminalWorkspaceTab = useCallback(
     (tab: "terminal" | "chat") => {
       if (!activeThreadId) return;
@@ -1316,13 +1409,22 @@ export default function ChatView({ threadId }: ChatViewProps) {
   );
   const toggleTerminalVisibility = useCallback(() => {
     if (!activeThreadId) return;
+    if (!terminalState.terminalOpen) {
+      setTerminalPresentationMode("drawer");
+    }
     setTerminalOpen(!terminalState.terminalOpen);
-  }, [activeThreadId, setTerminalOpen, terminalState.terminalOpen]);
+  }, [activeThreadId, setTerminalOpen, setTerminalPresentationMode, terminalState.terminalOpen]);
   const expandTerminalWorkspace = useCallback(() => {
     if (!activeThreadId) return;
     setTerminalPresentationMode("workspace");
+    setTerminalWorkspaceLayout("both");
     setTerminalWorkspaceTab("terminal");
-  }, [activeThreadId, setTerminalPresentationMode, setTerminalWorkspaceTab]);
+  }, [
+    activeThreadId,
+    setTerminalPresentationMode,
+    setTerminalWorkspaceLayout,
+    setTerminalWorkspaceTab,
+  ]);
   const collapseTerminalWorkspace = useCallback(() => {
     if (!activeThreadId) return;
     setTerminalPresentationMode("drawer");
@@ -1339,6 +1441,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
     storeNewTerminal(activeThreadId, terminalId);
     setTerminalFocusRequestId((value) => value + 1);
   }, [activeThreadId, storeNewTerminal]);
+  const openNewFullWidthTerminal = useCallback(() => {
+    if (!activeThreadId || !activeProject) return;
+    const terminalId = `terminal-${randomUUID()}`;
+    storeOpenNewFullWidthTerminal(activeThreadId, terminalId);
+    setTerminalFocusRequestId((value) => value + 1);
+  }, [activeProject, activeThreadId, storeOpenNewFullWidthTerminal]);
   const activateTerminal = useCallback(
     (terminalId: string) => {
       if (!activeThreadId) return;
@@ -1377,6 +1485,24 @@ export default function ChatView({ threadId }: ChatViewProps) {
     },
     [activeThreadId, storeCloseTerminal, terminalState.terminalIds.length],
   );
+  const closeActiveWorkspaceView = useCallback(() => {
+    if (!activeThreadId || !terminalWorkspaceOpen) {
+      return;
+    }
+    if (terminalState.workspaceLayout === "both" && terminalState.workspaceActiveTab === "chat") {
+      storeCloseWorkspaceChat(activeThreadId);
+      return;
+    }
+    closeTerminal(terminalState.activeTerminalId);
+  }, [
+    activeThreadId,
+    closeTerminal,
+    storeCloseWorkspaceChat,
+    terminalState.activeTerminalId,
+    terminalState.workspaceActiveTab,
+    terminalState.workspaceLayout,
+    terminalWorkspaceOpen,
+  ]);
   const terminalDrawerProps = useMemo(
     () => ({
       threadId,
@@ -1393,6 +1519,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       splitShortcutLabel: splitTerminalShortcutLabel ?? undefined,
       newShortcutLabel: newTerminalShortcutLabel ?? undefined,
       closeShortcutLabel: closeTerminalShortcutLabel ?? undefined,
+      workspaceCloseShortcutLabel: closeWorkspaceShortcutLabel ?? undefined,
       onActiveTerminalChange: activateTerminal,
       onCloseTerminal: closeTerminal,
       onHeightChange: setTerminalHeight,
@@ -1404,6 +1531,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       addTerminalContextToDraft,
       closeTerminal,
       closeTerminalShortcutLabel,
+      closeWorkspaceShortcutLabel,
       createNewTerminal,
       gitCwd,
       newTerminalShortcutLabel,
@@ -2030,6 +2158,18 @@ export default function ChatView({ threadId }: ChatViewProps) {
   }, [prompt]);
 
   useEffect(() => {
+    setSelectedComposerSkills((existing) =>
+      existing.filter((skill) => promptIncludesSkillMention(prompt, skill.name)),
+    );
+  }, [prompt]);
+
+  useEffect(() => {
+    if (selectedProvider !== "codex") {
+      setSelectedComposerSkills([]);
+    }
+  }, [selectedProvider]);
+
+  useEffect(() => {
     setOptimisticUserMessages((existing) => {
       for (const message of existing) {
         revokeUserMessagePreviewUrls(message);
@@ -2041,6 +2181,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     setComposerHighlightedItemId(null);
     setComposerCursor(collapseExpandedComposerCursor(promptRef.current, promptRef.current.length));
     setComposerTrigger(detectComposerTrigger(promptRef.current, promptRef.current.length));
+    setSelectedComposerSkills([]);
     dragDepthRef.current = 0;
     setIsDragOverComposer(false);
     setExpandedImage(null);
@@ -2255,6 +2396,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
         terminalFocus: isTerminalFocused(),
         terminalOpen: Boolean(terminalState.terminalOpen),
         terminalWorkspaceOpen,
+        terminalWorkspaceTerminalOnly: terminalState.workspaceLayout === "terminal-only",
+        terminalWorkspaceTerminalTabActive,
+        terminalWorkspaceChatTabActive,
       };
 
       const command = resolveShortcutCommand(event, keybindings, {
@@ -2294,6 +2438,20 @@ export default function ChatView({ threadId }: ChatViewProps) {
           setTerminalOpen(true);
         }
         createNewTerminal();
+        return;
+      }
+
+      if (command === "terminal.workspace.newFullWidth") {
+        event.preventDefault();
+        event.stopPropagation();
+        openNewFullWidthTerminal();
+        return;
+      }
+
+      if (command === "terminal.workspace.closeActive") {
+        event.preventDefault();
+        event.stopPropagation();
+        closeActiveWorkspaceView();
         return;
       }
 
@@ -2342,14 +2500,19 @@ export default function ChatView({ threadId }: ChatViewProps) {
     activeProject,
     terminalState.terminalOpen,
     terminalState.activeTerminalId,
+    terminalState.workspaceLayout,
     activeThreadId,
     closeTerminal,
+    closeActiveWorkspaceView,
     createNewTerminal,
     setTerminalOpen,
+    openNewFullWidthTerminal,
     runProjectScript,
     splitTerminal,
     keybindings,
+    terminalWorkspaceChatTabActive,
     terminalWorkspaceOpen,
+    terminalWorkspaceTerminalTabActive,
     onToggleBrowser,
     onToggleDiff,
     setTerminalWorkspaceTab,
@@ -2595,6 +2758,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
 
     const composerImagesSnapshot = [...composerImages];
     const composerTerminalContextsSnapshot = [...sendableComposerTerminalContexts];
+    const composerSkillsSnapshot = [...selectedComposerSkills];
     const messageTextForSend = appendTerminalContextsToPrompt(
       promptForSend,
       composerTerminalContextsSnapshot,
@@ -2607,6 +2771,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
       effort: selectedPromptEffort,
       text: messageTextForSend || IMAGE_ONLY_BOOTSTRAP_PROMPT,
     });
+    const selectedSkillsForSend =
+      selectedProvider === "codex"
+        ? selectedComposerSkills.filter((skill) =>
+            promptIncludesSkillMention(outgoingMessageText, skill.name),
+          )
+        : [];
     const turnAttachmentsPromise = Promise.all(
       composerImagesSnapshot.map(async (image) => ({
         type: "image" as const,
@@ -2787,6 +2957,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           role: "user",
           text: outgoingMessageText,
           attachments: turnAttachments,
+          ...(selectedSkillsForSend.length > 0 ? { skills: selectedSkillsForSend } : {}),
         },
         modelSelection: selectedModelSelection,
         ...(providerOptionsForDispatch ? { providerOptions: providerOptionsForDispatch } : {}),
@@ -2825,6 +2996,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         setComposerCursor(collapseExpandedComposerCursor(promptForSend, promptForSend.length));
         addComposerImagesToDraft(composerImagesSnapshot.map(cloneComposerImageForRetry));
         addComposerTerminalContextsToDraft(composerTerminalContextsSnapshot);
+        setSelectedComposerSkills(composerSkillsSnapshot);
         setComposerTrigger(detectComposerTrigger(promptForSend, promptForSend.length));
       }
       setThreadError(
@@ -3444,6 +3616,35 @@ export default function ChatView({ threadId }: ChatViewProps) {
         }
         return;
       }
+      if (item.type === "skill") {
+        const replacement = `$${item.skill.name} `;
+        const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
+          snapshot.value,
+          trigger.rangeEnd,
+          replacement,
+        );
+        const applied = applyPromptReplacement(
+          trigger.rangeStart,
+          replacementRangeEnd,
+          replacement,
+          { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
+        );
+        if (applied) {
+          setSelectedComposerSkills((existing) => {
+            const nextSkill = {
+              name: item.skill.name,
+              path: item.skill.path,
+            } satisfies ProviderSkillReference;
+            return existing.some(
+              (skill) => skill.name === nextSkill.name && skill.path === nextSkill.path,
+            )
+              ? existing
+              : [...existing, nextSkill];
+          });
+          setComposerHighlightedItemId(null);
+        }
+        return;
+      }
       onProviderModelSelect(item.provider, item.model);
       const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
         expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
@@ -3456,6 +3657,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       applyPromptReplacement,
       handleInteractionModeChange,
       onProviderModelSelect,
+      setSelectedComposerSkills,
       resolveActiveComposerTrigger,
     ],
   );
@@ -3730,6 +3932,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
                   resolvedTheme={resolvedTheme}
                   timestampFormat={timestampFormat}
                   workspaceRoot={activeProject?.cwd ?? undefined}
+                  emptyStateContent={<ChatEmptyStateHero projectName={activeProject?.name} />}
                 />
               </div>
 
@@ -3749,7 +3952,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
             </div>
 
             {/* Input bar */}
-            <div className={cn("px-3 pt-1.5 sm:px-5 sm:pt-2", isGitRepo ? "pb-1" : "pb-3 sm:pb-4")}>
+            <div
+              className={cn("px-3 pt-1.5 sm:px-5 sm:pt-2", isGitRepo ? "pb-1" : "pb-2.5 sm:pb-3")}
+            >
               <form
                 ref={composerFormRef}
                 onSubmit={onSend}
@@ -3758,7 +3963,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
               >
                 <div
                   className={cn(
-                    "group rounded-[22px] p-px transition-colors duration-200",
+                    "group rounded-2xl p-px transition-colors duration-200",
                     composerProviderState.composerFrameClassName,
                   )}
                   onDragEnter={onComposerDragEnter}
@@ -3768,8 +3973,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
                 >
                   <div
                     className={cn(
-                      "rounded-[20px] border bg-card transition-colors duration-200 focus-within:border-ring/45",
-                      isDragOverComposer ? "border-primary/70 bg-accent/30" : "border-border",
+                      "rounded-[calc(var(--radius-2xl)-1px)] border bg-card transition-colors duration-200 focus-within:border-ring/35",
+                      isDragOverComposer ? "border-primary/50 bg-accent/20" : "border-border/60",
                       composerProviderState.composerSurfaceClassName,
                     )}
                   >
@@ -3801,8 +4006,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
                     ) : null}
                     <div
                       className={cn(
-                        "relative px-3 pb-2 sm:px-4",
-                        hasComposerHeader ? "pt-2.5 sm:pt-3" : "pt-3.5 sm:pt-4",
+                        "relative px-3.5 pb-2 sm:px-4",
+                        hasComposerHeader ? "pt-2 sm:pt-2.5" : "pt-3 sm:pt-3.5",
                       )}
                     >
                       {composerMenuOpen && !isComposerApprovalState && (
@@ -3822,11 +4027,11 @@ export default function ChatView({ threadId }: ChatViewProps) {
                       {!isComposerApprovalState &&
                         pendingUserInputs.length === 0 &&
                         composerImages.length > 0 && (
-                          <div className="mb-3 flex flex-wrap gap-2">
+                          <div className="mb-2.5 flex flex-wrap gap-1.5">
                             {composerImages.map((image) => (
                               <div
                                 key={image.id}
-                                className="relative h-16 w-16 overflow-hidden rounded-lg border border-border/80 bg-background"
+                                className="relative h-14 w-14 overflow-hidden rounded-md border border-border/50 bg-background"
                               >
                                 {image.previewUrl ? (
                                   <button
@@ -3938,10 +4143,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
                       <div
                         data-chat-composer-footer="true"
                         className={cn(
-                          "flex items-center justify-between px-2.5 pb-2.5 sm:px-3 sm:pb-3",
+                          "flex items-center justify-between px-2.5 pb-2 sm:px-3 sm:pb-2.5",
                           isComposerFooterCompact
                             ? "gap-1.5"
-                            : "flex-wrap gap-2 sm:flex-nowrap sm:gap-0",
+                            : "flex-wrap gap-1.5 sm:flex-nowrap sm:gap-0",
                         )}
                       >
                         <div
@@ -4122,7 +4327,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
                           ) : phase === "running" ? (
                             <button
                               type="button"
-                              className="flex size-8 cursor-pointer items-center justify-center rounded-full bg-rose-500/90 text-white transition-all duration-150 hover:bg-rose-500 hover:scale-105 sm:h-8 sm:w-8"
+                              className="flex size-7 cursor-pointer items-center justify-center rounded-full bg-foreground/70 text-background transition-all duration-150 hover:bg-foreground hover:scale-105 sm:h-7 sm:w-7"
                               onClick={() => void onInterrupt()}
                               aria-label="Stop generation"
                             >
@@ -4185,7 +4390,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
                             ) : (
                               <button
                                 type="submit"
-                                className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/90 text-primary-foreground transition-all duration-150 hover:bg-primary hover:scale-105 disabled:opacity-30 disabled:hover:scale-100 sm:h-8 sm:w-8"
+                                className="flex h-8 w-8 items-center justify-center rounded-full bg-foreground/80 text-background transition-all duration-150 hover:bg-foreground hover:scale-105 disabled:opacity-20 disabled:hover:scale-100 sm:h-7 sm:w-7"
                                 disabled={
                                   isSendBusy ||
                                   isConnecting ||

@@ -4,6 +4,7 @@
 
 @theme inline {
   --animate-skeleton: skeleton 2s -1s infinite linear;
+  --font-mono: var(--font-mono-family);
   --color-warning-foreground: var(--warning-foreground);
   --color-warning: var(--warning);
   --color-success-foreground: var(--success-foreground);
@@ -64,6 +65,9 @@
 :root {
   color-scheme: light;
   --radius: 0.625rem;
+  --font-mono-family:
+    "JetBrains Mono Variable", "JetBrains Mono", "SF Mono", "SFMono-Regular", Consolas,
+    "Liberation Mono", Menlo, monospace;
   --background: var(--color-white);
   --foreground: var(--color-neutral-800);
   --card: var(--color-white);
@@ -162,7 +166,7 @@ pre,
 code,
 textarea,
 input {
-  font-family: "SF Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-family: var(--font-mono-family);
 }
 
 /* Window drag region (frameless titlebar) */

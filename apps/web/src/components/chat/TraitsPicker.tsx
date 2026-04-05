@@ -14,7 +14,7 @@ import {
   hasEffortLevel,
 } from "@t3tools/shared/model";
 import { memo, useCallback, useState } from "react";
-import { ChevronDownIcon } from "lucide-react";
+import { ChevronDownIcon } from "~/lib/icons";
 import { Button } from "../ui/button";
 import {
   Menu,

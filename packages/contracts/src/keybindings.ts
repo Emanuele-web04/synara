@@ -13,6 +13,8 @@ const STATIC_KEYBINDING_COMMANDS = [
   "terminal.split",
   "terminal.new",
   "terminal.close",
+  "terminal.workspace.newFullWidth",
+  "terminal.workspace.closeActive",
   "terminal.workspace.terminal",
   "terminal.workspace.chat",
   "browser.toggle",

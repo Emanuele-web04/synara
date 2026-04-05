@@ -15,13 +15,16 @@ export default function TerminalWorkspaceTabs({
   terminalCount,
   onSelectTab,
 }: TerminalWorkspaceTabsProps) {
+  const tabClassName =
+    "group relative -mb-px inline-flex h-7 shrink-0 items-center rounded-t-[10px] border border-b-0 px-3 text-xs transition-colors";
+
   return (
     <div className="relative border-b border-border/70 bg-muted/10 px-3 sm:px-5">
       <div className="flex min-w-0 items-end gap-1.5 overflow-x-auto pt-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <button
           type="button"
           className={cn(
-            "group relative -mb-px inline-flex h-7 shrink-0 items-center rounded-t-[10px] border border-b-0 px-3 text-xs transition-colors",
+            tabClassName,
             activeTab === "terminal"
               ? "z-[1] border-border/70 bg-background text-foreground"
               : "border-transparent bg-transparent text-muted-foreground hover:bg-background/55 hover:text-foreground",
@@ -38,7 +41,7 @@ export default function TerminalWorkspaceTabs({
         <button
           type="button"
           className={cn(
-            "group relative -mb-px inline-flex h-7 shrink-0 items-center rounded-t-[10px] border border-b-0 px-3 text-xs transition-colors",
+            tabClassName,
             activeTab === "chat"
               ? "z-[1] border-border/70 bg-background text-foreground"
               : "border-transparent bg-transparent text-muted-foreground hover:bg-background/55 hover:text-foreground",

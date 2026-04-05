@@ -258,7 +258,7 @@ const makeServerProgram = (input: CliInput) =>
         ? `http://${formatHostForUrl(config.host)}:${config.port}`
         : localUrl;
     const { authToken, devUrl, ...safeConfig } = config;
-    yield* Effect.logInfo("T3 Code running", {
+    yield* Effect.logInfo("DP Code running", {
       ...safeConfig,
       devUrl: devUrl?.toString(),
       authEnabled: Boolean(authToken),
@@ -296,7 +296,7 @@ const hostFlag = Flag.string("host").pipe(
   Flag.optional,
 );
 const t3HomeFlag = Flag.string("home-dir").pipe(
-  Flag.withDescription("Base directory for all T3 Code data (equivalent to T3CODE_HOME)."),
+  Flag.withDescription("Base directory for all DP Code data (equivalent to T3CODE_HOME)."),
   Flag.optional,
 );
 const devUrlFlag = Flag.string("dev-url").pipe(
@@ -338,6 +338,6 @@ export const t3Cli = Command.make("t3", {
   autoBootstrapProjectFromCwd: autoBootstrapProjectFromCwdFlag,
   logWebSocketEvents: logWebSocketEventsFlag,
 }).pipe(
-  Command.withDescription("Run the T3 Code server."),
+  Command.withDescription("Run the DP Code server."),
   Command.withHandler((input) => Effect.scoped(makeServerProgram(input))),
 );

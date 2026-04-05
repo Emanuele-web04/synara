@@ -29,6 +29,32 @@ interface ShortcutMatchOptions {
 
 const WORKSPACE_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
   {
+    command: "terminal.workspace.newFullWidth",
+    shortcut: {
+      key: "j",
+      metaKey: false,
+      ctrlKey: false,
+      shiftKey: true,
+      altKey: false,
+      modKey: true,
+    },
+  },
+  {
+    command: "terminal.workspace.closeActive",
+    shortcut: {
+      key: "w",
+      metaKey: false,
+      ctrlKey: false,
+      shiftKey: false,
+      altKey: false,
+      modKey: true,
+    },
+    whenAst: {
+      type: "identifier",
+      name: "terminalWorkspaceOpen",
+    },
+  },
+  {
     command: "terminal.workspace.terminal",
     shortcut: {
       key: "1",

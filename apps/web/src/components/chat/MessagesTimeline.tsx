@@ -32,7 +32,7 @@ import {
   Undo2Icon,
   WrenchIcon,
   ZapIcon,
-} from "lucide-react";
+} from "~/lib/icons";
 import { Button } from "../ui/button";
 import { clamp } from "effect/Number";
 import { estimateTimelineMessageHeight } from "../timelineHeight";
@@ -64,6 +64,7 @@ interface MessagesTimelineProps {
   isWorking: boolean;
   activeTurnInProgress: boolean;
   activeTurnStartedAt: string | null;
+  emptyStateContent?: ReactNode;
   scrollContainer: HTMLDivElement | null;
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
   completionDividerBeforeEntryId: string | null;
@@ -105,6 +106,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   resolvedTheme,
   timestampFormat,
   workspaceRoot,
+  emptyStateContent,
 }: MessagesTimelineProps) {
   const timelineRootRef = useRef<HTMLDivElement | null>(null);
   const [timelineWidthPx, setTimelineWidthPx] = useState<number | null>(null);
@@ -360,10 +362,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const terminalContexts = displayedUserMessage.contexts;
           const canRevertAgentWork = revertTurnCountByUserMessageId.has(row.message.id);
           return (
-            <div className="flex justify-end">
-              <div className="group flex flex-col items-end gap-1">
+            <div className="flex w-full justify-end">
+              <div className="group flex max-w-[80%] flex-col items-end gap-1">
                 {/* Keep user-message chrome outside the bubble so the message reads as one simple block. */}
-                <div className="max-w-[80%] self-end rounded-xl border border-border/70 bg-secondary px-4 py-2">
+                <div className="w-max max-w-full min-w-0 self-end rounded-xl border border-border/70 bg-secondary px-4 py-2">
                   {userImages.length > 0 && (
                     <div className="mb-2 grid max-w-[420px] grid-cols-2 gap-2">
                       {userImages.map(
@@ -559,6 +561,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   );
 
   if (!hasMessages && !isWorking) {
+    if (emptyStateContent) {
+      return <div className="flex h-full items-center justify-center">{emptyStateContent}</div>;
+    }
     return (
       <div className="flex h-full items-center justify-center">
         <p className="text-sm text-muted-foreground/30">
@@ -725,7 +730,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
         }
 
         return (
-          <div className="wrap-break-word whitespace-pre-wrap font-system-ui text-sm leading-relaxed text-foreground">
+          <div className="inline-block max-w-full min-w-0 wrap-break-word whitespace-pre-wrap font-system-ui text-sm leading-relaxed text-foreground">
             {inlineNodes}
           </div>
         );
@@ -753,7 +758,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
     }
 
     return (
-      <div className="wrap-break-word whitespace-pre-wrap font-system-ui text-sm leading-relaxed text-foreground">
+      <div className="inline-block max-w-full min-w-0 wrap-break-word whitespace-pre-wrap font-system-ui text-sm leading-relaxed text-foreground">
         {inlineNodes}
       </div>
     );
@@ -764,9 +769,9 @@ const UserMessageBody = memo(function UserMessageBody(props: {
   }
 
   return (
-    <pre className="font-system-ui whitespace-pre-wrap wrap-break-word text-sm leading-relaxed text-foreground">
+    <div className="inline-block max-w-full min-w-0 whitespace-pre-wrap break-words font-system-ui text-sm leading-relaxed text-foreground">
       {props.text}
-    </pre>
+    </div>
   );
 });
 

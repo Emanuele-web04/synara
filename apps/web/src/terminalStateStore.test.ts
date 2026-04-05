@@ -39,6 +39,7 @@ describe("terminalStateStore actions", () => {
     expect(terminalState).toEqual({
       terminalOpen: false,
       presentationMode: "drawer",
+      workspaceLayout: "both",
       workspaceActiveTab: "terminal",
       terminalHeight: 280,
       terminalIds: ["default"],
@@ -92,6 +93,67 @@ describe("terminalStateStore actions", () => {
       THREAD_ID,
     );
     expect(terminalState.presentationMode).toBe("workspace");
+    expect(terminalState.workspaceActiveTab).toBe("terminal");
+  });
+
+  it("opens a new full-width terminal in terminal-only workspace mode", () => {
+    const store = useTerminalStateStore.getState();
+    store.openNewFullWidthTerminal(THREAD_ID, "terminal-2");
+
+    const terminalState = selectThreadTerminalState(
+      useTerminalStateStore.getState().terminalStateByThreadId,
+      THREAD_ID,
+    );
+    expect(terminalState.terminalOpen).toBe(true);
+    expect(terminalState.presentationMode).toBe("workspace");
+    expect(terminalState.workspaceLayout).toBe("terminal-only");
+    expect(terminalState.workspaceActiveTab).toBe("terminal");
+    expect(terminalState.activeTerminalId).toBe("terminal-2");
+    expect(terminalState.terminalIds).toEqual(["default", "terminal-2"]);
+  });
+
+  it("restores chat when selecting the chat workspace tab from terminal-only mode", () => {
+    const store = useTerminalStateStore.getState();
+    store.openNewFullWidthTerminal(THREAD_ID, "terminal-2");
+    store.setTerminalWorkspaceTab(THREAD_ID, "chat");
+
+    const terminalState = selectThreadTerminalState(
+      useTerminalStateStore.getState().terminalStateByThreadId,
+      THREAD_ID,
+    );
+    expect(terminalState.workspaceLayout).toBe("both");
+    expect(terminalState.workspaceActiveTab).toBe("chat");
+  });
+
+  it("closes workspace chat into terminal-only mode without closing terminals", () => {
+    const store = useTerminalStateStore.getState();
+    store.setTerminalPresentationMode(THREAD_ID, "workspace");
+    store.setTerminalWorkspaceTab(THREAD_ID, "chat");
+    store.closeWorkspaceChat(THREAD_ID);
+
+    const terminalState = selectThreadTerminalState(
+      useTerminalStateStore.getState().terminalStateByThreadId,
+      THREAD_ID,
+    );
+    expect(terminalState.terminalOpen).toBe(true);
+    expect(terminalState.presentationMode).toBe("workspace");
+    expect(terminalState.workspaceLayout).toBe("terminal-only");
+    expect(terminalState.workspaceActiveTab).toBe("terminal");
+    expect(terminalState.terminalIds).toEqual(["default"]);
+  });
+
+  it("preserves terminal-only workspace layout when collapsing to drawer and reopening", () => {
+    const store = useTerminalStateStore.getState();
+    store.openNewFullWidthTerminal(THREAD_ID, "terminal-2");
+    store.setTerminalPresentationMode(THREAD_ID, "drawer");
+    store.setTerminalPresentationMode(THREAD_ID, "workspace");
+
+    const terminalState = selectThreadTerminalState(
+      useTerminalStateStore.getState().terminalStateByThreadId,
+      THREAD_ID,
+    );
+    expect(terminalState.presentationMode).toBe("workspace");
+    expect(terminalState.workspaceLayout).toBe("terminal-only");
     expect(terminalState.workspaceActiveTab).toBe("terminal");
   });
 

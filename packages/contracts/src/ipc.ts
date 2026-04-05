@@ -48,6 +48,14 @@ import type {
 } from "./orchestration";
 import { EditorId } from "./editor";
 import type { ThreadId } from "./baseSchemas";
+import type {
+  ProviderComposerCapabilities,
+  ProviderGetComposerCapabilitiesInput,
+  ProviderListModelsInput,
+  ProviderListModelsResult,
+  ProviderListSkillsInput,
+  ProviderListSkillsResult,
+} from "./providerDiscovery";
 
 export interface ContextMenuItem<T extends string = string> {
   id: T;
@@ -237,6 +245,13 @@ export interface NativeApi {
   server: {
     getConfig: () => Promise<ServerConfig>;
     upsertKeybinding: (input: ServerUpsertKeybindingInput) => Promise<ServerUpsertKeybindingResult>;
+  };
+  provider: {
+    getComposerCapabilities: (
+      input: ProviderGetComposerCapabilitiesInput,
+    ) => Promise<ProviderComposerCapabilities>;
+    listSkills: (input: ProviderListSkillsInput) => Promise<ProviderListSkillsResult>;
+    listModels: (input: ProviderListModelsInput) => Promise<ProviderListModelsResult>;
   };
   orchestration: {
     getSnapshot: () => Promise<OrchestrationReadModel>;

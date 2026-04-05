@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDownIcon, PlusIcon, RotateCcwIcon, Undo2Icon, XIcon } from "lucide-react";
+import { ChevronDownIcon, PlusIcon, RotateCcwIcon, Undo2Icon, XIcon } from "~/lib/icons";
 import { type ReactNode, useCallback, useState } from "react";
 import { type ProviderKind, DEFAULT_GIT_TEXT_GENERATION_MODEL } from "@t3tools/contracts";
 import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
@@ -426,7 +426,7 @@ function SettingsRouteView() {
             <SettingsSection title="General">
               <SettingsRow
                 title="Theme"
-                description="Choose how T3 Code looks across the app."
+                description="Choose how DP Code looks across the app."
                 resetAction={
                   theme !== "system" ? (
                     <SettingResetButton label="theme" onClick={() => setTheme("system")} />

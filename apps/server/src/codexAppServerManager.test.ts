@@ -314,7 +314,7 @@ describe("startSession", () => {
     expect(buildCodexInitializeParams()).toEqual({
       clientInfo: {
         name: "t3code_desktop",
-        title: "T3 Code Desktop",
+        title: "DP Code Desktop",
         version: "0.1.0",
       },
       capabilities: {
@@ -381,7 +381,7 @@ describe("startSession", () => {
       )
       .mockImplementation(() => {
         throw new Error(
-          "Codex CLI v0.36.0 is too old for T3 Code. Upgrade to v0.37.0 or newer and restart T3 Code.",
+          "Codex CLI v0.36.0 is too old for DP Code. Upgrade to v0.37.0 or newer and restart DP Code.",
         );
       });
 
@@ -393,7 +393,7 @@ describe("startSession", () => {
           runtimeMode: "full-access",
         }),
       ).rejects.toThrow(
-        "Codex CLI v0.36.0 is too old for T3 Code. Upgrade to v0.37.0 or newer and restart T3 Code.",
+        "Codex CLI v0.36.0 is too old for DP Code. Upgrade to v0.37.0 or newer and restart DP Code.",
       );
       expect(versionCheck).toHaveBeenCalledTimes(1);
       expect(events).toEqual([
@@ -401,7 +401,7 @@ describe("startSession", () => {
           method: "session/startFailed",
           kind: "error",
           message:
-            "Codex CLI v0.36.0 is too old for T3 Code. Upgrade to v0.37.0 or newer and restart T3 Code.",
+            "Codex CLI v0.36.0 is too old for DP Code. Upgrade to v0.37.0 or newer and restart DP Code.",
         },
       ]);
     } finally {
@@ -479,6 +479,38 @@ describe("sendTurn", () => {
         {
           type: "image",
           url: "data:image/png;base64,BBBB",
+        },
+      ],
+      model: "gpt-5.3-codex",
+    });
+  });
+
+  it("adds selected skills as structured turn/start input items", async () => {
+    const { manager, context, sendRequest } = createSendTurnHarness();
+
+    await manager.sendTurn({
+      threadId: asThreadId("thread_1"),
+      input: "Use $check-code for this repo",
+      skills: [
+        {
+          name: "check-code",
+          path: "/Users/test/.codex/skills/check-code/SKILL.md",
+        },
+      ],
+    });
+
+    expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
+      threadId: "thread_1",
+      input: [
+        {
+          type: "text",
+          text: "Use $check-code for this repo",
+          text_elements: [],
+        },
+        {
+          type: "skill",
+          name: "check-code",
+          path: "/Users/test/.codex/skills/check-code/SKILL.md",
         },
       ],
       model: "gpt-5.3-codex",
@@ -584,6 +616,171 @@ describe("sendTurn", () => {
         threadId: asThreadId("thread_1"),
       }),
     ).rejects.toThrow("Turn input must include text or attachments.");
+  });
+});
+
+describe("CodexAppServerManager discovery", () => {
+  it("parses bucketed skills/list responses for the requested cwd", async () => {
+    const manager = new CodexAppServerManager();
+    const context = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId: "thread_1",
+        runtimeMode: "full-access",
+        model: "gpt-5.3-codex",
+        resumeCursor: { threadId: "thread_1" },
+        createdAt: "2026-02-10T00:00:00.000Z",
+        updatedAt: "2026-02-10T00:00:00.000Z",
+      },
+      account: {
+        type: "unknown",
+        planType: null,
+        sparkEnabled: true,
+      },
+      collabReceiverTurns: new Map(),
+    };
+
+    const resolveContextForDiscovery = vi
+      .spyOn(
+        manager as unknown as {
+          resolveContextForDiscovery: (threadId?: string) => unknown;
+        },
+        "resolveContextForDiscovery",
+      )
+      .mockReturnValue(context);
+    const sendRequest = vi
+      .spyOn(
+        manager as unknown as {
+          sendRequest: (...args: unknown[]) => Promise<unknown>;
+        },
+        "sendRequest",
+      )
+      .mockResolvedValue({
+        result: {
+          data: [
+            {
+              cwd: "/other",
+              skills: [
+                {
+                  name: "ignore-me",
+                  path: "/ignore",
+                },
+              ],
+            },
+            {
+              cwd: "/repo",
+              skills: [
+                {
+                  name: "check-code",
+                  description: "Review repo changes for bugs and risks.",
+                  path: "/Users/test/.codex/skills/check-code/SKILL.md",
+                  scope: "project",
+                  interface: {
+                    displayName: "Check Code",
+                    shortDescription: "Review code changes",
+                  },
+                  dependencies: ["rg"],
+                },
+              ],
+            },
+          ],
+        },
+      });
+
+    const result = await manager.listSkills({
+      cwd: "/repo",
+      threadId: "thread_1",
+    });
+
+    expect(resolveContextForDiscovery).toHaveBeenCalledWith("thread_1");
+    expect(sendRequest).toHaveBeenCalledWith(context, "skills/list", {
+      cwds: ["/repo"],
+    });
+    expect(result).toEqual({
+      skills: [
+        {
+          name: "check-code",
+          description: "Review repo changes for bugs and risks.",
+          path: "/Users/test/.codex/skills/check-code/SKILL.md",
+          enabled: true,
+          scope: "project",
+          interface: {
+            displayName: "Check Code",
+            shortDescription: "Review code changes",
+          },
+          dependencies: ["rg"],
+        },
+      ],
+      source: "codex-app-server",
+      cached: false,
+    });
+  });
+
+  it("retries skills/list with cwd when a runtime rejects cwds", async () => {
+    const manager = new CodexAppServerManager();
+    const context = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId: "thread_1",
+        runtimeMode: "full-access",
+        model: "gpt-5.3-codex",
+        resumeCursor: { threadId: "thread_1" },
+        createdAt: "2026-02-10T00:00:00.000Z",
+        updatedAt: "2026-02-10T00:00:00.000Z",
+      },
+      account: {
+        type: "unknown",
+        planType: null,
+        sparkEnabled: true,
+      },
+      collabReceiverTurns: new Map(),
+    };
+
+    vi.spyOn(
+      manager as unknown as {
+        resolveContextForDiscovery: (threadId?: string) => unknown;
+      },
+      "resolveContextForDiscovery",
+    ).mockReturnValue(context);
+    const sendRequest = vi
+      .spyOn(
+        manager as unknown as {
+          sendRequest: (...args: unknown[]) => Promise<unknown>;
+        },
+        "sendRequest",
+      )
+      .mockRejectedValueOnce(new Error('skills/list failed: invalid params: unknown field "cwds"'))
+      .mockResolvedValueOnce({
+        result: {
+          skills: [
+            {
+              name: "check-code",
+              path: "/Users/test/.codex/skills/check-code/SKILL.md",
+            },
+          ],
+        },
+      });
+
+    const result = await manager.listSkills({
+      cwd: "/repo",
+      threadId: "thread_1",
+    });
+
+    expect(sendRequest).toHaveBeenNthCalledWith(1, context, "skills/list", {
+      cwds: ["/repo"],
+    });
+    expect(sendRequest).toHaveBeenNthCalledWith(2, context, "skills/list", {
+      cwd: "/repo",
+    });
+    expect(result.skills).toEqual([
+      {
+        name: "check-code",
+        path: "/Users/test/.codex/skills/check-code/SKILL.md",
+        enabled: true,
+      },
+    ]);
   });
 });
 

@@ -7,7 +7,7 @@ import {
   TerminalSquare,
   Trash2,
   XIcon,
-} from "lucide-react";
+} from "~/lib/icons";
 import { type ThreadId } from "@t3tools/contracts";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import {
@@ -41,6 +41,19 @@ import { cn } from "~/lib/utils";
 const MIN_DRAWER_HEIGHT = 180;
 const MAX_DRAWER_HEIGHT_RATIO = 0.75;
 const MULTI_CLICK_SELECTION_ACTION_DELAY_MS = 260;
+const FALLBACK_MONO_FONT_FAMILY =
+  '"JetBrains Mono Variable", "JetBrains Mono", "SF Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace';
+
+function getTerminalFontFamily(): string {
+  if (typeof window === "undefined") {
+    return FALLBACK_MONO_FONT_FAMILY;
+  }
+
+  const configuredFontFamily = getComputedStyle(document.documentElement)
+    .getPropertyValue("--font-mono-family")
+    .trim();
+  return configuredFontFamily || FALLBACK_MONO_FONT_FAMILY;
+}
 
 function maxDrawerHeight(): number {
   if (typeof window === "undefined") return DEFAULT_THREAD_TERMINAL_HEIGHT;
@@ -201,7 +214,6 @@ interface TerminalViewportProps {
   focusRequestId: number;
   autoFocus: boolean;
   resizeEpoch: number;
-  drawerHeight: number;
 }
 
 function TerminalViewport({
@@ -215,7 +227,6 @@ function TerminalViewport({
   focusRequestId,
   autoFocus,
   resizeEpoch,
-  drawerHeight,
 }: TerminalViewportProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -233,6 +244,26 @@ function TerminalViewport({
   useEffect(() => {
     onSessionExitedRef.current = onSessionExited;
   }, [onSessionExited]);
+
+  const resizeTerminalToContainer = useCallback(() => {
+    const api = readNativeApi();
+    const terminal = terminalRef.current;
+    const fitAddon = fitAddonRef.current;
+    if (!api || !terminal || !fitAddon) return;
+    const wasAtBottom = terminal.buffer.active.viewportY >= terminal.buffer.active.baseY;
+    fitAddon.fit();
+    if (wasAtBottom) {
+      terminal.scrollToBottom();
+    }
+    void api.terminal
+      .resize({
+        threadId,
+        terminalId,
+        cols: terminal.cols,
+        rows: terminal.rows,
+      })
+      .catch(() => undefined);
+  }, [terminalId, threadId]);
 
   useEffect(() => {
     onAddTerminalContextRef.current = onAddTerminalContext;
@@ -254,7 +285,7 @@ function TerminalViewport({
       lineHeight: 1.2,
       fontSize: 12,
       scrollback: 5_000,
-      fontFamily: '"SF Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
+      fontFamily: getTerminalFontFamily(),
       theme: terminalThemeFromApp(),
     });
     terminal.loadAddon(fitAddon);
@@ -570,23 +601,7 @@ function TerminalViewport({
     });
 
     const fitTimer = window.setTimeout(() => {
-      const activeTerminal = terminalRef.current;
-      const activeFitAddon = fitAddonRef.current;
-      if (!activeTerminal || !activeFitAddon) return;
-      const wasAtBottom =
-        activeTerminal.buffer.active.viewportY >= activeTerminal.buffer.active.baseY;
-      activeFitAddon.fit();
-      if (wasAtBottom) {
-        activeTerminal.scrollToBottom();
-      }
-      void api.terminal
-        .resize({
-          threadId,
-          terminalId,
-          cols: activeTerminal.cols,
-          rows: activeTerminal.rows,
-        })
-        .catch(() => undefined);
+      resizeTerminalToContainer();
     }, 30);
     void openTerminal();
 
@@ -610,7 +625,7 @@ function TerminalViewport({
     // autoFocus is intentionally omitted;
     // it is only read at mount time and must not trigger terminal teardown/recreation.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cwd, runtimeEnv, terminalId, threadId]);
+  }, [cwd, resizeTerminalToContainer, runtimeEnv, terminalId, threadId]);
 
   useEffect(() => {
     if (!autoFocus) return;
@@ -625,31 +640,49 @@ function TerminalViewport({
   }, [autoFocus, focusRequestId]);
 
   useEffect(() => {
-    const api = readNativeApi();
     const terminal = terminalRef.current;
-    const fitAddon = fitAddonRef.current;
-    if (!api || !terminal || !fitAddon) return;
+    if (!terminal) return;
     const wasAtBottom = terminal.buffer.active.viewportY >= terminal.buffer.active.baseY;
     const frame = window.requestAnimationFrame(() => {
-      fitAddon.fit();
       if (wasAtBottom) {
         terminal.scrollToBottom();
       }
-      void api.terminal
-        .resize({
-          threadId,
-          terminalId,
-          cols: terminal.cols,
-          rows: terminal.rows,
-        })
-        .catch(() => undefined);
+      resizeTerminalToContainer();
     });
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [drawerHeight, resizeEpoch, terminalId, threadId]);
+  }, [resizeEpoch, resizeTerminalToContainer]);
+
+  useEffect(() => {
+    const mount = containerRef.current;
+    if (!mount || typeof ResizeObserver === "undefined") return;
+
+    let frame = 0;
+
+    const observer = new ResizeObserver(() => {
+      if (frame !== 0) {
+        window.cancelAnimationFrame(frame);
+      }
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        resizeTerminalToContainer();
+      });
+    });
+
+    observer.observe(mount);
+    return () => {
+      observer.disconnect();
+      if (frame !== 0) {
+        window.cancelAnimationFrame(frame);
+      }
+    };
+  }, [resizeTerminalToContainer]);
   return (
-    <div ref={containerRef} className="relative h-full w-full overflow-hidden rounded-[4px]" />
+    <div
+      ref={containerRef}
+      className="relative h-full min-h-0 w-full overflow-hidden rounded-[4px]"
+    />
   );
 }
 
@@ -670,6 +703,7 @@ interface ThreadTerminalDrawerProps {
   splitShortcutLabel?: string | undefined;
   newShortcutLabel?: string | undefined;
   closeShortcutLabel?: string | undefined;
+  workspaceCloseShortcutLabel?: string | undefined;
   onActiveTerminalChange: (terminalId: string) => void;
   onCloseTerminal: (terminalId: string) => void;
   onHeightChange: (height: number) => void;
@@ -778,6 +812,7 @@ export default function ThreadTerminalDrawer({
   splitShortcutLabel,
   newShortcutLabel,
   closeShortcutLabel,
+  workspaceCloseShortcutLabel,
   onActiveTerminalChange,
   onCloseTerminal,
   onHeightChange,
@@ -884,6 +919,7 @@ export default function ThreadTerminalDrawer({
   const visibleTerminalIds = resolvedTerminalGroups[resolvedActiveGroupIndex]?.terminalIds ?? [
     resolvedActiveTerminalId,
   ];
+  const workspaceTerminalIds = normalizedTerminalIds;
   const hasTerminalSidebar = normalizedTerminalIds.length > 1;
   const isSplitView = visibleTerminalIds.length > 1;
   const showGroupHeaders =
@@ -905,8 +941,11 @@ export default function ThreadTerminalDrawer({
   const newTerminalActionLabel = newShortcutLabel
     ? `New Terminal (${newShortcutLabel})`
     : "New Terminal";
-  const closeTerminalActionLabel = closeShortcutLabel
-    ? `Close Terminal (${closeShortcutLabel})`
+  const resolvedCloseShortcutLabel = isWorkspaceMode
+    ? (workspaceCloseShortcutLabel ?? closeShortcutLabel)
+    : closeShortcutLabel;
+  const closeTerminalActionLabel = resolvedCloseShortcutLabel
+    ? `Close Terminal (${resolvedCloseShortcutLabel})`
     : "Close Terminal";
   const onSplitTerminalAction = useCallback(() => {
     if (hasReachedSplitLimit) return;
@@ -1013,17 +1052,6 @@ export default function ThreadTerminalDrawer({
       syncHeight(drawerHeightRef.current);
     };
   }, [syncHeight]);
-
-  const workspaceTitle = (
-    <div className="flex min-w-0 items-center gap-2">
-      <div className="inline-flex h-7 items-center rounded-full border border-border/70 bg-background px-3 font-mono text-[11px] tracking-[0.16em] text-muted-foreground uppercase">
-        Terminal
-      </div>
-      <span className="truncate text-xs text-muted-foreground">
-        {terminalIds.length === 1 ? "1 shell" : `${terminalIds.length} shells`}
-      </span>
-    </div>
-  );
   const presentationToggleLabel = isWorkspaceMode
     ? "Collapse terminal workspace"
     : "Expand terminal workspace";
@@ -1032,7 +1060,7 @@ export default function ThreadTerminalDrawer({
   ) : (
     <Maximize2 className="size-3.25" />
   );
-  const chromeActions: TerminalChromeActionItem[] = [
+  const drawerChromeActions: TerminalChromeActionItem[] = [
     {
       label: splitTerminalActionLabel,
       onClick: onSplitTerminalAction,
@@ -1055,13 +1083,81 @@ export default function ThreadTerminalDrawer({
       children: <Trash2 className="size-3.25" />,
     },
   ];
+  // Workspace mode behaves like flat browser tabs, so we keep only shell-level
+  // actions here and leave split groups as a drawer-only concept.
+  const workspaceChromeActions: TerminalChromeActionItem[] = [
+    {
+      label: newTerminalActionLabel,
+      onClick: onNewTerminalAction,
+      children: <Plus className="size-3.25" />,
+    },
+    {
+      label: presentationToggleLabel,
+      onClick: onTogglePresentationMode,
+      children: presentationToggleIcon,
+    },
+    {
+      label: closeTerminalActionLabel,
+      onClick: () => onCloseTerminal(resolvedActiveTerminalId),
+      children: <Trash2 className="size-3.25" />,
+    },
+  ];
+  const workspaceTerminalTabs = isWorkspaceMode && (
+    <div className="flex min-w-0 items-center justify-between gap-3 border-b border-border/70 bg-muted/10 px-2 pt-1.5">
+      <div className="flex min-w-0 items-end gap-1 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {workspaceTerminalIds.map((terminalId) => {
+          const isActive = terminalId === resolvedActiveTerminalId;
+          const closeTabLabel = `Close ${terminalLabelById.get(terminalId) ?? "Terminal"}`;
+          return (
+            <div
+              key={terminalId}
+              className={cn(
+                "group relative -mb-px flex h-8 shrink-0 items-center gap-2 rounded-t-[11px] border border-b-0 px-3 transition-colors",
+                isActive
+                  ? "z-[1] border-border/70 bg-background text-foreground"
+                  : "border-transparent bg-transparent text-muted-foreground hover:bg-background/60 hover:text-foreground",
+              )}
+            >
+              <button
+                type="button"
+                className="flex min-w-0 items-center gap-2 text-left"
+                onClick={() => onActiveTerminalChange(terminalId)}
+              >
+                <TerminalSquare className="size-3 shrink-0" />
+                <span className="truncate font-mono text-[11px] tracking-[0.08em]">
+                  {terminalLabelById.get(terminalId) ?? "Terminal"}
+                </span>
+              </button>
+              <button
+                type="button"
+                className={cn(
+                  "inline-flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground transition hover:bg-accent/80 hover:text-foreground",
+                  workspaceTerminalIds.length <= 1 ? "hidden" : "",
+                )}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onCloseTerminal(terminalId);
+                }}
+                aria-label={closeTabLabel}
+              >
+                <XIcon className="size-2.75" />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      <div className="shrink-0 pb-0.5">
+        <TerminalChromeActions actions={workspaceChromeActions} variant="workspace" />
+      </div>
+    </div>
+  );
 
   return (
     <aside
       className={cn(
         "thread-terminal-drawer relative flex min-w-0 flex-col overflow-hidden bg-background",
         isWorkspaceMode
-          ? "min-h-0 flex-1 border-t border-border/70"
+          ? "h-full min-h-0 border-t border-border/70"
           : "shrink-0 border-t border-border/80",
       )}
       style={isWorkspaceMode ? undefined : { height: `${drawerHeight}px` }}
@@ -1076,25 +1172,25 @@ export default function ThreadTerminalDrawer({
         />
       ) : null}
 
-      {isWorkspaceMode ? (
-        <div className="flex h-11 items-center justify-between gap-3 border-b border-border/70 bg-muted/10 px-3">
-          {workspaceTitle}
-          <TerminalChromeActions actions={chromeActions} variant="workspace" />
-        </div>
-      ) : null}
+      {workspaceTerminalTabs}
 
       {!hasTerminalSidebar && !isWorkspaceMode && (
         <div className="pointer-events-none absolute right-2 top-2 z-20">
           <div className="pointer-events-auto">
-            <TerminalChromeActions actions={chromeActions} variant="compact" />
+            <TerminalChromeActions actions={drawerChromeActions} variant="compact" />
           </div>
         </div>
       )}
 
       <div className="min-h-0 w-full flex-1">
-        <div className={`flex h-full min-h-0 ${hasTerminalSidebar ? "gap-1.5" : ""}`}>
+        <div
+          className={cn(
+            "flex h-full min-h-0",
+            hasTerminalSidebar && !isWorkspaceMode ? "gap-1.5" : "",
+          )}
+        >
           <div className="min-w-0 flex-1">
-            {isSplitView ? (
+            {!isWorkspaceMode && isSplitView ? (
               <div
                 className="grid h-full w-full min-w-0 gap-0 overflow-hidden"
                 style={{
@@ -1125,14 +1221,13 @@ export default function ThreadTerminalDrawer({
                         focusRequestId={focusRequestId}
                         autoFocus={terminalId === resolvedActiveTerminalId}
                         resizeEpoch={resizeEpoch}
-                        drawerHeight={drawerHeight}
                       />
                     </div>
                   </div>
                 ))}
               </div>
             ) : (
-              <div className="h-full p-1">
+              <div className={cn("h-full", isWorkspaceMode ? "" : "p-1")}>
                 <TerminalViewport
                   key={resolvedActiveTerminalId}
                   threadId={threadId}
@@ -1145,13 +1240,12 @@ export default function ThreadTerminalDrawer({
                   focusRequestId={focusRequestId}
                   autoFocus
                   resizeEpoch={resizeEpoch}
-                  drawerHeight={drawerHeight}
                 />
               </div>
             )}
           </div>
 
-          {hasTerminalSidebar && (
+          {hasTerminalSidebar && !isWorkspaceMode && (
             <aside
               className={cn(
                 "flex w-36 min-w-36 flex-col border border-border/70 bg-muted/10",
@@ -1159,7 +1253,7 @@ export default function ThreadTerminalDrawer({
               )}
             >
               <div className="flex h-[22px] items-stretch justify-end border-b border-border/70">
-                <TerminalChromeActions actions={chromeActions} variant="sidebar" />
+                <TerminalChromeActions actions={drawerChromeActions} variant="sidebar" />
               </div>
 
               <div className="min-h-0 flex-1 overflow-y-auto px-1 py-1">
@@ -1193,9 +1287,12 @@ export default function ThreadTerminalDrawer({
                       >
                         {terminalGroup.terminalIds.map((terminalId) => {
                           const isActive = terminalId === resolvedActiveTerminalId;
+                          const terminalCloseLabelShortcut = isActive
+                            ? resolvedCloseShortcutLabel
+                            : null;
                           const closeTerminalLabel = `Close ${
                             terminalLabelById.get(terminalId) ?? "terminal"
-                          }${isActive && closeShortcutLabel ? ` (${closeShortcutLabel})` : ""}`;
+                          }${terminalCloseLabelShortcut ? ` (${terminalCloseLabelShortcut})` : ""}`;
                           return (
                             <div
                               key={terminalId}

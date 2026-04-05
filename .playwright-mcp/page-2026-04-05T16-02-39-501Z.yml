@@ -1,0 +1,35 @@
+- generic [active] [ref=e1]:
+    - generic [ref=e6]:
+        - generic [ref=e9] [cursor=pointer]:
+            - generic "DP" [ref=e10]
+            - generic [ref=e11]: Code
+            - button "Toggle thread sidebar" [ref=e12]:
+                - img
+                - generic [ref=e13]: Toggle Sidebar
+        - generic [ref=e15]:
+            - list [ref=e17]:
+                - listitem [ref=e18]:
+                    - button "New thread" [ref=e19] [cursor=pointer]:
+                        - img [ref=e21]
+                        - generic [ref=e25]: New thread
+            - generic [ref=e26]:
+                - generic [ref=e27]:
+                    - generic [ref=e28]: Threads
+                    - generic [ref=e29]:
+                        - button [ref=e30] [cursor=pointer]:
+                            - img [ref=e31]
+                        - button "Add project" [ref=e34] [cursor=pointer]:
+                            - img [ref=e35]
+                - list
+                - generic [ref=e36]: No projects yet
+        - separator [ref=e37]
+        - list [ref=e39]:
+            - listitem [ref=e40]:
+                - button "Settings" [ref=e41] [cursor=pointer]:
+                    - img [ref=e42]
+                    - generic [ref=e45]: Settings
+        - button "Resize Sidebar" [ref=e46]
+    - generic:
+        - region "Notifications"
+    - generic:
+        - region "Notifications"

@@ -1,33 +1,61 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { DEFAULT_RUNTIME_MODE } from "@t3tools/contracts";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useEffect, useRef } from "react";
 
-import { isElectron } from "../env";
-import { SidebarTrigger } from "../components/ui/sidebar";
+import { useAppSettings } from "~/appSettings";
+import { resolveSidebarNewThreadEnvMode } from "~/components/Sidebar.logic";
+import { useComposerDraftStore } from "../composerDraftStore";
+import { newThreadId } from "../lib/utils";
+import { useStore } from "../store";
 
 function ChatIndexRouteView() {
-  return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-muted-foreground/40">
-      {!isElectron && (
-        <header className="border-b border-border px-3 py-2 md:hidden">
-          <div className="flex items-center gap-2">
-            <SidebarTrigger className="size-7 shrink-0" />
-            <span className="text-sm font-medium text-foreground">Threads</span>
-          </div>
-        </header>
-      )}
+  const projects = useStore((store) => store.projects);
+  const navigate = useNavigate();
+  const { settings: appSettings } = useAppSettings();
+  const hasRedirected = useRef(false);
+  const firstProject = projects[0];
 
-      {isElectron && (
-        <div className="drag-region flex h-[52px] shrink-0 items-center border-b border-border px-5">
-          <span className="text-xs text-muted-foreground/50">No active thread</span>
-        </div>
-      )}
+  useEffect(() => {
+    if (!firstProject || hasRedirected.current) return;
+    hasRedirected.current = true;
 
-      <div className="flex flex-1 items-center justify-center">
-        <div className="text-center">
-          <p className="text-sm">Select a thread or create a new one to get started.</p>
-        </div>
-      </div>
-    </div>
-  );
+    const { getDraftThreadByProjectId, setProjectDraftThreadId, applyStickyState } =
+      useComposerDraftStore.getState();
+
+    // Reuse existing draft thread for this project if one exists
+    const existingDraft = getDraftThreadByProjectId(firstProject.id);
+    if (existingDraft) {
+      void navigate({
+        to: "/$threadId",
+        params: { threadId: existingDraft.threadId },
+        replace: true,
+      });
+      return;
+    }
+
+    // Create a new draft thread
+    const threadId = newThreadId();
+    const envMode = resolveSidebarNewThreadEnvMode({
+      defaultEnvMode: appSettings.defaultThreadEnvMode,
+    });
+
+    setProjectDraftThreadId(firstProject.id, threadId, {
+      createdAt: new Date().toISOString(),
+      branch: null,
+      worktreePath: null,
+      envMode,
+      runtimeMode: DEFAULT_RUNTIME_MODE,
+    });
+    applyStickyState(threadId);
+
+    void navigate({
+      to: "/$threadId",
+      params: { threadId },
+      replace: true,
+    });
+  }, [firstProject, navigate, appSettings.defaultThreadEnvMode]);
+
+  return null;
 }
 
 export const Route = createFileRoute("/_chat/")({

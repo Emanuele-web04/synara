@@ -15,7 +15,7 @@ import {
   PlusIcon,
   RefreshCwIcon,
   XIcon,
-} from "lucide-react";
+} from "~/lib/icons";
 
 import { readNativeApi } from "~/nativeApi";
 import { cn } from "~/lib/utils";
