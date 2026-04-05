@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronDownIcon, PlusIcon, RotateCcwIcon, Undo2Icon, XIcon } from "~/lib/icons";
-import { type ReactNode, useCallback, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { type ProviderKind, DEFAULT_GIT_TEXT_GENERATION_MODEL } from "@t3tools/contracts";
 import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
 import {
@@ -33,6 +33,12 @@ import { useTheme } from "../hooks/useTheme";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { cn } from "../lib/utils";
 import { ensureNativeApi, readNativeApi } from "../nativeApi";
+import {
+  buildNotificationSettingsSupportText,
+  readBrowserNotificationPermissionState,
+  requestBrowserNotificationPermission,
+} from "../notifications/taskCompletion";
+import { toastManager } from "../components/ui/toast";
 
 const THEME_OPTIONS = [
   {
@@ -207,6 +213,9 @@ function SettingsRouteView() {
     Partial<Record<ProviderKind, string | null>>
   >({});
   const [showAllCustomModels, setShowAllCustomModels] = useState(false);
+  const [browserNotificationPermission, setBrowserNotificationPermission] = useState(
+    readBrowserNotificationPermissionState(),
+  );
 
   const codexBinaryPath = settings.codexBinaryPath;
   const codexHomePath = settings.codexHomePath;
@@ -256,6 +265,13 @@ function SettingsRouteView() {
     ...(settings.enableAssistantStreaming !== defaults.enableAssistantStreaming
       ? ["Assistant output"]
       : []),
+    ...(settings.enableTaskCompletionToasts !== defaults.enableTaskCompletionToasts
+      ? ["Completion toasts"]
+      : []),
+    ...(settings.enableSystemTaskCompletionNotifications !==
+    defaults.enableSystemTaskCompletionNotifications
+      ? ["Desktop notifications"]
+      : []),
     ...(settings.defaultThreadEnvMode !== defaults.defaultThreadEnvMode ? ["New thread mode"] : []),
     ...(settings.confirmThreadDelete !== defaults.confirmThreadDelete
       ? ["Delete confirmation"]
@@ -289,6 +305,10 @@ function SettingsRouteView() {
         setIsOpeningKeybindings(false);
       });
   }, [availableEditors, keybindingsConfigPath]);
+
+  useEffect(() => {
+    setBrowserNotificationPermission(readBrowserNotificationPermissionState());
+  }, []);
 
   const addCustomModel = useCallback(
     (provider: ProviderKind) => {
@@ -379,8 +399,73 @@ function SettingsRouteView() {
     setCustomModelErrorByProvider({});
   }
 
+  async function setSystemNotificationsEnabled(nextEnabled: boolean) {
+    if (!nextEnabled) {
+      updateSettings({ enableSystemTaskCompletionNotifications: false });
+      return;
+    }
+
+    if (isElectron) {
+      updateSettings({ enableSystemTaskCompletionNotifications: true });
+      return;
+    }
+
+    const permission = await requestBrowserNotificationPermission();
+    setBrowserNotificationPermission(permission);
+
+    if (permission === "granted") {
+      updateSettings({ enableSystemTaskCompletionNotifications: true });
+      return;
+    }
+
+    updateSettings({ enableSystemTaskCompletionNotifications: false });
+    toastManager.add({
+      type: permission === "denied" ? "warning" : "error",
+      title: "Desktop notifications unavailable",
+      description: buildNotificationSettingsSupportText(permission),
+    });
+  }
+
+  async function sendTestNotification() {
+    const title = "Task completed";
+    const body = "Notification test from DP Code.";
+
+    if (window.desktopBridge) {
+      const shown = await window.desktopBridge.notifications.show({ title, body, silent: false });
+      toastManager.add({
+        type: shown ? "success" : "warning",
+        title: shown ? "Test notification sent" : "Notifications unavailable",
+        description: shown
+          ? "Your operating system should show the notification."
+          : "Desktop notifications are not supported on this device.",
+      });
+      return;
+    }
+
+    const permission = await requestBrowserNotificationPermission();
+    setBrowserNotificationPermission(permission);
+    if (permission !== "granted") {
+      toastManager.add({
+        type: permission === "denied" ? "warning" : "error",
+        title: "Desktop notifications unavailable",
+        description: buildNotificationSettingsSupportText(permission),
+      });
+      return;
+    }
+
+    const notification = new Notification(title, { body, tag: "t3code:test-notification" });
+    notification.addEventListener("click", () => {
+      window.focus();
+    });
+    toastManager.add({
+      type: "success",
+      title: "Test notification sent",
+      description: "Your browser should show the notification.",
+    });
+  }
+
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground isolate">
+    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none rounded-l-2xl bg-background text-foreground isolate">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground">
         {!isElectron && (
           <header className="border-b border-border px-3 py-2 sm:px-5">
@@ -498,6 +583,66 @@ function SettingsRouteView() {
                       </SelectItem>
                     </SelectPopup>
                   </Select>
+                }
+              />
+
+              <SettingsRow
+                title="Completion toasts"
+                description="Show an in-app toast when a thread changes from working to completed."
+                resetAction={
+                  settings.enableTaskCompletionToasts !== defaults.enableTaskCompletionToasts ? (
+                    <SettingResetButton
+                      label="completion toasts"
+                      onClick={() =>
+                        updateSettings({
+                          enableTaskCompletionToasts: defaults.enableTaskCompletionToasts,
+                        })
+                      }
+                    />
+                  ) : null
+                }
+                control={
+                  <Switch
+                    checked={settings.enableTaskCompletionToasts}
+                    onCheckedChange={(checked) =>
+                      updateSettings({ enableTaskCompletionToasts: checked })
+                    }
+                    aria-label="Completion toast notifications"
+                  />
+                }
+              />
+
+              <SettingsRow
+                title="Desktop notifications"
+                description="Show an OS notification when a thread finishes while the app is in the background."
+                status={buildNotificationSettingsSupportText(browserNotificationPermission)}
+                resetAction={
+                  settings.enableSystemTaskCompletionNotifications !==
+                  defaults.enableSystemTaskCompletionNotifications ? (
+                    <SettingResetButton
+                      label="desktop notifications"
+                      onClick={() =>
+                        updateSettings({
+                          enableSystemTaskCompletionNotifications:
+                            defaults.enableSystemTaskCompletionNotifications,
+                        })
+                      }
+                    />
+                  ) : null
+                }
+                control={
+                  <div className="flex w-full items-center gap-2 sm:w-auto sm:justify-end">
+                    <Button size="xs" variant="outline" onClick={() => void sendTestNotification()}>
+                      Test
+                    </Button>
+                    <Switch
+                      checked={settings.enableSystemTaskCompletionNotifications}
+                      onCheckedChange={(checked) => {
+                        void setSystemNotificationsEnabled(checked);
+                      }}
+                      aria-label="Desktop task completion notifications"
+                    />
+                  </div>
                 }
               />
 

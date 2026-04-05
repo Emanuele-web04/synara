@@ -1,4 +1,6 @@
+import type { TurnDiffFileChange } from "../types";
 import { deriveDisplayedUserMessageState } from "../lib/terminalContext";
+import { buildTurnDiffTree, type TurnDiffTreeNode } from "../lib/turnDiffTree";
 import { buildInlineTerminalContextText } from "./chat/userMessageTerminalContexts";
 
 const ASSISTANT_CHARS_PER_LINE_FALLBACK = 72;
@@ -16,15 +18,43 @@ const USER_MONO_AVG_CHAR_WIDTH_PX = 8.4;
 const ASSISTANT_AVG_CHAR_WIDTH_PX = 7.2;
 const MIN_USER_CHARS_PER_LINE = 4;
 const MIN_ASSISTANT_CHARS_PER_LINE = 20;
+const COMPLETION_DIVIDER_HEIGHT_PX = 40;
+const TURN_DIFF_SUMMARY_CHROME_HEIGHT_PX = 76;
+const TURN_DIFF_TREE_ROW_HEIGHT_PX = 24;
+const TURN_DIFF_TREE_ROW_GAP_PX = 2;
+const WORK_GROUP_CHROME_HEIGHT_PX = 24;
+const WORK_GROUP_HEADER_HEIGHT_PX = 20;
+const WORK_ENTRY_ROW_HEIGHT_PX = 30;
+const WORK_ENTRY_CHANGED_FILES_HEIGHT_PX = 24;
+const WORK_ENTRY_GAP_PX = 2;
+const changedFilesSummaryHeightCache = new WeakMap<
+  ReadonlyArray<TurnDiffFileChange>,
+  { collapsed?: number; expanded?: number }
+>();
 
 interface TimelineMessageHeightInput {
   role: "user" | "assistant" | "system";
   text: string;
   attachments?: ReadonlyArray<{ id: string }>;
+  diffSummaryFiles?: ReadonlyArray<TurnDiffFileChange>;
+  diffSummaryAllDirectoriesExpanded?: boolean;
+  showCompletionDivider?: boolean;
 }
 
 interface TimelineHeightEstimateLayout {
   timelineWidthPx: number | null;
+}
+
+interface TimelineWorkEntryHeightInput {
+  tone: "thinking" | "tool" | "info" | "error";
+  command?: string | null;
+  detail?: string | null;
+  changedFiles?: ReadonlyArray<string>;
+}
+
+interface TimelineWorkGroupEstimateOptions {
+  expanded: boolean;
+  maxVisibleEntries: number;
 }
 
 function estimateWrappedLineCount(text: string, charsPerLine: number): number {
@@ -66,6 +96,84 @@ function estimateCharsPerLineForAssistant(timelineWidthPx: number | null): numbe
   );
 }
 
+// Count the tree rows the diff summary will render before ResizeObserver corrects the real size.
+function countVisibleTurnDiffTreeRows(
+  nodes: ReadonlyArray<TurnDiffTreeNode>,
+  allDirectoriesExpanded: boolean,
+): number {
+  let count = 0;
+  for (const node of nodes) {
+    count += 1;
+    if (allDirectoriesExpanded && node.kind === "directory") {
+      count += countVisibleTurnDiffTreeRows(node.children, allDirectoriesExpanded);
+    }
+  }
+  return count;
+}
+
+export function estimateChangedFilesSummaryHeight(
+  files: ReadonlyArray<TurnDiffFileChange>,
+  allDirectoriesExpanded = true,
+): number {
+  if (files.length === 0) return 0;
+
+  const cacheKey = allDirectoriesExpanded ? "expanded" : "collapsed";
+  const cachedHeights = changedFilesSummaryHeightCache.get(files);
+  const cachedHeight = cachedHeights?.[cacheKey];
+  if (typeof cachedHeight === "number") {
+    return cachedHeight;
+  }
+
+  const visibleRowCount = countVisibleTurnDiffTreeRows(
+    buildTurnDiffTree(files),
+    allDirectoriesExpanded,
+  );
+
+  const height =
+    TURN_DIFF_SUMMARY_CHROME_HEIGHT_PX +
+    visibleRowCount * TURN_DIFF_TREE_ROW_HEIGHT_PX +
+    Math.max(visibleRowCount - 1, 0) * TURN_DIFF_TREE_ROW_GAP_PX;
+  changedFilesSummaryHeightCache.set(files, {
+    ...cachedHeights,
+    [cacheKey]: height,
+  });
+
+  return height;
+}
+
+function estimateTimelineWorkEntryHeight(entry: TimelineWorkEntryHeightInput): number {
+  const hasChangedFiles = (entry.changedFiles?.length ?? 0) > 0;
+  const previewIsChangedFiles = hasChangedFiles && !entry.command && !entry.detail;
+
+  return (
+    WORK_ENTRY_ROW_HEIGHT_PX +
+    (hasChangedFiles && !previewIsChangedFiles ? WORK_ENTRY_CHANGED_FILES_HEIGHT_PX : 0)
+  );
+}
+
+// Bias work-log estimates upward so fast scrolls do not stack rows before they are measured.
+export function estimateTimelineWorkGroupHeight(
+  entries: ReadonlyArray<TimelineWorkEntryHeightInput>,
+  options: TimelineWorkGroupEstimateOptions,
+): number {
+  if (entries.length === 0) return WORK_GROUP_CHROME_HEIGHT_PX;
+
+  const visibleEntries =
+    options.expanded || entries.length <= options.maxVisibleEntries
+      ? entries
+      : entries.slice(-options.maxVisibleEntries);
+  const showHeader =
+    entries.length > options.maxVisibleEntries ||
+    visibleEntries.some((entry) => entry.tone !== "tool");
+
+  return (
+    WORK_GROUP_CHROME_HEIGHT_PX +
+    (showHeader ? WORK_GROUP_HEADER_HEIGHT_PX : 0) +
+    visibleEntries.reduce((total, entry) => total + estimateTimelineWorkEntryHeight(entry), 0) +
+    Math.max(visibleEntries.length - 1, 0) * WORK_ENTRY_GAP_PX
+  );
+}
+
 export function estimateTimelineMessageHeight(
   message: TimelineMessageHeightInput,
   layout: TimelineHeightEstimateLayout = { timelineWidthPx: null },
@@ -73,7 +181,15 @@ export function estimateTimelineMessageHeight(
   if (message.role === "assistant") {
     const charsPerLine = estimateCharsPerLineForAssistant(layout.timelineWidthPx);
     const estimatedLines = estimateWrappedLineCount(message.text, charsPerLine);
-    return ASSISTANT_BASE_HEIGHT_PX + estimatedLines * LINE_HEIGHT_PX;
+    return (
+      ASSISTANT_BASE_HEIGHT_PX +
+      estimatedLines * LINE_HEIGHT_PX +
+      (message.showCompletionDivider ? COMPLETION_DIVIDER_HEIGHT_PX : 0) +
+      estimateChangedFilesSummaryHeight(
+        message.diffSummaryFiles ?? [],
+        message.diffSummaryAllDirectoriesExpanded ?? true,
+      )
+    );
   }
 
   if (message.role === "user") {

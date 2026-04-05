@@ -189,7 +189,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Terminal 1 lines 1-5");
-    expect(markup).toContain("lucide-terminal");
+    expect(markup).toContain("tabler-icon-terminal");
     expect(markup).toContain("yoo what&#x27;s ");
   });
 

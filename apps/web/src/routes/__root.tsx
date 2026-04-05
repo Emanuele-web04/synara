@@ -24,6 +24,7 @@ import { onServerConfigUpdated, onServerWelcome } from "../wsNativeApi";
 import { providerQueryKeys } from "../lib/providerReactQuery";
 import { projectQueryKeys } from "../lib/projectReactQuery";
 import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
+import { TaskCompletionNotifications } from "../notifications/taskCompletion";
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient;
@@ -52,6 +53,7 @@ function RootRouteView() {
     <ToastProvider>
       <AnchoredToastProvider>
         <EventRouter />
+        <TaskCompletionNotifications />
         <DesktopProjectBootstrap />
         <Outlet />
       </AnchoredToastProvider>

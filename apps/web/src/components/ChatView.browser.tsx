@@ -92,9 +92,17 @@ interface UserRowMeasurement {
 interface MountedChatView {
   [Symbol.asyncDispose]: () => Promise<void>;
   cleanup: () => Promise<void>;
+  measureLayout: () => Promise<ChatLayoutMeasurement>;
   measureUserRow: (targetMessageId: MessageId) => Promise<UserRowMeasurement>;
   setViewport: (viewport: ViewportSpec) => Promise<void>;
   router: ReturnType<typeof getRouter>;
+}
+
+interface ChatLayoutMeasurement {
+  hostHeightPx: number;
+  composerBottomPx: number;
+  scrollClientHeightPx: number;
+  scrollHeightPx: number;
 }
 
 function isoAt(offsetSeconds: number): string {
@@ -265,6 +273,36 @@ function createSnapshotForTargetUser(options: {
       },
     ],
     updatedAt: NOW_ISO,
+  };
+}
+
+function createSnapshotWithLongAssistantResponse(): OrchestrationReadModel {
+  const snapshot = createSnapshotForTargetUser({
+    targetMessageId: "msg-user-assistant-overflow-target" as MessageId,
+    targetText: "start",
+  });
+
+  return {
+    ...snapshot,
+    threads: snapshot.threads.map((thread) =>
+      thread.id === THREAD_ID
+        ? {
+            ...thread,
+            messages: thread.messages.map((message, index) =>
+              message.role === "assistant" && index === 7
+                ? {
+                    ...message,
+                    text: Array.from(
+                      { length: 240 },
+                      (_, lineIndex) =>
+                        `${lineIndex + 1}. keep the viewport stable while this response keeps growing`,
+                    ).join("\n"),
+                  }
+                : message,
+            ),
+          }
+        : thread,
+    ),
   };
 }
 
@@ -735,6 +773,28 @@ async function measureUserRow(options: {
   return { measuredRowHeightPx, timelineWidthMeasuredPx, renderedInVirtualizedRegion };
 }
 
+async function measureChatLayout(host: HTMLElement): Promise<ChatLayoutMeasurement> {
+  const scrollContainer = await waitForElement(
+    () => host.querySelector<HTMLDivElement>("div.overflow-y-auto.overscroll-y-contain"),
+    "Unable to find ChatView message scroll container.",
+  );
+  const composerForm = await waitForElement(
+    () => host.querySelector<HTMLElement>("[data-chat-composer-form='true']"),
+    "Unable to find chat composer form.",
+  );
+
+  await waitForLayout();
+
+  const hostHeightPx = host.getBoundingClientRect().height;
+  const composerBottomPx = composerForm.getBoundingClientRect().bottom;
+  return {
+    hostHeightPx,
+    composerBottomPx,
+    scrollClientHeightPx: scrollContainer.clientHeight,
+    scrollHeightPx: scrollContainer.scrollHeight,
+  };
+}
+
 async function mountChatView(options: {
   viewport: ViewportSpec;
   snapshot: OrchestrationReadModel;
@@ -774,6 +834,7 @@ async function mountChatView(options: {
   return {
     [Symbol.asyncDispose]: cleanup,
     cleanup,
+    measureLayout: async () => measureChatLayout(host),
     measureUserRow: async (targetMessageId: MessageId) => measureUserRow({ host, targetMessageId }),
     setViewport: async (viewport: ViewportSpec) => {
       await setViewport(viewport);
@@ -961,6 +1022,28 @@ describe("ChatView timeline estimator parity (full app)", () => {
     const ratio = estimatedDeltaPx / measuredDeltaPx;
     expect(ratio).toBeGreaterThan(0.65);
     expect(ratio).toBeLessThan(1.35);
+  });
+
+  it("keeps the composer visible while a long assistant response forces a viewport relayout", async () => {
+    const mounted = await mountChatView({
+      viewport: TEXT_VIEWPORT_MATRIX[0],
+      snapshot: createSnapshotWithLongAssistantResponse(),
+    });
+
+    try {
+      const desktopLayout = await mounted.measureLayout();
+      expect(desktopLayout.scrollClientHeightPx).toBeGreaterThan(0);
+      expect(desktopLayout.scrollHeightPx).toBeGreaterThan(desktopLayout.scrollClientHeightPx);
+      expect(desktopLayout.composerBottomPx).toBeLessThanOrEqual(desktopLayout.hostHeightPx + 1);
+
+      await mounted.setViewport(TEXT_VIEWPORT_MATRIX[2]);
+      const mobileLayout = await mounted.measureLayout();
+      expect(mobileLayout.scrollClientHeightPx).toBeGreaterThan(0);
+      expect(mobileLayout.scrollHeightPx).toBeGreaterThan(mobileLayout.scrollClientHeightPx);
+      expect(mobileLayout.composerBottomPx).toBeLessThanOrEqual(mobileLayout.hostHeightPx + 1);
+    } finally {
+      await mounted.cleanup();
+    }
   });
 
   it.each(ATTACHMENT_VIEWPORT_MATRIX)(
@@ -1850,6 +1933,21 @@ describe("ChatView timeline estimator parity (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows a wide-footer control to reopen the plan sidebar when a plan exists", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithLongProposedPlan(),
+    });
+
+    try {
+      await expect.element(page.getByTitle("Show plan sidebar")).toBeInTheDocument();
+      await page.getByTitle("Show plan sidebar").click();
+      await expect.element(page.getByLabelText("Close plan sidebar")).toBeInTheDocument();
     } finally {
       await mounted.cleanup();
     }

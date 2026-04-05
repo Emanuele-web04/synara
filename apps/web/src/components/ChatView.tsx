@@ -30,6 +30,7 @@ import {
   normalizeModelSlug,
 } from "@t3tools/shared/model";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { GoTasklist } from "react-icons/go";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useNavigate, useSearch } from "@tanstack/react-router";
@@ -99,14 +100,11 @@ import PlanSidebar from "./PlanSidebar";
 import TerminalWorkspaceTabs from "./TerminalWorkspaceTabs";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import {
-  BotIcon,
   ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   CircleAlertIcon,
   ListTodoIcon,
-  LockIcon,
-  LockOpenIcon,
   XIcon,
 } from "~/lib/icons";
 import { Button } from "./ui/button";
@@ -237,6 +235,32 @@ function escapeRegExp(value: string): string {
 function promptIncludesSkillMention(prompt: string, skillName: string): boolean {
   const pattern = new RegExp(`(^|\\s)\\$${escapeRegExp(skillName)}(?=\\s|$)`, "i");
   return pattern.test(prompt);
+}
+
+function normalizeSkillSearchText(value: string | undefined): string {
+  if (!value) return "";
+  return value
+    .toLowerCase()
+    .replace(/[:/_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildSkillSearchBlob(skill: {
+  name: string;
+  description?: string | undefined;
+  interface?:
+    | {
+        displayName?: string | undefined;
+        shortDescription?: string | undefined;
+      }
+    | undefined;
+}): string {
+  return normalizeSkillSearchText(
+    [skill.name, skill.interface?.displayName, skill.interface?.shortDescription, skill.description]
+      .filter((value) => typeof value === "string" && value.trim().length > 0)
+      .join("\n"),
+  );
 }
 
 const extendReplacementRangeForTrailingSpace = (
@@ -1151,14 +1175,11 @@ export default function ChatView({ threadId }: ChatViewProps) {
     }
 
     if (composerTrigger.kind === "skill") {
-      const query = composerTrigger.query.trim().toLowerCase();
+      const query = normalizeSkillSearchText(composerTrigger.query);
       return providerSkills
         .filter((skill) => {
           if (!query) return true;
-          return (
-            skill.name.toLowerCase().includes(query) ||
-            (skill.description?.toLowerCase().includes(query) ?? false)
-          );
+          return buildSkillSearchBlob(skill).includes(query);
         })
         .map((skill) => ({
           id: `skill:${skill.path}`,
@@ -3827,7 +3848,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   }
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
       {/* Top bar */}
       <header
         className={cn(
@@ -3882,18 +3903,18 @@ export default function ChatView({ threadId }: ChatViewProps) {
         />
       ) : null}
       {/* Main content area with optional plan sidebar */}
-      <div className="relative flex min-h-0 min-w-0 flex-1">
+      <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
         {/* Chat column */}
-        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <div
             aria-hidden={terminalWorkspaceTerminalTabActive}
             className={cn(
-              "flex min-h-0 min-w-0 flex-1 flex-col",
+              "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
               terminalWorkspaceTerminalTabActive ? "pointer-events-none invisible" : "",
             )}
           >
             {/* Messages Wrapper */}
-            <div className="relative flex min-h-0 flex-1 flex-col">
+            <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
               {/* Messages */}
               <div
                 ref={setMessagesScrollContainerRef}
@@ -4198,57 +4219,26 @@ export default function ChatView({ threadId }: ChatViewProps) {
                                 </>
                               ) : null}
 
-                              <Separator
-                                orientation="vertical"
-                                className="mx-0.5 hidden h-4 sm:block"
-                              />
+                              {interactionMode === "plan" ? (
+                                <>
+                                  <Separator
+                                    orientation="vertical"
+                                    className="mx-0.5 hidden h-4 sm:block"
+                                  />
 
-                              <Button
-                                variant="ghost"
-                                className="shrink-0 whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 sm:px-3"
-                                size="sm"
-                                type="button"
-                                onClick={toggleInteractionMode}
-                                title={
-                                  interactionMode === "plan"
-                                    ? "Plan mode — click to return to normal chat mode"
-                                    : "Default mode — click to enter plan mode"
-                                }
-                              >
-                                <BotIcon />
-                                <span className="sr-only sm:not-sr-only">
-                                  {interactionMode === "plan" ? "Plan" : "Chat"}
-                                </span>
-                              </Button>
-
-                              <Separator
-                                orientation="vertical"
-                                className="mx-0.5 hidden h-4 sm:block"
-                              />
-
-                              <Button
-                                variant="ghost"
-                                className="shrink-0 whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 sm:px-3"
-                                size="sm"
-                                type="button"
-                                onClick={() =>
-                                  void handleRuntimeModeChange(
-                                    runtimeMode === "full-access"
-                                      ? "approval-required"
-                                      : "full-access",
-                                  )
-                                }
-                                title={
-                                  runtimeMode === "full-access"
-                                    ? "Full access — click to require approvals"
-                                    : "Approval required — click for full access"
-                                }
-                              >
-                                {runtimeMode === "full-access" ? <LockOpenIcon /> : <LockIcon />}
-                                <span className="sr-only sm:not-sr-only">
-                                  {runtimeMode === "full-access" ? "Full access" : "Supervised"}
-                                </span>
-                              </Button>
+                                  <Button
+                                    variant="ghost"
+                                    className="shrink-0 whitespace-nowrap px-2 text-[12px] sm:text-[12px] font-normal text-blue-400 hover:text-blue-300 sm:px-3"
+                                    size="sm"
+                                    type="button"
+                                    onClick={toggleInteractionMode}
+                                    title="Plan mode — click to return to normal chat mode"
+                                  >
+                                    <GoTasklist className="size-3.5" />
+                                    <span className="sr-only sm:not-sr-only">Plan</span>
+                                  </Button>
+                                </>
+                              ) : null}
 
                               {activePlan || sidebarProposedPlan || planSidebarOpen ? (
                                 <>
@@ -4259,7 +4249,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
                                   <Button
                                     variant="ghost"
                                     className={cn(
-                                      "shrink-0 whitespace-nowrap px-2 sm:px-3",
+                                      "shrink-0 whitespace-nowrap px-2 text-[12px] sm:text-[12px] font-normal sm:px-3",
                                       planSidebarOpen
                                         ? "text-blue-400 hover:text-blue-300"
                                         : "text-muted-foreground/70 hover:text-foreground/80",
@@ -4271,7 +4261,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
                                       planSidebarOpen ? "Hide plan sidebar" : "Show plan sidebar"
                                     }
                                   >
-                                    <ListTodoIcon />
+                                    <ListTodoIcon className="size-3.5" />
                                     <span className="sr-only sm:not-sr-only">Plan</span>
                                   </Button>
                                 </>
@@ -4458,6 +4448,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
                 threadId={activeThread.id}
                 onEnvModeChange={onEnvModeChange}
                 envLocked={envLocked}
+                runtimeMode={runtimeMode}
+                onRuntimeModeChange={handleRuntimeModeChange}
                 onComposerFocusRequest={scheduleComposerFocus}
                 {...(canCheckoutPullRequestIntoThread
                   ? { onCheckoutPullRequestRequest: openPullRequestDialog }

@@ -163,6 +163,12 @@ export interface BrowserSetPanelBoundsInput {
   bounds: BrowserPanelBounds | null;
 }
 
+export interface DesktopNotificationInput {
+  title: string;
+  body?: string;
+  silent?: boolean;
+}
+
 export interface DesktopBridge {
   getWsUrl: () => string | null;
   pickFolder: () => Promise<string | null>;
@@ -178,6 +184,10 @@ export interface DesktopBridge {
   downloadUpdate: () => Promise<DesktopUpdateActionResult>;
   installUpdate: () => Promise<DesktopUpdateActionResult>;
   onUpdateState: (listener: (state: DesktopUpdateState) => void) => () => void;
+  notifications: {
+    isSupported: () => Promise<boolean>;
+    show: (input: DesktopNotificationInput) => Promise<boolean>;
+  };
   browser: {
     open: (input: BrowserOpenInput) => Promise<ThreadBrowserState>;
     close: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;

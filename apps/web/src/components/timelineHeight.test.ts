@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import { appendTerminalContextsToPrompt } from "../lib/terminalContext";
 import { buildInlineTerminalContextText } from "./chat/userMessageTerminalContexts";
-import { estimateTimelineMessageHeight } from "./timelineHeight";
+import {
+  estimateChangedFilesSummaryHeight,
+  estimateTimelineMessageHeight,
+  estimateTimelineWorkGroupHeight,
+} from "./timelineHeight";
 
 describe("estimateTimelineMessageHeight", () => {
   it("uses assistant sizing rules for assistant messages", () => {
@@ -134,5 +138,83 @@ describe("estimateTimelineMessageHeight", () => {
 
     expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 320 })).toBe(188);
     expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 768 })).toBe(122);
+  });
+
+  it("adds diff summary chrome to assistant message estimates", () => {
+    expect(
+      estimateTimelineMessageHeight(
+        {
+          role: "assistant",
+          text: "done",
+          diffSummaryFiles: [{ path: "src/index.ts", additions: 3, deletions: 1 }],
+        },
+        { timelineWidthPx: 768 },
+      ),
+    ).toBe(226);
+  });
+
+  it("accounts for the completion divider in assistant message estimates", () => {
+    expect(
+      estimateTimelineMessageHeight(
+        {
+          role: "assistant",
+          text: "done",
+          showCompletionDivider: true,
+        },
+        { timelineWidthPx: 768 },
+      ),
+    ).toBe(140);
+  });
+});
+
+describe("estimateChangedFilesSummaryHeight", () => {
+  it("grows when nested directories are expanded", () => {
+    const files = [
+      { path: "apps/web/src/index.ts", additions: 1, deletions: 0 },
+      { path: "apps/web/src/components/Button.tsx", additions: 2, deletions: 1 },
+    ];
+
+    expect(estimateChangedFilesSummaryHeight(files, false)).toBe(100);
+    expect(estimateChangedFilesSummaryHeight(files, true)).toBe(178);
+  });
+});
+
+describe("estimateTimelineWorkGroupHeight", () => {
+  it("caps collapsed work groups to the visible tail entries", () => {
+    const entries = Array.from({ length: 8 }, (_, index) => ({
+      tone: "tool" as const,
+      detail: `detail-${index}`,
+    }));
+
+    expect(
+      estimateTimelineWorkGroupHeight(entries, {
+        expanded: false,
+        maxVisibleEntries: 6,
+      }),
+    ).toBe(234);
+    expect(
+      estimateTimelineWorkGroupHeight(entries, {
+        expanded: true,
+        maxVisibleEntries: 6,
+      }),
+    ).toBe(298);
+  });
+
+  it("adds room for changed-file chips in work log rows", () => {
+    expect(
+      estimateTimelineWorkGroupHeight(
+        [
+          {
+            tone: "tool",
+            detail: "Updated files",
+            changedFiles: ["src/a.ts", "src/b.ts"],
+          },
+        ],
+        {
+          expanded: true,
+          maxVisibleEntries: 6,
+        },
+      ),
+    ).toBe(78);
   });
 });

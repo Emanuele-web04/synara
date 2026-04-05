@@ -35,7 +35,7 @@ import {
 } from "~/lib/icons";
 import { Button } from "../ui/button";
 import { clamp } from "effect/Number";
-import { estimateTimelineMessageHeight } from "../timelineHeight";
+import { estimateTimelineMessageHeight, estimateTimelineWorkGroupHeight } from "../timelineHeight";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { ChangedFilesTree } from "./ChangedFilesTree";
@@ -243,19 +243,49 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     minimum: 0,
     maximum: rows.length,
   });
+  const [allDirectoriesExpandedByTurnId, setAllDirectoriesExpandedByTurnId] = useState<
+    Record<string, boolean>
+  >({});
+  const onToggleAllDirectories = useCallback((turnId: TurnId) => {
+    setAllDirectoriesExpandedByTurnId((current) => ({
+      ...current,
+      [turnId]: !(current[turnId] ?? true),
+    }));
+  }, []);
 
   const rowVirtualizer = useVirtualizer({
     count: virtualizedRowCount,
     getScrollElement: () => scrollContainer,
     // Use stable row ids so virtual measurements do not leak across thread switches.
     getItemKey: (index: number) => rows[index]?.id ?? index,
+    // Keep pre-measure placements close to the final layout so fast scrolls do not visually stack rows.
     estimateSize: (index: number) => {
       const row = rows[index];
       if (!row) return 96;
-      if (row.kind === "work") return 112;
+      if (row.kind === "work") {
+        return estimateTimelineWorkGroupHeight(row.groupedEntries, {
+          expanded: expandedWorkGroups[row.id] ?? false,
+          maxVisibleEntries: MAX_VISIBLE_WORK_LOG_ENTRIES,
+        });
+      }
       if (row.kind === "proposed-plan") return estimateTimelineProposedPlanHeight(row.proposedPlan);
       if (row.kind === "working") return 40;
-      return estimateTimelineMessageHeight(row.message, { timelineWidthPx });
+      const turnSummary =
+        row.message.role === "assistant"
+          ? turnDiffSummaryByAssistantMessageId.get(row.message.id)
+          : undefined;
+      const messageHeightInput = {
+        ...row.message,
+        showCompletionDivider: row.showCompletionDivider,
+      };
+      if (turnSummary) {
+        Object.assign(messageHeightInput, {
+          diffSummaryFiles: turnSummary.files,
+          diffSummaryAllDirectoriesExpanded:
+            allDirectoriesExpandedByTurnId[turnSummary.turnId] ?? true,
+        });
+      }
+      return estimateTimelineMessageHeight(messageHeightInput, { timelineWidthPx });
     },
     measureElement: measureVirtualElement,
     useAnimationFrameWithResizeObserver: true,
@@ -265,6 +295,39 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     if (timelineWidthPx === null) return;
     rowVirtualizer.measure();
   }, [rowVirtualizer, timelineWidthPx]);
+  useLayoutEffect(() => {
+    if (!scrollContainer || typeof ResizeObserver === "undefined") return;
+
+    let lastViewportWidth = -1;
+    let lastViewportHeight = -1;
+    // Re-measure when the scroll viewport changes because composer/panel chrome
+    // can steal vertical space without remounting the timeline.
+    const syncViewportSize = () => {
+      const nextViewportWidth = scrollContainer.clientWidth;
+      const nextViewportHeight = scrollContainer.clientHeight;
+      if (
+        Math.abs(nextViewportWidth - lastViewportWidth) < 0.5 &&
+        Math.abs(nextViewportHeight - lastViewportHeight) < 0.5
+      ) {
+        return;
+      }
+      lastViewportWidth = nextViewportWidth;
+      lastViewportHeight = nextViewportHeight;
+      rowVirtualizer.measure();
+    };
+
+    syncViewportSize();
+    const observer = new ResizeObserver(() => {
+      syncViewportSize();
+    });
+    observer.observe(scrollContainer);
+    return () => {
+      observer.disconnect();
+    };
+  }, [rowVirtualizer, scrollContainer]);
+  useEffect(() => {
+    rowVirtualizer.measure();
+  }, [rowVirtualizer, expandedWorkGroups, allDirectoriesExpandedByTurnId]);
   useEffect(() => {
     rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = (_item, _delta, instance) => {
       const viewportHeight = instance.scrollRect?.height ?? 0;
@@ -295,15 +358,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
   const virtualRows = rowVirtualizer.getVirtualItems();
   const nonVirtualizedRows = rows.slice(virtualizedRowCount);
-  const [allDirectoriesExpandedByTurnId, setAllDirectoriesExpandedByTurnId] = useState<
-    Record<string, boolean>
-  >({});
-  const onToggleAllDirectories = useCallback((turnId: TurnId) => {
-    setAllDirectoriesExpandedByTurnId((current) => ({
-      ...current,
-      [turnId]: !(current[turnId] ?? true),
-    }));
-  }, []);
 
   const renderRowContent = (row: TimelineRow) => (
     <div

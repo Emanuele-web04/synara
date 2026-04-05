@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import {
+  SidebarInset,
   SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuSubButton,
@@ -49,5 +50,19 @@ describe("sidebar interactive cursors", () => {
 
     expect(html).toContain('data-slot="sidebar-menu-sub-button"');
     expect(html).toContain("cursor-pointer");
+  });
+
+  it("keeps inset layout classes on the outer shell", () => {
+    const html = renderToStaticMarkup(
+      <SidebarProvider>
+        <SidebarInset className="h-dvh overflow-hidden rounded-l-2xl">Content</SidebarInset>
+      </SidebarProvider>,
+    );
+
+    expect(html).toContain('data-slot="sidebar-inset"');
+    expect(html).toContain("h-dvh");
+    expect(html).toContain("overflow-hidden");
+    expect(html).toContain("rounded-l-2xl");
+    expect(html).toContain('data-slot="sidebar-inset-surface"');
   });
 });

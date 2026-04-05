@@ -94,7 +94,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
             size="sm"
             variant="ghost"
             className={cn(
-              "min-w-0 justify-start overflow-hidden whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 [&_svg]:mx-0",
+              "min-w-0 justify-start overflow-hidden whitespace-nowrap px-2 text-[12px] sm:text-[12px] font-normal text-muted-foreground/70 hover:text-foreground/80 [&_svg]:mx-0",
               props.compact ? "max-w-42 shrink-0" : "max-w-48 shrink sm:max-w-56 sm:px-3",
             )}
             disabled={props.disabled}
@@ -110,7 +110,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
           <ProviderIcon
             aria-hidden="true"
             className={cn(
-              "size-4 shrink-0",
+              "size-3.5 shrink-0",
               providerIconClassName(activeProvider, "text-muted-foreground/70"),
               props.activeProviderIconClassName,
             )}

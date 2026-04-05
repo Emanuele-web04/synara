@@ -46,7 +46,7 @@
 
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    @apply border-border outline-ring/30;
   }
   body {
     @apply bg-transparent text-foreground relative;
@@ -64,7 +64,7 @@
 
 :root {
   color-scheme: light;
-  --radius: 0.625rem;
+  --radius: 0.75rem;
   --font-mono-family:
     "JetBrains Mono Variable", "JetBrains Mono", "SF Mono", "SFMono-Regular", Consolas,
     "Liberation Mono", Menlo, monospace;
@@ -83,8 +83,8 @@
   --accent: --alpha(var(--color-black) / 4%);
   --accent-foreground: var(--color-neutral-800);
   --destructive: var(--color-red-500);
-  --border: --alpha(var(--color-black) / 8%);
-  --input: --alpha(var(--color-black) / 10%);
+  --border: --alpha(var(--color-black) / 5%);
+  --input: --alpha(var(--color-black) / 6%);
   --ring: oklch(0.488 0.217 264);
   --destructive-foreground: var(--color-red-700);
   --info: var(--color-blue-500);
@@ -111,8 +111,8 @@
     --accent: --alpha(var(--color-white) / 4%);
     --accent-foreground: var(--color-neutral-100);
     --destructive: color-mix(in srgb, var(--color-red-500) 90%, var(--color-white));
-    --border: --alpha(var(--color-white) / 6%);
-    --input: --alpha(var(--color-white) / 8%);
+    --border: --alpha(var(--color-white) / 4%);
+    --input: --alpha(var(--color-white) / 5%);
     --ring: oklch(0.588 0.217 264);
     --destructive-foreground: var(--color-red-400);
     --info: var(--color-blue-500);

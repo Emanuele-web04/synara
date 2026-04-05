@@ -1152,6 +1152,13 @@ export default function Sidebar() {
 
       return (
         <SidebarMenuSubItem key={thread.id} className="w-full" data-thread-item>
+          {threadStatus && (
+            <span
+              className={`pointer-events-none absolute left-3 top-1/2 z-10 h-1.5 w-1.5 -translate-y-1/2 rounded-full ${threadStatus.dotClass} ${
+                threadStatus.pulse ? "animate-pulse" : ""
+              }`}
+            />
+          )}
           <SidebarMenuSubButton
             render={<div role="button" tabIndex={0} />}
             size="sm"
@@ -1217,18 +1224,6 @@ export default function Sidebar() {
                   />
                   <TooltipPopup side="top">{prStatus.tooltip}</TooltipPopup>
                 </Tooltip>
-              )}
-              {threadStatus && (
-                <span
-                  className={`inline-flex items-center gap-1 text-[10px] ${threadStatus.colorClass}`}
-                >
-                  <span
-                    className={`h-1.5 w-1.5 rounded-full ${threadStatus.dotClass} ${
-                      threadStatus.pulse ? "animate-pulse" : ""
-                    }`}
-                  />
-                  <span className="hidden md:inline">{threadStatus.label}</span>
-                </span>
               )}
               {renamingThreadId === thread.id ? (
                 <input
@@ -1383,7 +1378,7 @@ export default function Sidebar() {
                   render={<button type="button" />}
                   data-thread-selection-safe
                   size="sm"
-                  className="h-7 w-full translate-x-0 justify-start rounded-lg pr-2 pl-2 text-left text-[13px] text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
+                  className="h-7 w-full translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-[13px] text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
                   onClick={() => {
                     expandThreadListForProject(project.id);
                   }}
@@ -1398,7 +1393,7 @@ export default function Sidebar() {
                   render={<button type="button" />}
                   data-thread-selection-safe
                   size="sm"
-                  className="h-7 w-full translate-x-0 justify-start rounded-lg pr-2 pl-2 text-left text-[13px] text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
+                  className="h-7 w-full translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-[13px] text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
                   onClick={() => {
                     collapseThreadListForProject(project.id);
                   }}

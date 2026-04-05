@@ -150,7 +150,7 @@ const RightPanelInlineSidebar = (props: {
       <Sidebar
         side="right"
         collapsible="offcanvas"
-        className="border-l border-border bg-card text-foreground"
+        className="border-l border-border/50 bg-card text-foreground"
         resizable={{
           minWidth: DIFF_INLINE_SIDEBAR_MIN_WIDTH,
           shouldAcceptWidth: shouldAcceptInlineSidebarWidth,
@@ -267,7 +267,7 @@ function ChatThreadRouteView() {
   if (!shouldUseDiffSheet) {
     return (
       <>
-        <SidebarInset className="h-dvh  min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+        <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none rounded-l-2xl bg-background text-foreground">
           <ChatView key={threadId} threadId={threadId} />
         </SidebarInset>
         <RightPanelInlineSidebar
@@ -284,7 +284,7 @@ function ChatThreadRouteView() {
 
   return (
     <>
-      <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+      <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none rounded-l-2xl bg-background text-foreground">
         <ChatView key={threadId} threadId={threadId} />
       </SidebarInset>
       <RightPanelSheet panelOpen={panelOpen} onClosePanel={closePanel}>

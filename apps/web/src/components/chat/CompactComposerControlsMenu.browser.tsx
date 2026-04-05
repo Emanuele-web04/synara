@@ -9,7 +9,12 @@ import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
 import { TraitsMenuContent } from "./TraitsPicker";
 import { useComposerDraftStore } from "../../composerDraftStore";
 
-async function mountMenu(props?: { modelSelection?: ModelSelection; prompt?: string }) {
+async function mountMenu(props?: {
+  activePlan?: boolean;
+  interactionMode?: "default" | "plan";
+  modelSelection?: ModelSelection;
+  prompt?: string;
+}) {
   const threadId = ThreadId.makeUnsafe("thread-compact-menu");
   const provider = props?.modelSelection?.provider ?? "claudeAgent";
   const draftsByThreadId = {} as ReturnType<
@@ -45,8 +50,8 @@ async function mountMenu(props?: { modelSelection?: ModelSelection; prompt?: str
   const providerOptions = props?.modelSelection?.options;
   const screen = await render(
     <CompactComposerControlsMenu
-      activePlan={false}
-      interactionMode="default"
+      activePlan={props?.activePlan ?? false}
+      interactionMode={props?.interactionMode ?? "default"}
       planSidebarOpen={false}
       runtimeMode="approval-required"
       traitsMenuContent={
@@ -168,6 +173,31 @@ describe("CompactComposerControlsMenu", () => {
       expect(text).toContain("Effort");
       expect(text).toContain("Remove Ultrathink from the prompt to change effort.");
       expect(text).not.toContain("Fallback Effort");
+    });
+  });
+
+  it("shows both chat and plan mode options", async () => {
+    await using _ = await mountMenu();
+
+    await page.getByLabelText("More composer controls").click();
+
+    await vi.waitFor(() => {
+      const text = document.body.textContent ?? "";
+      expect(text).toContain("Chat");
+      expect(text).toContain("Plan");
+    });
+  });
+
+  it("shows the plan sidebar toggle when a plan is active", async () => {
+    await using _ = await mountMenu({
+      activePlan: true,
+      interactionMode: "plan",
+    });
+
+    await page.getByLabelText("More composer controls").click();
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent ?? "").toContain("Show plan sidebar");
     });
   });
 });

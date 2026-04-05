@@ -11,6 +11,8 @@ const UPDATE_STATE_CHANNEL = "desktop:update-state";
 const UPDATE_GET_STATE_CHANNEL = "desktop:update-get-state";
 const UPDATE_DOWNLOAD_CHANNEL = "desktop:update-download";
 const UPDATE_INSTALL_CHANNEL = "desktop:update-install";
+const NOTIFICATIONS_IS_SUPPORTED_CHANNEL = "desktop:notifications-is-supported";
+const NOTIFICATIONS_SHOW_CHANNEL = "desktop:notifications-show";
 const BROWSER_STATE_CHANNEL = "desktop:browser-state";
 const BROWSER_OPEN_CHANNEL = "desktop:browser-open";
 const BROWSER_CLOSE_CHANNEL = "desktop:browser-close";
@@ -58,6 +60,10 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     return () => {
       ipcRenderer.removeListener(UPDATE_STATE_CHANNEL, wrappedListener);
     };
+  },
+  notifications: {
+    isSupported: () => ipcRenderer.invoke(NOTIFICATIONS_IS_SUPPORTED_CHANNEL),
+    show: (input) => ipcRenderer.invoke(NOTIFICATIONS_SHOW_CHANNEL, input),
   },
   browser: {
     open: (input) => ipcRenderer.invoke(BROWSER_OPEN_CHANNEL, input),

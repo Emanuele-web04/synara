@@ -10,6 +10,7 @@ import {
   dialog,
   ipcMain,
   Menu,
+  Notification,
   nativeImage,
   nativeTheme,
   protocol,
@@ -63,6 +64,8 @@ const UPDATE_STATE_CHANNEL = "desktop:update-state";
 const UPDATE_GET_STATE_CHANNEL = "desktop:update-get-state";
 const UPDATE_DOWNLOAD_CHANNEL = "desktop:update-download";
 const UPDATE_INSTALL_CHANNEL = "desktop:update-install";
+const NOTIFICATIONS_IS_SUPPORTED_CHANNEL = "desktop:notifications-is-supported";
+const NOTIFICATIONS_SHOW_CHANNEL = "desktop:notifications-show";
 const BROWSER_STATE_CHANNEL = "desktop:browser-state";
 const BROWSER_OPEN_CHANNEL = "desktop:browser-open";
 const BROWSER_CLOSE_CHANNEL = "desktop:browser-close";
@@ -695,6 +698,43 @@ function resolveIconPath(ext: "ico" | "icns" | "png"): string | null {
   return resolveResourcePath(`icon.${ext}`);
 }
 
+// Show a native OS notification and refocus the app window when the alert is clicked.
+function showDesktopNotification(input: {
+  title: string;
+  body?: string;
+  silent?: boolean;
+}): boolean {
+  const title = typeof input.title === "string" ? input.title.trim() : "";
+  const body = typeof input.body === "string" ? input.body.trim() : "";
+  if (title.length === 0 || !Notification.isSupported()) {
+    return false;
+  }
+
+  const iconPath = resolveIconPath("png");
+  const notification = new Notification({
+    title,
+    body,
+    silent: input.silent === true,
+    ...(iconPath ? { icon: iconPath } : {}),
+  });
+
+  notification.on("click", () => {
+    if (!mainWindow) {
+      return;
+    }
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore();
+    }
+    if (!mainWindow.isVisible()) {
+      mainWindow.show();
+    }
+    mainWindow.focus();
+  });
+
+  notification.show();
+  return true;
+}
+
 /**
  * Resolve the Electron userData directory path.
  *
@@ -1248,6 +1288,23 @@ function registerIpcHandlers(): void {
       state: updateState,
     } satisfies DesktopUpdateActionResult;
   });
+
+  ipcMain.removeHandler(NOTIFICATIONS_IS_SUPPORTED_CHANNEL);
+  ipcMain.handle(NOTIFICATIONS_IS_SUPPORTED_CHANNEL, async () => Notification.isSupported());
+
+  ipcMain.removeHandler(NOTIFICATIONS_SHOW_CHANNEL);
+  ipcMain.handle(
+    NOTIFICATIONS_SHOW_CHANNEL,
+    async (
+      _event,
+      input: { title?: unknown; body?: unknown; silent?: unknown } | null | undefined,
+    ) =>
+      showDesktopNotification({
+        title: typeof input?.title === "string" ? input.title : "",
+        body: typeof input?.body === "string" ? input.body : "",
+        silent: input?.silent === true,
+      }),
+  );
 
   ipcMain.removeHandler(BROWSER_OPEN_CHANNEL);
   ipcMain.handle(BROWSER_OPEN_CHANNEL, async (_event, input: BrowserOpenInput) =>

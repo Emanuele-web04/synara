@@ -63,7 +63,7 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
       }}
     >
       <div className="relative overflow-hidden rounded-xl border border-border/50 bg-popover shadow-sm">
-        <CommandList className="max-h-72">
+        <CommandList className="max-h-72 py-1">
           {props.items.map((item) => (
             <ComposerCommandMenuItem
               key={item.id}
@@ -75,7 +75,7 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
           ))}
         </CommandList>
         {props.items.length === 0 && (
-          <p className="px-3 py-2 text-muted-foreground/50 text-[11px]">
+          <p className="px-2.5 py-1.5 text-muted-foreground/50 text-[11px]">
             {props.isLoading
               ? "Searching workspace files..."
               : props.triggerKind === "path"
