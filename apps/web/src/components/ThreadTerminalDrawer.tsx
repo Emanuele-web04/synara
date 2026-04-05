@@ -1102,7 +1102,8 @@ export default function ThreadTerminalDrawer({
       children: <Trash2 className="size-3.25" />,
     },
   ];
-  const workspaceTerminalTabs = isWorkspaceMode && (
+  const showWorkspaceTerminalTabs = isWorkspaceMode && workspaceTerminalIds.length > 1;
+  const workspaceTerminalTabs = showWorkspaceTerminalTabs && (
     <div className="flex min-w-0 items-center justify-between gap-3 border-b border-border/70 bg-muted/10 px-2 pt-1.5">
       <div className="flex min-w-0 items-end gap-1 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {workspaceTerminalIds.map((terminalId) => {
@@ -1173,6 +1174,14 @@ export default function ThreadTerminalDrawer({
       ) : null}
 
       {workspaceTerminalTabs}
+
+      {isWorkspaceMode && !showWorkspaceTerminalTabs ? (
+        <div className="pointer-events-none absolute right-2 top-2 z-20">
+          <div className="pointer-events-auto">
+            <TerminalChromeActions actions={workspaceChromeActions} variant="compact" />
+          </div>
+        </div>
+      ) : null}
 
       {!hasTerminalSidebar && !isWorkspaceMode && (
         <div className="pointer-events-none absolute right-2 top-2 z-20">

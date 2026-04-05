@@ -96,11 +96,11 @@
 
   @variant dark {
     color-scheme: dark;
-    --background: color-mix(in srgb, var(--color-neutral-950) 95%, var(--color-white));
+    --background: var(--color-neutral-950);
     --foreground: var(--color-neutral-100);
-    --card: color-mix(in srgb, var(--background) 98%, var(--color-white));
+    --card: color-mix(in srgb, var(--background) 99%, var(--color-white));
     --card-foreground: var(--color-neutral-100);
-    --popover: color-mix(in srgb, var(--background) 98%, var(--color-white));
+    --popover: color-mix(in srgb, var(--background) 99%, var(--color-white));
     --popover-foreground: var(--color-neutral-100);
     --primary: oklch(0.588 0.217 264);
     --primary-foreground: var(--color-white);
@@ -385,6 +385,11 @@ label:has(> select#reasoning-effort) select {
 
 .chat-markdown .chat-markdown-shiki .shiki {
   background: color-mix(in srgb, var(--muted) 78%, var(--background)) !important;
+  font-family: var(--font-mono-family) !important;
+}
+
+.chat-markdown .chat-markdown-shiki .shiki * {
+  font-family: inherit !important;
 }
 
 .chat-markdown table {
@@ -399,8 +404,16 @@ label:has(> select#reasoning-effort) select {
   text-align: left;
 }
 
+/* Feed the diff web component's own CSS variables so shadow-root chrome uses JetBrains Mono too. */
+diffs-container {
+  --diffs-font-family: var(--font-mono-family);
+  --diffs-header-font-family: var(--font-mono-family);
+}
+
 /* Diffs theme bridge (match diff surfaces to app palette) */
 .diff-panel-viewport {
+  /* Keep raw patch fallback and any unthemed diff chrome on the coding font stack. */
+  font-family: var(--font-mono-family);
   background: color-mix(in srgb, var(--background) 94%, var(--card));
 }
 

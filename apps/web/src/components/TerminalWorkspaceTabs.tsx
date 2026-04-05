@@ -15,6 +15,10 @@ export default function TerminalWorkspaceTabs({
   terminalCount,
   onSelectTab,
 }: TerminalWorkspaceTabsProps) {
+  if (terminalCount <= 1) {
+    return null;
+  }
+
   const tabClassName =
     "group relative -mb-px inline-flex h-7 shrink-0 items-center rounded-t-[10px] border border-b-0 px-3 text-xs transition-colors";
 

@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   COMPOSER_DRAFT_STORAGE_KEY,
   type ComposerImageAttachment,
+  resolvePreferredComposerModelSelection,
   useComposerDraftStore,
 } from "./composerDraftStore";
 import { removeLocalStorageItem, setLocalStorageItem } from "./hooks/useLocalStorage";
@@ -92,6 +93,29 @@ function modelSelection(
 function providerModelOptions(options: ProviderModelOptions): ProviderModelOptions {
   return options;
 }
+
+describe("resolvePreferredComposerModelSelection", () => {
+  it("prefers the active draft provider selection over thread and project defaults", () => {
+    expect(
+      resolvePreferredComposerModelSelection({
+        draft: {
+          modelSelectionByProvider: {
+            claudeAgent: modelSelection("claudeAgent", "claude-opus-4-6", {
+              effort: "max",
+            }),
+          },
+          activeProvider: "claudeAgent",
+        },
+        threadModelSelection: modelSelection("codex", "gpt-5"),
+        projectModelSelection: modelSelection("codex", "gpt-5.4"),
+      }),
+    ).toEqual(
+      modelSelection("claudeAgent", "claude-opus-4-6", {
+        effort: "max",
+      }),
+    );
+  });
+});
 
 describe("composerDraftStore addImages", () => {
   const threadId = ThreadId.makeUnsafe("thread-dedupe");
@@ -466,6 +490,7 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(useComposerDraftStore.getState().getDraftThreadByProjectId(projectId)).toEqual({
       threadId,
       projectId,
+      entryPoint: "chat",
       branch: "feature/test",
       worktreePath: "/tmp/worktree-test",
       envMode: "worktree",
@@ -475,6 +500,7 @@ describe("composerDraftStore project draft thread mapping", () => {
     });
     expect(useComposerDraftStore.getState().getDraftThread(threadId)).toEqual({
       projectId,
+      entryPoint: "chat",
       branch: "feature/test",
       worktreePath: "/tmp/worktree-test",
       envMode: "worktree",
@@ -482,6 +508,31 @@ describe("composerDraftStore project draft thread mapping", () => {
       interactionMode: "default",
       createdAt: "2026-01-01T00:00:00.000Z",
     });
+  });
+
+  it("tracks chat and terminal draft threads independently for the same project", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectId, threadId, { entryPoint: "chat" });
+    store.setProjectDraftThreadId(projectId, otherThreadId, { entryPoint: "terminal" });
+
+    expect(
+      useComposerDraftStore.getState().getDraftThreadByProjectId(projectId, "chat"),
+    ).toMatchObject({
+      threadId,
+      projectId,
+      entryPoint: "chat",
+    });
+    expect(
+      useComposerDraftStore.getState().getDraftThreadByProjectId(projectId, "terminal"),
+    ).toMatchObject({
+      threadId: otherThreadId,
+      projectId,
+      entryPoint: "terminal",
+    });
+    expect(useComposerDraftStore.getState().getDraftThread(threadId)?.entryPoint).toBe("chat");
+    expect(useComposerDraftStore.getState().getDraftThread(otherThreadId)?.entryPoint).toBe(
+      "terminal",
+    );
   });
 
   it("clears only matching project draft mapping entries", () => {

@@ -1452,6 +1452,98 @@ describe("WebSocket Server", () => {
     expect(push.channel).toBe(WS_CHANNELS.terminalEvent);
   });
 
+  it("auto-renames generic terminal threads from safe terminal commands", async () => {
+    const terminalManager = new MockTerminalManager();
+    server = await createTestServer({
+      cwd: "/test",
+      terminalManager,
+    });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const [ws] = await connectAndAwaitWelcome(port);
+    connections.push(ws);
+
+    const workspaceRoot = makeTempDir("t3code-ws-terminal-rename-");
+    const createdAt = new Date().toISOString();
+    const createProjectResponse = await sendRequest(ws, ORCHESTRATION_WS_METHODS.dispatchCommand, {
+      type: "project.create",
+      commandId: "cmd-terminal-rename-project-create",
+      projectId: "project-terminal-rename",
+      title: "Terminal Rename Project",
+      workspaceRoot,
+      defaultModelSelection: {
+        provider: "codex",
+        model: "gpt-5-codex",
+      },
+      createdAt,
+    });
+    expect(createProjectResponse.error).toBeUndefined();
+
+    const createThreadResponse = await sendRequest(ws, ORCHESTRATION_WS_METHODS.dispatchCommand, {
+      type: "thread.create",
+      commandId: "cmd-terminal-rename-thread-create",
+      threadId: "thread-terminal-rename",
+      projectId: "project-terminal-rename",
+      title: "New terminal",
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5-codex",
+      },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdAt,
+    });
+    expect(createThreadResponse.error).toBeUndefined();
+
+    const openResponse = await sendRequest(ws, WS_METHODS.terminalOpen, {
+      threadId: "thread-terminal-rename",
+      cwd: workspaceRoot,
+      cols: 100,
+      rows: 24,
+    });
+    expect(openResponse.error).toBeUndefined();
+
+    const writeResponse = await sendRequest(ws, WS_METHODS.terminalWrite, {
+      threadId: "thread-terminal-rename",
+      data: "git push origin main\r",
+    });
+    expect(writeResponse.error).toBeUndefined();
+
+    const metaUpdatedPush = await waitForPush(
+      ws,
+      ORCHESTRATION_WS_CHANNELS.domainEvent,
+      (push) =>
+        (push.data as { type?: string; payload?: { threadId?: string; title?: string } }).type ===
+          "thread.meta-updated" &&
+        (push.data as { payload?: { threadId?: string; title?: string } }).payload?.threadId ===
+          "thread-terminal-rename",
+    );
+    expect(
+      (
+        metaUpdatedPush.data as {
+          payload: {
+            title?: string;
+          };
+        }
+      ).payload.title,
+    ).toBe("git push");
+
+    const snapshotResponse = await sendRequest(ws, ORCHESTRATION_WS_METHODS.getSnapshot);
+    expect(snapshotResponse.error).toBeUndefined();
+    const renamedThread = (
+      snapshotResponse.result as {
+        threads: Array<{
+          id: string;
+          title: string;
+        }>;
+      }
+    ).threads.find((thread) => thread.id === "thread-terminal-rename");
+    expect(renamedThread?.title).toBe("git push");
+  });
+
   it("detaches terminal event listener on stop for injected manager", async () => {
     const terminalManager = new MockTerminalManager();
     server = await createTestServer({

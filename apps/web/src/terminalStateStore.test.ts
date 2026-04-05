@@ -37,6 +37,7 @@ describe("terminalStateStore actions", () => {
       THREAD_ID,
     );
     expect(terminalState).toEqual({
+      entryPoint: "chat",
       terminalOpen: false,
       presentationMode: "drawer",
       workspaceLayout: "both",
@@ -48,6 +49,35 @@ describe("terminalStateStore actions", () => {
       terminalGroups: [{ id: "group-default", terminalIds: ["default"] }],
       activeTerminalGroupId: "group-default",
     });
+  });
+
+  it("marks chat-first threads without forcing open terminal UI", () => {
+    const store = useTerminalStateStore.getState();
+    store.openTerminalThreadPage(THREAD_ID, { terminalOnly: true });
+    store.openChatThreadPage(THREAD_ID);
+
+    const terminalState = selectThreadTerminalState(
+      useTerminalStateStore.getState().terminalStateByThreadId,
+      THREAD_ID,
+    );
+    expect(terminalState.entryPoint).toBe("chat");
+    expect(terminalState.workspaceLayout).toBe("both");
+    expect(terminalState.workspaceActiveTab).toBe("chat");
+  });
+
+  it("opens terminal-first threads in the workspace terminal tab", () => {
+    const store = useTerminalStateStore.getState();
+    store.openTerminalThreadPage(THREAD_ID, { terminalOnly: true });
+
+    const terminalState = selectThreadTerminalState(
+      useTerminalStateStore.getState().terminalStateByThreadId,
+      THREAD_ID,
+    );
+    expect(terminalState.entryPoint).toBe("terminal");
+    expect(terminalState.terminalOpen).toBe(true);
+    expect(terminalState.presentationMode).toBe("workspace");
+    expect(terminalState.workspaceLayout).toBe("terminal-only");
+    expect(terminalState.workspaceActiveTab).toBe("terminal");
   });
 
   it("opens and splits terminals into the active group", () => {

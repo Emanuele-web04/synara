@@ -252,6 +252,10 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
           persisted.some((entry) => entry.command === "terminal.toggle" && entry.key === "mod+j"),
         );
 
+        const persistedNewTerminalThread = byCommand.get("chat.newTerminal");
+        assert.isNotNull(persistedNewTerminalThread);
+        assert.equal(persistedNewTerminalThread?.key, "mod+shift+t");
+
         for (const defaultRule of DEFAULT_KEYBINDINGS) {
           assert.isTrue(byCommand.has(defaultRule.command), `expected ${defaultRule.command}`);
         }

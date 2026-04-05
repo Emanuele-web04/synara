@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { ThreadId, type TurnId } from "@t3tools/contracts";
 import {
+  ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   Columns2Icon,
@@ -34,16 +35,28 @@ import { useAppSettings } from "../appSettings";
 import { formatShortTimestamp } from "../timestampFormat";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { ToggleGroup, Toggle } from "./ui/toggle-group";
+import { VscodeEntryIcon } from "./chat/VscodeEntryIcon";
 
 type DiffRenderMode = "stacked" | "split";
 type DiffThemeType = "light" | "dark";
 
 const DIFF_PANEL_UNSAFE_CSS = `
+:host {
+  /* Feed the library's host-level font variables so shadow DOM chrome stops falling back to system-ui. */
+  --diffs-font-family: var(--font-mono-family);
+  --diffs-header-font-family: var(--font-mono-family);
+  font-family: var(--font-mono-family) !important;
+}
+
 [data-diffs-header],
 [data-diff],
 [data-file],
 [data-error-wrapper],
 [data-virtualizer-buffer] {
+  /* Drive the library through its own font variables so shadow-rooted headers and code stay on JetBrains Mono. */
+  --diffs-font-family: var(--font-mono-family) !important;
+  --diffs-header-font-family: var(--font-mono-family) !important;
+  font-family: var(--font-mono-family) !important;
   --diffs-bg: color-mix(in srgb, var(--card) 90%, var(--background)) !important;
   --diffs-light-bg: color-mix(in srgb, var(--card) 90%, var(--background)) !important;
   --diffs-dark-bg: color-mix(in srgb, var(--card) 90%, var(--background)) !important;
@@ -73,6 +86,7 @@ const DIFF_PANEL_UNSAFE_CSS = `
 }
 
 [data-file-info] {
+  font-family: var(--font-mono-family) !important;
   background-color: color-mix(in srgb, var(--card) 94%, var(--foreground)) !important;
   border-block-color: var(--border) !important;
   color: var(--foreground) !important;
@@ -86,7 +100,13 @@ const DIFF_PANEL_UNSAFE_CSS = `
   border-bottom: 1px solid var(--border) !important;
 }
 
+/* Hide the default change-type icon (blue circle) — replaced by chevron + file-type icon. */
+[data-change-icon] {
+  display: none;
+}
+
 [data-title] {
+  font-family: var(--font-mono-family) !important;
   cursor: pointer;
   transition:
     color 120ms ease,
@@ -169,6 +189,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
   const { settings } = useAppSettings();
   const [diffRenderMode, setDiffRenderMode] = useState<DiffRenderMode>("stacked");
   const [diffWordWrap, setDiffWordWrap] = useState(settings.diffWordWrap);
+  const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(() => new Set());
   const patchViewportRef = useRef<HTMLDivElement>(null);
   const turnStripRef = useRef<HTMLDivElement>(null);
   const previousDiffOpenRef = useRef(false);
@@ -318,6 +339,15 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
     ).find((element) => element.dataset.diffFilePath === selectedFilePath);
     target?.scrollIntoView({ block: "nearest" });
   }, [selectedFilePath, renderableFiles]);
+
+  const toggleFileCollapsed = useCallback((fileKey: string) => {
+    setCollapsedFiles((prev) => {
+      const next = new Set(prev);
+      if (next.has(fileKey)) next.delete(fileKey);
+      else next.add(fileKey);
+      return next;
+    });
+  }, []);
 
   const openDiffFileInEditor = useCallback(
     (filePath: string) => {
@@ -591,6 +621,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
                   const filePath = resolveFileDiffPath(fileDiff);
                   const fileKey = buildFileDiffRenderKey(fileDiff);
                   const themedFileKey = `${fileKey}:${resolvedTheme}`;
+                  const isCollapsed = collapsedFiles.has(fileKey);
                   return (
                     <div
                       key={themedFileKey}
@@ -616,7 +647,44 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
                           theme: resolveDiffThemeName(resolvedTheme),
                           themeType: resolvedTheme as DiffThemeType,
                           unsafeCSS: DIFF_PANEL_UNSAFE_CSS,
+                          collapsed: isCollapsed,
                         }}
+                        renderHeaderPrefix={() => (
+                          <VscodeEntryIcon
+                            pathValue={filePath}
+                            kind="file"
+                            theme={resolvedTheme}
+                            className="size-4"
+                          />
+                        )}
+                        renderHeaderMetadata={() => (
+                          <button
+                            type="button"
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              cursor: "pointer",
+                              background: "none",
+                              border: "none",
+                              padding: "2px",
+                              color: "inherit",
+                            }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleFileCollapsed(fileKey);
+                            }}
+                          >
+                            <ChevronDownIcon
+                              style={{
+                                width: "14px",
+                                height: "14px",
+                                transition: "transform 150ms ease",
+                                transform: isCollapsed ? "rotate(-90deg)" : "rotate(0deg)",
+                                opacity: 0.5,
+                              }}
+                            />
+                          </button>
+                        )}
                       />
                     </div>
                   );

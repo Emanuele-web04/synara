@@ -449,6 +449,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const sendInFlightRef = useRef(false);
   const dragDepthRef = useRef(0);
   const terminalOpenByThreadRef = useRef<Record<string, boolean>>({});
+  const activatedThreadIdRef = useRef<ThreadId | null>(null);
   const setMessagesScrollContainerRef = useCallback((element: HTMLDivElement | null) => {
     messagesScrollRef.current = element;
     setMessagesScrollElement(element);
@@ -461,6 +462,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const storeSetTerminalPresentationMode = useTerminalStateStore(
     (s) => s.setTerminalPresentationMode,
   );
+  const storeOpenTerminalThreadPage = useTerminalStateStore((s) => s.openTerminalThreadPage);
   const storeSetTerminalWorkspaceLayout = useTerminalStateStore(
     (s) => s.setTerminalWorkspaceLayout,
   );
@@ -600,7 +602,11 @@ export default function ChatView({ threadId }: ChatViewProps) {
       }
 
       const activeDraftThread = getDraftThread(threadId);
-      if (!isServerThread && activeDraftThread?.projectId === activeProject.id) {
+      if (
+        !isServerThread &&
+        activeDraftThread?.projectId === activeProject.id &&
+        activeDraftThread.entryPoint === "chat"
+      ) {
         setDraftThreadContext(threadId, input);
         setProjectDraftThreadId(activeProject.id, threadId, input);
         return;
@@ -2394,6 +2400,21 @@ export default function ChatView({ threadId }: ChatViewProps) {
 
     terminalOpenByThreadRef.current[activeThreadId] = current;
   }, [activeThreadId, focusComposer, terminalState.terminalOpen]);
+
+  useEffect(() => {
+    if (!activeThreadId) {
+      activatedThreadIdRef.current = null;
+      return;
+    }
+    if (activatedThreadIdRef.current === activeThreadId) {
+      return;
+    }
+    activatedThreadIdRef.current = activeThreadId;
+    if (terminalState.entryPoint !== "terminal") {
+      return;
+    }
+    storeOpenTerminalThreadPage(activeThreadId);
+  }, [activeThreadId, storeOpenTerminalThreadPage, terminalState.entryPoint]);
 
   useEffect(() => {
     if (!terminalWorkspaceOpen) {

@@ -76,6 +76,22 @@ function ChatRouteGlobalShortcuts() {
         return;
       }
 
+      if (command === "chat.newTerminal") {
+        const projectId =
+          activeThread?.projectId ?? activeDraftThread?.projectId ?? projects[0]?.id;
+        if (!projectId) return;
+        event.preventDefault();
+        event.stopPropagation();
+        void handleNewThread(projectId, {
+          branch: activeThread?.branch ?? activeDraftThread?.branch ?? null,
+          worktreePath: activeThread?.worktreePath ?? activeDraftThread?.worktreePath ?? null,
+          envMode:
+            activeDraftThread?.envMode ?? (activeThread?.worktreePath ? "worktree" : "local"),
+          entryPoint: "terminal",
+        });
+        return;
+      }
+
       if (command !== "chat.new") return;
       const projectId = activeThread?.projectId ?? activeDraftThread?.projectId ?? projects[0]?.id;
       if (!projectId) return;

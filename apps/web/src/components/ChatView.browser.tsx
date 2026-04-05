@@ -7,7 +7,7 @@ import {
   type OrchestrationReadModel,
   type ProjectId,
   type ServerConfig,
-  type ThreadId,
+  ThreadId,
   type WsWelcomePayload,
   WS_CHANNELS,
   WS_METHODS,
@@ -647,10 +647,18 @@ async function waitForServerConfigToApply(): Promise<void> {
 }
 
 function dispatchChatNewShortcut(): void {
+  dispatchThreadShortcut("o");
+}
+
+function dispatchTerminalThreadShortcut(): void {
+  dispatchThreadShortcut("t");
+}
+
+function dispatchThreadShortcut(key: string): void {
   const useMetaForMod = isMacPlatform(navigator.platform);
   window.dispatchEvent(
     new KeyboardEvent("keydown", {
-      key: "o",
+      key,
       shiftKey: true,
       metaKey: useMetaForMod,
       ctrlKey: !useMetaForMod,
@@ -665,10 +673,32 @@ async function triggerChatNewShortcutUntilPath(
   predicate: (pathname: string) => boolean,
   errorMessage: string,
 ): Promise<string> {
+  return triggerThreadShortcutUntilPath(router, dispatchChatNewShortcut, predicate, errorMessage);
+}
+
+async function triggerTerminalThreadShortcutUntilPath(
+  router: ReturnType<typeof getRouter>,
+  predicate: (pathname: string) => boolean,
+  errorMessage: string,
+): Promise<string> {
+  return triggerThreadShortcutUntilPath(
+    router,
+    dispatchTerminalThreadShortcut,
+    predicate,
+    errorMessage,
+  );
+}
+
+async function triggerThreadShortcutUntilPath(
+  router: ReturnType<typeof getRouter>,
+  dispatchShortcut: () => void,
+  predicate: (pathname: string) => boolean,
+  errorMessage: string,
+): Promise<string> {
   let pathname = router.state.location.pathname;
   const deadline = Date.now() + 8_000;
   while (Date.now() < deadline) {
-    dispatchChatNewShortcut();
+    dispatchShortcut();
     await waitForLayout();
     pathname = router.state.location.pathname;
     if (predicate(pathname)) {
@@ -1024,6 +1054,69 @@ describe("ChatView timeline estimator parity (full app)", () => {
     expect(ratio).toBeLessThan(1.35);
   });
 
+  it("collapses header actions into overflow before they can overlap the thread title", async () => {
+    const longTitle =
+      'remove "ago" from the sidebar while the diff panel stays open on smaller viewports';
+    const headerOverflowSnapshot = (() => {
+      const snapshot = createSnapshotForTargetUser({
+        targetMessageId: "msg-user-header-overflow-target" as MessageId,
+        targetText: "header overflow",
+      });
+
+      return withProjectScripts(
+        {
+          ...snapshot,
+          threads: snapshot.threads.map((thread) =>
+            thread.id === THREAD_ID ? Object.assign({}, thread, { title: longTitle }) : thread,
+          ),
+        },
+        [
+          {
+            id: "dev-server",
+            name: "Dev",
+            command: "bun run dev",
+            icon: "play",
+            runOnWorktreeCreate: false,
+          },
+        ],
+      );
+    })();
+    const mounted = await mountChatView({
+      viewport: { ...DEFAULT_VIEWPORT, width: 540 },
+      snapshot: headerOverflowSnapshot,
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          availableEditors: ["vscode"],
+        };
+      },
+    });
+
+    try {
+      await vi.waitFor(
+        () => {
+          const title = document.querySelector<HTMLElement>(`h2[title='${longTitle}']`);
+          const overflowButton = document.querySelector<HTMLButtonElement>(
+            'button[aria-label="More actions"]',
+          );
+          const actions =
+            overflowButton?.closest<HTMLElement>("[data-toolbar-overflow]")?.parentElement;
+
+          expect(title, "Unable to find the chat header title.").toBeTruthy();
+          expect(overflowButton, "Unable to find the header overflow trigger.").toBeTruthy();
+          expect(actions, "Unable to find the header actions container.").toBeTruthy();
+
+          const titleRight = title!.getBoundingClientRect().right;
+          const actionsLeft = actions!.getBoundingClientRect().left;
+          expect(titleRight).toBeLessThanOrEqual(actionsLeft + 1);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("keeps the composer visible while a long assistant response forces a viewport relayout", async () => {
     const mounted = await mountChatView({
       viewport: TEXT_VIEWPORT_MATRIX[0],
@@ -1092,6 +1185,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           createdAt: NOW_ISO,
           runtimeMode: "full-access",
           interactionMode: "default",
+          entryPoint: "chat",
           branch: null,
           worktreePath: null,
           envMode: "local",
@@ -1149,6 +1243,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           createdAt: NOW_ISO,
           runtimeMode: "full-access",
           interactionMode: "default",
+          entryPoint: "chat",
           branch: null,
           worktreePath: null,
           envMode: "local",
@@ -1225,6 +1320,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           createdAt: NOW_ISO,
           runtimeMode: "full-access",
           interactionMode: "default",
+          entryPoint: "chat",
           branch: "feature/draft",
           worktreePath: "/repo/worktrees/feature-draft",
           envMode: "worktree",
@@ -1841,6 +1937,206 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await mounted.cleanup();
     }
   });
+
+  it("promotes terminal-first shortcut threads so they render as terminal rows", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-terminal-shortcut-test" as MessageId,
+        targetText: "terminal shortcut test",
+      }),
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          keybindings: [
+            {
+              command: "chat.newTerminal",
+              shortcut: {
+                key: "t",
+                metaKey: false,
+                ctrlKey: false,
+                shiftKey: true,
+                altKey: false,
+                modKey: true,
+              },
+              whenAst: {
+                type: "not",
+                node: { type: "identifier", name: "terminalFocus" },
+              },
+            },
+          ],
+        };
+      },
+    });
+
+    try {
+      await waitForServerConfigToApply();
+      const composerEditor = await waitForComposerEditor();
+      composerEditor.focus();
+      await waitForLayout();
+      const newThreadPath = await triggerTerminalThreadShortcutUntilPath(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a new terminal-first draft thread UUID from the shortcut.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+
+      await vi.waitFor(
+        () => {
+          expect(
+            wsRequests.some(
+              (request) =>
+                request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                typeof request.command === "object" &&
+                request.command !== null &&
+                "type" in request.command &&
+                "threadId" in request.command &&
+                request.command.type === "thread.create" &&
+                request.command.threadId === newThreadId,
+            ),
+          ).toBe(true);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      useStore.getState().syncServerReadModel(addThreadToSnapshot(fixture.snapshot, newThreadId));
+      useComposerDraftStore.getState().clearDraftThread(newThreadId);
+
+      await vi.waitFor(
+        () => {
+          const terminalThreadRow = document.querySelector<HTMLElement>(
+            '[data-thread-entry-point="terminal"]',
+          );
+          expect(terminalThreadRow).not.toBeNull();
+          expect(terminalThreadRow?.textContent).toContain("New thread");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("promotes a stored terminal draft using its saved context and model selection", async () => {
+    const draftThreadId = ThreadId.makeUnsafe("thread-terminal-draft-reuse");
+    useComposerDraftStore.setState({
+      draftsByThreadId: {
+        [draftThreadId]: {
+          prompt: "",
+          images: [],
+          nonPersistedImageIds: [],
+          persistedAttachments: [],
+          terminalContexts: [],
+          modelSelectionByProvider: {
+            claudeAgent: {
+              provider: "claudeAgent",
+              model: "claude-opus-4-6",
+              options: {
+                effort: "max",
+              },
+            },
+          },
+          activeProvider: "claudeAgent",
+          runtimeMode: null,
+          interactionMode: null,
+        },
+      },
+      draftThreadsByThreadId: {
+        [draftThreadId]: {
+          projectId: PROJECT_ID,
+          createdAt: NOW_ISO,
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          entryPoint: "terminal",
+          branch: "feature/terminal-title",
+          worktreePath: "/repo/project/.worktrees/terminal-title",
+          envMode: "worktree",
+        },
+      },
+      projectDraftThreadIdByProjectId: {
+        [`${PROJECT_ID}::terminal`]: draftThreadId,
+      },
+      stickyModelSelectionByProvider: {},
+      stickyActiveProvider: null,
+    });
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-terminal-draft-reuse-test" as MessageId,
+        targetText: "terminal draft reuse test",
+      }),
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          keybindings: [
+            {
+              command: "chat.newTerminal",
+              shortcut: {
+                key: "t",
+                metaKey: false,
+                ctrlKey: false,
+                shiftKey: true,
+                altKey: false,
+                modKey: true,
+              },
+              whenAst: {
+                type: "not",
+                node: { type: "identifier", name: "terminalFocus" },
+              },
+            },
+          ],
+        };
+      },
+    });
+
+    try {
+      await waitForServerConfigToApply();
+      const composerEditor = await waitForComposerEditor();
+      composerEditor.focus();
+      await waitForLayout();
+      dispatchTerminalThreadShortcut();
+
+      await waitForURL(
+        mounted.router,
+        (path) => path === `/${draftThreadId}`,
+        "Shortcut should reuse the stored terminal draft thread route.",
+      );
+
+      await vi.waitFor(
+        () => {
+          const createRequest = wsRequests.find(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              typeof request.command === "object" &&
+              request.command !== null &&
+              "type" in request.command &&
+              "threadId" in request.command &&
+              request.command.type === "thread.create" &&
+              request.command.threadId === draftThreadId,
+          );
+
+          expect(createRequest).toBeTruthy();
+          expect(createRequest?.command).toMatchObject({
+            branch: "feature/terminal-title",
+            worktreePath: "/repo/project/.worktrees/terminal-title",
+            runtimeMode: "approval-required",
+            modelSelection: {
+              provider: "claudeAgent",
+              model: "claude-opus-4-6",
+              options: {
+                effort: "max",
+              },
+            },
+          });
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("creates a fresh draft after the previous draft thread is promoted", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,

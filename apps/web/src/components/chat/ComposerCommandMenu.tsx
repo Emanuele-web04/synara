@@ -107,10 +107,7 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
     return (
       <CommandItem
         value={props.item.id}
-        className={cn(
-          "cursor-pointer px-2.5 py-1.5",
-          props.isActive && "bg-accent/20",
-        )}
+        className={cn("cursor-pointer px-2.5 py-1.5", props.isActive && "bg-accent/20")}
         onMouseDown={(event) => {
           event.preventDefault();
         }}

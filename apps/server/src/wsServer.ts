@@ -12,6 +12,7 @@ import type { Duplex } from "node:stream";
 import Mime from "@effect/platform-node/Mime";
 import {
   CommandId,
+  DEFAULT_TERMINAL_ID,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   type ClientOrchestrationCommand,
   type OrchestrationCommand,
@@ -79,6 +80,7 @@ import { expandHomePath } from "./os-jank.ts";
 import { makeServerPushBus } from "./wsServer/pushBus.ts";
 import { makeServerReadiness } from "./wsServer/readiness.ts";
 import { decodeJsonResult, formatSchemaError } from "@t3tools/shared/schemaJson";
+import { TerminalThreadTitleTracker } from "./terminal/terminalThreadTitleTracker";
 
 /**
  * ServerShape - Service API for server lifecycle control.
@@ -411,6 +413,35 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         attachments: normalizedAttachments,
       },
     } satisfies OrchestrationCommand;
+  });
+  const terminalTitleTracker = new TerminalThreadTitleTracker();
+  // Terminal auto-titles are best-effort metadata and must never block terminal writes.
+  const maybeAutoRenameTerminalThread = Effect.fnUntraced(function* (input: {
+    threadId: string;
+    terminalId: string;
+    data: string;
+  }) {
+    const readModel = yield* orchestrationEngine.getReadModel();
+    const thread = readModel.threads.find((entry) => entry.id === input.threadId);
+    if (!thread) {
+      return;
+    }
+    const nextTitle = terminalTitleTracker.consumeWrite({
+      currentTitle: thread.title,
+      data: input.data,
+      terminalId: input.terminalId,
+      threadId: input.threadId,
+    });
+    if (!nextTitle) {
+      return;
+    }
+
+    yield* orchestrationEngine.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe(crypto.randomUUID()),
+      threadId: ThreadId.makeUnsafe(input.threadId),
+      title: nextTitle,
+    });
   });
 
   // HTTP server — serves static files or redirects to Vite dev server
@@ -853,12 +884,19 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
 
       case WS_METHODS.terminalOpen: {
         const body = stripRequestTag(request.body);
+        terminalTitleTracker.reset(body.threadId, body.terminalId ?? DEFAULT_TERMINAL_ID);
         return yield* terminalManager.open(body);
       }
 
       case WS_METHODS.terminalWrite: {
         const body = stripRequestTag(request.body);
-        return yield* terminalManager.write(body);
+        yield* terminalManager.write(body);
+        yield* maybeAutoRenameTerminalThread({
+          threadId: body.threadId,
+          terminalId: body.terminalId ?? DEFAULT_TERMINAL_ID,
+          data: body.data,
+        }).pipe(Effect.catch(() => Effect.void));
+        return;
       }
 
       case WS_METHODS.terminalResize: {
@@ -873,11 +911,13 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
 
       case WS_METHODS.terminalRestart: {
         const body = stripRequestTag(request.body);
+        terminalTitleTracker.reset(body.threadId, body.terminalId ?? DEFAULT_TERMINAL_ID);
         return yield* terminalManager.restart(body);
       }
 
       case WS_METHODS.terminalClose: {
         const body = stripRequestTag(request.body);
+        terminalTitleTracker.reset(body.threadId, body.terminalId ?? null);
         return yield* terminalManager.close(body);
       }
 

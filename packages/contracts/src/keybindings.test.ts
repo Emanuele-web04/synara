@@ -82,6 +82,12 @@ it.effect("parses keybinding rules", () =>
       command: "chat.newLocal",
     });
     assert.strictEqual(parsedLocal.command, "chat.newLocal");
+
+    const parsedTerminal = yield* decode(KeybindingRule, {
+      key: "mod+shift+t",
+      command: "chat.newTerminal",
+    });
+    assert.strictEqual(parsedTerminal.command, "chat.newTerminal");
   }),
 );
 

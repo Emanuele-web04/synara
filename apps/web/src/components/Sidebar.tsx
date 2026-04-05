@@ -2,7 +2,6 @@ import {
   ArrowLeftIcon,
   ArrowUpDownIcon,
   FolderIcon,
-  FolderOpenIcon,
   GitPullRequestIcon,
   PlusIcon,
   RocketIcon,
@@ -12,6 +11,8 @@ import {
   TriangleAlertIcon,
 } from "~/lib/icons";
 import { autoAnimate } from "@formkit/auto-animate";
+import { IoFolderOutline } from "react-icons/io5";
+import { HiOutlineFolderOpen } from "react-icons/hi2";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import {
   DndContext,
@@ -123,11 +124,11 @@ const SIDEBAR_LIST_ANIMATION_OPTIONS = {
 function formatRelativeTime(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
   const minutes = Math.floor(diff / 60_000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 1) return "now";
+  if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
 }
 
 interface TerminalStatusIndicator {
@@ -344,14 +345,11 @@ export default function Sidebar() {
   const toggleProject = useStore((store) => store.toggleProject);
   const reorderProjects = useStore((store) => store.reorderProjects);
   const clearComposerDraftForThread = useComposerDraftStore((store) => store.clearDraftThread);
-  const getDraftThreadByProjectId = useComposerDraftStore(
-    (store) => store.getDraftThreadByProjectId,
-  );
   const terminalStateByThreadId = useTerminalStateStore((state) => state.terminalStateByThreadId);
   const clearTerminalState = useTerminalStateStore((state) => state.clearTerminalState);
-  const clearProjectDraftThreadId = useComposerDraftStore(
-    (store) => store.clearProjectDraftThreadId,
-  );
+  const openChatThreadPage = useTerminalStateStore((state) => state.openChatThreadPage);
+  const openTerminalThreadPage = useTerminalStateStore((state) => state.openTerminalThreadPage);
+  const clearProjectDraftThreads = useComposerDraftStore((store) => store.clearProjectDraftThreads);
   const clearProjectDraftThreadById = useComposerDraftStore(
     (store) => store.clearProjectDraftThreadById,
   );
@@ -1001,16 +999,12 @@ export default function Sidebar() {
       if (!confirmed) return;
 
       try {
-        const projectDraftThread = getDraftThreadByProjectId(projectId);
-        if (projectDraftThread) {
-          clearComposerDraftForThread(projectDraftThread.threadId);
-        }
-        clearProjectDraftThreadId(projectId);
         await api.orchestration.dispatchCommand({
           type: "project.delete",
           commandId: newCommandId(),
           projectId,
         });
+        clearProjectDraftThreads(projectId);
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error removing project.";
         console.error("Failed to remove project", { projectId, error });
@@ -1021,13 +1015,7 @@ export default function Sidebar() {
         });
       }
     },
-    [
-      clearComposerDraftForThread,
-      clearProjectDraftThreadId,
-      getDraftThreadByProjectId,
-      projects,
-      threads,
-    ],
+    [clearProjectDraftThreads, projects, threads],
   );
 
   const projectDnDSensors = useSensors(
@@ -1137,6 +1125,8 @@ export default function Sidebar() {
     const orderedProjectThreadIds = projectThreads.map((thread) => thread.id);
     const renderedThreads = pinnedCollapsedThread ? [pinnedCollapsedThread] : visibleThreads;
     const renderThreadRow = (thread: (typeof projectThreads)[number]) => {
+      const threadTerminalState = selectThreadTerminalState(terminalStateByThreadId, thread.id);
+      const threadEntryPoint = threadTerminalState.entryPoint;
       const isActive = routeThreadId === thread.id;
       const isSelected = selectedThreadIds.has(thread.id);
       const isHighlighted = isActive || isSelected;
@@ -1146,9 +1136,14 @@ export default function Sidebar() {
         hasPendingUserInput: derivePendingUserInputs(thread.activities).length > 0,
       });
       const prStatus = prStatusIndicator(prByThreadId.get(thread.id) ?? null);
-      const terminalStatus = terminalStatusFromRunningIds(
-        selectThreadTerminalState(terminalStateByThreadId, thread.id).runningTerminalIds,
-      );
+      const terminalStatus = terminalStatusFromRunningIds(threadTerminalState.runningTerminalIds);
+      const openThreadPrimarySurface = () => {
+        if (threadEntryPoint === "terminal") {
+          openTerminalThreadPage(thread.id);
+          return;
+        }
+        openChatThreadPage(thread.id);
+      };
 
       return (
         <SidebarMenuSubItem key={thread.id} className="w-full" data-thread-item>
@@ -1161,6 +1156,7 @@ export default function Sidebar() {
           )}
           <SidebarMenuSubButton
             render={<div role="button" tabIndex={0} />}
+            data-thread-entry-point={threadEntryPoint}
             size="sm"
             isActive={isActive}
             className={resolveThreadRowClassName({
@@ -1168,6 +1164,12 @@ export default function Sidebar() {
               isSelected,
             })}
             onClick={(event) => {
+              const isMac = isMacPlatform(navigator.platform);
+              const isModClick = isMac ? event.metaKey : event.ctrlKey;
+              const isShiftClick = event.shiftKey;
+              if (!isModClick && !isShiftClick) {
+                openThreadPrimarySurface();
+              }
               handleThreadClick(event, thread.id, orderedProjectThreadIds);
             }}
             onKeyDown={(event) => {
@@ -1177,6 +1179,7 @@ export default function Sidebar() {
                 clearSelection();
               }
               setSelectionAnchor(thread.id);
+              openThreadPrimarySurface();
               void navigate({
                 to: "/$threadId",
                 params: { threadId: thread.id },
@@ -1200,7 +1203,9 @@ export default function Sidebar() {
               }
             }}
           >
-            {thread.modelSelection.provider === "claudeAgent" ? (
+            {threadEntryPoint === "terminal" ? (
+              <TerminalIcon aria-hidden="true" className="size-3.5 shrink-0 text-teal-600/85" />
+            ) : thread.modelSelection.provider === "claudeAgent" ? (
               <ClaudeAI aria-hidden="true" className="size-3.5 shrink-0 text-[#d97757]" />
             ) : (
               <OpenAI aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground/60" />
@@ -1314,15 +1319,15 @@ export default function Sidebar() {
           >
             <span className="relative inline-flex size-4 shrink-0 items-center justify-center text-muted-foreground/72">
               {project.expanded ? (
-                <FolderOpenIcon className="size-4" />
+                <HiOutlineFolderOpen className="size-4" />
               ) : (
-                <FolderIcon className="size-4" />
+                <IoFolderOutline className="size-4" />
               )}
               {projectStatus ? (
                 <span
                   aria-hidden="true"
                   title={projectStatus.label}
-                  className={`absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full ${projectStatus.dotClass} ${
+                  className={`absolute -right-0.5 top-0.5 size-1.5 rounded-full ${projectStatus.dotClass} ${
                     projectStatus.pulse ? "animate-pulse" : ""
                   }`}
                 />
@@ -1332,6 +1337,39 @@ export default function Sidebar() {
               {project.name}
             </span>
           </SidebarMenuButton>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <SidebarMenuAction
+                  render={
+                    <button
+                      type="button"
+                      aria-label={`Create new terminal thread in ${project.name}`}
+                    />
+                  }
+                  showOnHover
+                  className="top-1 right-7 size-5 rounded-md p-0 text-muted-foreground/60 hover:bg-white/8 hover:text-foreground"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    void handleNewThread(project.id, {
+                      envMode: resolveSidebarNewThreadEnvMode({
+                        defaultEnvMode: appSettings.defaultThreadEnvMode,
+                      }),
+                      entryPoint: "terminal",
+                    });
+                  }}
+                >
+                  <TerminalIcon className="size-3.5" />
+                </SidebarMenuAction>
+              }
+            />
+            <TooltipPopup side="top">
+              {newTerminalThreadShortcutLabel
+                ? `New terminal thread (${newTerminalThreadShortcutLabel})`
+                : "New terminal thread"}
+            </TooltipPopup>
+          </Tooltip>
           <Tooltip>
             <TooltipTrigger
               render={
@@ -1519,6 +1557,7 @@ export default function Sidebar() {
   const newThreadShortcutLabel =
     shortcutLabelForCommand(keybindings, "chat.newLocal") ??
     shortcutLabelForCommand(keybindings, "chat.new");
+  const newTerminalThreadShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newTerminal");
 
   const handleDesktopUpdateButtonClick = useCallback(() => {
     const bridge = window.desktopBridge;

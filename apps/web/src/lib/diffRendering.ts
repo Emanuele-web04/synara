@@ -1,6 +1,7 @@
 export const DIFF_THEME_NAMES = {
-  light: "pierre-light",
-  dark: "pierre-dark",
+  // Keep diff syntax highlighting on the bundled GitHub themes for better parity with git tooling.
+  light: "github-light",
+  dark: "github-dark",
 } as const;
 
 export type DiffThemeName = (typeof DIFF_THEME_NAMES)[keyof typeof DIFF_THEME_NAMES];

@@ -9,10 +9,11 @@ import {
   type ResolvedKeybindingsConfig,
   type ThreadId,
 } from "@t3tools/contracts";
-import { memo } from "react";
+import React, { memo, useEffect, useRef, useState } from "react";
 import GitActionsControl from "../GitActionsControl";
-import { DiffIcon, GlobeIcon, TerminalSquareIcon } from "~/lib/icons";
-import { Badge } from "../ui/badge";
+import { DiffIcon, EllipsisIcon, GlobeIcon, PlusIcon, TerminalSquareIcon } from "~/lib/icons";
+import { Button } from "../ui/button";
+import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import ProjectScriptsControl, { type NewProjectScriptInput } from "../ProjectScriptsControl";
 import { Toggle } from "../ui/toggle";
@@ -20,6 +21,19 @@ import { SidebarTrigger, useSidebar } from "../ui/sidebar";
 import { OpenInPicker } from "./OpenInPicker";
 import { isElectron } from "~/env";
 import { cn } from "~/lib/utils";
+import { readNativeApi } from "~/nativeApi";
+import { usePreferredEditor } from "../../editorPreferences";
+import { AntigravityIcon, CursorIcon, VisualStudioCode, Zed } from "../Icons";
+
+/** Width (px) below which collapsible header controls fold into the ellipsis menu. */
+const HEADER_COMPACT_BREAKPOINT = 480;
+
+const EDITOR_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
+  cursor: CursorIcon,
+  vscode: VisualStudioCode,
+  zed: Zed,
+  antigravity: AntigravityIcon,
+};
 
 interface ChatHeaderProps {
   activeThreadId: ThreadId;
@@ -76,85 +90,162 @@ export const ChatHeader = memo(function ChatHeader({
 }: ChatHeaderProps) {
   const { isMobile, state } = useSidebar();
   const needsDesktopTrafficLightInset = isElectron && !isMobile && state === "collapsed";
+  const headerRef = useRef<HTMLDivElement>(null);
+  const [compact, setCompact] = useState(false);
+  const [preferredEditor] = usePreferredEditor(availableEditors);
+  const EditorIcon = preferredEditor ? EDITOR_ICONS[preferredEditor] : null;
+
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el) return;
+    const measure = () => setCompact(el.clientWidth < HEADER_COMPACT_BREAKPOINT);
+    measure();
+    const observer = new ResizeObserver(() => measure());
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  const hasCollapsibleControls = Boolean(
+    activeProjectScripts || activeProjectName || terminalAvailable,
+  );
 
   return (
-    <div className="flex min-w-0 flex-1 items-center gap-2">
+    <div ref={headerRef} className="flex min-w-0 flex-1 items-center gap-2">
       <div
         className={cn(
           "flex min-w-0 flex-1 items-center gap-2 overflow-hidden sm:gap-3",
           needsDesktopTrafficLightInset ? "pl-[84px]" : "",
         )}
       >
-        <SidebarTrigger className="size-7 shrink-0 md:hidden" />
-        <h2
-          className="min-w-0 shrink truncate text-sm font-medium text-foreground"
-          title={activeThreadTitle}
-        >
-          {activeThreadTitle}
-        </h2>
-        {activeProjectName && (
-          <Badge variant="outline" className="min-w-0 shrink truncate">
-            {activeProjectName}
-          </Badge>
-        )}
-        {activeProjectName && !isGitRepo && (
-          <Badge variant="outline" className="shrink-0 text-[10px] text-amber-700">
-            No Git
-          </Badge>
-        )}
+        <div className="shrink-0 md:hidden">
+          <SidebarTrigger className="size-7 shrink-0" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <h2
+            className="max-w-[clamp(16rem,50vw,40rem)] truncate text-sm font-medium text-foreground"
+            title={activeThreadTitle}
+          >
+            {activeThreadTitle}
+          </h2>
+        </div>
       </div>
-      <div className="@container/header-actions flex shrink-0 items-center justify-end gap-2 @sm/header-actions:gap-3">
-        {activeProjectScripts && (
-          <div className="shrink-0">
-            <ProjectScriptsControl
-              scripts={activeProjectScripts}
-              keybindings={keybindings}
-              preferredScriptId={preferredScriptId}
-              onRunScript={onRunProjectScript}
-              onAddScript={onAddProjectScript}
-              onUpdateScript={onUpdateProjectScript}
-              onDeleteScript={onDeleteProjectScript}
-            />
-          </div>
+      <div className="flex shrink-0 items-center gap-2">
+        {/* Inline controls — shown when there's enough room. */}
+        {!compact && (
+          <>
+            {activeProjectScripts ? (
+              <ProjectScriptsControl
+                scripts={activeProjectScripts}
+                keybindings={keybindings}
+                preferredScriptId={preferredScriptId}
+                onRunScript={onRunProjectScript}
+                onAddScript={onAddProjectScript}
+                onUpdateScript={onUpdateProjectScript}
+                onDeleteScript={onDeleteProjectScript}
+              />
+            ) : null}
+            {activeProjectName ? (
+              <OpenInPicker
+                keybindings={keybindings}
+                availableEditors={availableEditors}
+                openInCwd={openInCwd}
+              />
+            ) : null}
+            {terminalAvailable ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Toggle
+                      className="shrink-0"
+                      pressed={terminalOpen}
+                      onPressedChange={onToggleTerminal}
+                      aria-label="Toggle terminal"
+                      variant="outline"
+                      size="xs"
+                    >
+                      <TerminalSquareIcon className="size-3" />
+                    </Toggle>
+                  }
+                />
+                <TooltipPopup side="bottom">
+                  {terminalToggleShortcutLabel
+                    ? `Toggle terminal (${terminalToggleShortcutLabel})`
+                    : "Toggle terminal"}
+                </TooltipPopup>
+              </Tooltip>
+            ) : null}
+          </>
         )}
-        {activeProjectName && (
-          <div className="shrink-0">
-            <OpenInPicker
-              keybindings={keybindings}
-              availableEditors={availableEditors}
-              openInCwd={openInCwd}
-            />
-          </div>
-        )}
-        {activeProjectName && (
-          <div className="shrink-0">
-            <GitActionsControl gitCwd={gitCwd} activeThreadId={activeThreadId} />
-          </div>
-        )}
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Toggle
-                className="shrink-0"
-                pressed={terminalOpen}
-                onPressedChange={onToggleTerminal}
-                aria-label="Toggle terminal"
-                variant="outline"
-                size="xs"
-                disabled={!terminalAvailable}
-              >
-                <TerminalSquareIcon className="size-3" />
-              </Toggle>
-            }
-          />
-          <TooltipPopup side="bottom">
-            {!terminalAvailable
-              ? "Terminal is unavailable until this thread has an active project."
-              : terminalToggleShortcutLabel
-                ? `Toggle terminal (${terminalToggleShortcutLabel})`
-                : "Toggle terminal"}
-          </TooltipPopup>
-        </Tooltip>
+
+        {/* Overflow ellipsis — shown only when compact. */}
+        {compact && hasCollapsibleControls ? (
+          <Menu modal={false}>
+            <MenuTrigger
+              render={
+                <Button
+                  size="icon-xs"
+                  variant="outline"
+                  className="shrink-0"
+                  aria-label="More actions"
+                />
+              }
+            >
+              <EllipsisIcon className="size-3.5" />
+            </MenuTrigger>
+            <MenuPopup align="end" side="bottom" className="min-w-[13rem]">
+              {activeProjectScripts
+                ? activeProjectScripts.map((script) => (
+                    <MenuItem key={script.id} onClick={() => onRunProjectScript(script)}>
+                      <span className="truncate">{script.name}</span>
+                    </MenuItem>
+                  ))
+                : null}
+              {activeProjectScripts ? (
+                <MenuItem
+                  onClick={() => {
+                    setCompact(false);
+                  }}
+                >
+                  <PlusIcon className="size-3.5 shrink-0" />
+                  <span>Add action</span>
+                </MenuItem>
+              ) : null}
+              {activeProjectName ? (
+                <>
+                  <MenuSeparator className="mx-1" />
+                  <MenuItem
+                    onClick={() => {
+                      const api = readNativeApi();
+                      if (api && openInCwd && preferredEditor) {
+                        void api.shell.openInEditor(openInCwd, preferredEditor);
+                      }
+                    }}
+                    disabled={!preferredEditor || !openInCwd}
+                  >
+                    {EditorIcon ? (
+                      <EditorIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                    ) : null}
+                    <span>Open in editor</span>
+                  </MenuItem>
+                </>
+              ) : null}
+              <MenuSeparator className="mx-1" />
+              <MenuItem onClick={onToggleTerminal} disabled={!terminalAvailable}>
+                <TerminalSquareIcon className="size-3.5 shrink-0" />
+                <span>Terminal</span>
+                {terminalToggleShortcutLabel && (
+                  <span className="ml-auto text-[11px] opacity-60">
+                    {terminalToggleShortcutLabel}
+                  </span>
+                )}
+              </MenuItem>
+            </MenuPopup>
+          </Menu>
+        ) : null}
+
+        {activeProjectName ? (
+          <GitActionsControl gitCwd={gitCwd} activeThreadId={activeThreadId} />
+        ) : null}
         {isElectron ? (
           <Tooltip>
             <TooltipTrigger
