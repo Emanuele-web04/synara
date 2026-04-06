@@ -235,6 +235,66 @@ class RouteRequestError extends Schema.TaggedErrorClass<RouteRequestError>()("Ro
   message: Schema.String,
 }) {}
 
+// Summarize noisy websocket pushes so explicit debug logging stays useful
+// without dumping ANSI-heavy terminal redraw traffic into the server logs.
+function summarizePushForLog(push: WsPushEnvelopeBase): unknown {
+  if (push.channel !== WS_CHANNELS.terminalEvent || typeof push.data !== "object" || !push.data) {
+    return push.data;
+  }
+
+  const event = push.data as Record<string, unknown>;
+  const threadId = typeof event.threadId === "string" ? event.threadId : undefined;
+  const terminalId = typeof event.terminalId === "string" ? event.terminalId : undefined;
+  const createdAt = typeof event.createdAt === "string" ? event.createdAt : undefined;
+  const type = typeof event.type === "string" ? event.type : "unknown";
+
+  if (type === "output") {
+    const data = typeof event.data === "string" ? event.data : "";
+    return {
+      type,
+      threadId,
+      terminalId,
+      createdAt,
+      outputBytes: Buffer.byteLength(data),
+      preview: "redacted",
+    };
+  }
+
+  const snapshot =
+    typeof event.snapshot === "object" && event.snapshot
+      ? (event.snapshot as Record<string, unknown>)
+      : null;
+
+  if (type === "started" || type === "restarted") {
+    const history = typeof snapshot?.history === "string" ? snapshot.history : "";
+    return {
+      type,
+      threadId,
+      terminalId,
+      createdAt,
+      snapshot: {
+        cwd: typeof snapshot?.cwd === "string" ? snapshot.cwd : undefined,
+        status: typeof snapshot?.status === "string" ? snapshot.status : undefined,
+        pid: typeof snapshot?.pid === "number" ? snapshot.pid : null,
+        historyBytes: Buffer.byteLength(history),
+      },
+    };
+  }
+
+  return {
+    ...event,
+    ...(snapshot
+      ? {
+          snapshot: {
+            cwd: typeof snapshot.cwd === "string" ? snapshot.cwd : undefined,
+            status: typeof snapshot.status === "string" ? snapshot.status : undefined,
+            pid: typeof snapshot.pid === "number" ? snapshot.pid : null,
+          },
+        }
+      : {}),
+  };
+}
+
 export const createServer = Effect.fn(function* (): Effect.fn.Return<
   http.Server,
   ServerLifecycleError,
@@ -285,7 +345,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       channel: push.channel,
       sequence: push.sequence,
       recipients,
-      payload: push.data,
+      payload: summarizePushForLog(push),
     });
   }
 
@@ -707,6 +767,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           modelSelection: bootstrapProjectDefaultModelSelection,
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "full-access",
+          envMode: "local",
           branch: null,
           worktreePath: null,
           createdAt,
@@ -941,6 +1002,11 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       case WS_METHODS.providerGetComposerCapabilities: {
         const body = stripRequestTag(request.body);
         return yield* providerDiscoveryService.getComposerCapabilities(body);
+      }
+
+      case WS_METHODS.providerListCommands: {
+        const body = stripRequestTag(request.body);
+        return yield* providerDiscoveryService.listCommands(body);
       }
 
       case WS_METHODS.providerListSkills: {

@@ -23,8 +23,7 @@ export type ComposerPromptSegment =
     };
 
 const MENTION_TOKEN_REGEX = /(^|\s)@([^\s@]+)(?=\s)/g;
-const SKILL_TOKEN_REGEX = /(^|\s)([$/])([a-zA-Z][a-zA-Z0-9_:-]*)(?=\s)/g;
-const BUILT_IN_SLASH_COMMANDS = new Set(["default", "model", "plan"]);
+const SKILL_TOKEN_REGEX = /(^|\s)(\$)([a-zA-Z][a-zA-Z0-9_:-]*)(?=\s)/g;
 
 function pushTextSegment(segments: ComposerPromptSegment[], text: string): void {
   if (!text) return;
@@ -67,13 +66,9 @@ function collectInlineTokenMatches(text: string): InlineTokenMatch[] {
     const matchIndex = match.index ?? 0;
     const start = matchIndex + whitespace.length;
     const end = start + fullMatch.length - whitespace.length;
-    // Keep raw `$foo` and `/foo` text editable while the user is still typing.
-    // We only chipify skill mentions once a delimiter exists, and we never
-    // reinterpret built-in slash commands as provider skills.
-    if (
-      name.length > 0 &&
-      !(skillPrefix === "/" && BUILT_IN_SLASH_COMMANDS.has(name.toLowerCase()))
-    ) {
+    // Keep raw slash commands editable in the composer. Only `$foo` becomes a
+    // skill chip once it is delimited.
+    if (name.length > 0) {
       matches.push({ kind: "skill", value: name, skillPrefix, start, end });
     }
   }

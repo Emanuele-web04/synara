@@ -106,6 +106,7 @@ export function useHandleNewThread() {
           modelSelection: creationState.modelSelection,
           runtimeMode: creationState.runtimeMode,
           interactionMode: creationState.interactionMode,
+          envMode: creationState.envMode,
           branch: creationState.branch,
           worktreePath: creationState.worktreePath,
           createdAt: new Date().toISOString(),

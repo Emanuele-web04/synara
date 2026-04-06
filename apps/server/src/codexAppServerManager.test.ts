@@ -1176,6 +1176,31 @@ describe("thread checkpoint control", () => {
     });
   });
 
+  it("forks a provider thread via thread/fork", async () => {
+    const { manager, context, sendRequest } = createThreadControlHarness();
+    sendRequest.mockResolvedValue({
+      thread: {
+        id: "thread_forked",
+      },
+    });
+
+    const result = await manager.forkThread({
+      sourceThreadId: asThreadId("thread_1"),
+      threadId: asThreadId("thread_2"),
+      runtimeMode: "full-access",
+    });
+
+    expect(sendRequest).toHaveBeenCalledWith(context, "thread/fork", {
+      threadId: "thread_1",
+    });
+    expect(result).toEqual({
+      threadId: "thread_2",
+      resumeCursor: {
+        threadId: "thread_forked",
+      },
+    });
+  });
+
   it("rolls back turns via thread/rollback and resets session running state", async () => {
     const { manager, context, sendRequest, updateSession } = createThreadControlHarness();
     sendRequest.mockResolvedValue({

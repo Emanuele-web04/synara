@@ -8,6 +8,7 @@ import {
   isCollapsedCursorAdjacentToInlineToken,
   parseStandaloneComposerSlashCommand,
   replaceTextRange,
+  stripComposerTriggerText,
 } from "./composer-logic";
 import { INLINE_TERMINAL_CONTEXT_PLACEHOLDER } from "./lib/terminalContext";
 
@@ -120,6 +121,22 @@ describe("replaceTextRange", () => {
       text: "hello ",
       cursor: 6,
     });
+  });
+});
+
+describe("stripComposerTriggerText", () => {
+  it("removes the active slash trigger text without touching the rest of the prompt", () => {
+    const text = "/rev";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(stripComposerTriggerText(text, trigger)).toBe("");
+  });
+
+  it("preserves earlier composer content when removing a trailing slash trigger", () => {
+    const text = "Need context first\n/rev";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(stripComposerTriggerText(text, trigger)).toBe("Need context first\n");
   });
 });
 
@@ -263,6 +280,10 @@ describe("parseStandaloneComposerSlashCommand", () => {
 
   it("parses standalone /default command", () => {
     expect(parseStandaloneComposerSlashCommand("/default")).toBe("default");
+  });
+
+  it("parses standalone /fast command", () => {
+    expect(parseStandaloneComposerSlashCommand("/fast")).toBe("fast");
   });
 
   it("ignores slash commands with extra message text", () => {

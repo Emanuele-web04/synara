@@ -41,6 +41,8 @@ import {
   type UserInputQuestion,
   ClaudeCodeEffort,
   type ProviderComposerCapabilities,
+  type ProviderListCommandsInput,
+  type ProviderListCommandsResult,
   type ProviderListSkillsInput,
   type ProviderListSkillsResult,
 } from "@t3tools/contracts";
@@ -1950,6 +1952,38 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           yield* backfillAssistantTextBlocksFromSnapshot(context, message);
         }
 
+        // Capture per-API-call usage from the assistant response for accurate
+        // context window tracking. Unlike task_progress (accumulated per-task),
+        // this reflects the actual prompt + output size for this single API call.
+        const perCallUsage = (message.message as { usage?: unknown } | undefined)?.usage;
+        if (perCallUsage) {
+          const normalizedPerCallUsage = normalizeClaudeTokenUsage(
+            perCallUsage,
+            context.lastKnownContextWindow,
+          );
+          if (normalizedPerCallUsage) {
+            context.lastKnownTokenUsage = normalizedPerCallUsage;
+            const usageStamp = yield* makeEventStamp();
+            yield* offerRuntimeEvent({
+              type: "thread.token-usage.updated",
+              eventId: usageStamp.eventId,
+              provider: PROVIDER,
+              createdAt: usageStamp.createdAt,
+              threadId: context.session.threadId,
+              ...(context.turnState
+                ? { turnId: asCanonicalTurnId(context.turnState.turnId) }
+                : {}),
+              payload: { usage: normalizedPerCallUsage },
+              providerRefs: nativeProviderRefs(context),
+              raw: {
+                source: "claude.sdk.message",
+                method: "claude/assistant-usage",
+                payload: perCallUsage,
+              },
+            });
+          }
+        }
+
         context.lastAssistantUuid = message.uuid;
         yield* updateResumeCursor(context);
       });
@@ -3063,27 +3097,27 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         return context !== undefined && !context.stopped;
       });
 
-    // Skill discovery cache — avoids spawning a process per query.
-    let skillsCache: { result: ProviderListSkillsResult; cwd: string } | null = null;
-    let pendingDiscovery: Promise<ProviderListSkillsResult> | null = null;
+    // Native command discovery cache — avoids spawning a process per query.
+    let commandsCache: { result: ProviderListCommandsResult; cwd: string } | null = null;
+    let pendingCommandDiscovery: Promise<ProviderListCommandsResult> | null = null;
 
-    function mapCommandsToSkills(commands: SlashCommand[]): ProviderListSkillsResult {
+    function mapSupportedCommands(
+      commands: SlashCommand[],
+    ): ProviderListCommandsResult {
       return {
-        skills: commands.map((cmd) => ({
+        commands: commands.map((cmd) => ({
           name: cmd.name,
           description: cmd.description || undefined,
-          path: cmd.name,
-          enabled: true,
         })),
         source: "claudeAgent",
         cached: false,
       };
     }
 
-    async function discoverSkillsViaTemporaryProcess(
+    async function discoverCommandsViaTemporaryProcess(
       cwd: string,
-    ): Promise<ProviderListSkillsResult> {
-      // Spawn a lightweight Claude Code process for skill discovery.
+    ): Promise<ProviderListCommandsResult> {
+      // Spawn a lightweight Claude Code process for native command discovery.
       // The SDK's supportedCommands() awaits an internal initialization promise
       // that only resolves when the async generator is iterated (driving the
       // subprocess handshake). We iterate in the background to unblock it.
@@ -3111,14 +3145,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         })();
 
         const commands = await tempQuery.supportedCommands();
-        return mapCommandsToSkills(commands);
+        return mapSupportedCommands(commands);
       } finally {
         tempQuery.close();
       }
     }
 
-    const listSkills: NonNullable<ClaudeAdapterShape["listSkills"]> = (
-      input: ProviderListSkillsInput,
+    const listCommands: NonNullable<ClaudeAdapterShape["listCommands"]> = (
+      input: ProviderListCommandsInput,
     ) =>
       Effect.gen(function* () {
         // 1. Try an active session first (cheapest path).
@@ -3129,21 +3163,22 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         if (context && !context.stopped) {
           const commands = yield* Effect.tryPromise({
             try: () => context.query.supportedCommands(),
-            catch: (cause) => toRequestError(context.session.threadId, "listSkills", cause),
+            catch: (cause) => toRequestError(context.session.threadId, "listCommands", cause),
           });
-          const result = mapCommandsToSkills(commands);
-          skillsCache = { result, cwd: input.cwd };
+          const result = mapSupportedCommands(commands);
+          commandsCache = { result, cwd: input.cwd };
           return result;
         }
 
         // 2. Return from cache if valid and not force-reloading.
-        if (skillsCache && skillsCache.cwd === input.cwd && !input.forceReload) {
-          return { ...skillsCache.result, cached: true } satisfies ProviderListSkillsResult;
+        if (commandsCache && commandsCache.cwd === input.cwd && !input.forceReload) {
+          return { ...commandsCache.result, cached: true } satisfies ProviderListCommandsResult;
         }
 
         // 3. Spawn a temporary process for discovery (deduplicating concurrent requests).
-        const discoveryPromise = pendingDiscovery ?? discoverSkillsViaTemporaryProcess(input.cwd);
-        pendingDiscovery = discoveryPromise;
+        const discoveryPromise =
+          pendingCommandDiscovery ?? discoverCommandsViaTemporaryProcess(input.cwd);
+        pendingCommandDiscovery = discoveryPromise;
 
         const result = yield* Effect.tryPromise({
           try: () => discoveryPromise,
@@ -3151,25 +3186,34 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             new ProviderAdapterProcessError({
               provider: PROVIDER,
               threadId: ThreadId.makeUnsafe("discovery"),
-              detail: toMessage(cause, "Failed to discover Claude skills."),
+              detail: toMessage(cause, "Failed to discover Claude commands."),
               cause,
             }),
         }).pipe(
           Effect.tap(() =>
             Effect.sync(() => {
-              pendingDiscovery = null;
+              pendingCommandDiscovery = null;
             }),
           ),
           Effect.tapError(() =>
             Effect.sync(() => {
-              pendingDiscovery = null;
+              pendingCommandDiscovery = null;
             }),
           ),
         );
 
-        skillsCache = { result, cwd: input.cwd };
+        commandsCache = { result, cwd: input.cwd };
         return result;
       });
+
+    const listSkills: NonNullable<ClaudeAdapterShape["listSkills"]> = (
+      _input: ProviderListSkillsInput,
+    ) =>
+      Effect.succeed({
+        skills: [],
+        source: "unsupported",
+        cached: false,
+      } satisfies ProviderListSkillsResult);
 
     const stopAll: ClaudeAdapterShape["stopAll"] = () =>
       Effect.forEach(
@@ -3194,8 +3238,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
     const composerCapabilities: ProviderComposerCapabilities = {
       provider: PROVIDER,
-      supportsSkillMentions: true,
-      supportsSkillDiscovery: true,
+      supportsSkillMentions: false,
+      supportsSkillDiscovery: false,
+      supportsNativeSlashCommandDiscovery: true,
       supportsPluginMentions: false,
       supportsPluginDiscovery: false,
       supportsRuntimeModelList: false,
@@ -3209,8 +3254,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       provider: PROVIDER,
       capabilities: {
         sessionModelSwitch: "in-session",
-        supportsSkillMentions: true,
-        supportsSkillDiscovery: true,
+        supportsSkillMentions: false,
+        supportsSkillDiscovery: false,
+        supportsNativeSlashCommandDiscovery: true,
         supportsPluginMentions: false,
         supportsPluginDiscovery: false,
         supportsRuntimeModelList: false,
@@ -3227,6 +3273,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       hasSession,
       stopAll,
       getComposerCapabilities,
+      listCommands,
       listSkills,
       streamEvents: Stream.fromQueue(runtimeEventQueue),
     } satisfies ClaudeAdapterShape;

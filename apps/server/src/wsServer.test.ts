@@ -522,7 +522,7 @@ describe("WebSocket Server", () => {
       noBrowser: true,
       authToken: options.authToken,
       autoBootstrapProjectFromCwd: options.autoBootstrapProjectFromCwd ?? false,
-      logWebSocketEvents: options.logWebSocketEvents ?? Boolean(options.devUrl),
+      logWebSocketEvents: options.logWebSocketEvents ?? false,
     } satisfies ServerConfigShape);
     const infrastructureLayer = providerLayer.pipe(Layer.provideMerge(persistenceLayer));
     const runtimeOverrides = Layer.mergeAll(
@@ -809,7 +809,7 @@ describe("WebSocket Server", () => {
     );
   });
 
-  it("logs outbound websocket push events in dev mode", async () => {
+  it("logs outbound websocket push events when explicitly enabled", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {
       // Keep test output clean while verifying websocket logs.
     });
@@ -817,6 +817,7 @@ describe("WebSocket Server", () => {
     server = await createTestServer({
       cwd: "/test/project",
       devUrl: "http://localhost:5173",
+      logWebSocketEvents: true,
     });
     const addr = server.address();
     const port = typeof addr === "object" && addr !== null ? addr.port : 0;
@@ -1260,6 +1261,7 @@ describe("WebSocket Server", () => {
           threadId,
           turnId: asTurnId("provider-turn-1"),
         }),
+      forkThread: () => Effect.succeed(null),
       interruptTurn: () => unsupported(),
       respondToRequest: () => unsupported(),
       respondToUserInput: () => unsupported(),

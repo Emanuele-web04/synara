@@ -255,8 +255,10 @@ export function projectEvent(
             modelSelection: payload.modelSelection,
             runtimeMode: payload.runtimeMode,
             interactionMode: payload.interactionMode,
+            envMode: payload.envMode,
             branch: payload.branch,
             worktreePath: payload.worktreePath,
+            forkSourceThreadId: payload.forkSourceThreadId,
             latestTurn: null,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
@@ -299,6 +301,7 @@ export function projectEvent(
             ...(payload.modelSelection !== undefined
               ? { modelSelection: payload.modelSelection }
               : {}),
+            ...(payload.envMode !== undefined ? { envMode: payload.envMode } : {}),
             ...(payload.branch !== undefined ? { branch: payload.branch } : {}),
             ...(payload.worktreePath !== undefined ? { worktreePath: payload.worktreePath } : {}),
             ...(payload.handoff !== undefined ? { handoff: payload.handoff } : {}),

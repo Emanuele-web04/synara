@@ -17,6 +17,8 @@ import {
   Stream,
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import * as nodeFs from "node:fs/promises";
+import * as nodePath from "node:path";
 
 import { GitCommandError } from "../Errors.ts";
 import {
@@ -109,6 +111,22 @@ function parsePorcelainPath(line: string): string | null {
   const parts = line.trim().split(/\s+/g);
   const filePath = parts.at(-1) ?? "";
   return filePath.length > 0 ? filePath : null;
+}
+
+function countTextLines(contents: Uint8Array): number {
+  if (contents.length === 0) return 0;
+
+  let lineFeeds = 0;
+  for (const byte of contents) {
+    if (byte === 0) {
+      return 0;
+    }
+    if (byte === 10) {
+      lineFeeds += 1;
+    }
+  }
+
+  return contents.at(-1) === 10 ? lineFeeds : lineFeeds + 1;
 }
 
 function parseBranchLine(line: string): { name: string; current: boolean } | null {
@@ -1050,6 +1068,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         let behindCount = 0;
         let hasWorkingTreeChanges = false;
         const changedFilesWithoutNumstat = new Set<string>();
+        const untrackedFilesWithoutNumstat = new Set<string>();
 
         for (const line of statusStdout.split(/\r?\n/g)) {
           if (line.startsWith("# branch.head ")) {
@@ -1072,7 +1091,12 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           if (line.trim().length > 0 && !line.startsWith("#")) {
             hasWorkingTreeChanges = true;
             const pathValue = parsePorcelainPath(line);
-            if (pathValue) changedFilesWithoutNumstat.add(pathValue);
+            if (pathValue) {
+              changedFilesWithoutNumstat.add(pathValue);
+              if (line.startsWith("? ")) {
+                untrackedFilesWithoutNumstat.add(pathValue);
+              }
+            }
           }
         }
 
@@ -1105,9 +1129,23 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
         for (const filePath of changedFilesWithoutNumstat) {
           if (fileStatMap.has(filePath)) continue;
-          files.push({ path: filePath, insertions: 0, deletions: 0 });
+
+          const insertions = untrackedFilesWithoutNumstat.has(filePath)
+            ? yield* Effect.tryPromise(() => nodeFs.readFile(nodePath.join(cwd, filePath))).pipe(
+                Effect.map((contents) => countTextLines(new Uint8Array(contents))),
+                Effect.catch(() => Effect.succeed(0)),
+              )
+            : 0;
+
+          files.push({ path: filePath, insertions, deletions: 0 });
         }
         files.sort((a, b) => a.path.localeCompare(b.path));
+
+        for (const file of files) {
+          if (fileStatMap.has(file.path)) continue;
+          insertions += file.insertions;
+          deletions += file.deletions;
+        }
 
         return {
           branch,

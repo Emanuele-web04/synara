@@ -11,7 +11,11 @@ import type {
   ApprovalRequestId,
   ProviderComposerCapabilities,
   ProviderApprovalDecision,
+  ProviderForkThreadInput,
+  ProviderForkThreadResult,
   ProviderKind,
+  ProviderListCommandsInput,
+  ProviderListCommandsResult,
   ProviderListModelsResult,
   ProviderListPluginsInput,
   ProviderListPluginsResult,
@@ -19,6 +23,7 @@ import type {
   ProviderReadPluginResult,
   ProviderListSkillsResult,
   ProviderListSkillsInput,
+  ProviderStartReviewInput,
   ProviderUserInputAnswers,
   ProviderRuntimeEvent,
   ProviderSendTurnInput,
@@ -40,6 +45,7 @@ export interface ProviderAdapterCapabilities {
   readonly sessionModelSwitch: ProviderSessionModelSwitchMode;
   readonly supportsSkillMentions?: boolean;
   readonly supportsSkillDiscovery?: boolean;
+  readonly supportsNativeSlashCommandDiscovery?: boolean;
   readonly supportsPluginMentions?: boolean;
   readonly supportsPluginDiscovery?: boolean;
   readonly supportsRuntimeModelList?: boolean;
@@ -74,6 +80,13 @@ export interface ProviderAdapterShape<TError> {
    */
   readonly sendTurn: (
     input: ProviderSendTurnInput,
+  ) => Effect.Effect<ProviderTurnStartResult, TError>;
+
+  /**
+   * Start a native provider review run when the adapter supports it.
+   */
+  readonly startReview?: (
+    input: ProviderStartReviewInput,
   ) => Effect.Effect<ProviderTurnStartResult, TError>;
 
   /**
@@ -128,6 +141,16 @@ export interface ProviderAdapterShape<TError> {
   ) => Effect.Effect<ProviderThreadSnapshot, TError>;
 
   /**
+   * Fork one provider thread into another persisted thread cursor when supported.
+   *
+   * Adapters may omit this to signal that the caller should fall back to
+   * conversation-history-only forking.
+   */
+  readonly forkThread?: (
+    input: ProviderForkThreadInput,
+  ) => Effect.Effect<ProviderForkThreadResult, TError>;
+
+  /**
    * Stop all sessions owned by this adapter.
    */
   readonly stopAll: () => Effect.Effect<void, TError>;
@@ -148,6 +171,13 @@ export interface ProviderAdapterShape<TError> {
   readonly listSkills?: (
     input: ProviderListSkillsInput,
   ) => Effect.Effect<ProviderListSkillsResult, TError>;
+
+  /**
+   * List provider-native slash commands available for a given cwd.
+   */
+  readonly listCommands?: (
+    input: ProviderListCommandsInput,
+  ) => Effect.Effect<ProviderListCommandsResult, TError>;
 
   /**
    * List plugins available for the current provider/runtime.

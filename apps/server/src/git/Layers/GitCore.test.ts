@@ -1274,6 +1274,25 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("counts untracked text files in working tree totals", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+
+        yield* writeTextFile(path.join(tmp, "README.md"), "updated\n");
+        yield* writeTextFile(path.join(tmp, "new-file.ts"), "alpha\nbeta\n");
+
+        const details = yield* core.statusDetails(tmp);
+        expect(details.workingTree.insertions).toBe(3);
+        expect(details.workingTree.deletions).toBe(1);
+        expect(details.workingTree.files).toEqual([
+          { path: "new-file.ts", insertions: 2, deletions: 0 },
+          { path: "README.md", insertions: 1, deletions: 1 },
+        ]);
+      }),
+    );
+
     it.effect("computes ahead count against base branch when no upstream is configured", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();

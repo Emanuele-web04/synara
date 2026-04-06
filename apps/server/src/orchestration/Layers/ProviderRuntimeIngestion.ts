@@ -526,6 +526,61 @@ function runtimeEventToActivities(
       ];
     }
 
+    case "turn.completed": {
+      const totalCostUsd = event.payload.totalCostUsd;
+      if (typeof totalCostUsd !== "number") {
+        return [];
+      }
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info" as const,
+          kind: "turn.completed",
+          summary: "Turn completed",
+          payload: { totalCostUsd },
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
+    case "account.rate-limits.updated": {
+      const rawRateLimits = event.payload.rateLimits;
+      if (!rawRateLimits || typeof rawRateLimits !== "object") {
+        return [];
+      }
+      const rl = rawRateLimits as Record<string, unknown>;
+      const status = rl.status;
+      if (status !== "rejected" && status !== "allowed_warning") {
+        return [];
+      }
+      // Normalize resetsAt: Claude SDK sends Unix seconds (number), Codex may send ISO string
+      const resetsAtRaw = rl.resetsAt;
+      const resetsAt =
+        typeof resetsAtRaw === "number"
+          ? new Date(resetsAtRaw * 1000).toISOString()
+          : typeof resetsAtRaw === "string"
+            ? resetsAtRaw
+            : undefined;
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: (status === "rejected" ? "error" : "info") as "error" | "info",
+          kind: "account.rate-limited",
+          summary: status === "rejected" ? "Rate limited" : "Approaching rate limit",
+          payload: {
+            status,
+            ...(resetsAt ? { resetsAt } : {}),
+            ...(typeof rl.utilization === "number" ? { utilization: rl.utilization } : {}),
+          },
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
     default:
       break;
   }

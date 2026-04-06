@@ -14,7 +14,8 @@ import {
 } from "~/lib/icons";
 import { autoAnimate } from "@formkit/auto-animate";
 import { FiGitBranch } from "react-icons/fi";
-import { IoFolderOutline } from "react-icons/io5";
+import { TbFolderPlus } from "react-icons/tb";
+import { IoFilter, IoFolderOutline } from "react-icons/io5";
 import { HiOutlineFolderOpen } from "react-icons/hi2";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import {
@@ -41,6 +42,7 @@ import {
   type GitStatusResult,
   type ResolvedKeybindingsConfig,
 } from "@t3tools/contracts";
+import { resolveThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import {
@@ -270,7 +272,7 @@ function ProjectSortMenu({
             <MenuTrigger className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground" />
           }
         >
-          <ArrowUpDownIcon className="size-3.5" />
+          <IoFilter className="size-3.5" />
         </TooltipTrigger>
         <TooltipPopup side="right">Sort projects</TooltipPopup>
       </Tooltip>
@@ -456,7 +458,11 @@ export default function Sidebar() {
       threads.map((thread) => ({
         threadId: thread.id,
         branch: thread.branch,
-        cwd: thread.worktreePath ?? projectCwdById.get(thread.projectId) ?? null,
+        cwd: resolveThreadWorkspaceCwd({
+          projectCwd: projectCwdById.get(thread.projectId) ?? null,
+          envMode: thread.envMode,
+          worktreePath: thread.worktreePath,
+        }),
       })),
     [projectCwdById, threads],
   );
@@ -899,8 +905,11 @@ export default function Sidebar() {
       const handoffLabel = canHandoff
         ? `Handoff to ${PROVIDER_DISPLAY_NAMES[resolveHandoffTargetProvider(thread.modelSelection.provider)]}`
         : null;
-      const threadWorkspacePath =
-        thread.worktreePath ?? projectCwdById.get(thread.projectId) ?? null;
+      const threadWorkspacePath = resolveThreadWorkspaceCwd({
+        projectCwd: projectCwdById.get(thread.projectId) ?? null,
+        envMode: thread.envMode,
+        worktreePath: thread.worktreePath,
+      });
       const clicked = await api.contextMenu.show(
         [
           { id: "rename", label: "Rename thread" },
@@ -1241,7 +1250,7 @@ export default function Sidebar() {
       isThreadListExpanded,
       previewLimit: THREAD_PREVIEW_LIMIT,
     });
-    const shouldShowThreadPanel = project.expanded || renderedThreads.length > 0;
+    const shouldShowThreadPanel = project.expanded;
     const orderedProjectThreadIds = projectThreads.map((thread) => thread.id);
     const renderThreadRow = (thread: (typeof projectThreads)[number]) => {
       const threadTerminalState = selectThreadTerminalState(terminalStateByThreadId, thread.id);
@@ -1623,6 +1632,14 @@ export default function Sidebar() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
+
+      if ((event.metaKey || event.ctrlKey) && event.key === "o") {
+        event.preventDefault();
+        event.stopPropagation();
+        handleStartAddProject();
+        return;
+      }
+
       const command = resolveShortcutCommand(event, keybindings, {
         context: {
           terminalFocus: isTerminalFocused(),
@@ -1649,7 +1666,7 @@ export default function Sidebar() {
     return () => {
       window.removeEventListener("keydown", onKeyDown, { capture: true });
     };
-  }, [activateThread, keybindings, routeThreadId, terminalOpen, visibleSidebarThreadIds]);
+  }, [activateThread, handleStartAddProject, keybindings, routeThreadId, terminalOpen, visibleSidebarThreadIds]);
 
   useEffect(() => {
     if (!isElectron) return;
@@ -1893,6 +1910,8 @@ export default function Sidebar() {
           </SidebarMenu>
         </SidebarGroup>
 
+        <div className="my-1.5 h-px w-full bg-border" />
+
         <SidebarGroup className="px-1.5 py-1.5">
           <div className="mb-1.5 flex items-center justify-between px-2">
             <span className="text-[13px] font-normal tracking-tight text-muted-foreground/58">
@@ -1921,11 +1940,7 @@ export default function Sidebar() {
                     />
                   }
                 >
-                  <PlusIcon
-                    className={`size-3.5 transition-transform duration-150 ${
-                      shouldShowProjectPathEntry ? "rotate-45" : "rotate-0"
-                    }`}
-                  />
+                  <TbFolderPlus className="size-3.5" />
                 </TooltipTrigger>
                 <TooltipPopup side="right">
                   {shouldShowProjectPathEntry ? "Cancel add project" : "Add project"}
@@ -2006,7 +2021,7 @@ export default function Sidebar() {
               onDragEnd={handleProjectDragEnd}
               onDragCancel={handleProjectDragCancel}
             >
-              <SidebarMenu>
+              <SidebarMenu className="gap-3">
                 <SortableContext
                   items={sortedProjects.map((project) => project.id)}
                   strategy={verticalListSortingStrategy}
@@ -2020,7 +2035,7 @@ export default function Sidebar() {
               </SidebarMenu>
             </DndContext>
           ) : (
-            <SidebarMenu ref={attachProjectListAutoAnimateRef} className="gap-0.5">
+            <SidebarMenu ref={attachProjectListAutoAnimateRef} className="gap-3">
               {sortedProjects.map((project) => (
                 <SidebarMenuItem key={project.id} className="rounded-md">
                   {renderProjectItem(project, null)}

@@ -1,8 +1,12 @@
 import { splitPromptIntoComposerSegments } from "./composer-editor-mentions";
+import {
+  BUILT_IN_COMPOSER_SLASH_COMMANDS,
+  isBuiltInComposerSlashCommand,
+  type ComposerSlashCommand,
+} from "./composerSlashCommands";
 import { INLINE_TERMINAL_CONTEXT_PLACEHOLDER } from "./lib/terminalContext";
 
 export type ComposerTriggerKind = "mention" | "slash-command" | "slash-model" | "skill";
-export type ComposerSlashCommand = "model" | "plan" | "default";
 
 export interface ComposerTrigger {
   kind: ComposerTriggerKind;
@@ -11,7 +15,14 @@ export interface ComposerTrigger {
   rangeEnd: number;
 }
 
-const SLASH_COMMANDS: readonly ComposerSlashCommand[] = ["model", "plan", "default"];
+export function stripComposerTriggerText(text: string, trigger: ComposerTrigger | null): string {
+  if (!trigger) {
+    return text;
+  }
+
+  return `${text.slice(0, trigger.rangeStart)}${text.slice(trigger.rangeEnd)}`;
+}
+
 type ComposerSegmentLike =
   | { type: "text"; text: string }
   | { type: "mention" }
@@ -222,7 +233,11 @@ export function detectComposerTrigger(text: string, cursorInput: number): Compos
           rangeEnd: cursor,
         };
       }
-      if (SLASH_COMMANDS.some((command) => command.startsWith(commandQuery.toLowerCase()))) {
+      if (
+        BUILT_IN_COMPOSER_SLASH_COMMANDS.some((command) =>
+          command.startsWith(commandQuery.toLowerCase()),
+        )
+      ) {
         return {
           kind: "slash-command",
           query: commandQuery,
@@ -230,10 +245,10 @@ export function detectComposerTrigger(text: string, cursorInput: number): Compos
           rangeEnd: cursor,
         };
       }
-      // `/query` that doesn't match a built-in command → treat as skill trigger
-      // so providers with slash-command skills (e.g. Claude) can show suggestions.
+      // Unknown `/query` stays in the slash-command lane so provider-native
+      // commands can be suggested without borrowing the `$skill` flow.
       return {
-        kind: "skill",
+        kind: "slash-command",
         query: commandQuery,
         rangeStart: lineStart,
         rangeEnd: cursor,
@@ -276,13 +291,15 @@ export function detectComposerTrigger(text: string, cursorInput: number): Compos
 export function parseStandaloneComposerSlashCommand(
   text: string,
 ): Exclude<ComposerSlashCommand, "model"> | null {
-  const match = /^\/(plan|default)\s*$/i.exec(text.trim());
+  const match = /^\/([a-z-]+)\s*$/i.exec(text.trim());
   if (!match) {
     return null;
   }
   const command = match[1]?.toLowerCase();
-  if (command === "plan") return "plan";
-  return "default";
+  if (!command || !isBuiltInComposerSlashCommand(command) || command === "model") {
+    return null;
+  }
+  return command;
 }
 
 export function replaceTextRange(

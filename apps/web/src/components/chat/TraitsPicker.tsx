@@ -2,7 +2,6 @@ import {
   type ClaudeModelOptions,
   type CodexModelOptions,
   type ProviderKind,
-  type ProviderModelOptions,
   type ThreadId,
 } from "@t3tools/contracts";
 import {
@@ -14,7 +13,7 @@ import {
   hasEffortLevel,
 } from "@t3tools/shared/model";
 import { memo, useCallback, useState } from "react";
-import { ChevronDownIcon } from "~/lib/icons";
+import { ChevronDownIcon, ZapIcon } from "~/lib/icons";
 import { Button } from "../ui/button";
 import {
   Menu,
@@ -26,8 +25,7 @@ import {
   MenuTrigger,
 } from "../ui/menu";
 import { useComposerDraftStore } from "../../composerDraftStore";
-
-type ProviderOptions = ProviderModelOptions[ProviderKind];
+import { buildNextProviderOptions, type ProviderOptions } from "../../providerModelOptions";
 
 const ULTRATHINK_PROMPT_PREFIX = "Ultrathink:\n";
 
@@ -39,17 +37,6 @@ function getRawEffort(
     return trimOrNull((modelOptions as CodexModelOptions | undefined)?.reasoningEffort);
   }
   return trimOrNull((modelOptions as ClaudeModelOptions | undefined)?.effort);
-}
-
-function buildNextOptions(
-  provider: ProviderKind,
-  modelOptions: ProviderOptions | null | undefined,
-  patch: Record<string, unknown>,
-): ProviderOptions {
-  if (provider === "codex") {
-    return { ...(modelOptions as CodexModelOptions | undefined), ...patch } as CodexModelOptions;
-  }
-  return { ...(modelOptions as ClaudeModelOptions | undefined), ...patch } as ClaudeModelOptions;
 }
 
 function getSelectedTraits(
@@ -146,7 +133,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
       setProviderModelOptions(
         threadId,
         provider,
-        buildNextOptions(provider, modelOptions, { [effortKey]: nextOption.value }),
+        buildNextProviderOptions(provider, modelOptions, { [effortKey]: nextOption.value }),
         { persistSticky: true },
       );
     },
@@ -201,7 +188,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
               setProviderModelOptions(
                 threadId,
                 provider,
-                buildNextOptions(provider, modelOptions, { thinking: value === "on" }),
+                buildNextProviderOptions(provider, modelOptions, { thinking: value === "on" }),
                 { persistSticky: true },
               );
             }}
@@ -222,7 +209,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
                 setProviderModelOptions(
                   threadId,
                   provider,
-                  buildNextOptions(provider, modelOptions, { fastMode: value === "on" }),
+                  buildNextProviderOptions(provider, modelOptions, { fastMode: value === "on" }),
                   { persistSticky: true },
                 );
               }}
@@ -258,18 +245,14 @@ export const TraitsPicker = memo(function TraitsPicker({
   const effortLabel = effort
     ? (effortLevels.find((l) => l.value === effort)?.label ?? effort)
     : null;
-  const triggerLabel = [
-    ultrathinkPromptControlled
-      ? "Ultrathink"
-      : effortLabel
-        ? effortLabel
-        : thinkingEnabled === null
-          ? null
-          : `Thinking ${thinkingEnabled ? "On" : "Off"}`,
-    ...(caps.supportsFastMode && fastModeEnabled ? ["Fast"] : []),
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const primaryTriggerLabel = ultrathinkPromptControlled
+    ? "Ultrathink"
+    : effortLabel
+      ? effortLabel
+      : thinkingEnabled === null
+        ? null
+        : `Thinking ${thinkingEnabled ? "On" : "Off"}`;
+  const showsFastBadge = caps.supportsFastMode && fastModeEnabled;
 
   const isCodexStyle = provider === "codex";
 
@@ -295,12 +278,36 @@ export const TraitsPicker = memo(function TraitsPicker({
       >
         {isCodexStyle ? (
           <span className="flex min-w-0 w-full items-center gap-2 overflow-hidden">
-            {triggerLabel}
+            <span className="min-w-0 flex flex-1 items-center gap-1.5 truncate">
+              {primaryTriggerLabel ? <span className="truncate">{primaryTriggerLabel}</span> : null}
+              {showsFastBadge ? (
+                <>
+                  {primaryTriggerLabel ? (
+                    <span className="shrink-0 text-muted-foreground/45">·</span>
+                  ) : null}
+                  <span className="inline-flex shrink-0 items-center gap-1">
+                    <ZapIcon aria-hidden="true" className="size-3 text-[hsl(var(--chart-4))]" />
+                    <span>Fast</span>
+                  </span>
+                </>
+              ) : null}
+            </span>
             <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 opacity-60" />
           </span>
         ) : (
           <>
-            <span>{triggerLabel}</span>
+            <span className="inline-flex items-center gap-1.5">
+              {primaryTriggerLabel ? <span>{primaryTriggerLabel}</span> : null}
+              {showsFastBadge ? (
+                <>
+                  {primaryTriggerLabel ? <span className="text-muted-foreground/45">·</span> : null}
+                  <span className="inline-flex items-center gap-1">
+                    <ZapIcon aria-hidden="true" className="size-3 text-[hsl(var(--chart-4))]" />
+                    <span>Fast</span>
+                  </span>
+                </>
+              ) : null}
+            </span>
             <ChevronDownIcon aria-hidden="true" className="size-3 opacity-60" />
           </>
         )}

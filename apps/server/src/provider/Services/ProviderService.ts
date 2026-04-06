@@ -12,12 +12,15 @@
  * @module ProviderService
  */
 import type {
+  ProviderForkThreadInput,
+  ProviderForkThreadResult,
   ProviderInterruptTurnInput,
   ProviderKind,
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
   ProviderRuntimeEvent,
   ProviderSendTurnInput,
+  ProviderStartReviewInput,
   ProviderSession,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
@@ -48,6 +51,23 @@ export interface ProviderServiceShape {
   readonly sendTurn: (
     input: ProviderSendTurnInput,
   ) => Effect.Effect<ProviderTurnStartResult, ProviderServiceError>;
+
+  /**
+   * Start a native provider review run when supported by the routed adapter.
+   */
+  readonly startReview: (
+    input: ProviderStartReviewInput,
+  ) => Effect.Effect<ProviderTurnStartResult, ProviderServiceError>;
+
+  /**
+   * Fork a provider thread natively when the underlying adapter supports it.
+   *
+   * Returns a persisted provider-native fork binding when available, otherwise
+   * `null` so callers can fall back to orchestration-only history.
+   */
+  readonly forkThread?: (
+    input: ProviderForkThreadInput,
+  ) => Effect.Effect<ProviderForkThreadResult | null, ProviderServiceError>;
 
   /**
    * Interrupt a running provider turn.

@@ -8,9 +8,12 @@ export function resolveEffectiveEnvMode(input: {
   activeWorktreePath: string | null;
   hasServerThread: boolean;
   draftThreadEnvMode: EnvMode | undefined;
+  serverThreadEnvMode?: EnvMode | undefined;
 }): EnvMode {
-  const { activeWorktreePath, hasServerThread, draftThreadEnvMode } = input;
-  return activeWorktreePath || (!hasServerThread && draftThreadEnvMode === "worktree")
+  const { activeWorktreePath, hasServerThread, draftThreadEnvMode, serverThreadEnvMode } = input;
+  return activeWorktreePath ||
+    serverThreadEnvMode === "worktree" ||
+    (!hasServerThread && draftThreadEnvMode === "worktree")
     ? "worktree"
     : "local";
 }

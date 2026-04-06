@@ -1,0 +1,134 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  buildReviewPrompt,
+  buildSubagentsPrompt,
+  canOfferForkSlashCommand,
+  canOfferReviewSlashCommand,
+  filterComposerSlashCommands,
+  isBuiltInComposerSlashCommand,
+  parseComposerSlashInvocation,
+  parseFastSlashCommandAction,
+  parseForkSlashCommandArgs,
+} from "./composerSlashCommands";
+
+describe("composerSlashCommands", () => {
+  it("recognizes built-in slash commands", () => {
+    expect(isBuiltInComposerSlashCommand("review")).toBe(true);
+    expect(isBuiltInComposerSlashCommand("fast")).toBe(true);
+    expect(isBuiltInComposerSlashCommand("unknown")).toBe(false);
+  });
+
+  it("filters slash commands by query", () => {
+    expect(filterComposerSlashCommands("rev").map((entry) => entry.command)).toEqual(["review"]);
+    expect(filterComposerSlashCommands("fast").map((entry) => entry.command)).toEqual(["fast"]);
+  });
+
+  it("parses slash invocations with optional arguments", () => {
+    expect(parseComposerSlashInvocation("/review current diff")).toEqual({
+      command: "review",
+      args: "current diff",
+    });
+    expect(parseComposerSlashInvocation("/fast")).toEqual({
+      command: "fast",
+      args: "",
+    });
+    expect(parseComposerSlashInvocation("review")).toBeNull();
+  });
+
+  it("parses /fast actions", () => {
+    expect(parseFastSlashCommandAction("/fast")).toBe("toggle");
+    expect(parseFastSlashCommandAction("/fast on")).toBe("on");
+    expect(parseFastSlashCommandAction("/fast off")).toBe("off");
+    expect(parseFastSlashCommandAction("/fast status")).toBe("status");
+    expect(parseFastSlashCommandAction("/fast maybe")).toBe("invalid");
+    expect(parseFastSlashCommandAction("/review")).toBeNull();
+  });
+
+  it("parses /fork target shorthand only", () => {
+    expect(parseForkSlashCommandArgs("")).toEqual({
+      target: null,
+      invalid: false,
+    });
+    expect(parseForkSlashCommandArgs("local")).toEqual({
+      target: "local",
+      invalid: false,
+    });
+    expect(parseForkSlashCommandArgs("  worktree  ")).toEqual({
+      target: "worktree",
+      invalid: false,
+    });
+    expect(parseForkSlashCommandArgs("follow up on the bug")).toEqual({
+      target: null,
+      invalid: true,
+    });
+    expect(parseForkSlashCommandArgs("local continue here")).toEqual({
+      target: null,
+      invalid: true,
+    });
+  });
+
+  it("only offers /fork for an otherwise empty default composer", () => {
+    expect(
+      canOfferForkSlashCommand({
+        prompt: "",
+        imageCount: 0,
+        terminalContextCount: 0,
+        selectedSkillCount: 0,
+        selectedMentionCount: 0,
+        interactionMode: "default",
+      }),
+    ).toBe(true);
+
+    expect(
+      canOfferForkSlashCommand({
+        prompt: "hello",
+        imageCount: 0,
+        terminalContextCount: 0,
+        selectedSkillCount: 0,
+        selectedMentionCount: 0,
+        interactionMode: "default",
+      }),
+    ).toBe(false);
+
+    expect(
+      canOfferForkSlashCommand({
+        prompt: "",
+        imageCount: 0,
+        terminalContextCount: 0,
+        selectedSkillCount: 0,
+        selectedMentionCount: 0,
+        interactionMode: "plan",
+      }),
+    ).toBe(false);
+  });
+
+  it("only offers /review for an otherwise empty composer", () => {
+    expect(
+      canOfferReviewSlashCommand({
+        prompt: "",
+        imageCount: 0,
+        terminalContextCount: 0,
+        selectedSkillCount: 0,
+        selectedMentionCount: 0,
+      }),
+    ).toBe(true);
+
+    expect(
+      canOfferReviewSlashCommand({
+        prompt: "",
+        imageCount: 1,
+        terminalContextCount: 0,
+        selectedSkillCount: 0,
+        selectedMentionCount: 0,
+      }),
+    ).toBe(false);
+  });
+
+  it("builds slash-command canned prompts", () => {
+    expect(buildSubagentsPrompt("")).toContain("Run subagents");
+    expect(buildSubagentsPrompt("Already there")).toContain("Already there\n\nRun subagents");
+    expect(buildReviewPrompt({ target: "changes" })).toContain("uncommitted changes");
+    expect(buildReviewPrompt({ target: "base-branch" })).toContain("base branch");
+  });
+});

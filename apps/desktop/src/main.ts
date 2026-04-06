@@ -776,12 +776,8 @@ function configureAppIdentity(): void {
     app.setAppUserModelId(APP_USER_MODEL_ID);
   }
 
-  if (process.platform === "darwin" && app.dock) {
-    const iconPath = resolveIconPath("png");
-    if (iconPath) {
-      app.dock.setIcon(iconPath);
-    }
-  }
+  // On macOS the dock icon comes from the .icns in the app bundle;
+  // calling dock.setIcon() with a raw PNG bypasses the OS rounded mask.
 }
 
 function clearUpdatePollTimer(): void {

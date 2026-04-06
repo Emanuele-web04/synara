@@ -42,7 +42,7 @@ export function hasNativeHandoffMessages(thread: Pick<OrchestrationThread, "mess
   return thread.messages.some(
     (message) =>
       (message.role === "user" || message.role === "assistant") &&
-      message.source !== "handoff-import" &&
+      message.source === "native" &&
       message.streaming === false,
   );
 }
@@ -58,7 +58,7 @@ export function hasNativeAssistantMessagesBefore(
   return thread.messages.slice(0, currentIndex).some((message) => {
     return (
       message.role === "assistant" &&
-      message.source !== "handoff-import" &&
+      message.source === "native" &&
       message.streaming === false
     );
   });

@@ -3,7 +3,12 @@
 // Layer: Web lib
 // Exports: cwd resolution, search normalization, and provider skill/plugin display helpers.
 
-import type { ProviderPluginDescriptor, ProviderSkillDescriptor } from "@t3tools/contracts";
+import { resolveThreadBranchSourceCwd } from "@t3tools/shared/threadEnvironment";
+import type {
+  ProviderNativeCommandDescriptor,
+  ProviderPluginDescriptor,
+  ProviderSkillDescriptor,
+} from "@t3tools/contracts";
 
 // Prefer the most specific workspace context so discovery reflects the active thread first.
 export function resolveProviderDiscoveryCwd(options: {
@@ -11,7 +16,12 @@ export function resolveProviderDiscoveryCwd(options: {
   activeProjectCwd: string | null;
   serverCwd: string | null;
 }): string | null {
-  return options.activeThreadWorktreePath ?? options.activeProjectCwd ?? options.serverCwd;
+  return (
+    resolveThreadBranchSourceCwd({
+      projectCwd: options.activeProjectCwd,
+      worktreePath: options.activeThreadWorktreePath,
+    }) ?? options.serverCwd
+  );
 }
 
 export function normalizeProviderDiscoveryText(value: string | undefined): string {
@@ -47,6 +57,12 @@ export function buildPluginSearchBlob(
       .filter((value) => typeof value === "string" && value.trim().length > 0)
       .join("\n"),
   );
+}
+
+export function buildCommandSearchBlob(
+  command: Pick<ProviderNativeCommandDescriptor, "name" | "description">,
+): string {
+  return normalizeProviderDiscoveryText([command.name, command.description].filter(Boolean).join("\n"));
 }
 
 export function formatSkillScope(scope: string | undefined): string {

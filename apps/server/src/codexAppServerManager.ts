@@ -14,10 +14,13 @@ import {
   type ProviderPluginAppSummary,
   type ProviderPluginDescriptor,
   type ProviderPluginDetail,
+  type ProviderForkThreadInput,
   type ProviderReadPluginResult,
+  type ProviderForkThreadResult,
   type ProviderListSkillsResult,
   type ProviderListPluginsInput,
   type ProviderReadPluginInput,
+  type ProviderStartReviewInput,
   type ProviderSkillDescriptor,
   type ProviderSkillReference,
   ProviderRequestKind,
@@ -162,6 +165,8 @@ export interface CodexAppServerSendTurnInput {
   readonly effort?: string;
   readonly interactionMode?: ProviderInteractionMode;
 }
+
+type CodexAppServerReviewTarget = ProviderStartReviewInput["target"];
 
 export interface CodexAppServerStartSessionInput {
   readonly threadId: ThreadId;
@@ -901,6 +906,47 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     };
   }
 
+  async startReview(input: ProviderStartReviewInput): Promise<ProviderTurnStartResult> {
+    const context = this.requireSession(input.threadId);
+    const providerThreadId = readResumeThreadId({
+      threadId: context.session.threadId,
+      runtimeMode: context.session.runtimeMode,
+      resumeCursor: context.session.resumeCursor,
+    });
+    if (!providerThreadId) {
+      throw new Error("Session is missing a provider resume thread id.");
+    }
+
+    const response = await this.sendRequest(context, "review/start", {
+      threadId: providerThreadId,
+      delivery: "inline",
+      target: this.toCodexReviewTarget(input.target),
+    });
+
+    const turn = this.readObject(this.readObject(response), "turn");
+    const turnIdRaw = this.readString(turn, "id");
+    if (!turnIdRaw) {
+      throw new Error("review/start response did not include a turn id.");
+    }
+    const turnId = TurnId.makeUnsafe(turnIdRaw);
+
+    this.updateSession(context, {
+      status: "running",
+      activeTurnId: turnId,
+      ...(context.session.resumeCursor !== undefined
+        ? { resumeCursor: context.session.resumeCursor }
+        : {}),
+    });
+
+    return {
+      threadId: context.session.threadId,
+      turnId,
+      ...(context.session.resumeCursor !== undefined
+        ? { resumeCursor: context.session.resumeCursor }
+        : {}),
+    };
+  }
+
   async interruptTurn(threadId: ThreadId, turnId?: TurnId): Promise<void> {
     const context = this.requireSession(threadId);
     const effectiveTurnId = turnId ?? context.session.activeTurnId;
@@ -936,6 +982,138 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       includeTurns: true,
     });
     return this.parseThreadSnapshot("thread/read", response);
+  }
+
+  async forkThread(input: ProviderForkThreadInput): Promise<ProviderForkThreadResult> {
+    const threadId = input.threadId;
+    const now = new Date().toISOString();
+    let context: CodexSessionContext | undefined;
+
+    try {
+      const sourceProviderThreadId = readResumeCursorThreadId(input.sourceResumeCursor);
+      if (!sourceProviderThreadId) {
+        throw new Error("Provider fork is missing the source thread resume id.");
+      }
+
+      const resolvedCwd = input.cwd ?? process.cwd();
+      const session: ProviderSession = {
+        provider: "codex",
+        status: "connecting",
+        runtimeMode: input.runtimeMode,
+        model:
+          input.modelSelection?.provider === "codex"
+            ? normalizeCodexModelSlug(input.modelSelection.model)
+            : undefined,
+        cwd: resolvedCwd,
+        threadId,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      const codexOptions = readCodexProviderOptions({
+        threadId,
+        ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
+        runtimeMode: input.runtimeMode,
+        ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+      });
+      const codexBinaryPath = codexOptions.binaryPath ?? "codex";
+      const codexHomePath = codexOptions.homePath;
+      this.assertSupportedCodexCliVersion({
+        binaryPath: codexBinaryPath,
+        cwd: resolvedCwd,
+        ...(codexHomePath ? { homePath: codexHomePath } : {}),
+      });
+      const child = spawn(codexBinaryPath, ["app-server"], {
+        cwd: resolvedCwd,
+        env: {
+          ...process.env,
+          ...(codexHomePath ? { CODEX_HOME: codexHomePath } : {}),
+        },
+        stdio: ["pipe", "pipe", "pipe"],
+        shell: process.platform === "win32",
+      });
+      const output = readline.createInterface({ input: child.stdout });
+
+      context = {
+        session,
+        account: {
+          type: "unknown",
+          planType: null,
+          sparkEnabled: true,
+        },
+        child,
+        output,
+        pending: new Map(),
+        pendingApprovals: new Map(),
+        pendingUserInputs: new Map(),
+        collabReceiverTurns: new Map(),
+        nextRequestId: 1,
+        stopping: false,
+      };
+
+      this.sessions.set(threadId, context);
+      this.attachProcessListeners(context);
+      this.emitLifecycleEvent(context, "session/connecting", "Starting codex app-server");
+
+      await this.sendRequest(context, "initialize", buildCodexInitializeParams());
+      this.writeMessage(context, { method: "initialized" });
+      try {
+        const accountReadResponse = await this.sendRequest(context, "account/read", {});
+        context.account = readCodexAccountSnapshot(accountReadResponse);
+      } catch {
+        // Fork can proceed without account metadata; model fallback will stay best-effort.
+      }
+
+      const normalizedModel =
+        input.modelSelection?.provider === "codex"
+          ? resolveCodexModelForAccount(
+              normalizeCodexModelSlug(input.modelSelection.model),
+              context.account,
+            )
+          : undefined;
+      const forkParams = {
+        threadId: sourceProviderThreadId,
+        ...(normalizedModel ? { model: normalizedModel } : {}),
+        ...(input.modelSelection?.provider === "codex" && input.modelSelection.options?.fastMode
+          ? { serviceTier: "fast" as const }
+          : {}),
+        ...(input.cwd ? { cwd: input.cwd } : {}),
+        ...mapCodexRuntimeMode(input.runtimeMode),
+      };
+
+      this.emitLifecycleEvent(
+        context,
+        "session/threadOpenRequested",
+        `Forking Codex thread ${sourceProviderThreadId}.`,
+      );
+      const response = await this.sendRequest(context, "thread/fork", forkParams);
+      const forkedProviderThreadId = this.readThreadIdFromResponse("thread/fork", response);
+
+      this.updateSession(context, {
+        status: "ready",
+        resumeCursor: { threadId: forkedProviderThreadId },
+      });
+      this.emitLifecycleEvent(context, "session/threadOpenResolved", "Codex thread/fork resolved.");
+      this.emitLifecycleEvent(context, "session/ready", `Connected to thread ${forkedProviderThreadId}`);
+
+      return {
+        threadId,
+        resumeCursor: {
+          threadId: forkedProviderThreadId,
+        },
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to fork Codex thread.";
+      if (context) {
+        this.updateSession(context, {
+          status: "error",
+          lastError: message,
+        });
+        this.emitErrorEvent(context, "session/threadForkFailed", message);
+        this.stopSession(threadId);
+      }
+      throw new Error(message, { cause: error });
+    }
   }
 
   async rollbackThread(threadId: ThreadId, numTurns: number): Promise<CodexThreadSnapshot> {
@@ -1216,6 +1394,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       provider: "codex",
       supportsSkillMentions: true,
       supportsSkillDiscovery: true,
+      supportsNativeSlashCommandDiscovery: false,
       supportsPluginMentions: true,
       supportsPluginDiscovery: true,
       supportsRuntimeModelList: true,
@@ -1715,14 +1894,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   private parseThreadSnapshot(method: string, response: unknown): CodexThreadSnapshot {
     const responseRecord = this.readObject(response);
-    const thread = this.readObject(responseRecord, "thread");
-    const threadIdRaw =
-      this.readString(thread, "id") ?? this.readString(responseRecord, "threadId");
-    if (!threadIdRaw) {
-      throw new Error(`${method} response did not include a thread id.`);
-    }
+    const threadIdRaw = this.readThreadIdFromResponse(method, responseRecord);
     const turnsRaw =
-      this.readArray(thread, "turns") ?? this.readArray(responseRecord, "turns") ?? [];
+      this.readArray(this.readObject(responseRecord, "thread"), "turns") ??
+      this.readArray(responseRecord, "turns") ??
+      [];
     const turns = turnsRaw.map((turnValue, index) => {
       const turn = this.readObject(turnValue);
       const turnIdRaw = this.readString(turn, "id") ?? `${threadIdRaw}:turn:${index + 1}`;
@@ -1738,6 +1914,31 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       threadId: threadIdRaw,
       turns,
     };
+  }
+
+  private toCodexReviewTarget(target: CodexAppServerReviewTarget): Record<string, unknown> {
+    switch (target.type) {
+      case "uncommittedChanges":
+        return {
+          type: "uncommittedChanges",
+        };
+      case "baseBranch":
+        return {
+          type: "baseBranch",
+          branch: target.branch,
+        };
+    }
+  }
+
+  private readThreadIdFromResponse(method: string, response: unknown): string {
+    const responseRecord = this.readObject(response);
+    const thread = this.readObject(responseRecord, "thread");
+    const threadIdRaw =
+      this.readString(thread, "id") ?? this.readString(responseRecord, "threadId");
+    if (!threadIdRaw) {
+      throw new Error(`${method} response did not include a thread id.`);
+    }
+    return threadIdRaw;
   }
 
   private isServerRequest(value: unknown): value is JsonRpcRequest {

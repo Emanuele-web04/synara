@@ -110,7 +110,7 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(resolvedConfig?.noBrowser, true);
       assert.equal(resolvedConfig?.authToken, "auth-secret");
       assert.equal(resolvedConfig?.autoBootstrapProjectFromCwd, false);
-      assert.equal(resolvedConfig?.logWebSocketEvents, true);
+      assert.equal(resolvedConfig?.logWebSocketEvents, false);
       assert.equal(stop.mock.calls.length, 1);
     }),
   );
@@ -146,7 +146,7 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(resolvedConfig?.noBrowser, true);
       assert.equal(resolvedConfig?.authToken, "env-token");
       assert.equal(resolvedConfig?.autoBootstrapProjectFromCwd, false);
-      assert.equal(resolvedConfig?.logWebSocketEvents, true);
+      assert.equal(resolvedConfig?.logWebSocketEvents, false);
       assert.equal(findAvailablePort.mock.calls.length, 0);
     }),
   );

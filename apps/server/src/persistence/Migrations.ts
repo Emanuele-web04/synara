@@ -31,6 +31,8 @@ import Migration0015 from "./Migrations/015_ProjectionTurnsSourceProposedPlan.ts
 import Migration0016 from "./Migrations/016_CanonicalizeModelSelections.ts";
 import Migration0017 from "./Migrations/017_ThreadHandoffMetadata.ts";
 import Migration0018 from "./Migrations/018_ProjectionThreadMessageMentions.ts";
+import Migration0019 from "./Migrations/019_ProjectionThreadsEnvMode.ts";
+import Migration0020 from "./Migrations/020_ProjectionThreadsForkSource.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -61,6 +63,8 @@ export const migrationEntries = [
   [16, "CanonicalizeModelSelections", Migration0016],
   [17, "ThreadHandoffMetadata", Migration0017],
   [18, "ProjectionThreadMessageMentions", Migration0018],
+  [19, "ProjectionThreadsEnvMode", Migration0019],
+  [20, "ProjectionThreadsForkSource", Migration0020],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

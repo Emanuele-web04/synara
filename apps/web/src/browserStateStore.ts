@@ -11,6 +11,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
 
 const BROWSER_STATE_STORAGE_KEY = "t3code:browser-state:v1";
 const BROWSER_HISTORY_LIMIT = 12;
+const EMPTY_BROWSER_HISTORY: BrowserHistoryEntry[] = [];
 
 export interface BrowserHistoryEntry {
   url: string;
@@ -112,5 +113,5 @@ export function selectThreadBrowserState(
 export function selectThreadBrowserHistory(
   threadId: ThreadId,
 ): (store: BrowserStateStore) => BrowserHistoryEntry[] {
-  return (store) => store.recentHistoryByThreadId[threadId] ?? [];
+  return (store) => store.recentHistoryByThreadId[threadId] ?? EMPTY_BROWSER_HISTORY;
 }

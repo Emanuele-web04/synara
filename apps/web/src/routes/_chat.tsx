@@ -6,6 +6,7 @@ import { useEffect } from "react";
 import ThreadSidebar from "../components/Sidebar";
 import { isElectron } from "../env";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { resolveThreadEnvironmentMode } from "../lib/threadEnvironment";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { resolveShortcutCommand } from "../keybindings";
@@ -86,7 +87,11 @@ function ChatRouteGlobalShortcuts() {
           branch: activeThread?.branch ?? activeDraftThread?.branch ?? null,
           worktreePath: activeThread?.worktreePath ?? activeDraftThread?.worktreePath ?? null,
           envMode:
-            activeDraftThread?.envMode ?? (activeThread?.worktreePath ? "worktree" : "local"),
+            activeDraftThread?.envMode ??
+            resolveThreadEnvironmentMode({
+              envMode: activeThread?.envMode,
+              worktreePath: activeThread?.worktreePath ?? null,
+            }),
           entryPoint: "terminal",
         });
         return;
@@ -100,7 +105,12 @@ function ChatRouteGlobalShortcuts() {
       void handleNewThread(projectId, {
         branch: activeThread?.branch ?? activeDraftThread?.branch ?? null,
         worktreePath: activeThread?.worktreePath ?? activeDraftThread?.worktreePath ?? null,
-        envMode: activeDraftThread?.envMode ?? (activeThread?.worktreePath ? "worktree" : "local"),
+        envMode:
+          activeDraftThread?.envMode ??
+          resolveThreadEnvironmentMode({
+            envMode: activeThread?.envMode,
+            worktreePath: activeThread?.worktreePath ?? null,
+          }),
       });
     };
 

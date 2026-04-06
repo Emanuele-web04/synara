@@ -13,6 +13,8 @@ import {
   resolveEffectiveEnvMode,
 } from "./BranchToolbar.logic";
 import { BranchToolbarBranchSelector } from "./BranchToolbarBranchSelector";
+import { ContextWindowMeter } from "./chat/ContextWindowMeter";
+import type { ContextWindowSnapshot } from "../lib/contextWindow";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./ui/select";
 
 const envModeItems = [
@@ -28,6 +30,8 @@ interface BranchToolbarProps {
   onRuntimeModeChange?: (mode: RuntimeMode) => void;
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
+  contextWindow?: ContextWindowSnapshot | null;
+  cumulativeCostUsd?: number | null;
 }
 
 export default function BranchToolbar({
@@ -38,6 +42,8 @@ export default function BranchToolbar({
   onRuntimeModeChange,
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
+  contextWindow,
+  cumulativeCostUsd,
 }: BranchToolbarProps) {
   const threads = useStore((store) => store.threads);
   const projects = useStore((store) => store.projects);
@@ -57,6 +63,7 @@ export default function BranchToolbar({
     activeWorktreePath,
     hasServerThread,
     draftThreadEnvMode: draftThread?.envMode,
+    serverThreadEnvMode: serverThread?.envMode,
   });
 
   const setThreadBranch = useCallback(
@@ -80,6 +87,7 @@ export default function BranchToolbar({
           type: "thread.meta.update",
           commandId: newCommandId(),
           threadId: activeThreadId,
+          envMode: worktreePath ? "worktree" : effectiveEnvMode,
           branch,
           worktreePath,
         });
@@ -118,7 +126,7 @@ export default function BranchToolbar({
       <div className="flex items-center gap-2">
         {envLocked || activeWorktreePath ? (
           <span className="inline-flex items-center gap-1 border border-transparent px-[calc(--spacing(3)-1px)] text-xs font-normal text-muted-foreground/70">
-            {activeWorktreePath ? (
+            {effectiveEnvMode === "worktree" ? (
               <>
                 <GitForkIcon className="size-3" />
                 Worktree
@@ -186,17 +194,25 @@ export default function BranchToolbar({
         ) : null}
       </div>
 
-      <BranchToolbarBranchSelector
-        activeProjectCwd={activeProject.cwd}
-        activeThreadBranch={activeThreadBranch}
-        activeWorktreePath={activeWorktreePath}
-        branchCwd={branchCwd}
-        effectiveEnvMode={effectiveEnvMode}
-        envLocked={envLocked}
-        onSetThreadBranch={setThreadBranch}
-        {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}
-        {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}
-      />
+      <div className="flex items-center gap-2">
+        <BranchToolbarBranchSelector
+          activeProjectCwd={activeProject.cwd}
+          activeThreadBranch={activeThreadBranch}
+          activeWorktreePath={activeWorktreePath}
+          branchCwd={branchCwd}
+          effectiveEnvMode={effectiveEnvMode}
+          envLocked={envLocked}
+          onSetThreadBranch={setThreadBranch}
+          {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}
+          {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}
+        />
+        {contextWindow ? (
+          <ContextWindowMeter
+            usage={contextWindow}
+            {...(cumulativeCostUsd != null ? { cumulativeCostUsd } : {})}
+          />
+        ) : null}
+      </div>
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import {
   type ProviderComposerCapabilities,
   ProviderGetComposerCapabilitiesInput,
+  ProviderListCommandsInput,
   ProviderListModelsInput,
   ProviderListPluginsInput,
   ProviderListSkillsInput,
@@ -37,6 +38,7 @@ const disabledCapabilitiesForProvider = (
   provider,
   supportsSkillMentions: false,
   supportsSkillDiscovery: false,
+  supportsNativeSlashCommandDiscovery: false,
   supportsPluginMentions: false,
   supportsPluginDiscovery: false,
   supportsRuntimeModelList: false,
@@ -77,6 +79,24 @@ const make = Effect.gen(function* () {
         };
       }
       return yield* adapter.listSkills(parsed);
+    });
+
+  const listCommands: ProviderDiscoveryServiceShape["listCommands"] = (input) =>
+    Effect.gen(function* () {
+      const parsed = yield* decodeInputOrValidationError({
+        operation: "ProviderDiscoveryService.listCommands",
+        schema: ProviderListCommandsInput,
+        payload: input,
+      });
+      const adapter = yield* registry.getByProvider(parsed.provider);
+      if (!adapter.listCommands) {
+        return {
+          commands: [],
+          source: "unsupported",
+          cached: false,
+        };
+      }
+      return yield* adapter.listCommands(parsed);
     });
 
   const listPlugins: ProviderDiscoveryServiceShape["listPlugins"] = (input) =>
@@ -137,6 +157,7 @@ const make = Effect.gen(function* () {
 
   return {
     getComposerCapabilities,
+    listCommands,
     listSkills,
     listPlugins,
     readPlugin,

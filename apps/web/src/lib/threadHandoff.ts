@@ -9,6 +9,14 @@ import {
 import { type Thread } from "../types";
 import { randomUUID } from "./utils";
 
+function isImportableThreadMessage(
+  message: Thread["messages"][number],
+): message is Thread["messages"][number] & {
+  role: "user" | "assistant";
+} {
+  return (message.role === "user" || message.role === "assistant") && message.streaming === false;
+}
+
 export function resolveHandoffTargetProvider(sourceProvider: ProviderKind): ProviderKind {
   return sourceProvider === "claudeAgent" ? "codex" : "claudeAgent";
 }
@@ -24,13 +32,7 @@ export function buildThreadHandoffImportedMessages(
   thread: Pick<Thread, "messages">,
 ): ReadonlyArray<ThreadHandoffImportedMessage> {
   return thread.messages
-    .filter(
-      (
-        message,
-      ): message is Thread["messages"][number] & {
-        role: "user" | "assistant";
-      } => (message.role === "user" || message.role === "assistant") && message.streaming === false,
-    )
+    .filter(isImportableThreadMessage)
     .map((message) => {
       const importedMessage: ThreadHandoffImportedMessage = {
         messageId: MessageId.makeUnsafe(randomUUID()),
@@ -53,12 +55,15 @@ export function buildThreadHandoffImportedMessages(
     });
 }
 
+// Used by: ChatView fork command gating.
+export function hasTransferableThreadMessages(thread: Pick<Thread, "messages">): boolean {
+  return thread.messages.some(isImportableThreadMessage);
+}
+
 export function hasNativeThreadHandoffMessages(thread: Pick<Thread, "messages">): boolean {
   return thread.messages.some(
     (message) =>
-      (message.role === "user" || message.role === "assistant") &&
-      message.source !== "handoff-import" &&
-      message.streaming === false,
+      isImportableThreadMessage(message) && message.source === "native",
   );
 }
 

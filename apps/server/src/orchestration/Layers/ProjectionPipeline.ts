@@ -423,8 +423,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             modelSelection: event.payload.modelSelection,
             runtimeMode: event.payload.runtimeMode,
             interactionMode: event.payload.interactionMode,
+            envMode: event.payload.envMode,
             branch: event.payload.branch,
             worktreePath: event.payload.worktreePath,
+            forkSourceThreadId: event.payload.forkSourceThreadId,
             latestTurnId: null,
             handoff: event.payload.handoff,
             createdAt: event.payload.createdAt,
@@ -446,6 +448,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             ...(event.payload.modelSelection !== undefined
               ? { modelSelection: event.payload.modelSelection }
               : {}),
+            ...(event.payload.envMode !== undefined ? { envMode: event.payload.envMode } : {}),
             ...(event.payload.branch !== undefined ? { branch: event.payload.branch } : {}),
             ...(event.payload.worktreePath !== undefined
               ? { worktreePath: event.payload.worktreePath }

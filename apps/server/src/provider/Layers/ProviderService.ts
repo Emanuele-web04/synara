@@ -10,6 +10,7 @@
  * @module ProviderServiceLive
  */
 import {
+  ProviderForkThreadInput,
   ModelSelection,
   NonNegativeInt,
   ThreadId,
@@ -17,6 +18,7 @@ import {
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
   ProviderSendTurnInput,
+  ProviderStartReviewInput,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
   type ProviderRuntimeEvent,
@@ -344,6 +346,106 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         return session;
       });
 
+    const forkThread: ProviderServiceShape["forkThread"] = (rawInput) =>
+      Effect.gen(function* () {
+        const input = yield* decodeInputOrValidationError({
+          operation: "ProviderService.forkThread",
+          schema: ProviderForkThreadInput,
+          payload: rawInput,
+        });
+
+        const sourceBinding = Option.getOrUndefined(
+          yield* directory.getBinding(input.sourceThreadId),
+        );
+        if (!sourceBinding) {
+          return null;
+        }
+
+        const existingTargetBinding = Option.getOrUndefined(
+          yield* directory.getBinding(input.threadId),
+        );
+        if (existingTargetBinding) {
+          return null;
+        }
+
+        const effectiveProviderOptions =
+          input.providerOptions ?? readPersistedProviderOptions(sourceBinding.runtimePayload);
+
+        const adapter = yield* registry.getByProvider(sourceBinding.provider);
+        if (!adapter.forkThread) {
+          return null;
+        }
+
+        if (
+          input.modelSelection !== undefined &&
+          input.modelSelection.provider !== adapter.provider
+        ) {
+          return null;
+        }
+
+        const forked = yield* adapter.forkThread({
+          ...input,
+          threadId: input.threadId,
+          sourceThreadId: input.sourceThreadId,
+          ...(effectiveProviderOptions !== undefined
+            ? { providerOptions: effectiveProviderOptions }
+            : {}),
+          ...(sourceBinding.resumeCursor !== null && sourceBinding.resumeCursor !== undefined
+            ? { sourceResumeCursor: sourceBinding.resumeCursor }
+            : {}),
+          runtimeMode: input.runtimeMode,
+        }).pipe(
+          Effect.catchAll((error) =>
+            Effect.logWarning("provider native fork failed; falling back", {
+              sourceThreadId: input.sourceThreadId,
+              targetThreadId: input.threadId,
+              cause: error instanceof Error ? error.message : String(error),
+            }).pipe(Effect.as(null)),
+          ),
+        );
+        if (!forked) {
+          return null;
+        }
+
+        const forkedSession = (yield* adapter.listSessions()).find(
+          (session) => session.threadId === input.threadId,
+        );
+        if (forkedSession) {
+          yield* upsertSessionBinding(forkedSession, input.threadId, {
+            ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
+            ...(effectiveProviderOptions !== undefined
+              ? { providerOptions: effectiveProviderOptions }
+              : {}),
+            lastRuntimeEvent: "provider.thread.forked",
+            lastRuntimeEventAt: new Date().toISOString(),
+          });
+        } else {
+          yield* directory.upsert({
+            threadId: input.threadId,
+            provider: adapter.provider,
+            runtimeMode: input.runtimeMode,
+            status: "stopped",
+            ...(forked.resumeCursor !== undefined ? { resumeCursor: forked.resumeCursor } : {}),
+            runtimePayload: {
+              cwd: input.cwd ?? null,
+              model: input.modelSelection?.model ?? null,
+              activeTurnId: null,
+              lastError: null,
+              ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
+              ...(effectiveProviderOptions !== undefined
+                ? { providerOptions: effectiveProviderOptions }
+                : {}),
+              lastRuntimeEvent: "provider.thread.forked",
+              lastRuntimeEventAt: new Date().toISOString(),
+            },
+          });
+        }
+        yield* analytics.record("provider.thread.forked", {
+          provider: adapter.provider,
+        });
+        return forked;
+      });
+
     const sendTurn: ProviderServiceShape["sendTurn"] = (rawInput) =>
       Effect.gen(function* () {
         const parsed = yield* decodeInputOrValidationError({
@@ -386,6 +488,45 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           interactionMode: input.interactionMode,
           attachmentCount: input.attachments.length,
           hasInput: typeof input.input === "string" && input.input.trim().length > 0,
+        });
+        return turn;
+      });
+
+    const startReview: ProviderServiceShape["startReview"] = (rawInput) =>
+      Effect.gen(function* () {
+        const input = yield* decodeInputOrValidationError({
+          operation: "ProviderService.startReview",
+          schema: ProviderStartReviewInput,
+          payload: rawInput,
+        });
+
+        const routed = yield* resolveRoutableSession({
+          threadId: input.threadId,
+          operation: "ProviderService.startReview",
+          allowRecovery: true,
+        });
+        if (!routed.adapter.startReview) {
+          return yield* toValidationError(
+            "ProviderService.startReview",
+            `Provider '${routed.adapter.provider}' does not support native review.`,
+          );
+        }
+
+        const turn = yield* routed.adapter.startReview(input);
+        yield* directory.upsert({
+          threadId: input.threadId,
+          provider: routed.adapter.provider,
+          status: "running",
+          ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
+          runtimePayload: {
+            activeTurnId: turn.turnId,
+            lastRuntimeEvent: "provider.startReview",
+            lastRuntimeEventAt: new Date().toISOString(),
+          },
+        });
+        yield* analytics.record("provider.review.started", {
+          provider: routed.adapter.provider,
+          target: input.target.type,
         });
         return turn;
       });
@@ -580,7 +721,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
     return {
       startSession,
+      forkThread,
       sendTurn,
+      startReview,
       interruptTurn,
       respondToRequest,
       respondToUserInput,

@@ -73,6 +73,30 @@ export function deriveLatestContextWindowSnapshot(
   return null;
 }
 
+export function deriveCumulativeCostUsd(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): number | null {
+  let total = 0;
+  let found = false;
+  for (const activity of activities) {
+    if (activity.kind !== "turn.completed") continue;
+    const payload = asRecord(activity.payload);
+    const cost = asFiniteNumber(payload?.totalCostUsd);
+    if (cost === null) continue;
+    total += cost;
+    found = true;
+  }
+  return found ? total : null;
+}
+
+export function formatCostUsd(value: number): string {
+  if (value < 0.0001) return `$${value.toFixed(6)}`;
+  if (value < 0.001) return `$${value.toFixed(5)}`;
+  if (value < 0.01) return `$${value.toFixed(4)}`;
+  if (value < 0.1) return `$${value.toFixed(3)}`;
+  return `$${value.toFixed(2)}`;
+}
+
 export function formatContextWindowTokens(value: number | null): string {
   if (value === null || !Number.isFinite(value)) {
     return "0";

@@ -15,6 +15,7 @@ import {
   type ProviderListPluginsResult,
   type ProviderReadPluginResult,
   type ProviderListSkillsResult,
+  type ProviderStartReviewInput,
   type ProviderRuntimeEvent,
   type ThreadTokenUsageSnapshot,
   type ProviderUserInputAnswers,
@@ -1456,6 +1457,17 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         );
       });
 
+    const startReview: CodexAdapterShape["startReview"] = (input) =>
+      Effect.tryPromise({
+        try: () => manager.startReview(input),
+        catch: (cause) => toRequestError(input.threadId, "review/start", cause),
+      }).pipe(
+        Effect.map((result) => ({
+          ...result,
+          threadId: input.threadId,
+        })),
+      );
+
     const interruptTurn: CodexAdapterShape["interruptTurn"] = (threadId, turnId) =>
       Effect.tryPromise({
         try: () => manager.interruptTurn(threadId, turnId),
@@ -1494,6 +1506,12 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         })),
       );
     };
+
+    const forkThread: CodexAdapterShape["forkThread"] = (input) =>
+      Effect.tryPromise({
+        try: () => manager.forkThread(input),
+        catch: (cause) => toRequestError(input.sourceThreadId, "thread/fork", cause),
+      });
 
     const respondToRequest: CodexAdapterShape["respondToRequest"] = (
       threadId,
@@ -1645,15 +1663,18 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         sessionModelSwitch: "in-session",
         supportsSkillMentions: true,
         supportsSkillDiscovery: true,
+        supportsNativeSlashCommandDiscovery: false,
         supportsPluginMentions: true,
         supportsPluginDiscovery: true,
         supportsRuntimeModelList: true,
       },
       startSession,
       sendTurn,
+      startReview,
       interruptTurn,
       readThread,
       rollbackThread,
+      forkThread,
       respondToRequest,
       respondToUserInput,
       stopSession,

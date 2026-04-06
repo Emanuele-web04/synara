@@ -11,6 +11,7 @@ import {
   type ResolvedKeybindingsConfig,
   type ThreadId,
 } from "@t3tools/contracts";
+import { useQuery } from "@tanstack/react-query";
 import React, { memo, useEffect, useRef, useState } from "react";
 import { FiGitBranch } from "react-icons/fi";
 import GitActionsControl from "../GitActionsControl";
@@ -35,6 +36,7 @@ import { cn } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import { usePreferredEditor } from "../../editorPreferences";
 import { AntigravityIcon, ClaudeAI, CursorIcon, OpenAI, VisualStudioCode, Zed } from "../Icons";
+import { gitStatusQueryOptions } from "~/lib/gitReactQuery";
 
 /** Width (px) below which collapsible header controls fold into the ellipsis menu. */
 const HEADER_COMPACT_BREAKPOINT = 480;
@@ -119,6 +121,11 @@ export const ChatHeader = memo(function ChatHeader({
   const [compact, setCompact] = useState(false);
   const [preferredEditor] = usePreferredEditor(availableEditors);
   const EditorIcon = preferredEditor ? EDITOR_ICONS[preferredEditor] : null;
+  // Reuse the shared git status query so the diff toggle can show live totals
+  // without introducing a second API shape just for the header control.
+  const { data: gitStatus = null } = useQuery(gitStatusQueryOptions(gitCwd));
+  const diffTotals = gitStatus?.workingTree ?? null;
+  const showDiffTotals = (diffTotals?.insertions ?? 0) > 0 || (diffTotals?.deletions ?? 0) > 0;
 
   useEffect(() => {
     const el = headerRef.current;
@@ -351,7 +358,7 @@ export const ChatHeader = memo(function ChatHeader({
           <TooltipTrigger
             render={
               <Toggle
-                className="shrink-0"
+                className={cn("shrink-0", showDiffTotals ? "gap-1 px-1.5 text-[12px]" : "")}
                 pressed={diffOpen}
                 onPressedChange={onToggleDiff}
                 aria-label="Toggle diff panel"
@@ -360,6 +367,16 @@ export const ChatHeader = memo(function ChatHeader({
                 disabled={!isGitRepo}
               >
                 <DiffIcon className="size-3" />
+                {showDiffTotals ? (
+                  <>
+                    <span className="font-mono text-[12px] font-light tracking-normal tabular-nums text-success">
+                      +{diffTotals?.insertions ?? 0}
+                    </span>
+                    <span className="font-mono text-[12px] font-light tracking-normal tabular-nums text-destructive">
+                      -{diffTotals?.deletions ?? 0}
+                    </span>
+                  </>
+                ) : null}
               </Toggle>
             }
           />

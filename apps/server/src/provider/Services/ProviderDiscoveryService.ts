@@ -1,6 +1,8 @@
 import type {
   ProviderComposerCapabilities,
   ProviderGetComposerCapabilitiesInput,
+  ProviderListCommandsInput,
+  ProviderListCommandsResult,
   ProviderListModelsInput,
   ProviderListModelsResult,
   ProviderListPluginsInput,
@@ -28,6 +30,9 @@ export interface ProviderDiscoveryServiceShape {
   readonly getComposerCapabilities: (
     input: ProviderGetComposerCapabilitiesInput,
   ) => Effect.Effect<ProviderComposerCapabilities, ProviderDiscoveryError>;
+  readonly listCommands: (
+    input: ProviderListCommandsInput,
+  ) => Effect.Effect<ProviderListCommandsResult, ProviderDiscoveryError>;
   readonly listSkills: (
     input: ProviderListSkillsInput,
   ) => Effect.Effect<ProviderListSkillsResult, ProviderDiscoveryError>;

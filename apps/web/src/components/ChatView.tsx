@@ -11,6 +11,7 @@ import {
   type ProjectId,
   type ProviderApprovalDecision,
   type ProviderMentionReference,
+  type ProviderNativeCommandDescriptor,
   type ProviderPluginDescriptor,
   type ProviderSkillDescriptor,
   type ProviderSkillReference,
@@ -32,6 +33,11 @@ import {
   getModelCapabilities,
   normalizeModelSlug,
 } from "@t3tools/shared/model";
+import {
+  resolveThreadWorkspaceState,
+  resolveThreadBranchSourceCwd,
+  resolveThreadWorkspaceCwd as resolveSharedThreadWorkspaceCwd,
+} from "@t3tools/shared/threadEnvironment";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { GoTasklist } from "react-icons/go";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -39,15 +45,14 @@ import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { gitBranchesQueryOptions, gitCreateWorktreeMutationOptions } from "~/lib/gitReactQuery";
 import {
-  buildPluginSearchBlob,
-  buildSkillSearchBlob,
-  normalizeProviderDiscoveryText,
   resolveProviderDiscoveryCwd,
 } from "~/lib/providerDiscovery";
 import {
   providerComposerCapabilitiesQueryOptions,
+  providerCommandsQueryOptions,
   providerPluginsQueryOptions,
   providerSkillsQueryOptions,
+  supportsNativeSlashCommandDiscovery,
   supportsPluginDiscovery,
   supportsSkillDiscovery,
 } from "~/lib/providerDiscoveryReactQuery";
@@ -61,9 +66,14 @@ import {
   collapseExpandedComposerCursor,
   detectComposerTrigger,
   expandCollapsedComposerCursor,
-  parseStandaloneComposerSlashCommand,
   replaceTextRange,
+  stripComposerTriggerText,
 } from "../composer-logic";
+import {
+  canOfferForkSlashCommand,
+  canOfferReviewSlashCommand,
+  resolveComposerSlashRootBranch,
+} from "../composerSlashCommands";
 import {
   derivePendingApprovals,
   derivePendingUserInputs,
@@ -102,8 +112,8 @@ import {
   type ChatMessage,
   type TurnDiffSummary,
 } from "../types";
-import { basenameOfPath } from "../vscode-icons";
 import { useTheme } from "../hooks/useTheme";
+import { useComposerCommandMenuItems } from "../hooks/useComposerCommandMenuItems";
 import { useThreadHandoff } from "../hooks/useThreadHandoff";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import BranchToolbar from "./BranchToolbar";
@@ -130,7 +140,6 @@ import { type NewProjectScriptInput } from "./ProjectScriptsControl";
 import {
   commandForProjectScript,
   nextProjectScriptId,
-  projectScriptCwd,
   projectScriptRuntimeEnv,
   projectScriptIdFromCommand,
   setupProjectScript,
@@ -162,7 +171,10 @@ import {
   type TerminalContextDraft,
   type TerminalContextSelection,
 } from "../lib/terminalContext";
-import { deriveLatestContextWindowSnapshot } from "../lib/contextWindow";
+import {
+  deriveLatestContextWindowSnapshot,
+  deriveCumulativeCostUsd,
+} from "../lib/contextWindow";
 import { shouldUseCompactComposerFooter } from "./composerFooterLayout";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
@@ -170,7 +182,7 @@ import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { ChatEmptyStateHero } from "./chat/ChatEmptyStateHero";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 import { ChatHeader } from "./chat/ChatHeader";
-import { ContextWindowMeter } from "./chat/ContextWindowMeter";
+import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { AVAILABLE_PROVIDER_OPTIONS, ProviderModelPicker } from "./chat/ProviderModelPicker";
 import { ComposerCommandItem, ComposerCommandMenu } from "./chat/ComposerCommandMenu";
@@ -186,6 +198,7 @@ import {
 } from "./chat/composerProviderRegistry";
 import { ProviderHealthBanner } from "./chat/ProviderHealthBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
+import { RateLimitBanner, deriveLatestRateLimitStatus } from "./chat/RateLimitBanner";
 import {
   shouldAutoDeleteTerminalThreadOnLastClose,
   buildExpiredTerminalContextToastCopy,
@@ -204,11 +217,14 @@ import {
   SendPhase,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
+import { useComposerSlashCommands } from "../hooks/useComposerSlashCommands";
+import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import {
   canCreateThreadHandoff,
   resolveHandoffTargetProvider,
   resolveThreadHandoffBadgeLabel,
 } from "../lib/threadHandoff";
+import { resolveThreadEnvironmentMode } from "../lib/threadEnvironment";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
@@ -217,6 +233,7 @@ const IMAGE_ONLY_BOOTSTRAP_PROMPT =
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
+const EMPTY_PROVIDER_NATIVE_COMMANDS: ProviderNativeCommandDescriptor[] = [];
 const EMPTY_PROVIDER_SKILLS: ProviderSkillDescriptor[] = [];
 const EMPTY_AVAILABLE_EDITORS: EditorId[] = [];
 const EMPTY_PROVIDER_STATUSES: ServerProviderStatus[] = [];
@@ -249,8 +266,8 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function skillMentionPrefix(provider: string): string {
-  return provider === "claudeAgent" ? "/" : "$";
+function skillMentionPrefix(_provider: string): string {
+  return "$";
 }
 
 function promptIncludesSkillMention(prompt: string, skillName: string, provider: string): boolean {
@@ -342,6 +359,15 @@ function resolvePromptPluginMentions(params: {
   return resolvedMentions;
 }
 
+const providerMentionReferencesEqual = (
+  left: ReadonlyArray<ProviderMentionReference>,
+  right: ReadonlyArray<ProviderMentionReference>,
+): boolean =>
+  left.length === right.length &&
+  left.every(
+    (mention, index) => mention.path === right[index]?.path && mention.name === right[index]?.name,
+  );
+
 const extendReplacementRangeForTrailingSpace = (
   text: string,
   rangeEnd: number,
@@ -387,6 +413,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   );
   const timestampFormat = settings.timestampFormat;
   const navigate = useNavigate();
+  const { handleNewThread } = useHandleNewThread();
   const { createThreadHandoff } = useThreadHandoff();
   const rawSearch = useSearch({
     strict: false,
@@ -411,6 +438,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const nonPersistedComposerImageIds = composerDraft.nonPersistedImageIds;
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
   const setComposerDraftModelSelection = useComposerDraftStore((store) => store.setModelSelection);
+  const setComposerDraftProviderModelOptions = useComposerDraftStore(
+    (store) => store.setProviderModelOptions,
+  );
   const setComposerDraftRuntimeMode = useComposerDraftStore((store) => store.setRuntimeMode);
   const setComposerDraftInteractionMode = useComposerDraftStore(
     (store) => store.setInteractionMode,
@@ -476,6 +506,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const [expandedWorkGroups, setExpandedWorkGroups] = useState<Record<string, boolean>>({});
   const [planSidebarOpen, setPlanSidebarOpen] = useState(false);
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
+  const [composerCommandPicker, setComposerCommandPicker] = useState<null | "fork-target">(null);
   // Tracks whether the user explicitly dismissed the sidebar for the active turn.
   const planSidebarDismissedForTurnRef = useRef<string | null>(null);
   // When set, the thread-change reset effect will open the sidebar instead of closing it.
@@ -508,6 +539,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
   );
   const messagesScrollRef = useRef<HTMLDivElement>(null);
   const [messagesScrollElement, setMessagesScrollElement] = useState<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    setComposerCommandPicker(null);
+  }, [threadId]);
   const shouldAutoScrollRef = useRef(true);
   const lastKnownScrollTopRef = useRef(0);
   const isPointerScrollActiveRef = useRef(false);
@@ -646,8 +681,23 @@ export default function ChatView({ threadId }: ChatViewProps) {
     () => deriveLatestContextWindowSnapshot(activeThread?.activities ?? []),
     [activeThread?.activities],
   );
+  const activeCumulativeCostUsd = useMemo(
+    () => deriveCumulativeCostUsd(activeThread?.activities ?? []),
+    [activeThread?.activities],
+  );
+  const activeRateLimitStatus = useMemo(
+    () => deriveLatestRateLimitStatus(activeThread?.activities ?? []),
+    [activeThread?.activities],
+  );
   const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread?.session ?? null);
-  const activeProject = projects.find((p) => p.id === activeThread?.projectId);
+  const activeProjectId = activeThread?.projectId ?? draftThread?.projectId ?? null;
+  const activeProject = projects.find((p) => p.id === activeProjectId);
+  const resolvedThreadEnvMode = isServerThread
+    ? (activeThread?.envMode ?? null)
+    : (draftThread?.envMode ?? null);
+  const resolvedThreadWorktreePath = isServerThread
+    ? (activeThread?.worktreePath ?? null)
+    : (draftThread?.worktreePath ?? null);
 
   const openPullRequestDialog = useCallback(
     (reference?: string) => {
@@ -1199,10 +1249,18 @@ export default function ChatView({ threadId }: ChatViewProps) {
     latestTurnSettled,
     timelineEntries,
   ]);
-  const gitCwd = activeProject
-    ? projectScriptCwd({
-        project: { cwd: activeProject.cwd },
-        worktreePath: activeThread?.worktreePath ?? null,
+  const threadWorkspaceCwd = activeProject
+    ? resolveSharedThreadWorkspaceCwd({
+        projectCwd: activeProject.cwd,
+        envMode: resolvedThreadEnvMode,
+        worktreePath: resolvedThreadWorktreePath,
+      })
+    : null;
+  const gitCwd = threadWorkspaceCwd;
+  const gitBranchSourceCwd = activeProject
+    ? resolveThreadBranchSourceCwd({
+        projectCwd: activeProject.cwd,
+        worktreePath: resolvedThreadWorktreePath,
       })
     : null;
   const composerTriggerKind = composerTrigger?.kind ?? null;
@@ -1216,15 +1274,27 @@ export default function ChatView({ threadId }: ChatViewProps) {
     (debouncerState) => ({ isPending: debouncerState.isPending }),
   );
   const effectiveMentionQuery = mentionTriggerQuery.length > 0 ? debouncedPathQuery : "";
-  const branchesQuery = useQuery(gitBranchesQueryOptions(gitCwd));
+  const branchesQuery = useQuery(gitBranchesQueryOptions(gitBranchSourceCwd));
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const composerSkillCwd = resolveProviderDiscoveryCwd({
-    activeThreadWorktreePath: activeThread?.worktreePath ?? null,
+    activeThreadWorktreePath: resolvedThreadWorktreePath,
     activeProjectCwd: activeProject?.cwd ?? null,
     serverCwd: serverConfigQuery.data?.cwd ?? null,
   });
   const providerComposerCapabilitiesQuery = useQuery(
     providerComposerCapabilitiesQueryOptions(selectedProvider),
+  );
+  const providerCommandsQuery = useQuery(
+    providerCommandsQueryOptions({
+      provider: selectedProvider,
+      cwd: composerSkillCwd,
+      threadId,
+      query: composerTriggerKind === "slash-command" ? composerTrigger.query : "",
+      enabled:
+        composerTriggerKind === "slash-command" &&
+        supportsNativeSlashCommandDiscovery(providerComposerCapabilitiesQuery.data) &&
+        composerSkillCwd !== null,
+    }),
   );
   const providerSkillsQuery = useQuery(
     providerSkillsQueryOptions({
@@ -1257,112 +1327,107 @@ export default function ChatView({ threadId }: ChatViewProps) {
     }),
   );
   const workspaceEntries = workspaceEntriesQuery.data?.entries ?? EMPTY_PROJECT_ENTRIES;
-  const providerPlugins =
-    providerPluginsQuery.data?.marketplaces.flatMap((marketplace) =>
-      marketplace.plugins.map((plugin) => ({
-        plugin,
-        mention: {
-          name: plugin.name,
-          path: `plugin://${plugin.name}@${marketplace.name}`,
-        } satisfies ProviderMentionReference,
-      })),
-    ) ?? EMPTY_COMPOSER_PLUGIN_SUGGESTIONS;
-  const providerSkills = providerSkillsQuery.data?.skills ?? EMPTY_PROVIDER_SKILLS;
-  const composerMenuItems = useMemo<ComposerCommandItem[]>(() => {
-    if (!composerTrigger) return [];
-    if (composerTrigger.kind === "mention") {
-      const query = normalizeProviderDiscoveryText(composerTrigger.query);
-      const pluginItems = providerPlugins
-        .filter(({ plugin }) => {
-          if (!query) return true;
-          return buildPluginSearchBlob(plugin).includes(query);
-        })
-        .map(({ plugin, mention }) => ({
-          id: `plugin:${plugin.id}`,
-          type: "plugin" as const,
+  const activeRootBranch = useMemo(
+    () =>
+      resolveComposerSlashRootBranch({
+        branches: branchesQuery.data?.branches,
+        activeProjectCwd: activeProject?.cwd,
+        activeThreadBranch: activeThread?.branch,
+      }),
+    [activeProject?.cwd, activeThread?.branch, branchesQuery.data?.branches],
+  );
+  // Keep plugin suggestions referentially stable so prompt-sync effects do not loop on rerender.
+  const providerPlugins = useMemo(
+    () =>
+      providerPluginsQuery.data?.marketplaces.flatMap((marketplace) =>
+        marketplace.plugins.map((plugin) => ({
           plugin,
-          mention,
-          label: plugin.interface?.displayName ?? plugin.name,
-          description: plugin.interface?.shortDescription ?? plugin.source.path,
-        }));
-      const pathItems = workspaceEntries.map((entry) => ({
-        id: `path:${entry.kind}:${entry.path}`,
-        type: "path" as const,
-        path: entry.path,
-        pathKind: entry.kind,
-        label: basenameOfPath(entry.path),
-        description: entry.parentPath ?? "",
-      }));
-      return [...pluginItems, ...pathItems];
-    }
-
-    if (composerTrigger.kind === "slash-command") {
-      const slashCommandItems = [
+          mention: {
+            name: plugin.name,
+            path: `plugin://${plugin.name}@${marketplace.name}`,
+          } satisfies ProviderMentionReference,
+        })),
+      ) ?? EMPTY_COMPOSER_PLUGIN_SUGGESTIONS,
+    [providerPluginsQuery.data],
+  );
+  const providerNativeCommands =
+    providerCommandsQuery.data?.commands ?? EMPTY_PROVIDER_NATIVE_COMMANDS;
+  const supportsTextNativeReviewCommand = useMemo(
+    () => providerNativeCommands.some((command) => command.name.toLowerCase() === "review"),
+    [providerNativeCommands],
+  );
+  const providerSkills = providerSkillsQuery.data?.skills ?? EMPTY_PROVIDER_SKILLS;
+  const selectedModelCaps = useMemo(
+    () => getModelCapabilities(selectedProvider, selectedModel),
+    [selectedModel, selectedProvider],
+  );
+  const supportsFastSlashCommand = selectedModelCaps.supportsFastMode;
+  const currentProviderModelOptions = composerModelOptions?.[selectedProvider];
+  const fastModeEnabled =
+    supportsFastSlashCommand &&
+    (currentProviderModelOptions as { fastMode?: boolean } | undefined)?.fastMode === true;
+  const composerPromptWithoutActiveSlashTrigger =
+    composerTrigger?.kind === "slash-command"
+      ? stripComposerTriggerText(prompt, composerTrigger)
+      : prompt;
+  const canOfferReviewCommand =
+    (branchesQuery.data?.isRepo ?? true) &&
+    canOfferReviewSlashCommand({
+      prompt: composerPromptWithoutActiveSlashTrigger,
+      imageCount: composerImages.length,
+      terminalContextCount: composerTerminalContexts.length,
+      selectedSkillCount: selectedComposerSkills.length,
+      selectedMentionCount: selectedComposerMentions.length,
+    });
+  const canOfferForkCommand =
+    isServerThread &&
+    activeThread !== undefined &&
+    canOfferForkSlashCommand({
+      prompt: composerPromptWithoutActiveSlashTrigger,
+      imageCount: composerImages.length,
+      terminalContextCount: composerTerminalContexts.length,
+      selectedSkillCount: selectedComposerSkills.length,
+      selectedMentionCount: selectedComposerMentions.length,
+      interactionMode,
+    });
+  const normalComposerMenuItems = useComposerCommandMenuItems({
+    composerTrigger,
+    provider: selectedProvider,
+    providerPlugins,
+    providerNativeCommands,
+    providerSkills,
+    workspaceEntries,
+    searchableModelOptions,
+    supportsFastSlashCommand,
+    canOfferReviewCommand,
+    canOfferForkCommand,
+  });
+  const composerMenuItems = useMemo(() => {
+    if (composerCommandPicker === "fork-target") {
+      return [
         {
-          id: "slash:model",
-          type: "slash-command",
-          command: "model",
-          label: "/model",
-          description: "Switch response model for this thread",
+          id: "fork-target:worktree",
+          type: "fork-target" as const,
+          target: "worktree" as const,
+          label: "Fork Into New Worktree",
+          description: "Continue in a new worktree",
         },
         {
-          id: "slash:plan",
-          type: "slash-command",
-          command: "plan",
-          label: "/plan",
-          description: "Switch this thread into plan mode",
+          id: "fork-target:local",
+          type: "fork-target" as const,
+          target: "local" as const,
+          label: "Fork Into Local",
+          description:
+            activeThread?.worktreePath || activeThread?.envMode === "worktree"
+              ? "Continue in this local worktree"
+              : "Continue in the current local thread",
         },
-        {
-          id: "slash:default",
-          type: "slash-command",
-          command: "default",
-          label: "/default",
-          description: "Switch this thread back to normal chat mode",
-        },
-      ] satisfies ReadonlyArray<Extract<ComposerCommandItem, { type: "slash-command" }>>;
-      const query = composerTrigger.query.trim().toLowerCase();
-      if (!query) {
-        return [...slashCommandItems];
-      }
-      return slashCommandItems.filter(
-        (item) => item.command.includes(query) || item.label.slice(1).includes(query),
-      );
+      ];
     }
 
-    if (composerTrigger.kind === "skill") {
-      const query = normalizeProviderDiscoveryText(composerTrigger.query);
-      return providerSkills
-        .filter((skill) => {
-          if (!query) return true;
-          return buildSkillSearchBlob(skill).includes(query);
-        })
-        .map((skill) => ({
-          id: `skill:${skill.path}`,
-          type: "skill",
-          skill,
-          label: skill.interface?.displayName ?? skill.name,
-          description: skill.interface?.shortDescription ?? skill.description ?? skill.path,
-        }));
-    }
-
-    return searchableModelOptions
-      .filter(({ searchSlug, searchName, searchProvider }) => {
-        const query = composerTrigger.query.trim().toLowerCase();
-        if (!query) return true;
-        return (
-          searchSlug.includes(query) || searchName.includes(query) || searchProvider.includes(query)
-        );
-      })
-      .map(({ provider, providerLabel, slug, name }) => ({
-        id: `model:${provider}:${slug}`,
-        type: "model",
-        provider,
-        model: slug,
-        label: name,
-        description: `${providerLabel} · ${slug}`,
-      }));
-  }, [composerTrigger, providerPlugins, providerSkills, searchableModelOptions, workspaceEntries]);
-  const composerMenuOpen = Boolean(composerTrigger);
+    return normalComposerMenuItems;
+  }, [composerCommandPicker, normalComposerMenuItems]);
+  const composerMenuOpen = Boolean(composerTrigger || composerCommandPicker);
   const activeComposerMenuItem = useMemo(
     () =>
       composerMenuItems.find((item) => item.id === composerHighlightedItemId) ??
@@ -1386,6 +1451,13 @@ export default function ChatView({ threadId }: ChatViewProps) {
   );
   const activeProjectCwd = activeProject?.cwd ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
+  const hasNativeUserMessages = useMemo(
+    () =>
+      activeThread?.messages.some(
+        (message) => message.role === "user" && message.source === "native",
+      ) ?? false,
+    [activeThread?.messages],
+  );
   const threadTerminalRuntimeEnv = useMemo(() => {
     if (!activeProjectCwd) return {};
     return projectScriptRuntimeEnv({
@@ -2378,13 +2450,14 @@ export default function ChatView({ threadId }: ChatViewProps) {
   }, [prompt, selectedProvider]);
 
   useEffect(() => {
-    setSelectedComposerMentions((existing) =>
-      resolvePromptPluginMentions({
+    setSelectedComposerMentions((existing) => {
+      const nextMentions = resolvePromptPluginMentions({
         prompt,
         existingMentions: existing,
         providerPlugins,
-      }),
-    );
+      });
+      return providerMentionReferencesEqual(existing, nextMentions) ? existing : nextMentions;
+    });
   }, [prompt, providerPlugins]);
 
   // Clear selected skills when switching providers — skills are provider-specific.
@@ -2526,12 +2599,38 @@ export default function ChatView({ threadId }: ChatViewProps) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [closeExpandedImage, expandedImage, navigateExpandedImage]);
 
+  useEffect(() => {
+    if (!composerMenuOpen) {
+      return;
+    }
+
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape") {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      setComposerCommandPicker(null);
+      setComposerHighlightedItemId(null);
+      setComposerTrigger(null);
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [composerMenuOpen]);
+
   const activeWorktreePath = activeThread?.worktreePath;
-  const envMode: DraftThreadEnvMode = activeWorktreePath
-    ? "worktree"
-    : isLocalDraftThread
-      ? (draftThread?.envMode ?? "local")
-      : "local";
+  const envMode: DraftThreadEnvMode = isServerThread
+    ? resolveThreadEnvironmentMode({
+        envMode: activeThread?.envMode,
+        worktreePath: activeWorktreePath ?? null,
+      })
+    : (draftThread?.envMode ?? "local");
+  const envState = resolveThreadWorkspaceState({
+    envMode: resolvedThreadEnvMode,
+    worktreePath: resolvedThreadWorktreePath,
+  });
 
   useEffect(() => {
     if (phase !== "running") return;
@@ -2965,18 +3064,11 @@ export default function ChatView({ threadId }: ChatViewProps) {
       });
       return;
     }
-    const standaloneSlashCommand =
-      composerImages.length === 0 && sendableComposerTerminalContexts.length === 0
-        ? parseStandaloneComposerSlashCommand(trimmed)
-        : null;
-    if (standaloneSlashCommand) {
-      handleInteractionModeChange(standaloneSlashCommand);
-      promptRef.current = "";
-      clearComposerDraftContent(activeThread.id);
-      setComposerHighlightedItemId(null);
-      setComposerCursor(0);
-      setComposerTrigger(null);
-      return;
+    if (composerImages.length === 0 && sendableComposerTerminalContexts.length === 0) {
+      const handledSlashCommand = await handleStandaloneSlashCommand(trimmed);
+      if (handledSlashCommand) {
+        return;
+      }
     }
     if (!hasSendableContent) {
       if (expiredTerminalContextCount > 0) {
@@ -2994,7 +3086,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     }
     if (!activeProject) return;
     const threadIdForSend = activeThread.id;
-    const isFirstMessage = !isServerThread || activeThread.messages.length === 0;
+    const isFirstMessage = !isServerThread || !hasNativeUserMessages;
     const baseBranchForWorktree =
       isFirstMessage && envMode === "worktree" && !activeThread.worktreePath
         ? activeThread.branch
@@ -3111,6 +3203,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
             type: "thread.meta.update",
             commandId: newCommandId(),
             threadId: threadIdForSend,
+            envMode: "worktree",
             branch: result.worktree.branch,
             worktreePath: result.worktree.path,
           });
@@ -3157,6 +3250,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           modelSelection: threadCreateModelSelection,
           runtimeMode,
           interactionMode,
+          envMode,
           branch: nextThreadBranch,
           worktreePath: nextThreadWorktreePath,
           createdAt: activeThread.createdAt,
@@ -3610,6 +3704,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         modelSelection: nextThreadModelSelection,
         runtimeMode,
         interactionMode: "default",
+        envMode: activeThread.envMode ?? (activeThread.worktreePath ? "worktree" : "local"),
         branch: activeThread.branch,
         worktreePath: activeThread.worktreePath,
         createdAt,
@@ -3747,9 +3842,34 @@ export default function ChatView({ threadId }: ChatViewProps) {
       if (isLocalDraftThread) {
         setDraftThreadContext(threadId, { envMode: mode });
       }
+      if (
+        isServerThread &&
+        activeThread &&
+        !hasNativeUserMessages &&
+        !activeThread.session
+      ) {
+        const api = readNativeApi();
+        if (api) {
+          void api.orchestration.dispatchCommand({
+            type: "thread.meta.update",
+            commandId: newCommandId(),
+            threadId,
+            envMode: mode,
+            ...(mode === "local" ? { worktreePath: null } : {}),
+          });
+        }
+      }
       scheduleComposerFocus();
     },
-    [isLocalDraftThread, scheduleComposerFocus, setDraftThreadContext, threadId],
+    [
+      activeThread,
+      hasNativeUserMessages,
+      isLocalDraftThread,
+      isServerThread,
+      scheduleComposerFocus,
+      setDraftThreadContext,
+      threadId,
+    ],
   );
 
   const applyPromptReplacement = useCallback(
@@ -3827,6 +3947,95 @@ export default function ChatView({ threadId }: ChatViewProps) {
     };
   }, [readComposerSnapshot]);
 
+  const setComposerPromptValue = useCallback(
+    (nextPrompt: string) => {
+      promptRef.current = nextPrompt;
+      setPrompt(nextPrompt);
+      const nextCursor = collapseExpandedComposerCursor(nextPrompt, nextPrompt.length);
+      setComposerCursor(nextCursor);
+      setComposerTrigger(detectComposerTrigger(nextPrompt, nextPrompt.length));
+      setComposerHighlightedItemId(null);
+      window.requestAnimationFrame(() => {
+        composerEditorRef.current?.focusAt(nextCursor);
+      });
+    },
+    [setPrompt],
+  );
+
+  const clearComposerSlashDraft = useCallback(() => {
+    promptRef.current = "";
+    clearComposerDraftContent(threadId);
+    setComposerHighlightedItemId(null);
+    setComposerCursor(0);
+    setComposerTrigger(null);
+    scheduleComposerFocus();
+  }, [clearComposerDraftContent, scheduleComposerFocus, threadId]);
+
+  const slashEditorActions = useMemo(
+    () => ({
+      resolveActiveComposerTrigger,
+      applyPromptReplacement,
+      extendReplacementRangeForTrailingSpace,
+      clearComposerSlashDraft,
+      setComposerPromptValue,
+      scheduleComposerFocus,
+      setComposerHighlightedItemId,
+    }),
+    [
+      applyPromptReplacement,
+      clearComposerSlashDraft,
+      resolveActiveComposerTrigger,
+      scheduleComposerFocus,
+      setComposerPromptValue,
+    ],
+  );
+
+  const {
+    handleForkTargetSelection,
+    isSlashStatusDialogOpen,
+    setIsSlashStatusDialogOpen,
+    handleStandaloneSlashCommand,
+    handleSlashCommandSelection,
+  } = useComposerSlashCommands({
+    activeProject,
+    activeThread,
+    activeRootBranch,
+    isServerThread,
+    supportsFastSlashCommand,
+    supportsTextNativeReviewCommand,
+    fastModeEnabled,
+    selectedProvider,
+    currentProviderModelOptions,
+    selectedModelSelection,
+    runtimeMode,
+    interactionMode,
+    threadId,
+    syncServerReadModel,
+    navigateToThread: (nextThreadId) =>
+      navigate({
+        to: "/$threadId",
+        params: { threadId: nextThreadId },
+      }),
+    handleClearConversation: async () => {
+      if (!activeProject) {
+        toastManager.add({
+          type: "warning",
+          title: "Clear is unavailable",
+          description: "Open a project before starting a fresh thread.",
+        });
+        return;
+      }
+      await handleNewThread(activeProject.id, { entryPoint: "chat" });
+    },
+    handleInteractionModeChange,
+    openForkTargetPicker: () => {
+      setComposerCommandPicker("fork-target");
+      setComposerHighlightedItemId("fork-target:worktree");
+    },
+    setComposerDraftProviderModelOptions,
+    editorActions: slashEditorActions,
+  });
+
   const onSelectComposerItem = useCallback(
     (item: ComposerCommandItem) => {
       if (composerSelectLockRef.current) return;
@@ -3834,6 +4043,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
       window.requestAnimationFrame(() => {
         composerSelectLockRef.current = false;
       });
+      if (item.type === "fork-target") {
+        setComposerCommandPicker(null);
+        setComposerHighlightedItemId(null);
+        void handleForkTargetSelection(item.target);
+        return;
+      }
       const { snapshot, trigger } = resolveActiveComposerTrigger();
       if (!trigger) return;
       if (item.type === "path") {
@@ -3855,28 +4070,22 @@ export default function ChatView({ threadId }: ChatViewProps) {
         return;
       }
       if (item.type === "slash-command") {
-        if (item.command === "model") {
-          const replacement = "/model ";
-          const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
-            snapshot.value,
-            trigger.rangeEnd,
-            replacement,
-          );
-          const applied = applyPromptReplacement(
-            trigger.rangeStart,
-            replacementRangeEnd,
-            replacement,
-            { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
-          );
-          if (applied) {
-            setComposerHighlightedItemId(null);
-          }
-          return;
-        }
-        void handleInteractionModeChange(item.command === "plan" ? "plan" : "default");
-        const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
-          expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
-        });
+        handleSlashCommandSelection(item);
+        return;
+      }
+      if (item.type === "provider-native-command") {
+        const replacement = `/${item.command} `;
+        const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
+          snapshot.value,
+          trigger.rangeEnd,
+          replacement,
+        );
+        const applied = applyPromptReplacement(
+          trigger.rangeStart,
+          replacementRangeEnd,
+          replacement,
+          { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
+        );
         if (applied) {
           setComposerHighlightedItemId(null);
         }
@@ -3946,8 +4155,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
     },
     [
       applyPromptReplacement,
-      handleInteractionModeChange,
+      handleForkTargetSelection,
+      handleSlashCommandSelection,
       onProviderModelSelect,
+      setComposerCommandPicker,
       selectedProvider,
       setSelectedComposerMentions,
       setSelectedComposerSkills,
@@ -3976,12 +4187,14 @@ export default function ChatView({ threadId }: ChatViewProps) {
     [composerHighlightedItemId, composerMenuItems],
   );
   const isComposerMenuLoading =
-    composerTriggerKind === "mention" &&
-    ((mentionTriggerQuery.length > 0 && composerPathQueryDebouncer.state.isPending) ||
-      workspaceEntriesQuery.isLoading ||
-      workspaceEntriesQuery.isFetching ||
-      providerPluginsQuery.isLoading ||
-      providerPluginsQuery.isFetching);
+    (composerTriggerKind === "mention" &&
+      ((mentionTriggerQuery.length > 0 && composerPathQueryDebouncer.state.isPending) ||
+        workspaceEntriesQuery.isLoading ||
+        workspaceEntriesQuery.isFetching ||
+        providerPluginsQuery.isLoading ||
+        providerPluginsQuery.isFetching)) ||
+    (composerTriggerKind === "slash-command" &&
+      (providerCommandsQuery.isLoading || providerCommandsQuery.isFetching));
 
   const onPromptChange = useCallback(
     (
@@ -4003,6 +4216,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
       }
       promptRef.current = nextPrompt;
       setPrompt(nextPrompt);
+      if (composerCommandPicker !== null && nextPrompt.trim().length > 0) {
+        setComposerCommandPicker(null);
+      }
       if (!terminalContextIdListsEqual(composerTerminalContexts, terminalContextIds)) {
         setComposerDraftTerminalContexts(
           threadId,
@@ -4018,9 +4234,11 @@ export default function ChatView({ threadId }: ChatViewProps) {
       activePendingProgress?.activeQuestion,
       activePendingUserInput,
       composerTerminalContexts,
+      composerCommandPicker,
       onChangeActivePendingUserInputCustomAnswer,
       setPrompt,
       setComposerDraftTerminalContexts,
+      setComposerCommandPicker,
       threadId,
     ],
   );
@@ -4135,7 +4353,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           activeThreadTitle={activeThread.title}
           activeProjectName={activeProject?.name}
           isGitRepo={isGitRepo}
-          openInCwd={gitCwd}
+          openInCwd={threadWorkspaceCwd}
           activeProjectScripts={activeProject?.scripts}
           preferredScriptId={
             activeProject ? (lastInvokedScriptByProjectId[activeProject.id] ?? null) : null
@@ -4154,7 +4372,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           handoffBadgeSourceProvider={handoffBadgeSourceProvider}
           handoffBadgeTargetProvider={handoffBadgeTargetProvider}
           browserOpen={browserOpen}
-          gitCwd={gitCwd}
+          gitCwd={threadWorkspaceCwd}
           diffOpen={diffOpen}
           onRunProjectScript={(script) => {
             void runProjectScript(script);
@@ -4175,6 +4393,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         error={activeThread.error}
         onDismiss={() => setThreadError(activeThread.id, null)}
       />
+      <RateLimitBanner rateLimitStatus={activeRateLimitStatus} />
       {terminalWorkspaceOpen ? (
         <TerminalWorkspaceTabs
           activeTab={terminalState.workspaceActiveTab}
@@ -4230,7 +4449,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
                   onRevertUserMessage={onRevertUserMessage}
                   isRevertingCheckpoint={isRevertingCheckpoint}
                   onImageExpand={onExpandTimelineImage}
-                  markdownCwd={gitCwd ?? undefined}
+                  markdownCwd={threadWorkspaceCwd ?? undefined}
                   resolvedTheme={resolvedTheme}
                   timestampFormat={timestampFormat}
                   workspaceRoot={activeProject?.cwd ?? undefined}
@@ -4318,7 +4537,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
                             items={composerMenuItems}
                             resolvedTheme={resolvedTheme}
                             isLoading={isComposerMenuLoading}
-                            triggerKind={composerTriggerKind}
+                            triggerKind={
+                              composerCommandPicker !== null ? "slash-command" : composerTriggerKind
+                            }
                             activeItemId={activeComposerMenuItem?.id ?? null}
                             onHighlightedItemChange={onComposerMenuItemHighlighted}
                             onSelect={onSelectComposerItem}
@@ -4556,9 +4777,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
                           data-chat-composer-actions="right"
                           className="flex shrink-0 items-center gap-2"
                         >
-                          {activeContextWindow ? (
-                            <ContextWindowMeter usage={activeContextWindow} />
-                          ) : null}
                           {isPreparingWorktree ? (
                             <span className="text-muted-foreground/70 text-xs">
                               Preparing worktree...
@@ -4732,6 +4950,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
                 runtimeMode={runtimeMode}
                 onRuntimeModeChange={handleRuntimeModeChange}
                 onComposerFocusRequest={scheduleComposerFocus}
+                contextWindow={activeContextWindow}
+                cumulativeCostUsd={activeCumulativeCostUsd}
                 {...(canCheckoutPullRequestIntoThread
                   ? { onCheckoutPullRequestRequest: openPullRequestDialog }
                   : {})}
@@ -4780,7 +5000,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           <PlanSidebar
             activePlan={activePlan}
             activeProposedPlan={sidebarProposedPlan}
-            markdownCwd={gitCwd ?? undefined}
+            markdownCwd={threadWorkspaceCwd ?? undefined}
             workspaceRoot={activeProject?.cwd ?? undefined}
             timestampFormat={timestampFormat}
             onClose={() => {
@@ -4809,6 +5029,21 @@ export default function ChatView({ threadId }: ChatViewProps) {
           />
         );
       })()}
+
+      <ComposerSlashStatusDialog
+        open={isSlashStatusDialogOpen}
+        onOpenChange={setIsSlashStatusDialogOpen}
+        selectedModel={selectedModel}
+        fastModeEnabled={fastModeEnabled}
+        selectedPromptEffort={selectedPromptEffort}
+        interactionMode={interactionMode}
+        envMode={envMode}
+        envState={envState}
+        branch={activeThread?.branch ?? activeRootBranch}
+        contextWindow={activeContextWindow}
+        cumulativeCostUsd={activeCumulativeCostUsd}
+        rateLimitStatus={activeRateLimitStatus}
+      />
 
       {expandedImage && expandedImageItem && (
         <div

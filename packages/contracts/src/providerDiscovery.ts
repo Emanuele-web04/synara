@@ -36,6 +36,7 @@ export const ProviderComposerCapabilities = Schema.Struct({
   provider: ProviderDiscoveryKind,
   supportsSkillMentions: Schema.Boolean,
   supportsSkillDiscovery: Schema.Boolean,
+  supportsNativeSlashCommandDiscovery: Schema.Boolean,
   supportsPluginMentions: Schema.Boolean,
   supportsPluginDiscovery: Schema.Boolean,
   supportsRuntimeModelList: Schema.Boolean,
@@ -61,6 +62,27 @@ export const ProviderListSkillsResult = Schema.Struct({
   cached: Schema.optional(Schema.Boolean),
 });
 export type ProviderListSkillsResult = typeof ProviderListSkillsResult.Type;
+
+export const ProviderNativeCommandDescriptor = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  description: Schema.optional(TrimmedNonEmptyString),
+});
+export type ProviderNativeCommandDescriptor = typeof ProviderNativeCommandDescriptor.Type;
+
+export const ProviderListCommandsInput = Schema.Struct({
+  provider: ProviderDiscoveryKind,
+  cwd: TrimmedNonEmptyString,
+  threadId: Schema.optional(TrimmedNonEmptyString),
+  forceReload: Schema.optional(Schema.Boolean),
+});
+export type ProviderListCommandsInput = typeof ProviderListCommandsInput.Type;
+
+export const ProviderListCommandsResult = Schema.Struct({
+  commands: Schema.Array(ProviderNativeCommandDescriptor),
+  source: Schema.optional(TrimmedNonEmptyString),
+  cached: Schema.optional(Schema.Boolean),
+});
+export type ProviderListCommandsResult = typeof ProviderListCommandsResult.Type;
 
 // Plugin discovery mirrors Codex app-server's marketplace + plugin summary surface.
 export const ProviderPluginMarketplaceInterface = Schema.Struct({

@@ -9,6 +9,7 @@ import {
   type ProjectId,
   type ProviderInteractionMode,
   type RuntimeMode,
+  type ThreadEnvironmentMode,
   type ThreadId,
 } from "@t3tools/contracts";
 import {
@@ -31,6 +32,7 @@ interface ActiveThreadSnapshot {
   modelSelection: ModelSelection;
   runtimeMode: RuntimeMode;
   interactionMode: ProviderInteractionMode;
+  envMode?: ThreadEnvironmentMode;
 }
 
 export interface DraftReusePlanStored {
@@ -63,6 +65,7 @@ interface ResolveTerminalThreadCreationStateInput {
 
 export interface TerminalThreadCreationState {
   branch: string | null;
+  envMode: DraftThreadEnvMode;
   interactionMode: ProviderInteractionMode;
   modelSelection: ModelSelection;
   runtimeMode: RuntimeMode;
@@ -77,6 +80,7 @@ export function createActiveThreadSnapshot(
         modelSelection: ModelSelection;
         projectId: ProjectId;
         runtimeMode: RuntimeMode;
+        envMode?: ThreadEnvironmentMode;
       }
     | null
     | undefined,
@@ -90,6 +94,7 @@ export function createActiveThreadSnapshot(
     modelSelection: activeThread.modelSelection,
     runtimeMode: activeThread.runtimeMode,
     interactionMode: activeThread.interactionMode,
+    envMode: activeThread.envMode,
   };
 }
 
@@ -237,6 +242,16 @@ export function resolveTerminalThreadCreationState(
         ? input.activeThread.interactionMode
         : null) ??
       DEFAULT_INTERACTION_MODE,
+    envMode:
+      input.options?.envMode ??
+      input.draftThread?.envMode ??
+      (input.activeThread?.projectId === input.projectId
+        ? (input.activeThread.envMode ?? null)
+        : null) ??
+      (input.activeDraftThread?.projectId === input.projectId
+        ? input.activeDraftThread.envMode
+        : null) ??
+      "local",
     branch:
       input.options?.branch !== undefined
         ? (input.options.branch ?? null)

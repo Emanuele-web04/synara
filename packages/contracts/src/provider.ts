@@ -18,6 +18,7 @@ import {
   ProviderInteractionMode,
   ProviderKind,
   ProviderRequestKind,
+  ProviderReviewTarget,
   ProviderSandboxMode,
   ProviderStartOptions,
   ProviderUserInputAnswers,
@@ -76,12 +77,35 @@ export const ProviderSendTurnInput = Schema.Struct({
 });
 export type ProviderSendTurnInput = typeof ProviderSendTurnInput.Type;
 
+export const ProviderForkThreadInput = Schema.Struct({
+  sourceThreadId: ThreadId,
+  threadId: ThreadId,
+  sourceResumeCursor: Schema.optional(Schema.Unknown),
+  cwd: Schema.optional(TrimmedNonEmptyString),
+  modelSelection: Schema.optional(ModelSelection),
+  providerOptions: Schema.optional(ProviderStartOptions),
+  runtimeMode: RuntimeMode,
+});
+export type ProviderForkThreadInput = typeof ProviderForkThreadInput.Type;
+
+export const ProviderForkThreadResult = Schema.Struct({
+  threadId: ThreadId,
+  resumeCursor: Schema.optional(Schema.Unknown),
+});
+export type ProviderForkThreadResult = typeof ProviderForkThreadResult.Type;
+
 export const ProviderTurnStartResult = Schema.Struct({
   threadId: ThreadId,
   turnId: TurnId,
   resumeCursor: Schema.optional(Schema.Unknown),
 });
 export type ProviderTurnStartResult = typeof ProviderTurnStartResult.Type;
+
+export const ProviderStartReviewInput = Schema.Struct({
+  threadId: ThreadId,
+  target: ProviderReviewTarget,
+});
+export type ProviderStartReviewInput = typeof ProviderStartReviewInput.Type;
 
 export const ProviderInterruptTurnInput = Schema.Struct({
   threadId: ThreadId,

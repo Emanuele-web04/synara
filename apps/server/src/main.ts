@@ -160,9 +160,11 @@ const ServerConfigLive = (input: CliInput) =>
         input.autoBootstrapProjectFromCwd,
         env.autoBootstrapProjectFromCwd ?? mode === "web",
       );
+      // Keep websocket payload logging opt-in in dev. Terminal/TUI traffic is
+      // high-volume enough that automatic logging adds noticeable CPU and I/O.
       const logWebSocketEvents = resolveBooleanFlag(
         input.logWebSocketEvents,
-        env.logWebSocketEvents ?? Boolean(devUrl),
+        env.logWebSocketEvents ?? false,
       );
       const staticDir = devUrl ? undefined : yield* cliConfig.resolveStaticDir;
       const host =

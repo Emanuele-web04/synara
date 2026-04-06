@@ -8,6 +8,7 @@ import {
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   type ProviderMentionReference,
   ProviderKind,
+  type ProviderReviewTarget,
   type ProviderStartOptions,
   type ProviderSkillReference,
   type OrchestrationSession,
@@ -18,6 +19,7 @@ import {
 } from "@t3tools/contracts";
 import { Cache, Cause, Duration, Effect, Equal, Layer, Option, Schema, Stream } from "effect";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { resolveThreadWorkspaceState } from "@t3tools/shared/threadEnvironment";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
@@ -250,6 +252,17 @@ const make = Effect.gen(function* () {
       thread,
       projects: readModel.projects,
     });
+    const workspaceState = resolveThreadWorkspaceState({
+      envMode: thread.envMode,
+      worktreePath: thread.worktreePath,
+    });
+    if (workspaceState === "worktree-pending") {
+      return yield* new ProviderAdapterRequestError({
+        provider: threadProvider,
+        method: "thread.turn.start",
+        detail: `Thread '${threadId}' targets a worktree that has not been created yet.`,
+      });
+    }
 
     const resolveActiveSession = (threadId: ThreadId) =>
       providerService
@@ -351,6 +364,36 @@ const make = Effect.gen(function* () {
       return restartedSession.threadId;
     }
 
+    if (providerService.forkThread && thread.forkSourceThreadId) {
+      const forked = yield* providerService.forkThread({
+        sourceThreadId: thread.forkSourceThreadId,
+        threadId,
+        ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+        modelSelection: desiredModelSelection,
+        ...(options?.providerOptions !== undefined
+          ? { providerOptions: options.providerOptions }
+          : {}),
+        runtimeMode: desiredRuntimeMode,
+      });
+      if (forked) {
+        const forkedSession =
+          (yield* resolveActiveSession(threadId)) ??
+          ({
+            provider: preferredProvider,
+            status: "ready",
+            runtimeMode: desiredRuntimeMode,
+            ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+            model: desiredModelSelection.model,
+            threadId,
+            ...(forked.resumeCursor !== undefined ? { resumeCursor: forked.resumeCursor } : {}),
+            createdAt,
+            updatedAt: createdAt,
+          } satisfies ProviderSession);
+        yield* bindSessionToThread(forkedSession);
+        return threadId;
+      }
+    }
+
     const startedSession = yield* startProviderSession(undefined);
     yield* bindSessionToThread(startedSession);
     return startedSession.threadId;
@@ -363,6 +406,7 @@ const make = Effect.gen(function* () {
     readonly attachments?: ReadonlyArray<ChatAttachment>;
     readonly skills?: ReadonlyArray<ProviderSkillReference>;
     readonly mentions?: ReadonlyArray<ProviderMentionReference>;
+    readonly reviewTarget?: ProviderReviewTarget;
     readonly modelSelection?: ModelSelection;
     readonly providerOptions?: ProviderStartOptions;
     readonly interactionMode?: "default" | "plan";
@@ -421,15 +465,22 @@ const make = Effect.gen(function* () {
           : requestedModelSelection
         : input.modelSelection;
 
-    yield* providerService.sendTurn({
-      threadId: input.threadId,
-      ...(normalizedInput ? { input: normalizedInput } : {}),
-      ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
-      ...(input.skills !== undefined ? { skills: input.skills } : {}),
-      ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
-      ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
-      ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
-    });
+    if (input.reviewTarget !== undefined) {
+      yield* providerService.startReview({
+        threadId: input.threadId,
+        target: input.reviewTarget,
+      });
+    } else {
+      yield* providerService.sendTurn({
+        threadId: input.threadId,
+        ...(normalizedInput ? { input: normalizedInput } : {}),
+        ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
+        ...(input.skills !== undefined ? { skills: input.skills } : {}),
+        ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
+        ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
+        ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
+      });
+    }
     if (handoffBootstrapText && thread.handoff !== null) {
       yield* orchestrationEngine.dispatch({
         type: "thread.meta.update",
@@ -463,7 +514,9 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const userMessages = thread.messages.filter((message) => message.role === "user");
+    const userMessages = thread.messages.filter(
+      (message) => message.role === "user" && message.source === "native",
+    );
     if (userMessages.length !== 1 || userMessages[0]?.id !== input.messageId) {
       return;
     }
@@ -559,6 +612,9 @@ const make = Effect.gen(function* () {
         : {}),
       ...(event.payload.providerOptions !== undefined
         ? { providerOptions: event.payload.providerOptions }
+        : {}),
+      ...(event.payload.reviewTarget !== undefined
+        ? { reviewTarget: event.payload.reviewTarget }
         : {}),
       interactionMode: event.payload.interactionMode,
       createdAt: event.payload.createdAt,
