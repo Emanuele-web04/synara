@@ -40,7 +40,9 @@ import { OpenInEditorInput } from "./editor";
 import { ServerConfigUpdatedPayload } from "./server";
 import {
   ProviderGetComposerCapabilitiesInput,
+  ProviderListPluginsInput,
   ProviderListModelsInput,
+  ProviderReadPluginInput,
   ProviderListSkillsInput,
 } from "./providerDiscovery";
 
@@ -85,6 +87,8 @@ export const WS_METHODS = {
   // Provider discovery
   providerGetComposerCapabilities: "provider.getComposerCapabilities",
   providerListSkills: "provider.listSkills",
+  providerListPlugins: "provider.listPlugins",
+  providerReadPlugin: "provider.readPlugin",
   providerListModels: "provider.listModels",
 } as const;
 
@@ -155,6 +159,8 @@ const WebSocketRequestBody = Schema.Union([
   // Provider discovery
   tagRequestBody(WS_METHODS.providerGetComposerCapabilities, ProviderGetComposerCapabilitiesInput),
   tagRequestBody(WS_METHODS.providerListSkills, ProviderListSkillsInput),
+  tagRequestBody(WS_METHODS.providerListPlugins, ProviderListPluginsInput),
+  tagRequestBody(WS_METHODS.providerReadPlugin, ProviderReadPluginInput),
   tagRequestBody(WS_METHODS.providerListModels, ProviderListModelsInput),
 ]);
 

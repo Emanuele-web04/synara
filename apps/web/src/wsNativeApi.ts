@@ -275,6 +275,8 @@ export function createWsNativeApi(): NativeApi {
       getComposerCapabilities: (input) =>
         transport.request(WS_METHODS.providerGetComposerCapabilities, input),
       listSkills: (input) => transport.request(WS_METHODS.providerListSkills, input),
+      listPlugins: (input) => transport.request(WS_METHODS.providerListPlugins, input),
+      readPlugin: (input) => transport.request(WS_METHODS.providerReadPlugin, input),
       listModels: (input) => transport.request(WS_METHODS.providerListModels, input),
     },
     orchestration: {

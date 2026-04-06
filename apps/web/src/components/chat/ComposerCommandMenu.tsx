@@ -1,7 +1,9 @@
 import {
   type ProjectEntry,
   type ModelSlug,
+  type ProviderMentionReference,
   type ProviderKind,
+  type ProviderPluginDescriptor,
   type ProviderSkillDescriptor,
 } from "@t3tools/contracts";
 import { memo } from "react";
@@ -33,6 +35,14 @@ export type ComposerCommandItem =
       type: "model";
       provider: ProviderKind;
       model: ModelSlug;
+      label: string;
+      description: string;
+    }
+  | {
+      id: string;
+      type: "plugin";
+      plugin: ProviderPluginDescriptor;
+      mention: ProviderMentionReference;
       label: string;
       description: string;
     }
@@ -78,8 +88,8 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
           <p className="px-2.5 py-1.5 text-muted-foreground/50 text-[11px]">
             {props.isLoading
               ? "Searching workspace files..."
-              : props.triggerKind === "path"
-                ? "No matching files or folders."
+              : props.triggerKind === "mention"
+                ? "No matching plugin or file."
                 : props.triggerKind === "skill"
                   ? "No matching skill."
                   : "No matching command."}
@@ -103,7 +113,7 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
   isActive: boolean;
   onSelect: (item: ComposerCommandItem) => void;
 }) {
-  if (props.item.type === "skill") {
+  if (props.item.type === "plugin" || props.item.type === "skill") {
     return (
       <CommandItem
         value={props.item.id}
@@ -133,7 +143,7 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
             </span>
           </div>
           <div className="shrink-0 pl-2 text-[10px] leading-none text-muted-foreground/35">
-            {formatSkillScope(props.item.skill.scope)}
+            {props.item.type === "skill" ? formatSkillScope(props.item.skill.scope) : "Plugin"}
           </div>
         </div>
       </CommandItem>

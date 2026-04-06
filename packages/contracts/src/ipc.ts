@@ -53,8 +53,12 @@ import type {
   ProviderGetComposerCapabilitiesInput,
   ProviderListModelsInput,
   ProviderListModelsResult,
+  ProviderListPluginsInput,
+  ProviderListPluginsResult,
   ProviderListSkillsInput,
   ProviderListSkillsResult,
+  ProviderReadPluginInput,
+  ProviderReadPluginResult,
 } from "./providerDiscovery";
 
 export interface ContextMenuItem<T extends string = string> {
@@ -261,6 +265,8 @@ export interface NativeApi {
       input: ProviderGetComposerCapabilitiesInput,
     ) => Promise<ProviderComposerCapabilities>;
     listSkills: (input: ProviderListSkillsInput) => Promise<ProviderListSkillsResult>;
+    listPlugins: (input: ProviderListPluginsInput) => Promise<ProviderListPluginsResult>;
+    readPlugin: (input: ProviderReadPluginInput) => Promise<ProviderReadPluginResult>;
     listModels: (input: ProviderListModelsInput) => Promise<ProviderListModelsResult>;
   };
   orchestration: {

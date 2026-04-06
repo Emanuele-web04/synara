@@ -1,7 +1,7 @@
 import { splitPromptIntoComposerSegments } from "./composer-editor-mentions";
 import { INLINE_TERMINAL_CONTEXT_PLACEHOLDER } from "./lib/terminalContext";
 
-export type ComposerTriggerKind = "path" | "slash-command" | "slash-model" | "skill";
+export type ComposerTriggerKind = "mention" | "slash-command" | "slash-model" | "skill";
 export type ComposerSlashCommand = "model" | "plan" | "default";
 
 export interface ComposerTrigger {
@@ -266,7 +266,7 @@ export function detectComposerTrigger(text: string, cursorInput: number): Compos
   }
 
   return {
-    kind: "path",
+    kind: "mention",
     query: token.slice(1),
     rangeStart: tokenStart,
     rangeEnd: cursor,

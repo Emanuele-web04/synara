@@ -10,6 +10,8 @@ import {
   type ProjectEntry,
   type ProjectId,
   type ProviderApprovalDecision,
+  type ProviderMentionReference,
+  type ProviderPluginDescriptor,
   type ProviderSkillDescriptor,
   type ProviderSkillReference,
   PROVIDER_DISPLAY_NAMES,
@@ -38,7 +40,9 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import { gitBranchesQueryOptions, gitCreateWorktreeMutationOptions } from "~/lib/gitReactQuery";
 import {
   providerComposerCapabilitiesQueryOptions,
+  providerPluginsQueryOptions,
   providerSkillsQueryOptions,
+  supportsPluginDiscovery,
   supportsSkillDiscovery,
 } from "~/lib/providerDiscoveryReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
@@ -211,6 +215,13 @@ const EMPTY_AVAILABLE_EDITORS: EditorId[] = [];
 const EMPTY_PROVIDER_STATUSES: ServerProviderStatus[] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
 
+type ComposerPluginSuggestion = {
+  plugin: ProviderPluginDescriptor;
+  mention: ProviderMentionReference;
+};
+
+const EMPTY_COMPOSER_PLUGIN_SUGGESTIONS: ComposerPluginSuggestion[] = [];
+
 function formatOutgoingPrompt(params: {
   provider: ProviderKind;
   model: string | null;
@@ -249,6 +260,22 @@ function promptIncludesSkillMention(prompt: string, skillName: string, provider:
   return pattern.test(prompt);
 }
 
+function promptIncludesProviderMention(prompt: string, mentionName: string): boolean {
+  const pattern = new RegExp(`(^|\\s)@${escapeRegExp(mentionName)}(?=\\s|$)`, "i");
+  return pattern.test(prompt);
+}
+
+function collectPromptMentionNames(prompt: string): string[] {
+  const names: string[] = [];
+  for (const match of prompt.matchAll(/(^|\s)@([^\s@]+)(?=\s|$)/g)) {
+    const mentionName = (match[2] ?? "").trim();
+    if (mentionName.length > 0) {
+      names.push(mentionName);
+    }
+  }
+  return names;
+}
+
 function normalizeSkillSearchText(value: string | undefined): string {
   if (!value) return "";
   return value
@@ -273,6 +300,102 @@ function buildSkillSearchBlob(skill: {
       .filter((value) => typeof value === "string" && value.trim().length > 0)
       .join("\n"),
   );
+}
+
+function buildPluginSearchBlob(plugin: {
+  name: string;
+  interface?:
+    | {
+        displayName?: string | undefined;
+        shortDescription?: string | undefined;
+        category?: string | undefined;
+        developerName?: string | undefined;
+      }
+    | undefined;
+}): string {
+  return normalizeSkillSearchText(
+    [
+      plugin.name,
+      plugin.interface?.displayName,
+      plugin.interface?.shortDescription,
+      plugin.interface?.category,
+      plugin.interface?.developerName,
+    ]
+      .filter((value) => typeof value === "string" && value.trim().length > 0)
+      .join("\n"),
+  );
+}
+
+function normalizeMentionNameKey(name: string): string {
+  return name.trim().toLowerCase();
+}
+
+function resolvePromptPluginMentions(params: {
+  prompt: string;
+  existingMentions: ReadonlyArray<ProviderMentionReference>;
+  providerPlugins: ReadonlyArray<ComposerPluginSuggestion>;
+}): ProviderMentionReference[] {
+  const promptMentionNames = collectPromptMentionNames(params.prompt);
+  if (promptMentionNames.length === 0) {
+    return [];
+  }
+
+  const uniquePromptMentionNames: string[] = [];
+  const seenPromptMentionNames = new Set<string>();
+  for (const mentionName of promptMentionNames) {
+    const key = normalizeMentionNameKey(mentionName);
+    if (seenPromptMentionNames.has(key)) {
+      continue;
+    }
+    seenPromptMentionNames.add(key);
+    uniquePromptMentionNames.push(mentionName);
+  }
+
+  const existingMentionsByName = new Map<string, ProviderMentionReference[]>();
+  for (const mention of params.existingMentions) {
+    const key = normalizeMentionNameKey(mention.name);
+    const bucket = existingMentionsByName.get(key);
+    if (bucket) {
+      bucket.push(mention);
+    } else {
+      existingMentionsByName.set(key, [mention]);
+    }
+  }
+
+  const providerMentionsByName = new Map<string, ProviderMentionReference[]>();
+  for (const suggestion of params.providerPlugins) {
+    const key = normalizeMentionNameKey(suggestion.plugin.name);
+    const bucket = providerMentionsByName.get(key);
+    if (bucket) {
+      bucket.push(suggestion.mention);
+    } else {
+      providerMentionsByName.set(key, [suggestion.mention]);
+    }
+  }
+
+  const resolvedMentions: ProviderMentionReference[] = [];
+  const seenPaths = new Set<string>();
+
+  for (const mentionName of uniquePromptMentionNames) {
+    const key = normalizeMentionNameKey(mentionName);
+    const existingMention = (existingMentionsByName.get(key) ?? []).find(
+      (candidate) => !seenPaths.has(candidate.path),
+    );
+    if (existingMention) {
+      seenPaths.add(existingMention.path);
+      resolvedMentions.push(existingMention);
+      continue;
+    }
+
+    const discoveredMentions = providerMentionsByName.get(key) ?? [];
+    if (discoveredMentions.length === 1) {
+      const discoveredMention = discoveredMentions[0]!;
+      seenPaths.add(discoveredMention.path);
+      resolvedMentions.push(discoveredMention);
+    }
+  }
+
+  return resolvedMentions;
 }
 
 const extendReplacementRangeForTrailingSpace = (
@@ -431,6 +554,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const [selectedComposerSkills, setSelectedComposerSkills] = useState<ProviderSkillReference[]>(
     [],
   );
+  const [selectedComposerMentions, setSelectedComposerMentions] = useState<
+    ProviderMentionReference[]
+  >([]);
   const [lastInvokedScriptByProjectId, setLastInvokedScriptByProjectId] = useLocalStorage(
     LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
     {},
@@ -1135,16 +1261,16 @@ export default function ChatView({ threadId }: ChatViewProps) {
       })
     : null;
   const composerTriggerKind = composerTrigger?.kind ?? null;
-  const pathTriggerQuery = composerTrigger?.kind === "path" ? composerTrigger.query : "";
-  const isPathTrigger = composerTriggerKind === "path";
+  const mentionTriggerQuery = composerTrigger?.kind === "mention" ? composerTrigger.query : "";
+  const isMentionTrigger = composerTriggerKind === "mention";
   const skillTriggerQuery = composerTrigger?.kind === "skill" ? composerTrigger.query : "";
   const isSkillTrigger = composerTriggerKind === "skill";
   const [debouncedPathQuery, composerPathQueryDebouncer] = useDebouncedValue(
-    pathTriggerQuery,
+    mentionTriggerQuery,
     { wait: COMPOSER_PATH_QUERY_DEBOUNCE_MS },
     (debouncerState) => ({ isPending: debouncerState.isPending }),
   );
-  const effectivePathQuery = pathTriggerQuery.length > 0 ? debouncedPathQuery : "";
+  const effectiveMentionQuery = mentionTriggerQuery.length > 0 ? debouncedPathQuery : "";
   const branchesQuery = useQuery(gitBranchesQueryOptions(gitCwd));
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const composerSkillCwd = resolveComposerSkillCwd({
@@ -1167,27 +1293,62 @@ export default function ChatView({ threadId }: ChatViewProps) {
         composerSkillCwd !== null,
     }),
   );
+  const providerPluginsQuery = useQuery(
+    providerPluginsQueryOptions({
+      provider: selectedProvider,
+      cwd: composerSkillCwd,
+      threadId,
+      enabled:
+        supportsPluginDiscovery(providerComposerCapabilitiesQuery.data) &&
+        composerSkillCwd !== null,
+    }),
+  );
   const workspaceEntriesQuery = useQuery(
     projectSearchEntriesQueryOptions({
       cwd: gitCwd,
-      query: effectivePathQuery,
-      enabled: isPathTrigger,
+      query: effectiveMentionQuery,
+      enabled: isMentionTrigger,
       limit: 80,
     }),
   );
   const workspaceEntries = workspaceEntriesQuery.data?.entries ?? EMPTY_PROJECT_ENTRIES;
+  const providerPlugins =
+    providerPluginsQuery.data?.marketplaces.flatMap((marketplace) =>
+      marketplace.plugins.map((plugin) => ({
+        plugin,
+        mention: {
+          name: plugin.name,
+          path: `plugin://${plugin.name}@${marketplace.name}`,
+        } satisfies ProviderMentionReference,
+      })),
+    ) ?? EMPTY_COMPOSER_PLUGIN_SUGGESTIONS;
   const providerSkills = providerSkillsQuery.data?.skills ?? EMPTY_PROVIDER_SKILLS;
   const composerMenuItems = useMemo<ComposerCommandItem[]>(() => {
     if (!composerTrigger) return [];
-    if (composerTrigger.kind === "path") {
-      return workspaceEntries.map((entry) => ({
+    if (composerTrigger.kind === "mention") {
+      const query = normalizeSkillSearchText(composerTrigger.query);
+      const pluginItems = providerPlugins
+        .filter(({ plugin }) => {
+          if (!query) return true;
+          return buildPluginSearchBlob(plugin).includes(query);
+        })
+        .map(({ plugin, mention }) => ({
+          id: `plugin:${plugin.id}`,
+          type: "plugin" as const,
+          plugin,
+          mention,
+          label: plugin.interface?.displayName ?? plugin.name,
+          description: plugin.interface?.shortDescription ?? plugin.source.path,
+        }));
+      const pathItems = workspaceEntries.map((entry) => ({
         id: `path:${entry.kind}:${entry.path}`,
-        type: "path",
+        type: "path" as const,
         path: entry.path,
         pathKind: entry.kind,
         label: basenameOfPath(entry.path),
         description: entry.parentPath ?? "",
       }));
+      return [...pluginItems, ...pathItems];
     }
 
     if (composerTrigger.kind === "slash-command") {
@@ -1255,7 +1416,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         label: name,
         description: `${providerLabel} · ${slug}`,
       }));
-  }, [composerTrigger, providerSkills, searchableModelOptions, selectedProvider, workspaceEntries]);
+  }, [composerTrigger, providerPlugins, providerSkills, searchableModelOptions, workspaceEntries]);
   const composerMenuOpen = Boolean(composerTrigger);
   const activeComposerMenuItem = useMemo(
     () =>
@@ -2231,11 +2392,22 @@ export default function ChatView({ threadId }: ChatViewProps) {
     setSelectedComposerSkills((existing) =>
       existing.filter((skill) => promptIncludesSkillMention(prompt, skill.name, selectedProvider)),
     );
-  }, [prompt]);
+  }, [prompt, selectedProvider]);
+
+  useEffect(() => {
+    setSelectedComposerMentions((existing) =>
+      resolvePromptPluginMentions({
+        prompt,
+        existingMentions: existing,
+        providerPlugins,
+      }),
+    );
+  }, [prompt, providerPlugins]);
 
   // Clear selected skills when switching providers — skills are provider-specific.
   useEffect(() => {
     setSelectedComposerSkills([]);
+    setSelectedComposerMentions([]);
   }, [selectedProvider]);
 
   useEffect(() => {
@@ -2251,6 +2423,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     setComposerCursor(collapseExpandedComposerCursor(promptRef.current, promptRef.current.length));
     setComposerTrigger(detectComposerTrigger(promptRef.current, promptRef.current.length));
     setSelectedComposerSkills([]);
+    setSelectedComposerMentions([]);
     dragDepthRef.current = 0;
     setIsDragOverComposer(false);
     setExpandedImage(null);
@@ -2862,6 +3035,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     const composerImagesSnapshot = [...composerImages];
     const composerTerminalContextsSnapshot = [...sendableComposerTerminalContexts];
     const composerSkillsSnapshot = [...selectedComposerSkills];
+    const composerMentionsSnapshot = [...selectedComposerMentions];
     const messageTextForSend = appendTerminalContextsToPrompt(
       promptForSend,
       composerTerminalContextsSnapshot,
@@ -2877,6 +3051,11 @@ export default function ChatView({ threadId }: ChatViewProps) {
     const selectedSkillsForSend = selectedComposerSkills.filter((skill) =>
       promptIncludesSkillMention(outgoingMessageText, skill.name, selectedProvider),
     );
+    const selectedMentionsForSend = resolvePromptPluginMentions({
+      prompt: outgoingMessageText,
+      existingMentions: selectedComposerMentions,
+      providerPlugins,
+    });
     const turnAttachmentsPromise = Promise.all(
       composerImagesSnapshot.map(async (image) => ({
         type: "image" as const,
@@ -3059,6 +3238,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           text: outgoingMessageText,
           attachments: turnAttachments,
           ...(selectedSkillsForSend.length > 0 ? { skills: selectedSkillsForSend } : {}),
+          ...(selectedMentionsForSend.length > 0 ? { mentions: selectedMentionsForSend } : {}),
         },
         modelSelection: selectedModelSelection,
         ...(providerOptionsForDispatch ? { providerOptions: providerOptionsForDispatch } : {}),
@@ -3098,6 +3278,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         addComposerImagesToDraft(composerImagesSnapshot.map(cloneComposerImageForRetry));
         addComposerTerminalContextsToDraft(composerTerminalContextsSnapshot);
         setSelectedComposerSkills(composerSkillsSnapshot);
+        setSelectedComposerMentions(composerMentionsSnapshot);
         setComposerTrigger(detectComposerTrigger(promptForSend, promptForSend.length));
       }
       setThreadError(
@@ -3747,6 +3928,31 @@ export default function ChatView({ threadId }: ChatViewProps) {
         }
         return;
       }
+      if (item.type === "plugin") {
+        const replacement = `@${item.plugin.name} `;
+        const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
+          snapshot.value,
+          trigger.rangeEnd,
+          replacement,
+        );
+        const applied = applyPromptReplacement(
+          trigger.rangeStart,
+          replacementRangeEnd,
+          replacement,
+          { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
+        );
+        if (applied) {
+          setSelectedComposerMentions((existing) => {
+            const nextMention = item.mention;
+            const nextWithoutSameName = existing.filter(
+              (mention) => mention.name !== nextMention.name,
+            );
+            return [...nextWithoutSameName, nextMention];
+          });
+          setComposerHighlightedItemId(null);
+        }
+        return;
+      }
       onProviderModelSelect(item.provider, item.model);
       const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
         expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
@@ -3759,6 +3965,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
       applyPromptReplacement,
       handleInteractionModeChange,
       onProviderModelSelect,
+      selectedProvider,
+      setSelectedComposerMentions,
       setSelectedComposerSkills,
       resolveActiveComposerTrigger,
     ],
@@ -3785,10 +3993,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
     [composerHighlightedItemId, composerMenuItems],
   );
   const isComposerMenuLoading =
-    composerTriggerKind === "path" &&
-    ((pathTriggerQuery.length > 0 && composerPathQueryDebouncer.state.isPending) ||
+    composerTriggerKind === "mention" &&
+    ((mentionTriggerQuery.length > 0 && composerPathQueryDebouncer.state.isPending) ||
       workspaceEntriesQuery.isLoading ||
-      workspaceEntriesQuery.isFetching);
+      workspaceEntriesQuery.isFetching ||
+      providerPluginsQuery.isLoading ||
+      providerPluginsQuery.isFetching);
 
   const onPromptChange = useCallback(
     (

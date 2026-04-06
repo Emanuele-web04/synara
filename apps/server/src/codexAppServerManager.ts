@@ -9,7 +9,15 @@ import {
   type ProviderComposerCapabilities,
   ProviderItemId,
   type ProviderListModelsResult,
+  type ProviderListPluginsResult,
+  type ProviderMentionReference,
+  type ProviderPluginAppSummary,
+  type ProviderPluginDescriptor,
+  type ProviderPluginDetail,
+  type ProviderReadPluginResult,
   type ProviderListSkillsResult,
+  type ProviderListPluginsInput,
+  type ProviderReadPluginInput,
   type ProviderSkillDescriptor,
   type ProviderSkillReference,
   ProviderRequestKind,
@@ -87,6 +95,10 @@ interface CodexSkillListInput {
   readonly threadId?: string;
 }
 
+interface CodexPluginListInput extends Omit<ProviderListPluginsInput, "provider"> {}
+
+interface CodexPluginReadInput extends Omit<ProviderReadPluginInput, "provider"> {}
+
 interface JsonRpcError {
   code?: number;
   message?: string;
@@ -144,6 +156,7 @@ export interface CodexAppServerSendTurnInput {
   readonly input?: string;
   readonly attachments?: ReadonlyArray<{ type: "image"; url: string }>;
   readonly skills?: ReadonlyArray<ProviderSkillReference>;
+  readonly mentions?: ReadonlyArray<ProviderMentionReference>;
   readonly model?: string;
   readonly serviceTier?: string | null;
   readonly effort?: string;
@@ -543,6 +556,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private readonly sessions = new Map<ThreadId, CodexSessionContext>();
   private readonly discoverySessions = new Map<string, CodexSessionContext>();
   private readonly skillsCache = new Map<string, ProviderListSkillsResult>();
+  private readonly pluginsCache = new Map<string, ProviderListPluginsResult>();
+  private readonly pluginDetailCache = new Map<string, ProviderReadPluginResult>();
   private readonly modelCache = new Map<string, ProviderListModelsResult>();
 
   private runPromise: (effect: Effect.Effect<unknown, never>) => Promise<unknown>;
@@ -769,6 +784,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       | { type: "text"; text: string; text_elements: [] }
       | { type: "image"; url: string }
       | { type: "skill"; name: string; path: string }
+      | { type: "mention"; name: string; path: string }
     > = [];
     if (input.input) {
       turnInput.push({
@@ -792,6 +808,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         path: skill.path,
       });
     }
+    for (const mention of input.mentions ?? []) {
+      turnInput.push({
+        type: "mention",
+        name: mention.name,
+        path: mention.path,
+      });
+    }
     if (turnInput.length === 0) {
       throw new Error("Turn input must include text or attachments.");
     }
@@ -810,6 +833,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         | { type: "text"; text: string; text_elements: [] }
         | { type: "image"; url: string }
         | { type: "skill"; name: string; path: string }
+        | { type: "mention"; name: string; path: string }
       >;
       model?: string;
       serviceTier?: string | null;
@@ -1105,6 +1129,66 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     return result;
   }
 
+  async listPlugins(input: CodexPluginListInput): Promise<ProviderListPluginsResult> {
+    const cwd = input.cwd?.trim() || null;
+    const cacheKey = JSON.stringify({
+      cwd,
+      threadId: input.threadId?.trim() || null,
+      forceRemoteSync: input.forceRemoteSync === true,
+    });
+    if (!input.forceReload) {
+      const cached = this.pluginsCache.get(cacheKey);
+      if (cached) {
+        return {
+          ...cached,
+          cached: true,
+        };
+      }
+    }
+
+    const context = await this.resolveContextForDiscovery(input.threadId, cwd ?? undefined);
+    const response = await this.sendRequest<Record<string, unknown>>(context, "plugin/list", {
+      ...(cwd ? { cwds: [cwd] } : {}),
+      ...(input.forceRemoteSync ? { forceRemoteSync: true } : {}),
+    });
+    const result: ProviderListPluginsResult = {
+      ...this.parsePluginListResponse(response),
+      source: "codex-app-server",
+      cached: false,
+    };
+    this.pluginsCache.set(cacheKey, result);
+    return result;
+  }
+
+  async readPlugin(input: CodexPluginReadInput): Promise<ProviderReadPluginResult> {
+    const marketplacePath = input.marketplacePath.trim();
+    const pluginName = input.pluginName.trim();
+    const cacheKey = JSON.stringify({
+      marketplacePath,
+      pluginName,
+    });
+    const cached = this.pluginDetailCache.get(cacheKey);
+    if (cached) {
+      return {
+        ...cached,
+        cached: true,
+      };
+    }
+
+    const context = await this.resolveContextForDiscovery(undefined);
+    const response = await this.sendRequest<Record<string, unknown>>(context, "plugin/read", {
+      marketplacePath,
+      pluginName,
+    });
+    const result: ProviderReadPluginResult = {
+      plugin: this.parsePluginReadResponse(response),
+      source: "codex-app-server",
+      cached: false,
+    };
+    this.pluginDetailCache.set(cacheKey, result);
+    return result;
+  }
+
   async listModels(threadId?: string): Promise<ProviderListModelsResult> {
     const cacheKey = threadId?.trim() || "__default__";
     const cached = this.modelCache.get(cacheKey);
@@ -1132,6 +1216,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       provider: "codex",
       supportsSkillMentions: true,
       supportsSkillDiscovery: true,
+      supportsPluginMentions: true,
+      supportsPluginDiscovery: true,
       supportsRuntimeModelList: true,
     };
   }
@@ -1814,6 +1900,39 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     return typeof candidate === "boolean" ? candidate : undefined;
   }
 
+  private parseSkillDescriptor(skill: unknown): ProviderSkillDescriptor | undefined {
+    const record = this.readObject(skill);
+    if (!record) return undefined;
+    const name = this.readString(record, "name")?.trim();
+    const path = this.readString(record, "path")?.trim();
+    if (!name || !path) {
+      return undefined;
+    }
+    const description = this.readString(record, "description")?.trim();
+    const scope = this.readString(record, "scope")?.trim();
+    const display = this.readObject(record, "interface");
+    return {
+      name,
+      path,
+      enabled: record.enabled !== false,
+      ...(description ? { description } : {}),
+      ...(scope ? { scope } : {}),
+      ...(display
+        ? {
+            interface: {
+              ...(this.readString(display, "displayName")
+                ? { displayName: this.readString(display, "displayName") }
+                : {}),
+              ...(this.readString(display, "shortDescription")
+                ? { shortDescription: this.readString(display, "shortDescription") }
+                : {}),
+            },
+          }
+        : {}),
+      ...(record.dependencies !== undefined ? { dependencies: record.dependencies } : {}),
+    } satisfies ProviderSkillDescriptor;
+  }
+
   private parseSkillsListResponse(response: unknown, cwd: string): ProviderSkillDescriptor[] {
     const responseRecord = this.readObject(response);
     const resultRecord = this.readObject(responseRecord, "result") ?? responseRecord;
@@ -1827,43 +1946,217 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const directSkills = this.readArray(resultRecord, "skills");
     const rawSkills = scopedSkills ?? directSkills ?? [];
 
-    const parsedSkills = rawSkills
-      .map((value) => this.readObject(value))
-      .flatMap((skill) => {
-        if (!skill) return [];
-        const name = this.readString(skill, "name")?.trim();
-        const path = this.readString(skill, "path")?.trim();
+    const parsedSkills = rawSkills.flatMap((skill) => {
+      const parsedSkill = this.parseSkillDescriptor(skill);
+      return parsedSkill ? [parsedSkill] : [];
+    });
+
+    return parsedSkills.toSorted((a, b) => a.name.localeCompare(b.name));
+  }
+
+  private parsePluginListResponse(
+    response: unknown,
+  ): Omit<ProviderListPluginsResult, "source" | "cached"> {
+    const responseRecord = this.readObject(response);
+    const resultRecord = this.readObject(responseRecord, "result") ?? responseRecord;
+    const marketplaces = (this.readArray(resultRecord, "marketplaces") ?? []).flatMap(
+      (marketplace) => {
+        const record = this.readObject(marketplace);
+        if (!record) return [];
+        const name = this.readString(record, "name")?.trim();
+        const path = this.readString(record, "path")?.trim();
         if (!name || !path) {
           return [];
         }
-        const description = this.readString(skill, "description")?.trim();
-        const scope = this.readString(skill, "scope")?.trim();
-        const display = this.readObject(skill, "interface");
+        const rawPlugins = this.readArray(record, "plugins") ?? [];
+        const plugins = rawPlugins.flatMap((plugin) => {
+          const parsedPlugin = this.parsePluginSummary(plugin);
+          return parsedPlugin ? [parsedPlugin] : [];
+        });
+        const marketplaceInterface = this.readObject(record, "interface");
+        const marketplaceDisplayName = this.readString(marketplaceInterface, "displayName")?.trim();
         return [
           {
             name,
             path,
-            enabled: skill.enabled !== false,
-            ...(description ? { description } : {}),
-            ...(scope ? { scope } : {}),
-            ...(display
+            ...(marketplaceDisplayName
               ? {
                   interface: {
-                    ...(this.readString(display, "displayName")
-                      ? { displayName: this.readString(display, "displayName") }
-                      : {}),
-                    ...(this.readString(display, "shortDescription")
-                      ? { shortDescription: this.readString(display, "shortDescription") }
-                      : {}),
+                    displayName: marketplaceDisplayName,
                   },
                 }
               : {}),
-            ...(skill.dependencies !== undefined ? { dependencies: skill.dependencies } : {}),
-          } satisfies ProviderSkillDescriptor,
+            plugins,
+          },
         ];
+      },
+    );
+    const marketplaceLoadErrors = (this.readArray(resultRecord, "marketplaceLoadErrors") ?? [])
+      .map((error) => this.readObject(error))
+      .flatMap((error) => {
+        if (!error) return [];
+        const marketplacePath = this.readString(error, "marketplacePath")?.trim();
+        const message = this.readString(error, "message")?.trim();
+        if (!marketplacePath || !message) {
+          return [];
+        }
+        return [{ marketplacePath, message }];
       });
+    const featuredPluginIds = (this.readArray(resultRecord, "featuredPluginIds") ?? [])
+      .map((value) => (typeof value === "string" ? value.trim() : ""))
+      .filter((value) => value.length > 0);
+    const remoteSyncError = this.readString(resultRecord, "remoteSyncError")?.trim() ?? null;
 
-    return parsedSkills.toSorted((a, b) => a.name.localeCompare(b.name));
+    return {
+      marketplaces,
+      marketplaceLoadErrors,
+      remoteSyncError: remoteSyncError?.length ? remoteSyncError : null,
+      featuredPluginIds,
+    };
+  }
+
+  private parsePluginSummary(plugin: unknown): ProviderPluginDescriptor | undefined {
+    const record = this.readObject(plugin);
+    if (!record) return undefined;
+    const id = this.readString(record, "id")?.trim();
+    const name = this.readString(record, "name")?.trim();
+    const source = this.readObject(record, "source");
+    const sourcePath = this.readString(source, "path")?.trim();
+    const installPolicy = this.readString(record, "installPolicy");
+    const authPolicy = this.readString(record, "authPolicy");
+    if (
+      !id ||
+      !name ||
+      !sourcePath ||
+      (installPolicy !== "NOT_AVAILABLE" &&
+        installPolicy !== "AVAILABLE" &&
+        installPolicy !== "INSTALLED_BY_DEFAULT") ||
+      (authPolicy !== "ON_INSTALL" && authPolicy !== "ON_USE")
+    ) {
+      return undefined;
+    }
+
+    const pluginInterface = this.parsePluginInterface(this.readObject(record, "interface"));
+
+    return {
+      id,
+      name,
+      source: {
+        type: "local",
+        path: sourcePath,
+      },
+      installed: record.installed === true,
+      enabled: record.enabled === true,
+      installPolicy,
+      authPolicy,
+      ...(pluginInterface ? { interface: pluginInterface } : {}),
+    } satisfies ProviderPluginDescriptor;
+  }
+
+  private parsePluginInterface(value: unknown): ProviderPluginDescriptor["interface"] | undefined {
+    const record = this.readObject(value);
+    if (!record) return undefined;
+    const capabilities = (this.readArray(record, "capabilities") ?? [])
+      .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+      .filter((entry) => entry.length > 0);
+    const defaultPrompt = (this.readArray(record, "defaultPrompt") ?? [])
+      .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+      .filter((entry) => entry.length > 0);
+    const screenshots = (this.readArray(record, "screenshots") ?? [])
+      .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+      .filter((entry) => entry.length > 0);
+
+    return {
+      ...(this.readString(record, "displayName")?.trim()
+        ? { displayName: this.readString(record, "displayName")?.trim() }
+        : {}),
+      ...(this.readString(record, "shortDescription")?.trim()
+        ? { shortDescription: this.readString(record, "shortDescription")?.trim() }
+        : {}),
+      ...(this.readString(record, "longDescription")?.trim()
+        ? { longDescription: this.readString(record, "longDescription")?.trim() }
+        : {}),
+      ...(this.readString(record, "developerName")?.trim()
+        ? { developerName: this.readString(record, "developerName")?.trim() }
+        : {}),
+      ...(this.readString(record, "category")?.trim()
+        ? { category: this.readString(record, "category")?.trim() }
+        : {}),
+      ...(capabilities.length > 0 ? { capabilities } : {}),
+      ...(this.readString(record, "websiteUrl")?.trim()
+        ? { websiteUrl: this.readString(record, "websiteUrl")?.trim() }
+        : {}),
+      ...(this.readString(record, "privacyPolicyUrl")?.trim()
+        ? { privacyPolicyUrl: this.readString(record, "privacyPolicyUrl")?.trim() }
+        : {}),
+      ...(this.readString(record, "termsOfServiceUrl")?.trim()
+        ? { termsOfServiceUrl: this.readString(record, "termsOfServiceUrl")?.trim() }
+        : {}),
+      ...(defaultPrompt.length > 0 ? { defaultPrompt } : {}),
+      ...(this.readString(record, "brandColor")?.trim()
+        ? { brandColor: this.readString(record, "brandColor")?.trim() }
+        : {}),
+      ...(this.readString(record, "composerIcon")?.trim()
+        ? { composerIcon: this.readString(record, "composerIcon")?.trim() }
+        : {}),
+      ...(this.readString(record, "logo")?.trim()
+        ? { logo: this.readString(record, "logo")?.trim() }
+        : {}),
+      ...(screenshots.length > 0 ? { screenshots } : {}),
+    };
+  }
+
+  private parsePluginReadResponse(response: unknown): ProviderPluginDetail {
+    const responseRecord = this.readObject(response);
+    const resultRecord = this.readObject(responseRecord, "result") ?? responseRecord;
+    const pluginRecord = this.readObject(resultRecord, "plugin") ?? resultRecord;
+    const marketplaceName = this.readString(pluginRecord, "marketplaceName")?.trim();
+    const marketplacePath = this.readString(pluginRecord, "marketplacePath")?.trim();
+    const summary = this.parsePluginSummary(this.readObject(pluginRecord, "summary"));
+    if (!marketplaceName || !marketplacePath || !summary) {
+      throw new Error("plugin/read response did not include a valid plugin payload.");
+    }
+    const skills = (this.readArray(pluginRecord, "skills") ?? []).flatMap((skill) => {
+      const parsedSkill = this.parseSkillDescriptor(skill);
+      return parsedSkill ? [parsedSkill] : [];
+    });
+    const apps = (this.readArray(pluginRecord, "apps") ?? []).flatMap((app) => {
+      const parsedApp = this.parsePluginAppSummary(app);
+      return parsedApp ? [parsedApp] : [];
+    });
+    const mcpServers = (this.readArray(pluginRecord, "mcpServers") ?? [])
+      .map((value) => (typeof value === "string" ? value.trim() : ""))
+      .filter((value) => value.length > 0);
+    const description = this.readString(pluginRecord, "description")?.trim();
+
+    return {
+      marketplaceName,
+      marketplacePath,
+      summary,
+      ...(description ? { description } : {}),
+      skills,
+      apps,
+      mcpServers,
+    };
+  }
+
+  private parsePluginAppSummary(value: unknown): ProviderPluginAppSummary | undefined {
+    const record = this.readObject(value);
+    if (!record) return undefined;
+    const id = this.readString(record, "id")?.trim();
+    const name = this.readString(record, "name")?.trim();
+    if (!id || !name) {
+      return undefined;
+    }
+    const description = this.readString(record, "description")?.trim();
+    const installUrl = this.readString(record, "installUrl")?.trim();
+    return {
+      id,
+      name,
+      ...(description ? { description } : {}),
+      ...(installUrl ? { installUrl } : {}),
+      needsAuth: record.needsAuth === true,
+    };
   }
 
   private parseModelListResponse(response: unknown): ProviderListModelsResult["models"] {

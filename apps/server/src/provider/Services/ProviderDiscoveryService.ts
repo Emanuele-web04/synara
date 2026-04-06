@@ -3,8 +3,12 @@ import type {
   ProviderGetComposerCapabilitiesInput,
   ProviderListModelsInput,
   ProviderListModelsResult,
+  ProviderListPluginsInput,
+  ProviderListPluginsResult,
   ProviderListSkillsInput,
   ProviderListSkillsResult,
+  ProviderReadPluginInput,
+  ProviderReadPluginResult,
 } from "@t3tools/contracts";
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
@@ -27,6 +31,12 @@ export interface ProviderDiscoveryServiceShape {
   readonly listSkills: (
     input: ProviderListSkillsInput,
   ) => Effect.Effect<ProviderListSkillsResult, ProviderDiscoveryError>;
+  readonly listPlugins: (
+    input: ProviderListPluginsInput,
+  ) => Effect.Effect<ProviderListPluginsResult, ProviderDiscoveryError>;
+  readonly readPlugin: (
+    input: ProviderReadPluginInput,
+  ) => Effect.Effect<ProviderReadPluginResult, ProviderDiscoveryError>;
   readonly listModels: (
     input: ProviderListModelsInput,
   ) => Effect.Effect<ProviderListModelsResult, ProviderDiscoveryError>;

@@ -12,12 +12,12 @@ import {
 import { INLINE_TERMINAL_CONTEXT_PLACEHOLDER } from "./lib/terminalContext";
 
 describe("detectComposerTrigger", () => {
-  it("detects @path trigger at cursor", () => {
+  it("detects @mention trigger at cursor", () => {
     const text = "Please check @src/com";
     const trigger = detectComposerTrigger(text, text.length);
 
     expect(trigger).toEqual({
-      kind: "path",
+      kind: "mention",
       query: "src/com",
       rangeStart: "Please check ".length,
       rangeEnd: text.length,
@@ -72,28 +72,28 @@ describe("detectComposerTrigger", () => {
     });
   });
 
-  it("detects @path trigger in the middle of existing text", () => {
+  it("detects @mention trigger in the middle of existing text", () => {
     // User typed @ between "inspect " and "in this sentence"
     const text = "Please inspect @in this sentence";
     const cursorAfterAt = "Please inspect @".length;
 
     const trigger = detectComposerTrigger(text, cursorAfterAt);
     expect(trigger).toEqual({
-      kind: "path",
+      kind: "mention",
       query: "",
       rangeStart: "Please inspect ".length,
       rangeEnd: cursorAfterAt,
     });
   });
 
-  it("detects @path trigger with query typed mid-text", () => {
+  it("detects @mention trigger with query typed mid-text", () => {
     // User typed @sr between "inspect " and "in this sentence"
     const text = "Please inspect @srin this sentence";
     const cursorAfterQuery = "Please inspect @sr".length;
 
     const trigger = detectComposerTrigger(text, cursorAfterQuery);
     expect(trigger).toEqual({
-      kind: "path",
+      kind: "mention",
       query: "sr",
       rangeStart: "Please inspect ".length,
       rangeEnd: cursorAfterQuery,
@@ -108,7 +108,7 @@ describe("detectComposerTrigger", () => {
 
     const trigger = detectComposerTrigger(text, cursorAfterAt);
     expect(trigger).not.toBeNull();
-    expect(trigger?.kind).toBe("path");
+    expect(trigger?.kind).toBe("mention");
     expect(trigger?.query).toBe("");
   });
 });
