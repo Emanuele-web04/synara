@@ -8,7 +8,8 @@ import {
 } from "@t3tools/contracts";
 import { memo } from "react";
 import { type ComposerSlashCommand, type ComposerTriggerKind } from "../../composer-logic";
-import { BotIcon, CubeIcon } from "~/lib/icons";
+import { BotIcon, PlugIcon } from "~/lib/icons";
+import { formatSkillScope } from "~/lib/providerDiscovery";
 import { cn } from "~/lib/utils";
 import { Badge } from "../ui/badge";
 import { Command, CommandItem, CommandList } from "../ui/command";
@@ -100,13 +101,6 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
   );
 });
 
-function formatSkillScope(scope: string | undefined): string {
-  if (!scope) return "Personal";
-  const normalized = scope.trim();
-  if (normalized.length === 0) return "Personal";
-  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
-}
-
 const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
   item: ComposerCommandItem;
   resolvedTheme: "light" | "dark";
@@ -132,7 +126,7 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
               props.isActive && "text-foreground/60",
             )}
           >
-            <CubeIcon className="size-3" />
+            <PlugIcon className="size-3" />
           </div>
           <div className="min-w-0 flex flex-1 items-center gap-1.5">
             <span className="truncate font-semibold text-[11px] leading-none text-foreground/80">

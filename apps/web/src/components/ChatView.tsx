@@ -39,6 +39,12 @@ import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { gitBranchesQueryOptions, gitCreateWorktreeMutationOptions } from "~/lib/gitReactQuery";
 import {
+  buildPluginSearchBlob,
+  buildSkillSearchBlob,
+  normalizeProviderDiscoveryText,
+  resolveProviderDiscoveryCwd,
+} from "~/lib/providerDiscovery";
+import {
   providerComposerCapabilitiesQueryOptions,
   providerPluginsQueryOptions,
   providerSkillsQueryOptions,
@@ -235,14 +241,6 @@ function formatOutgoingPrompt(params: {
   return params.text;
 }
 const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
-
-function resolveComposerSkillCwd(options: {
-  activeThreadWorktreePath: string | null;
-  activeProjectCwd: string | null;
-  serverCwd: string | null;
-}): string | null {
-  return options.activeThreadWorktreePath ?? options.activeProjectCwd ?? options.serverCwd;
-}
 const SCRIPT_TERMINAL_COLS = 120;
 const SCRIPT_TERMINAL_ROWS = 30;
 
@@ -260,11 +258,6 @@ function promptIncludesSkillMention(prompt: string, skillName: string, provider:
   return pattern.test(prompt);
 }
 
-function promptIncludesProviderMention(prompt: string, mentionName: string): boolean {
-  const pattern = new RegExp(`(^|\\s)@${escapeRegExp(mentionName)}(?=\\s|$)`, "i");
-  return pattern.test(prompt);
-}
-
 function collectPromptMentionNames(prompt: string): string[] {
   const names: string[] = [];
   for (const match of prompt.matchAll(/(^|\s)@([^\s@]+)(?=\s|$)/g)) {
@@ -274,56 +267,6 @@ function collectPromptMentionNames(prompt: string): string[] {
     }
   }
   return names;
-}
-
-function normalizeSkillSearchText(value: string | undefined): string {
-  if (!value) return "";
-  return value
-    .toLowerCase()
-    .replace(/[:/_-]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function buildSkillSearchBlob(skill: {
-  name: string;
-  description?: string | undefined;
-  interface?:
-    | {
-        displayName?: string | undefined;
-        shortDescription?: string | undefined;
-      }
-    | undefined;
-}): string {
-  return normalizeSkillSearchText(
-    [skill.name, skill.interface?.displayName, skill.interface?.shortDescription, skill.description]
-      .filter((value) => typeof value === "string" && value.trim().length > 0)
-      .join("\n"),
-  );
-}
-
-function buildPluginSearchBlob(plugin: {
-  name: string;
-  interface?:
-    | {
-        displayName?: string | undefined;
-        shortDescription?: string | undefined;
-        category?: string | undefined;
-        developerName?: string | undefined;
-      }
-    | undefined;
-}): string {
-  return normalizeSkillSearchText(
-    [
-      plugin.name,
-      plugin.interface?.displayName,
-      plugin.interface?.shortDescription,
-      plugin.interface?.category,
-      plugin.interface?.developerName,
-    ]
-      .filter((value) => typeof value === "string" && value.trim().length > 0)
-      .join("\n"),
-  );
 }
 
 function normalizeMentionNameKey(name: string): string {
@@ -1273,7 +1216,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const effectiveMentionQuery = mentionTriggerQuery.length > 0 ? debouncedPathQuery : "";
   const branchesQuery = useQuery(gitBranchesQueryOptions(gitCwd));
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
-  const composerSkillCwd = resolveComposerSkillCwd({
+  const composerSkillCwd = resolveProviderDiscoveryCwd({
     activeThreadWorktreePath: activeThread?.worktreePath ?? null,
     activeProjectCwd: activeProject?.cwd ?? null,
     serverCwd: serverConfigQuery.data?.cwd ?? null,
@@ -1326,7 +1269,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const composerMenuItems = useMemo<ComposerCommandItem[]>(() => {
     if (!composerTrigger) return [];
     if (composerTrigger.kind === "mention") {
-      const query = normalizeSkillSearchText(composerTrigger.query);
+      const query = normalizeProviderDiscoveryText(composerTrigger.query);
       const pluginItems = providerPlugins
         .filter(({ plugin }) => {
           if (!query) return true;
@@ -1385,7 +1328,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     }
 
     if (composerTrigger.kind === "skill") {
-      const query = normalizeSkillSearchText(composerTrigger.query);
+      const query = normalizeProviderDiscoveryText(composerTrigger.query);
       return providerSkills
         .filter((skill) => {
           if (!query) return true;

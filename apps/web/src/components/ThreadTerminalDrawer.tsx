@@ -70,12 +70,31 @@ function writeSystemMessage(terminal: Terminal, message: string): void {
   terminal.write(`\r\n[terminal] ${message}\r\n`);
 }
 
+// Resolve the actual app surface colors from CSS tokens because the document body stays transparent.
+function resolveTerminalSurfaceColors(): { background: string; foreground: string } {
+  const isDark = document.documentElement.classList.contains("dark");
+  const probe = document.createElement("div");
+  probe.style.position = "fixed";
+  probe.style.pointerEvents = "none";
+  probe.style.opacity = "0";
+  probe.style.backgroundColor = "var(--background)";
+  probe.style.color = "var(--foreground)";
+  document.body.append(probe);
+
+  const computedProbeStyles = getComputedStyle(probe);
+  const background = computedProbeStyles.backgroundColor;
+  const foreground = computedProbeStyles.color;
+  probe.remove();
+
+  return {
+    background: background || (isDark ? "rgb(14, 18, 24)" : "rgb(255, 255, 255)"),
+    foreground: foreground || (isDark ? "rgb(237, 241, 247)" : "rgb(28, 33, 41)"),
+  };
+}
+
 function terminalThemeFromApp(): ITheme {
   const isDark = document.documentElement.classList.contains("dark");
-  const bodyStyles = getComputedStyle(document.body);
-  const background =
-    bodyStyles.backgroundColor || (isDark ? "rgb(14, 18, 24)" : "rgb(255, 255, 255)");
-  const foreground = bodyStyles.color || (isDark ? "rgb(237, 241, 247)" : "rgb(28, 33, 41)");
+  const { background, foreground } = resolveTerminalSurfaceColors();
 
   if (isDark) {
     return {
@@ -679,10 +698,12 @@ function TerminalViewport({
     };
   }, [resizeTerminalToContainer]);
   return (
-    <div
-      ref={containerRef}
-      className="relative h-full min-h-0 w-full overflow-hidden rounded-[4px]"
-    />
+    <div className="h-full min-h-0 w-full rounded-[8px] bg-background p-3">
+      <div
+        ref={containerRef}
+        className="relative h-full min-h-0 w-full overflow-hidden rounded-[4px]"
+      />
+    </div>
   );
 }
 

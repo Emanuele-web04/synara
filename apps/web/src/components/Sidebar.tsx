@@ -3,6 +3,8 @@ import {
   ArrowUpDownIcon,
   FolderIcon,
   GitPullRequestIcon,
+  type LucideIcon,
+  PlugIcon,
   PlusIcon,
   RocketIcon,
   SettingsIcon,
@@ -320,17 +322,21 @@ function SidebarPrimaryAction({
   icon: Icon,
   label,
   onClick,
+  active = false,
   disabled = false,
 }: {
-  icon: typeof SquarePenIcon;
+  icon: LucideIcon;
   label: string;
   onClick?: () => void;
+  active?: boolean;
   disabled?: boolean;
 }) {
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
         size="default"
+        data-active={active}
+        aria-current={active ? "page" : undefined}
         className="h-9 gap-2.5 rounded-xl px-2 font-system-ui text-[13px] font-normal text-foreground/82 transition-colors hover:bg-accent/55 hover:text-foreground data-[active=true]:bg-accent/65"
         aria-disabled={disabled || undefined}
         disabled={disabled}
@@ -399,6 +405,7 @@ export default function Sidebar() {
   );
   const navigate = useNavigate();
   const isOnSettings = useLocation({ select: (loc) => loc.pathname === "/settings" });
+  const isOnPlugins = useLocation({ select: (loc) => loc.pathname === "/plugins" });
   const { settings: appSettings, updateSettings } = useAppSettings();
   const { handleNewThread } = useHandleNewThread();
   const { createThreadHandoff } = useThreadHandoff();
@@ -1874,6 +1881,14 @@ export default function Sidebar() {
               icon={SquarePenIcon}
               label="New thread"
               onClick={handlePrimaryNewThread}
+            />
+            <SidebarPrimaryAction
+              icon={PlugIcon}
+              label="Plugins"
+              active={isOnPlugins}
+              onClick={() => {
+                void navigate({ to: "/plugins" });
+              }}
             />
           </SidebarMenu>
         </SidebarGroup>
