@@ -1,5 +1,6 @@
 import { ProjectId, type ModelSelection, type ThreadId } from "@t3tools/contracts";
-import { type ChatMessage, type Thread } from "../types";
+import { isGenericTerminalThreadTitle } from "@t3tools/shared/terminalThreads";
+import { type ChatMessage, type Thread, type ThreadPrimarySurface } from "../types";
 import { randomUUID } from "~/lib/utils";
 import { type ComposerImageAttachment, type DraftThreadState } from "../composerDraftStore";
 import { Schema } from "effect";
@@ -169,5 +170,33 @@ export function shouldRenderTerminalWorkspace(options: {
 }): boolean {
   return (
     options.terminalOpen && options.presentationMode === "workspace" && options.activeProjectExists
+  );
+}
+
+export function shouldAutoDeleteTerminalThreadOnLastClose(options: {
+  isLastTerminal: boolean;
+  isServerThread: boolean;
+  terminalEntryPoint: ThreadPrimarySurface;
+  thread:
+    | Pick<Thread, "activities" | "latestTurn" | "messages" | "proposedPlans" | "session" | "title">
+    | null
+    | undefined;
+}): boolean {
+  const { thread } = options;
+  if (
+    !options.isLastTerminal ||
+    !options.isServerThread ||
+    options.terminalEntryPoint !== "terminal" ||
+    !thread
+  ) {
+    return false;
+  }
+  return (
+    isGenericTerminalThreadTitle(thread.title) &&
+    thread.messages.length === 0 &&
+    thread.latestTurn === null &&
+    thread.session === null &&
+    thread.activities.length === 0 &&
+    thread.proposedPlans.length === 0
   );
 }

@@ -3,7 +3,11 @@
 // Layer: Server terminal helper
 // Exports: generic-title checks plus incremental command parsing for terminal writes.
 
-const GENERIC_TERMINAL_THREAD_TITLE = "New terminal";
+import {
+  GENERIC_TERMINAL_THREAD_TITLE,
+  isGenericTerminalThreadTitle,
+} from "@t3tools/shared/terminalThreads";
+
 const MAX_TERMINAL_INPUT_BUFFER_LENGTH = 512;
 const MAX_TERMINAL_TITLE_LENGTH = 48;
 
@@ -144,9 +148,7 @@ function derivePackageManagerTitle(tokens: string[]): string | null {
   return first;
 }
 
-export function isGenericTerminalThreadTitle(title: string | null | undefined): boolean {
-  return (title ?? "").trim() === GENERIC_TERMINAL_THREAD_TITLE;
-}
+export { GENERIC_TERMINAL_THREAD_TITLE, isGenericTerminalThreadTitle };
 
 // Convert a submitted shell command into a short sidebar-safe label.
 export function deriveTerminalThreadTitleFromCommand(command: string): string | null {

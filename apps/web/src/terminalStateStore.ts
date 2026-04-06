@@ -500,6 +500,17 @@ function closeThreadTerminal(state: ThreadTerminalState, terminalId: string): Th
 
   const remainingTerminalIds = normalized.terminalIds.filter((id) => id !== terminalId);
   if (remainingTerminalIds.length === 0) {
+    if (normalized.entryPoint === "terminal") {
+      return normalizeThreadTerminalState({
+        ...createDefaultThreadTerminalState(),
+        entryPoint: "terminal",
+        terminalOpen: false,
+        presentationMode: normalized.presentationMode,
+        workspaceLayout: normalized.workspaceLayout,
+        workspaceActiveTab: "terminal",
+        terminalHeight: normalized.terminalHeight,
+      });
+    }
     return createDefaultThreadTerminalState();
   }
 

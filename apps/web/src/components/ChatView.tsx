@@ -187,6 +187,7 @@ import {
 import { ProviderHealthBanner } from "./chat/ProviderHealthBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
 import {
+  shouldAutoDeleteTerminalThreadOnLastClose,
   buildExpiredTerminalContextToastCopy,
   buildLocalDraftThread,
   shouldRenderTerminalWorkspace,
@@ -556,6 +557,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const storeCloseWorkspaceChat = useTerminalStateStore((s) => s.closeWorkspaceChat);
   const storeSetActiveTerminal = useTerminalStateStore((s) => s.setActiveTerminal);
   const storeCloseTerminal = useTerminalStateStore((s) => s.closeTerminal);
+  const storeClearTerminalState = useTerminalStateStore((s) => s.clearTerminalState);
 
   const setPrompt = useCallback(
     (nextPrompt: string) => {
@@ -1634,6 +1636,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
       const api = readNativeApi();
       if (!activeThreadId || !api) return;
       const isFinalTerminal = terminalState.terminalIds.length <= 1;
+      const shouldDeletePlaceholderTerminalThread = shouldAutoDeleteTerminalThreadOnLastClose({
+        isLastTerminal: isFinalTerminal,
+        isServerThread,
+        terminalEntryPoint: terminalState.entryPoint,
+        thread: activeThread,
+      });
       const fallbackExitWrite = () =>
         api.terminal
           .write({ threadId: activeThreadId, terminalId, data: "exit\n" })
@@ -1656,8 +1664,40 @@ export default function ChatView({ threadId }: ChatViewProps) {
       }
       storeCloseTerminal(activeThreadId, terminalId);
       setTerminalFocusRequestId((value) => value + 1);
+      if (!shouldDeletePlaceholderTerminalThread) {
+        return;
+      }
+      void (async () => {
+        try {
+          await api.orchestration.dispatchCommand({
+            type: "thread.delete",
+            commandId: newCommandId(),
+            threadId: activeThreadId,
+          });
+          const snapshot = await api.orchestration.getSnapshot();
+          syncServerReadModel(snapshot);
+          useComposerDraftStore.getState().clearDraftThread(activeThreadId);
+          storeClearTerminalState(activeThreadId);
+          await navigate({ to: "/", replace: true });
+        } catch (error) {
+          console.error("Failed to delete empty terminal thread after closing its last terminal", {
+            threadId: activeThreadId,
+            error,
+          });
+        }
+      })();
     },
-    [activeThreadId, storeCloseTerminal, terminalState.terminalIds.length],
+    [
+      activeThread,
+      activeThreadId,
+      isServerThread,
+      navigate,
+      storeClearTerminalState,
+      storeCloseTerminal,
+      syncServerReadModel,
+      terminalState.entryPoint,
+      terminalState.terminalIds.length,
+    ],
   );
   const closeActiveWorkspaceView = useCallback(() => {
     if (!activeThreadId || !terminalWorkspaceOpen) {

@@ -31,6 +31,10 @@
     "./schemaJson": {
       "types": "./src/schemaJson.ts",
       "import": "./src/schemaJson.ts"
+    },
+    "./terminalThreads": {
+      "types": "./src/terminalThreads.ts",
+      "import": "./src/terminalThreads.ts"
     }
   },
   "scripts": {

@@ -279,6 +279,21 @@ describe("terminalStateStore actions", () => {
     ).toEqual(["default"]);
   });
 
+  it("keeps terminal-first threads terminal-first after closing the last terminal", () => {
+    const store = useTerminalStateStore.getState();
+    store.openTerminalThreadPage(THREAD_ID, { terminalOnly: true });
+    store.closeTerminal(THREAD_ID, "default");
+
+    const terminalState = selectThreadTerminalState(
+      useTerminalStateStore.getState().terminalStateByThreadId,
+      THREAD_ID,
+    );
+    expect(useTerminalStateStore.getState().terminalStateByThreadId[THREAD_ID]).toBeDefined();
+    expect(terminalState.entryPoint).toBe("terminal");
+    expect(terminalState.terminalOpen).toBe(false);
+    expect(terminalState.terminalIds).toEqual(["default"]);
+  });
+
   it("keeps a valid active terminal after closing an active split terminal", () => {
     const store = useTerminalStateStore.getState();
     store.splitTerminal(THREAD_ID, "terminal-2");

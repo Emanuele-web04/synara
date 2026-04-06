@@ -2,6 +2,7 @@ import { ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
+  shouldAutoDeleteTerminalThreadOnLastClose,
   buildExpiredTerminalContextToastCopy,
   deriveComposerSendState,
   shouldRenderTerminalWorkspace,
@@ -96,6 +97,68 @@ describe("shouldRenderTerminalWorkspace", () => {
         activeProjectExists: true,
         presentationMode: "drawer",
         terminalOpen: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("shouldAutoDeleteTerminalThreadOnLastClose", () => {
+  it("deletes untouched terminal-first placeholder threads when the last terminal closes", () => {
+    expect(
+      shouldAutoDeleteTerminalThreadOnLastClose({
+        isLastTerminal: true,
+        isServerThread: true,
+        terminalEntryPoint: "terminal",
+        thread: {
+          title: "New terminal",
+          messages: [],
+          latestTurn: null,
+          session: null,
+          activities: [],
+          proposedPlans: [],
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps non-placeholder or already-used threads", () => {
+    expect(
+      shouldAutoDeleteTerminalThreadOnLastClose({
+        isLastTerminal: true,
+        isServerThread: true,
+        terminalEntryPoint: "terminal",
+        thread: {
+          title: "Manual rename",
+          messages: [],
+          latestTurn: null,
+          session: null,
+          activities: [],
+          proposedPlans: [],
+        },
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldAutoDeleteTerminalThreadOnLastClose({
+        isLastTerminal: true,
+        isServerThread: true,
+        terminalEntryPoint: "terminal",
+        thread: {
+          title: "New terminal",
+          messages: [
+            {
+              id: "msg-1" as never,
+              role: "user",
+              text: "hello",
+              createdAt: "2026-04-06T12:00:00.000Z",
+              streaming: false,
+            },
+          ],
+          latestTurn: null,
+          session: null,
+          activities: [],
+          proposedPlans: [],
+        },
       }),
     ).toBe(false);
   });
