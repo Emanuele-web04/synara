@@ -948,6 +948,16 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         return yield* providerDiscoveryService.listSkills(body);
       }
 
+      case WS_METHODS.providerListPlugins: {
+        const body = stripRequestTag(request.body);
+        return yield* providerDiscoveryService.listPlugins(body);
+      }
+
+      case WS_METHODS.providerReadPlugin: {
+        const body = stripRequestTag(request.body);
+        return yield* providerDiscoveryService.readPlugin(body);
+      }
+
       case WS_METHODS.providerListModels: {
         const body = stripRequestTag(request.body);
         return yield* providerDiscoveryService.listModels(body);

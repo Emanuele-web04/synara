@@ -3196,6 +3196,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       provider: PROVIDER,
       supportsSkillMentions: true,
       supportsSkillDiscovery: true,
+      supportsPluginMentions: false,
+      supportsPluginDiscovery: false,
       supportsRuntimeModelList: false,
     };
 
@@ -3209,6 +3211,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         sessionModelSwitch: "in-session",
         supportsSkillMentions: true,
         supportsSkillDiscovery: true,
+        supportsPluginMentions: false,
+        supportsPluginDiscovery: false,
         supportsRuntimeModelList: false,
       },
       startSession,

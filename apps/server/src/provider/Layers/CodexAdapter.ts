@@ -12,6 +12,8 @@ import {
   type ProviderComposerCapabilities,
   type ProviderEvent,
   type ProviderListModelsResult,
+  type ProviderListPluginsResult,
+  type ProviderReadPluginResult,
   type ProviderListSkillsResult,
   type ProviderRuntimeEvent,
   type ThreadTokenUsageSnapshot,
@@ -1426,6 +1428,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
               threadId: input.threadId,
               ...(input.input !== undefined ? { input: input.input } : {}),
               ...(input.skills !== undefined ? { skills: input.skills } : {}),
+              ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
               ...(input.modelSelection?.provider === "codex"
                 ? { model: input.modelSelection.model }
                 : {}),
@@ -1548,6 +1551,42 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           }),
       }).pipe(Effect.map((result) => result satisfies ProviderListSkillsResult));
 
+    const listPlugins: NonNullable<CodexAdapterShape["listPlugins"]> = (input) =>
+      Effect.tryPromise({
+        try: () =>
+          manager.listPlugins({
+            ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+            ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+            ...(input.forceRemoteSync !== undefined
+              ? { forceRemoteSync: input.forceRemoteSync }
+              : {}),
+            ...(input.forceReload !== undefined ? { forceReload: input.forceReload } : {}),
+          }),
+        catch: (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "plugin/list",
+            detail: toMessage(cause, "plugin/list failed"),
+            cause,
+          }),
+      }).pipe(Effect.map((result) => result satisfies ProviderListPluginsResult));
+
+    const readPlugin: NonNullable<CodexAdapterShape["readPlugin"]> = (input) =>
+      Effect.tryPromise({
+        try: () =>
+          manager.readPlugin({
+            marketplacePath: input.marketplacePath,
+            pluginName: input.pluginName,
+          }),
+        catch: (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "plugin/read",
+            detail: toMessage(cause, "plugin/read failed"),
+            cause,
+          }),
+      }).pipe(Effect.map((result) => result satisfies ProviderReadPluginResult));
+
     const listModels: NonNullable<CodexAdapterShape["listModels"]> = () =>
       Effect.tryPromise({
         try: () => manager.listModels(),
@@ -1606,6 +1645,8 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         sessionModelSwitch: "in-session",
         supportsSkillMentions: true,
         supportsSkillDiscovery: true,
+        supportsPluginMentions: true,
+        supportsPluginDiscovery: true,
         supportsRuntimeModelList: true,
       },
       startSession,
@@ -1621,6 +1662,8 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       stopAll,
       getComposerCapabilities,
       listSkills,
+      listPlugins,
+      readPlugin,
       listModels,
       streamEvents: Stream.fromQueue(runtimeEventQueue),
     } satisfies CodexAdapterShape;

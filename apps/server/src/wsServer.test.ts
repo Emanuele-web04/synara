@@ -1277,9 +1277,44 @@ describe("WebSocket Server", () => {
             provider: "codex" as const,
             supportsSkillMentions: false,
             supportsSkillDiscovery: false,
+            supportsPluginMentions: false,
+            supportsPluginDiscovery: false,
             supportsRuntimeModelList: false,
           }),
         listSkills: () => Effect.succeed({ skills: [], source: "test", cached: false }),
+        listPlugins: () =>
+          Effect.succeed({
+            marketplaces: [],
+            marketplaceLoadErrors: [],
+            remoteSyncError: null,
+            featuredPluginIds: [],
+            source: "test",
+            cached: false,
+          }),
+        readPlugin: () =>
+          Effect.succeed({
+            plugin: {
+              marketplaceName: "test-marketplace",
+              marketplacePath: "/test/marketplace.json",
+              summary: {
+                id: "plugin/test",
+                name: "test",
+                source: {
+                  type: "local",
+                  path: "/test/plugin",
+                },
+                installed: false,
+                enabled: false,
+                installPolicy: "AVAILABLE",
+                authPolicy: "ON_USE",
+              },
+              skills: [],
+              apps: [],
+              mcpServers: [],
+            },
+            source: "test",
+            cached: false,
+          }),
         listModels: () => Effect.succeed({ models: [], source: "test", cached: false }),
       }),
     );

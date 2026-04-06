@@ -517,6 +517,38 @@ describe("sendTurn", () => {
     });
   });
 
+  it("adds selected plugin mentions as structured turn/start input items", async () => {
+    const { manager, context, sendRequest } = createSendTurnHarness();
+
+    await manager.sendTurn({
+      threadId: asThreadId("thread_1"),
+      input: "Use @github to inspect the PR",
+      mentions: [
+        {
+          name: "github",
+          path: "plugin://github@openai-curated",
+        },
+      ],
+    });
+
+    expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
+      threadId: "thread_1",
+      input: [
+        {
+          type: "text",
+          text: "Use @github to inspect the PR",
+          text_elements: [],
+        },
+        {
+          type: "mention",
+          name: "github",
+          path: "plugin://github@openai-curated",
+        },
+      ],
+      model: "gpt-5.3-codex",
+    });
+  });
+
   it("passes Codex plan mode as a collaboration preset on turn/start", async () => {
     const { manager, context, sendRequest } = createSendTurnHarness();
 
@@ -693,7 +725,7 @@ describe("CodexAppServerManager discovery", () => {
       threadId: "thread_1",
     });
 
-    expect(resolveContextForDiscovery).toHaveBeenCalledWith("thread_1");
+    expect(resolveContextForDiscovery).toHaveBeenCalledWith("thread_1", "/repo");
     expect(sendRequest).toHaveBeenCalledWith(context, "skills/list", {
       cwds: ["/repo"],
     });
@@ -781,6 +813,304 @@ describe("CodexAppServerManager discovery", () => {
         enabled: true,
       },
     ]);
+  });
+
+  it("parses plugin/list responses for the requested cwd", async () => {
+    const manager = new CodexAppServerManager();
+    const context = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId: "thread_1",
+        runtimeMode: "full-access",
+        model: "gpt-5.3-codex",
+        resumeCursor: { threadId: "thread_1" },
+        createdAt: "2026-02-10T00:00:00.000Z",
+        updatedAt: "2026-02-10T00:00:00.000Z",
+      },
+      account: {
+        type: "unknown",
+        planType: null,
+        sparkEnabled: true,
+      },
+      collabReceiverTurns: new Map(),
+    };
+
+    const resolveContextForDiscovery = vi
+      .spyOn(
+        manager as unknown as {
+          resolveContextForDiscovery: (threadId?: string, cwd?: string) => unknown;
+        },
+        "resolveContextForDiscovery",
+      )
+      .mockReturnValue(context);
+    const sendRequest = vi
+      .spyOn(
+        manager as unknown as {
+          sendRequest: (...args: unknown[]) => Promise<unknown>;
+        },
+        "sendRequest",
+      )
+      .mockResolvedValue({
+        result: {
+          marketplaces: [
+            {
+              name: "openai-curated",
+              path: "/Users/test/.agents/plugins/marketplace.json",
+              interface: {
+                displayName: "OpenAI Curated",
+              },
+              plugins: [
+                {
+                  id: "plugin/github",
+                  name: "github",
+                  source: {
+                    path: "/Users/test/.codex/plugins/cache/openai-curated/github",
+                  },
+                  installed: true,
+                  enabled: true,
+                  installPolicy: "INSTALLED_BY_DEFAULT",
+                  authPolicy: "ON_USE",
+                  interface: {
+                    displayName: "GitHub",
+                    shortDescription: "Inspect repositories and pull requests",
+                    capabilities: ["pull_requests", "issues"],
+                    defaultPrompt: ["Help with repository tasks"],
+                    websiteUrl: "https://github.com",
+                    screenshots: ["https://example.com/github.png"],
+                  },
+                },
+              ],
+            },
+          ],
+          marketplaceLoadErrors: [
+            {
+              marketplacePath: "/broken/marketplace.json",
+              message: "Invalid marketplace manifest",
+            },
+          ],
+          featuredPluginIds: ["plugin/github"],
+          remoteSyncError: "Remote sync unavailable",
+        },
+      });
+
+    const result = await manager.listPlugins({
+      cwd: "/repo",
+      threadId: "thread_1",
+      forceRemoteSync: true,
+    });
+
+    expect(resolveContextForDiscovery).toHaveBeenCalledWith("thread_1", "/repo");
+    expect(sendRequest).toHaveBeenCalledWith(context, "plugin/list", {
+      cwds: ["/repo"],
+      forceRemoteSync: true,
+    });
+    expect(result).toEqual({
+      marketplaces: [
+        {
+          name: "openai-curated",
+          path: "/Users/test/.agents/plugins/marketplace.json",
+          interface: {
+            displayName: "OpenAI Curated",
+          },
+          plugins: [
+            {
+              id: "plugin/github",
+              name: "github",
+              source: {
+                type: "local",
+                path: "/Users/test/.codex/plugins/cache/openai-curated/github",
+              },
+              installed: true,
+              enabled: true,
+              installPolicy: "INSTALLED_BY_DEFAULT",
+              authPolicy: "ON_USE",
+              interface: {
+                displayName: "GitHub",
+                shortDescription: "Inspect repositories and pull requests",
+                capabilities: ["pull_requests", "issues"],
+                defaultPrompt: ["Help with repository tasks"],
+                websiteUrl: "https://github.com",
+                screenshots: ["https://example.com/github.png"],
+              },
+            },
+          ],
+        },
+      ],
+      marketplaceLoadErrors: [
+        {
+          marketplacePath: "/broken/marketplace.json",
+          message: "Invalid marketplace manifest",
+        },
+      ],
+      featuredPluginIds: ["plugin/github"],
+      remoteSyncError: "Remote sync unavailable",
+      source: "codex-app-server",
+      cached: false,
+    });
+  });
+
+  it("parses plugin/read responses into plugin detail", async () => {
+    const manager = new CodexAppServerManager();
+    const context = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId: "thread_1",
+        runtimeMode: "full-access",
+        model: "gpt-5.3-codex",
+        resumeCursor: { threadId: "thread_1" },
+        createdAt: "2026-02-10T00:00:00.000Z",
+        updatedAt: "2026-02-10T00:00:00.000Z",
+      },
+      account: {
+        type: "unknown",
+        planType: null,
+        sparkEnabled: true,
+      },
+      collabReceiverTurns: new Map(),
+    };
+
+    const resolveContextForDiscovery = vi
+      .spyOn(
+        manager as unknown as {
+          resolveContextForDiscovery: (threadId?: string, cwd?: string) => unknown;
+        },
+        "resolveContextForDiscovery",
+      )
+      .mockReturnValue(context);
+    const sendRequest = vi
+      .spyOn(
+        manager as unknown as {
+          sendRequest: (...args: unknown[]) => Promise<unknown>;
+        },
+        "sendRequest",
+      )
+      .mockResolvedValue({
+        result: {
+          plugin: {
+            marketplaceName: "openai-curated",
+            marketplacePath: "/Users/test/.agents/plugins/marketplace.json",
+            summary: {
+              id: "plugin/github",
+              name: "github",
+              source: {
+                path: "/Users/test/.codex/plugins/cache/openai-curated/github",
+              },
+              installed: true,
+              enabled: true,
+              installPolicy: "INSTALLED_BY_DEFAULT",
+              authPolicy: "ON_USE",
+              interface: {
+                displayName: "GitHub",
+                shortDescription: "Inspect repositories and pull requests",
+                longDescription: "Use GitHub tools to work with repositories, issues, and PRs.",
+                developerName: "OpenAI",
+                category: "Developer Tools",
+                capabilities: ["pull_requests", "issues"],
+                defaultPrompt: ["Help with repository tasks"],
+                websiteUrl: "https://github.com",
+                privacyPolicyUrl: "https://github.com/privacy",
+                termsOfServiceUrl:
+                  "https://docs.github.com/site-policy/github-terms/github-terms-of-service",
+                brandColor: "#24292f",
+                composerIcon: "github",
+                logo: "https://example.com/github-logo.png",
+                screenshots: ["https://example.com/github.png"],
+              },
+            },
+            description: "GitHub connector for repository workflows.",
+            skills: [
+              {
+                name: "gh-fix-ci",
+                description: "Debug failing GitHub Actions checks.",
+                path: "/Users/test/.codex/plugins/cache/openai-curated/github/skills/gh-fix-ci/SKILL.md",
+                scope: "user",
+                dependencies: ["gh"],
+              },
+            ],
+            apps: [
+              {
+                id: "github-app",
+                name: "GitHub App",
+                description: "Connected GitHub account",
+                installUrl: "https://github.com/apps/openai",
+                needsAuth: true,
+              },
+            ],
+            mcpServers: ["GitHub"],
+          },
+        },
+      });
+
+    const result = await manager.readPlugin({
+      marketplacePath: "/Users/test/.agents/plugins/marketplace.json",
+      pluginName: "github",
+    });
+
+    expect(resolveContextForDiscovery).toHaveBeenCalledWith(undefined);
+    expect(sendRequest).toHaveBeenCalledWith(context, "plugin/read", {
+      marketplacePath: "/Users/test/.agents/plugins/marketplace.json",
+      pluginName: "github",
+    });
+    expect(result).toEqual({
+      plugin: {
+        marketplaceName: "openai-curated",
+        marketplacePath: "/Users/test/.agents/plugins/marketplace.json",
+        summary: {
+          id: "plugin/github",
+          name: "github",
+          source: {
+            type: "local",
+            path: "/Users/test/.codex/plugins/cache/openai-curated/github",
+          },
+          installed: true,
+          enabled: true,
+          installPolicy: "INSTALLED_BY_DEFAULT",
+          authPolicy: "ON_USE",
+          interface: {
+            displayName: "GitHub",
+            shortDescription: "Inspect repositories and pull requests",
+            longDescription: "Use GitHub tools to work with repositories, issues, and PRs.",
+            developerName: "OpenAI",
+            category: "Developer Tools",
+            capabilities: ["pull_requests", "issues"],
+            defaultPrompt: ["Help with repository tasks"],
+            websiteUrl: "https://github.com",
+            privacyPolicyUrl: "https://github.com/privacy",
+            termsOfServiceUrl:
+              "https://docs.github.com/site-policy/github-terms/github-terms-of-service",
+            brandColor: "#24292f",
+            composerIcon: "github",
+            logo: "https://example.com/github-logo.png",
+            screenshots: ["https://example.com/github.png"],
+          },
+        },
+        description: "GitHub connector for repository workflows.",
+        skills: [
+          {
+            name: "gh-fix-ci",
+            description: "Debug failing GitHub Actions checks.",
+            path: "/Users/test/.codex/plugins/cache/openai-curated/github/skills/gh-fix-ci/SKILL.md",
+            enabled: true,
+            scope: "user",
+            dependencies: ["gh"],
+          },
+        ],
+        apps: [
+          {
+            id: "github-app",
+            name: "GitHub App",
+            description: "Connected GitHub account",
+            installUrl: "https://github.com/apps/openai",
+            needsAuth: true,
+          },
+        ],
+        mcpServers: ["GitHub"],
+      },
+      source: "codex-app-server",
+      cached: false,
+    });
   });
 });
 

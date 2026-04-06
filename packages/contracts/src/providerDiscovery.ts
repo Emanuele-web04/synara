@@ -26,10 +26,18 @@ export const ProviderSkillReference = Schema.Struct({
 });
 export type ProviderSkillReference = typeof ProviderSkillReference.Type;
 
+export const ProviderMentionReference = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  path: TrimmedNonEmptyString,
+});
+export type ProviderMentionReference = typeof ProviderMentionReference.Type;
+
 export const ProviderComposerCapabilities = Schema.Struct({
   provider: ProviderDiscoveryKind,
   supportsSkillMentions: Schema.Boolean,
   supportsSkillDiscovery: Schema.Boolean,
+  supportsPluginMentions: Schema.Boolean,
+  supportsPluginDiscovery: Schema.Boolean,
   supportsRuntimeModelList: Schema.Boolean,
 });
 export type ProviderComposerCapabilities = typeof ProviderComposerCapabilities.Type;
@@ -53,6 +61,125 @@ export const ProviderListSkillsResult = Schema.Struct({
   cached: Schema.optional(Schema.Boolean),
 });
 export type ProviderListSkillsResult = typeof ProviderListSkillsResult.Type;
+
+// Plugin discovery mirrors Codex app-server's marketplace + plugin summary surface.
+export const ProviderPluginMarketplaceInterface = Schema.Struct({
+  displayName: Schema.optional(TrimmedNonEmptyString),
+});
+export type ProviderPluginMarketplaceInterface = typeof ProviderPluginMarketplaceInterface.Type;
+
+export const ProviderPluginInstallPolicy = Schema.Literals([
+  "NOT_AVAILABLE",
+  "AVAILABLE",
+  "INSTALLED_BY_DEFAULT",
+]);
+export type ProviderPluginInstallPolicy = typeof ProviderPluginInstallPolicy.Type;
+
+export const ProviderPluginAuthPolicy = Schema.Literals(["ON_INSTALL", "ON_USE"]);
+export type ProviderPluginAuthPolicy = typeof ProviderPluginAuthPolicy.Type;
+
+export const ProviderPluginSource = Schema.Struct({
+  type: Schema.Literal("local"),
+  path: TrimmedNonEmptyString,
+});
+export type ProviderPluginSource = typeof ProviderPluginSource.Type;
+
+export const ProviderPluginInterface = Schema.Struct({
+  displayName: Schema.optional(TrimmedNonEmptyString),
+  shortDescription: Schema.optional(TrimmedNonEmptyString),
+  longDescription: Schema.optional(TrimmedNonEmptyString),
+  developerName: Schema.optional(TrimmedNonEmptyString),
+  category: Schema.optional(TrimmedNonEmptyString),
+  capabilities: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  websiteUrl: Schema.optional(TrimmedNonEmptyString),
+  privacyPolicyUrl: Schema.optional(TrimmedNonEmptyString),
+  termsOfServiceUrl: Schema.optional(TrimmedNonEmptyString),
+  defaultPrompt: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  brandColor: Schema.optional(TrimmedNonEmptyString),
+  composerIcon: Schema.optional(TrimmedNonEmptyString),
+  logo: Schema.optional(TrimmedNonEmptyString),
+  screenshots: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+});
+export type ProviderPluginInterface = typeof ProviderPluginInterface.Type;
+
+export const ProviderPluginDescriptor = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  source: ProviderPluginSource,
+  installed: Schema.Boolean,
+  enabled: Schema.Boolean,
+  installPolicy: ProviderPluginInstallPolicy,
+  authPolicy: ProviderPluginAuthPolicy,
+  interface: Schema.optional(ProviderPluginInterface),
+});
+export type ProviderPluginDescriptor = typeof ProviderPluginDescriptor.Type;
+
+export const ProviderPluginMarketplaceLoadError = Schema.Struct({
+  marketplacePath: TrimmedNonEmptyString,
+  message: TrimmedNonEmptyString,
+});
+export type ProviderPluginMarketplaceLoadError = typeof ProviderPluginMarketplaceLoadError.Type;
+
+export const ProviderPluginMarketplaceDescriptor = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  path: TrimmedNonEmptyString,
+  interface: Schema.optional(ProviderPluginMarketplaceInterface),
+  plugins: Schema.Array(ProviderPluginDescriptor),
+});
+export type ProviderPluginMarketplaceDescriptor = typeof ProviderPluginMarketplaceDescriptor.Type;
+
+export const ProviderPluginAppSummary = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  description: Schema.optional(TrimmedNonEmptyString),
+  installUrl: Schema.optional(TrimmedNonEmptyString),
+  needsAuth: Schema.Boolean,
+});
+export type ProviderPluginAppSummary = typeof ProviderPluginAppSummary.Type;
+
+export const ProviderListPluginsInput = Schema.Struct({
+  provider: ProviderDiscoveryKind,
+  cwd: Schema.optional(TrimmedNonEmptyString),
+  threadId: Schema.optional(TrimmedNonEmptyString),
+  forceRemoteSync: Schema.optional(Schema.Boolean),
+  forceReload: Schema.optional(Schema.Boolean),
+});
+export type ProviderListPluginsInput = typeof ProviderListPluginsInput.Type;
+
+export const ProviderListPluginsResult = Schema.Struct({
+  marketplaces: Schema.Array(ProviderPluginMarketplaceDescriptor),
+  marketplaceLoadErrors: Schema.Array(ProviderPluginMarketplaceLoadError),
+  remoteSyncError: Schema.NullOr(TrimmedNonEmptyString),
+  featuredPluginIds: Schema.Array(TrimmedNonEmptyString),
+  source: Schema.optional(TrimmedNonEmptyString),
+  cached: Schema.optional(Schema.Boolean),
+});
+export type ProviderListPluginsResult = typeof ProviderListPluginsResult.Type;
+
+export const ProviderReadPluginInput = Schema.Struct({
+  provider: ProviderDiscoveryKind,
+  marketplacePath: TrimmedNonEmptyString,
+  pluginName: TrimmedNonEmptyString,
+});
+export type ProviderReadPluginInput = typeof ProviderReadPluginInput.Type;
+
+export const ProviderPluginDetail = Schema.Struct({
+  marketplaceName: TrimmedNonEmptyString,
+  marketplacePath: TrimmedNonEmptyString,
+  summary: ProviderPluginDescriptor,
+  description: Schema.optional(TrimmedNonEmptyString),
+  skills: Schema.Array(ProviderSkillDescriptor),
+  apps: Schema.Array(ProviderPluginAppSummary),
+  mcpServers: Schema.Array(TrimmedNonEmptyString),
+});
+export type ProviderPluginDetail = typeof ProviderPluginDetail.Type;
+
+export const ProviderReadPluginResult = Schema.Struct({
+  plugin: ProviderPluginDetail,
+  source: Schema.optional(TrimmedNonEmptyString),
+  cached: Schema.optional(Schema.Boolean),
+});
+export type ProviderReadPluginResult = typeof ProviderReadPluginResult.Type;
 
 export const ProviderListModelsInput = Schema.Struct({
   provider: ProviderDiscoveryKind,

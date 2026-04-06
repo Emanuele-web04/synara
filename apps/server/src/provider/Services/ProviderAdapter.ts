@@ -13,6 +13,10 @@ import type {
   ProviderApprovalDecision,
   ProviderKind,
   ProviderListModelsResult,
+  ProviderListPluginsInput,
+  ProviderListPluginsResult,
+  ProviderReadPluginInput,
+  ProviderReadPluginResult,
   ProviderListSkillsResult,
   ProviderListSkillsInput,
   ProviderUserInputAnswers,
@@ -36,6 +40,8 @@ export interface ProviderAdapterCapabilities {
   readonly sessionModelSwitch: ProviderSessionModelSwitchMode;
   readonly supportsSkillMentions?: boolean;
   readonly supportsSkillDiscovery?: boolean;
+  readonly supportsPluginMentions?: boolean;
+  readonly supportsPluginDiscovery?: boolean;
   readonly supportsRuntimeModelList?: boolean;
 }
 
@@ -142,6 +148,20 @@ export interface ProviderAdapterShape<TError> {
   readonly listSkills?: (
     input: ProviderListSkillsInput,
   ) => Effect.Effect<ProviderListSkillsResult, TError>;
+
+  /**
+   * List plugins available for the current provider/runtime.
+   */
+  readonly listPlugins?: (
+    input: ProviderListPluginsInput,
+  ) => Effect.Effect<ProviderListPluginsResult, TError>;
+
+  /**
+   * Read one plugin in detail from a marketplace entry.
+   */
+  readonly readPlugin?: (
+    input: ProviderReadPluginInput,
+  ) => Effect.Effect<ProviderReadPluginResult, TError>;
 
   /**
    * List models directly from the provider runtime when supported.

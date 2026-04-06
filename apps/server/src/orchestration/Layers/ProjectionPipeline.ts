@@ -600,6 +600,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             role: event.payload.role,
             text: nextText,
             ...(nextAttachments !== undefined ? { attachments: [...nextAttachments] } : {}),
+            ...(event.payload.skills !== undefined ? { skills: event.payload.skills } : {}),
+            ...(event.payload.mentions !== undefined ? { mentions: event.payload.mentions } : {}),
             isStreaming: event.payload.streaming,
             source: event.payload.source,
             createdAt: existingMessage?.createdAt ?? event.payload.createdAt,

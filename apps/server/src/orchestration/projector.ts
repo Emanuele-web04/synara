@@ -354,6 +354,8 @@ export function projectEvent(
             role: payload.role,
             text: payload.text,
             ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
+            ...(payload.skills !== undefined ? { skills: payload.skills } : {}),
+            ...(payload.mentions !== undefined ? { mentions: payload.mentions } : {}),
             turnId: payload.turnId,
             streaming: payload.streaming,
             source: payload.source,
@@ -382,6 +384,8 @@ export function projectEvent(
                     ...(message.attachments !== undefined
                       ? { attachments: message.attachments }
                       : {}),
+                    ...(message.skills !== undefined ? { skills: message.skills } : {}),
+                    ...(message.mentions !== undefined ? { mentions: message.mentions } : {}),
                   }
                 : entry,
             )

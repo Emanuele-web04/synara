@@ -7,6 +7,8 @@ import {
   OrchestrationProposedPlanId,
   OrchestrationReadModel,
   ProjectScript,
+  ProviderMentionReference,
+  ProviderSkillReference,
   ThreadId,
   TurnId,
   type OrchestrationCheckpointSummary,
@@ -55,6 +57,8 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
   Struct.assign({
     isStreaming: Schema.Number,
     attachments: Schema.NullOr(Schema.fromJsonString(Schema.Array(ChatAttachment))),
+    skills: Schema.NullOr(Schema.fromJsonString(Schema.Array(ProviderSkillReference))),
+    mentions: Schema.NullOr(Schema.fromJsonString(Schema.Array(ProviderMentionReference))),
   }),
 );
 const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
@@ -195,6 +199,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           role,
           text,
           attachments_json AS "attachments",
+          skills_json AS "skills",
+          mentions_json AS "mentions",
           is_streaming AS "isStreaming",
           source,
           created_at AS "createdAt",
@@ -438,6 +444,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               role: row.role,
               text: row.text,
               ...(row.attachments !== null ? { attachments: row.attachments } : {}),
+              ...(row.skills !== null ? { skills: row.skills } : {}),
+              ...(row.mentions !== null ? { mentions: row.mentions } : {}),
               turnId: row.turnId,
               streaming: row.isStreaming === 1,
               source: row.source,

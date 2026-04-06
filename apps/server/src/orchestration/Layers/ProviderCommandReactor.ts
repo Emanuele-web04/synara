@@ -6,8 +6,10 @@ import {
   type ModelSelection,
   type OrchestrationEvent,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
+  type ProviderMentionReference,
   ProviderKind,
   type ProviderStartOptions,
+  type ProviderSkillReference,
   type OrchestrationSession,
   ThreadId,
   type ProviderSession,
@@ -359,6 +361,8 @@ const make = Effect.gen(function* () {
     readonly messageId: string;
     readonly messageText: string;
     readonly attachments?: ReadonlyArray<ChatAttachment>;
+    readonly skills?: ReadonlyArray<ProviderSkillReference>;
+    readonly mentions?: ReadonlyArray<ProviderMentionReference>;
     readonly modelSelection?: ModelSelection;
     readonly providerOptions?: ProviderStartOptions;
     readonly interactionMode?: "default" | "plan";
@@ -421,6 +425,8 @@ const make = Effect.gen(function* () {
       threadId: input.threadId,
       ...(normalizedInput ? { input: normalizedInput } : {}),
       ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
+      ...(input.skills !== undefined ? { skills: input.skills } : {}),
+      ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
       ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
     });
@@ -546,6 +552,8 @@ const make = Effect.gen(function* () {
       messageId: message.id,
       messageText: message.text,
       ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+      ...(message.skills !== undefined ? { skills: message.skills } : {}),
+      ...(message.mentions !== undefined ? { mentions: message.mentions } : {}),
       ...(event.payload.modelSelection !== undefined
         ? { modelSelection: event.payload.modelSelection }
         : {}),

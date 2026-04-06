@@ -1,6 +1,6 @@
 import { Option, Schema, SchemaIssue, Struct } from "effect";
 import { ClaudeModelOptions, CodexModelOptions } from "./model";
-import { ProviderSkillReference } from "./providerDiscovery";
+import { ProviderMentionReference, ProviderSkillReference } from "./providerDiscovery";
 import {
   ApprovalRequestId,
   CheckpointRef,
@@ -182,6 +182,8 @@ export const OrchestrationMessage = Schema.Struct({
   role: OrchestrationMessageRole,
   text: Schema.String,
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
+  skills: Schema.optional(Schema.Array(ProviderSkillReference)),
+  mentions: Schema.optional(Schema.Array(ProviderMentionReference)),
   turnId: Schema.NullOr(TurnId),
   streaming: Schema.Boolean,
   source: OrchestrationMessageSource.pipe(Schema.withDecodingDefault(() => "native")),
@@ -445,6 +447,7 @@ export const ThreadTurnStartCommand = Schema.Struct({
     text: Schema.String,
     attachments: Schema.Array(ChatAttachment),
     skills: Schema.optional(Schema.Array(ProviderSkillReference)),
+    mentions: Schema.optional(Schema.Array(ProviderMentionReference)),
   }),
   modelSelection: Schema.optional(ModelSelection),
   providerOptions: Schema.optional(ProviderStartOptions),
@@ -467,6 +470,7 @@ const ClientThreadTurnStartCommand = Schema.Struct({
     text: Schema.String,
     attachments: Schema.Array(UploadChatAttachment),
     skills: Schema.optional(Schema.Array(ProviderSkillReference)),
+    mentions: Schema.optional(Schema.Array(ProviderMentionReference)),
   }),
   modelSelection: Schema.optional(ModelSelection),
   providerOptions: Schema.optional(ProviderStartOptions),
@@ -742,6 +746,8 @@ export const ThreadMessageSentPayload = Schema.Struct({
   role: OrchestrationMessageRole,
   text: Schema.String,
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
+  skills: Schema.optional(Schema.Array(ProviderSkillReference)),
+  mentions: Schema.optional(Schema.Array(ProviderMentionReference)),
   turnId: Schema.NullOr(TurnId),
   streaming: Schema.Boolean,
   source: OrchestrationMessageSource.pipe(Schema.withDecodingDefault(() => "native")),

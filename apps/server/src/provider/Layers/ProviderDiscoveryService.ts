@@ -2,7 +2,9 @@ import {
   type ProviderComposerCapabilities,
   ProviderGetComposerCapabilitiesInput,
   ProviderListModelsInput,
+  ProviderListPluginsInput,
   ProviderListSkillsInput,
+  ProviderReadPluginInput,
 } from "@t3tools/contracts";
 import { Effect, Layer, Schema, SchemaIssue } from "effect";
 
@@ -35,6 +37,8 @@ const disabledCapabilitiesForProvider = (
   provider,
   supportsSkillMentions: false,
   supportsSkillDiscovery: false,
+  supportsPluginMentions: false,
+  supportsPluginDiscovery: false,
   supportsRuntimeModelList: false,
 });
 
@@ -75,6 +79,44 @@ const make = Effect.gen(function* () {
       return yield* adapter.listSkills(parsed);
     });
 
+  const listPlugins: ProviderDiscoveryServiceShape["listPlugins"] = (input) =>
+    Effect.gen(function* () {
+      const parsed = yield* decodeInputOrValidationError({
+        operation: "ProviderDiscoveryService.listPlugins",
+        schema: ProviderListPluginsInput,
+        payload: input,
+      });
+      const adapter = yield* registry.getByProvider(parsed.provider);
+      if (!adapter.listPlugins) {
+        return {
+          marketplaces: [],
+          marketplaceLoadErrors: [],
+          remoteSyncError: null,
+          featuredPluginIds: [],
+          source: "unsupported",
+          cached: false,
+        };
+      }
+      return yield* adapter.listPlugins(parsed);
+    });
+
+  const readPlugin: ProviderDiscoveryServiceShape["readPlugin"] = (input) =>
+    Effect.gen(function* () {
+      const parsed = yield* decodeInputOrValidationError({
+        operation: "ProviderDiscoveryService.readPlugin",
+        schema: ProviderReadPluginInput,
+        payload: input,
+      });
+      const adapter = yield* registry.getByProvider(parsed.provider);
+      if (!adapter.readPlugin) {
+        return yield* new ProviderValidationError({
+          operation: "ProviderDiscoveryService.readPlugin",
+          issue: `Plugin discovery is unavailable for provider '${parsed.provider}'.`,
+        });
+      }
+      return yield* adapter.readPlugin(parsed);
+    });
+
   const listModels: ProviderDiscoveryServiceShape["listModels"] = (input) =>
     Effect.gen(function* () {
       const parsed = yield* decodeInputOrValidationError({
@@ -96,6 +138,8 @@ const make = Effect.gen(function* () {
   return {
     getComposerCapabilities,
     listSkills,
+    listPlugins,
+    readPlugin,
     listModels,
   } satisfies ProviderDiscoveryServiceShape;
 });
