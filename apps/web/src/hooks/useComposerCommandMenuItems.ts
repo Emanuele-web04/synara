@@ -18,6 +18,7 @@ import type { ComposerTrigger } from "../composer-logic";
 import {
   filterComposerSlashCommands,
   getAvailableComposerSlashCommands,
+  getProviderNativeSlashCommandSearchTerms,
 } from "../composerSlashCommands";
 import type { ComposerCommandItem } from "../components/chat/ComposerCommandMenu";
 
@@ -115,7 +116,12 @@ export function useComposerCommandMenuItems(input: {
       const providerCommandItems = safeProviderNativeCommands
         .filter((command) => {
           if (!query) return true;
-          return buildCommandSearchBlob(command).includes(query);
+          return (
+            buildCommandSearchBlob(command).includes(query) ||
+            getProviderNativeSlashCommandSearchTerms(provider, command.name).some((term) =>
+              term.includes(query),
+            )
+          );
         })
         .map((command) => ({
           id: `provider-command:${provider}:${command.name}`,

@@ -384,6 +384,7 @@ export function useComposerSlashCommands(input: {
       });
       if (
         hasProviderNativeSlashCommand(
+          "claudeAgent",
           result.commands.map((command) => command.name),
           "fast",
         )

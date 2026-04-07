@@ -155,11 +155,11 @@ describe("composerSlashCommands", () => {
     expect(availableCommands).not.toContain("fast");
     expect(availableCommands).not.toContain("model");
     expect(availableCommands).not.toContain("status");
-    expect(hasProviderNativeSlashCommand(["/fast", "model"], "fast")).toBe(true);
-    expect(hasProviderNativeSlashCommand(["/fast", "model"], "/model")).toBe(true);
+    expect(hasProviderNativeSlashCommand("codex", ["/fast", "model"], "fast")).toBe(true);
+    expect(hasProviderNativeSlashCommand("codex", ["/fast", "model"], "/model")).toBe(true);
   });
 
-  it("never exposes app-level /fast for claude", () => {
+  it("never exposes app-level slash commands for claude", () => {
     expect(
       getAvailableComposerSlashCommands({
         provider: "claudeAgent",
@@ -167,6 +167,11 @@ describe("composerSlashCommands", () => {
         canOfferReviewCommand: true,
         canOfferForkCommand: true,
       }),
-    ).not.toContain("fast");
+    ).toEqual([]);
+  });
+
+  it("treats claude aliases like /fork as provider-native collisions", () => {
+    expect(hasProviderNativeSlashCommand("claudeAgent", ["branch", "model"], "fork")).toBe(true);
+    expect(hasProviderNativeSlashCommand("claudeAgent", ["clear"], "reset")).toBe(true);
   });
 });

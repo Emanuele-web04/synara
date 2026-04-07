@@ -1451,8 +1451,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const effectiveComposerTrigger = useMemo(() => {
     if (
       composerTrigger?.kind === "slash-model" &&
-      composerTrigger.query.length === 0 &&
-      hasProviderNativeSlashCommand(providerNativeCommandNames, "model")
+      hasProviderNativeSlashCommand(selectedProvider, providerNativeCommandNames, "model")
     ) {
       return {
         ...composerTrigger,
@@ -1461,7 +1460,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       };
     }
     return composerTrigger;
-  }, [composerTrigger, providerNativeCommandNames]);
+  }, [composerTrigger, providerNativeCommandNames, selectedProvider]);
   const effectiveComposerTriggerKind = effectiveComposerTrigger?.kind ?? null;
   const supportsTextNativeReviewCommand = useMemo(
     () => providerNativeCommands.some((command) => command.name.toLowerCase() === "review"),

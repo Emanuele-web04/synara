@@ -33,6 +33,56 @@ function normalizeSlashCommandName(value: string): string {
   return value.trim().replace(/^\/+/, "").toLowerCase();
 }
 
+const CLAUDE_NATIVE_COMMAND_ALIASES: Record<string, readonly string[]> = {
+  clear: ["reset", "new"],
+  config: ["settings"],
+  desktop: ["app"],
+  exit: ["quit"],
+  feedback: ["bug"],
+  branch: ["fork"],
+  mobile: ["ios", "android"],
+  permissions: ["allowed-tools"],
+  "remote-control": ["rc"],
+  resume: ["continue"],
+};
+
+function getProviderNativeSlashCommandAliases(
+  provider: ProviderKind,
+  command: string,
+): readonly string[] {
+  const normalizedCommand = normalizeSlashCommandName(command);
+  if (provider !== "claudeAgent") {
+    return [];
+  }
+  return CLAUDE_NATIVE_COMMAND_ALIASES[normalizedCommand] ?? [];
+}
+
+function expandProviderNativeSlashCommandNames(
+  provider: ProviderKind,
+  commandNames: ReadonlyArray<string>,
+): string[] {
+  const expandedNames = new Set<string>();
+  for (const commandName of commandNames) {
+    const normalizedCommandName = normalizeSlashCommandName(commandName);
+    if (!normalizedCommandName) {
+      continue;
+    }
+    expandedNames.add(normalizedCommandName);
+    for (const alias of getProviderNativeSlashCommandAliases(provider, normalizedCommandName)) {
+      expandedNames.add(alias);
+    }
+  }
+  return [...expandedNames];
+}
+
+export function getProviderNativeSlashCommandSearchTerms(
+  provider: ProviderKind,
+  command: string,
+): readonly string[] {
+  const normalizedCommand = normalizeSlashCommandName(command);
+  return [normalizedCommand, ...getProviderNativeSlashCommandAliases(provider, normalizedCommand)];
+}
+
 const COMPOSER_SLASH_COMMAND_DEFINITIONS: Record<
   ComposerSlashCommand,
   ComposerSlashCommandDefinition
@@ -248,31 +298,36 @@ export function getAvailableComposerSlashCommands(input: {
   providerNativeCommandNames?: ReadonlyArray<string>;
 }): ComposerSlashCommand[] {
   const collidingNativeCommandNames = new Set<ComposerSlashCommand>(
-    (input.providerNativeCommandNames ?? [])
-      .map((name) => normalizeSlashCommandName(name))
-      .filter((name): name is ComposerSlashCommand => isBuiltInComposerSlashCommand(name)),
+    expandProviderNativeSlashCommandNames(
+      input.provider,
+      input.providerNativeCommandNames ?? [],
+    ).filter((name): name is ComposerSlashCommand => isBuiltInComposerSlashCommand(name)),
   );
 
-  const availableCommands: ComposerSlashCommand[] = [
-    "clear",
-    "model",
-    ...(input.provider === "codex" && input.supportsFastSlashCommand ? (["fast"] as const) : []),
-    "plan",
-    "default",
-    ...(input.canOfferReviewCommand ? (["review"] as const) : []),
-    ...(input.canOfferForkCommand ? (["fork"] as const) : []),
-    "status",
-    "subagents",
-  ];
+  const availableCommands: ComposerSlashCommand[] =
+    input.provider === "codex"
+      ? [
+          "clear",
+          "model",
+          ...(input.supportsFastSlashCommand ? (["fast"] as const) : []),
+          "plan",
+          "default",
+          ...(input.canOfferReviewCommand ? (["review"] as const) : []),
+          ...(input.canOfferForkCommand ? (["fork"] as const) : []),
+          "status",
+          "subagents",
+        ]
+      : [];
   return availableCommands.filter((command) => !collidingNativeCommandNames.has(command));
 }
 
 export function hasProviderNativeSlashCommand(
+  provider: ProviderKind,
   commandNames: ReadonlyArray<string>,
   command: string,
 ): boolean {
   const normalizedCommand = normalizeSlashCommandName(command);
-  return commandNames.some((name) => normalizeSlashCommandName(name) === normalizedCommand);
+  return expandProviderNativeSlashCommandNames(provider, commandNames).includes(normalizedCommand);
 }
 
 export function buildSlashReviewComposerPrompt(args: string): string {
