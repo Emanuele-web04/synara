@@ -1,8 +1,8 @@
 "use client";
 
 import { Toast } from "@base-ui/react/toast";
-import { useEffect, type CSSProperties } from "react";
-import { useParams } from "@tanstack/react-router";
+import { useEffect, useMemo, type CSSProperties } from "react";
+import { useParams, useSearch } from "@tanstack/react-router";
 import { ThreadId } from "@t3tools/contracts";
 import {
   CircleAlertIcon,
@@ -15,6 +15,9 @@ import {
 import { cn } from "~/lib/utils";
 import { buttonVariants } from "~/components/ui/button";
 import { buildVisibleToastLayout, shouldHideCollapsedToastContent } from "./toast.logic";
+import { parseDiffRouteSearch } from "../../diffRouteSearch";
+import { selectSplitView, useSplitViewStore } from "../../splitViewStore";
+import { resolveVisibleToastThreadIds } from "./toastRouteVisibility";
 
 type ThreadToastData = {
   threadId?: ThreadId | null;
@@ -49,19 +52,28 @@ interface ToastProviderProps extends Toast.Provider.Props {
 
 function shouldRenderForActiveThread(
   data: ThreadToastData | undefined,
-  activeThreadId: ThreadId | null,
+  visibleThreadIds: ReadonlySet<ThreadId>,
 ): boolean {
   const toastThreadId = data?.threadId;
   if (!toastThreadId) return true;
-  return toastThreadId === activeThreadId;
+  return visibleThreadIds.has(toastThreadId);
 }
 
-function useActiveThreadIdFromRoute(): ThreadId | null {
-  return useParams({
+function useVisibleThreadIdsFromRoute(): ReadonlySet<ThreadId> {
+  const activeThreadId = useParams({
     strict: false,
     select: (params) =>
       typeof params.threadId === "string" ? ThreadId.makeUnsafe(params.threadId) : null,
   });
+  const routeSearch = useSearch({
+    strict: false,
+    select: (search) => parseDiffRouteSearch(search),
+  });
+  const splitView = useSplitViewStore(selectSplitView(routeSearch.splitViewId ?? null));
+
+  return useMemo(() => {
+    return resolveVisibleToastThreadIds({ activeThreadId, splitView });
+  }, [activeThreadId, splitView]);
 }
 
 function ThreadToastVisibleAutoDismiss({
@@ -153,10 +165,10 @@ function ToastProvider({ children, position = "top-right", ...props }: ToastProv
 
 function Toasts({ position = "top-right" }: { position: ToastPosition }) {
   const { toasts } = Toast.useToastManager<ThreadToastData>();
-  const activeThreadId = useActiveThreadIdFromRoute();
+  const visibleThreadIds = useVisibleThreadIdsFromRoute();
   const isTop = position.startsWith("top");
   const visibleToasts = toasts.filter((toast) =>
-    shouldRenderForActiveThread(toast.data, activeThreadId),
+    shouldRenderForActiveThread(toast.data, visibleThreadIds),
   );
   const visibleToastLayout = buildVisibleToastLayout(visibleToasts);
 
@@ -322,13 +334,13 @@ function AnchoredToastProvider({ children, ...props }: Toast.Provider.Props) {
 
 function AnchoredToasts() {
   const { toasts } = Toast.useToastManager<ThreadToastData>();
-  const activeThreadId = useActiveThreadIdFromRoute();
+  const visibleThreadIds = useVisibleThreadIdsFromRoute();
 
   return (
     <Toast.Portal data-slot="toast-portal-anchored">
       <Toast.Viewport className="outline-none" data-slot="toast-viewport-anchored">
         {toasts
-          .filter((toast) => shouldRenderForActiveThread(toast.data, activeThreadId))
+          .filter((toast) => shouldRenderForActiveThread(toast.data, visibleThreadIds))
           .map((toast) => {
             const Icon = toast.type ? TOAST_ICONS[toast.type as keyof typeof TOAST_ICONS] : null;
             const tooltipStyle = toast.data?.tooltipStyle ?? false;

@@ -88,4 +88,17 @@ describe("parseDiffRouteSearch", () => {
       panel: "browser",
     });
   });
+
+  it("preserves split route state while normalizing unrelated values", () => {
+    const parsed = parseDiffRouteSearch({
+      panel: "browser",
+      diffTurnId: "turn-1",
+      splitViewId: " split-1 ",
+    });
+
+    expect(parsed).toEqual({
+      panel: "browser",
+      splitViewId: "split-1",
+    });
+  });
 });

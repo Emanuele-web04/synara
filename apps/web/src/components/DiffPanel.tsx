@@ -37,6 +37,7 @@ import { formatShortTimestamp } from "../timestampFormat";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { ToggleGroup, Toggle } from "./ui/toggle-group";
 import { VscodeEntryIcon } from "./chat/VscodeEntryIcon";
+import { type SplitViewPanePanelState } from "../splitViewStore";
 
 type DiffRenderMode = "stacked" | "split";
 type DiffThemeType = "light" | "dark";
@@ -180,11 +181,21 @@ function buildFileDiffRenderKey(fileDiff: FileDiffMetadata): string {
 
 interface DiffPanelProps {
   mode?: DiffPanelMode;
+  threadId?: ThreadId | null;
+  panelState?: Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">;
+  onUpdatePanelState?: (
+    patch: Partial<Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">>,
+  ) => void;
 }
 
 export { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 
-export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
+export default function DiffPanel({
+  mode = "inline",
+  threadId: controlledThreadId,
+  panelState,
+  onUpdatePanelState,
+}: DiffPanelProps) {
   const navigate = useNavigate();
   const { resolvedTheme } = useTheme();
   const { settings } = useAppSettings();
@@ -201,8 +212,8 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
     select: (params) => (params.threadId ? ThreadId.makeUnsafe(params.threadId) : null),
   });
   const diffSearch = useSearch({ strict: false, select: (search) => parseDiffRouteSearch(search) });
-  const diffOpen = diffSearch.diff === "1";
-  const activeThreadId = routeThreadId;
+  const diffOpen = panelState ? panelState.panel === "diff" : diffSearch.diff === "1";
+  const activeThreadId = controlledThreadId ?? routeThreadId;
   const activeThread = useStore((store) =>
     activeThreadId ? store.threads.find((thread) => thread.id === activeThreadId) : undefined,
   );
@@ -234,8 +245,15 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
     [inferredCheckpointTurnCountByTurnId, turnDiffSummaries],
   );
 
-  const selectedTurnId = diffSearch.diffTurnId ?? null;
-  const selectedFilePath = selectedTurnId !== null ? (diffSearch.diffFilePath ?? null) : null;
+  const selectedTurnId = panelState
+    ? (panelState.diffTurnId ?? null)
+    : (diffSearch.diffTurnId ?? null);
+  const selectedFilePath =
+    selectedTurnId !== null
+      ? panelState
+        ? (panelState.diffFilePath ?? null)
+        : (diffSearch.diffFilePath ?? null)
+      : null;
   const selectedTurn =
     selectedTurnId === null
       ? undefined
@@ -368,6 +386,14 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
 
   const selectTurn = (turnId: TurnId) => {
     if (!activeThread) return;
+    if (onUpdatePanelState) {
+      onUpdatePanelState({
+        panel: "diff",
+        diffTurnId: turnId,
+        diffFilePath: null,
+      });
+      return;
+    }
     void navigate({
       to: "/$threadId",
       params: { threadId: activeThread.id },
@@ -379,6 +405,14 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
   };
   const selectWholeConversation = () => {
     if (!activeThread) return;
+    if (onUpdatePanelState) {
+      onUpdatePanelState({
+        panel: "diff",
+        diffTurnId: null,
+        diffFilePath: null,
+      });
+      return;
+    }
     void navigate({
       to: "/$threadId",
       params: { threadId: activeThread.id },

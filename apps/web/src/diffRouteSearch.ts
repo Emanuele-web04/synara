@@ -3,6 +3,7 @@ import { TurnId } from "@t3tools/contracts";
 export type ChatRightPanel = "browser" | "diff";
 
 export interface DiffRouteSearch {
+  splitViewId?: string | undefined;
   panel?: ChatRightPanel | undefined;
   diff?: "1" | undefined;
   diffTurnId?: TurnId | undefined;
@@ -35,6 +36,7 @@ export function stripDiffSearchParams<T extends Record<string, unknown>>(
 }
 
 export function parseDiffRouteSearch(search: Record<string, unknown>): DiffRouteSearch {
+  const splitViewId = normalizeSearchString(search.splitViewId);
   const panelRaw = normalizeSearchString(search.panel);
   const panel: ChatRightPanel | undefined =
     panelRaw === "browser" ? "browser" : panelRaw === "diff" ? "diff" : undefined;
@@ -45,6 +47,7 @@ export function parseDiffRouteSearch(search: Record<string, unknown>): DiffRoute
   const diffFilePath = diff && diffTurnId ? normalizeSearchString(search.diffFilePath) : undefined;
 
   return {
+    ...(splitViewId ? { splitViewId } : {}),
     ...(resolvedPanel ? { panel: resolvedPanel } : {}),
     ...(diff ? { diff } : {}),
     ...(diffTurnId ? { diffTurnId } : {}),

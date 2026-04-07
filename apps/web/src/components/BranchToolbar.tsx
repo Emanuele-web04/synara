@@ -220,7 +220,7 @@ export default function BranchToolbar({
             onClick={onHandoffToWorktree}
           >
             <HandoffIcon className="size-3.5" />
-            Hand off to worktree
+            Hand off
           </button>
         ) : null}
         {canHandoffToLocal && onHandoffToLocal ? (

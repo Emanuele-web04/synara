@@ -27,13 +27,19 @@ function ChatRouteGlobalShortcuts() {
   const { toggleSidebar } = useSidebar();
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
   const selectedThreadIdsSize = useThreadSelectionStore((state) => state.selectedThreadIds.size);
-  const { activeDraftThread, activeThread, handleNewThread, projects, routeThreadId } =
-    useHandleNewThread();
+  const {
+    activeContextThreadId,
+    activeDraftThread,
+    activeProjectId,
+    activeThread,
+    handleNewThread,
+    projects,
+  } = useHandleNewThread();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
   const terminalOpen = useTerminalStateStore((state) =>
-    routeThreadId
-      ? selectThreadTerminalState(state.terminalStateByThreadId, routeThreadId).terminalOpen
+    activeContextThreadId
+      ? selectThreadTerminalState(state.terminalStateByThreadId, activeContextThreadId).terminalOpen
       : false,
   );
   const { settings: appSettings } = useAppSettings();
@@ -65,8 +71,7 @@ function ChatRouteGlobalShortcuts() {
       if (!command) return;
 
       if (command === "chat.newLocal") {
-        const projectId =
-          activeThread?.projectId ?? activeDraftThread?.projectId ?? projects[0]?.id;
+        const projectId = activeProjectId ?? projects[0]?.id;
         if (!projectId) return;
         event.preventDefault();
         event.stopPropagation();
@@ -79,8 +84,7 @@ function ChatRouteGlobalShortcuts() {
       }
 
       if (command === "chat.newTerminal") {
-        const projectId =
-          activeThread?.projectId ?? activeDraftThread?.projectId ?? projects[0]?.id;
+        const projectId = activeProjectId ?? projects[0]?.id;
         if (!projectId) return;
         event.preventDefault();
         event.stopPropagation();
@@ -99,7 +103,7 @@ function ChatRouteGlobalShortcuts() {
       }
 
       if (command !== "chat.new") return;
-      const projectId = activeThread?.projectId ?? activeDraftThread?.projectId ?? projects[0]?.id;
+      const projectId = activeProjectId ?? projects[0]?.id;
       if (!projectId) return;
       event.preventDefault();
       event.stopPropagation();
@@ -121,6 +125,7 @@ function ChatRouteGlobalShortcuts() {
     };
   }, [
     activeDraftThread,
+    activeProjectId,
     activeThread,
     clearSelection,
     handleNewThread,

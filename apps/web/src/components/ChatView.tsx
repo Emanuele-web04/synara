@@ -183,6 +183,12 @@ import {
 import { deriveLatestContextWindowSnapshot, deriveCumulativeCostUsd } from "../lib/contextWindow";
 import { shouldUseCompactComposerFooter } from "./composerFooterLayout";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
+import {
+  resolveSplitViewFocusedThreadId,
+  selectSplitView,
+  type SplitViewPanePanelState,
+  useSplitViewStore,
+} from "../splitViewStore";
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { ChatEmptyStateHero } from "./chat/ChatEmptyStateHero";
@@ -460,9 +466,29 @@ const terminalContextIdListsEqual = (
 
 interface ChatViewProps {
   threadId: ThreadId;
+  paneScopeId?: string;
+  surfaceMode?: "single" | "split";
+  isFocusedPane?: boolean;
+  panelState?: SplitViewPanePanelState;
+  onToggleDiffPanel?: () => void;
+  onToggleBrowserPanel?: () => void;
+  onOpenTurnDiffPanel?: (turnId: TurnId, filePath?: string) => void;
+  onSplitSurface?: () => void;
+  onMaximizeSurface?: () => void;
 }
 
-export default function ChatView({ threadId }: ChatViewProps) {
+export default function ChatView({
+  threadId,
+  paneScopeId = "single",
+  surfaceMode = "single",
+  isFocusedPane = true,
+  panelState,
+  onToggleDiffPanel,
+  onToggleBrowserPanel,
+  onOpenTurnDiffPanel,
+  onSplitSurface,
+  onMaximizeSurface,
+}: ChatViewProps) {
   const threads = useStore((store) => store.threads);
   const projects = useStore((store) => store.projects);
   const markThreadVisited = useStore((store) => store.markThreadVisited);
@@ -481,6 +507,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
     strict: false,
     select: (params) => parseDiffRouteSearch(params),
   });
+  const activeSplitView = useSplitViewStore(selectSplitView(rawSearch.splitViewId ?? null));
+  const removeThreadFromSplitViews = useSplitViewStore((store) => store.removeThreadFromSplitViews);
   const { resolvedTheme } = useTheme();
   const queryClient = useQueryClient();
   const createDetachedWorktreeMutation = useMutation(
@@ -747,6 +775,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const canCheckoutPullRequestIntoThread = isLocalDraftThread;
   const diffOpen = rawSearch.panel === "diff";
   const browserOpen = rawSearch.panel === "browser";
+  const resolvedDiffOpen = panelState ? panelState.panel === "diff" : diffOpen;
+  const resolvedBrowserOpen = panelState ? panelState.panel === "browser" : browserOpen;
   const activeThreadId = activeThread?.id ?? null;
   const activeLatestTurn = activeThread?.latestTurn ?? null;
   const activeContextWindow = useMemo(
@@ -1626,6 +1656,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
     [keybindings],
   );
   const onToggleDiff = useCallback(() => {
+    if (onToggleDiffPanel) {
+      onToggleDiffPanel();
+      return;
+    }
     void navigate({
       to: "/$threadId",
       params: { threadId },
@@ -1637,8 +1671,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
           : { ...rest, panel: "diff", diff: "1" };
       },
     });
-  }, [diffOpen, navigate, threadId]);
+  }, [diffOpen, navigate, onToggleDiffPanel, threadId]);
   const onToggleBrowser = useCallback(() => {
+    if (onToggleBrowserPanel) {
+      onToggleBrowserPanel();
+      return;
+    }
     void navigate({
       to: "/$threadId",
       params: { threadId },
@@ -1648,7 +1686,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         return browserOpen ? { ...rest, panel: undefined } : { ...rest, panel: "browser" };
       },
     });
-  }, [browserOpen, navigate, threadId]);
+  }, [browserOpen, navigate, onToggleBrowserPanel, threadId]);
 
   const envLocked = Boolean(
     activeThread &&
@@ -1878,6 +1916,22 @@ export default function ChatView({ threadId }: ChatViewProps) {
           syncServerReadModel(snapshot);
           useComposerDraftStore.getState().clearDraftThread(activeThreadId);
           storeClearTerminalState(activeThreadId);
+          removeThreadFromSplitViews(activeThreadId);
+          if (activeSplitView) {
+            const nextSplitView = useSplitViewStore.getState().splitViewsById[activeSplitView.id];
+            const nextThreadId = nextSplitView
+              ? resolveSplitViewFocusedThreadId(nextSplitView)
+              : null;
+            if (nextSplitView && nextThreadId) {
+              await navigate({
+                to: "/$threadId",
+                params: { threadId: nextThreadId },
+                replace: true,
+                search: () => ({ splitViewId: nextSplitView.id }),
+              });
+              return;
+            }
+          }
           await navigate({ to: "/", replace: true });
         } catch (error) {
           console.error("Failed to delete empty terminal thread after closing its last terminal", {
@@ -1890,8 +1944,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
     [
       activeThread,
       activeThreadId,
+      activeSplitView,
       isServerThread,
       navigate,
+      removeThreadFromSplitViews,
       storeClearTerminalState,
       storeCloseTerminal,
       syncServerReadModel,
@@ -2906,6 +2962,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
   }, [focusComposer, terminalState.workspaceActiveTab, terminalWorkspaceOpen]);
 
   useEffect(() => {
+    if (surfaceMode === "split" && !isFocusedPane) {
+      return;
+    }
+
     const handler = (event: globalThis.KeyboardEvent) => {
       if (!activeThreadId || event.defaultPrevented) return;
       const shortcutContext = {
@@ -3031,7 +3091,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
     terminalWorkspaceTerminalTabActive,
     onToggleBrowser,
     onToggleDiff,
+    isFocusedPane,
     setTerminalWorkspaceTab,
+    surfaceMode,
     toggleTerminalVisibility,
   ]);
 
@@ -4709,6 +4771,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const expandedImageItem = expandedImage ? expandedImage.images[expandedImage.index] : null;
   const onOpenTurnDiff = useCallback(
     (turnId: TurnId, filePath?: string) => {
+      if (onOpenTurnDiffPanel) {
+        onOpenTurnDiffPanel(turnId, filePath);
+        return;
+      }
       void navigate({
         to: "/$threadId",
         params: { threadId },
@@ -4720,7 +4786,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         },
       });
     },
-    [navigate, threadId],
+    [navigate, onOpenTurnDiffPanel, threadId],
   );
   const onRevertUserMessage = (messageId: MessageId) => {
     const targetTurnCount = revertTurnCountByUserMessageId.get(messageId);
@@ -4788,9 +4854,25 @@ export default function ChatView({ threadId }: ChatViewProps) {
           handoffActionTargetProvider={handoffTargetProvider}
           handoffBadgeSourceProvider={handoffBadgeSourceProvider}
           handoffBadgeTargetProvider={handoffBadgeTargetProvider}
-          browserOpen={browserOpen}
+          browserOpen={resolvedBrowserOpen}
           gitCwd={threadWorkspaceCwd}
-          diffOpen={diffOpen}
+          diffOpen={resolvedDiffOpen}
+          surfaceMode={surfaceMode}
+          chatLayoutAction={
+            surfaceMode === "single" && onSplitSurface
+              ? {
+                  kind: "split",
+                  label: "Split chat",
+                  onClick: onSplitSurface,
+                }
+              : surfaceMode === "split" && isFocusedPane && onMaximizeSurface
+                ? {
+                    kind: "maximize",
+                    label: "Expand this chat",
+                    onClick: onMaximizeSurface,
+                  }
+                : null
+          }
           onRunProjectScript={(script) => {
             void runProjectScript(script);
           }}
@@ -4896,6 +4978,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
                 onSubmit={onSend}
                 className="relative z-10 mx-auto w-full min-w-0 max-w-3xl"
                 data-chat-composer-form="true"
+                data-chat-pane-scope={paneScopeId}
               >
                 {queuedComposerTurns.length > 0 ? (
                   <div className="mx-auto flex w-5/6 flex-col">

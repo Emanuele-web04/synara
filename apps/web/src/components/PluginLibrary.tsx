@@ -8,10 +8,8 @@ import {
   type ProviderKind,
   type ProviderPluginDescriptor,
   type ProviderSkillDescriptor,
-  ThreadId,
 } from "@t3tools/contracts";
 import { useQuery } from "@tanstack/react-query";
-import { useParams } from "@tanstack/react-router";
 import React, { type ReactNode, useDeferredValue, useEffect, useMemo, useState } from "react";
 import type { IconType } from "react-icons";
 import {
@@ -43,6 +41,7 @@ import {
   supportsSkillDiscovery,
 } from "~/lib/providerDiscoveryReactQuery";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
+import { useFocusedChatContext } from "~/focusedChatContext";
 import {
   BotIcon,
   CheckIcon,
@@ -360,22 +359,8 @@ function SectionHeader({ title }: { title: string }) {
 
 export function PluginLibrary() {
   const projects = useStore((store) => store.projects);
-  const threads = useStore((store) => store.threads);
-  const routeThreadId = useParams({
-    strict: false,
-    select: (params) => (params.threadId ? ThreadId.makeUnsafe(params.threadId) : null),
-  });
-  const activeThread = useMemo(
-    () => (routeThreadId ? (threads.find((t) => t.id === routeThreadId) ?? null) : null),
-    [routeThreadId, threads],
-  );
-  const activeProject = useMemo(
-    () =>
-      (activeThread ? projects.find((p) => p.id === activeThread.projectId) : null) ??
-      projects[0] ??
-      null,
-    [activeThread, projects],
-  );
+  const { activeProject: focusedProject, activeThread, focusedThreadId } = useFocusedChatContext();
+  const activeProject = focusedProject ?? projects[0] ?? null;
 
   const preferredProvider =
     activeThread?.modelSelection.provider ??
@@ -388,7 +373,7 @@ export function PluginLibrary() {
   const [skillSearch, setSkillSearch] = useState("");
   const deferredPluginSearch = useDeferredValue(pluginSearch);
   const deferredSkillSearch = useDeferredValue(skillSearch);
-  const providerThreadId = routeThreadId ?? null;
+  const providerThreadId = focusedThreadId;
 
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const codexCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("codex"));

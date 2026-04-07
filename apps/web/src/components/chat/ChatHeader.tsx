@@ -13,7 +13,9 @@ import {
 } from "@t3tools/contracts";
 import { useQuery } from "@tanstack/react-query";
 import React, { memo, useEffect, useRef, useState } from "react";
+import { BsLayoutSplit } from "react-icons/bs";
 import { FiGitBranch } from "react-icons/fi";
+import { HiMiniArrowsPointingOut } from "react-icons/hi2";
 import GitActionsControl from "../GitActionsControl";
 import {
   ArrowRightIcon,
@@ -72,6 +74,12 @@ interface ChatHeaderProps {
   browserOpen: boolean;
   gitCwd: string | null;
   diffOpen: boolean;
+  surfaceMode?: "single" | "split";
+  chatLayoutAction?: {
+    kind: "split" | "maximize";
+    label: string;
+    onClick: () => void;
+  } | null;
   onRunProjectScript: (script: ProjectScript) => void;
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<void>;
   onUpdateProjectScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void>;
@@ -106,6 +114,8 @@ export const ChatHeader = memo(function ChatHeader({
   browserOpen,
   gitCwd,
   diffOpen,
+  surfaceMode = "single",
+  chatLayoutAction = null,
   onRunProjectScript,
   onAddProjectScript,
   onUpdateProjectScript,
@@ -127,15 +137,17 @@ export const ChatHeader = memo(function ChatHeader({
   const diffTotals = gitStatus?.workingTree ?? null;
   const showDiffTotals = (diffTotals?.insertions ?? 0) > 0 || (diffTotals?.deletions ?? 0) > 0;
 
+  const isSplitPane = surfaceMode === "split";
+
   useEffect(() => {
     const el = headerRef.current;
     if (!el) return;
-    const measure = () => setCompact(el.clientWidth < HEADER_COMPACT_BREAKPOINT);
+    const measure = () => setCompact(isSplitPane || el.clientWidth < HEADER_COMPACT_BREAKPOINT);
     measure();
     const observer = new ResizeObserver(() => measure());
     observer.observe(el);
     return () => observer.disconnect();
-  }, []);
+  }, [isSplitPane]);
 
   const hasCollapsibleControls = Boolean(
     activeProjectScripts || activeProjectName || terminalAvailable,
@@ -199,17 +211,23 @@ export const ChatHeader = memo(function ChatHeader({
                 type="button"
                 size="xs"
                 variant="outline"
-                className="shrink-0 gap-1.5"
+                className={compact ? "shrink-0 gap-1" : "shrink-0 gap-1.5"}
                 aria-label={handoffActionLabel}
                 disabled={handoffDisabled}
                 onClick={onCreateHandoff}
               >
                 <FiGitBranch className="size-3.5 shrink-0" />
-                <span className="truncate">Hand off to</span>
+                {compact ? (
+                  <ArrowRightIcon className="size-2.5 shrink-0 opacity-45" />
+                ) : (
+                  <span className="truncate">Hand off to</span>
+                )}
                 {renderProviderIcon(handoffActionTargetProvider, "size-3.5 shrink-0")}
-                <span className="truncate">
-                  {PROVIDER_DISPLAY_NAMES[handoffActionTargetProvider ?? "codex"]}
-                </span>
+                {!compact && (
+                  <span className="truncate">
+                    {PROVIDER_DISPLAY_NAMES[handoffActionTargetProvider ?? "codex"]}
+                  </span>
+                )}
               </Button>
             }
           />
@@ -330,6 +348,29 @@ export const ChatHeader = memo(function ChatHeader({
 
         {activeProjectName ? (
           <GitActionsControl gitCwd={gitCwd} activeThreadId={activeThreadId} />
+        ) : null}
+        {chatLayoutAction ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant="outline"
+                  className="shrink-0"
+                  aria-label={chatLayoutAction.label}
+                  onClick={chatLayoutAction.onClick}
+                />
+              }
+            >
+              {chatLayoutAction.kind === "split" ? (
+                <BsLayoutSplit className="size-3.5" />
+              ) : (
+                <HiMiniArrowsPointingOut className="size-3.5" />
+              )}
+            </TooltipTrigger>
+            <TooltipPopup side="bottom">{chatLayoutAction.label}</TooltipPopup>
+          </Tooltip>
         ) : null}
         {isElectron ? (
           <Tooltip>

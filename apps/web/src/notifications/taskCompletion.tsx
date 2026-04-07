@@ -8,6 +8,7 @@ import { useEffect, useRef } from "react";
 import { toastManager } from "../components/ui/toast";
 import { useAppSettings } from "../appSettings";
 import { isElectron } from "../env";
+import { resolvePreferredSplitViewIdForThread, useSplitViewStore } from "../splitViewStore";
 import { useStore } from "../store";
 import type { Thread } from "../types";
 import {
@@ -87,6 +88,7 @@ async function showSystemTaskCompletionNotification(
 function showCompletionToast(
   candidate: CompletedThreadCandidate,
   navigate: ReturnType<typeof useNavigate>,
+  splitViewId: string | null,
 ): void {
   const { body, title } = buildTaskCompletionCopy(candidate);
   toastManager.add({
@@ -103,6 +105,7 @@ function showCompletionToast(
         void navigate({
           to: "/$threadId",
           params: { threadId: candidate.threadId },
+          ...(splitViewId ? { search: () => ({ splitViewId }) } : {}),
         });
       },
     },
@@ -114,6 +117,10 @@ export function TaskCompletionNotifications() {
   const navigate = useNavigate();
   const threads = useStore((store) => store.threads);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
+  const splitViewsById = useSplitViewStore((store) => store.splitViewsById);
+  const splitViewIdBySourceThreadId = useSplitViewStore(
+    (store) => store.splitViewIdBySourceThreadId,
+  );
   const previousThreadsRef = useRef<readonly Thread[]>([]);
   const readyRef = useRef(false);
 
@@ -139,8 +146,13 @@ export function TaskCompletionNotifications() {
       settings.enableSystemTaskCompletionNotifications && !isWindowForeground();
 
     for (const completion of completions) {
+      const preferredSplitViewId = resolvePreferredSplitViewIdForThread({
+        splitViewsById,
+        splitViewIdBySourceThreadId,
+        threadId: completion.threadId,
+      });
       if (settings.enableTaskCompletionToasts) {
-        showCompletionToast(completion, navigate);
+        showCompletionToast(completion, navigate, preferredSplitViewId);
       }
 
       if (shouldAttemptSystemNotification) {
@@ -151,6 +163,8 @@ export function TaskCompletionNotifications() {
     navigate,
     settings.enableSystemTaskCompletionNotifications,
     settings.enableTaskCompletionToasts,
+    splitViewIdBySourceThreadId,
+    splitViewsById,
     threads,
     threadsHydrated,
   ]);
