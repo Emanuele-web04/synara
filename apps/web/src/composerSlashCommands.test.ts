@@ -6,8 +6,11 @@ import {
   canOfferForkSlashCommand,
   canOfferReviewSlashCommand,
   filterComposerSlashCommands,
+  getAvailableComposerSlashCommands,
+  hasProviderNativeSlashCommand,
   isBuiltInComposerSlashCommand,
   parseComposerSlashInvocation,
+  parseComposerSlashInvocationForCommands,
   parseFastSlashCommandAction,
   parseForkSlashCommandArgs,
 } from "./composerSlashCommands";
@@ -34,6 +37,14 @@ describe("composerSlashCommands", () => {
       args: "",
     });
     expect(parseComposerSlashInvocation("review")).toBeNull();
+  });
+
+  it("does not parse app slash commands that are shadowed by provider-native commands", () => {
+    expect(parseComposerSlashInvocationForCommands("/fast", ["clear", "model"])).toBeNull();
+    expect(parseComposerSlashInvocationForCommands("/clear", ["clear", "model"])).toEqual({
+      command: "clear",
+      args: "",
+    });
   });
 
   it("parses /fast actions", () => {
@@ -130,5 +141,32 @@ describe("composerSlashCommands", () => {
     expect(buildSubagentsPrompt("Already there")).toContain("Already there\n\nRun subagents");
     expect(buildReviewPrompt({ target: "changes" })).toContain("uncommitted changes");
     expect(buildReviewPrompt({ target: "base-branch" })).toContain("base branch");
+  });
+
+  it("filters app slash commands when a provider exposes the same command natively", () => {
+    const availableCommands = getAvailableComposerSlashCommands({
+      provider: "codex",
+      supportsFastSlashCommand: true,
+      canOfferReviewCommand: true,
+      canOfferForkCommand: true,
+      providerNativeCommandNames: ["fast", "/model", "status"],
+    });
+
+    expect(availableCommands).not.toContain("fast");
+    expect(availableCommands).not.toContain("model");
+    expect(availableCommands).not.toContain("status");
+    expect(hasProviderNativeSlashCommand(["/fast", "model"], "fast")).toBe(true);
+    expect(hasProviderNativeSlashCommand(["/fast", "model"], "/model")).toBe(true);
+  });
+
+  it("never exposes app-level /fast for claude", () => {
+    expect(
+      getAvailableComposerSlashCommands({
+        provider: "claudeAgent",
+        supportsFastSlashCommand: true,
+        canOfferReviewCommand: true,
+        canOfferForkCommand: true,
+      }),
+    ).not.toContain("fast");
   });
 });

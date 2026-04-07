@@ -3,6 +3,7 @@ import {
   type OrchestrationReadModel,
   type ProviderInteractionMode,
   type ProviderKind,
+  type ProviderNativeCommandDescriptor,
   type ProviderModelOptions,
   type RuntimeMode,
   type ThreadId,
@@ -16,7 +17,9 @@ import type { ComposerTrigger } from "../composer-logic";
 import {
   buildSlashReviewComposerPrompt,
   buildSubagentsPrompt,
-  parseComposerSlashInvocation,
+  getAvailableComposerSlashCommands,
+  hasProviderNativeSlashCommand,
+  parseComposerSlashInvocationForCommands,
   parseFastSlashCommandAction,
   parseForkSlashCommandArgs,
   type ForkSlashCommandTarget,
@@ -43,6 +46,8 @@ export function useComposerSlashCommands(input: {
   supportsFastSlashCommand: boolean;
   supportsTextNativeReviewCommand: boolean;
   fastModeEnabled: boolean;
+  providerNativeCommands: readonly ProviderNativeCommandDescriptor[];
+  providerCommandDiscoveryCwd: string | null;
   selectedProvider: ProviderKind;
   currentProviderModelOptions: ProviderModelOptions[ProviderKind] | undefined;
   selectedModelSelection: ModelSelection;
@@ -83,6 +88,16 @@ export function useComposerSlashCommands(input: {
   };
 }) {
   const [isSlashStatusDialogOpen, setIsSlashStatusDialogOpen] = useState(false);
+  const providerNativeCommandNames = (input.providerNativeCommands ?? []).map(
+    (command) => command.name,
+  );
+  const availableBuiltInSlashCommands = getAvailableComposerSlashCommands({
+    provider: input.selectedProvider,
+    supportsFastSlashCommand: input.supportsFastSlashCommand,
+    canOfferReviewCommand: true,
+    canOfferForkCommand: true,
+    providerNativeCommandNames,
+  });
 
   const setFastModeFromSlashCommand = useCallback(
     (enabled: boolean) => {
@@ -241,9 +256,9 @@ export function useComposerSlashCommands(input: {
       const associatedWorktree = deriveAssociatedWorktreeMetadata({
         branch: input.activeThread.branch,
         worktreePath: input.activeThread.worktreePath,
-        associatedWorktreePath: input.activeThread.associatedWorktreePath,
-        associatedWorktreeBranch: input.activeThread.associatedWorktreeBranch,
-        associatedWorktreeRef: input.activeThread.associatedWorktreeRef,
+        associatedWorktreePath: input.activeThread.associatedWorktreePath ?? null,
+        associatedWorktreeBranch: input.activeThread.associatedWorktreeBranch ?? null,
+        associatedWorktreeRef: input.activeThread.associatedWorktreeRef ?? null,
       });
 
       try {
@@ -349,9 +364,66 @@ export function useComposerSlashCommands(input: {
     [createForkThreadFromSlashCommand],
   );
 
+  const checkClaudeFastSlashCommandAvailability = useCallback(async (): Promise<boolean> => {
+    const api = readNativeApi();
+    if (!api || !input.providerCommandDiscoveryCwd) {
+      input.editorActions.clearComposerSlashDraft();
+      toastManager.add({
+        type: "warning",
+        title: "Fast mode could not be checked",
+        description: "Claude command discovery is unavailable right now.",
+      });
+      return false;
+    }
+
+    try {
+      const result = await api.provider.listCommands({
+        provider: "claudeAgent",
+        cwd: input.providerCommandDiscoveryCwd,
+        threadId: input.threadId,
+        forceReload: true,
+      });
+      if (
+        hasProviderNativeSlashCommand(
+          result.commands.map((command) => command.name),
+          "fast",
+        )
+      ) {
+        return true;
+      }
+    } catch {
+      input.editorActions.clearComposerSlashDraft();
+      toastManager.add({
+        type: "warning",
+        title: "Fast mode could not be checked",
+        description: "Claude command discovery failed. Please try again.",
+      });
+      return false;
+    }
+
+    input.editorActions.clearComposerSlashDraft();
+    toastManager.add({
+      type: "info",
+      title: "Fast mode is unavailable",
+      description: "Claude did not expose /fast for this account or environment.",
+    });
+    return false;
+  }, [input.editorActions, input.providerCommandDiscoveryCwd, input.threadId]);
+
   const handleStandaloneSlashCommand = useCallback(
     async (trimmed: string): Promise<boolean> => {
-      const slashInvocation = parseComposerSlashInvocation(trimmed);
+      const fastSlashAction = parseFastSlashCommandAction(trimmed);
+      if (input.selectedProvider === "claudeAgent" && fastSlashAction !== null) {
+        if (await checkClaudeFastSlashCommandAvailability()) {
+          return false;
+        }
+        return true;
+      }
+
+      const slashInvocation = parseComposerSlashInvocationForCommands(
+        trimmed,
+        availableBuiltInSlashCommands,
+      );
       if (!slashInvocation || slashInvocation.command === "model") {
         return false;
       }
@@ -447,11 +519,14 @@ export function useComposerSlashCommands(input: {
       return false;
     },
     [
+      availableBuiltInSlashCommands,
+      checkClaudeFastSlashCommandAvailability,
       chooseReviewTarget,
       createForkThreadFromSlashCommand,
       input.editorActions,
       input.handleClearConversation,
       input.handleInteractionModeChange,
+      input.openForkTargetPicker,
       input.selectedProvider,
       input.supportsTextNativeReviewCommand,
       runCodexReviewStart,

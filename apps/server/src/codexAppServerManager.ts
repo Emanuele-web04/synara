@@ -1509,20 +1509,36 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     cwd?: string,
   ): Promise<CodexSessionContext> {
     const normalizedThreadId = threadId?.trim();
+    const normalizedCwd = cwd?.trim() || undefined;
     if (normalizedThreadId) {
       try {
-        return this.requireSession(ThreadId.makeUnsafe(normalizedThreadId));
+        const session = this.requireSession(ThreadId.makeUnsafe(normalizedThreadId));
+        if (!normalizedCwd || session.session.cwd === normalizedCwd) {
+          return session;
+        }
       } catch {
         // Discovery is read-only metadata, so if the current draft thread does not
-        // have a live Codex session yet we can safely fall back to any active
-        // Codex session instead of disabling skill autocomplete outright.
+        // have a live Codex session yet we can still service repo-scoped
+        // discovery through a dedicated discovery session for that cwd.
       }
+    }
+    if (normalizedCwd) {
+      for (const activeSession of this.sessions.values()) {
+        if (
+          !activeSession.stopping &&
+          !activeSession.child.killed &&
+          activeSession.session.cwd === normalizedCwd
+        ) {
+          return activeSession;
+        }
+      }
+      return this.getOrCreateDiscoverySession(normalizedCwd);
     }
     const firstActive = this.sessions.values().next().value;
     if (firstActive) {
       return firstActive;
     }
-    return this.getOrCreateDiscoverySession(cwd?.trim() || process.cwd());
+    return this.getOrCreateDiscoverySession(process.cwd());
   }
 
   private async getOrCreateDiscoverySession(cwd: string): Promise<CodexSessionContext> {

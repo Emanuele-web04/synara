@@ -47,8 +47,7 @@ import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
   gitBranchesQueryOptions,
-  gitCreateWorktreeMutationOptions,
-  gitHandoffThreadMutationOptions,
+  gitCreateDetachedWorktreeMutationOptions,
 } from "~/lib/gitReactQuery";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import {
@@ -76,6 +75,7 @@ import {
 import {
   canOfferForkSlashCommand,
   canOfferReviewSlashCommand,
+  hasProviderNativeSlashCommand,
   resolveComposerSlashRootBranch,
 } from "../composerSlashCommands";
 import {
@@ -117,6 +117,7 @@ import {
   type TurnDiffSummary,
 } from "../types";
 import { useTheme } from "../hooks/useTheme";
+import { useThreadWorkspaceHandoff } from "../hooks/useThreadWorkspaceHandoff";
 import { useComposerCommandMenuItems } from "../hooks/useComposerCommandMenuItems";
 import { useThreadHandoff } from "../hooks/useThreadHandoff";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
@@ -206,11 +207,9 @@ import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
 import { RateLimitBanner, deriveLatestRateLimitStatus } from "./chat/RateLimitBanner";
 import {
   shouldAutoDeleteTerminalThreadOnLastClose,
-  buildSuggestedWorktreeBranchName,
   buildExpiredTerminalContextToastCopy,
   buildLocalDraftThread,
   shouldRenderTerminalWorkspace,
-  buildTemporaryWorktreeBranchName,
   cloneComposerImageForRetry,
   collectUserMessageBlobPreviewUrls,
   deriveComposerSendState,
@@ -329,8 +328,8 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function skillMentionPrefix(_provider: string): string {
-  return "$";
+function skillMentionPrefix(provider: string): string {
+  return provider === "claudeAgent" ? "/" : "$";
 }
 
 function promptIncludesSkillMention(prompt: string, skillName: string, provider: string): boolean {
@@ -484,7 +483,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
   });
   const { resolvedTheme } = useTheme();
   const queryClient = useQueryClient();
-  const createWorktreeMutation = useMutation(gitCreateWorktreeMutationOptions({ queryClient }));
+  const createDetachedWorktreeMutation = useMutation(
+    gitCreateDetachedWorktreeMutationOptions({ queryClient }),
+  );
   const composerDraft = useComposerThreadDraft(threadId);
   const prompt = composerDraft.prompt;
   const composerImages = composerDraft.images;
@@ -580,8 +581,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const [composerHighlightedItemId, setComposerHighlightedItemId] = useState<string | null>(null);
   const [pullRequestDialogState, setPullRequestDialogState] =
     useState<PullRequestDialogState | null>(null);
-  const [worktreeHandoffDialogOpen, setWorktreeHandoffDialogOpen] = useState(false);
-  const [worktreeHandoffBranchName, setWorktreeHandoffBranchName] = useState("");
   const [attachmentPreviewHandoffByMessageId, setAttachmentPreviewHandoffByMessageId] = useState<
     Record<string, string[]>
   >({});
@@ -610,8 +609,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     setComposerCommandPicker(null);
   }, [threadId]);
   useEffect(() => {
-    setWorktreeHandoffDialogOpen(false);
-    setWorktreeHandoffBranchName("");
+    // Thread-bound handoff dialog state is reset by the dedicated hook.
   }, [threadId]);
   const shouldAutoScrollRef = useRef(true);
   const lastKnownScrollTopRef = useRef(0);
@@ -764,9 +762,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread?.session ?? null);
   const activeProjectId = activeThread?.projectId ?? draftThread?.projectId ?? null;
   const activeProject = projects.find((p) => p.id === activeProjectId);
-  const handoffThreadMutation = useMutation(
-    gitHandoffThreadMutationOptions({ cwd: activeProject?.cwd ?? null, queryClient }),
-  );
   const resolvedThreadEnvMode = isServerThread
     ? (activeThread?.envMode ?? null)
     : (draftThread?.envMode ?? null);
@@ -778,9 +773,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
       deriveAssociatedWorktreeMetadata({
         branch: activeThread?.branch ?? null,
         worktreePath: activeThread?.worktreePath ?? null,
-        associatedWorktreePath: activeThread?.associatedWorktreePath,
-        associatedWorktreeBranch: activeThread?.associatedWorktreeBranch,
-        associatedWorktreeRef: activeThread?.associatedWorktreeRef,
+        associatedWorktreePath: activeThread?.associatedWorktreePath ?? null,
+        associatedWorktreeBranch: activeThread?.associatedWorktreeBranch ?? null,
+        associatedWorktreeRef: activeThread?.associatedWorktreeRef ?? null,
       }),
     [
       activeThread?.associatedWorktreeBranch,
@@ -1381,9 +1376,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
       provider: selectedProvider,
       cwd: composerSkillCwd,
       threadId,
-      query: composerTriggerKind === "slash-command" ? (composerTrigger?.query ?? "") : "",
+      query:
+        composerTriggerKind === "slash-command" || composerTriggerKind === "slash-model"
+          ? (composerTrigger?.query ?? "")
+          : "",
       enabled:
-        composerTriggerKind === "slash-command" &&
+        (composerTriggerKind === "slash-command" || composerTriggerKind === "slash-model") &&
         supportsNativeSlashCommandDiscovery(providerComposerCapabilitiesQuery.data) &&
         composerSkillCwd !== null,
     }),
@@ -1444,6 +1442,25 @@ export default function ChatView({ threadId }: ChatViewProps) {
   );
   const providerNativeCommands =
     providerCommandsQuery.data?.commands ?? EMPTY_PROVIDER_NATIVE_COMMANDS;
+  const providerNativeCommandNames = useMemo(
+    () => providerNativeCommands.map((command) => command.name),
+    [providerNativeCommands],
+  );
+  const effectiveComposerTrigger = useMemo(() => {
+    if (
+      composerTrigger?.kind === "slash-model" &&
+      composerTrigger.query.length === 0 &&
+      hasProviderNativeSlashCommand(providerNativeCommandNames, "model")
+    ) {
+      return {
+        ...composerTrigger,
+        kind: "slash-command" as const,
+        query: "model",
+      };
+    }
+    return composerTrigger;
+  }, [composerTrigger, providerNativeCommandNames]);
+  const effectiveComposerTriggerKind = effectiveComposerTrigger?.kind ?? null;
   const supportsTextNativeReviewCommand = useMemo(
     () => providerNativeCommands.some((command) => command.name.toLowerCase() === "review"),
     [providerNativeCommands],
@@ -1483,7 +1500,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       interactionMode,
     });
   const normalComposerMenuItems = useComposerCommandMenuItems({
-    composerTrigger,
+    composerTrigger: effectiveComposerTrigger,
     provider: selectedProvider,
     providerPlugins,
     providerNativeCommands,
@@ -2036,126 +2053,26 @@ export default function ChatView({ threadId }: ChatViewProps) {
       createdAt: new Date().toISOString(),
     });
   }, [activeThread, isServerThread]);
-  const handoffThread = useCallback(
-    async (targetMode: "local" | "worktree", options?: { preferredWorktreeBranch?: string }) => {
-      const api = readNativeApi();
-      if (!api || !activeProject || !activeThread || !isServerThread || handoffThreadMutation.isPending) {
-        return false;
-      }
-
-      try {
-        await stopActiveThreadSession();
-        const result = await handoffThreadMutation.mutateAsync({
-          targetMode,
-          currentBranch: activeThread.branch ?? null,
-          worktreePath: activeThread.worktreePath ?? null,
-          associatedWorktreePath: activeThreadAssociatedWorktree.associatedWorktreePath,
-          associatedWorktreeBranch: activeThreadAssociatedWorktree.associatedWorktreeBranch,
-          associatedWorktreeRef: activeThreadAssociatedWorktree.associatedWorktreeRef,
-          preferredLocalBranch: activeRootBranch ?? activeThread.branch ?? null,
-          preferredWorktreeBaseBranch:
-            activeRootBranch ??
-            activeThreadAssociatedWorktree.associatedWorktreeBranch ??
-            activeThread.branch ??
-            null,
-          preferredNewWorktreeBranch:
-            options?.preferredWorktreeBranch ??
-            activeThreadAssociatedWorktree.associatedWorktreeBranch ??
-            activeThread.branch ??
-            null,
-        });
-        const workspacePatch = {
-          envMode: result.targetMode,
-          branch: result.branch,
-          worktreePath: result.worktreePath,
-          associatedWorktreePath: result.associatedWorktreePath,
-          associatedWorktreeBranch: result.associatedWorktreeBranch,
-          associatedWorktreeRef: result.associatedWorktreeRef,
-        } as const;
-
-        await api.orchestration.dispatchCommand({
-          type: "thread.meta.update",
-          commandId: newCommandId(),
-          threadId: activeThread.id,
-          ...workspacePatch,
-        });
-        setStoreThreadWorkspace(activeThread.id, workspacePatch);
-
-        const snapshot = await api.orchestration.getSnapshot();
-        syncServerReadModel(snapshot);
-
-        if (targetMode === "worktree" && result.worktreePath) {
-          const setupScript = setupProjectScript(activeProject.scripts);
-          if (setupScript) {
-            await runProjectScript(setupScript, {
-              cwd: result.worktreePath,
-              worktreePath: result.worktreePath,
-              rememberAsLastInvoked: false,
-            });
-          }
-        }
-
-        toastManager.add({
-          type: result.conflictsDetected ? "warning" : "success",
-          title:
-            targetMode === "worktree"
-              ? "Thread handed off to worktree"
-              : "Thread handed off to local",
-          ...(result.message ? { description: result.message } : {}),
-        });
-        return true;
-      } catch (error) {
-        toastManager.add({
-          type: "error",
-          title:
-            targetMode === "worktree"
-              ? "Could not hand off to worktree"
-              : "Could not hand off to local",
-          description:
-            error instanceof Error ? error.message : "An error occurred during the handoff.",
-        });
-        return false;
-      }
-    },
-    [
-      activeProject,
-      activeRootBranch,
-      activeThread,
-      activeThreadAssociatedWorktree,
-      handoffThreadMutation,
-      isServerThread,
-      runProjectScript,
-      setStoreThreadWorkspace,
-      stopActiveThreadSession,
-      syncServerReadModel,
-    ],
-  );
-  const onHandoffToWorktree = useCallback(() => {
-    if (!activeThread) {
-      return;
-    }
-    setWorktreeHandoffBranchName(
-      buildSuggestedWorktreeBranchName({
-        associatedWorktreeBranch:
-          activeThreadAssociatedWorktree.associatedWorktreeBranch ?? activeThread.branch ?? null,
-        title: activeThread.title,
-      }),
-    );
-    setWorktreeHandoffDialogOpen(true);
-  }, [activeThread, activeThreadAssociatedWorktree.associatedWorktreeBranch]);
-  const confirmWorktreeHandoff = useCallback(async () => {
-    const normalizedBranch = buildSuggestedWorktreeBranchName({
-      associatedWorktreeBranch: worktreeHandoffBranchName,
-    });
-    setWorktreeHandoffBranchName(normalizedBranch);
-    const succeeded = await handoffThread("worktree", { preferredWorktreeBranch: normalizedBranch });
-    if (succeeded) {
-      setWorktreeHandoffDialogOpen(false);
-    }
-  }, [handoffThread, worktreeHandoffBranchName]);
-  const onHandoffToLocal = useCallback(async () => {
-    await handoffThread("local");
-  }, [handoffThread]);
+  const {
+    handoffBusy,
+    worktreeHandoffDialogOpen,
+    setWorktreeHandoffDialogOpen,
+    worktreeHandoffName,
+    setWorktreeHandoffName,
+    onHandoffToWorktree,
+    onHandoffToLocal,
+    confirmWorktreeHandoff,
+  } = useThreadWorkspaceHandoff({
+    activeProject,
+    activeThread,
+    activeRootBranch,
+    activeThreadAssociatedWorktree,
+    isServerThread,
+    stopActiveThreadSession,
+    runProjectScript,
+    setStoreThreadWorkspace,
+    syncServerReadModel,
+  });
   const persistProjectScripts = useCallback(
     async (input: {
       projectId: ProjectId;
@@ -3561,17 +3478,16 @@ export default function ChatView({ threadId }: ChatViewProps) {
       // On first message: lock in branch + create worktree if needed.
       if (baseBranchForWorktree) {
         beginSendPhase("preparing-worktree");
-        const newBranch = buildTemporaryWorktreeBranchName();
-        const result = await createWorktreeMutation.mutateAsync({
+        const result = await createDetachedWorktreeMutation.mutateAsync({
           cwd: activeProject.cwd,
-          branch: baseBranchForWorktree,
-          newBranch,
+          ref: baseBranchForWorktree,
         });
         nextThreadBranch = result.worktree.branch;
         nextThreadWorktreePath = result.worktree.path;
         const nextAssociatedWorktree = deriveAssociatedWorktreeMetadata({
-          branch: result.worktree.branch,
           worktreePath: result.worktree.path,
+          associatedWorktreeBranch: null,
+          associatedWorktreeRef: result.worktree.ref,
         });
         if (isServerThread) {
           await api.orchestration.dispatchCommand({
@@ -4470,6 +4386,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
     supportsFastSlashCommand,
     supportsTextNativeReviewCommand,
     fastModeEnabled,
+    providerNativeCommands,
+    providerCommandDiscoveryCwd: composerSkillCwd,
     selectedProvider,
     currentProviderModelOptions,
     selectedModelSelection,
@@ -4941,23 +4859,23 @@ export default function ChatView({ threadId }: ChatViewProps) {
             {/* Input bar */}
             <div className={cn("px-3 pt-4 sm:px-5 sm:pt-4", isGitRepo ? "pb-1" : "pb-2.5 sm:pb-3")}>
               {queuedComposerTurns.length > 0 ? (
-                <div className="pointer-events-auto relative z-0 mx-auto mb-[-1px] flex w-full max-w-3xl flex-col gap-2">
+                <div className="pointer-events-auto relative z-0 mx-auto mb-1.5 flex w-full max-w-3xl flex-col gap-1.5">
                   {queuedComposerTurns.map((queuedTurn) => (
                     <div
                       key={queuedTurn.id}
                       data-testid="queued-follow-up-row"
-                      className="flex items-center gap-3 rounded-t-2xl rounded-b-none border border-b-0 border-border/50 bg-card px-3.5 py-2 text-sm backdrop-blur"
+                      className="flex items-center gap-2.5 rounded-2xl border border-border/50 bg-card/95 px-3 py-1.5 text-[13px] shadow-sm backdrop-blur"
                     >
-                      <div className="flex min-w-0 flex-1 items-center gap-2.5">
-                        <Undo2Icon className="size-4 shrink-0 text-muted-foreground/70" />
-                        <span className="truncate text-[15px] font-medium text-foreground/85">
+                      <div className="flex min-w-0 flex-1 items-center gap-2">
+                        <Undo2Icon className="size-3.5 shrink-0 text-muted-foreground/70" />
+                        <span className="truncate text-[14px] font-medium text-foreground/85">
                           {queuedTurn.previewText}
                         </span>
                       </div>
-                      <div className="flex shrink-0 items-center gap-1">
+                      <div className="flex shrink-0 items-center gap-0.5">
                         <button
                           type="button"
-                          className="inline-flex items-center gap-1.5 rounded-lg bg-muted/80 px-3.5 py-1.5 text-[13px] font-medium text-foreground transition-colors hover:bg-muted"
+                          className="inline-flex items-center gap-1.5 rounded-xl bg-muted/80 px-3 py-1 text-[12px] font-medium text-foreground transition-colors hover:bg-muted"
                           onClick={() => void onSteerQueuedComposerTurn(queuedTurn)}
                         >
                           <Undo2Icon className="size-3.5" />
@@ -4965,23 +4883,23 @@ export default function ChatView({ threadId }: ChatViewProps) {
                         </button>
                         <button
                           type="button"
-                          className="inline-flex size-8 items-center justify-center rounded-lg text-muted-foreground/70 transition-colors hover:bg-muted/60 hover:text-foreground"
+                          className="inline-flex size-7 items-center justify-center rounded-xl text-muted-foreground/70 transition-colors hover:bg-muted/60 hover:text-foreground"
                           aria-label="Delete queued follow-up"
                           onClick={() => removeQueuedComposerTurn(queuedTurn.id)}
                         >
-                          <Trash2 className="size-4" />
+                          <Trash2 className="size-3.5" />
                         </button>
                         <Menu>
                           <MenuTrigger
                             render={
                               <button
                                 type="button"
-                                className="inline-flex size-8 items-center justify-center rounded-lg text-muted-foreground/70 transition-colors hover:bg-muted/60 hover:text-foreground"
+                                className="inline-flex size-7 items-center justify-center rounded-xl text-muted-foreground/70 transition-colors hover:bg-muted/60 hover:text-foreground"
                                 aria-label="Queued follow-up actions"
                               />
                             }
                           >
-                            <EllipsisIcon className="size-4" />
+                            <EllipsisIcon className="size-3.5" />
                           </MenuTrigger>
                           <MenuPopup align="end" side="top">
                             <MenuItem onClick={() => onEditQueuedComposerTurn(queuedTurn)}>
@@ -5054,7 +4972,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
                             resolvedTheme={resolvedTheme}
                             isLoading={isComposerMenuLoading}
                             triggerKind={
-                              composerCommandPicker !== null ? "slash-command" : composerTriggerKind
+                              composerCommandPicker !== null
+                                ? "slash-command"
+                                : effectiveComposerTriggerKind
                             }
                             activeItemId={activeComposerMenuItem?.id ?? null}
                             onHighlightedItemChange={onComposerMenuItemHighlighted}
@@ -5470,7 +5390,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
                 onRuntimeModeChange={handleRuntimeModeChange}
                 onHandoffToWorktree={onHandoffToWorktree}
                 onHandoffToLocal={onHandoffToLocal}
-                handoffBusy={handoffThreadMutation.isPending}
+                handoffBusy={handoffBusy}
                 onComposerFocusRequest={scheduleComposerFocus}
                 contextWindow={activeContextWindow}
                 cumulativeCostUsd={activeCumulativeCostUsd}
@@ -5568,9 +5488,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
       />
       <ThreadWorktreeHandoffDialog
         open={worktreeHandoffDialogOpen}
-        branchName={worktreeHandoffBranchName}
-        busy={handoffThreadMutation.isPending}
-        onBranchNameChange={setWorktreeHandoffBranchName}
+        worktreeName={worktreeHandoffName}
+        busy={handoffBusy}
+        onWorktreeNameChange={setWorktreeHandoffName}
         onOpenChange={setWorktreeHandoffDialogOpen}
         onConfirm={confirmWorktreeHandoff}
       />

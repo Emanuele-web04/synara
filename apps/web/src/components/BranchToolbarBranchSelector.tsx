@@ -482,7 +482,7 @@ export function BranchToolbarBranchSelector({
     >
       <ComboboxTrigger
         render={<Button variant="ghost" size="xs" />}
-        className="inline-flex items-center text-muted-foreground/70 hover:text-foreground/80"
+        className="inline-flex items-center font-normal text-muted-foreground/70 hover:text-foreground/80"
         disabled={(branchesQuery.isLoading && branches.length === 0) || isBranchActionPending}
       >
         <GoGitBranch className="size-3 shrink-0" />

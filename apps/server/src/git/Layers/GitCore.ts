@@ -1635,6 +1635,30 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         };
       });
 
+    const createDetachedWorktree: GitCoreShape["createDetachedWorktree"] = (input) =>
+      Effect.gen(function* () {
+        const sanitizedRef = input.ref.replace(/\//g, "-");
+        const repoName = path.basename(input.cwd);
+        const worktreePath =
+          input.path ?? path.join(worktreesDir, repoName, `detached-${sanitizedRef}`);
+
+        yield* executeGit("GitCore.createDetachedWorktree", input.cwd, [
+          "worktree",
+          "add",
+          "--detach",
+          worktreePath,
+          input.ref,
+        ]);
+
+        return {
+          worktree: {
+            path: worktreePath,
+            ref: input.ref,
+            branch: null,
+          },
+        };
+      });
+
     const fetchPullRequestBranch: GitCoreShape["fetchPullRequestBranch"] = (input) =>
       Effect.gen(function* () {
         const remoteName = yield* resolvePrimaryRemoteName(input.cwd);
@@ -1843,6 +1867,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       readConfigValue,
       listBranches,
       createWorktree,
+      createDetachedWorktree,
       fetchPullRequestBranch,
       ensureRemote,
       fetchRemoteBranch,

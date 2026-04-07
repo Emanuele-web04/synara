@@ -2,7 +2,6 @@ import { ProjectId, type ModelSelection, type ThreadId } from "@t3tools/contract
 import { sanitizeBranchFragment } from "@t3tools/shared/git";
 import { isGenericTerminalThreadTitle } from "@t3tools/shared/terminalThreads";
 import { type ChatMessage, type Thread, type ThreadPrimarySurface } from "../types";
-import { randomUUID } from "~/lib/utils";
 import { type ComposerImageAttachment, type DraftThreadState } from "../composerDraftStore";
 import { Schema } from "effect";
 import {
@@ -12,7 +11,7 @@ import {
 } from "../lib/terminalContext";
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "t3code:last-invoked-script-by-project";
-const WORKTREE_BRANCH_PREFIX = "dpcode";
+const WORKTREE_NAME_PREFIX = "dpcode";
 
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);
 
@@ -101,24 +100,19 @@ export function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
-export function buildTemporaryWorktreeBranchName(): string {
-  // Keep the 8-hex suffix shape for backend temporary-branch detection.
-  const token = randomUUID().slice(0, 8).toLowerCase();
-  return `${WORKTREE_BRANCH_PREFIX}/${token}`;
-}
-
-export function buildSuggestedWorktreeBranchName(input: {
+export function buildSuggestedWorktreeName(input: {
   associatedWorktreeBranch?: string | null;
   title?: string | null;
 }): string {
-  const normalizedExisting = input.associatedWorktreeBranch?.trim().replace(/^(codex|t3code|dpcode)\//i, "") ?? "";
+  const normalizedExisting =
+    input.associatedWorktreeBranch?.trim().replace(/^(codex|t3code|dpcode)\//i, "") ?? "";
   const preferred =
     normalizedExisting ||
-    `${WORKTREE_BRANCH_PREFIX}/${sanitizeBranchFragment(input.title ?? "update")}`;
+    `${WORKTREE_NAME_PREFIX}/${sanitizeBranchFragment(input.title ?? "update")}`;
   const normalized = preferred.toLowerCase();
-  return normalized.startsWith(`${WORKTREE_BRANCH_PREFIX}/`)
+  return normalized.startsWith(`${WORKTREE_NAME_PREFIX}/`)
     ? normalized
-    : `${WORKTREE_BRANCH_PREFIX}/${sanitizeBranchFragment(normalized)}`;
+    : `${WORKTREE_NAME_PREFIX}/${sanitizeBranchFragment(normalized)}`;
 }
 
 export function cloneComposerImageForRetry(

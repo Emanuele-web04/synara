@@ -41,9 +41,11 @@ describe("splitPromptIntoComposerSegments", () => {
     ]);
   });
 
-  it("keeps slash-prefixed text as plain text even when it is delimited", () => {
+  it("converts completed slash skill tokens once a trailing delimiter exists", () => {
     expect(splitPromptIntoComposerSegments("Use /check-code please")).toEqual([
-      { type: "text", text: "Use /check-code please" },
+      { type: "text", text: "Use " },
+      { type: "skill", name: "check-code", prefix: "/" },
+      { type: "text", text: " please" },
     ]);
   });
 

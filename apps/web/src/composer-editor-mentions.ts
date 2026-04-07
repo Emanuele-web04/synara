@@ -1,3 +1,4 @@
+import { isBuiltInComposerSlashCommand } from "./composerSlashCommands";
 import {
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
   type TerminalContextDraft,
@@ -23,9 +24,9 @@ export type ComposerPromptSegment =
     };
 
 const MENTION_TOKEN_REGEX = /(^|\s)@([^\s@]+)(?=\s)/g;
-const SKILL_TOKEN_REGEX = /(^|\s)(\$)([a-zA-Z][a-zA-Z0-9_:-]*)(?=\s)/g;
+const SKILL_TOKEN_REGEX = /(^|\s)([\$\/])([a-zA-Z][a-zA-Z0-9_:-]*)(?=\s)/g;
 const DISPLAY_MENTION_TOKEN_REGEX = /(^|\s)@([^\s@]+)(?=\s|$)/g;
-const DISPLAY_SKILL_TOKEN_REGEX = /(^|\s)(\$)([a-zA-Z][a-zA-Z0-9_:-]*)(?=\s|$)/g;
+const DISPLAY_SKILL_TOKEN_REGEX = /(^|\s)([\$\/])([a-zA-Z][a-zA-Z0-9_:-]*)(?=\s|$)/g;
 
 function pushTextSegment(segments: ComposerPromptSegment[], text: string): void {
   if (!text) return;
@@ -79,9 +80,8 @@ function collectInlineTokenMatches(
     const matchIndex = match.index ?? 0;
     const start = matchIndex + whitespace.length;
     const end = start + fullMatch.length - whitespace.length;
-    // Keep raw slash commands editable in the composer. Only `$foo` becomes a
-    // skill chip once it is delimited.
-    if (name.length > 0) {
+    // Skip built-in slash commands so `/clear`, `/plan` etc. stay as plain text.
+    if (name.length > 0 && !(skillPrefix === "/" && isBuiltInComposerSlashCommand(name))) {
       matches.push({ kind: "skill", value: name, skillPrefix, start, end });
     }
   }

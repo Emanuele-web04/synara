@@ -50,6 +50,11 @@ const GitWorktree = Schema.Struct({
   path: TrimmedNonEmptyStringSchema,
   branch: TrimmedNonEmptyStringSchema,
 });
+const GitDetachedWorktree = Schema.Struct({
+  path: TrimmedNonEmptyStringSchema,
+  ref: TrimmedNonEmptyStringSchema,
+  branch: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
+});
 const GitResolvedPullRequest = Schema.Struct({
   number: PositiveInt,
   title: TrimmedNonEmptyStringSchema,
@@ -100,6 +105,13 @@ export const GitCreateWorktreeInput = Schema.Struct({
 });
 export type GitCreateWorktreeInput = typeof GitCreateWorktreeInput.Type;
 
+export const GitCreateDetachedWorktreeInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  ref: TrimmedNonEmptyStringSchema,
+  path: Schema.NullOr(TrimmedNonEmptyStringSchema),
+});
+export type GitCreateDetachedWorktreeInput = typeof GitCreateDetachedWorktreeInput.Type;
+
 export const GitPullRequestRefInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   reference: GitPullRequestReference,
@@ -123,7 +135,7 @@ export const GitHandoffThreadInput = Schema.Struct({
   associatedWorktreeRef: Schema.NullOr(TrimmedNonEmptyStringSchema),
   preferredLocalBranch: Schema.NullOr(TrimmedNonEmptyStringSchema),
   preferredWorktreeBaseBranch: Schema.NullOr(TrimmedNonEmptyStringSchema),
-  preferredNewWorktreeBranch: Schema.NullOr(TrimmedNonEmptyStringSchema),
+  preferredNewWorktreeName: Schema.NullOr(TrimmedNonEmptyStringSchema),
 });
 export type GitHandoffThreadInput = typeof GitHandoffThreadInput.Type;
 
@@ -194,6 +206,11 @@ export const GitCreateWorktreeResult = Schema.Struct({
   worktree: GitWorktree,
 });
 export type GitCreateWorktreeResult = typeof GitCreateWorktreeResult.Type;
+
+export const GitCreateDetachedWorktreeResult = Schema.Struct({
+  worktree: GitDetachedWorktree,
+});
+export type GitCreateDetachedWorktreeResult = typeof GitCreateDetachedWorktreeResult.Type;
 
 export const GitResolvePullRequestResult = Schema.Struct({
   pullRequest: GitResolvedPullRequest,

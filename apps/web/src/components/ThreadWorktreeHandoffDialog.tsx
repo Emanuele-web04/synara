@@ -14,28 +14,28 @@ import { Input } from "./ui/input";
 
 interface ThreadWorktreeHandoffDialogProps {
   open: boolean;
-  branchName: string;
+  worktreeName: string;
   busy?: boolean;
-  onBranchNameChange: (value: string) => void;
+  onWorktreeNameChange: (value: string) => void;
   onOpenChange: (open: boolean) => void;
   onConfirm: () => Promise<void> | void;
 }
 
 export function ThreadWorktreeHandoffDialog({
   open,
-  branchName,
+  worktreeName,
   busy = false,
-  onBranchNameChange,
+  onWorktreeNameChange,
   onOpenChange,
   onConfirm,
 }: ThreadWorktreeHandoffDialogProps) {
-  const branchInputRef = useRef<HTMLInputElement>(null);
+  const worktreeInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open) return;
     const frame = window.requestAnimationFrame(() => {
-      branchInputRef.current?.focus();
-      branchInputRef.current?.select();
+      worktreeInputRef.current?.focus();
+      worktreeInputRef.current?.select();
     });
     return () => {
       window.cancelAnimationFrame(frame);
@@ -59,7 +59,8 @@ export function ThreadWorktreeHandoffDialog({
           <div className="space-y-2">
             <DialogTitle>Hand off thread to worktree</DialogTitle>
             <DialogDescription className="max-w-lg text-[15px] leading-7">
-              Create and check out a branch in a new worktree to continue working in parallel.
+              Create a new detached worktree from the selected base branch to continue working in
+              parallel. You can create a branch later from inside the worktree.
             </DialogDescription>
           </div>
         </DialogHeader>
@@ -68,22 +69,22 @@ export function ThreadWorktreeHandoffDialog({
             className="space-y-4"
             onSubmit={(event) => {
               event.preventDefault();
-              if (!busy && branchName.trim().length > 0) {
+              if (!busy && worktreeName.trim().length > 0) {
                 void onConfirm();
               }
             }}
           >
             <div className="space-y-2">
-              <label className="block font-medium text-sm" htmlFor="handoff-worktree-branch">
-                Branch name
+              <label className="block font-medium text-sm" htmlFor="handoff-worktree-name">
+                Worktree name
               </label>
               <Input
-                ref={branchInputRef}
-                id="handoff-worktree-branch"
+                ref={worktreeInputRef}
+                id="handoff-worktree-name"
                 size="lg"
-                value={branchName}
-                onChange={(event) => onBranchNameChange(event.target.value)}
-                placeholder="dpcode/my-change"
+                value={worktreeName}
+                onChange={(event) => onWorktreeNameChange(event.target.value)}
+                placeholder="dpcode/check-code"
               />
             </div>
             <DialogFooter variant="bare" className="px-0 pb-0 pt-2 sm:justify-start">
@@ -91,7 +92,7 @@ export function ThreadWorktreeHandoffDialog({
                 type="submit"
                 size="lg"
                 className="w-full"
-                disabled={busy || branchName.trim().length === 0}
+                disabled={busy || worktreeName.trim().length === 0}
               >
                 {busy ? "Handing off..." : "Hand off"}
               </Button>

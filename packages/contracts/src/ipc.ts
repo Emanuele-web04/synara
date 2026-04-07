@@ -2,6 +2,8 @@ import type {
   GitCheckoutInput,
   GitActionProgressEvent,
   GitCreateBranchInput,
+  GitCreateDetachedWorktreeInput,
+  GitCreateDetachedWorktreeResult,
   GitHandoffThreadInput,
   GitHandoffThreadResult,
   GitPreparePullRequestThreadInput,
@@ -240,6 +242,9 @@ export interface NativeApi {
     // Existing branch/worktree API
     listBranches: (input: GitListBranchesInput) => Promise<GitListBranchesResult>;
     createWorktree: (input: GitCreateWorktreeInput) => Promise<GitCreateWorktreeResult>;
+    createDetachedWorktree: (
+      input: GitCreateDetachedWorktreeInput,
+    ) => Promise<GitCreateDetachedWorktreeResult>;
     removeWorktree: (input: GitRemoveWorktreeInput) => Promise<void>;
     createBranch: (input: GitCreateBranchInput) => Promise<void>;
     checkout: (input: GitCheckoutInput) => Promise<void>;

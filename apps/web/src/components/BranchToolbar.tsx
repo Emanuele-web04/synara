@@ -1,7 +1,8 @@
 import type { ThreadId, RuntimeMode } from "@t3tools/contracts";
 import { deriveAssociatedWorktreeMetadata } from "@t3tools/shared/threadWorkspace";
-import { GitForkIcon, HandoffIcon, LockOpenIcon, LockIcon } from "~/lib/icons";
-import { FaLaptop } from "react-icons/fa";
+import { GitForkIcon, HandoffIcon } from "~/lib/icons";
+import { LiaUnlockAltSolid, LiaLockSolid } from "react-icons/lia";
+import { PiLaptop } from "react-icons/pi";
 import { useCallback } from "react";
 
 import { newCommandId } from "../lib/utils";
@@ -17,7 +18,6 @@ import { BranchToolbarBranchSelector } from "./BranchToolbarBranchSelector";
 import { ContextWindowMeter } from "./chat/ContextWindowMeter";
 import type { ContextWindowSnapshot } from "../lib/contextWindow";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./ui/select";
-import { Button } from "./ui/button";
 import type { ThreadWorkspacePatch } from "../types";
 
 const envModeItems = [
@@ -176,7 +176,7 @@ export default function BranchToolbar({
               </>
             ) : (
               <>
-                <FaLaptop className="size-3" />
+                <PiLaptop className="size-3" />
                 Local
               </>
             )}
@@ -191,14 +191,14 @@ export default function BranchToolbar({
               {effectiveEnvMode === "worktree" ? (
                 <GitForkIcon className="size-3" />
               ) : (
-                <FaLaptop className="size-3" />
+                <PiLaptop className="size-3" />
               )}
               <SelectValue />
             </SelectTrigger>
             <SelectPopup>
               <SelectItem value="local">
                 <span className="inline-flex items-center gap-1.5">
-                  <FaLaptop className="size-3" />
+                  <PiLaptop className="size-3" />
                   Local
                 </span>
               </SelectItem>
@@ -212,6 +212,28 @@ export default function BranchToolbar({
           </Select>
         )}
 
+        {canHandoffToWorktree && onHandoffToWorktree ? (
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 border border-transparent px-[calc(--spacing(3)-1px)] text-xs font-normal text-muted-foreground/70 transition-colors hover:text-foreground/80 disabled:pointer-events-none disabled:opacity-50"
+            disabled={handoffBusy}
+            onClick={onHandoffToWorktree}
+          >
+            <HandoffIcon className="size-3.5" />
+            Hand off to worktree
+          </button>
+        ) : null}
+        {canHandoffToLocal && onHandoffToLocal ? (
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 border border-transparent px-[calc(--spacing(3)-1px)] text-xs font-normal text-muted-foreground/70 transition-colors hover:text-foreground/80 disabled:pointer-events-none disabled:opacity-50"
+            disabled={handoffBusy}
+            onClick={onHandoffToLocal}
+          >
+            <HandoffIcon className="size-3.5" />
+            Hand off to local
+          </button>
+        ) : null}
         {runtimeMode && onRuntimeModeChange ? (
           <button
             type="button"
@@ -228,38 +250,12 @@ export default function BranchToolbar({
             }
           >
             {runtimeMode === "full-access" ? (
-              <LockOpenIcon className="size-3" />
+              <LiaUnlockAltSolid className="size-3 -scale-x-100" />
             ) : (
-              <LockIcon className="size-3" />
+              <LiaLockSolid className="size-3" />
             )}
             {runtimeMode === "full-access" ? "Full access" : "Supervised"}
           </button>
-        ) : null}
-        {canHandoffToWorktree && onHandoffToWorktree ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            className="font-normal"
-            disabled={handoffBusy}
-            onClick={onHandoffToWorktree}
-          >
-            <HandoffIcon className="size-3.5" />
-            Hand off to worktree
-          </Button>
-        ) : null}
-        {canHandoffToLocal && onHandoffToLocal ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            className="font-normal"
-            disabled={handoffBusy}
-            onClick={onHandoffToLocal}
-          >
-            <HandoffIcon className="size-3.5" />
-            Hand off to local
-          </Button>
         ) : null}
       </div>
 

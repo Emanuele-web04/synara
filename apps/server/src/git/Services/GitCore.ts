@@ -11,6 +11,8 @@ import type { Effect, Scope } from "effect";
 import type {
   GitCheckoutInput,
   GitCreateBranchInput,
+  GitCreateDetachedWorktreeInput,
+  GitCreateDetachedWorktreeResult,
   GitCreateWorktreeInput,
   GitCreateWorktreeResult,
   GitInitInput,
@@ -207,6 +209,13 @@ export interface GitCoreShape {
   readonly createWorktree: (
     input: GitCreateWorktreeInput,
   ) => Effect.Effect<GitCreateWorktreeResult, GitCommandError>;
+
+  /**
+   * Create a detached worktree from a branch or ref.
+   */
+  readonly createDetachedWorktree: (
+    input: GitCreateDetachedWorktreeInput,
+  ) => Effect.Effect<GitCreateDetachedWorktreeResult, GitCommandError>;
 
   /**
    * Materialize a GitHub pull request head as a local branch without switching checkout.

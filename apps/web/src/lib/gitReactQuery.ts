@@ -186,6 +186,20 @@ export function gitCreateWorktreeMutationOptions(input: { queryClient: QueryClie
   });
 }
 
+export function gitCreateDetachedWorktreeMutationOptions(input: { queryClient: QueryClient }) {
+  return mutationOptions({
+    mutationFn: async ({ cwd, ref, path }: { cwd: string; ref: string; path?: string | null }) => {
+      const api = ensureNativeApi();
+      if (!cwd) throw new Error("Git worktree creation is unavailable.");
+      return api.git.createDetachedWorktree({ cwd, ref, path: path ?? null });
+    },
+    mutationKey: ["git", "mutation", "create-detached-worktree"] as const,
+    onSettled: async () => {
+      await invalidateGitQueries(input.queryClient);
+    },
+  });
+}
+
 export function gitRemoveWorktreeMutationOptions(input: { queryClient: QueryClient }) {
   return mutationOptions({
     mutationFn: async ({ cwd, path, force }: { cwd: string; path: string; force?: boolean }) => {
@@ -235,7 +249,7 @@ export function gitHandoffThreadMutationOptions(input: {
       associatedWorktreeRef: string | null;
       preferredLocalBranch: string | null;
       preferredWorktreeBaseBranch: string | null;
-      preferredNewWorktreeBranch: string | null;
+      preferredNewWorktreeName: string | null;
     }) => {
       const api = ensureNativeApi();
       if (!input.cwd) throw new Error("Git handoff is unavailable.");
