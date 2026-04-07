@@ -260,6 +260,7 @@ function SettingsRouteView() {
     settings.codexHomePath !== defaults.codexHomePath;
   const changedSettingLabels = [
     ...(theme !== "system" ? ["Theme"] : []),
+    ...(settings.uiFontFamily !== defaults.uiFontFamily ? ["UI font"] : []),
     ...(settings.timestampFormat !== defaults.timestampFormat ? ["Time format"] : []),
     ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
     ...(settings.enableAssistantStreaming !== defaults.enableAssistantStreaming
@@ -538,6 +539,29 @@ function SettingsRouteView() {
                       ))}
                     </SelectPopup>
                   </Select>
+                }
+              />
+
+              <SettingsRow
+                title="UI font"
+                description="Set a custom font for the interface. Leave empty for the default system font."
+                resetAction={
+                  settings.uiFontFamily !== defaults.uiFontFamily ? (
+                    <SettingResetButton
+                      label="UI font"
+                      onClick={() => updateSettings({ uiFontFamily: defaults.uiFontFamily })}
+                    />
+                  ) : null
+                }
+                control={
+                  <Input
+                    className="w-full sm:w-48 text-right"
+                    value={settings.uiFontFamily}
+                    onChange={(event) => updateSettings({ uiFontFamily: event.target.value })}
+                    placeholder="-apple-system, BlinkM…"
+                    spellCheck={false}
+                    aria-label="Custom UI font family"
+                  />
                 }
               />
 

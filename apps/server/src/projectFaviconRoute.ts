@@ -95,6 +95,13 @@ function serveFallbackFavicon(res: http.ServerResponse): void {
   res.end(FALLBACK_FAVICON_SVG);
 }
 
+function serveNoContent(res: http.ServerResponse): void {
+  res.writeHead(204, {
+    "Cache-Control": "public, max-age=3600",
+  });
+  res.end();
+}
+
 export function tryHandleProjectFaviconRequest(url: URL, res: http.ServerResponse): boolean {
   if (url.pathname !== "/api/project-favicon") {
     return false;
@@ -106,6 +113,8 @@ export function tryHandleProjectFaviconRequest(url: URL, res: http.ServerRespons
     res.end("Missing cwd parameter");
     return true;
   }
+
+  const shouldServeFallback = url.searchParams.get("fallback") !== "none";
 
   const tryResolvedPaths = (paths: string[], index: number, onExhausted: () => void): void => {
     if (index >= paths.length) {
@@ -128,7 +137,11 @@ export function tryHandleProjectFaviconRequest(url: URL, res: http.ServerRespons
 
   const trySourceFiles = (index: number): void => {
     if (index >= ICON_SOURCE_FILES.length) {
-      serveFallbackFavicon(res);
+      if (shouldServeFallback) {
+        serveFallbackFavicon(res);
+        return;
+      }
+      serveNoContent(res);
       return;
     }
     const sourceFile = path.join(projectCwd, ICON_SOURCE_FILES[index]!);

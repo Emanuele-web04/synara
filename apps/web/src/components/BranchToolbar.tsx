@@ -1,5 +1,6 @@
 import type { ThreadId, RuntimeMode } from "@t3tools/contracts";
-import { GitForkIcon, LockOpenIcon, LockIcon } from "~/lib/icons";
+import { deriveAssociatedWorktreeMetadata } from "@t3tools/shared/threadWorkspace";
+import { GitForkIcon, HandoffIcon, LockOpenIcon, LockIcon } from "~/lib/icons";
 import { FaLaptop } from "react-icons/fa";
 import { useCallback } from "react";
 
@@ -16,6 +17,8 @@ import { BranchToolbarBranchSelector } from "./BranchToolbarBranchSelector";
 import { ContextWindowMeter } from "./chat/ContextWindowMeter";
 import type { ContextWindowSnapshot } from "../lib/contextWindow";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./ui/select";
+import { Button } from "./ui/button";
+import type { ThreadWorkspacePatch } from "../types";
 
 const envModeItems = [
   { value: "local", label: "Local" },
@@ -28,6 +31,9 @@ interface BranchToolbarProps {
   envLocked: boolean;
   runtimeMode?: RuntimeMode;
   onRuntimeModeChange?: (mode: RuntimeMode) => void;
+  onHandoffToWorktree?: () => void;
+  onHandoffToLocal?: () => void;
+  handoffBusy?: boolean;
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
   contextWindow?: ContextWindowSnapshot | null;
@@ -40,6 +46,9 @@ export default function BranchToolbar({
   envLocked,
   runtimeMode,
   onRuntimeModeChange,
+  onHandoffToWorktree,
+  onHandoffToLocal,
+  handoffBusy = false,
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
   contextWindow,
@@ -47,7 +56,7 @@ export default function BranchToolbar({
 }: BranchToolbarProps) {
   const threads = useStore((store) => store.threads);
   const projects = useStore((store) => store.projects);
-  const setThreadBranchAction = useStore((store) => store.setThreadBranch);
+  const setThreadWorkspaceAction = useStore((store) => store.setThreadWorkspace);
   const draftThread = useComposerDraftStore((store) => store.getDraftThread(threadId));
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
 
@@ -66,9 +75,26 @@ export default function BranchToolbar({
     serverThreadEnvMode: serverThread?.envMode,
   });
 
-  const setThreadBranch = useCallback(
-    (branch: string | null, worktreePath: string | null) => {
+  const setThreadWorkspace = useCallback(
+    (patch: ThreadWorkspacePatch) => {
       if (!activeThreadId) return;
+      const branch = patch.branch !== undefined ? patch.branch : activeThreadBranch;
+      const worktreePath =
+        patch.worktreePath !== undefined ? patch.worktreePath : activeWorktreePath;
+      const nextEnvMode =
+        patch.envMode !== undefined ? patch.envMode : worktreePath ? "worktree" : effectiveEnvMode;
+      const nextAssociatedWorktree = deriveAssociatedWorktreeMetadata({
+        branch,
+        worktreePath,
+        associatedWorktreePath:
+          patch.associatedWorktreePath !== undefined
+            ? patch.associatedWorktreePath
+            : (serverThread?.associatedWorktreePath ?? null),
+        associatedWorktreeBranch:
+          patch.associatedWorktreeBranch !== undefined ? patch.associatedWorktreeBranch : branch,
+        associatedWorktreeRef:
+          patch.associatedWorktreeRef !== undefined ? patch.associatedWorktreeRef : branch,
+      });
       const api = readNativeApi();
       // If the effective cwd is about to change, stop the running session so the
       // next message creates a new one with the correct cwd.
@@ -87,13 +113,21 @@ export default function BranchToolbar({
           type: "thread.meta.update",
           commandId: newCommandId(),
           threadId: activeThreadId,
-          envMode: worktreePath ? "worktree" : effectiveEnvMode,
+          envMode: nextEnvMode,
           branch,
           worktreePath,
+          associatedWorktreePath: nextAssociatedWorktree.associatedWorktreePath,
+          associatedWorktreeBranch: nextAssociatedWorktree.associatedWorktreeBranch,
+          associatedWorktreeRef: nextAssociatedWorktree.associatedWorktreeRef,
         });
       }
       if (hasServerThread) {
-        setThreadBranchAction(activeThreadId, branch, worktreePath);
+        setThreadWorkspaceAction(activeThreadId, {
+          envMode: nextEnvMode,
+          branch,
+          worktreePath,
+          ...nextAssociatedWorktree,
+        });
         return;
       }
       const nextDraftEnvMode = resolveDraftEnvModeAfterBranchChange({
@@ -109,15 +143,24 @@ export default function BranchToolbar({
     },
     [
       activeThreadId,
+      activeThreadBranch,
       serverThread?.session,
       activeWorktreePath,
       hasServerThread,
-      setThreadBranchAction,
+      setThreadWorkspaceAction,
+      serverThread?.associatedWorktreeBranch,
+      serverThread?.associatedWorktreePath,
+      serverThread?.associatedWorktreeRef,
       setDraftThreadContext,
       threadId,
       effectiveEnvMode,
     ],
   );
+
+  const canHandoffToWorktree = Boolean(
+    hasServerThread && envLocked && !activeWorktreePath && effectiveEnvMode === "local",
+  );
+  const canHandoffToLocal = Boolean(hasServerThread && activeWorktreePath);
 
   if (!activeThreadId || !activeProject) return null;
 
@@ -192,6 +235,32 @@ export default function BranchToolbar({
             {runtimeMode === "full-access" ? "Full access" : "Supervised"}
           </button>
         ) : null}
+        {canHandoffToWorktree && onHandoffToWorktree ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            className="font-normal"
+            disabled={handoffBusy}
+            onClick={onHandoffToWorktree}
+          >
+            <HandoffIcon className="size-3.5" />
+            Hand off to worktree
+          </Button>
+        ) : null}
+        {canHandoffToLocal && onHandoffToLocal ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            className="font-normal"
+            disabled={handoffBusy}
+            onClick={onHandoffToLocal}
+          >
+            <HandoffIcon className="size-3.5" />
+            Hand off to local
+          </Button>
+        ) : null}
       </div>
 
       <div className="flex items-center gap-2">
@@ -202,7 +271,7 @@ export default function BranchToolbar({
           branchCwd={branchCwd}
           effectiveEnvMode={effectiveEnvMode}
           envLocked={envLocked}
-          onSetThreadBranch={setThreadBranch}
+          onSetThreadWorkspace={setThreadWorkspace}
           {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}
           {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}
         />

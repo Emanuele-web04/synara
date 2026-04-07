@@ -1,4 +1,5 @@
 import { ProjectId, type ModelSelection, type ThreadId } from "@t3tools/contracts";
+import { sanitizeBranchFragment } from "@t3tools/shared/git";
 import { isGenericTerminalThreadTitle } from "@t3tools/shared/terminalThreads";
 import { type ChatMessage, type Thread, type ThreadPrimarySurface } from "../types";
 import { randomUUID } from "~/lib/utils";
@@ -11,7 +12,7 @@ import {
 } from "../lib/terminalContext";
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "t3code:last-invoked-script-by-project";
-const WORKTREE_BRANCH_PREFIX = "t3code";
+const WORKTREE_BRANCH_PREFIX = "dpcode";
 
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);
 
@@ -104,6 +105,20 @@ export function buildTemporaryWorktreeBranchName(): string {
   // Keep the 8-hex suffix shape for backend temporary-branch detection.
   const token = randomUUID().slice(0, 8).toLowerCase();
   return `${WORKTREE_BRANCH_PREFIX}/${token}`;
+}
+
+export function buildSuggestedWorktreeBranchName(input: {
+  associatedWorktreeBranch?: string | null;
+  title?: string | null;
+}): string {
+  const normalizedExisting = input.associatedWorktreeBranch?.trim().replace(/^(codex|t3code|dpcode)\//i, "") ?? "";
+  const preferred =
+    normalizedExisting ||
+    `${WORKTREE_BRANCH_PREFIX}/${sanitizeBranchFragment(input.title ?? "update")}`;
+  const normalized = preferred.toLowerCase();
+  return normalized.startsWith(`${WORKTREE_BRANCH_PREFIX}/`)
+    ? normalized
+    : `${WORKTREE_BRANCH_PREFIX}/${sanitizeBranchFragment(normalized)}`;
 }
 
 export function cloneComposerImageForRetry(

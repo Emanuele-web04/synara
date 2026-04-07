@@ -34,6 +34,7 @@ const GitStatusPrState = Schema.Literals(["open", "closed", "merged"]);
 const GitPullRequestReference = TrimmedNonEmptyStringSchema;
 const GitPullRequestState = Schema.Literals(["open", "closed", "merged"]);
 const GitPreparePullRequestThreadMode = Schema.Literals(["local", "worktree"]);
+const GitHandoffThreadMode = Schema.Literals(["local", "worktree"]);
 
 export const GitBranch = Schema.Struct({
   name: TrimmedNonEmptyStringSchema,
@@ -111,6 +112,20 @@ export const GitPreparePullRequestThreadInput = Schema.Struct({
   mode: GitPreparePullRequestThreadMode,
 });
 export type GitPreparePullRequestThreadInput = typeof GitPreparePullRequestThreadInput.Type;
+
+export const GitHandoffThreadInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  targetMode: GitHandoffThreadMode,
+  currentBranch: Schema.NullOr(TrimmedNonEmptyStringSchema),
+  worktreePath: Schema.NullOr(TrimmedNonEmptyStringSchema),
+  associatedWorktreePath: Schema.NullOr(TrimmedNonEmptyStringSchema),
+  associatedWorktreeBranch: Schema.NullOr(TrimmedNonEmptyStringSchema),
+  associatedWorktreeRef: Schema.NullOr(TrimmedNonEmptyStringSchema),
+  preferredLocalBranch: Schema.NullOr(TrimmedNonEmptyStringSchema),
+  preferredWorktreeBaseBranch: Schema.NullOr(TrimmedNonEmptyStringSchema),
+  preferredNewWorktreeBranch: Schema.NullOr(TrimmedNonEmptyStringSchema),
+});
+export type GitHandoffThreadInput = typeof GitHandoffThreadInput.Type;
 
 export const GitRemoveWorktreeInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
@@ -191,6 +206,19 @@ export const GitPreparePullRequestThreadResult = Schema.Struct({
   worktreePath: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
 });
 export type GitPreparePullRequestThreadResult = typeof GitPreparePullRequestThreadResult.Type;
+
+export const GitHandoffThreadResult = Schema.Struct({
+  targetMode: GitHandoffThreadMode,
+  branch: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
+  worktreePath: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
+  associatedWorktreePath: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
+  associatedWorktreeBranch: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
+  associatedWorktreeRef: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
+  changesTransferred: Schema.Boolean,
+  conflictsDetected: Schema.Boolean,
+  message: Schema.NullOr(Schema.String),
+});
+export type GitHandoffThreadResult = typeof GitHandoffThreadResult.Type;
 
 export const GitRunStackedActionResult = Schema.Struct({
   action: GitStackedAction,

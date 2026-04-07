@@ -1,7 +1,10 @@
-import type { GitBranch } from "@t3tools/contracts";
+// Purpose: Branch/worktree picker for the chat toolbar.
+// Coordinates branch checkout/create actions and decorates rows with git metadata.
+// Depends on: git React Query helpers, native API mutations, and toolbar selection rules.
+import type { GitBranch, GitStatusResult } from "@t3tools/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ChevronDownIcon } from "~/lib/icons";
+import { ChevronDownIcon, PlusIcon } from "~/lib/icons";
 import { GoGitBranch } from "react-icons/go";
 import {
   type CSSProperties,
@@ -32,6 +35,15 @@ import {
 } from "./BranchToolbar.logic";
 import { Button } from "./ui/button";
 import {
+  Dialog,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogPanel,
+  DialogPopup,
+  DialogTitle,
+} from "./ui/dialog";
+import {
   Combobox,
   ComboboxEmpty,
   ComboboxInput,
@@ -40,7 +52,9 @@ import {
   ComboboxPopup,
   ComboboxTrigger,
 } from "./ui/combobox";
+import { Input } from "./ui/input";
 import { toastManager } from "./ui/toast";
+import type { ThreadWorkspacePatch } from "../types";
 
 interface BranchToolbarBranchSelectorProps {
   activeProjectCwd: string;
@@ -49,7 +63,7 @@ interface BranchToolbarBranchSelectorProps {
   branchCwd: string | null;
   effectiveEnvMode: EnvMode;
   envLocked: boolean;
-  onSetThreadBranch: (branch: string | null, worktreePath: string | null) => void;
+  onSetThreadWorkspace: (patch: ThreadWorkspacePatch) => void;
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
 }
@@ -73,6 +87,31 @@ function getBranchTriggerLabel(input: {
   return resolvedActiveBranch;
 }
 
+function getCreateBranchActionLabel(trimmedBranchQuery: string): string {
+  return trimmedBranchQuery.length > 0
+    ? `Create and checkout "${trimmedBranchQuery}"`
+    : "Create and checkout new branch...";
+}
+
+function getCurrentBranchChangeSummary(
+  branch: GitBranch,
+  branchStatus: GitStatusResult | null | undefined,
+): {
+  fileCount: number;
+  insertions: number;
+  deletions: number;
+} | null {
+  if (!branch.current || !branchStatus?.hasWorkingTreeChanges) {
+    return null;
+  }
+
+  return {
+    fileCount: branchStatus.workingTree.files.length,
+    insertions: branchStatus.workingTree.insertions,
+    deletions: branchStatus.workingTree.deletions,
+  };
+}
+
 export function BranchToolbarBranchSelector({
   activeProjectCwd,
   activeThreadBranch,
@@ -80,12 +119,14 @@ export function BranchToolbarBranchSelector({
   branchCwd,
   effectiveEnvMode,
   envLocked,
-  onSetThreadBranch,
+  onSetThreadWorkspace,
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
 }: BranchToolbarBranchSelectorProps) {
   const queryClient = useQueryClient();
   const [isBranchMenuOpen, setIsBranchMenuOpen] = useState(false);
+  const [isCreateBranchDialogOpen, setIsCreateBranchDialogOpen] = useState(false);
+  const [createBranchName, setCreateBranchName] = useState("");
   const [branchQuery, setBranchQuery] = useState("");
   const deferredBranchQuery = useDeferredValue(branchQuery);
 
@@ -116,30 +157,23 @@ export function BranchToolbarBranchSelector({
     effectiveEnvMode === "worktree" && !envLocked && !activeWorktreePath;
   const checkoutPullRequestItemValue =
     prReference && onCheckoutPullRequestRequest ? `__checkout_pull_request__:${prReference}` : null;
-  const canCreateBranch = !isSelectingWorktreeBase && trimmedBranchQuery.length > 0;
+  const canPrefillCreateBranch = !isSelectingWorktreeBase && trimmedBranchQuery.length > 0;
   const hasExactBranchMatch = branchByName.has(trimmedBranchQuery);
-  const createBranchItemValue = canCreateBranch
-    ? `__create_new_branch__:${trimmedBranchQuery}`
-    : null;
   const branchPickerItems = useMemo(() => {
     const items = [...branchNames];
-    if (createBranchItemValue && !hasExactBranchMatch) {
-      items.push(createBranchItemValue);
-    }
     if (checkoutPullRequestItemValue) {
       items.unshift(checkoutPullRequestItemValue);
     }
     return items;
-  }, [branchNames, checkoutPullRequestItemValue, createBranchItemValue, hasExactBranchMatch]);
+  }, [branchNames, checkoutPullRequestItemValue]);
   const filteredBranchPickerItems = useMemo(
     () =>
       normalizedDeferredBranchQuery.length === 0
         ? branchPickerItems
-        : branchPickerItems.filter((itemValue) => {
-            if (createBranchItemValue && itemValue === createBranchItemValue) return true;
-            return itemValue.toLowerCase().includes(normalizedDeferredBranchQuery);
-          }),
-    [branchPickerItems, createBranchItemValue, normalizedDeferredBranchQuery],
+        : branchPickerItems.filter((itemValue) =>
+            itemValue.toLowerCase().includes(normalizedDeferredBranchQuery),
+          ),
+    [branchPickerItems, normalizedDeferredBranchQuery],
   );
   const [resolvedActiveBranch, setOptimisticBranch] = useOptimistic(
     canonicalActiveBranch,
@@ -155,13 +189,19 @@ export function BranchToolbarBranchSelector({
     });
   };
 
+  const openCreateBranchDialog = useCallback(() => {
+    setCreateBranchName(canPrefillCreateBranch && !hasExactBranchMatch ? trimmedBranchQuery : "");
+    setIsBranchMenuOpen(false);
+    setIsCreateBranchDialogOpen(true);
+  }, [canPrefillCreateBranch, hasExactBranchMatch, trimmedBranchQuery]);
+
   const selectBranch = (branch: GitBranch) => {
     const api = readNativeApi();
     if (!api || !branchCwd || isBranchActionPending) return;
 
     // In new-worktree mode, selecting a branch sets the base branch.
     if (isSelectingWorktreeBase) {
-      onSetThreadBranch(branch.name, null);
+      onSetThreadWorkspace({ branch: branch.name, worktreePath: null });
       setIsBranchMenuOpen(false);
       onComposerFocusRequest?.();
       return;
@@ -175,7 +215,10 @@ export function BranchToolbarBranchSelector({
 
     // If the branch already lives in a worktree, point the thread there.
     if (selectionTarget.reuseExistingWorktree) {
-      onSetThreadBranch(branch.name, selectionTarget.nextWorktreePath);
+      onSetThreadWorkspace({
+        branch: branch.name,
+        worktreePath: selectionTarget.nextWorktreePath,
+      });
       setIsBranchMenuOpen(false);
       onComposerFocusRequest?.();
       return;
@@ -211,7 +254,10 @@ export function BranchToolbarBranchSelector({
       }
 
       setOptimisticBranch(nextBranchName);
-      onSetThreadBranch(nextBranchName, selectionTarget.nextWorktreePath);
+      onSetThreadWorkspace({
+        branch: nextBranchName,
+        worktreePath: selectionTarget.nextWorktreePath,
+      });
     });
   };
 
@@ -248,8 +294,12 @@ export function BranchToolbarBranchSelector({
       }
 
       setOptimisticBranch(name);
-      onSetThreadBranch(name, activeWorktreePath);
+      onSetThreadWorkspace({
+        branch: name,
+        worktreePath: activeWorktreePath,
+      });
       setBranchQuery("");
+      setCreateBranchName("");
     });
   };
 
@@ -262,13 +312,13 @@ export function BranchToolbarBranchSelector({
     ) {
       return;
     }
-    onSetThreadBranch(currentGitBranch, null);
+    onSetThreadWorkspace({ branch: currentGitBranch, worktreePath: null });
   }, [
     activeThreadBranch,
     activeWorktreePath,
     currentGitBranch,
     effectiveEnvMode,
-    onSetThreadBranch,
+    onSetThreadWorkspace,
   ]);
 
   const handleOpenChange = useCallback(
@@ -288,8 +338,13 @@ export function BranchToolbarBranchSelector({
   const branchListScrollElementRef = useRef<HTMLDivElement | null>(null);
   const branchListVirtualizer = useVirtualizer({
     count: filteredBranchPickerItems.length,
-    estimateSize: (index) =>
-      filteredBranchPickerItems[index] === checkoutPullRequestItemValue ? 44 : 28,
+    estimateSize: (index) => {
+      const itemValue = filteredBranchPickerItems[index];
+      if (!itemValue) return 28;
+      if (itemValue === checkoutPullRequestItemValue) return 44;
+      const branch = branchByName.get(itemValue);
+      return branch && getCurrentBranchChangeSummary(branch, branchStatusQuery.data) ? 48 : 28;
+    },
     getScrollElement: () => branchListScrollElementRef.current,
     overscan: 12,
     enabled: isBranchMenuOpen && shouldVirtualizeBranchList,
@@ -317,6 +372,7 @@ export function BranchToolbarBranchSelector({
     });
   }, [
     branchListVirtualizer,
+    branchStatusQuery.data,
     filteredBranchPickerItems.length,
     isBranchMenuOpen,
     shouldVirtualizeBranchList,
@@ -354,25 +410,15 @@ export function BranchToolbarBranchSelector({
         </ComboboxItem>
       );
     }
-    if (createBranchItemValue && itemValue === createBranchItemValue) {
-      return (
-        <ComboboxItem
-          hideIndicator
-          key={itemValue}
-          index={index}
-          value={itemValue}
-          style={style}
-          onClick={() => createBranch(trimmedBranchQuery)}
-        >
-          <span className="truncate">Create new branch "{trimmedBranchQuery}"</span>
-        </ComboboxItem>
-      );
-    }
 
     const branch = branchByName.get(itemValue);
     if (!branch) return null;
 
     const hasSecondaryWorktree = branch.worktreePath && branch.worktreePath !== activeProjectCwd;
+    const currentBranchChangeSummary = getCurrentBranchChangeSummary(
+      branch,
+      branchStatusQuery.data,
+    );
     const badge = branch.current
       ? "current"
       : hasSecondaryWorktree
@@ -392,9 +438,29 @@ export function BranchToolbarBranchSelector({
         style={style}
         onClick={() => selectBranch(branch)}
       >
-        <div className="flex w-full items-center justify-between gap-2">
-          <span className="truncate">{itemValue}</span>
-          {badge && <span className="shrink-0 text-[10px] text-muted-foreground/45">{badge}</span>}
+        <div className="flex w-full items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center justify-between gap-2">
+              <span className="truncate">{itemValue}</span>
+              {badge && (
+                <span className="shrink-0 text-[10px] text-muted-foreground/45">{badge}</span>
+              )}
+            </div>
+            {currentBranchChangeSummary ? (
+              <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] leading-4">
+                <span className="text-muted-foreground">
+                  Uncommitted: {currentBranchChangeSummary.fileCount.toLocaleString()}{" "}
+                  {currentBranchChangeSummary.fileCount === 1 ? "file" : "files"}
+                </span>
+                <span className="font-mono tabular-nums text-success">
+                  +{currentBranchChangeSummary.insertions.toLocaleString()}
+                </span>
+                <span className="font-mono tabular-nums text-destructive">
+                  -{currentBranchChangeSummary.deletions.toLocaleString()}
+                </span>
+              </div>
+            ) : null}
+          </div>
         </div>
       </ComboboxItem>
     );
@@ -426,7 +492,7 @@ export function BranchToolbarBranchSelector({
       <ComboboxPopup align="end" side="top" className="w-80">
         <div className="border-b p-1">
           <ComboboxInput
-            className="[&_input]:font-sans rounded-md"
+            className="rounded-xl border-border/60 bg-background shadow-none before:hidden has-focus-visible:border-neutral-500/15 has-focus-visible:ring-0 [&_input]:font-sans"
             inputClassName="ring-0"
             placeholder="Search branches..."
             showTrigger={false}
@@ -461,7 +527,89 @@ export function BranchToolbarBranchSelector({
             filteredBranchPickerItems.map((itemValue, index) => renderPickerItem(itemValue, index))
           )}
         </ComboboxList>
+        {!isSelectingWorktreeBase ? (
+          <div className="border-t p-1">
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={isBranchActionPending}
+              onClick={openCreateBranchDialog}
+            >
+              <PlusIcon className="size-3.5 shrink-0" />
+              <span className="truncate">{getCreateBranchActionLabel(trimmedBranchQuery)}</span>
+            </button>
+          </div>
+        ) : null}
       </ComboboxPopup>
+      <Dialog
+        open={isCreateBranchDialogOpen}
+        onOpenChange={(open) => {
+          setIsCreateBranchDialogOpen(open);
+          if (!open) {
+            setCreateBranchName("");
+          }
+        }}
+      >
+        <DialogPopup className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Create Branch</DialogTitle>
+            <DialogDescription>
+              {`Create and switch to a new branch from ${resolvedActiveBranch ?? currentGitBranch ?? "the current HEAD"}.`}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogPanel className="space-y-3">
+            <form
+              className="space-y-3"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const nextName = createBranchName.trim();
+                if (!nextName || branchByName.has(nextName)) {
+                  return;
+                }
+                setIsCreateBranchDialogOpen(false);
+                createBranch(nextName);
+              }}
+            >
+              <div className="space-y-1.5">
+                <label className="block font-medium text-sm" htmlFor="branch-create-name">
+                  Branch name
+                </label>
+                <Input
+                  autoFocus
+                  id="branch-create-name"
+                  placeholder="feature/my-change"
+                  value={createBranchName}
+                  onChange={(event) => setCreateBranchName(event.target.value)}
+                />
+              </div>
+              {branchByName.has(createBranchName.trim()) ? (
+                <p className="text-destructive text-sm">A branch with this name already exists.</p>
+              ) : null}
+              <DialogFooter variant="bare">
+                <Button
+                  variant="outline"
+                  type="button"
+                  onClick={() => {
+                    setIsCreateBranchDialogOpen(false);
+                    setCreateBranchName("");
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  disabled={
+                    createBranchName.trim().length === 0 ||
+                    branchByName.has(createBranchName.trim())
+                  }
+                >
+                  Create and switch
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogPanel>
+        </DialogPopup>
+      </Dialog>
     </Combobox>
   );
 }

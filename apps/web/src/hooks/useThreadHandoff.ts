@@ -54,6 +54,13 @@ export function useThreadHandoff() {
         envMode: thread.envMode ?? (thread.worktreePath ? "worktree" : "local"),
         branch: thread.branch,
         worktreePath: thread.worktreePath,
+        associatedWorktreePath: thread.associatedWorktreePath ?? thread.worktreePath ?? null,
+        associatedWorktreeBranch: thread.associatedWorktreeBranch ?? thread.branch ?? null,
+        associatedWorktreeRef:
+          thread.associatedWorktreeRef ??
+          thread.associatedWorktreeBranch ??
+          thread.branch ??
+          null,
         importedMessages: [...importedMessages],
         createdAt,
       });

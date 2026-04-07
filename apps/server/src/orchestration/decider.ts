@@ -3,6 +3,10 @@ import type {
   OrchestrationEvent,
   OrchestrationReadModel,
 } from "@t3tools/contracts";
+import {
+  deriveAssociatedWorktreeMetadata,
+  deriveAssociatedWorktreeMetadataPatch,
+} from "@t3tools/shared/threadWorkspace";
 import { Effect } from "effect";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
@@ -165,6 +169,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           envMode: command.envMode,
           branch: command.branch,
           worktreePath: command.worktreePath,
+          ...deriveAssociatedWorktreeMetadata({
+            branch: command.branch,
+            worktreePath: command.worktreePath,
+            associatedWorktreePath: command.associatedWorktreePath,
+            associatedWorktreeBranch: command.associatedWorktreeBranch,
+            associatedWorktreeRef: command.associatedWorktreeRef,
+          }),
           forkSourceThreadId: null,
           handoff: null,
           createdAt: command.createdAt,
@@ -226,6 +237,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           envMode: command.envMode,
           branch: command.branch,
           worktreePath: command.worktreePath,
+          ...deriveAssociatedWorktreeMetadata({
+            branch: command.branch,
+            worktreePath: command.worktreePath,
+            associatedWorktreePath: command.associatedWorktreePath,
+            associatedWorktreeBranch: command.associatedWorktreeBranch,
+            associatedWorktreeRef: command.associatedWorktreeRef,
+          }),
           forkSourceThreadId: null,
           handoff: {
             sourceThreadId: command.sourceThreadId,
@@ -311,6 +329,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           envMode: command.envMode,
           branch: command.branch,
           worktreePath: command.worktreePath,
+          ...deriveAssociatedWorktreeMetadata({
+            branch: command.branch,
+            worktreePath: command.worktreePath,
+            associatedWorktreePath: command.associatedWorktreePath,
+            associatedWorktreeBranch: command.associatedWorktreeBranch,
+            associatedWorktreeRef: command.associatedWorktreeRef,
+          }),
           forkSourceThreadId: command.sourceThreadId,
           handoff: null,
           createdAt: command.createdAt,
@@ -390,6 +415,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.envMode !== undefined ? { envMode: command.envMode } : {}),
           ...(command.branch !== undefined ? { branch: command.branch } : {}),
           ...(command.worktreePath !== undefined ? { worktreePath: command.worktreePath } : {}),
+          ...deriveAssociatedWorktreeMetadataPatch({
+            branch: command.branch,
+            worktreePath: command.worktreePath,
+            associatedWorktreePath: command.associatedWorktreePath,
+            associatedWorktreeBranch: command.associatedWorktreeBranch,
+            associatedWorktreeRef: command.associatedWorktreeRef,
+          }),
           ...(command.handoff !== undefined ? { handoff: command.handoff } : {}),
           updatedAt: occurredAt,
         },

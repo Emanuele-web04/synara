@@ -65,6 +65,7 @@
 :root {
   color-scheme: light;
   --radius: 0.75rem;
+  --font-ui-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-mono-family:
     "JetBrains Mono Variable", "JetBrains Mono", "SF Mono", "SFMono-Regular", Consolas,
     "Liberation Mono", Menlo, monospace;
@@ -125,7 +126,7 @@
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-family: var(--font-ui-family);
   letter-spacing: -0.025em;
   margin: 0;
   padding: 0;
@@ -134,7 +135,7 @@ body {
 
 /* Reuse the OS UI stack on chat surfaces that should feel native and utilitarian. */
 .font-system-ui {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-family: var(--font-ui-family);
   letter-spacing: -0.025em;
 }
 

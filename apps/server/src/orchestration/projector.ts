@@ -258,6 +258,9 @@ export function projectEvent(
             envMode: payload.envMode,
             branch: payload.branch,
             worktreePath: payload.worktreePath,
+            associatedWorktreePath: payload.associatedWorktreePath,
+            associatedWorktreeBranch: payload.associatedWorktreeBranch,
+            associatedWorktreeRef: payload.associatedWorktreeRef,
             forkSourceThreadId: payload.forkSourceThreadId,
             latestTurn: null,
             createdAt: payload.createdAt,
@@ -304,6 +307,15 @@ export function projectEvent(
             ...(payload.envMode !== undefined ? { envMode: payload.envMode } : {}),
             ...(payload.branch !== undefined ? { branch: payload.branch } : {}),
             ...(payload.worktreePath !== undefined ? { worktreePath: payload.worktreePath } : {}),
+            ...(payload.associatedWorktreePath !== undefined
+              ? { associatedWorktreePath: payload.associatedWorktreePath }
+              : {}),
+            ...(payload.associatedWorktreeBranch !== undefined
+              ? { associatedWorktreeBranch: payload.associatedWorktreeBranch }
+              : {}),
+            ...(payload.associatedWorktreeRef !== undefined
+              ? { associatedWorktreeRef: payload.associatedWorktreeRef }
+              : {}),
             ...(payload.handoff !== undefined ? { handoff: payload.handoff } : {}),
             updatedAt: payload.updatedAt,
           }),

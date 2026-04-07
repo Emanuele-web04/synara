@@ -8,6 +8,8 @@
  */
 import {
   GitActionProgressEvent,
+  GitHandoffThreadInput,
+  GitHandoffThreadResult,
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
   GitPullRequestRefInput,
@@ -54,6 +56,13 @@ export interface GitManagerShape {
   readonly preparePullRequestThread: (
     input: GitPreparePullRequestThreadInput,
   ) => Effect.Effect<GitPreparePullRequestThreadResult, GitManagerServiceError>;
+
+  /**
+   * Move a thread between Local and Worktree while preserving recoverable Git state.
+   */
+  readonly handoffThread: (
+    input: GitHandoffThreadInput,
+  ) => Effect.Effect<GitHandoffThreadResult, GitManagerServiceError>;
 
   /**
    * Run a stacked Git action (`commit`, `commit_push`, `commit_push_pr`).

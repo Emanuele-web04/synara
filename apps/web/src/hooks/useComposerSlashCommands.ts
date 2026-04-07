@@ -7,6 +7,7 @@ import {
   type RuntimeMode,
   type ThreadId,
 } from "@t3tools/contracts";
+import { deriveAssociatedWorktreeMetadata } from "@t3tools/shared/threadWorkspace";
 import { useCallback, useState } from "react";
 import { newCommandId, newMessageId, newThreadId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
@@ -181,6 +182,9 @@ export function useComposerSlashCommands(input: {
         envMode: resolvedTarget.envMode,
         branch: resolvedTarget.branch,
         worktreePath: resolvedTarget.worktreePath,
+        associatedWorktreePath: resolvedTarget.associatedWorktreePath,
+        associatedWorktreeBranch: resolvedTarget.associatedWorktreeBranch,
+        associatedWorktreeRef: resolvedTarget.associatedWorktreeRef,
         importedMessages: [...importedMessages],
         createdAt,
       });
@@ -234,6 +238,13 @@ export function useComposerSlashCommands(input: {
         target === "base-branch"
           ? `${input.activeThread.title} Review`
           : `${input.activeThread.title} Review`;
+      const associatedWorktree = deriveAssociatedWorktreeMetadata({
+        branch: input.activeThread.branch,
+        worktreePath: input.activeThread.worktreePath,
+        associatedWorktreePath: input.activeThread.associatedWorktreePath,
+        associatedWorktreeBranch: input.activeThread.associatedWorktreeBranch,
+        associatedWorktreeRef: input.activeThread.associatedWorktreeRef,
+      });
 
       try {
         await api.orchestration.dispatchCommand({
@@ -249,6 +260,7 @@ export function useComposerSlashCommands(input: {
             input.activeThread.envMode ?? (input.activeThread.worktreePath ? "worktree" : "local"),
           branch: input.activeThread.branch,
           worktreePath: input.activeThread.worktreePath,
+          ...associatedWorktree,
           createdAt,
         });
         await api.orchestration.dispatchCommand({

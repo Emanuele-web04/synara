@@ -96,7 +96,25 @@ export interface Project {
   scripts: ProjectScript[];
 }
 
-export interface Thread {
+export interface ThreadWorkspaceState {
+  envMode?: ThreadEnvironmentMode | undefined;
+  branch: string | null;
+  worktreePath: string | null;
+  associatedWorktreePath?: string | null;
+  associatedWorktreeBranch?: string | null;
+  associatedWorktreeRef?: string | null;
+}
+
+export interface ThreadWorkspacePatch {
+  envMode?: ThreadEnvironmentMode | undefined;
+  branch?: string | null;
+  worktreePath?: string | null;
+  associatedWorktreePath?: string | null;
+  associatedWorktreeBranch?: string | null;
+  associatedWorktreeRef?: string | null;
+}
+
+export interface Thread extends ThreadWorkspaceState {
   id: ThreadId;
   codexThreadId: string | null;
   projectId: ProjectId;
@@ -112,9 +130,6 @@ export interface Thread {
   updatedAt?: string | undefined;
   latestTurn: OrchestrationLatestTurn | null;
   lastVisitedAt?: string | undefined;
-  envMode?: ThreadEnvironmentMode | undefined;
-  branch: string | null;
-  worktreePath: string | null;
   forkSourceThreadId?: ThreadId | null;
   handoff?: ThreadHandoff | null;
   turnDiffSummaries: TurnDiffSummary[];

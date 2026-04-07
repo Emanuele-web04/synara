@@ -15,8 +15,7 @@ import {
 import { autoAnimate } from "@formkit/auto-animate";
 import { FiGitBranch } from "react-icons/fi";
 import { TbFolderPlus } from "react-icons/tb";
-import { IoFilter, IoFolderOutline } from "react-icons/io5";
-import { HiOutlineFolderOpen } from "react-icons/hi2";
+import { IoFilter } from "react-icons/io5";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import {
   DndContext,
@@ -61,6 +60,7 @@ import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { readNativeApi } from "../nativeApi";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { ClaudeAI, OpenAI } from "./Icons";
+import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useThreadHandoff } from "../hooks/useThreadHandoff";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
@@ -1453,11 +1453,7 @@ export default function Sidebar() {
             }}
           >
             <span className="relative inline-flex size-4 shrink-0 items-center justify-center text-muted-foreground/72">
-              {project.expanded ? (
-                <HiOutlineFolderOpen className="size-4" />
-              ) : (
-                <IoFolderOutline className="size-4" />
-              )}
+              <ProjectSidebarIcon cwd={project.cwd} expanded={project.expanded} />
               {projectStatus ? (
                 <span
                   aria-hidden="true"
@@ -1822,7 +1818,7 @@ export default function Sidebar() {
       <Tooltip>
         <TooltipTrigger
           render={
-            <div className="ml-1 flex min-w-0 flex-1 cursor-pointer items-center gap-2 font-system-ui">
+            <div className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 font-system-ui">
               <T3Wordmark />
               <span className="truncate text-[14px] font-normal tracking-tight text-foreground/82">
                 Code
@@ -1845,7 +1841,7 @@ export default function Sidebar() {
     <>
       {isElectron ? (
         <>
-          <SidebarHeader className="drag-region h-[56px] flex-row items-center gap-2 px-4 py-0 pl-[90px] font-system-ui">
+          <SidebarHeader className="drag-region h-[48px] flex-row items-center gap-2 px-4 py-0 pl-[90px] font-system-ui">
             {wordmark}
             {showDesktopUpdateButton && (
               <Tooltip>
@@ -1899,7 +1895,7 @@ export default function Sidebar() {
           </SidebarGroup>
         ) : null}
         {/* Primary sidebar actions stay limited to features we currently ship. */}
-        <SidebarGroup className="px-1.5 pt-1 pb-1.5">
+        <SidebarGroup className="px-1.5 pt-0 pb-1.5">
           <SidebarMenu className="gap-0.5">
             <SidebarPrimaryAction
               icon={SquarePenIcon}
@@ -2066,7 +2062,7 @@ export default function Sidebar() {
             {isOnSettings ? (
               <SidebarMenuButton
                 size="default"
-                className="h-9 gap-2.5 rounded-xl px-2.5 text-[13px] font-normal text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
+                className="h-8 gap-2.5 rounded-lg px-2 text-[13px] font-normal text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
                 onClick={() => window.history.back()}
               >
                 <ArrowLeftIcon className="size-[15px]" />
@@ -2075,7 +2071,7 @@ export default function Sidebar() {
             ) : (
               <SidebarMenuButton
                 size="default"
-                className="h-9 gap-2.5 rounded-xl px-2.5 text-[13px] font-normal text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
+                className="h-8 gap-2.5 rounded-lg px-2 text-[13px] font-normal text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
                 onClick={() => void navigate({ to: "/settings" })}
               >
                 <SettingsIcon className="size-[15px]" />

@@ -943,6 +943,11 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         return yield* git.initRepo(body);
       }
 
+      case WS_METHODS.gitHandoffThread: {
+        const body = stripRequestTag(request.body);
+        return yield* gitManager.handoffThread(body);
+      }
+
       case WS_METHODS.terminalOpen: {
         const body = stripRequestTag(request.body);
         terminalTitleTracker.reset(body.threadId, body.terminalId ?? DEFAULT_TERMINAL_ID);

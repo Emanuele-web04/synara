@@ -39,12 +39,17 @@ import {
   resolveThreadBranchSourceCwd,
   resolveThreadWorkspaceCwd as resolveSharedThreadWorkspaceCwd,
 } from "@t3tools/shared/threadEnvironment";
+import { deriveAssociatedWorktreeMetadata } from "@t3tools/shared/threadWorkspace";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { GoTasklist } from "react-icons/go";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { gitBranchesQueryOptions, gitCreateWorktreeMutationOptions } from "~/lib/gitReactQuery";
+import {
+  gitBranchesQueryOptions,
+  gitCreateWorktreeMutationOptions,
+  gitHandoffThreadMutationOptions,
+} from "~/lib/gitReactQuery";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import {
   providerComposerCapabilitiesQueryOptions,
@@ -116,6 +121,7 @@ import { useComposerCommandMenuItems } from "../hooks/useComposerCommandMenuItem
 import { useThreadHandoff } from "../hooks/useThreadHandoff";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import BranchToolbar from "./BranchToolbar";
+import { ThreadWorktreeHandoffDialog } from "./ThreadWorktreeHandoffDialog";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import PlanSidebar from "./PlanSidebar";
 import TerminalWorkspaceTabs from "./TerminalWorkspaceTabs";
@@ -200,6 +206,7 @@ import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
 import { RateLimitBanner, deriveLatestRateLimitStatus } from "./chat/RateLimitBanner";
 import {
   shouldAutoDeleteTerminalThreadOnLastClose,
+  buildSuggestedWorktreeBranchName,
   buildExpiredTerminalContextToastCopy,
   buildLocalDraftThread,
   shouldRenderTerminalWorkspace,
@@ -462,7 +469,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const markThreadVisited = useStore((store) => store.markThreadVisited);
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
   const setStoreThreadError = useStore((store) => store.setError);
-  const setStoreThreadBranch = useStore((store) => store.setThreadBranch);
+  const setStoreThreadWorkspace = useStore((store) => store.setThreadWorkspace);
   const { settings } = useAppSettings();
   const setStickyComposerModelSelection = useComposerDraftStore(
     (store) => store.setStickyModelSelection,
@@ -573,6 +580,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const [composerHighlightedItemId, setComposerHighlightedItemId] = useState<string | null>(null);
   const [pullRequestDialogState, setPullRequestDialogState] =
     useState<PullRequestDialogState | null>(null);
+  const [worktreeHandoffDialogOpen, setWorktreeHandoffDialogOpen] = useState(false);
+  const [worktreeHandoffBranchName, setWorktreeHandoffBranchName] = useState("");
   const [attachmentPreviewHandoffByMessageId, setAttachmentPreviewHandoffByMessageId] = useState<
     Record<string, string[]>
   >({});
@@ -599,6 +608,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
 
   useEffect(() => {
     setComposerCommandPicker(null);
+  }, [threadId]);
+  useEffect(() => {
+    setWorktreeHandoffDialogOpen(false);
+    setWorktreeHandoffBranchName("");
   }, [threadId]);
   const shouldAutoScrollRef = useRef(true);
   const lastKnownScrollTopRef = useRef(0);
@@ -751,12 +764,32 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread?.session ?? null);
   const activeProjectId = activeThread?.projectId ?? draftThread?.projectId ?? null;
   const activeProject = projects.find((p) => p.id === activeProjectId);
+  const handoffThreadMutation = useMutation(
+    gitHandoffThreadMutationOptions({ cwd: activeProject?.cwd ?? null, queryClient }),
+  );
   const resolvedThreadEnvMode = isServerThread
     ? (activeThread?.envMode ?? null)
     : (draftThread?.envMode ?? null);
   const resolvedThreadWorktreePath = isServerThread
     ? (activeThread?.worktreePath ?? null)
     : (draftThread?.worktreePath ?? null);
+  const activeThreadAssociatedWorktree = useMemo(
+    () =>
+      deriveAssociatedWorktreeMetadata({
+        branch: activeThread?.branch ?? null,
+        worktreePath: activeThread?.worktreePath ?? null,
+        associatedWorktreePath: activeThread?.associatedWorktreePath,
+        associatedWorktreeBranch: activeThread?.associatedWorktreeBranch,
+        associatedWorktreeRef: activeThread?.associatedWorktreeRef,
+      }),
+    [
+      activeThread?.associatedWorktreeBranch,
+      activeThread?.associatedWorktreePath,
+      activeThread?.associatedWorktreeRef,
+      activeThread?.branch,
+      activeThread?.worktreePath,
+    ],
+  );
 
   const openPullRequestDialog = useCallback(
     (reference?: string) => {
@@ -1984,6 +2017,145 @@ export default function ChatView({ threadId }: ChatViewProps) {
       terminalState.terminalIds,
     ],
   );
+  const stopActiveThreadSession = useCallback(async () => {
+    const api = readNativeApi();
+    if (
+      !api ||
+      !isServerThread ||
+      !activeThread ||
+      activeThread.session === null ||
+      activeThread.session.status === "closed"
+    ) {
+      return;
+    }
+
+    await api.orchestration.dispatchCommand({
+      type: "thread.session.stop",
+      commandId: newCommandId(),
+      threadId: activeThread.id,
+      createdAt: new Date().toISOString(),
+    });
+  }, [activeThread, isServerThread]);
+  const handoffThread = useCallback(
+    async (targetMode: "local" | "worktree", options?: { preferredWorktreeBranch?: string }) => {
+      const api = readNativeApi();
+      if (!api || !activeProject || !activeThread || !isServerThread || handoffThreadMutation.isPending) {
+        return false;
+      }
+
+      try {
+        await stopActiveThreadSession();
+        const result = await handoffThreadMutation.mutateAsync({
+          targetMode,
+          currentBranch: activeThread.branch ?? null,
+          worktreePath: activeThread.worktreePath ?? null,
+          associatedWorktreePath: activeThreadAssociatedWorktree.associatedWorktreePath,
+          associatedWorktreeBranch: activeThreadAssociatedWorktree.associatedWorktreeBranch,
+          associatedWorktreeRef: activeThreadAssociatedWorktree.associatedWorktreeRef,
+          preferredLocalBranch: activeRootBranch ?? activeThread.branch ?? null,
+          preferredWorktreeBaseBranch:
+            activeRootBranch ??
+            activeThreadAssociatedWorktree.associatedWorktreeBranch ??
+            activeThread.branch ??
+            null,
+          preferredNewWorktreeBranch:
+            options?.preferredWorktreeBranch ??
+            activeThreadAssociatedWorktree.associatedWorktreeBranch ??
+            activeThread.branch ??
+            null,
+        });
+        const workspacePatch = {
+          envMode: result.targetMode,
+          branch: result.branch,
+          worktreePath: result.worktreePath,
+          associatedWorktreePath: result.associatedWorktreePath,
+          associatedWorktreeBranch: result.associatedWorktreeBranch,
+          associatedWorktreeRef: result.associatedWorktreeRef,
+        } as const;
+
+        await api.orchestration.dispatchCommand({
+          type: "thread.meta.update",
+          commandId: newCommandId(),
+          threadId: activeThread.id,
+          ...workspacePatch,
+        });
+        setStoreThreadWorkspace(activeThread.id, workspacePatch);
+
+        const snapshot = await api.orchestration.getSnapshot();
+        syncServerReadModel(snapshot);
+
+        if (targetMode === "worktree" && result.worktreePath) {
+          const setupScript = setupProjectScript(activeProject.scripts);
+          if (setupScript) {
+            await runProjectScript(setupScript, {
+              cwd: result.worktreePath,
+              worktreePath: result.worktreePath,
+              rememberAsLastInvoked: false,
+            });
+          }
+        }
+
+        toastManager.add({
+          type: result.conflictsDetected ? "warning" : "success",
+          title:
+            targetMode === "worktree"
+              ? "Thread handed off to worktree"
+              : "Thread handed off to local",
+          ...(result.message ? { description: result.message } : {}),
+        });
+        return true;
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title:
+            targetMode === "worktree"
+              ? "Could not hand off to worktree"
+              : "Could not hand off to local",
+          description:
+            error instanceof Error ? error.message : "An error occurred during the handoff.",
+        });
+        return false;
+      }
+    },
+    [
+      activeProject,
+      activeRootBranch,
+      activeThread,
+      activeThreadAssociatedWorktree,
+      handoffThreadMutation,
+      isServerThread,
+      runProjectScript,
+      setStoreThreadWorkspace,
+      stopActiveThreadSession,
+      syncServerReadModel,
+    ],
+  );
+  const onHandoffToWorktree = useCallback(() => {
+    if (!activeThread) {
+      return;
+    }
+    setWorktreeHandoffBranchName(
+      buildSuggestedWorktreeBranchName({
+        associatedWorktreeBranch:
+          activeThreadAssociatedWorktree.associatedWorktreeBranch ?? activeThread.branch ?? null,
+        title: activeThread.title,
+      }),
+    );
+    setWorktreeHandoffDialogOpen(true);
+  }, [activeThread, activeThreadAssociatedWorktree.associatedWorktreeBranch]);
+  const confirmWorktreeHandoff = useCallback(async () => {
+    const normalizedBranch = buildSuggestedWorktreeBranchName({
+      associatedWorktreeBranch: worktreeHandoffBranchName,
+    });
+    setWorktreeHandoffBranchName(normalizedBranch);
+    const succeeded = await handoffThread("worktree", { preferredWorktreeBranch: normalizedBranch });
+    if (succeeded) {
+      setWorktreeHandoffDialogOpen(false);
+    }
+  }, [handoffThread, worktreeHandoffBranchName]);
+  const onHandoffToLocal = useCallback(async () => {
+    await handoffThread("local");
+  }, [handoffThread]);
   const persistProjectScripts = useCallback(
     async (input: {
       projectId: ProjectId;
@@ -3397,6 +3569,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
         });
         nextThreadBranch = result.worktree.branch;
         nextThreadWorktreePath = result.worktree.path;
+        const nextAssociatedWorktree = deriveAssociatedWorktreeMetadata({
+          branch: result.worktree.branch,
+          worktreePath: result.worktree.path,
+        });
         if (isServerThread) {
           await api.orchestration.dispatchCommand({
             type: "thread.meta.update",
@@ -3405,10 +3581,17 @@ export default function ChatView({ threadId }: ChatViewProps) {
             envMode: "worktree",
             branch: result.worktree.branch,
             worktreePath: result.worktree.path,
+            associatedWorktreePath: nextAssociatedWorktree.associatedWorktreePath,
+            associatedWorktreeBranch: nextAssociatedWorktree.associatedWorktreeBranch,
+            associatedWorktreeRef: nextAssociatedWorktree.associatedWorktreeRef,
           });
           // Keep local thread state in sync immediately so terminal drawer opens
           // with the worktree cwd/env instead of briefly using the project root.
-          setStoreThreadBranch(threadIdForSend, result.worktree.branch, result.worktree.path);
+          setStoreThreadWorkspace(threadIdForSend, {
+            branch: result.worktree.branch,
+            worktreePath: result.worktree.path,
+            ...nextAssociatedWorktree,
+          });
         }
       }
 
@@ -3990,6 +4173,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
         envMode: activeThread.envMode ?? (activeThread.worktreePath ? "worktree" : "local"),
         branch: activeThread.branch,
         worktreePath: activeThread.worktreePath,
+        associatedWorktreePath: activeThreadAssociatedWorktree.associatedWorktreePath,
+        associatedWorktreeBranch: activeThreadAssociatedWorktree.associatedWorktreeBranch,
+        associatedWorktreeRef: activeThreadAssociatedWorktree.associatedWorktreeRef,
         createdAt,
       })
       .then(() => {
@@ -4048,6 +4234,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     activeProject,
     activeProposedPlan,
     activeThread,
+    activeThreadAssociatedWorktree,
     beginSendPhase,
     isConnecting,
     isSendBusy,
@@ -4859,7 +5046,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
                         />
                       </div>
                     ) : null}
-                    <div className={cn("relative px-3.5 pb-1 pt-3.5")}>
+                    <div className={cn("relative px-4 pb-1 pt-3.5")}>
                       {composerMenuOpen && !isComposerApprovalState && (
                         <div className="absolute inset-x-0 bottom-full z-20 mb-2 px-1">
                           <ComposerCommandMenu
@@ -5281,6 +5468,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
                 envLocked={envLocked}
                 runtimeMode={runtimeMode}
                 onRuntimeModeChange={handleRuntimeModeChange}
+                onHandoffToWorktree={onHandoffToWorktree}
+                onHandoffToLocal={onHandoffToLocal}
+                handoffBusy={handoffThreadMutation.isPending}
                 onComposerFocusRequest={scheduleComposerFocus}
                 contextWindow={activeContextWindow}
                 cumulativeCostUsd={activeCumulativeCostUsd}
@@ -5375,6 +5565,14 @@ export default function ChatView({ threadId }: ChatViewProps) {
         contextWindow={activeContextWindow}
         cumulativeCostUsd={activeCumulativeCostUsd}
         rateLimitStatus={activeRateLimitStatus}
+      />
+      <ThreadWorktreeHandoffDialog
+        open={worktreeHandoffDialogOpen}
+        branchName={worktreeHandoffBranchName}
+        busy={handoffThreadMutation.isPending}
+        onBranchNameChange={setWorktreeHandoffBranchName}
+        onOpenChange={setWorktreeHandoffDialogOpen}
+        onConfirm={confirmWorktreeHandoff}
       />
 
       {expandedImage && expandedImageItem && (

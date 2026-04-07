@@ -20,6 +20,7 @@ export const gitMutationKeys = {
   pull: (cwd: string | null) => ["git", "mutation", "pull", cwd] as const,
   preparePullRequestThread: (cwd: string | null) =>
     ["git", "mutation", "prepare-pull-request-thread", cwd] as const,
+  handoffThread: (cwd: string | null) => ["git", "mutation", "handoff-thread", cwd] as const,
 };
 
 export function invalidateGitQueries(queryClient: QueryClient) {
@@ -214,6 +215,36 @@ export function gitPreparePullRequestThreadMutationOptions(input: {
       });
     },
     mutationKey: gitMutationKeys.preparePullRequestThread(input.cwd),
+    onSettled: async () => {
+      await invalidateGitQueries(input.queryClient);
+    },
+  });
+}
+
+export function gitHandoffThreadMutationOptions(input: {
+  cwd: string | null;
+  queryClient: QueryClient;
+}) {
+  return mutationOptions({
+    mutationFn: async (request: {
+      targetMode: "local" | "worktree";
+      currentBranch: string | null;
+      worktreePath: string | null;
+      associatedWorktreePath: string | null;
+      associatedWorktreeBranch: string | null;
+      associatedWorktreeRef: string | null;
+      preferredLocalBranch: string | null;
+      preferredWorktreeBaseBranch: string | null;
+      preferredNewWorktreeBranch: string | null;
+    }) => {
+      const api = ensureNativeApi();
+      if (!input.cwd) throw new Error("Git handoff is unavailable.");
+      return api.git.handoffThread({
+        cwd: input.cwd,
+        ...request,
+      });
+    },
+    mutationKey: gitMutationKeys.handoffThread(input.cwd),
     onSettled: async () => {
       await invalidateGitQueries(input.queryClient);
     },

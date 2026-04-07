@@ -39,6 +39,10 @@
     "./threadEnvironment": {
       "types": "./src/threadEnvironment.ts",
       "import": "./src/threadEnvironment.ts"
+    },
+    "./threadWorkspace": {
+      "types": "./src/threadWorkspace.ts",
+      "import": "./src/threadWorkspace.ts"
     }
   },
   "scripts": {

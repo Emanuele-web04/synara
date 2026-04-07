@@ -2,6 +2,8 @@ import type {
   GitCheckoutInput,
   GitActionProgressEvent,
   GitCreateBranchInput,
+  GitHandoffThreadInput,
+  GitHandoffThreadResult,
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
   GitPullRequestRefInput,
@@ -242,6 +244,7 @@ export interface NativeApi {
     createBranch: (input: GitCreateBranchInput) => Promise<void>;
     checkout: (input: GitCheckoutInput) => Promise<void>;
     init: (input: GitInitInput) => Promise<void>;
+    handoffThread: (input: GitHandoffThreadInput) => Promise<GitHandoffThreadResult>;
     resolvePullRequest: (input: GitPullRequestRefInput) => Promise<GitResolvePullRequestResult>;
     preparePullRequestThread: (
       input: GitPreparePullRequestThreadInput,

@@ -7,7 +7,7 @@ import {
 } from "@t3tools/contracts";
 import { resolveModelSlugForProvider } from "@t3tools/shared/model";
 import { create } from "zustand";
-import { type ChatMessage, type Project, type Thread } from "./types";
+import { type ChatMessage, type Project, type Thread, type ThreadWorkspacePatch } from "./types";
 import { Debouncer } from "@tanstack/react-pacer";
 
 // ── State ────────────────────────────────────────────────────────────
@@ -306,6 +306,9 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
         envMode: thread.envMode ?? "local",
         branch: thread.branch,
         worktreePath: thread.worktreePath,
+        associatedWorktreePath: thread.associatedWorktreePath ?? null,
+        associatedWorktreeBranch: thread.associatedWorktreeBranch ?? null,
+        associatedWorktreeRef: thread.associatedWorktreeRef ?? null,
         forkSourceThreadId: thread.forkSourceThreadId ?? null,
         handoff: thread.handoff,
         turnDiffSummaries: thread.checkpoints.map((checkpoint) => ({
@@ -406,19 +409,46 @@ export function setError(state: AppState, threadId: ThreadId, error: string | nu
   return threads === state.threads ? state : { ...state, threads };
 }
 
-export function setThreadBranch(
+export function setThreadWorkspace(
   state: AppState,
   threadId: ThreadId,
-  branch: string | null,
-  worktreePath: string | null,
+  patch: ThreadWorkspacePatch,
 ): AppState {
   const threads = updateThread(state.threads, threadId, (t) => {
-    if (t.branch === branch && t.worktreePath === worktreePath) return t;
-    const cwdChanged = t.worktreePath !== worktreePath;
+    const nextEnvMode = patch.envMode !== undefined ? patch.envMode : t.envMode;
+    const nextBranch = patch.branch !== undefined ? patch.branch : t.branch;
+    const nextWorktreePath = patch.worktreePath !== undefined ? patch.worktreePath : t.worktreePath;
+    const nextAssociatedWorktreePath =
+      patch.associatedWorktreePath !== undefined
+        ? patch.associatedWorktreePath
+        : (t.associatedWorktreePath ?? null);
+    const nextAssociatedWorktreeBranch =
+      patch.associatedWorktreeBranch !== undefined
+        ? patch.associatedWorktreeBranch
+        : (t.associatedWorktreeBranch ?? null);
+    const nextAssociatedWorktreeRef =
+      patch.associatedWorktreeRef !== undefined
+        ? patch.associatedWorktreeRef
+        : (t.associatedWorktreeRef ?? null);
+    if (
+      t.envMode === nextEnvMode &&
+      t.branch === nextBranch &&
+      t.worktreePath === nextWorktreePath &&
+      (t.associatedWorktreePath ?? null) === nextAssociatedWorktreePath &&
+      (t.associatedWorktreeBranch ?? null) === nextAssociatedWorktreeBranch &&
+      (t.associatedWorktreeRef ?? null) === nextAssociatedWorktreeRef
+    ) {
+      return t;
+    }
+    const cwdChanged = t.worktreePath !== nextWorktreePath;
     return {
       ...t,
-      branch,
-      worktreePath,
+      envMode: nextEnvMode,
+      branch: nextBranch,
+      worktreePath: nextWorktreePath,
+      associatedWorktreePath: nextAssociatedWorktreePath,
+      associatedWorktreeBranch: nextAssociatedWorktreeBranch,
+      associatedWorktreeRef: nextAssociatedWorktreeRef,
       ...(cwdChanged ? { session: null } : {}),
     };
   });
@@ -435,7 +465,7 @@ interface AppStore extends AppState {
   setProjectExpanded: (projectId: Project["id"], expanded: boolean) => void;
   reorderProjects: (draggedProjectId: Project["id"], targetProjectId: Project["id"]) => void;
   setError: (threadId: ThreadId, error: string | null) => void;
-  setThreadBranch: (threadId: ThreadId, branch: string | null, worktreePath: string | null) => void;
+  setThreadWorkspace: (threadId: ThreadId, patch: ThreadWorkspacePatch) => void;
 }
 
 export const useStore = create<AppStore>((set) => ({
@@ -450,8 +480,8 @@ export const useStore = create<AppStore>((set) => ({
   reorderProjects: (draggedProjectId, targetProjectId) =>
     set((state) => reorderProjects(state, draggedProjectId, targetProjectId)),
   setError: (threadId, error) => set((state) => setError(state, threadId, error)),
-  setThreadBranch: (threadId, branch, worktreePath) =>
-    set((state) => setThreadBranch(state, threadId, branch, worktreePath)),
+  setThreadWorkspace: (threadId, patch) =>
+    set((state) => setThreadWorkspace(state, threadId, patch)),
 }));
 
 // Persist state changes with debouncing to avoid localStorage thrashing
