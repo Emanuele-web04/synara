@@ -27,6 +27,8 @@ const WORK_GROUP_HEADER_HEIGHT_PX = 20;
 const WORK_ENTRY_ROW_HEIGHT_PX = 30;
 const WORK_ENTRY_CHANGED_FILES_HEIGHT_PX = 24;
 const WORK_ENTRY_GAP_PX = 2;
+// Height of the changed files block when collapsed (just the header bar).
+const CHANGED_FILES_COLLAPSED_HEADER_HEIGHT_PX = 52;
 const changedFilesSummaryHeightCache = new WeakMap<
   ReadonlyArray<TurnDiffFileChange>,
   { collapsed?: number; expanded?: number }
@@ -38,6 +40,7 @@ interface TimelineMessageHeightInput {
   attachments?: ReadonlyArray<{ id: string }>;
   diffSummaryFiles?: ReadonlyArray<TurnDiffFileChange>;
   diffSummaryAllDirectoriesExpanded?: boolean;
+  diffSummaryBlockExpanded?: boolean;
   showCompletionDivider?: boolean;
 }
 
@@ -181,14 +184,23 @@ export function estimateTimelineMessageHeight(
   if (message.role === "assistant") {
     const charsPerLine = estimateCharsPerLineForAssistant(layout.timelineWidthPx);
     const estimatedLines = estimateWrappedLineCount(message.text, charsPerLine);
+    const diffFiles = message.diffSummaryFiles ?? [];
+    const blockExpanded = message.diffSummaryBlockExpanded ?? false;
+    // When the block is collapsed, only show the header bar height.
+    const changedFilesHeight =
+      diffFiles.length === 0
+        ? 0
+        : blockExpanded
+          ? estimateChangedFilesSummaryHeight(
+              diffFiles,
+              message.diffSummaryAllDirectoriesExpanded ?? true,
+            )
+          : CHANGED_FILES_COLLAPSED_HEADER_HEIGHT_PX;
     return (
       ASSISTANT_BASE_HEIGHT_PX +
       estimatedLines * LINE_HEIGHT_PX +
       (message.showCompletionDivider ? COMPLETION_DIVIDER_HEIGHT_PX : 0) +
-      estimateChangedFilesSummaryHeight(
-        message.diffSummaryFiles ?? [],
-        message.diffSummaryAllDirectoriesExpanded ?? true,
-      )
+      changedFilesHeight
     );
   }
 

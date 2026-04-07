@@ -2,7 +2,7 @@ import { useCallback } from "react";
 import { Option, Schema } from "effect";
 import {
   TrimmedNonEmptyString,
-  type ProviderKind,
+  ProviderKind,
   type ProviderStartOptions,
 } from "@t3tools/contracts";
 import {
@@ -77,6 +77,7 @@ export const AppSettingsSchema = Schema.Struct({
   customClaudeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
   uiFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
+  defaultProvider: ProviderKind.pipe(withDefaults(() => "codex" as const)),
 });
 export type AppSettings = typeof AppSettingsSchema.Type;
 export interface AppModelOption {

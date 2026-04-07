@@ -36,19 +36,14 @@ import { OpenInPicker } from "./OpenInPicker";
 import { isElectron } from "~/env";
 import { cn } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
+import { resolveEditorIcon } from "../../editorMetadata";
 import { usePreferredEditor } from "../../editorPreferences";
-import { AntigravityIcon, ClaudeAI, CursorIcon, OpenAI, VisualStudioCode, Zed } from "../Icons";
+import { useIsDisposableThread } from "~/hooks/useIsDisposableThread";
+import { ClaudeAI, OpenAI } from "../Icons";
 import { gitStatusQueryOptions } from "~/lib/gitReactQuery";
 
 /** Width (px) below which collapsible header controls fold into the ellipsis menu. */
 const HEADER_COMPACT_BREAKPOINT = 480;
-
-const EDITOR_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
-  cursor: CursorIcon,
-  vscode: VisualStudioCode,
-  zed: Zed,
-  antigravity: AntigravityIcon,
-};
 
 interface ChatHeaderProps {
   activeThreadId: ThreadId;
@@ -130,12 +125,13 @@ export const ChatHeader = memo(function ChatHeader({
   const headerRef = useRef<HTMLDivElement>(null);
   const [compact, setCompact] = useState(false);
   const [preferredEditor] = usePreferredEditor(availableEditors);
-  const EditorIcon = preferredEditor ? EDITOR_ICONS[preferredEditor] : null;
+  const EditorIcon = preferredEditor ? resolveEditorIcon(preferredEditor) : null;
   // Reuse the shared git status query so the diff toggle can show live totals
   // without introducing a second API shape just for the header control.
   const { data: gitStatus = null } = useQuery(gitStatusQueryOptions(gitCwd));
   const diffTotals = gitStatus?.workingTree ?? null;
   const showDiffTotals = (diffTotals?.insertions ?? 0) > 0 || (diffTotals?.deletions ?? 0) > 0;
+  const isDisposableThread = useIsDisposableThread(activeThreadId);
 
   const isSplitPane = surfaceMode === "split";
 
@@ -204,37 +200,39 @@ export const ChatHeader = memo(function ChatHeader({
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-2 [-webkit-app-region:no-drag]">
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                type="button"
-                size="xs"
-                variant="outline"
-                className={compact ? "shrink-0 gap-1" : "shrink-0 gap-1.5"}
-                aria-label={handoffActionLabel}
-                disabled={handoffDisabled}
-                onClick={onCreateHandoff}
-              >
-                <FiGitBranch className="size-3.5 shrink-0" />
-                {compact ? (
-                  <ArrowRightIcon className="size-2.5 shrink-0 opacity-45" />
-                ) : (
-                  <span className="truncate">Hand off to</span>
-                )}
-                {renderProviderIcon(handoffActionTargetProvider, "size-3.5 shrink-0")}
-                {!compact && (
-                  <span className="truncate">
-                    {PROVIDER_DISPLAY_NAMES[handoffActionTargetProvider ?? "codex"]}
-                  </span>
-                )}
-              </Button>
-            }
-          />
-          <TooltipPopup side="bottom">{handoffActionLabel}</TooltipPopup>
-        </Tooltip>
+        {!isDisposableThread ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  className={compact ? "shrink-0 gap-1" : "shrink-0 gap-1.5"}
+                  aria-label={handoffActionLabel}
+                  disabled={handoffDisabled}
+                  onClick={onCreateHandoff}
+                >
+                  <FiGitBranch className="size-3.5 shrink-0" />
+                  {compact ? (
+                    <ArrowRightIcon className="size-2.5 shrink-0 opacity-45" />
+                  ) : (
+                    <span className="truncate">Hand off to</span>
+                  )}
+                  {renderProviderIcon(handoffActionTargetProvider, "size-3.5 shrink-0")}
+                  {!compact && (
+                    <span className="truncate">
+                      {PROVIDER_DISPLAY_NAMES[handoffActionTargetProvider ?? "codex"]}
+                    </span>
+                  )}
+                </Button>
+              }
+            />
+            <TooltipPopup side="bottom">{handoffActionLabel}</TooltipPopup>
+          </Tooltip>
+        ) : null}
         {/* Inline controls — shown when there's enough room. */}
-        {!compact && (
+        {!isDisposableThread && !compact && (
           <>
             {activeProjectScripts ? (
               <ProjectScriptsControl
@@ -281,7 +279,7 @@ export const ChatHeader = memo(function ChatHeader({
         )}
 
         {/* Overflow ellipsis — shown only when compact. */}
-        {compact && hasCollapsibleControls ? (
+        {!isDisposableThread && compact && hasCollapsibleControls ? (
           <Menu modal={false}>
             <MenuTrigger
               render={
@@ -346,10 +344,10 @@ export const ChatHeader = memo(function ChatHeader({
           </Menu>
         ) : null}
 
-        {activeProjectName ? (
+        {!isDisposableThread && activeProjectName ? (
           <GitActionsControl gitCwd={gitCwd} activeThreadId={activeThreadId} />
         ) : null}
-        {chatLayoutAction ? (
+        {!isDisposableThread && chatLayoutAction ? (
           <Tooltip>
             <TooltipTrigger
               render={

@@ -22,6 +22,7 @@ import ChatMarkdown from "../ChatMarkdown";
 import {
   BotIcon,
   CheckIcon,
+  ChevronDownIcon,
   CircleAlertIcon,
   EyeIcon,
   GlobeIcon,
@@ -40,6 +41,7 @@ import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImage
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { ChangedFilesTree } from "./ChangedFilesTree";
 import { DiffStatLabel, hasNonZeroStat } from "./DiffStatLabel";
+import { VscodeEntryIcon } from "./VscodeEntryIcon";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { computeMessageDurationStart, normalizeCompactToolLabel } from "./MessagesTimeline.logic";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
@@ -260,6 +262,28 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       [turnId]: !(current[turnId] ?? true),
     }));
   }, []);
+  const [changedFilesExpandedByTurnId, setChangedFilesExpandedByTurnId] = useState<
+    Record<string, boolean>
+  >({});
+  const onToggleChangedFilesBlock = useCallback((turnId: TurnId) => {
+    setChangedFilesExpandedByTurnId((current) => ({
+      ...current,
+      [turnId]: !(current[turnId] ?? false),
+    }));
+  }, []);
+  const userMessageIdByAssistantMessageId = useMemo(() => {
+    const map = new Map<MessageId, MessageId>();
+    let lastUserMessageId: MessageId | null = null;
+    for (const row of rows) {
+      if (row.kind !== "message") continue;
+      if (row.message.role === "user") {
+        lastUserMessageId = row.message.id;
+      } else if (row.message.role === "assistant" && lastUserMessageId) {
+        map.set(row.message.id, lastUserMessageId);
+      }
+    }
+    return map;
+  }, [rows]);
 
   const rowVirtualizer = useVirtualizer({
     count: virtualizedRowCount,
@@ -287,10 +311,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         showCompletionDivider: row.showCompletionDivider,
       };
       if (turnSummary) {
+        const isBlockExpanded = changedFilesExpandedByTurnId[turnSummary.turnId] ?? false;
         Object.assign(messageHeightInput, {
           diffSummaryFiles: turnSummary.files,
           diffSummaryAllDirectoriesExpanded:
             allDirectoriesExpandedByTurnId[turnSummary.turnId] ?? true,
+          diffSummaryBlockExpanded: isBlockExpanded,
         });
       }
       return estimateTimelineMessageHeight(messageHeightInput, { timelineWidthPx });
@@ -335,7 +361,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   }, [rowVirtualizer, scrollContainer]);
   useEffect(() => {
     rowVirtualizer.measure();
-  }, [rowVirtualizer, expandedWorkGroups, allDirectoriesExpandedByTurnId]);
+  }, [
+    rowVirtualizer,
+    expandedWorkGroups,
+    allDirectoriesExpandedByTurnId,
+    changedFilesExpandedByTurnId,
+  ]);
   useEffect(() => {
     rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = (_item, _delta, instance) => {
       const viewportHeight = instance.scrollRect?.height ?? 0;
@@ -390,7 +421,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const groupLabel = onlyToolEntries ? "Tool calls" : "Work log";
 
           return (
-            <div className="rounded-xl border border-border/45 bg-card/25 px-2 py-1.5">
+            <div>
               {showHeader && (
                 <div className="mb-1.5 flex items-center justify-between gap-2 px-0.5">
                   <p className="font-mono text-[9px] text-muted-foreground/55">
@@ -528,54 +559,65 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   if (!turnSummary) return null;
                   const checkpointFiles = turnSummary.files;
                   if (checkpointFiles.length === 0) return null;
-                  const summaryStat = summarizeTurnDiffStats(checkpointFiles);
-                  const changedFileCountLabel = String(checkpointFiles.length);
+                  const isBlockExpanded = changedFilesExpandedByTurnId[turnSummary.turnId] ?? false;
                   const allDirectoriesExpanded =
                     allDirectoriesExpandedByTurnId[turnSummary.turnId] ?? true;
+                  const summaryStat = summarizeTurnDiffStats(checkpointFiles);
+                  const correspondingUserMessageId = userMessageIdByAssistantMessageId.get(
+                    row.message.id,
+                  );
+                  const canUndo =
+                    correspondingUserMessageId != null &&
+                    revertTurnCountByUserMessageId.has(correspondingUserMessageId);
                   return (
-                    <div className="mt-2 rounded-lg border border-border/80 bg-card/45 p-2.5">
-                      <div className="mb-1.5 flex items-center justify-between gap-2">
-                        <p className="font-mono text-[10px] text-muted-foreground/65">
-                          <span>Changed files ({changedFileCountLabel})</span>
-                          {hasNonZeroStat(summaryStat) && (
-                            <>
-                              <span className="mx-1">•</span>
-                              <DiffStatLabel
-                                additions={summaryStat.additions}
-                                deletions={summaryStat.deletions}
-                              />
-                            </>
+                    <div className="mt-3 overflow-hidden rounded-lg bg-muted">
+                      <div className="flex items-center justify-between gap-2 px-3.5 py-2.5">
+                        <span className="font-mono text-[12px] text-foreground/85">
+                          {checkpointFiles.length === 1
+                            ? "1 file changed"
+                            : `${checkpointFiles.length} files changed`}
+                        </span>
+                        <div className="flex items-center gap-3">
+                          {canUndo && (
+                            <button
+                              type="button"
+                              className="flex items-center gap-1 font-mono text-[12px] text-muted-foreground/70 transition-colors hover:text-foreground/90"
+                              onClick={() => onRevertUserMessage(correspondingUserMessageId)}
+                            >
+                              Undo
+                              <Undo2Icon className="size-3" />
+                            </button>
                           )}
-                        </p>
-                        <div className="flex items-center gap-1.5">
-                          <Button
-                            type="button"
-                            size="xs"
-                            variant="outline"
-                            onClick={() => onToggleAllDirectories(turnSummary.turnId)}
-                          >
-                            {allDirectoriesExpanded ? "Collapse all" : "Expand all"}
-                          </Button>
-                          <Button
-                            type="button"
-                            size="xs"
-                            variant="outline"
-                            onClick={() =>
-                              onOpenTurnDiff(turnSummary.turnId, checkpointFiles[0]?.path)
-                            }
-                          >
-                            View diff
-                          </Button>
                         </div>
                       </div>
-                      <ChangedFilesTree
-                        key={`changed-files-tree:${turnSummary.turnId}`}
-                        turnId={turnSummary.turnId}
-                        files={checkpointFiles}
-                        allDirectoriesExpanded={allDirectoriesExpanded}
-                        resolvedTheme={resolvedTheme}
-                        onOpenTurnDiff={onOpenTurnDiff}
-                      />
+                      <div className="px-3.5 pb-3">
+                        {checkpointFiles.map((file) => (
+                          <button
+                            key={file.path}
+                            type="button"
+                            className="flex w-full items-center gap-1.5 rounded-md py-1 text-left hover:bg-background/50"
+                            onClick={() => onOpenTurnDiff(turnSummary.turnId, file.path)}
+                          >
+                            <VscodeEntryIcon
+                              pathValue={file.path}
+                              kind="file"
+                              theme={resolvedTheme}
+                              className="size-3.5 shrink-0"
+                            />
+                            <span className="truncate font-mono text-[11px] text-muted-foreground/80">
+                              {file.path}
+                            </span>
+                            {(file.additions ?? 0) + (file.deletions ?? 0) > 0 && (
+                              <span className="ml-auto shrink-0 font-mono text-[10px] tabular-nums">
+                                <DiffStatLabel
+                                  additions={file.additions ?? 0}
+                                  deletions={file.deletions ?? 0}
+                                />
+                              </span>
+                            )}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   );
                 })()}

@@ -165,10 +165,10 @@ export default function BranchToolbar({
   if (!activeThreadId || !activeProject) return null;
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl items-center justify-between px-5 pb-3 pt-1">
+    <div className="mx-auto flex w-full max-w-3xl items-center justify-between px-3 pb-3 pt-1">
       <div className="flex items-center gap-2">
         {envLocked || activeWorktreePath ? (
-          <span className="inline-flex items-center gap-1 border border-transparent px-[calc(--spacing(3)-1px)] text-xs font-normal text-muted-foreground/70">
+          <span className="inline-flex items-center gap-1 px-1.5 text-xs font-normal text-muted-foreground/70">
             {effectiveEnvMode === "worktree" ? (
               <>
                 <GitForkIcon className="size-3" />
@@ -187,7 +187,7 @@ export default function BranchToolbar({
             onValueChange={(value) => onEnvModeChange(value as EnvMode)}
             items={envModeItems}
           >
-            <SelectTrigger variant="ghost" size="xs" className="font-normal">
+            <SelectTrigger variant="ghost" size="xs" className="px-1.5 font-normal">
               {effectiveEnvMode === "worktree" ? (
                 <GitForkIcon className="size-3" />
               ) : (
@@ -215,7 +215,7 @@ export default function BranchToolbar({
         {canHandoffToWorktree && onHandoffToWorktree ? (
           <button
             type="button"
-            className="inline-flex items-center gap-1 border border-transparent px-[calc(--spacing(3)-1px)] text-xs font-normal text-muted-foreground/70 transition-colors hover:text-foreground/80 disabled:pointer-events-none disabled:opacity-50"
+            className="inline-flex items-center gap-1 px-1.5 text-xs font-normal text-muted-foreground/70 transition-colors hover:text-foreground/80 disabled:pointer-events-none disabled:opacity-50"
             disabled={handoffBusy}
             onClick={onHandoffToWorktree}
           >
@@ -226,7 +226,7 @@ export default function BranchToolbar({
         {canHandoffToLocal && onHandoffToLocal ? (
           <button
             type="button"
-            className="inline-flex items-center gap-1 border border-transparent px-[calc(--spacing(3)-1px)] text-xs font-normal text-muted-foreground/70 transition-colors hover:text-foreground/80 disabled:pointer-events-none disabled:opacity-50"
+            className="inline-flex items-center gap-1 px-1.5 text-xs font-normal text-muted-foreground/70 transition-colors hover:text-foreground/80 disabled:pointer-events-none disabled:opacity-50"
             disabled={handoffBusy}
             onClick={onHandoffToLocal}
           >

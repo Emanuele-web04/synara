@@ -37,12 +37,58 @@ interface CommandAvailabilityOptions {
   readonly env?: NodeJS.ProcessEnv;
 }
 
-const LINE_COLUMN_SUFFIX_PATTERN = /:\d+(?::\d+)?$/;
+const TARGET_WITH_POSITION_PATTERN = /^(.*?):(\d+)(?::(\d+))?$/;
 
-function shouldUseGotoFlag(editorId: EditorId, target: string): boolean {
-  return (
-    (editorId === "cursor" || editorId === "vscode") && LINE_COLUMN_SUFFIX_PATTERN.test(target)
-  );
+function parseTargetPathAndPosition(target: string): {
+  path: string;
+  line: string | undefined;
+  column: string | undefined;
+} | null {
+  const match = TARGET_WITH_POSITION_PATTERN.exec(target);
+  if (!match?.[1] || !match[2]) {
+    return null;
+  }
+
+  return {
+    path: match[1],
+    line: match[2],
+    column: match[3],
+  };
+}
+
+function resolveCommandEditorArgs(
+  editor: (typeof EDITORS)[number],
+  target: string,
+): ReadonlyArray<string> {
+  const parsedTarget = parseTargetPathAndPosition(target);
+
+  switch (editor.launchStyle) {
+    case "direct-path":
+      return [target];
+    case "goto":
+      return parsedTarget ? ["--goto", target] : [target];
+    case "line-column": {
+      if (!parsedTarget) {
+        return [target];
+      }
+
+      const { path, line, column } = parsedTarget;
+      return [...(line ? ["--line", line] : []), ...(column ? ["--column", column] : []), path];
+    }
+  }
+}
+
+function resolveAvailableCommand(
+  commands: ReadonlyArray<string>,
+  options: CommandAvailabilityOptions = {},
+): string | null {
+  for (const command of commands) {
+    if (isCommandAvailable(command, options)) {
+      return command;
+    }
+  }
+
+  return null;
 }
 
 function fileManagerCommandForPlatform(platform: NodeJS.Platform): string {
@@ -168,8 +214,15 @@ export function resolveAvailableEditors(
   const available: EditorId[] = [];
 
   for (const editor of EDITORS) {
-    const command = editor.command ?? fileManagerCommandForPlatform(platform);
-    if (isCommandAvailable(command, { platform, env })) {
+    if (editor.commands === null) {
+      const command = fileManagerCommandForPlatform(platform);
+      if (isCommandAvailable(command, { platform, env })) {
+        available.push(editor.id);
+      }
+      continue;
+    }
+
+    if (resolveAvailableCommand(editor.commands, { platform, env }) !== null) {
       available.push(editor.id);
     }
   }
@@ -206,16 +259,20 @@ export class Open extends ServiceMap.Service<Open, OpenShape>()("t3/open") {}
 export const resolveEditorLaunch = Effect.fnUntraced(function* (
   input: OpenInEditorInput,
   platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
 ): Effect.fn.Return<EditorLaunch, OpenError> {
   const editorDef = EDITORS.find((editor) => editor.id === input.editor);
   if (!editorDef) {
     return yield* new OpenError({ message: `Unknown editor: ${input.editor}` });
   }
 
-  if (editorDef.command) {
-    return shouldUseGotoFlag(editorDef.id, input.cwd)
-      ? { command: editorDef.command, args: ["--goto", input.cwd] }
-      : { command: editorDef.command, args: [input.cwd] };
+  if (editorDef.commands) {
+    const command =
+      resolveAvailableCommand(editorDef.commands, { platform, env }) ?? editorDef.commands[0];
+    return {
+      command,
+      args: resolveCommandEditorArgs(editorDef, input.cwd),
+    };
   }
 
   if (editorDef.id !== "file-manager") {

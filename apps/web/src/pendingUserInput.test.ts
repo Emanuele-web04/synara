@@ -7,23 +7,40 @@ import {
   findFirstUnansweredPendingUserInputQuestionIndex,
   resolvePendingUserInputAnswer,
   setPendingUserInputCustomAnswer,
+  togglePendingUserInputOptionSelection,
 } from "./pendingUserInput";
 
 describe("resolvePendingUserInputAnswer", () => {
   it("prefers a custom answer over a selected option", () => {
     expect(
-      resolvePendingUserInputAnswer({
-        selectedOptionLabel: "Keep current envelope",
-        customAnswer: "Keep the existing envelope for one release",
-      }),
+      resolvePendingUserInputAnswer(
+        {
+          id: "compat",
+          header: "Compat",
+          question: "How strict should compatibility be?",
+          options: [],
+        },
+        {
+          selectedOptionLabels: ["Keep current envelope"],
+          customAnswer: "Keep the existing envelope for one release",
+        },
+      ),
     ).toBe("Keep the existing envelope for one release");
   });
 
   it("falls back to the selected option", () => {
     expect(
-      resolvePendingUserInputAnswer({
-        selectedOptionLabel: "Scaffold only",
-      }),
+      resolvePendingUserInputAnswer(
+        {
+          id: "scope",
+          header: "Scope",
+          question: "What should the plan target first?",
+          options: [],
+        },
+        {
+          selectedOptionLabels: ["Scaffold only"],
+        },
+      ),
     ).toBe("Scaffold only");
   });
 
@@ -31,13 +48,59 @@ describe("resolvePendingUserInputAnswer", () => {
     expect(
       setPendingUserInputCustomAnswer(
         {
-          selectedOptionLabel: "Preserve existing tags",
+          selectedOptionLabels: ["Preserve existing tags"],
         },
         "doesn't matter",
       ),
     ).toEqual({
-      selectedOptionLabel: undefined,
       customAnswer: "doesn't matter",
+    });
+  });
+
+  it("returns all selected options for multi-select questions", () => {
+    expect(
+      resolvePendingUserInputAnswer(
+        {
+          id: "targets",
+          header: "Targets",
+          question: "Which outputs should we ship?",
+          multiSelect: true,
+          options: [],
+        },
+        {
+          selectedOptionLabels: ["CLI", "Desktop"],
+        },
+      ),
+    ).toEqual(["CLI", "Desktop"]);
+  });
+});
+
+describe("togglePendingUserInputOptionSelection", () => {
+  it("toggles options for multi-select questions", () => {
+    const question = {
+      id: "targets",
+      header: "Targets",
+      question: "Which outputs should we ship?",
+      multiSelect: true,
+      options: [],
+    } as const;
+
+    expect(
+      togglePendingUserInputOptionSelection(question, { selectedOptionLabels: ["CLI"] }, "Desktop"),
+    ).toEqual({
+      customAnswer: "",
+      selectedOptionLabels: ["CLI", "Desktop"],
+    });
+
+    expect(
+      togglePendingUserInputOptionSelection(
+        question,
+        { selectedOptionLabels: ["CLI", "Desktop"] },
+        "CLI",
+      ),
+    ).toEqual({
+      customAnswer: "",
+      selectedOptionLabels: ["Desktop"],
     });
   });
 });
@@ -72,7 +135,7 @@ describe("buildPendingUserInputAnswers", () => {
         ],
         {
           scope: {
-            selectedOptionLabel: "Orchestration-first",
+            selectedOptionLabels: ["Orchestration-first"],
           },
           compat: {
             customAnswer: "Keep the current envelope for one release window",
@@ -137,7 +200,7 @@ describe("pending user input question progress", () => {
     expect(
       countAnsweredPendingUserInputQuestions(questions, {
         scope: {
-          selectedOptionLabel: "Orchestration-first",
+          selectedOptionLabels: ["Orchestration-first"],
         },
       }),
     ).toBe(1);
@@ -147,7 +210,7 @@ describe("pending user input question progress", () => {
     expect(
       findFirstUnansweredPendingUserInputQuestionIndex(questions, {
         scope: {
-          selectedOptionLabel: "Orchestration-first",
+          selectedOptionLabels: ["Orchestration-first"],
         },
       }),
     ).toBe(1);
@@ -157,7 +220,7 @@ describe("pending user input question progress", () => {
     expect(
       findFirstUnansweredPendingUserInputQuestionIndex(questions, {
         scope: {
-          selectedOptionLabel: "Orchestration-first",
+          selectedOptionLabels: ["Orchestration-first"],
         },
         compat: {
           customAnswer: "Keep it for one release window",
@@ -172,7 +235,7 @@ describe("pending user input question progress", () => {
         questions,
         {
           scope: {
-            selectedOptionLabel: "Orchestration-first",
+            selectedOptionLabels: ["Orchestration-first"],
           },
         },
         0,
@@ -180,7 +243,7 @@ describe("pending user input question progress", () => {
     ).toMatchObject({
       questionIndex: 0,
       activeQuestion: questions[0],
-      selectedOptionLabel: "Orchestration-first",
+      selectedOptionLabels: ["Orchestration-first"],
       customAnswer: "",
       resolvedAnswer: "Orchestration-first",
       answeredQuestionCount: 1,

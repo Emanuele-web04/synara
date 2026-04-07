@@ -16,6 +16,7 @@ import { autoAnimate } from "@formkit/auto-animate";
 import { FiGitBranch } from "react-icons/fi";
 import { TbFolderPlus } from "react-icons/tb";
 import { IoFilter } from "react-icons/io5";
+import { LuMessageCircleDashed } from "react-icons/lu";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import {
   DndContext,
@@ -127,6 +128,7 @@ import {
   type SplitViewPane,
   useSplitViewStore,
 } from "../splitViewStore";
+import { useTemporaryThreadStore } from "../temporaryThreadStore";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_PREVIEW_LIMIT = 6;
@@ -445,6 +447,9 @@ export default function Sidebar() {
     (store) => store.clearProjectDraftThreadById,
   );
   const composerDraftsByThreadId = useComposerDraftStore((store) => store.draftsByThreadId);
+  const draftThreadsByThreadId = useComposerDraftStore((store) => store.draftThreadsByThreadId);
+  const temporaryThreadIds = useTemporaryThreadStore((store) => store.temporaryThreadIds);
+  const clearTemporaryThread = useTemporaryThreadStore((store) => store.clearTemporaryThread);
   const navigate = useNavigate();
   const isOnSettings = useLocation({ select: (loc) => loc.pathname === "/settings" });
   const isOnPlugins = useLocation({ select: (loc) => loc.pathname === "/plugins" });
@@ -854,6 +859,7 @@ export default function Sidebar() {
       clearProjectDraftThreadById(thread.projectId, thread.id);
       clearTerminalState(threadId);
       removeThreadFromSplitViews(threadId);
+      clearTemporaryThread(threadId);
 
       if (activeSplitViewId && deletedPaneInActiveSplit) {
         const nextActiveSplitView =
@@ -926,6 +932,7 @@ export default function Sidebar() {
       routeSearch.splitViewId,
       activeSplitView,
       removeThreadFromSplitViews,
+      clearTemporaryThread,
       threads,
     ],
   );
@@ -1584,6 +1591,9 @@ export default function Sidebar() {
       const handoffBadgeLabel = resolveThreadHandoffBadgeLabel(thread);
       const prStatus = prStatusIndicator(prByThreadId.get(thread.id) ?? null);
       const terminalStatus = terminalStatusFromRunningIds(threadTerminalState.runningTerminalIds);
+      const isDisposableThread =
+        temporaryThreadIds[thread.id] === true ||
+        draftThreadsByThreadId[thread.id]?.isTemporary === true;
 
       return (
         <SidebarMenuSubItem key={thread.id} className="w-full" data-thread-item>
@@ -1705,7 +1715,7 @@ export default function Sidebar() {
                   {thread.title}
                 </span>
               )}
-              {handoffBadgeLabel ? (
+              {!isDisposableThread && handoffBadgeLabel ? (
                 <Tooltip>
                   <TooltipTrigger
                     render={
@@ -1731,6 +1741,18 @@ export default function Sidebar() {
                   />
                 </span>
               )}
+              {isDisposableThread ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <span className="inline-flex shrink-0 items-center text-muted-foreground/55">
+                        <LuMessageCircleDashed className="size-3" />
+                      </span>
+                    }
+                  />
+                  <TooltipPopup side="top">Disposable chat</TooltipPopup>
+                </Tooltip>
+              ) : null}
               <span
                 className={`text-[12px] ${
                   isHighlighted
@@ -1900,6 +1922,35 @@ export default function Sidebar() {
                 ? `New terminal thread (${newTerminalThreadShortcutLabel})`
                 : "New terminal thread"}
             </TooltipPopup>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <SidebarMenuAction
+                  render={
+                    <button
+                      type="button"
+                      aria-label={`Create disposable thread in ${project.name}`}
+                    />
+                  }
+                  showOnHover
+                  className="top-1 right-[3.25rem] size-5 rounded-md p-0 text-muted-foreground/60 hover:bg-white/8 hover:text-foreground"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    void handleNewThread(project.id, {
+                      envMode: resolveSidebarNewThreadEnvMode({
+                        defaultEnvMode: appSettings.defaultThreadEnvMode,
+                      }),
+                      temporary: true,
+                    });
+                  }}
+                >
+                  <LuMessageCircleDashed className="size-3.5" />
+                </SidebarMenuAction>
+              }
+            />
+            <TooltipPopup side="top">New disposable thread</TooltipPopup>
           </Tooltip>
           <Tooltip>
             <TooltipTrigger

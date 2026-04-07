@@ -42,7 +42,9 @@ import { type SplitViewPanePanelState } from "../splitViewStore";
 type DiffRenderMode = "stacked" | "split";
 type DiffThemeType = "light" | "dark";
 
-const DIFF_PANEL_UNSAFE_CSS = `
+function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
+  const titleColor = theme === "dark" ? "#6073CC" : "#526FFF";
+  return `
 :host {
   /* Feed the library's host-level font variables so shadow DOM chrome stops falling back to system-ui. */
   --diffs-font-family: var(--font-mono-family);
@@ -100,6 +102,7 @@ const DIFF_PANEL_UNSAFE_CSS = `
   z-index: 4;
   background-color: color-mix(in srgb, var(--card) 94%, var(--foreground)) !important;
   border-bottom: 1px solid var(--border) !important;
+  cursor: pointer;
 }
 
 /* Hide the default change-type icon (blue circle) — replaced by chevron + file-type icon. */
@@ -110,19 +113,10 @@ const DIFF_PANEL_UNSAFE_CSS = `
 [data-title] {
   font-family: var(--font-mono-family) !important;
   cursor: pointer;
-  transition:
-    color 120ms ease,
-    text-decoration-color 120ms ease;
-  text-decoration: underline;
-  text-decoration-color: transparent;
-  text-underline-offset: 2px;
-}
-
-[data-title]:hover {
-  color: color-mix(in srgb, var(--foreground) 84%, var(--primary)) !important;
-  text-decoration-color: currentColor;
+  color: ${titleColor} !important;
 }
 `;
+}
 
 type RenderablePatch =
   | {
@@ -671,10 +665,14 @@ export default function DiffPanel({
                         const composedPath = nativeEvent.composedPath?.() ?? [];
                         const clickedHeader = composedPath.some((node) => {
                           if (!(node instanceof Element)) return false;
-                          return node.hasAttribute("data-title");
+                          return (
+                            node.hasAttribute("data-diffs-header") ||
+                            node.hasAttribute("data-file-info")
+                          );
                         });
                         if (!clickedHeader) return;
-                        openDiffFileInEditor(filePath);
+                        event.stopPropagation();
+                        toggleFileCollapsed(fileKey);
                       }}
                     >
                       <FileDiff
@@ -685,7 +683,7 @@ export default function DiffPanel({
                           overflow: diffWordWrap ? "wrap" : "scroll",
                           theme: resolveDiffThemeName(resolvedTheme),
                           themeType: resolvedTheme as DiffThemeType,
-                          unsafeCSS: DIFF_PANEL_UNSAFE_CSS,
+                          unsafeCSS: buildDiffPanelUnsafeCSS(resolvedTheme),
                           collapsed: isCollapsed,
                         }}
                         renderHeaderPrefix={() => (
@@ -697,20 +695,12 @@ export default function DiffPanel({
                           />
                         )}
                         renderHeaderMetadata={() => (
-                          <button
-                            type="button"
+                          <span
                             style={{
                               display: "inline-flex",
                               alignItems: "center",
-                              cursor: "pointer",
-                              background: "none",
-                              border: "none",
                               padding: "2px",
                               color: "inherit",
-                            }}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggleFileCollapsed(fileKey);
                             }}
                           >
                             <ChevronDownIcon
@@ -722,7 +712,7 @@ export default function DiffPanel({
                                 opacity: 0.5,
                               }}
                             />
-                          </button>
+                          </span>
                         )}
                       />
                     </div>

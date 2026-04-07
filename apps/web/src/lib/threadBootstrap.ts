@@ -8,6 +8,7 @@ import {
   type ModelSelection,
   type ProjectId,
   type ProviderInteractionMode,
+  type ProviderKind,
   type RuntimeMode,
   type ThreadEnvironmentMode,
   type ThreadId,
@@ -25,6 +26,7 @@ export interface NewThreadOptions {
   worktreePath?: string | null;
   envMode?: DraftThreadEnvMode;
   entryPoint?: ThreadPrimarySurface;
+  temporary?: boolean;
 }
 
 interface ActiveThreadSnapshot {
@@ -56,6 +58,7 @@ export type ThreadBootstrapPlan = DraftReusePlanStored | DraftReusePlanRoute | D
 interface ResolveTerminalThreadCreationStateInput {
   activeDraftThread: DraftThreadState | null;
   activeThread: ActiveThreadSnapshot | null;
+  defaultProvider?: ProviderKind | null | undefined;
   draftComposerState: ComposerThreadDraftState | null;
   draftThread: DraftThreadState | null;
   options: NewThreadOptions | undefined;
@@ -115,6 +118,7 @@ export function createActiveDraftThreadSnapshot(
     branch: activeDraftThread.branch,
     worktreePath: activeDraftThread.worktreePath,
     envMode: activeDraftThread.envMode,
+    ...(activeDraftThread.isTemporary ? { isTemporary: true } : {}),
   };
 }
 
@@ -163,6 +167,7 @@ export function createFreshDraftThreadSeed(input: {
     envMode: input.options?.envMode ?? "local",
     runtimeMode: DEFAULT_RUNTIME_MODE,
     entryPoint: input.entryPoint,
+    ...(input.options?.temporary ? { isTemporary: true } : {}),
   };
 }
 
@@ -220,6 +225,17 @@ export function shouldReuseActiveDraftThread(input: {
 export function resolveTerminalThreadCreationState(
   input: ResolveTerminalThreadCreationStateInput,
 ): TerminalThreadCreationState {
+  const hasExplicitEnvModeOverride =
+    input.options !== undefined && Object.hasOwn(input.options, "envMode");
+  const inheritedEnvMode =
+    input.draftThread?.envMode !== undefined
+      ? input.draftThread.envMode
+      : input.activeThread?.projectId === input.projectId
+        ? input.activeThread.envMode
+        : input.activeDraftThread?.projectId === input.projectId
+          ? input.activeDraftThread.envMode
+          : undefined;
+
   return {
     modelSelection: resolvePreferredComposerModelSelection({
       draft: input.draftComposerState,
@@ -228,6 +244,7 @@ export function resolveTerminalThreadCreationState(
           ? input.activeThread.modelSelection
           : null,
       projectModelSelection: input.projectDefaultModelSelection,
+      defaultProvider: input.defaultProvider,
     }),
     runtimeMode:
       input.draftThread?.runtimeMode ??
@@ -242,16 +259,9 @@ export function resolveTerminalThreadCreationState(
         ? input.activeThread.interactionMode
         : null) ??
       DEFAULT_INTERACTION_MODE,
-    envMode:
-      input.options?.envMode ??
-      input.draftThread?.envMode ??
-      (input.activeThread?.projectId === input.projectId
-        ? (input.activeThread.envMode ?? null)
-        : null) ??
-      (input.activeDraftThread?.projectId === input.projectId
-        ? input.activeDraftThread.envMode
-        : null) ??
-      "local",
+    envMode: hasExplicitEnvModeOverride
+      ? (input.options?.envMode ?? "local")
+      : (inheritedEnvMode ?? "local"),
     branch:
       input.options?.branch !== undefined
         ? (input.options.branch ?? null)

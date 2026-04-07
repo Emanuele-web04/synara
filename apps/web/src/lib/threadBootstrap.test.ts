@@ -172,6 +172,26 @@ describe("threadBootstrap", () => {
     });
   });
 
+  it("marks fresh draft seeds as temporary when requested", () => {
+    expect(
+      createFreshDraftThreadSeed({
+        createdAt: "2026-04-05T10:00:00.000Z",
+        entryPoint: "chat",
+        options: {
+          temporary: true,
+        },
+      }),
+    ).toEqual({
+      createdAt: "2026-04-05T10:00:00.000Z",
+      branch: null,
+      worktreePath: null,
+      envMode: "local",
+      runtimeMode: "full-access",
+      entryPoint: "chat",
+      isTemporary: true,
+    });
+  });
+
   it("prefers draft state when resolving terminal creation payloads", () => {
     expect(
       resolveTerminalThreadCreationState({
@@ -194,6 +214,7 @@ describe("threadBootstrap", () => {
       }),
       runtimeMode: "approval-required",
       interactionMode: "default",
+      envMode: "worktree",
       branch: "feature/terminal-bootstrap",
       worktreePath: "/repo/.worktrees/terminal-bootstrap",
     });

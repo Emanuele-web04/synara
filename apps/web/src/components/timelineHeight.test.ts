@@ -140,13 +140,27 @@ describe("estimateTimelineMessageHeight", () => {
     expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 768 })).toBe(122);
   });
 
-  it("adds diff summary chrome to assistant message estimates", () => {
+  it("uses collapsed header height for diff summary when block is collapsed (default)", () => {
     expect(
       estimateTimelineMessageHeight(
         {
           role: "assistant",
           text: "done",
           diffSummaryFiles: [{ path: "src/index.ts", additions: 3, deletions: 1 }],
+        },
+        { timelineWidthPx: 768 },
+      ),
+    ).toBe(152);
+  });
+
+  it("adds diff summary chrome to assistant message estimates when block is expanded", () => {
+    expect(
+      estimateTimelineMessageHeight(
+        {
+          role: "assistant",
+          text: "done",
+          diffSummaryFiles: [{ path: "src/index.ts", additions: 3, deletions: 1 }],
+          diffSummaryBlockExpanded: true,
         },
         { timelineWidthPx: 768 },
       ),

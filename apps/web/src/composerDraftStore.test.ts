@@ -510,6 +510,20 @@ describe("composerDraftStore project draft thread mapping", () => {
     });
   });
 
+  it("tracks temporary draft metadata and lets context updates clear it", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectId, threadId, { isTemporary: true });
+    expect(useComposerDraftStore.getState().getDraftThread(threadId)?.isTemporary).toBe(true);
+
+    store.setProjectDraftThreadId(projectId, threadId, {
+      branch: "feature/preserve-temp",
+    });
+    expect(useComposerDraftStore.getState().getDraftThread(threadId)?.isTemporary).toBe(true);
+
+    store.setDraftThreadContext(threadId, { isTemporary: false });
+    expect(useComposerDraftStore.getState().getDraftThread(threadId)?.isTemporary).toBeUndefined();
+  });
+
   it("tracks chat and terminal draft threads independently for the same project", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(projectId, threadId, { entryPoint: "chat" });

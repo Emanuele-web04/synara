@@ -40,12 +40,30 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
         args: ["/tmp/workspace"],
       });
 
+      const traeLaunch = yield* resolveEditorLaunch(
+        { cwd: "/tmp/workspace", editor: "trae" },
+        "darwin",
+      );
+      assert.deepEqual(traeLaunch, {
+        command: "trae",
+        args: ["/tmp/workspace"],
+      });
+
       const zedLaunch = yield* resolveEditorLaunch(
         { cwd: "/tmp/workspace", editor: "zed" },
         "darwin",
       );
       assert.deepEqual(zedLaunch, {
         command: "zed",
+        args: ["/tmp/workspace"],
+      });
+
+      const ideaLaunch = yield* resolveEditorLaunch(
+        { cwd: "/tmp/workspace", editor: "idea" },
+        "darwin",
+      );
+      assert.deepEqual(ideaLaunch, {
+        command: "idea",
         args: ["/tmp/workspace"],
       });
     }),
@@ -78,6 +96,15 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
       assert.deepEqual(vscodeLineAndColumn, {
         command: "code",
         args: ["--goto", "/tmp/workspace/src/open.ts:71:5"],
+      });
+
+      const ideaLineAndColumn = yield* resolveEditorLaunch(
+        { cwd: "/tmp/workspace/src/open.ts:71:5", editor: "idea" },
+        "darwin",
+      );
+      assert.deepEqual(ideaLineAndColumn, {
+        command: "idea",
+        args: ["--line", "71", "--column", "5", "/tmp/workspace/src/open.ts"],
       });
 
       const zedLineAndColumn = yield* resolveEditorLaunch(
@@ -221,12 +248,14 @@ it.layer(NodeServices.layer)("resolveAvailableEditors", (it) => {
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-editors-" });
 
       yield* fs.writeFileString(path.join(dir, "cursor.CMD"), "@echo off\r\n");
+      yield* fs.writeFileString(path.join(dir, "code-insiders.CMD"), "@echo off\r\n");
+      yield* fs.writeFileString(path.join(dir, "zeditor.CMD"), "@echo off\r\n");
       yield* fs.writeFileString(path.join(dir, "explorer.CMD"), "MZ");
       const editors = resolveAvailableEditors("win32", {
         PATH: dir,
         PATHEXT: ".COM;.EXE;.BAT;.CMD",
       });
-      assert.deepEqual(editors, ["cursor", "file-manager"]);
+      assert.deepEqual(editors, ["cursor", "vscode-insiders", "zed", "file-manager"]);
     }),
   );
 });

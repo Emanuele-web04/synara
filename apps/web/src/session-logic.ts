@@ -10,6 +10,7 @@ import {
   type ThreadId,
   type TurnId,
 } from "@t3tools/contracts";
+import { deriveReadableToolTitle, normalizeCompactToolLabel } from "./lib/toolCallLabel";
 
 import type {
   ChatMessage,
@@ -512,14 +513,22 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (changedFiles.length > 0) {
     entry.changedFiles = changedFiles;
   }
-  if (title) {
-    entry.toolTitle = title;
-  }
   if (itemType) {
     entry.itemType = itemType;
   }
   if (requestKind) {
     entry.requestKind = requestKind;
+  }
+  const readableTitle = deriveReadableToolTitle({
+    title,
+    fallbackLabel: activity.summary,
+    itemType,
+    requestKind,
+    command,
+    payload,
+  });
+  if (readableTitle) {
+    entry.toolTitle = readableTitle;
   }
   const collapseKey = deriveToolLifecycleCollapseKey(entry);
   if (collapseKey) {
@@ -605,10 +614,6 @@ function deriveToolLifecycleCollapseKey(entry: DerivedWorkLogEntry): string | un
     return undefined;
   }
   return [itemType, normalizedLabel, detail].join("\u001f");
-}
-
-function normalizeCompactToolLabel(value: string): string {
-  return value.replace(/\s+(?:complete|completed)\s*$/i, "").trim();
 }
 
 function toLatestProposedPlanState(proposedPlan: ProposedPlan): LatestProposedPlanState {

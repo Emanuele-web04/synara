@@ -13,6 +13,7 @@ import {
   useAppSettings,
 } from "../appSettings";
 import { APP_VERSION } from "../branding";
+import { ClaudeAI, OpenAI } from "../components/Icons";
 import { Button } from "../components/ui/button";
 import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
 import { Input } from "../components/ui/input";
@@ -260,6 +261,7 @@ function SettingsRouteView() {
     settings.codexHomePath !== defaults.codexHomePath;
   const changedSettingLabels = [
     ...(theme !== "system" ? ["Theme"] : []),
+    ...(settings.defaultProvider !== defaults.defaultProvider ? ["Default provider"] : []),
     ...(settings.uiFontFamily !== defaults.uiFontFamily ? ["UI font"] : []),
     ...(settings.timestampFormat !== defaults.timestampFormat ? ["Time format"] : []),
     ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
@@ -537,6 +539,57 @@ function SettingsRouteView() {
                           {option.label}
                         </SelectItem>
                       ))}
+                    </SelectPopup>
+                  </Select>
+                }
+              />
+
+              <SettingsRow
+                title="Default provider"
+                description="Choose the provider used for new chats."
+                resetAction={
+                  settings.defaultProvider !== defaults.defaultProvider ? (
+                    <SettingResetButton
+                      label="default provider"
+                      onClick={() =>
+                        updateSettings({ defaultProvider: defaults.defaultProvider })
+                      }
+                    />
+                  ) : null
+                }
+                control={
+                  <Select
+                    value={settings.defaultProvider}
+                    onValueChange={(value) => {
+                      if (value !== "codex" && value !== "claudeAgent") return;
+                      updateSettings({ defaultProvider: value });
+                    }}
+                  >
+                    <SelectTrigger className="w-full sm:w-44" aria-label="Default provider">
+                      <SelectValue>
+                        <span className="flex items-center gap-2">
+                          {settings.defaultProvider === "claudeAgent" ? (
+                            <ClaudeAI className="size-3.5 text-[#d97757]" />
+                          ) : (
+                            <OpenAI className="size-3.5" />
+                          )}
+                          {settings.defaultProvider === "claudeAgent" ? "Claude" : "Codex"}
+                        </span>
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectPopup align="end" alignItemWithTrigger={false}>
+                      <SelectItem hideIndicator value="codex">
+                        <span className="flex items-center gap-2">
+                          <OpenAI className="size-3.5" />
+                          Codex
+                        </span>
+                      </SelectItem>
+                      <SelectItem hideIndicator value="claudeAgent">
+                        <span className="flex items-center gap-2">
+                          <ClaudeAI className="size-3.5 text-[#d97757]" />
+                          Claude
+                        </span>
+                      </SelectItem>
                     </SelectPopup>
                   </Select>
                 }

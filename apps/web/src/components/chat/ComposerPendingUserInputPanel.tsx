@@ -13,7 +13,7 @@ interface PendingUserInputPanelProps {
   respondingRequestIds: ApprovalRequestId[];
   answers: Record<string, PendingUserInputDraftAnswer>;
   questionIndex: number;
-  onSelectOption: (questionId: string, optionLabel: string) => void;
+  onToggleOption: (questionId: string, optionLabel: string) => void;
   onAdvance: () => void;
 }
 
@@ -22,7 +22,7 @@ export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserIn
   respondingRequestIds,
   answers,
   questionIndex,
-  onSelectOption,
+  onToggleOption,
   onAdvance,
 }: PendingUserInputPanelProps) {
   if (pendingUserInputs.length === 0) return null;
@@ -36,7 +36,7 @@ export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserIn
       isResponding={respondingRequestIds.includes(activePrompt.requestId)}
       answers={answers}
       questionIndex={questionIndex}
-      onSelectOption={onSelectOption}
+      onToggleOption={onToggleOption}
       onAdvance={onAdvance}
     />
   );
@@ -47,14 +47,14 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   isResponding,
   answers,
   questionIndex,
-  onSelectOption,
+  onToggleOption,
   onAdvance,
 }: {
   prompt: PendingUserInput;
   isResponding: boolean;
   answers: Record<string, PendingUserInputDraftAnswer>;
   questionIndex: number;
-  onSelectOption: (questionId: string, optionLabel: string) => void;
+  onToggleOption: (questionId: string, optionLabel: string) => void;
   onAdvance: () => void;
 }) {
   const progress = derivePendingUserInputProgress(prompt.questions, answers, questionIndex);
@@ -70,9 +70,12 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
     };
   }, []);
 
-  const selectOptionAndAutoAdvance = useCallback(
+  const handleOptionSelection = useCallback(
     (questionId: string, optionLabel: string) => {
-      onSelectOption(questionId, optionLabel);
+      onToggleOption(questionId, optionLabel);
+      if (activeQuestion?.multiSelect) {
+        return;
+      }
       if (autoAdvanceTimerRef.current !== null) {
         window.clearTimeout(autoAdvanceTimerRef.current);
       }
@@ -81,13 +84,11 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
         onAdvance();
       }, 200);
     },
-    [onSelectOption, onAdvance],
+    [activeQuestion?.multiSelect, onAdvance, onToggleOption],
   );
 
-  // Keyboard shortcut: number keys 1-9 select corresponding option and auto-advance.
-  // Works even when the Lexical composer (contenteditable) has focus — the composer
-  // doubles as a custom-answer field during user input, and when it's empty the digit
-  // keys should pick options instead of typing into the editor.
+  // Keyboard shortcut: digits toggle options for multi-select prompts and preserve
+  // the current auto-advance behavior for single-select questions.
   useEffect(() => {
     if (!activeQuestion || isResponding) return;
     const handler = (event: globalThis.KeyboardEvent) => {
@@ -109,11 +110,11 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
       const option = activeQuestion.options[optionIndex];
       if (!option) return;
       event.preventDefault();
-      selectOptionAndAutoAdvance(activeQuestion.id, option.label);
+      handleOptionSelection(activeQuestion.id, option.label);
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [activeQuestion, isResponding, selectOptionAndAutoAdvance, progress.customAnswer.length]);
+  }, [activeQuestion, handleOptionSelection, isResponding, progress.customAnswer.length]);
 
   if (!activeQuestion) {
     return null;
@@ -134,16 +135,19 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
         </div>
       </div>
       <p className="mt-1.5 text-sm text-foreground/90">{activeQuestion.question}</p>
+      {activeQuestion.multiSelect ? (
+        <p className="mt-1 text-xs text-muted-foreground/65">Select one or more options.</p>
+      ) : null}
       <div className="mt-3 space-y-1">
         {activeQuestion.options.map((option, index) => {
-          const isSelected = progress.selectedOptionLabel === option.label;
+          const isSelected = progress.selectedOptionLabels.includes(option.label);
           const shortcutKey = index < 9 ? index + 1 : null;
           return (
             <button
               key={`${activeQuestion.id}:${option.label}`}
               type="button"
               disabled={isResponding}
-              onClick={() => selectOptionAndAutoAdvance(activeQuestion.id, option.label)}
+              onClick={() => handleOptionSelection(activeQuestion.id, option.label)}
               className={cn(
                 "group flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition-all duration-150",
                 isSelected

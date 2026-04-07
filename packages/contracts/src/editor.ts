@@ -1,13 +1,37 @@
+// FILE: editor.ts
+// Purpose: Define editor ids and launch metadata shared by the client and server.
+// Layer: Shared contracts
+// Exports: EDITORS, EditorId, OpenInEditorInput
+
 import { Schema } from "effect";
 import { TrimmedNonEmptyString } from "./baseSchemas";
 
+export const EditorLaunchStyle = Schema.Literals(["direct-path", "goto", "line-column"]);
+export type EditorLaunchStyle = typeof EditorLaunchStyle.Type;
+
+type EditorDefinition = {
+  readonly id: string;
+  readonly label: string;
+  readonly commands: readonly [string, ...string[]] | null;
+  readonly launchStyle: EditorLaunchStyle;
+};
+
 export const EDITORS = [
-  { id: "cursor", label: "Cursor", command: "cursor" },
-  { id: "vscode", label: "VS Code", command: "code" },
-  { id: "zed", label: "Zed", command: "zed" },
-  { id: "antigravity", label: "Antigravity", command: "agy" },
-  { id: "file-manager", label: "File Manager", command: null },
-] as const;
+  { id: "cursor", label: "Cursor", commands: ["cursor"], launchStyle: "goto" },
+  { id: "trae", label: "Trae", commands: ["trae"], launchStyle: "goto" },
+  { id: "vscode", label: "VS Code", commands: ["code"], launchStyle: "goto" },
+  {
+    id: "vscode-insiders",
+    label: "VS Code Insiders",
+    commands: ["code-insiders"],
+    launchStyle: "goto",
+  },
+  { id: "vscodium", label: "VSCodium", commands: ["codium"], launchStyle: "goto" },
+  { id: "zed", label: "Zed", commands: ["zed", "zeditor"], launchStyle: "direct-path" },
+  { id: "antigravity", label: "Antigravity", commands: ["agy"], launchStyle: "goto" },
+  { id: "idea", label: "IntelliJ IDEA", commands: ["idea"], launchStyle: "line-column" },
+  { id: "file-manager", label: "File Manager", commands: null, launchStyle: "direct-path" },
+] as const satisfies ReadonlyArray<EditorDefinition>;
 
 export const EditorId = Schema.Literals(EDITORS.map((e) => e.id));
 export type EditorId = typeof EditorId.Type;
