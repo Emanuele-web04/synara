@@ -15,7 +15,6 @@ import {
   type ProviderListPluginsResult,
   type ProviderReadPluginResult,
   type ProviderListSkillsResult,
-  type ProviderStartReviewInput,
   type ProviderRuntimeEvent,
   type ThreadTokenUsageSnapshot,
   type ProviderUserInputAnswers,

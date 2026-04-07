@@ -2,6 +2,8 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 
+import treeKill from "tree-kill";
+
 import {
   DEFAULT_TERMINAL_ID,
   TerminalClearInput,
@@ -33,6 +35,12 @@ const DEFAULT_PERSIST_DEBOUNCE_MS = 40;
 const DEFAULT_SUBPROCESS_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_PROCESS_KILL_GRACE_MS = 1_000;
 const DEFAULT_MAX_RETAINED_INACTIVE_SESSIONS = 128;
+/** Flush batched PTY output at ~60 fps to reduce WebSocket message volume. */
+const OUTPUT_BATCH_INTERVAL_MS = 16;
+/** Flush immediately when the batched output exceeds this byte count. */
+const OUTPUT_BATCH_SIZE_LIMIT = 131_072; // 128 KB
+/** Pause PTY reads when the pending output buffer exceeds this size. */
+const OUTPUT_BUFFER_HIGH_WATERMARK = 1_048_576; // 1 MB
 const DEFAULT_OPEN_COLS = 120;
 const DEFAULT_OPEN_ROWS = 30;
 const TERMINAL_ENV_BLOCKLIST = new Set(["PORT", "ELECTRON_RENDERER_PORT", "ELECTRON_RUN_AS_NODE"]);
@@ -252,6 +260,35 @@ function capHistory(history: string, maxLines: number): string {
   if (lines.length <= maxLines) return history;
   const capped = lines.slice(lines.length - maxLines).join("\n");
   return hasTrailingNewline ? `${capped}\n` : capped;
+}
+
+function countCharacter(value: string, target: string): number {
+  let count = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] === target) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function measureHistory(history: string): {
+  historyLineBreakCount: number;
+  historyEndsWithNewline: boolean;
+} {
+  return {
+    historyLineBreakCount: countCharacter(history, "\n"),
+    historyEndsWithNewline: history.endsWith("\n"),
+  };
+}
+
+function historyLineCount(
+  history: string,
+  lineBreakCount: number,
+  endsWithNewline: boolean,
+): number {
+  if (history.length === 0) return 0;
+  return lineBreakCount + (endsWithNewline ? 0 : 1);
 }
 
 function isCsiFinalByte(codePoint: number): boolean {
@@ -482,6 +519,38 @@ function normalizedRuntimeEnv(
   return Object.fromEntries(entries.toSorted(([left], [right]) => left.localeCompare(right)));
 }
 
+function resetSessionHistory(session: TerminalSessionState): void {
+  session.history = "";
+  session.historyLineBreakCount = 0;
+  session.historyEndsWithNewline = false;
+  session.pendingHistoryControlSequence = "";
+}
+
+function appendSessionHistory(
+  session: TerminalSessionState,
+  chunk: string,
+  historyLineLimit: number,
+): void {
+  if (chunk.length === 0) return;
+
+  const nextHistory = `${session.history}${chunk}`;
+  const nextLineBreakCount = session.historyLineBreakCount + countCharacter(chunk, "\n");
+  const nextEndsWithNewline = chunk.endsWith("\n");
+  const nextLineCount = historyLineCount(nextHistory, nextLineBreakCount, nextEndsWithNewline);
+
+  if (nextLineCount <= historyLineLimit) {
+    session.history = nextHistory;
+    session.historyLineBreakCount = nextLineBreakCount;
+    session.historyEndsWithNewline = nextEndsWithNewline;
+    return;
+  }
+
+  session.history = capHistory(nextHistory, historyLineLimit);
+  const cappedMetrics = measureHistory(session.history);
+  session.historyLineBreakCount = cappedMetrics.historyLineBreakCount;
+  session.historyEndsWithNewline = cappedMetrics.historyEndsWithNewline;
+}
+
 interface TerminalManagerEvents {
   event: [event: TerminalEvent];
 }
@@ -495,6 +564,11 @@ interface TerminalManagerOptions {
   subprocessPollIntervalMs?: number;
   processKillGraceMs?: number;
   maxRetainedInactiveSessions?: number;
+}
+
+interface KillEscalationHandle {
+  timer: ReturnType<typeof setTimeout>;
+  unsubscribeExit: (() => void) | null;
 }
 
 export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> {
@@ -514,7 +588,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   private readonly maxRetainedInactiveSessions: number;
   private subprocessPollTimer: ReturnType<typeof setInterval> | null = null;
   private subprocessPollInFlight = false;
-  private readonly killEscalationTimers = new Map<PtyProcess, ReturnType<typeof setTimeout>>();
+  private readonly killEscalationTimers = new Map<PtyProcess, KillEscalationHandle>();
   private readonly logger = createLogger("terminal");
 
   constructor(options: TerminalManagerOptions) {
@@ -545,6 +619,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         const history = await this.readHistory(input.threadId, input.terminalId);
         const cols = input.cols ?? DEFAULT_OPEN_COLS;
         const rows = input.rows ?? DEFAULT_OPEN_ROWS;
+        const historyMetrics = measureHistory(history);
         const session: TerminalSessionState = {
           threadId: input.threadId,
           terminalId: input.terminalId,
@@ -552,6 +627,8 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           status: "starting",
           pid: null,
           history,
+          historyLineBreakCount: historyMetrics.historyLineBreakCount,
+          historyEndsWithNewline: historyMetrics.historyEndsWithNewline,
           pendingHistoryControlSequence: "",
           exitCode: null,
           exitSignal: null,
@@ -563,6 +640,10 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           unsubscribeExit: null,
           hasRunningSubprocess: false,
           runtimeEnv: normalizedRuntimeEnv(input.env),
+          pendingOutputChunks: [],
+          pendingOutputLength: 0,
+          outputFlushTimer: null,
+          outputPaused: false,
         };
         this.sessions.set(sessionKey, session);
         this.evictInactiveSessionsIfNeeded();
@@ -581,13 +662,11 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         this.stopProcess(existing);
         existing.cwd = input.cwd;
         existing.runtimeEnv = nextRuntimeEnv;
-        existing.history = "";
-        existing.pendingHistoryControlSequence = "";
+        resetSessionHistory(existing);
         await this.persistHistory(existing.threadId, existing.terminalId, existing.history);
       } else if (existing.status === "exited" || existing.status === "error") {
         existing.runtimeEnv = nextRuntimeEnv;
-        existing.history = "";
-        existing.pendingHistoryControlSequence = "";
+        resetSessionHistory(existing);
         await this.persistHistory(existing.threadId, existing.terminalId, existing.history);
       } else if (currentRuntimeEnv !== nextRuntimeEnv) {
         existing.runtimeEnv = nextRuntimeEnv;
@@ -645,8 +724,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     const input = decodeTerminalClearInput(raw);
     await this.runWithThreadLock(input.threadId, async () => {
       const session = this.requireSession(input.threadId, input.terminalId);
-      session.history = "";
-      session.pendingHistoryControlSequence = "";
+      resetSessionHistory(session);
       session.updatedAt = new Date().toISOString();
       await this.persistHistory(input.threadId, input.terminalId, session.history);
       this.emitEvent({
@@ -675,6 +753,8 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           status: "starting",
           pid: null,
           history: "",
+          historyLineBreakCount: 0,
+          historyEndsWithNewline: false,
           pendingHistoryControlSequence: "",
           exitCode: null,
           exitSignal: null,
@@ -686,6 +766,10 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           unsubscribeExit: null,
           hasRunningSubprocess: false,
           runtimeEnv: normalizedRuntimeEnv(input.env),
+          pendingOutputChunks: [],
+          pendingOutputLength: 0,
+          outputFlushTimer: null,
+          outputPaused: false,
         };
         this.sessions.set(sessionKey, session);
         this.evictInactiveSessionsIfNeeded();
@@ -698,8 +782,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       const cols = input.cols ?? session.cols;
       const rows = input.rows ?? session.rows;
 
-      session.history = "";
-      session.pendingHistoryControlSequence = "";
+      resetSessionHistory(session);
       await this.persistHistory(input.threadId, input.terminalId, session.history);
       await this.startSession(session, { ...input, cols, rows }, "restarted");
       return this.snapshot(session);
@@ -737,14 +820,17 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     const sessions = [...this.sessions.values()];
     this.sessions.clear();
     for (const session of sessions) {
+      // Flush any remaining batched output before tearing down.
+      this.flushOutputBuffer(session);
       this.stopProcess(session);
     }
     for (const timer of this.persistTimers.values()) {
       clearTimeout(timer);
     }
     this.persistTimers.clear();
-    for (const timer of this.killEscalationTimers.values()) {
-      clearTimeout(timer);
+    for (const handle of this.killEscalationTimers.values()) {
+      clearTimeout(handle.timer);
+      handle.unsubscribeExit?.();
     }
     this.killEscalationTimers.clear();
     this.pendingPersistHistory.clear();
@@ -877,13 +963,48 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     const sanitized = sanitizeTerminalHistoryChunk(session.pendingHistoryControlSequence, data);
     session.pendingHistoryControlSequence = sanitized.pendingControlSequence;
     if (sanitized.visibleText.length > 0) {
-      session.history = capHistory(
-        `${session.history}${sanitized.visibleText}`,
-        this.historyLineLimit,
-      );
+      appendSessionHistory(session, sanitized.visibleText, this.historyLineLimit);
       this.queuePersist(session.threadId, session.terminalId, session.history);
     }
     session.updatedAt = new Date().toISOString();
+
+    // Accumulate output and batch-emit at ~60 fps to reduce WS message volume.
+    session.pendingOutputChunks.push(data);
+    session.pendingOutputLength += data.length;
+
+    // Backpressure: pause PTY when the pending buffer grows too large.
+    if (!session.outputPaused && session.pendingOutputLength >= OUTPUT_BUFFER_HIGH_WATERMARK) {
+      session.process?.pause();
+      session.outputPaused = true;
+    }
+
+    if (session.pendingOutputLength >= OUTPUT_BATCH_SIZE_LIMIT) {
+      // Large burst — flush immediately to avoid excessive latency.
+      this.flushOutputBuffer(session);
+    } else if (session.outputFlushTimer === null) {
+      session.outputFlushTimer = setTimeout(() => {
+        this.flushOutputBuffer(session);
+      }, OUTPUT_BATCH_INTERVAL_MS);
+    }
+  }
+
+  private flushOutputBuffer(session: TerminalSessionState): void {
+    if (session.outputFlushTimer !== null) {
+      clearTimeout(session.outputFlushTimer);
+      session.outputFlushTimer = null;
+    }
+    if (session.pendingOutputChunks.length === 0) return;
+
+    const data = session.pendingOutputChunks.join("");
+    session.pendingOutputChunks = [];
+    session.pendingOutputLength = 0;
+
+    // Backpressure: resume PTY reads now that the buffer is drained.
+    if (session.outputPaused) {
+      session.process?.resume();
+      session.outputPaused = false;
+    }
+
     this.emitEvent({
       type: "output",
       threadId: session.threadId,
@@ -894,11 +1015,14 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   }
 
   private onProcessExit(session: TerminalSessionState, event: PtyExitEvent): void {
+    // Drain any remaining batched output before emitting the exit event.
+    this.flushOutputBuffer(session);
     this.clearKillEscalationTimer(session.process);
     this.cleanupProcessHandles(session);
     session.process = null;
     session.pid = null;
     session.hasRunningSubprocess = false;
+    session.outputPaused = false;
     session.status = "exited";
     session.pendingHistoryControlSequence = "";
     session.exitCode = Number.isInteger(event.exitCode) ? event.exitCode : null;
@@ -917,12 +1041,15 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   }
 
   private stopProcess(session: TerminalSessionState): void {
+    // Drain any remaining batched output before killing.
+    this.flushOutputBuffer(session);
     const process = session.process;
     if (!process) return;
     this.cleanupProcessHandles(session);
     session.process = null;
     session.pid = null;
     session.hasRunningSubprocess = false;
+    session.outputPaused = false;
     session.status = "exited";
     session.pendingHistoryControlSequence = "";
     session.updatedAt = new Date().toISOString();
@@ -940,9 +1067,10 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
 
   private clearKillEscalationTimer(process: PtyProcess | null): void {
     if (!process) return;
-    const timer = this.killEscalationTimers.get(process);
-    if (!timer) return;
-    clearTimeout(timer);
+    const handle = this.killEscalationTimers.get(process);
+    if (!handle) return;
+    clearTimeout(handle.timer);
+    handle.unsubscribeExit?.();
     this.killEscalationTimers.delete(process);
   }
 
@@ -952,35 +1080,63 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     terminalId: string,
   ): void {
     this.clearKillEscalationTimer(process);
-    try {
-      process.kill("SIGTERM");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.logger.warn("failed to kill terminal process", {
-        threadId,
-        terminalId,
-        signal: "SIGTERM",
-        error: message,
-      });
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      this.killEscalationTimers.delete(process);
+    const pid = process.pid;
+    const signalProcess = (signal: "SIGTERM" | "SIGKILL") => {
       try {
-        process.kill("SIGKILL");
+        process.kill(signal);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        this.logger.warn("failed to force-kill terminal process", {
+        const errno = error as NodeJS.ErrnoException;
+        if (errno?.code === "ESRCH") {
+          return;
+        }
+        this.logger.warn("process signal failed", {
           threadId,
           terminalId,
-          signal: "SIGKILL",
-          error: message,
+          pid,
+          signal,
+          error: error instanceof Error ? error.message : String(error),
         });
       }
+    };
+
+    // Use tree-kill to terminate the entire process tree (shell + children).
+    treeKill(pid, "SIGTERM", (err) => {
+      if (err) {
+        this.logger.warn("tree-kill SIGTERM failed", {
+          threadId,
+          terminalId,
+          pid,
+          error: err.message,
+        });
+      }
+    });
+    // Also signal the PTY handle directly for adapter compatibility and test doubles.
+    signalProcess("SIGTERM");
+
+    const unsubscribeExit = process.onExit(() => {
+      this.clearKillEscalationTimer(process);
+    });
+
+    const timer = setTimeout(() => {
+      const handle = this.killEscalationTimers.get(process);
+      if (handle) {
+        handle.unsubscribeExit?.();
+      }
+      this.killEscalationTimers.delete(process);
+      treeKill(pid, "SIGKILL", (err) => {
+        if (err) {
+          this.logger.warn("tree-kill SIGKILL failed", {
+            threadId,
+            terminalId,
+            pid,
+            error: err.message,
+          });
+        }
+      });
+      signalProcess("SIGKILL");
     }, this.processKillGraceMs);
     timer.unref?.();
-    this.killEscalationTimers.set(process, timer);
+    this.killEscalationTimers.set(process, { timer, unsubscribeExit });
   }
 
   private evictInactiveSessionsIfNeeded(): void {
@@ -1000,6 +1156,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     const toEvict = inactiveSessions.length - this.maxRetainedInactiveSessions;
     for (const session of inactiveSessions.slice(0, toEvict)) {
       const key = toSessionKey(session.threadId, session.terminalId);
+      this.flushOutputBuffer(session);
       this.sessions.delete(key);
       this.clearPersistTimer(session.threadId, session.terminalId);
       this.pendingPersistHistory.delete(key);

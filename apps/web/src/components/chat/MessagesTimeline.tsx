@@ -17,12 +17,10 @@ import {
 import { deriveTimelineEntries, formatElapsed } from "../../session-logic";
 import { AUTO_SCROLL_BOTTOM_THRESHOLD_PX } from "../../chat-scroll";
 import { type TurnDiffSummary } from "../../types";
-import { summarizeTurnDiffStats } from "../../lib/turnDiffTree";
 import ChatMarkdown from "../ChatMarkdown";
 import {
   BotIcon,
   CheckIcon,
-  ChevronDownIcon,
   CircleAlertIcon,
   EyeIcon,
   GlobeIcon,
@@ -39,8 +37,7 @@ import { clamp } from "effect/Number";
 import { estimateTimelineMessageHeight, estimateTimelineWorkGroupHeight } from "../timelineHeight";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
-import { ChangedFilesTree } from "./ChangedFilesTree";
-import { DiffStatLabel, hasNonZeroStat } from "./DiffStatLabel";
+import { DiffStatLabel } from "./DiffStatLabel";
 import { VscodeEntryIcon } from "./VscodeEntryIcon";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { computeMessageDurationStart, normalizeCompactToolLabel } from "./MessagesTimeline.logic";
@@ -253,24 +250,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     minimum: 0,
     maximum: rows.length,
   });
-  const [allDirectoriesExpandedByTurnId, setAllDirectoriesExpandedByTurnId] = useState<
-    Record<string, boolean>
-  >({});
-  const onToggleAllDirectories = useCallback((turnId: TurnId) => {
-    setAllDirectoriesExpandedByTurnId((current) => ({
-      ...current,
-      [turnId]: !(current[turnId] ?? true),
-    }));
-  }, []);
-  const [changedFilesExpandedByTurnId, setChangedFilesExpandedByTurnId] = useState<
-    Record<string, boolean>
-  >({});
-  const onToggleChangedFilesBlock = useCallback((turnId: TurnId) => {
-    setChangedFilesExpandedByTurnId((current) => ({
-      ...current,
-      [turnId]: !(current[turnId] ?? false),
-    }));
-  }, []);
+  const [allDirectoriesExpandedByTurnId] = useState<Record<string, boolean>>({});
+  const [changedFilesExpandedByTurnId] = useState<Record<string, boolean>>({});
   const userMessageIdByAssistantMessageId = useMemo(() => {
     const map = new Map<MessageId, MessageId>();
     let lastUserMessageId: MessageId | null = null;
@@ -559,10 +540,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   if (!turnSummary) return null;
                   const checkpointFiles = turnSummary.files;
                   if (checkpointFiles.length === 0) return null;
-                  const isBlockExpanded = changedFilesExpandedByTurnId[turnSummary.turnId] ?? false;
-                  const allDirectoriesExpanded =
-                    allDirectoriesExpandedByTurnId[turnSummary.turnId] ?? true;
-                  const summaryStat = summarizeTurnDiffStats(checkpointFiles);
                   const correspondingUserMessageId = userMessageIdByAssistantMessageId.get(
                     row.message.id,
                   );

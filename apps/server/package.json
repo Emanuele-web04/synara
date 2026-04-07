@@ -30,6 +30,7 @@
     "effect": "catalog:",
     "node-pty": "^1.1.0",
     "open": "^10.1.0",
+    "tree-kill": "^1.2.2",
     "ws": "^8.18.0"
   },
   "devDependencies": {

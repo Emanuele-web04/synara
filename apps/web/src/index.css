@@ -69,6 +69,7 @@
   --font-mono-family:
     "JetBrains Mono Variable", "JetBrains Mono", "SF Mono", "SFMono-Regular", Consolas,
     "Liberation Mono", Menlo, monospace;
+  --terminal-font-family: "JetBrainsMono NFM", "JetBrainsMono NF", "JetBrains Mono", monospace;
   --background: var(--color-white);
   --foreground: var(--color-neutral-800);
   --card: var(--color-white);

@@ -27,6 +27,10 @@ export interface PtyProcess {
   write(data: string): void;
   resize(cols: number, rows: number): void;
   kill(signal?: string): void;
+  /** Pause reading from the PTY (backpressure). No-op if unsupported. */
+  pause(): void;
+  /** Resume reading from the PTY after a pause. No-op if unsupported. */
+  resume(): void;
   onData(callback: (data: string) => void): () => void;
   onExit(callback: (event: PtyExitEvent) => void): () => void;
 }

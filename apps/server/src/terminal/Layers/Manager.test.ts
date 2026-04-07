@@ -27,6 +27,7 @@ class FakePtyProcess implements PtyProcess {
   private readonly dataListeners = new Set<(data: string) => void>();
   private readonly exitListeners = new Set<(event: PtyExitEvent) => void>();
   killed = false;
+  paused = false;
 
   constructor(readonly pid: number) {}
 
@@ -41,6 +42,14 @@ class FakePtyProcess implements PtyProcess {
   kill(signal?: string): void {
     this.killed = true;
     this.killSignals.push(signal);
+  }
+
+  pause(): void {
+    this.paused = true;
+  }
+
+  resume(): void {
+    this.paused = false;
   }
 
   onData(callback: (data: string) => void): () => void {
@@ -604,6 +613,23 @@ describe("TerminalManager", () => {
 
     expect(process.killSignals[0]).toBe("SIGTERM");
     expect(process.killSignals).toContain("SIGKILL");
+
+    manager.dispose();
+  });
+
+  it("cancels SIGKILL escalation when the process exits after SIGTERM", async () => {
+    const { manager, ptyAdapter } = makeManager(5, { processKillGraceMs: 30 });
+    await manager.open(openInput());
+    const process = ptyAdapter.processes[0];
+    expect(process).toBeDefined();
+    if (!process) return;
+
+    await manager.close({ threadId: "thread-1" });
+    process.emitExit({ exitCode: 0, signal: 15 });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    expect(process.killSignals[0]).toBe("SIGTERM");
+    expect(process.killSignals).not.toContain("SIGKILL");
 
     manager.dispose();
   });

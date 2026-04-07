@@ -1,4 +1,10 @@
+import { ClipboardAddon } from "@xterm/addon-clipboard";
 import { FitAddon } from "@xterm/addon-fit";
+import { ImageAddon } from "@xterm/addon-image";
+import { LigaturesAddon } from "@xterm/addon-ligatures";
+import { SearchAddon } from "@xterm/addon-search";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { WebglAddon } from "@xterm/addon-webgl";
 import {
   Maximize2,
   Minimize2,
@@ -37,12 +43,22 @@ import {
 } from "../types";
 import { readNativeApi } from "~/nativeApi";
 import { cn } from "~/lib/utils";
+import { suppressQueryResponses } from "~/lib/suppressQueryResponses";
+import { TerminalSearch } from "./TerminalSearch";
+import { TerminalScrollToBottom } from "./TerminalScrollToBottom";
 
 const MIN_DRAWER_HEIGHT = 180;
 const MAX_DRAWER_HEIGHT_RATIO = 0.75;
 const MULTI_CLICK_SELECTION_ACTION_DELAY_MS = 260;
 const FALLBACK_MONO_FONT_FAMILY =
-  '"JetBrains Mono Variable", "JetBrains Mono", "SF Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace';
+  '"JetBrainsMono NFM", "JetBrainsMono NF", "JetBrains Mono", monospace';
+// Once WebGL fails, skip it for subsequent terminals in this renderer process.
+let suggestedRendererType: "webgl" | "dom" | undefined;
+const ENABLE_TERMINAL_WEBGL = true;
+const VISUAL_RESIZE_MIN_INTERVAL_MS = 64;
+const BACKEND_RESIZE_DEBOUNCE_MS = 120;
+const WRITE_BATCH_SIZE_LIMIT = 262_144;
+const WRITE_BATCH_MAX_LATENCY_MS = 50;
 
 function getTerminalFontFamily(): string {
   if (typeof window === "undefined") {
@@ -50,7 +66,7 @@ function getTerminalFontFamily(): string {
   }
 
   const configuredFontFamily = getComputedStyle(document.documentElement)
-    .getPropertyValue("--font-mono-family")
+    .getPropertyValue("--terminal-font-family")
     .trim();
   return configuredFontFamily || FALLBACK_MONO_FONT_FAMILY;
 }
@@ -151,6 +167,22 @@ function terminalThemeFromApp(): ITheme {
   };
 }
 
+function serializeRuntimeEnv(runtimeEnv: Record<string, string> | undefined): string {
+  if (!runtimeEnv) return "";
+  const entries = Object.entries(runtimeEnv);
+  if (entries.length === 0) return "";
+  entries.sort(([left], [right]) => left.localeCompare(right));
+  return JSON.stringify(entries);
+}
+
+function runtimeEnvFromSerialized(
+  serializedRuntimeEnv: string,
+): Record<string, string> | undefined {
+  if (!serializedRuntimeEnv) return undefined;
+  const entries = JSON.parse(serializedRuntimeEnv) as Array<[string, string]>;
+  return Object.fromEntries(entries);
+}
+
 function getTerminalSelectionRect(mountElement: HTMLElement): DOMRect | null {
   const selection = window.getSelection();
   if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
@@ -232,7 +264,7 @@ interface TerminalViewportProps {
   onAddTerminalContext: (selection: TerminalContextSelection) => void;
   focusRequestId: number;
   autoFocus: boolean;
-  resizeEpoch: number;
+  isVisible: boolean;
 }
 
 function TerminalViewport({
@@ -245,11 +277,18 @@ function TerminalViewport({
   onAddTerminalContext,
   focusRequestId,
   autoFocus,
-  resizeEpoch,
+  isVisible,
 }: TerminalViewportProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const webglAddonRef = useRef<WebglAddon | null>(null);
+  const lastSentResizeRef = useRef<{ cols: number; rows: number } | null>(null);
+  const pendingResizeRef = useRef<{ cols: number; rows: number } | null>(null);
+  const resizeDispatchTimerRef = useRef<number | null>(null);
+  const visualResizeFrameRef = useRef<number | null>(null);
+  const visualResizeTimerRef = useRef<number | null>(null);
+  const lastVisualResizeAtRef = useRef(0);
   const onSessionExitedRef = useRef(onSessionExited);
   const onAddTerminalContextRef = useRef(onAddTerminalContext);
   const terminalLabelRef = useRef(terminalLabel);
@@ -259,30 +298,135 @@ function TerminalViewport({
   const selectionActionRequestIdRef = useRef(0);
   const selectionActionOpenRef = useRef(false);
   const selectionActionTimerRef = useRef<number | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(null);
+  const [searchAddonInstance, setSearchAddonInstance] = useState<SearchAddon | null>(null);
+  const runtimeEnvSerialized = useMemo(() => serializeRuntimeEnv(runtimeEnv), [runtimeEnv]);
+  const runtimeEnvPayload = useMemo(
+    () => runtimeEnvFromSerialized(runtimeEnvSerialized),
+    [runtimeEnvSerialized],
+  );
 
   useEffect(() => {
     onSessionExitedRef.current = onSessionExited;
   }, [onSessionExited]);
 
-  const resizeTerminalToContainer = useCallback(() => {
+  const flushPendingResize = useCallback(() => {
     const api = readNativeApi();
-    const terminal = terminalRef.current;
-    const fitAddon = fitAddonRef.current;
-    if (!api || !terminal || !fitAddon) return;
-    const wasAtBottom = terminal.buffer.active.viewportY >= terminal.buffer.active.baseY;
-    fitAddon.fit();
-    if (wasAtBottom) {
-      terminal.scrollToBottom();
-    }
+    const pendingResize = pendingResizeRef.current;
+    if (!api || !pendingResize) return;
+
+    pendingResizeRef.current = null;
+    lastSentResizeRef.current = pendingResize;
     void api.terminal
       .resize({
         threadId,
         terminalId,
-        cols: terminal.cols,
-        rows: terminal.rows,
+        cols: pendingResize.cols,
+        rows: pendingResize.rows,
       })
-      .catch(() => undefined);
+      .catch(() => {
+        const current = lastSentResizeRef.current;
+        if (current && current.cols === pendingResize.cols && current.rows === pendingResize.rows) {
+          lastSentResizeRef.current = null;
+        }
+      });
   }, [terminalId, threadId]);
+
+  const queueBackendResize = useCallback(
+    (cols: number, rows: number) => {
+      const lastSentResize = lastSentResizeRef.current;
+      const pendingResize = pendingResizeRef.current;
+      if (
+        (lastSentResize && lastSentResize.cols === cols && lastSentResize.rows === rows) ||
+        (pendingResize && pendingResize.cols === cols && pendingResize.rows === rows)
+      ) {
+        return;
+      }
+      pendingResizeRef.current = { cols, rows };
+      if (resizeDispatchTimerRef.current !== null) {
+        window.clearTimeout(resizeDispatchTimerRef.current);
+      }
+      resizeDispatchTimerRef.current = window.setTimeout(() => {
+        resizeDispatchTimerRef.current = null;
+        flushPendingResize();
+      }, BACKEND_RESIZE_DEBOUNCE_MS);
+    },
+    [flushPendingResize],
+  );
+
+  const runTerminalResize = useCallback(
+    (options?: { clearTextureAtlas?: boolean; refresh?: boolean; dispatchBackend?: boolean }) => {
+      const terminal = terminalRef.current;
+      const fitAddon = fitAddonRef.current;
+      if (!terminal || !fitAddon) return;
+
+      const { clearTextureAtlas = false, refresh = false, dispatchBackend = true } = options ?? {};
+      const wasAtBottom = terminal.buffer.active.viewportY >= terminal.buffer.active.baseY;
+
+      if (clearTextureAtlas) {
+        (
+          webglAddonRef.current as unknown as {
+            clearTextureAtlas?: () => void;
+          } | null
+        )?.clearTextureAtlas?.();
+      }
+
+      fitAddon.fit();
+      if (wasAtBottom) {
+        terminal.scrollToBottom();
+      }
+      if (dispatchBackend) {
+        queueBackendResize(terminal.cols, terminal.rows);
+      }
+      if (refresh) {
+        terminal.refresh(0, Math.max(0, terminal.rows - 1));
+      }
+    },
+    [queueBackendResize],
+  );
+
+  const cancelScheduledVisualResize = useCallback(() => {
+    if (visualResizeFrameRef.current !== null) {
+      window.cancelAnimationFrame(visualResizeFrameRef.current);
+      visualResizeFrameRef.current = null;
+    }
+    if (visualResizeTimerRef.current !== null) {
+      window.clearTimeout(visualResizeTimerRef.current);
+      visualResizeTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleVisualResize = useCallback(() => {
+    if (visualResizeTimerRef.current !== null) {
+      return;
+    }
+
+    const now = Date.now();
+    const remaining = Math.max(
+      0,
+      VISUAL_RESIZE_MIN_INTERVAL_MS - (now - lastVisualResizeAtRef.current),
+    );
+
+    const run = () => {
+      visualResizeTimerRef.current = null;
+      if (visualResizeFrameRef.current !== null) {
+        window.cancelAnimationFrame(visualResizeFrameRef.current);
+      }
+      visualResizeFrameRef.current = window.requestAnimationFrame(() => {
+        visualResizeFrameRef.current = null;
+        lastVisualResizeAtRef.current = Date.now();
+        runTerminalResize();
+      });
+    };
+
+    if (remaining === 0) {
+      run();
+      return;
+    }
+
+    visualResizeTimerRef.current = window.setTimeout(run, remaining);
+  }, [runTerminalResize]);
 
   useEffect(() => {
     onAddTerminalContextRef.current = onAddTerminalContext;
@@ -295,27 +439,92 @@ function TerminalViewport({
   useEffect(() => {
     const mount = containerRef.current;
     if (!mount) return;
+    const api = readNativeApi();
+    if (!api) return;
 
     let disposed = false;
 
     const fitAddon = new FitAddon();
+    const clipboardAddon = new ClipboardAddon();
+    const imageAddon = new ImageAddon();
+    const searchAddon = new SearchAddon();
+    const unicode11Addon = new Unicode11Addon();
     const terminal = new Terminal({
       cursorBlink: true,
-      lineHeight: 1.2,
       fontSize: 12,
       scrollback: 5_000,
       fontFamily: getTerminalFontFamily(),
       theme: terminalThemeFromApp(),
+      allowProposedApi: true,
+      customGlyphs: true,
+      macOptionIsMeta: false,
+      cursorStyle: "block",
+      cursorInactiveStyle: "outline",
+      screenReaderMode: false,
     });
     terminal.loadAddon(fitAddon);
+    terminal.loadAddon(clipboardAddon);
+    terminal.loadAddon(imageAddon);
+    terminal.loadAddon(searchAddon);
+    terminal.loadAddon(unicode11Addon);
+    terminal.unicode.activeVersion = "11";
+    try {
+      terminal.loadAddon(new LigaturesAddon());
+    } catch {
+      // Keep terminal startup resilient when the active font doesn't support ligatures.
+    }
     terminal.open(mount);
+
+    // Suppress terminal query responses that would leak as visible garbage
+    const disposeQuerySuppression = suppressQueryResponses(terminal);
+
+    // Trim trailing whitespace on copy
+    const handleCopy = (e: ClipboardEvent) => {
+      const sel = terminal.getSelection();
+      if (!sel) return;
+      const trimmed = sel.replace(/[^\S\n]+$/gm, "");
+      if (trimmed === sel) return;
+
+      // On some Linux/Wayland Electron setups clipboardData may be null.
+      // Only cancel default copy if we can write directly to event clipboardData.
+      if (e.clipboardData) {
+        e.preventDefault();
+        e.clipboardData.setData("text/plain", trimmed);
+        return;
+      }
+
+      // Keep default behavior and best-effort write trimmed content.
+      void navigator.clipboard?.writeText(trimmed).catch(() => undefined);
+    };
+    mount.addEventListener("copy", handleCopy);
+
+    // Deferred WebGL loading — wait one frame so xterm viewport is synced.
+    const webglRaf = requestAnimationFrame(() => {
+      if (disposed || !ENABLE_TERMINAL_WEBGL || suggestedRendererType === "dom") return;
+      try {
+        const nextWebglAddon = new WebglAddon();
+        nextWebglAddon.onContextLoss(() => {
+          nextWebglAddon.dispose();
+          if (webglAddonRef.current === nextWebglAddon) {
+            webglAddonRef.current = null;
+          }
+          terminal.refresh(0, Math.max(0, terminal.rows - 1));
+        });
+        terminal.loadAddon(nextWebglAddon);
+        webglAddonRef.current = nextWebglAddon;
+      } catch {
+        suggestedRendererType = "dom";
+        webglAddonRef.current = null;
+      }
+    });
+
     fitAddon.fit();
 
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
-
-    const api = readNativeApi();
-    if (!api) return;
+    lastSentResizeRef.current = null;
+    setTerminalInstance(terminal);
+    setSearchAddonInstance(searchAddon);
 
     const clearSelectionAction = () => {
       selectionActionRequestIdRef.current += 1;
@@ -403,6 +612,20 @@ function TerminalViewport({
     };
 
     terminal.attachCustomKeyEventHandler((event) => {
+      // Cmd+F / Ctrl+F → open search
+      if (
+        event.type === "keydown" &&
+        event.key.toLowerCase() === "f" &&
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey &&
+        !event.shiftKey
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        setSearchOpen(true);
+        return false;
+      }
+
       const navigationData = terminalNavigationShortcutData(event);
       if (navigationData !== null) {
         event.preventDefault();
@@ -486,6 +709,8 @@ function TerminalViewport({
         );
     });
 
+    let themeRefreshFrame = 0;
+    let previousThemeKey = JSON.stringify(terminal.options.theme ?? {});
     const selectionDisposable = terminal.onSelectionChange(() => {
       if (terminalRef.current?.hasSelection()) {
         return;
@@ -519,10 +744,20 @@ function TerminalViewport({
     mount.addEventListener("pointerdown", handlePointerDown);
 
     const themeObserver = new MutationObserver(() => {
-      const activeTerminal = terminalRef.current;
-      if (!activeTerminal) return;
-      activeTerminal.options.theme = terminalThemeFromApp();
-      activeTerminal.refresh(0, activeTerminal.rows - 1);
+      if (themeRefreshFrame !== 0) return;
+      themeRefreshFrame = window.requestAnimationFrame(() => {
+        themeRefreshFrame = 0;
+        const activeTerminal = terminalRef.current;
+        if (!activeTerminal) return;
+        const nextTheme = terminalThemeFromApp();
+        const nextThemeKey = JSON.stringify(nextTheme);
+        if (nextThemeKey === previousThemeKey) {
+          return;
+        }
+        previousThemeKey = nextThemeKey;
+        activeTerminal.options.theme = nextTheme;
+        activeTerminal.refresh(0, activeTerminal.rows - 1);
+      });
     });
     themeObserver.observe(document.documentElement, {
       attributes: true,
@@ -541,7 +776,7 @@ function TerminalViewport({
           cwd,
           cols: activeTerminal.cols,
           rows: activeTerminal.rows,
-          ...(runtimeEnv ? { env: runtimeEnv } : {}),
+          ...(runtimeEnvPayload ? { env: runtimeEnvPayload } : {}),
         });
         if (disposed) return;
         activeTerminal.write("\u001bc");
@@ -562,13 +797,78 @@ function TerminalViewport({
       }
     };
 
+    // --- Write coalescing: batch incoming output into a single write per frame ---
+    const pendingWrites: string[] = [];
+    let pendingWriteLength = 0;
+    let writeRafHandle: number | null = null;
+    let writeFlushTimeout: number | null = null;
+
+    function flushPendingWrites() {
+      if (writeRafHandle !== null) {
+        cancelAnimationFrame(writeRafHandle);
+        writeRafHandle = null;
+      }
+      if (writeFlushTimeout !== null) {
+        window.clearTimeout(writeFlushTimeout);
+        writeFlushTimeout = null;
+      }
+      const t = terminalRef.current;
+      if (!t || pendingWrites.length === 0) {
+        pendingWrites.length = 0;
+        pendingWriteLength = 0;
+        return;
+      }
+      const combined = pendingWrites.join("");
+      pendingWrites.length = 0;
+      pendingWriteLength = 0;
+      t.write(combined);
+    }
+
+    function scheduleWrite(data: string) {
+      pendingWrites.push(data);
+      pendingWriteLength += data.length;
+
+      // Avoid unbounded memory growth when rAF is heavily throttled
+      // (for example in background tabs).
+      if (pendingWriteLength >= WRITE_BATCH_SIZE_LIMIT) {
+        flushPendingWrites();
+        return;
+      }
+
+      if (writeRafHandle === null) {
+        writeRafHandle = requestAnimationFrame(() => {
+          writeRafHandle = null;
+          flushPendingWrites();
+        });
+      }
+      if (writeFlushTimeout === null) {
+        writeFlushTimeout = window.setTimeout(() => {
+          writeFlushTimeout = null;
+          flushPendingWrites();
+        }, WRITE_BATCH_MAX_LATENCY_MS);
+      }
+    }
+
+    function clearPendingWrites() {
+      if (writeRafHandle !== null) {
+        cancelAnimationFrame(writeRafHandle);
+        writeRafHandle = null;
+      }
+      if (writeFlushTimeout !== null) {
+        window.clearTimeout(writeFlushTimeout);
+        writeFlushTimeout = null;
+      }
+      pendingWrites.length = 0;
+      pendingWriteLength = 0;
+    }
+
     const unsubscribe = api?.terminal.onEvent((event) => {
       if (event.threadId !== threadId || event.terminalId !== terminalId) return;
       const activeTerminal = terminalRef.current;
       if (!activeTerminal) return;
 
       if (event.type === "output") {
-        activeTerminal.write(event.data);
+        scheduleWrite(event.data);
         clearSelectionAction();
         return;
       }
@@ -576,6 +876,8 @@ function TerminalViewport({
       if (event.type === "started" || event.type === "restarted") {
         hasHandledExitRef.current = false;
         clearSelectionAction();
+        // Flush any pending writes before resetting the terminal.
+        clearPendingWrites();
         activeTerminal.write("\u001bc");
         if (event.snapshot.history.length > 0) {
           activeTerminal.write(event.snapshot.history);
@@ -585,6 +887,7 @@ function TerminalViewport({
 
       if (event.type === "cleared") {
         clearSelectionAction();
+        clearPendingWrites();
         activeTerminal.clear();
         activeTerminal.write("\u001bc");
         return;
@@ -596,6 +899,8 @@ function TerminalViewport({
       }
 
       if (event.type === "exited") {
+        // Flush any remaining output before displaying the exit message.
+        flushPendingWrites();
         const details = [
           typeof event.exitCode === "number" ? `code ${event.exitCode}` : null,
           typeof event.exitSignal === "number" ? `signal ${event.exitSignal}` : null,
@@ -619,32 +924,48 @@ function TerminalViewport({
       }
     });
 
-    const fitTimer = window.setTimeout(() => {
-      resizeTerminalToContainer();
-    }, 30);
     void openTerminal();
 
     return () => {
       disposed = true;
-      window.clearTimeout(fitTimer);
+      // Flush any remaining batched writes before tearing down.
+      flushPendingWrites();
+      cancelAnimationFrame(webglRaf);
+      cancelScheduledVisualResize();
       unsubscribe();
       inputDisposable.dispose();
+      mount.removeEventListener("copy", handleCopy);
       selectionDisposable.dispose();
       terminalLinksDisposable.dispose();
+      disposeQuerySuppression();
       if (selectionActionTimerRef.current !== null) {
         window.clearTimeout(selectionActionTimerRef.current);
+      }
+      if (themeRefreshFrame !== 0) {
+        window.cancelAnimationFrame(themeRefreshFrame);
       }
       window.removeEventListener("mouseup", handleMouseUp);
       mount.removeEventListener("pointerdown", handlePointerDown);
       themeObserver.disconnect();
+      webglAddonRef.current?.dispose();
+      webglAddonRef.current = null;
+      pendingResizeRef.current = null;
+      if (resizeDispatchTimerRef.current !== null) {
+        window.clearTimeout(resizeDispatchTimerRef.current);
+      }
+      resizeDispatchTimerRef.current = null;
+      lastVisualResizeAtRef.current = 0;
       terminalRef.current = null;
       fitAddonRef.current = null;
+      lastSentResizeRef.current = null;
+      setTerminalInstance(null);
+      setSearchAddonInstance(null);
       terminal.dispose();
     };
     // autoFocus is intentionally omitted;
     // it is only read at mount time and must not trigger terminal teardown/recreation.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cwd, resizeTerminalToContainer, runtimeEnv, terminalId, threadId]);
+  }, [cancelScheduledVisualResize, cwd, runtimeEnvPayload, terminalId, threadId]);
 
   useEffect(() => {
     if (!autoFocus) return;
@@ -659,19 +980,34 @@ function TerminalViewport({
   }, [autoFocus, focusRequestId]);
 
   useEffect(() => {
-    const terminal = terminalRef.current;
-    if (!terminal) return;
-    const wasAtBottom = terminal.buffer.active.viewportY >= terminal.buffer.active.baseY;
-    const frame = window.requestAnimationFrame(() => {
-      if (wasAtBottom) {
-        terminal.scrollToBottom();
-      }
-      resizeTerminalToContainer();
+    if (!isVisible) return;
+
+    let firstFrame = 0;
+    let secondFrame = 0;
+
+    firstFrame = window.requestAnimationFrame(() => {
+      cancelScheduledVisualResize();
+      lastVisualResizeAtRef.current = Date.now();
+      runTerminalResize({
+        clearTextureAtlas: true,
+        refresh: true,
+      });
+
+      secondFrame = window.requestAnimationFrame(() => {
+        lastVisualResizeAtRef.current = Date.now();
+        runTerminalResize({ refresh: true });
+      });
     });
+
     return () => {
-      window.cancelAnimationFrame(frame);
+      if (firstFrame !== 0) {
+        window.cancelAnimationFrame(firstFrame);
+      }
+      if (secondFrame !== 0) {
+        window.cancelAnimationFrame(secondFrame);
+      }
     };
-  }, [resizeEpoch, resizeTerminalToContainer]);
+  }, [cancelScheduledVisualResize, isVisible, runTerminalResize]);
 
   useEffect(() => {
     const mount = containerRef.current;
@@ -685,7 +1021,7 @@ function TerminalViewport({
       }
       frame = window.requestAnimationFrame(() => {
         frame = 0;
-        resizeTerminalToContainer();
+        scheduleVisualResize();
       });
     });
 
@@ -696,13 +1032,95 @@ function TerminalViewport({
         window.cancelAnimationFrame(frame);
       }
     };
-  }, [resizeTerminalToContainer]);
+  }, [scheduleVisualResize]);
+
+  useEffect(() => {
+    const RECOVERY_THROTTLE_MS = 120;
+    let frame = 0;
+    let throttleTimer: number | null = null;
+    let lastRunAt = 0;
+
+    const runRecovery = () => {
+      const mount = containerRef.current;
+      const terminal = terminalRef.current;
+      if (!mount || !terminal) return;
+      if (!mount.isConnected) return;
+
+      const style = window.getComputedStyle(mount);
+      if (style.display === "none" || style.visibility === "hidden") {
+        return;
+      }
+      const rect = mount.getBoundingClientRect();
+      if (rect.width <= 1 || rect.height <= 1) {
+        return;
+      }
+
+      cancelScheduledVisualResize();
+      lastVisualResizeAtRef.current = Date.now();
+      runTerminalResize({
+        clearTextureAtlas: true,
+        refresh: true,
+      });
+    };
+
+    const scheduleRecovery = () => {
+      if (frame !== 0) return;
+
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        const now = Date.now();
+        if (now - lastRunAt < RECOVERY_THROTTLE_MS) {
+          const remaining = RECOVERY_THROTTLE_MS - (now - lastRunAt);
+          if (throttleTimer !== null) {
+            window.clearTimeout(throttleTimer);
+          }
+          throttleTimer = window.setTimeout(() => {
+            throttleTimer = null;
+            scheduleRecovery();
+          }, remaining + 1);
+          return;
+        }
+        lastRunAt = now;
+        runRecovery();
+      });
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) return;
+      scheduleRecovery();
+    };
+    const handleWindowFocus = () => {
+      scheduleRecovery();
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("focus", handleWindowFocus);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("focus", handleWindowFocus);
+      if (frame !== 0) {
+        window.cancelAnimationFrame(frame);
+      }
+      if (throttleTimer !== null) {
+        window.clearTimeout(throttleTimer);
+      }
+    };
+  }, [cancelScheduledVisualResize, runTerminalResize]);
+
   return (
     <div className="h-full min-h-0 w-full rounded-[8px] bg-background p-3">
-      <div
-        ref={containerRef}
-        className="relative h-full min-h-0 w-full overflow-hidden rounded-[4px]"
-      />
+      <div className="relative h-full min-h-0 w-full overflow-hidden rounded-[4px]">
+        <TerminalSearch
+          searchAddon={searchAddonInstance}
+          isOpen={searchOpen}
+          onClose={() => {
+            setSearchOpen(false);
+            terminalRef.current?.focus();
+          }}
+        />
+        <TerminalScrollToBottom terminal={terminalInstance} />
+        <div ref={containerRef} className="h-full w-full" />
+      </div>
     </div>
   );
 }
@@ -842,7 +1260,6 @@ export default function ThreadTerminalDrawer({
 }: ThreadTerminalDrawerProps) {
   const isWorkspaceMode = presentationMode === "workspace";
   const [drawerHeight, setDrawerHeight] = useState(() => clampDrawerHeight(height));
-  const [resizeEpoch, setResizeEpoch] = useState(0);
   const drawerHeightRef = useRef(drawerHeight);
   const lastSyncedHeightRef = useRef(clampDrawerHeight(height));
   const onHeightChangeRef = useRef(onHeightChange);
@@ -998,13 +1415,6 @@ export default function ThreadTerminalDrawer({
     lastSyncedHeightRef.current = clampedHeight;
   }, [height, threadId]);
 
-  useEffect(() => {
-    if (!isVisible) {
-      return;
-    }
-    setResizeEpoch((value) => value + 1);
-  }, [isVisible, presentationMode]);
-
   const handleResizePointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
     event.preventDefault();
@@ -1044,7 +1454,6 @@ export default function ThreadTerminalDrawer({
         return;
       }
       syncHeight(drawerHeightRef.current);
-      setResizeEpoch((value) => value + 1);
     },
     [syncHeight],
   );
@@ -1060,7 +1469,6 @@ export default function ThreadTerminalDrawer({
       if (!resizeStateRef.current) {
         syncHeight(clampedHeight);
       }
-      setResizeEpoch((value) => value + 1);
     };
     window.addEventListener("resize", onWindowResize);
     return () => {
@@ -1250,7 +1658,7 @@ export default function ThreadTerminalDrawer({
                         onAddTerminalContext={onAddTerminalContext}
                         focusRequestId={focusRequestId}
                         autoFocus={terminalId === resolvedActiveTerminalId}
-                        resizeEpoch={resizeEpoch}
+                        isVisible={isVisible}
                       />
                     </div>
                   </div>
@@ -1269,7 +1677,7 @@ export default function ThreadTerminalDrawer({
                   onAddTerminalContext={onAddTerminalContext}
                   focusRequestId={focusRequestId}
                   autoFocus
-                  resizeEpoch={resizeEpoch}
+                  isVisible={isVisible}
                 />
               </div>
             )}

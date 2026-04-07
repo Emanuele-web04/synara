@@ -551,9 +551,7 @@ function SettingsRouteView() {
                   settings.defaultProvider !== defaults.defaultProvider ? (
                     <SettingResetButton
                       label="default provider"
-                      onClick={() =>
-                        updateSettings({ defaultProvider: defaults.defaultProvider })
-                      }
+                      onClick={() => updateSettings({ defaultProvider: defaults.defaultProvider })}
                     />
                   ) : null
                 }

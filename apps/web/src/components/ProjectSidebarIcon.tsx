@@ -61,27 +61,28 @@ export function ProjectSidebarIcon({ cwd, expanded }: { cwd: string; expanded: b
 
     let cancelled = false;
     const image = new Image();
-
-    image.onload = () => {
+    const handleLoad = () => {
       projectFaviconPresence.set(faviconSrc, true);
       if (!cancelled) {
         setHasFavicon(true);
       }
     };
-
-    image.onerror = () => {
+    const handleError = () => {
       projectFaviconPresence.set(faviconSrc, false);
       if (!cancelled) {
         setHasFavicon(false);
       }
     };
 
+    image.addEventListener("load", handleLoad);
+    image.addEventListener("error", handleError);
+
     image.src = faviconSrc;
 
     return () => {
       cancelled = true;
-      image.onload = null;
-      image.onerror = null;
+      image.removeEventListener("load", handleLoad);
+      image.removeEventListener("error", handleError);
     };
   }, [faviconSrc]);
 

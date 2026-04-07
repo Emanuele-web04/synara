@@ -24,9 +24,9 @@ export type ComposerPromptSegment =
     };
 
 const MENTION_TOKEN_REGEX = /(^|\s)@([^\s@]+)(?=\s)/g;
-const SKILL_TOKEN_REGEX = /(^|\s)([\$\/])([a-zA-Z][a-zA-Z0-9_:-]*)(?=\s)/g;
+const SKILL_TOKEN_REGEX = /(^|\s)([$/])([a-zA-Z][a-zA-Z0-9_:-]*)(?=\s)/g;
 const DISPLAY_MENTION_TOKEN_REGEX = /(^|\s)@([^\s@]+)(?=\s|$)/g;
-const DISPLAY_SKILL_TOKEN_REGEX = /(^|\s)([\$\/])([a-zA-Z][a-zA-Z0-9_:-]*)(?=\s|$)/g;
+const DISPLAY_SKILL_TOKEN_REGEX = /(^|\s)([$/])([a-zA-Z][a-zA-Z0-9_:-]*)(?=\s|$)/g;
 
 function pushTextSegment(segments: ComposerPromptSegment[], text: string): void {
   if (!text) return;

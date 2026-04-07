@@ -1102,10 +1102,6 @@ export default function ChatView({
     hasActionableProposedPlan(activeProposedPlan);
   const activePendingApproval = pendingApprovals[0] ?? null;
   const isComposerApprovalState = activePendingApproval !== null;
-  const hasComposerHeader =
-    isComposerApprovalState ||
-    pendingUserInputs.length > 0 ||
-    (showPlanFollowUpPrompt && activeProposedPlan !== null);
   const composerFooterHasWideActions = showPlanFollowUpPrompt || activePendingProgress !== null;
   const handoffDisabled = !(
     activeThread &&
@@ -1585,7 +1581,12 @@ export default function ChatView({
     }
 
     return normalComposerMenuItems;
-  }, [composerCommandPicker, normalComposerMenuItems]);
+  }, [
+    activeThread?.envMode,
+    activeThread?.worktreePath,
+    composerCommandPicker,
+    normalComposerMenuItems,
+  ]);
   const composerMenuOpen = Boolean(composerTrigger || composerCommandPicker);
   const activeComposerMenuItem = useMemo(
     () =>
@@ -4042,19 +4043,24 @@ export default function ChatView({
     }
   }
 
+  const onSendRef = useRef(onSend);
+  const onSubmitPlanFollowUpRef = useRef(onSubmitPlanFollowUp);
+  onSendRef.current = onSend;
+  onSubmitPlanFollowUpRef.current = onSubmitPlanFollowUp;
+
   const dispatchQueuedComposerTurn = useCallback(
     async (queuedTurn: QueuedComposerTurn, dispatchMode: "queue" | "steer"): Promise<boolean> => {
       if (queuedTurn.kind === "chat") {
-        return onSend(undefined, dispatchMode, queuedTurn);
+        return onSendRef.current(undefined, dispatchMode, queuedTurn);
       }
-      return onSubmitPlanFollowUp({
+      return onSubmitPlanFollowUpRef.current({
         text: queuedTurn.text,
         interactionMode: queuedTurn.interactionMode,
         dispatchMode,
         queuedTurn,
       });
     },
-    [onSend, onSubmitPlanFollowUp],
+    [],
   );
 
   const onSteerQueuedComposerTurn = useCallback(

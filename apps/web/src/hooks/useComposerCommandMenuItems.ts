@@ -61,7 +61,6 @@ export function useComposerCommandMenuItems(input: {
     canOfferReviewCommand,
     canOfferForkCommand,
   } = input;
-  const safeProviderNativeCommands = providerNativeCommands ?? [];
 
   return useMemo<ComposerCommandItem[]>(() => {
     if (!composerTrigger) return [];
@@ -100,7 +99,7 @@ export function useComposerCommandMenuItems(input: {
         supportsFastSlashCommand,
         canOfferReviewCommand,
         canOfferForkCommand,
-        providerNativeCommandNames: safeProviderNativeCommands.map((command) => command.name),
+        providerNativeCommandNames: providerNativeCommands.map((command) => command.name),
       });
       const builtInItems = filterComposerSlashCommands(
         composerTrigger.query,
@@ -113,7 +112,7 @@ export function useComposerCommandMenuItems(input: {
         description: definition.description,
         source: definition.source,
       }));
-      const providerCommandItems = safeProviderNativeCommands
+      const providerCommandItems = providerNativeCommands
         .filter((command) => {
           if (!query) return true;
           return (
@@ -189,7 +188,7 @@ export function useComposerCommandMenuItems(input: {
     composerTrigger,
     provider,
     providerPlugins,
-    safeProviderNativeCommands,
+    providerNativeCommands,
     providerSkills,
     searchableModelOptions,
     supportsFastSlashCommand,

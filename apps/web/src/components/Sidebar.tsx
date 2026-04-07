@@ -1,11 +1,9 @@
 import {
   ArrowLeftIcon,
-  ArrowUpDownIcon,
   FolderIcon,
   GitPullRequestIcon,
   type LucideIcon,
   PlugIcon,
-  PlusIcon,
   RocketIcon,
   SettingsIcon,
   SquarePenIcon,
@@ -466,9 +464,7 @@ export default function Sidebar() {
   });
   const activeSplitView = useSplitViewStore(selectSplitView(routeSearch.splitViewId ?? null));
   const splitViewsById = useSplitViewStore((store) => store.splitViewsById);
-  const replaceSplitPaneThread = useSplitViewStore((store) => store.replacePaneThread);
   const setSplitFocusedPane = useSplitViewStore((store) => store.setFocusedPane);
-  const setSplitPanePanelState = useSplitViewStore((store) => store.setPanePanelState);
   const removeSplitView = useSplitViewStore((store) => store.removeSplitView);
   const removeThreadFromSplitViews = useSplitViewStore((store) => store.removeThreadFromSplitViews);
   const { data: keybindings = EMPTY_KEYBINDINGS } = useQuery({
@@ -2268,16 +2264,18 @@ export default function Sidebar() {
   }, []);
 
   const wordmark = (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-1.5">
       <SidebarTrigger className="shrink-0 md:hidden" />
       <Tooltip>
         <TooltipTrigger
           render={
             <div className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 font-system-ui">
-              <T3Wordmark />
-              <span className="truncate text-[14px] font-normal tracking-tight text-foreground/82">
-                Code
-              </span>
+              <div className="flex min-w-0 items-center gap-1">
+                <T3Wordmark />
+                <span className="truncate text-[14px] font-normal tracking-tight text-foreground/82">
+                  Code
+                </span>
+              </div>
               <SidebarTrigger
                 className="hidden size-7 shrink-0 text-muted-foreground/75 hover:text-foreground md:inline-flex"
                 aria-label="Toggle thread sidebar"

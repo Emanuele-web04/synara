@@ -64,6 +64,14 @@ class NodePtyProcess implements PtyProcess {
     this.process.kill(signal);
   }
 
+  pause(): void {
+    this.process.pause();
+  }
+
+  resume(): void {
+    this.process.resume();
+  }
+
   onData(callback: (data: string) => void): () => void {
     const disposable = this.process.onData(callback);
     return () => {

@@ -32,6 +32,8 @@ export interface TerminalSessionState {
   status: TerminalSessionStatus;
   pid: number | null;
   history: string;
+  historyLineBreakCount: number;
+  historyEndsWithNewline: boolean;
   pendingHistoryControlSequence: string;
   exitCode: number | null;
   exitSignal: number | null;
@@ -43,6 +45,14 @@ export interface TerminalSessionState {
   unsubscribeExit: (() => void) | null;
   hasRunningSubprocess: boolean;
   runtimeEnv: Record<string, string> | null;
+  /** Buffered output chunks awaiting flush (output batching). */
+  pendingOutputChunks: string[];
+  /** Total code-unit length of buffered output chunks. */
+  pendingOutputLength: number;
+  /** Timer handle for the next scheduled output flush. */
+  outputFlushTimer: ReturnType<typeof setTimeout> | null;
+  /** Whether PTY reading has been paused due to backpressure. */
+  outputPaused: boolean;
 }
 
 export interface ShellCandidate {

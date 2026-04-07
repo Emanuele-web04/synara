@@ -286,27 +286,38 @@ function createSnapshotWithLongAssistantResponse(): OrchestrationReadModel {
     targetText: "start",
   });
 
+  const threads = [...snapshot.threads];
+  const threadIndex = threads.findIndex((thread) => thread.id === THREAD_ID);
+  if (threadIndex < 0) {
+    return snapshot;
+  }
+
+  const thread = threads[threadIndex]!;
+  const messages = [...thread.messages];
+  const messageIndex = messages.findIndex(
+    (message, index) => message.role === "assistant" && index === 7,
+  );
+  if (messageIndex < 0) {
+    return snapshot;
+  }
+
+  const message = messages[messageIndex]!;
+  messages[messageIndex] = {
+    ...message,
+    text: Array.from(
+      { length: 240 },
+      (_, lineIndex) =>
+        `${lineIndex + 1}. keep the viewport stable while this response keeps growing`,
+    ).join("\n"),
+  };
+  threads[threadIndex] = {
+    ...thread,
+    messages,
+  };
+
   return {
     ...snapshot,
-    threads: snapshot.threads.map((thread) =>
-      thread.id === THREAD_ID
-        ? {
-            ...thread,
-            messages: thread.messages.map((message, index) =>
-              message.role === "assistant" && index === 7
-                ? {
-                    ...message,
-                    text: Array.from(
-                      { length: 240 },
-                      (_, lineIndex) =>
-                        `${lineIndex + 1}. keep the viewport stable while this response keeps growing`,
-                    ).join("\n"),
-                  }
-                : message,
-            ),
-          }
-        : thread,
-    ),
+    threads,
   };
 }
 

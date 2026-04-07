@@ -46,6 +46,14 @@ class BunPtyProcess implements PtyProcess {
     this.process.kill(signal as NodeJS.Signals);
   }
 
+  pause(): void {
+    // Bun PTY uses a synchronous data callback; pause/resume is not supported.
+  }
+
+  resume(): void {
+    // Bun PTY uses a synchronous data callback; pause/resume is not supported.
+  }
+
   onData(callback: (data: string) => void): () => void {
     this.dataListeners.add(callback);
     return () => {
