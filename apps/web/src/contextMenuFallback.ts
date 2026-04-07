@@ -1,7 +1,7 @@
 import type { ContextMenuItem } from "@t3tools/contracts";
 
 /**
- * Imperative DOM-based context menu for non-Electron environments.
+ * Imperative DOM-based context menu that matches the app's Base UI menu styling.
  * Shows a positioned dropdown and returns a promise that resolves
  * with the clicked item id, or null if dismissed.
  */
@@ -15,12 +15,19 @@ export function showContextMenuFallback<T extends string>(
 
     const menu = document.createElement("div");
     menu.className =
-      "fixed z-[10000] min-w-[140px] rounded-md border border-border bg-popover py-1 shadow-xl animate-in fade-in zoom-in-95";
+      "fixed z-[10000] min-w-[180px] rounded-xl border border-border/60 bg-popover shadow-lg/5 animate-in fade-in zoom-in-95";
 
     const x = position?.x ?? 0;
     const y = position?.y ?? 0;
     menu.style.top = `${y}px`;
     menu.style.left = `${x}px`;
+
+    const inner = document.createElement("div");
+    inner.className = "p-1";
+    menu.appendChild(inner);
+
+    let focusedIndex = -1;
+    const buttons: HTMLButtonElement[] = [];
 
     function cleanup(result: T | null) {
       document.removeEventListener("keydown", onKeyDown);
@@ -29,26 +36,62 @@ export function showContextMenuFallback<T extends string>(
       resolve(result);
     }
 
+    function focusItem(index: number) {
+      if (index < 0 || index >= buttons.length) return;
+      buttons[focusedIndex]?.classList.remove("bg-accent", "text-accent-foreground");
+      focusedIndex = index;
+      buttons[focusedIndex]?.classList.add("bg-accent", "text-accent-foreground");
+      buttons[focusedIndex]?.focus();
+    }
+
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {
         e.preventDefault();
         cleanup(null);
+      } else if (e.key === "ArrowDown") {
+        e.preventDefault();
+        focusItem(focusedIndex < buttons.length - 1 ? focusedIndex + 1 : 0);
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        focusItem(focusedIndex > 0 ? focusedIndex - 1 : buttons.length - 1);
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        if (focusedIndex >= 0 && focusedIndex < items.length) {
+          cleanup(items[focusedIndex]!.id);
+        }
       }
     }
 
     overlay.addEventListener("mousedown", () => cleanup(null));
     document.addEventListener("keydown", onKeyDown);
 
-    for (const item of items) {
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]!;
+      const isDestructive = item.destructive === true || item.id === "delete";
+
+      // Add separator before destructive items
+      if (isDestructive && i > 0) {
+        const sep = document.createElement("div");
+        sep.className = "mx-2 my-1 h-px bg-border";
+        inner.appendChild(sep);
+      }
+
       const btn = document.createElement("button");
       btn.type = "button";
       btn.textContent = item.label;
-      const isDestructiveAction = item.destructive === true || item.id === "delete";
-      btn.className = isDestructiveAction
-        ? "flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] text-destructive hover:bg-accent cursor-default"
-        : "flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] text-popover-foreground hover:bg-accent cursor-default";
+      btn.className = isDestructive
+        ? "flex w-full min-h-7 cursor-default select-none items-center gap-2 rounded-sm px-2 py-1 text-left text-sm text-destructive-foreground hover:bg-accent hover:text-accent-foreground"
+        : "flex w-full min-h-7 cursor-default select-none items-center gap-2 rounded-sm px-2 py-1 text-left text-sm text-foreground hover:bg-accent hover:text-accent-foreground";
       btn.addEventListener("click", () => cleanup(item.id));
-      menu.appendChild(btn);
+      btn.addEventListener("mouseenter", () =>
+        focusItem(buttons.length > 0 ? buttons.indexOf(btn) : 0),
+      );
+      btn.addEventListener("mouseleave", () => {
+        btn.classList.remove("bg-accent", "text-accent-foreground");
+        focusedIndex = -1;
+      });
+      buttons.push(btn);
+      inner.appendChild(btn);
     }
 
     document.body.appendChild(overlay);

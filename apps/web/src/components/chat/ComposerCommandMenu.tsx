@@ -21,6 +21,7 @@ import {
   TbChartBar,
   TbUsers,
   TbGitFork,
+  TbGitCompare,
   TbTerminal2,
 } from "react-icons/tb";
 import { formatSkillScope } from "~/lib/providerDiscovery";
@@ -93,6 +94,13 @@ export type ComposerCommandItem =
       id: string;
       type: "fork-target";
       target: "local" | "worktree";
+      label: string;
+      description: string;
+    }
+  | {
+      id: string;
+      type: "review-target";
+      target: "changes" | "base-branch";
       label: string;
       description: string;
     }
@@ -258,6 +266,13 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
           <TbDeviceLaptop className="size-3.5 text-muted-foreground/60" />
         ) : (
           <TbGitFork className="size-3.5 text-muted-foreground/60" />
+        )
+      ) : null}
+      {props.item.type === "review-target" ? (
+        props.item.target === "changes" ? (
+          <TbBug className="size-3.5 text-muted-foreground/60" />
+        ) : (
+          <TbGitCompare className="size-3.5 text-muted-foreground/60" />
         )
       ) : null}
       {props.item.type === "slash-command" || props.item.type === "provider-native-command"

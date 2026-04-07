@@ -335,4 +335,72 @@ describe("store read model sync", () => {
 
     expect(next.projects.map((project) => project.id)).toEqual([project2, project1, project3]);
   });
+
+  it("preserves expanded project state when a project briefly disappears from the snapshot", () => {
+    const project1 = ProjectId.makeUnsafe("project-1");
+    const project2 = ProjectId.makeUnsafe("project-2");
+    const initialState: AppState = {
+      projects: [
+        {
+          id: project1,
+          name: "Project 1",
+          cwd: "/tmp/project-1",
+          defaultModelSelection: {
+            provider: "codex",
+            model: DEFAULT_MODEL_BY_PROVIDER.codex,
+          },
+          expanded: true,
+          scripts: [],
+        },
+        {
+          id: project2,
+          name: "Project 2",
+          cwd: "/tmp/project-2",
+          defaultModelSelection: {
+            provider: "codex",
+            model: DEFAULT_MODEL_BY_PROVIDER.codex,
+          },
+          expanded: true,
+          scripts: [],
+        },
+      ],
+      threads: [],
+      threadsHydrated: true,
+    };
+
+    const snapshotWithoutProject2: OrchestrationReadModel = {
+      snapshotSequence: 2,
+      updatedAt: "2026-02-27T00:00:00.000Z",
+      projects: [
+        makeReadModelProject({
+          id: project1,
+          title: "Project 1",
+          workspaceRoot: "/tmp/project-1",
+        }),
+      ],
+      threads: [],
+    };
+    const snapshotWithProject2Restored: OrchestrationReadModel = {
+      snapshotSequence: 3,
+      updatedAt: "2026-02-27T00:01:00.000Z",
+      projects: [
+        makeReadModelProject({
+          id: project1,
+          title: "Project 1",
+          workspaceRoot: "/tmp/project-1",
+        }),
+        makeReadModelProject({
+          id: project2,
+          title: "Project 2",
+          workspaceRoot: "/tmp/project-2",
+        }),
+      ],
+      threads: [],
+    };
+
+    const withoutProject2 = syncServerReadModel(initialState, snapshotWithoutProject2);
+    const restored = syncServerReadModel(withoutProject2, snapshotWithProject2Restored);
+
+    expect(restored.projects.find((project) => project.id === project2)?.expanded).toBe(true);
+  });
 });

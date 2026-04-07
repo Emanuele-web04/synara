@@ -39,6 +39,19 @@ const initialState: AppState = {
 const persistedExpandedProjectCwds = new Set<string>();
 const persistedProjectOrderCwds: string[] = [];
 
+function rememberProjectUiState(projects: ReadonlyArray<Pick<Project, "cwd" | "expanded">>): void {
+  for (const project of projects) {
+    if (project.expanded) {
+      persistedExpandedProjectCwds.add(project.cwd);
+    } else {
+      persistedExpandedProjectCwds.delete(project.cwd);
+    }
+    if (!persistedProjectOrderCwds.includes(project.cwd)) {
+      persistedProjectOrderCwds.push(project.cwd);
+    }
+  }
+}
+
 // ── Persist helpers ──────────────────────────────────────────────────
 
 function readPersistedState(): AppState {
@@ -73,6 +86,7 @@ let legacyKeysCleanedUp = false;
 function persistState(state: AppState): void {
   if (typeof window === "undefined") return;
   try {
+    rememberProjectUiState(state.projects);
     window.localStorage.setItem(
       PERSISTED_STATE_KEY,
       JSON.stringify({
@@ -234,6 +248,7 @@ function attachmentPreviewRoutePath(attachmentId: string): string {
 // ── Pure state transition functions ────────────────────────────────────
 
 export function syncServerReadModel(state: AppState, readModel: OrchestrationReadModel): AppState {
+  rememberProjectUiState(state.projects);
   const projects = mapProjectsFromReadModel(
     readModel.projects.filter((project) => project.deletedAt === null),
     state.projects,
@@ -485,7 +500,10 @@ export const useStore = create<AppStore>((set) => ({
 }));
 
 // Persist state changes with debouncing to avoid localStorage thrashing
-useStore.subscribe((state) => debouncedPersistState.maybeExecute(state));
+useStore.subscribe((state) => {
+  rememberProjectUiState(state.projects);
+  debouncedPersistState.maybeExecute(state);
+});
 
 // Flush pending writes synchronously before page unload to prevent data loss.
 if (typeof window !== "undefined") {

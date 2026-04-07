@@ -13,6 +13,21 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
 import React, { type ReactNode, useDeferredValue, useEffect, useMemo, useState } from "react";
+import type { IconType } from "react-icons";
+import {
+  SiCanva,
+  SiFigma,
+  SiGithub,
+  SiGmail,
+  SiGooglecalendar,
+  SiGoogledrive,
+  SiHuggingface,
+  SiLinear,
+  SiNotion,
+  SiSlack,
+  SiStripe,
+  SiVercel,
+} from "react-icons/si";
 import { useStore } from "~/store";
 import {
   buildPluginSearchBlob,
@@ -35,7 +50,6 @@ import {
   HammerIcon,
   ListChecksIcon,
   PlugIcon,
-  PlusIcon,
   SearchIcon,
 } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -53,6 +67,10 @@ type PluginEntry = {
   plugin: ProviderPluginDescriptor;
   isFeatured: boolean;
 };
+type PluginBrandArtwork = {
+  color: string;
+  icon: IconType;
+};
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -60,11 +78,29 @@ const PROVIDER_ICON: Record<ProviderKind, React.FC<React.SVGProps<SVGSVGElement>
   codex: HammerIcon,
   claudeAgent: BotIcon,
 };
+const KNOWN_PLUGIN_BRANDS: Record<string, PluginBrandArtwork> = {
+  canva: { icon: SiCanva, color: "#00C4CC" },
+  figma: { icon: SiFigma, color: "#F24E1E" },
+  github: { icon: SiGithub, color: "#181717" },
+  gmail: { icon: SiGmail, color: "#EA4335" },
+  googlecalendar: { icon: SiGooglecalendar, color: "#4285F4" },
+  googledrive: { icon: SiGoogledrive, color: "#0F9D58" },
+  huggingface: { icon: SiHuggingface, color: "#FF9D00" },
+  linear: { icon: SiLinear, color: "#5E6AD2" },
+  notion: { icon: SiNotion, color: "#111111" },
+  slack: { icon: SiSlack, color: "#4A154B" },
+  stripe: { icon: SiStripe, color: "#635BFF" },
+  vercel: { icon: SiVercel, color: "#111111" },
+};
 
 // ── Utilities ──────────────────────────────────────────────────────────────
 
 function pluginEntryKey(entry: Pick<PluginEntry, "marketplacePath" | "plugin">): string {
   return `${entry.marketplacePath}::${entry.plugin.name}`;
+}
+
+function isInstalledPlugin(plugin: ProviderPluginDescriptor): boolean {
+  return plugin.installed || plugin.enabled || plugin.installPolicy === "INSTALLED_BY_DEFAULT";
 }
 
 function sectionTitle(value: string): string {
@@ -74,6 +110,33 @@ function sectionTitle(value: string): string {
 
 function resolvePluginAccent(plugin: ProviderPluginDescriptor): string | undefined {
   return plugin.interface?.brandColor?.trim() || undefined;
+}
+
+function normalizeBrandKey(value: string | undefined): string {
+  return (value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function resolvePluginLogo(plugin: ProviderPluginDescriptor): string | undefined {
+  return plugin.interface?.logo?.trim() || undefined;
+}
+
+function resolvePluginBrand(plugin: ProviderPluginDescriptor): PluginBrandArtwork | undefined {
+  const candidates = [
+    plugin.interface?.composerIcon,
+    plugin.interface?.displayName,
+    plugin.name,
+  ].map(normalizeBrandKey);
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const knownBrand = KNOWN_PLUGIN_BRANDS[candidate];
+    if (knownBrand) return knownBrand;
+  }
+
+  return undefined;
 }
 
 /** Stable hue 0–359 from a string, for consistent per-item icon colors. */
@@ -89,7 +152,10 @@ function nameToHue(name: string): number {
 
 function PluginGlyph({ plugin }: { plugin: ProviderPluginDescriptor }) {
   const accent = resolvePluginAccent(plugin);
+  const logo = resolvePluginLogo(plugin);
+  const brand = resolvePluginBrand(plugin);
   const hue = nameToHue(plugin.interface?.displayName ?? plugin.name);
+  const [logoFailed, setLogoFailed] = useState(false);
   const style = accent
     ? {
         background: `linear-gradient(145deg, ${accent}cc, ${accent}77)`,
@@ -99,6 +165,37 @@ function PluginGlyph({ plugin }: { plugin: ProviderPluginDescriptor }) {
         background: `linear-gradient(145deg, hsl(${hue} 55% 30%), hsl(${hue} 45% 18%))`,
         boxShadow: `0 0 0 0.5px hsl(${hue} 40% 30% / 0.35)`,
       };
+
+  // Prefer metadata-provided artwork so marketplace plugins keep their own branding.
+  if (logo && !logoFailed) {
+    return (
+      <span
+        className="inline-flex size-11 shrink-0 items-center justify-center rounded-[14px] border border-border/60 bg-background"
+        style={accent ? { boxShadow: `0 0 0 0.5px ${accent}25` } : undefined}
+      >
+        <img
+          src={logo}
+          alt=""
+          className="size-6 object-contain"
+          loading="lazy"
+          onError={() => setLogoFailed(true)}
+        />
+      </span>
+    );
+  }
+
+  if (brand) {
+    const BrandIcon = brand.icon;
+    return (
+      <span
+        className="inline-flex size-11 shrink-0 items-center justify-center rounded-[14px] border border-border/60 bg-background"
+        style={accent ? { boxShadow: `0 0 0 0.5px ${accent}25` } : undefined}
+      >
+        <BrandIcon className="size-5" style={{ color: brand.color }} />
+      </span>
+    );
+  }
+
   return (
     <span
       className="inline-flex size-11 shrink-0 items-center justify-center rounded-[14px]"
@@ -206,17 +303,11 @@ function InlineWarning({ children }: { children: ReactNode }) {
   );
 }
 
-function ActionIcon({ active }: { active: boolean }) {
+function InstalledStatus({ installed }: { installed: boolean }) {
+  if (!installed) return null;
   return (
-    <span
-      className={cn(
-        "inline-flex size-7 shrink-0 items-center justify-center rounded-lg border transition-colors",
-        active
-          ? "border-border/40 text-muted-foreground/50"
-          : "border-border/60 text-muted-foreground",
-      )}
-    >
-      {active ? <CheckIcon className="size-3.5" /> : <PlusIcon className="size-3.5" />}
+    <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg border border-border/40 text-muted-foreground/60">
+      <CheckIcon className="size-3.5" />
     </span>
   );
 }
@@ -238,7 +329,7 @@ function PluginGridItem({ entry }: { entry: PluginEntry }) {
         </p>
         <p className="mt-0.5 truncate text-[12px] text-muted-foreground">{description}</p>
       </div>
-      <ActionIcon active={entry.plugin.enabled} />
+      <InstalledStatus installed={isInstalledPlugin(entry.plugin)} />
     </div>
   );
 }
@@ -256,7 +347,7 @@ function SkillGridItem({ skill }: { skill: ProviderSkillDescriptor }) {
         </p>
         <p className="mt-0.5 truncate text-[12px] text-muted-foreground">{description}</p>
       </div>
-      <ActionIcon active={skill.enabled} />
+      <InstalledStatus installed={skill.enabled} />
     </div>
   );
 }
@@ -387,16 +478,16 @@ export function PluginLibrary() {
     );
   }, [pluginsQuery.data]);
 
+  const installedPluginEntries = useMemo(
+    () => pluginEntries.filter((entry) => isInstalledPlugin(entry.plugin)),
+    [pluginEntries],
+  );
+
   const filteredPluginEntries = useMemo(() => {
     const q = normalizeProviderDiscoveryText(deferredPluginSearch);
-    if (!q) return pluginEntries;
-    return pluginEntries.filter((e) => buildPluginSearchBlob(e.plugin).includes(q));
-  }, [deferredPluginSearch, pluginEntries]);
-
-  const featuredPluginEntries = useMemo(
-    () => filteredPluginEntries.filter((e) => e.isFeatured),
-    [filteredPluginEntries],
-  );
+    if (!q) return installedPluginEntries;
+    return installedPluginEntries.filter((e) => buildPluginSearchBlob(e.plugin).includes(q));
+  }, [deferredPluginSearch, installedPluginEntries]);
 
   const marketplaceSections = useMemo(() => {
     const map = new Map<string, { title: string; entries: PluginEntry[] }>();
@@ -555,21 +646,11 @@ export function PluginLibrary() {
                   </div>
                 ) : filteredPluginEntries.length === 0 ? (
                   <EmptyPanel
-                    title="No plugins found"
-                    description="No plugins match this search."
+                    title="No installed plugins found"
+                    description="This view only shows plugins already available in your Codex setup."
                   />
                 ) : (
                   <div className="space-y-6">
-                    {featuredPluginEntries.length > 0 && (
-                      <div>
-                        <SectionHeader title="Featured" />
-                        <div className="grid grid-cols-1 sm:grid-cols-2">
-                          {featuredPluginEntries.map((entry) => (
-                            <PluginGridItem key={`f:${pluginEntryKey(entry)}`} entry={entry} />
-                          ))}
-                        </div>
-                      </div>
-                    )}
                     {marketplaceSections.map((section) => (
                       <div key={section.key}>
                         <SectionHeader title={section.title} />

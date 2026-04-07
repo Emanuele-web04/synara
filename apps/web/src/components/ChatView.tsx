@@ -570,7 +570,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const [expandedWorkGroups, setExpandedWorkGroups] = useState<Record<string, boolean>>({});
   const [planSidebarOpen, setPlanSidebarOpen] = useState(false);
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
-  const [composerCommandPicker, setComposerCommandPicker] = useState<null | "fork-target">(null);
+  const [composerCommandPicker, setComposerCommandPicker] = useState<
+    null | "fork-target" | "review-target"
+  >(null);
   // Tracks whether the user explicitly dismissed the sidebar for the active turn.
   const planSidebarDismissedForTurnRef = useRef<string | null>(null);
   // When set, the thread-change reset effect will open the sidebar instead of closing it.
@@ -1530,6 +1532,24 @@ export default function ChatView({ threadId }: ChatViewProps) {
             activeThread?.worktreePath || activeThread?.envMode === "worktree"
               ? "Continue in this local worktree"
               : "Continue in the current local thread",
+        },
+      ];
+    }
+    if (composerCommandPicker === "review-target") {
+      return [
+        {
+          id: "review-target:changes",
+          type: "review-target" as const,
+          target: "changes" as const,
+          label: "Review Uncommitted Changes",
+          description: "Review local uncommitted changes",
+        },
+        {
+          id: "review-target:base-branch",
+          type: "review-target" as const,
+          target: "base-branch" as const,
+          label: "Review Against Base Branch",
+          description: "Review the current branch diff against its base",
         },
       ];
     }
@@ -4374,6 +4394,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
 
   const {
     handleForkTargetSelection,
+    handleReviewTargetSelection,
     isSlashStatusDialogOpen,
     setIsSlashStatusDialogOpen,
     handleStandaloneSlashCommand,
@@ -4416,6 +4437,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
       setComposerCommandPicker("fork-target");
       setComposerHighlightedItemId("fork-target:worktree");
     },
+    openReviewTargetPicker: () => {
+      setComposerCommandPicker("review-target");
+      setComposerHighlightedItemId("review-target:changes");
+    },
     setComposerDraftProviderModelOptions,
     editorActions: slashEditorActions,
   });
@@ -4431,6 +4456,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
         setComposerCommandPicker(null);
         setComposerHighlightedItemId(null);
         void handleForkTargetSelection(item.target);
+        return;
+      }
+      if (item.type === "review-target") {
+        setComposerCommandPicker(null);
+        setComposerHighlightedItemId(null);
+        void handleReviewTargetSelection(item.target);
         return;
       }
       const { snapshot, trigger } = resolveActiveComposerTrigger();
@@ -4529,17 +4560,20 @@ export default function ChatView({ threadId }: ChatViewProps) {
         }
         return;
       }
-      onProviderModelSelect(item.provider, item.model);
-      const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
-        expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
-      });
-      if (applied) {
-        setComposerHighlightedItemId(null);
+      if (item.type === "model") {
+        onProviderModelSelect(item.provider, item.model);
+        const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
+          expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+        });
+        if (applied) {
+          setComposerHighlightedItemId(null);
+        }
       }
     },
     [
       applyPromptReplacement,
       handleForkTargetSelection,
+      handleReviewTargetSelection,
       handleSlashCommandSelection,
       onProviderModelSelect,
       setComposerCommandPicker,
@@ -4858,69 +4892,69 @@ export default function ChatView({ threadId }: ChatViewProps) {
 
             {/* Input bar */}
             <div className={cn("px-3 pt-4 sm:px-5 sm:pt-4", isGitRepo ? "pb-1" : "pb-2.5 sm:pb-3")}>
-              {queuedComposerTurns.length > 0 ? (
-                <div className="pointer-events-auto relative z-0 mx-auto mb-1.5 flex w-full max-w-3xl flex-col gap-1.5">
-                  {queuedComposerTurns.map((queuedTurn) => (
-                    <div
-                      key={queuedTurn.id}
-                      data-testid="queued-follow-up-row"
-                      className="flex items-center gap-2.5 rounded-2xl border border-border/50 bg-card/95 px-3 py-1.5 text-[13px] shadow-sm backdrop-blur"
-                    >
-                      <div className="flex min-w-0 flex-1 items-center gap-2">
-                        <Undo2Icon className="size-3.5 shrink-0 text-muted-foreground/70" />
-                        <span className="truncate text-[14px] font-medium text-foreground/85">
-                          {queuedTurn.previewText}
-                        </span>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-0.5">
-                        <button
-                          type="button"
-                          className="inline-flex items-center gap-1.5 rounded-xl bg-muted/80 px-3 py-1 text-[12px] font-medium text-foreground transition-colors hover:bg-muted"
-                          onClick={() => void onSteerQueuedComposerTurn(queuedTurn)}
-                        >
-                          <Undo2Icon className="size-3.5" />
-                          <span>Steer</span>
-                        </button>
-                        <button
-                          type="button"
-                          className="inline-flex size-7 items-center justify-center rounded-xl text-muted-foreground/70 transition-colors hover:bg-muted/60 hover:text-foreground"
-                          aria-label="Delete queued follow-up"
-                          onClick={() => removeQueuedComposerTurn(queuedTurn.id)}
-                        >
-                          <Trash2 className="size-3.5" />
-                        </button>
-                        <Menu>
-                          <MenuTrigger
-                            render={
-                              <button
-                                type="button"
-                                className="inline-flex size-7 items-center justify-center rounded-xl text-muted-foreground/70 transition-colors hover:bg-muted/60 hover:text-foreground"
-                                aria-label="Queued follow-up actions"
-                              />
-                            }
-                          >
-                            <EllipsisIcon className="size-3.5" />
-                          </MenuTrigger>
-                          <MenuPopup align="end" side="top">
-                            <MenuItem onClick={() => onEditQueuedComposerTurn(queuedTurn)}>
-                              Edit queued prompt
-                            </MenuItem>
-                            <MenuItem onClick={() => removeQueuedComposerTurn(queuedTurn.id)}>
-                              Delete queued prompt
-                            </MenuItem>
-                          </MenuPopup>
-                        </Menu>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
               <form
                 ref={composerFormRef}
                 onSubmit={onSend}
                 className="relative z-10 mx-auto w-full min-w-0 max-w-3xl"
                 data-chat-composer-form="true"
               >
+                {queuedComposerTurns.length > 0 ? (
+                  <div className="mx-auto flex w-5/6 flex-col">
+                    {queuedComposerTurns.map((queuedTurn) => (
+                      <div
+                        key={queuedTurn.id}
+                        data-testid="queued-follow-up-row"
+                        className="flex items-center gap-2 rounded-t-sm border border-b-0 border-border/60 bg-card px-2.5 py-2 text-[12px]"
+                      >
+                        <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                          <Undo2Icon className="size-3 shrink-0 text-muted-foreground/70" />
+                          <span className="truncate text-[12px] font-medium text-foreground/85">
+                            {queuedTurn.previewText}
+                          </span>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-0">
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 rounded-lg bg-muted/80 px-2 py-0.5 text-[11px] font-medium text-foreground transition-colors hover:bg-muted"
+                            onClick={() => void onSteerQueuedComposerTurn(queuedTurn)}
+                          >
+                            <Undo2Icon className="size-3" />
+                            <span>Steer</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="inline-flex size-6 items-center justify-center rounded-lg text-muted-foreground/70 transition-colors hover:bg-muted/60 hover:text-foreground"
+                            aria-label="Delete queued follow-up"
+                            onClick={() => removeQueuedComposerTurn(queuedTurn.id)}
+                          >
+                            <Trash2 className="size-3" />
+                          </button>
+                          <Menu>
+                            <MenuTrigger
+                              render={
+                                <button
+                                  type="button"
+                                  className="inline-flex size-6 items-center justify-center rounded-lg text-muted-foreground/70 transition-colors hover:bg-muted/60 hover:text-foreground"
+                                  aria-label="Queued follow-up actions"
+                                />
+                              }
+                            >
+                              <EllipsisIcon className="size-3" />
+                            </MenuTrigger>
+                            <MenuPopup align="end" side="top">
+                              <MenuItem onClick={() => onEditQueuedComposerTurn(queuedTurn)}>
+                                Edit queued prompt
+                              </MenuItem>
+                              <MenuItem onClick={() => removeQueuedComposerTurn(queuedTurn.id)}>
+                                Delete queued prompt
+                              </MenuItem>
+                            </MenuPopup>
+                          </Menu>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
                 <div
                   className={cn(
                     "group rounded-2xl p-px transition-colors duration-200",

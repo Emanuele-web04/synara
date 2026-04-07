@@ -59,6 +59,7 @@ export function useComposerSlashCommands(input: {
   handleClearConversation: () => Promise<void> | void;
   handleInteractionModeChange: (mode: "default" | "plan") => Promise<void> | void;
   openForkTargetPicker: () => void;
+  openReviewTargetPicker: () => void;
   setComposerDraftProviderModelOptions: (
     threadId: ThreadId,
     provider: ProviderKind,
@@ -331,20 +332,18 @@ export function useComposerSlashCommands(input: {
     ],
   );
 
-  const chooseReviewTarget = useCallback(async (): Promise<"changes" | "base-branch" | null> => {
-    const api = readNativeApi();
-    if (!api) {
-      return "changes";
-    }
-    const clicked = await api.contextMenu.show([
-      { id: "changes", label: "Review Uncommitted Changes" },
-      { id: "base", label: "Review Against Base Branch" },
-    ]);
-    if (!clicked) {
-      return null;
-    }
-    return clicked === "base" ? "base-branch" : "changes";
-  }, []);
+  const handleReviewTargetSelection = useCallback(
+    async (target: "changes" | "base-branch") => {
+      if (input.selectedProvider === "codex") {
+        await runCodexReviewStart(target);
+      } else {
+        const replacement = buildSlashReviewComposerPrompt(target === "base-branch" ? "base" : "");
+        input.editorActions.setComposerPromptValue(replacement);
+      }
+      input.editorActions.scheduleComposerFocus();
+    },
+    [input.editorActions, input.selectedProvider, runCodexReviewStart],
+  );
 
   const handleForkTargetSelection = useCallback(
     async (target: ForkSlashCommandTarget) => {
@@ -451,20 +450,19 @@ export function useComposerSlashCommands(input: {
       if (slashInvocation.command === "review") {
         if (input.selectedProvider === "codex") {
           const normalizedArgs = slashInvocation.args.trim().toLowerCase();
+          if (normalizedArgs.length === 0) {
+            input.editorActions.clearComposerSlashDraft();
+            input.openReviewTargetPicker();
+            return true;
+          }
           const target =
-            normalizedArgs.length === 0
-              ? await chooseReviewTarget()
-              : normalizedArgs === "base" || normalizedArgs.startsWith("base ")
-                ? "base-branch"
-                : null;
+            normalizedArgs === "base" || normalizedArgs.startsWith("base ") ? "base-branch" : null;
           if (!target) {
-            if (normalizedArgs.length > 0) {
-              toastManager.add({
-                type: "warning",
-                title: "Invalid /review command",
-                description: "Use /review and then choose a review target.",
-              });
-            }
+            toastManager.add({
+              type: "warning",
+              title: "Invalid /review command",
+              description: "Use /review and then choose a review target.",
+            });
             return true;
           }
           input.editorActions.clearComposerSlashDraft();
@@ -473,6 +471,11 @@ export function useComposerSlashCommands(input: {
         }
         if (input.supportsTextNativeReviewCommand && slashInvocation.args.length === 0) {
           return false;
+        }
+        if (slashInvocation.args.length === 0) {
+          input.editorActions.clearComposerSlashDraft();
+          input.openReviewTargetPicker();
+          return true;
         }
         input.editorActions.setComposerPromptValue(
           buildSlashReviewComposerPrompt(slashInvocation.args),
@@ -521,12 +524,12 @@ export function useComposerSlashCommands(input: {
     [
       availableBuiltInSlashCommands,
       checkClaudeFastSlashCommandAvailability,
-      chooseReviewTarget,
       createForkThreadFromSlashCommand,
       input.editorActions,
       input.handleClearConversation,
       input.handleInteractionModeChange,
       input.openForkTargetPicker,
+      input.openReviewTargetPicker,
       input.selectedProvider,
       input.supportsTextNativeReviewCommand,
       runCodexReviewStart,
@@ -619,22 +622,6 @@ export function useComposerSlashCommands(input: {
       }
 
       if (item.command === "review") {
-        if (input.selectedProvider === "codex") {
-          void (async () => {
-            const target = await chooseReviewTarget();
-            if (!target) {
-              input.editorActions.scheduleComposerFocus();
-              return;
-            }
-            const applied = clearSlashCommandFromComposer();
-            if (applied) {
-              input.editorActions.setComposerHighlightedItemId(null);
-            }
-            await runCodexReviewStart(target);
-            input.editorActions.scheduleComposerFocus();
-          })();
-          return;
-        }
         if (input.supportsTextNativeReviewCommand) {
           const replacement = "/review";
           const replacementRangeEnd = input.editorActions.extendReplacementRangeForTrailingSpace(
@@ -653,39 +640,13 @@ export function useComposerSlashCommands(input: {
           }
           return;
         }
-        const api = readNativeApi();
-        if (!api) {
-          const replacement = buildSlashReviewComposerPrompt("");
-          const applied = input.editorActions.applyPromptReplacement(
-            trigger.rangeStart,
-            trigger.rangeEnd,
-            replacement,
-            { expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd) },
-          );
-          if (applied) {
-            input.editorActions.setComposerHighlightedItemId(null);
-          }
+        const applied = clearSlashCommandFromComposer();
+        if (!applied) {
           return;
         }
-        void (async () => {
-          const target = await chooseReviewTarget();
-          if (!target) {
-            input.editorActions.scheduleComposerFocus();
-            return;
-          }
-          const replacement = buildSlashReviewComposerPrompt(
-            target === "base-branch" ? "base" : "",
-          );
-          const applied = input.editorActions.applyPromptReplacement(
-            trigger.rangeStart,
-            trigger.rangeEnd,
-            replacement,
-            { expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd) },
-          );
-          if (applied) {
-            input.editorActions.setComposerHighlightedItemId(null);
-          }
-        })();
+        input.editorActions.setComposerHighlightedItemId(null);
+        input.openReviewTargetPicker();
+        input.editorActions.scheduleComposerFocus();
         return;
       }
 
@@ -700,13 +661,13 @@ export function useComposerSlashCommands(input: {
       }
     },
     [
-      chooseReviewTarget,
       createForkThreadFromSlashCommand,
       input.editorActions,
       input.handleClearConversation,
       input.fastModeEnabled,
       input.handleInteractionModeChange,
       input.openForkTargetPicker,
+      input.openReviewTargetPicker,
       input.selectedProvider,
       input.supportsTextNativeReviewCommand,
       runCodexReviewStart,
@@ -716,6 +677,7 @@ export function useComposerSlashCommands(input: {
 
   return {
     handleForkTargetSelection,
+    handleReviewTargetSelection,
     isSlashStatusDialogOpen,
     setIsSlashStatusDialogOpen,
     handleStandaloneSlashCommand,

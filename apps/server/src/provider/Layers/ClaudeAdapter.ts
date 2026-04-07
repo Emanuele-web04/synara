@@ -683,16 +683,34 @@ function extractAssistantTextBlocks(message: SDKMessage): Array<string> {
       continue;
     }
     const candidate = block as { type?: unknown; text?: unknown };
-    if (
-      candidate.type === "text" &&
-      typeof candidate.text === "string" &&
-      candidate.text.length > 0
-    ) {
-      fragments.push(candidate.text);
+    const sanitizedText =
+      candidate.type === "text" && typeof candidate.text === "string"
+        ? sanitizeClaudeDisplayText(candidate.text)
+        : "";
+    if (candidate.type === "text" && sanitizedText.length > 0) {
+      fragments.push(sanitizedText);
     }
   }
 
   return fragments;
+}
+
+function sanitizeClaudeDisplayText(text: string): string {
+  if (text.length === 0) {
+    return text;
+  }
+
+  return text
+    .split(/\r?\n/)
+    .filter((line) => {
+      const normalized = line.trim().toLowerCase();
+      return !(
+        normalized.startsWith("[ede_diagnostic]") &&
+        normalized.includes("result_type=") &&
+        normalized.includes("stop_reason=")
+      );
+    })
+    .join("\n");
 }
 
 function extractContentBlockText(block: unknown): string {
@@ -701,12 +719,14 @@ function extractContentBlockText(block: unknown): string {
   }
 
   const candidate = block as { type?: unknown; text?: unknown };
-  return candidate.type === "text" && typeof candidate.text === "string" ? candidate.text : "";
+  return candidate.type === "text" && typeof candidate.text === "string"
+    ? sanitizeClaudeDisplayText(candidate.text)
+    : "";
 }
 
 function extractTextContent(value: unknown): string {
   if (typeof value === "string") {
-    return value;
+    return sanitizeClaudeDisplayText(value);
   }
 
   if (Array.isArray(value)) {

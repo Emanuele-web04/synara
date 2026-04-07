@@ -78,7 +78,6 @@ import {
 } from "./desktopUpdate.logic";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
-import { Collapsible, CollapsibleContent } from "./ui/collapsible";
 import { Menu, MenuGroup, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import {
@@ -1431,7 +1430,7 @@ export default function Sidebar() {
     };
 
     return (
-      <Collapsible className="group/collapsible" open={shouldShowThreadPanel}>
+      <div className="group/collapsible">
         <div className="group/project-header relative">
           <SidebarMenuButton
             ref={isManualProjectSorting ? dragHandleProps?.setActivatorNodeRef : undefined}
@@ -1534,14 +1533,14 @@ export default function Sidebar() {
           </Tooltip>
         </div>
 
-        <CollapsibleContent>
+        {shouldShowThreadPanel ? (
           <SidebarMenuSub
             ref={attachThreadListAutoAnimateRef}
             className="mx-0 my-0 w-full translate-x-0 gap-0.5 border-l-0 px-0 py-0"
           >
             {renderedThreads.map((thread) => renderThreadRow(thread))}
 
-            {project.expanded && hasHiddenThreads && !isThreadListExpanded && (
+            {hasHiddenThreads && !isThreadListExpanded && (
               <SidebarMenuSubItem className="w-full">
                 <SidebarMenuSubButton
                   render={<button type="button" />}
@@ -1556,7 +1555,7 @@ export default function Sidebar() {
                 </SidebarMenuSubButton>
               </SidebarMenuSubItem>
             )}
-            {project.expanded && hasHiddenThreads && isThreadListExpanded && (
+            {hasHiddenThreads && isThreadListExpanded && (
               <SidebarMenuSubItem className="w-full">
                 <SidebarMenuSubButton
                   render={<button type="button" />}
@@ -1572,8 +1571,8 @@ export default function Sidebar() {
               </SidebarMenuSubItem>
             )}
           </SidebarMenuSub>
-        </CollapsibleContent>
-      </Collapsible>
+        ) : null}
+      </div>
     );
   }
 

@@ -12,6 +12,7 @@ import {
   type WsWelcomePayload,
 } from "@t3tools/contracts";
 
+import { showConfirmDialogFallback } from "./confirmDialogFallback";
 import { showContextMenuFallback } from "./contextMenuFallback";
 import { WsTransport } from "./wsTransport";
 
@@ -198,10 +199,7 @@ export function createWsNativeApi(): NativeApi {
         return window.desktopBridge.pickFolder();
       },
       confirm: async (message) => {
-        if (window.desktopBridge) {
-          return window.desktopBridge.confirm(message);
-        }
-        return window.confirm(message);
+        return showConfirmDialogFallback(message);
       },
     },
     terminal: {
@@ -264,9 +262,6 @@ export function createWsNativeApi(): NativeApi {
         items: readonly ContextMenuItem<T>[],
         position?: { x: number; y: number },
       ): Promise<T | null> => {
-        if (window.desktopBridge) {
-          return window.desktopBridge.showContextMenu(items, position) as Promise<T | null>;
-        }
         return showContextMenuFallback(items, position);
       },
     },
