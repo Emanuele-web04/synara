@@ -124,6 +124,7 @@ import {
   resolveSplitViewPaneForThread,
   selectSplitView,
   type SplitView,
+  type SplitViewPane,
   useSplitViewStore,
 } from "../splitViewStore";
 
@@ -463,6 +464,7 @@ export default function Sidebar() {
   const replaceSplitPaneThread = useSplitViewStore((store) => store.replacePaneThread);
   const setSplitFocusedPane = useSplitViewStore((store) => store.setFocusedPane);
   const setSplitPanePanelState = useSplitViewStore((store) => store.setPanePanelState);
+  const removeSplitView = useSplitViewStore((store) => store.removeSplitView);
   const removeThreadFromSplitViews = useSplitViewStore((store) => store.removeThreadFromSplitViews);
   const { data: keybindings = EMPTY_KEYBINDINGS } = useQuery({
     ...serverConfigQueryOptions(),
@@ -978,7 +980,17 @@ export default function Sidebar() {
     [createThreadHandoff],
   );
   const handleThreadContextMenu = useCallback(
-    async (threadId: ThreadId, position: { x: number; y: number }) => {
+    async (
+      threadId: ThreadId,
+      position: { x: number; y: number },
+      options?: {
+        extraItems?: Array<{
+          id: "return-to-single-chat";
+          label: string;
+        }>;
+        onExtraAction?: (itemId: "return-to-single-chat") => Promise<void> | void;
+      },
+    ) => {
       const api = readNativeApi();
       if (!api) return;
       const thread = threads.find((t) => t.id === threadId);
@@ -1005,6 +1017,7 @@ export default function Sidebar() {
           ...(handoffLabel ? [{ id: "handoff", label: handoffLabel }] : []),
           { id: "copy-path", label: "Copy Path" },
           { id: "copy-thread-id", label: "Copy Thread ID" },
+          ...(options?.extraItems ?? []),
           { id: "delete", label: "Delete", destructive: true },
         ],
         position,
@@ -1041,6 +1054,10 @@ export default function Sidebar() {
         copyThreadIdToClipboard(threadId, { threadId });
         return;
       }
+      if (clicked === "return-to-single-chat") {
+        await options?.onExtraAction?.("return-to-single-chat");
+        return;
+      }
       if (clicked !== "delete") return;
       if (appSettings.confirmThreadDelete) {
         const confirmed = await api.dialogs.confirm(
@@ -1065,6 +1082,55 @@ export default function Sidebar() {
       projectCwdById,
       threads,
     ],
+  );
+  const returnSplitViewToSingleChat = useCallback(
+    (splitView: SplitView, pane: SplitViewPane) => {
+      const nextThreadId =
+        (pane === "left" ? splitView.leftThreadId : splitView.rightThreadId) ??
+        splitView.leftThreadId ??
+        splitView.rightThreadId;
+      removeSplitView(splitView.id);
+      if (!nextThreadId) {
+        return;
+      }
+      void navigate({
+        to: "/$threadId",
+        params: { threadId: nextThreadId },
+        search: (previous) => ({
+          ...previous,
+          splitViewId: undefined,
+        }),
+      });
+    },
+    [navigate, removeSplitView],
+  );
+  const handleSplitContextMenu = useCallback(
+    async (splitView: SplitView, pane: SplitViewPane, position: { x: number; y: number }) => {
+      const api = readNativeApi();
+      if (!api) return;
+
+      const paneThreadId = pane === "left" ? splitView.leftThreadId : splitView.rightThreadId;
+      setSplitFocusedPane(splitView.id, pane);
+
+      if (paneThreadId) {
+        await handleThreadContextMenu(paneThreadId, position, {
+          extraItems: [{ id: "return-to-single-chat", label: "Return to single chat" }],
+          onExtraAction: async () => {
+            returnSplitViewToSingleChat(splitView, pane);
+          },
+        });
+        return;
+      }
+
+      const clicked = await api.contextMenu.show(
+        [{ id: "return-to-single-chat", label: "Return to single chat" }],
+        position,
+      );
+      if (clicked === "return-to-single-chat") {
+        returnSplitViewToSingleChat(splitView, pane);
+      }
+    },
+    [handleThreadContextMenu, returnSplitViewToSingleChat, setSplitFocusedPane],
   );
 
   const handleMultiSelectContextMenu = useCallback(
@@ -1695,6 +1761,13 @@ export default function Sidebar() {
               isSelected: false,
             })}
             onClick={() => activateSplitPane(splitView, splitView.focusedPane)}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              void handleSplitContextMenu(splitView, splitView.focusedPane, {
+                x: event.clientX,
+                y: event.clientY,
+              });
+            }}
             onKeyDown={(event) => {
               if (event.key !== "Enter" && event.key !== " ") return;
               event.preventDefault();
@@ -1711,7 +1784,7 @@ export default function Sidebar() {
                   role="button"
                   tabIndex={0}
                   className={cn(
-                    "flex min-w-0 flex-1 items-center gap-1 rounded-md px-1.5 py-0.5 text-left outline-hidden transition-colors focus-visible:ring-1 focus-visible:ring-ring",
+                    "flex min-w-0 flex-1 select-none items-center gap-1 rounded-md px-1.5 py-0.5 text-left outline-hidden transition-colors focus-visible:ring-1 focus-visible:ring-ring",
                     splitView.focusedPane === pane
                       ? "bg-background shadow-xs dark:bg-foreground/12"
                       : "hover:bg-accent/35",
@@ -1719,6 +1792,19 @@ export default function Sidebar() {
                   onClick={(event) => {
                     event.stopPropagation();
                     activateSplitPane(splitView, pane);
+                  }}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    void handleSplitContextMenu(splitView, pane, {
+                      x: event.clientX,
+                      y: event.clientY,
+                    });
+                  }}
+                  onMouseDown={(event) => {
+                    if (event.detail > 1) {
+                      event.preventDefault();
+                    }
                   }}
                   onKeyDown={(event) => {
                     if (event.key !== "Enter" && event.key !== " ") return;

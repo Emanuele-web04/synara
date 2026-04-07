@@ -171,7 +171,7 @@ function ChatRouteLayout() {
         collapsible="offcanvas"
         className="text-foreground"
         gapClassName="overflow-hidden after:absolute after:inset-y-0 after:right-0 after:w-px after:bg-black/[0.03] dark:after:bg-white/[0.015] before:absolute before:inset-0 before:bg-[radial-gradient(90%_75%_at_0%_0%,rgba(255,255,255,0.06),transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.025),rgba(255,255,255,0.008))] dark:before:bg-[radial-gradient(90%_75%_at_0%_0%,rgba(255,255,255,0.04),transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.018),rgba(255,255,255,0.006))]"
-        innerClassName="border-r border-border/30 bg-background/85 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] backdrop-blur-lg backdrop-saturate-150 dark:border-white/[0.03] dark:bg-background/85 dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]"
+        innerClassName="border-r border-border/30 bg-background/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] backdrop-blur-xl backdrop-saturate-150 dark:border-white/[0.03] dark:bg-background/80 dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]"
         transparentSurface
         resizable={{
           minWidth: THREAD_SIDEBAR_MIN_WIDTH,

@@ -6,6 +6,7 @@ import type {
 } from "@t3tools/contracts";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { PiCloudArrowUp } from "react-icons/pi";
 import { ChevronDownIcon, CloudUploadIcon, GitCommitIcon, InfoIcon } from "~/lib/icons";
 import { GitHubIcon } from "./Icons";
 import {
@@ -185,6 +186,11 @@ const COMMIT_DIALOG_TITLE = "Commit changes";
 const COMMIT_DIALOG_DESCRIPTION =
   "Review and confirm your commit. Leave the message blank to auto-generate one.";
 
+// Keep the header quick action visually distinct from the generic push/menu icon.
+function CommitPushHeaderIcon({ className }: { className?: string }) {
+  return <PiCloudArrowUp className={className} />;
+}
+
 function GitActionItemIcon({ icon }: { icon: GitActionIconName }) {
   if (icon === "commit") return <GitCommitIcon />;
   if (icon === "push") return <CloudUploadIcon />;
@@ -197,7 +203,9 @@ function GitQuickActionIcon({ quickAction }: { quickAction: GitQuickAction }) {
   if (quickAction.kind === "run_pull") return <InfoIcon className={iconClassName} />;
   if (quickAction.kind === "run_action") {
     if (quickAction.action === "commit") return <GitCommitIcon className={iconClassName} />;
-    if (quickAction.action === "commit_push") return <CloudUploadIcon className={iconClassName} />;
+    if (quickAction.action === "commit_push") {
+      return <CommitPushHeaderIcon className={iconClassName} />;
+    }
     return <GitHubIcon className={iconClassName} />;
   }
   if (quickAction.label === "Commit") return <GitCommitIcon className={iconClassName} />;
