@@ -612,6 +612,20 @@ function TerminalViewport({
     };
 
     terminal.attachCustomKeyEventHandler((event) => {
+      if (
+        event.type === "keydown" &&
+        event.key === "Enter" &&
+        event.shiftKey &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        void sendTerminalInput("\n", "Failed to insert newline");
+        return false;
+      }
+
       // Cmd+F / Ctrl+F → open search
       if (
         event.type === "keydown" &&
