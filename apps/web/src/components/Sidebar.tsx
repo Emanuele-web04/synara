@@ -1666,7 +1666,14 @@ export default function Sidebar() {
     return () => {
       window.removeEventListener("keydown", onKeyDown, { capture: true });
     };
-  }, [activateThread, handleStartAddProject, keybindings, routeThreadId, terminalOpen, visibleSidebarThreadIds]);
+  }, [
+    activateThread,
+    handleStartAddProject,
+    keybindings,
+    routeThreadId,
+    terminalOpen,
+    visibleSidebarThreadIds,
+  ]);
 
   useEffect(() => {
     if (!isElectron) return;

@@ -62,7 +62,9 @@ export function buildPluginSearchBlob(
 export function buildCommandSearchBlob(
   command: Pick<ProviderNativeCommandDescriptor, "name" | "description">,
 ): string {
-  return normalizeProviderDiscoveryText([command.name, command.description].filter(Boolean).join("\n"));
+  return normalizeProviderDiscoveryText(
+    [command.name, command.description].filter(Boolean).join("\n"),
+  );
 }
 
 export function formatSkillScope(scope: string | undefined): string {

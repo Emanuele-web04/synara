@@ -31,28 +31,26 @@ export function resolveThreadHandoffBadgeLabel(thread: Pick<Thread, "handoff">):
 export function buildThreadHandoffImportedMessages(
   thread: Pick<Thread, "messages">,
 ): ReadonlyArray<ThreadHandoffImportedMessage> {
-  return thread.messages
-    .filter(isImportableThreadMessage)
-    .map((message) => {
-      const importedMessage: ThreadHandoffImportedMessage = {
-        messageId: MessageId.makeUnsafe(randomUUID()),
-        role: message.role,
-        text: message.text,
-        createdAt: message.createdAt,
-        updatedAt: message.completedAt ?? message.createdAt,
-      };
-      const attachments =
-        message.attachments && message.attachments.length > 0
-          ? message.attachments.map((attachment) => ({
-              type: attachment.type,
-              id: attachment.id,
-              name: attachment.name,
-              mimeType: attachment.mimeType,
-              sizeBytes: attachment.sizeBytes,
-            }))
-          : null;
-      return attachments ? Object.assign(importedMessage, { attachments }) : importedMessage;
-    });
+  return thread.messages.filter(isImportableThreadMessage).map((message) => {
+    const importedMessage: ThreadHandoffImportedMessage = {
+      messageId: MessageId.makeUnsafe(randomUUID()),
+      role: message.role,
+      text: message.text,
+      createdAt: message.createdAt,
+      updatedAt: message.completedAt ?? message.createdAt,
+    };
+    const attachments =
+      message.attachments && message.attachments.length > 0
+        ? message.attachments.map((attachment) => ({
+            type: attachment.type,
+            id: attachment.id,
+            name: attachment.name,
+            mimeType: attachment.mimeType,
+            sizeBytes: attachment.sizeBytes,
+          }))
+        : null;
+    return attachments ? Object.assign(importedMessage, { attachments }) : importedMessage;
+  });
 }
 
 // Used by: ChatView fork command gating.
@@ -62,8 +60,7 @@ export function hasTransferableThreadMessages(thread: Pick<Thread, "messages">):
 
 export function hasNativeThreadHandoffMessages(thread: Pick<Thread, "messages">): boolean {
   return thread.messages.some(
-    (message) =>
-      isImportableThreadMessage(message) && message.source === "native",
+    (message) => isImportableThreadMessage(message) && message.source === "native",
   );
 }
 

@@ -7,6 +7,7 @@ import {
   type OrchestrationEvent,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   type ProviderMentionReference,
+  type ProviderRuntimeEvent,
   ProviderKind,
   type ProviderReviewTarget,
   type ProviderStartOptions,
@@ -38,11 +39,19 @@ type ProviderIntentEvent = Extract<
   {
     type:
       | "thread.runtime-mode-set"
+      | "thread.turn-queued"
       | "thread.turn-start-requested"
       | "thread.turn-interrupt-requested"
       | "thread.approval-response-requested"
       | "thread.user-input-response-requested"
       | "thread.session-stop-requested";
+  }
+>;
+
+type ProviderQueueDrainEvent = Extract<
+  ProviderRuntimeEvent,
+  {
+    type: "turn.completed" | "turn.aborted";
   }
 >;
 
@@ -162,6 +171,11 @@ const make = Effect.gen(function* () {
 
   const threadProviderOptions = new Map<string, ProviderStartOptions>();
   const threadModelSelections = new Map<string, ModelSelection>();
+  const queuedTurnStartsByThread = new Map<
+    string,
+    Array<Extract<ProviderIntentEvent, { type: "thread.turn-queued" }>["payload"]>
+  >();
+  const drainingQueuedTurns = new Set<string>();
 
   const appendProviderFailureActivity = (input: {
     readonly threadId: ThreadId;
@@ -213,6 +227,34 @@ const make = Effect.gen(function* () {
     const readModel = yield* orchestrationEngine.getReadModel();
     return readModel.threads.find((entry) => entry.id === threadId);
   });
+
+  const enqueueQueuedTurnStart = (
+    payload: Extract<ProviderIntentEvent, { type: "thread.turn-queued" }>["payload"],
+  ) =>
+    Effect.sync(() => {
+      const existing = queuedTurnStartsByThread.get(payload.threadId) ?? [];
+      if (payload.dispatchMode === "steer") {
+        existing.unshift(payload);
+      } else {
+        existing.push(payload);
+      }
+      queuedTurnStartsByThread.set(payload.threadId, existing);
+    });
+
+  const dequeueQueuedTurnStart = (threadId: ThreadId) =>
+    Effect.sync(() => {
+      const existing = queuedTurnStartsByThread.get(threadId);
+      if (!existing || existing.length === 0) {
+        return null;
+      }
+      const next = existing.shift() ?? null;
+      if (existing.length === 0) {
+        queuedTurnStartsByThread.delete(threadId);
+      } else {
+        queuedTurnStartsByThread.set(threadId, existing);
+      }
+      return next;
+    });
 
   const ensureSessionForThread = Effect.fnUntraced(function* (
     threadId: ThreadId,
@@ -399,7 +441,7 @@ const make = Effect.gen(function* () {
     return startedSession.threadId;
   });
 
-  const sendTurnForThread = Effect.fnUntraced(function* (input: {
+  const dispatchTurnForThread = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly messageId: string;
     readonly messageText: string;
@@ -410,6 +452,7 @@ const make = Effect.gen(function* () {
     readonly modelSelection?: ModelSelection;
     readonly providerOptions?: ProviderStartOptions;
     readonly interactionMode?: "default" | "plan";
+    readonly dispatchMode?: "queue" | "steer";
     readonly createdAt: string;
   }) {
     const thread = yield* resolveThread(input.threadId);
@@ -469,6 +512,16 @@ const make = Effect.gen(function* () {
       yield* providerService.startReview({
         threadId: input.threadId,
         target: input.reviewTarget,
+      });
+    } else if (input.dispatchMode === "steer") {
+      yield* providerService.steerTurn({
+        threadId: input.threadId,
+        ...(normalizedInput ? { input: normalizedInput } : {}),
+        ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
+        ...(input.skills !== undefined ? { skills: input.skills } : {}),
+        ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
+        ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
+        ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
       });
     } else {
       yield* providerService.sendTurn({
@@ -599,8 +652,13 @@ const make = Effect.gen(function* () {
       messageText: message.text,
       ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
     }).pipe(Effect.forkScoped);
+    const immediateDispatchMode =
+      event.payload.dispatchMode === "steer" &&
+      (thread.session?.providerName ?? thread.modelSelection.provider) !== "codex"
+        ? "queue"
+        : event.payload.dispatchMode;
 
-    yield* sendTurnForThread({
+    yield* dispatchTurnForThread({
       threadId: event.payload.threadId,
       messageId: message.id,
       messageText: message.text,
@@ -617,19 +675,74 @@ const make = Effect.gen(function* () {
         ? { reviewTarget: event.payload.reviewTarget }
         : {}),
       interactionMode: event.payload.interactionMode,
+      dispatchMode: immediateDispatchMode,
       createdAt: event.payload.createdAt,
     }).pipe(
       Effect.catchCause((cause) =>
-        appendProviderFailureActivity({
-          threadId: event.payload.threadId,
-          kind: "provider.turn.start.failed",
-          summary: "Provider turn start failed",
-          detail: Cause.pretty(cause),
-          turnId: null,
-          createdAt: event.payload.createdAt,
+        Effect.gen(function* () {
+          yield* appendProviderFailureActivity({
+            threadId: event.payload.threadId,
+            kind: "provider.turn.start.failed",
+            summary: "Provider turn start failed",
+            detail: Cause.pretty(cause),
+            turnId: null,
+            createdAt: event.payload.createdAt,
+          });
+          yield* drainQueuedTurnsForThread(event.payload.threadId);
         }),
       ),
     );
+  });
+
+  const processTurnQueued = Effect.fnUntraced(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.turn-queued" }>,
+  ) {
+    yield* enqueueQueuedTurnStart(event.payload);
+  });
+
+  // Promote the next queued message only after the active provider turn settles.
+  const drainQueuedTurnsForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
+    if (drainingQueuedTurns.has(threadId)) {
+      return;
+    }
+    drainingQueuedTurns.add(threadId);
+    try {
+      const nextQueuedTurn = yield* dequeueQueuedTurnStart(threadId);
+      if (!nextQueuedTurn) {
+        return;
+      }
+      yield* orchestrationEngine.dispatch({
+        type: "thread.turn.dispatch-queued",
+        commandId: serverCommandId("dispatch-queued-turn"),
+        threadId,
+        messageId: nextQueuedTurn.messageId,
+        ...(nextQueuedTurn.modelSelection !== undefined
+          ? { modelSelection: nextQueuedTurn.modelSelection }
+          : {}),
+        ...(nextQueuedTurn.providerOptions !== undefined
+          ? { providerOptions: nextQueuedTurn.providerOptions }
+          : {}),
+        ...(nextQueuedTurn.reviewTarget !== undefined
+          ? { reviewTarget: nextQueuedTurn.reviewTarget }
+          : {}),
+        ...(nextQueuedTurn.assistantDeliveryMode !== undefined
+          ? { assistantDeliveryMode: nextQueuedTurn.assistantDeliveryMode }
+          : {}),
+        dispatchMode: nextQueuedTurn.dispatchMode,
+        runtimeMode: nextQueuedTurn.runtimeMode,
+        interactionMode: nextQueuedTurn.interactionMode,
+        ...(nextQueuedTurn.sourceProposedPlan !== undefined
+          ? { sourceProposedPlan: nextQueuedTurn.sourceProposedPlan }
+          : {}),
+        createdAt: nextQueuedTurn.createdAt,
+      });
+    } finally {
+      drainingQueuedTurns.delete(threadId);
+    }
+  });
+
+  const processQueueDrainEvent = Effect.fnUntraced(function* (event: ProviderQueueDrainEvent) {
+    yield* drainQueuedTurnsForThread(event.threadId);
   });
 
   const processTurnInterruptRequested = Effect.fnUntraced(function* (
@@ -753,6 +866,9 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    queuedTurnStartsByThread.delete(thread.id);
+    drainingQueuedTurns.delete(thread.id);
+
     const now = event.payload.createdAt;
     if (thread.session && thread.session.status !== "stopped") {
       yield* providerService.stopSession({ threadId: thread.id });
@@ -791,6 +907,9 @@ const make = Effect.gen(function* () {
           });
           return;
         }
+        case "thread.turn-queued":
+          yield* processTurnQueued(event);
+          return;
         case "thread.turn-start-requested":
           yield* processTurnStartRequested(event);
           return;
@@ -822,12 +941,27 @@ const make = Effect.gen(function* () {
       }),
     );
 
+  const processQueueDrainEventSafely = (event: ProviderQueueDrainEvent) =>
+    processQueueDrainEvent(event).pipe(
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) {
+          return Effect.failCause(cause);
+        }
+        return Effect.logWarning("provider command reactor failed to drain queued turn", {
+          eventType: event.type,
+          threadId: event.threadId,
+          cause: Cause.pretty(cause),
+        });
+      }),
+    );
+
   const worker = yield* makeDrainableWorker(processDomainEventSafely);
 
-  const start: ProviderCommandReactorShape["start"] = Effect.forkScoped(
+  const start: ProviderCommandReactorShape["start"] = Effect.all([
     Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
       if (
         event.type !== "thread.runtime-mode-set" &&
+        event.type !== "thread.turn-queued" &&
         event.type !== "thread.turn-start-requested" &&
         event.type !== "thread.turn-interrupt-requested" &&
         event.type !== "thread.approval-response-requested" &&
@@ -838,8 +972,14 @@ const make = Effect.gen(function* () {
       }
 
       return worker.enqueue(event);
-    }),
-  ).pipe(Effect.asVoid);
+    }).pipe(Effect.forkScoped),
+    Stream.runForEach(providerService.streamEvents, (event) => {
+      if (event.type !== "turn.completed" && event.type !== "turn.aborted") {
+        return Effect.void;
+      }
+      return processQueueDrainEventSafely(event);
+    }).pipe(Effect.forkScoped),
+  ]).pipe(Effect.asVoid);
 
   return {
     start,

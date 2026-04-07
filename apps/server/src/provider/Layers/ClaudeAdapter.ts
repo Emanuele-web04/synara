@@ -1970,9 +1970,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               provider: PROVIDER,
               createdAt: usageStamp.createdAt,
               threadId: context.session.threadId,
-              ...(context.turnState
-                ? { turnId: asCanonicalTurnId(context.turnState.turnId) }
-                : {}),
+              ...(context.turnState ? { turnId: asCanonicalTurnId(context.turnState.turnId) } : {}),
               payload: { usage: normalizedPerCallUsage },
               providerRefs: nativeProviderRefs(context),
               raw: {
@@ -3101,9 +3099,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     let commandsCache: { result: ProviderListCommandsResult; cwd: string } | null = null;
     let pendingCommandDiscovery: Promise<ProviderListCommandsResult> | null = null;
 
-    function mapSupportedCommands(
-      commands: SlashCommand[],
-    ): ProviderListCommandsResult {
+    function mapSupportedCommands(commands: SlashCommand[]): ProviderListCommandsResult {
       return {
         commands: commands.map((cmd) => ({
           name: cmd.name,

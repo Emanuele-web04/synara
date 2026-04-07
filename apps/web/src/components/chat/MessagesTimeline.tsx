@@ -55,6 +55,14 @@ import {
   formatInlineTerminalContextLabel,
   textContainsInlineTerminalContextLabels,
 } from "./userMessageTerminalContexts";
+import { splitPromptIntoDisplaySegments } from "~/composer-editor-mentions";
+import {
+  COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME,
+  COMPOSER_INLINE_SKILL_CHIP_CLASS_NAME,
+  COMPOSER_INLINE_SKILL_CHIP_ICON_CLASS_NAME,
+  COMPOSER_INLINE_SKILL_CHIP_ICON_SVG,
+  formatComposerSkillChipLabel,
+} from "../composerInlineChip";
 
 const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
 const ALWAYS_UNVIRTUALIZED_TAIL_ROWS = 8;
@@ -419,7 +427,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             <div className="flex w-full justify-end">
               <div className="group flex max-w-[80%] flex-col items-end gap-1">
                 {/* Keep user-message chrome outside the bubble so the message reads as one simple block. */}
-                <div className="w-max max-w-full min-w-0 self-end rounded-xl border border-border/70 bg-secondary px-4 py-2">
+                <div className="w-max max-w-full min-w-0 self-end rounded-xl border border-border/70 bg-secondary px-[14px] py-1.5">
                   {userImages.length > 0 && (
                     <div className="mb-2 grid max-w-[420px] grid-cols-2 gap-2">
                       {userImages.map(
@@ -736,6 +744,58 @@ const UserMessageTerminalContextInlineLabel = memo(
   },
 );
 
+const UserMessageInlineSkillChip = memo(function UserMessageInlineSkillChip(props: {
+  skillName: string;
+}) {
+  return (
+    <span className={COMPOSER_INLINE_SKILL_CHIP_CLASS_NAME}>
+      <span
+        aria-hidden="true"
+        className={COMPOSER_INLINE_SKILL_CHIP_ICON_CLASS_NAME}
+        dangerouslySetInnerHTML={{ __html: COMPOSER_INLINE_SKILL_CHIP_ICON_SVG }}
+      />
+      <span className={COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME}>
+        {formatComposerSkillChipLabel(props.skillName)}
+      </span>
+    </span>
+  );
+});
+
+// Renders read-only user text with the same inline skill pill treatment as the composer.
+function renderUserMessageInlineText(text: string, keyPrefix: string): ReactNode[] {
+  return splitPromptIntoDisplaySegments(text).flatMap((segment, index) => {
+    const key = `${keyPrefix}:${index}`;
+    if (segment.type === "text") {
+      return segment.text.length > 0 ? [<span key={`${key}:text`}>{segment.text}</span>] : [];
+    }
+    if (segment.type === "skill") {
+      return [<UserMessageInlineSkillChip key={`${key}:skill`} skillName={segment.name} />];
+    }
+    if (segment.type === "mention") {
+      return [<span key={`${key}:mention`}>{`@${segment.path}`}</span>];
+    }
+    return [];
+  });
+}
+
+function hasOnlyInlineSkillChips(text: string): boolean {
+  const segments = splitPromptIntoDisplaySegments(text);
+  let skillCount = 0;
+
+  for (const segment of segments) {
+    if (segment.type === "skill") {
+      skillCount += 1;
+      continue;
+    }
+    if (segment.type === "text" && segment.text.trim().length === 0) {
+      continue;
+    }
+    return false;
+  }
+
+  return skillCount > 0;
+}
+
 const UserMessageBody = memo(function UserMessageBody(props: {
   text: string;
   terminalContexts: ParsedTerminalContextEntry[];
@@ -760,9 +820,10 @@ const UserMessageBody = memo(function UserMessageBody(props: {
         }
         if (matchIndex > cursor) {
           inlineNodes.push(
-            <span key={`user-terminal-context-inline-before:${context.header}:${cursor}`}>
-              {props.text.slice(cursor, matchIndex)}
-            </span>,
+            ...renderUserMessageInlineText(
+              props.text.slice(cursor, matchIndex),
+              `user-terminal-context-inline-before:${context.header}:${cursor}`,
+            ),
           );
         }
         inlineNodes.push(
@@ -777,9 +838,10 @@ const UserMessageBody = memo(function UserMessageBody(props: {
       if (inlineNodes.length > 0) {
         if (cursor < props.text.length) {
           inlineNodes.push(
-            <span key={`user-message-terminal-context-inline-rest:${cursor}`}>
-              {props.text.slice(cursor)}
-            </span>,
+            ...renderUserMessageInlineText(
+              props.text.slice(cursor),
+              `user-message-terminal-context-inline-rest:${cursor}`,
+            ),
           );
         }
 
@@ -806,7 +868,9 @@ const UserMessageBody = memo(function UserMessageBody(props: {
     }
 
     if (props.text.length > 0) {
-      inlineNodes.push(<span key="user-message-terminal-context-inline-text">{props.text}</span>);
+      inlineNodes.push(
+        ...renderUserMessageInlineText(props.text, "user-message-terminal-context-inline-text"),
+      );
     } else if (inlinePrefix.length === 0) {
       return null;
     }
@@ -822,9 +886,17 @@ const UserMessageBody = memo(function UserMessageBody(props: {
     return null;
   }
 
+  if (props.terminalContexts.length === 0 && hasOnlyInlineSkillChips(props.text)) {
+    return (
+      <div className="flex max-w-full min-w-0 items-center leading-none text-foreground">
+        {renderUserMessageInlineText(props.text, "user-message-inline-chip-only")}
+      </div>
+    );
+  }
+
   return (
     <div className="inline-block max-w-full min-w-0 whitespace-pre-wrap break-words font-system-ui text-sm leading-relaxed text-foreground">
-      {props.text}
+      {renderUserMessageInlineText(props.text, "user-message-inline")}
     </div>
   );
 });

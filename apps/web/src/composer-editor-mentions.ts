@@ -24,6 +24,8 @@ export type ComposerPromptSegment =
 
 const MENTION_TOKEN_REGEX = /(^|\s)@([^\s@]+)(?=\s)/g;
 const SKILL_TOKEN_REGEX = /(^|\s)(\$)([a-zA-Z][a-zA-Z0-9_:-]*)(?=\s)/g;
+const DISPLAY_MENTION_TOKEN_REGEX = /(^|\s)@([^\s@]+)(?=\s|$)/g;
+const DISPLAY_SKILL_TOKEN_REGEX = /(^|\s)(\$)([a-zA-Z][a-zA-Z0-9_:-]*)(?=\s|$)/g;
 
 function pushTextSegment(segments: ComposerPromptSegment[], text: string): void {
   if (!text) return;
@@ -43,10 +45,21 @@ type InlineTokenMatch = {
   end: number;
 };
 
-function collectInlineTokenMatches(text: string): InlineTokenMatch[] {
+function collectInlineTokenMatches(
+  text: string,
+  options: {
+    includeTrailingTokenAtEnd: boolean;
+  },
+): InlineTokenMatch[] {
   const matches: InlineTokenMatch[] = [];
+  const mentionRegex = options.includeTrailingTokenAtEnd
+    ? DISPLAY_MENTION_TOKEN_REGEX
+    : MENTION_TOKEN_REGEX;
+  const skillRegex = options.includeTrailingTokenAtEnd
+    ? DISPLAY_SKILL_TOKEN_REGEX
+    : SKILL_TOKEN_REGEX;
 
-  for (const match of text.matchAll(MENTION_TOKEN_REGEX)) {
+  for (const match of text.matchAll(mentionRegex)) {
     const fullMatch = match[0];
     const prefix = match[1] ?? "";
     const path = match[2] ?? "";
@@ -58,7 +71,7 @@ function collectInlineTokenMatches(text: string): InlineTokenMatch[] {
     }
   }
 
-  for (const match of text.matchAll(SKILL_TOKEN_REGEX)) {
+  for (const match of text.matchAll(skillRegex)) {
     const fullMatch = match[0];
     const whitespace = match[1] ?? "";
     const skillPrefix = match[2] ?? "$";
@@ -77,13 +90,18 @@ function collectInlineTokenMatches(text: string): InlineTokenMatch[] {
   return matches;
 }
 
-function splitPromptTextIntoComposerSegments(text: string): ComposerPromptSegment[] {
+function splitTextIntoPromptSegments(
+  text: string,
+  options: {
+    includeTrailingTokenAtEnd: boolean;
+  },
+): ComposerPromptSegment[] {
   const segments: ComposerPromptSegment[] = [];
   if (!text) {
     return segments;
   }
 
-  const matches = collectInlineTokenMatches(text);
+  const matches = collectInlineTokenMatches(text, options);
   let cursor = 0;
 
   for (const match of matches) {
@@ -112,6 +130,12 @@ function splitPromptTextIntoComposerSegments(text: string): ComposerPromptSegmen
   return segments;
 }
 
+export function splitPromptIntoDisplaySegments(prompt: string): ComposerPromptSegment[] {
+  return splitTextIntoPromptSegments(prompt, {
+    includeTrailingTokenAtEnd: true,
+  });
+}
+
 export function splitPromptIntoComposerSegments(
   prompt: string,
   terminalContexts: ReadonlyArray<TerminalContextDraft> = [],
@@ -130,7 +154,11 @@ export function splitPromptIntoComposerSegments(
     }
 
     if (index > textCursor) {
-      segments.push(...splitPromptTextIntoComposerSegments(prompt.slice(textCursor, index)));
+      segments.push(
+        ...splitTextIntoPromptSegments(prompt.slice(textCursor, index), {
+          includeTrailingTokenAtEnd: false,
+        }),
+      );
     }
     segments.push({
       type: "terminal-context",
@@ -141,7 +169,11 @@ export function splitPromptIntoComposerSegments(
   }
 
   if (textCursor < prompt.length) {
-    segments.push(...splitPromptTextIntoComposerSegments(prompt.slice(textCursor)));
+    segments.push(
+      ...splitTextIntoPromptSegments(prompt.slice(textCursor), {
+        includeTrailingTokenAtEnd: false,
+      }),
+    );
   }
 
   return segments;

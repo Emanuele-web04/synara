@@ -97,8 +97,8 @@ export function formatCostUsd(value: number): string {
   return `$${value.toFixed(2)}`;
 }
 
-export function formatContextWindowTokens(value: number | null): string {
-  if (value === null || !Number.isFinite(value)) {
+export function formatContextWindowTokens(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) {
     return "0";
   }
   if (value < 1_000) {

@@ -27,6 +27,7 @@ import type {
   ProviderUserInputAnswers,
   ProviderRuntimeEvent,
   ProviderSendTurnInput,
+  ProviderSteerTurnInput,
   ProviderSession,
   ProviderSessionStartInput,
   ThreadId,
@@ -49,6 +50,7 @@ export interface ProviderAdapterCapabilities {
   readonly supportsPluginMentions?: boolean;
   readonly supportsPluginDiscovery?: boolean;
   readonly supportsRuntimeModelList?: boolean;
+  readonly supportsTurnSteering?: boolean;
 }
 
 export interface ProviderThreadTurnSnapshot {
@@ -80,6 +82,13 @@ export interface ProviderAdapterShape<TError> {
    */
   readonly sendTurn: (
     input: ProviderSendTurnInput,
+  ) => Effect.Effect<ProviderTurnStartResult, TError>;
+
+  /**
+   * Redirect an active turn toward a new prompt when the provider supports it.
+   */
+  readonly steerTurn?: (
+    input: ProviderSteerTurnInput,
   ) => Effect.Effect<ProviderTurnStartResult, TError>;
 
   /**

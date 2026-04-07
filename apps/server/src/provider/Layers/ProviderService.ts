@@ -19,6 +19,7 @@ import {
   ProviderRespondToUserInputInput,
   ProviderSendTurnInput,
   ProviderStartReviewInput,
+  ProviderSteerTurnInput,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
   type ProviderRuntimeEvent,
@@ -346,7 +347,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         return session;
       });
 
-    const forkThread: ProviderServiceShape["forkThread"] = (rawInput) =>
+    const forkThread: NonNullable<ProviderServiceShape["forkThread"]> = (rawInput) =>
       Effect.gen(function* () {
         const input = yield* decodeInputOrValidationError({
           operation: "ProviderService.forkThread",
@@ -383,26 +384,28 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           return null;
         }
 
-        const forked = yield* adapter.forkThread({
-          ...input,
-          threadId: input.threadId,
-          sourceThreadId: input.sourceThreadId,
-          ...(effectiveProviderOptions !== undefined
-            ? { providerOptions: effectiveProviderOptions }
-            : {}),
-          ...(sourceBinding.resumeCursor !== null && sourceBinding.resumeCursor !== undefined
-            ? { sourceResumeCursor: sourceBinding.resumeCursor }
-            : {}),
-          runtimeMode: input.runtimeMode,
-        }).pipe(
-          Effect.catchAll((error) =>
-            Effect.logWarning("provider native fork failed; falling back", {
-              sourceThreadId: input.sourceThreadId,
-              targetThreadId: input.threadId,
-              cause: error instanceof Error ? error.message : String(error),
-            }).pipe(Effect.as(null)),
-          ),
-        );
+        const forked = yield* adapter
+          .forkThread({
+            ...input,
+            threadId: input.threadId,
+            sourceThreadId: input.sourceThreadId,
+            ...(effectiveProviderOptions !== undefined
+              ? { providerOptions: effectiveProviderOptions }
+              : {}),
+            ...(sourceBinding.resumeCursor !== null && sourceBinding.resumeCursor !== undefined
+              ? { sourceResumeCursor: sourceBinding.resumeCursor }
+              : {}),
+            runtimeMode: input.runtimeMode,
+          })
+          .pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("provider native fork failed; falling back", {
+                sourceThreadId: input.sourceThreadId,
+                targetThreadId: input.threadId,
+                cause: error instanceof Error ? error.message : String(error),
+              }).pipe(Effect.as(null)),
+            ),
+          );
         if (!forked) {
           return null;
         }
@@ -431,7 +434,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               model: input.modelSelection?.model ?? null,
               activeTurnId: null,
               lastError: null,
-              ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
+              ...(input.modelSelection !== undefined
+                ? { modelSelection: input.modelSelection }
+                : {}),
               ...(effectiveProviderOptions !== undefined
                 ? { providerOptions: effectiveProviderOptions }
                 : {}),
@@ -483,6 +488,61 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           },
         });
         yield* analytics.record("provider.turn.sent", {
+          provider: routed.adapter.provider,
+          model: input.modelSelection?.model,
+          interactionMode: input.interactionMode,
+          attachmentCount: input.attachments.length,
+          hasInput: typeof input.input === "string" && input.input.trim().length > 0,
+        });
+        return turn;
+      });
+
+    const steerTurn: ProviderServiceShape["steerTurn"] = (rawInput) =>
+      Effect.gen(function* () {
+        const parsed = yield* decodeInputOrValidationError({
+          operation: "ProviderService.steerTurn",
+          schema: ProviderSteerTurnInput,
+          payload: rawInput,
+        });
+
+        const input = {
+          ...parsed,
+          attachments: parsed.attachments ?? [],
+        };
+        if (!input.input && input.attachments.length === 0) {
+          return yield* toValidationError(
+            "ProviderService.steerTurn",
+            "Either input text or at least one attachment is required",
+          );
+        }
+        const routed = yield* resolveRoutableSession({
+          threadId: input.threadId,
+          operation: "ProviderService.steerTurn",
+          allowRecovery: true,
+        });
+        if (
+          !routed.adapter.steerTurn ||
+          routed.adapter.capabilities.supportsTurnSteering !== true
+        ) {
+          return yield* toValidationError(
+            "ProviderService.steerTurn",
+            `Provider '${routed.adapter.provider}' does not support steering an active turn.`,
+          );
+        }
+        const turn = yield* routed.adapter.steerTurn(input);
+        yield* directory.upsert({
+          threadId: input.threadId,
+          provider: routed.adapter.provider,
+          status: "running",
+          ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
+          runtimePayload: {
+            ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
+            activeTurnId: turn.turnId,
+            lastRuntimeEvent: "provider.steerTurn",
+            lastRuntimeEventAt: new Date().toISOString(),
+          },
+        });
+        yield* analytics.record("provider.turn.steered", {
           provider: routed.adapter.provider,
           model: input.modelSelection?.model,
           interactionMode: input.interactionMode,
@@ -723,6 +783,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       startSession,
       forkThread,
       sendTurn,
+      steerTurn,
       startReview,
       interruptTurn,
       respondToRequest,

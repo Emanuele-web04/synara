@@ -76,6 +76,8 @@ export const ProviderSendTurnInput = Schema.Struct({
   interactionMode: Schema.optional(ProviderInteractionMode),
 });
 export type ProviderSendTurnInput = typeof ProviderSendTurnInput.Type;
+export const ProviderSteerTurnInput = ProviderSendTurnInput;
+export type ProviderSteerTurnInput = typeof ProviderSteerTurnInput.Type;
 
 export const ProviderForkThreadInput = Schema.Struct({
   sourceThreadId: ThreadId,

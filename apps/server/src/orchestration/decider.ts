@@ -460,6 +460,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         sourceProposedPlan && sourceThread
           ? sourceThread.proposedPlans.find((entry) => entry.id === sourceProposedPlan.planId)
           : null;
+      const dispatchMode = command.dispatchMode ?? "queue";
       if (sourceProposedPlan && !sourcePlan) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -495,7 +496,28 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           updatedAt: command.createdAt,
         },
       };
-      const turnStartRequestedEvent: Omit<OrchestrationEvent, "sequence"> = {
+      const turnRequestPayload = {
+        threadId: command.threadId,
+        messageId: command.message.messageId,
+        ...(command.modelSelection !== undefined ? { modelSelection: command.modelSelection } : {}),
+        ...(command.providerOptions !== undefined
+          ? { providerOptions: command.providerOptions }
+          : {}),
+        ...(command.reviewTarget !== undefined ? { reviewTarget: command.reviewTarget } : {}),
+        assistantDeliveryMode: command.assistantDeliveryMode ?? DEFAULT_ASSISTANT_DELIVERY_MODE,
+        dispatchMode,
+        runtimeMode: targetThread.runtimeMode,
+        interactionMode: targetThread.interactionMode,
+        ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
+        createdAt: command.createdAt,
+      } as const;
+      const activeProvider =
+        targetThread.session?.providerName ?? targetThread.modelSelection.provider;
+      const isThreadRunning =
+        targetThread.session?.status === "running" && targetThread.session.activeTurnId !== null;
+      const shouldQueue =
+        isThreadRunning && (dispatchMode === "queue" || activeProvider !== "codex");
+      const queuedEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -503,10 +525,50 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           commandId: command.commandId,
         }),
         causationEventId: userMessageEvent.eventId,
+        type: shouldQueue ? "thread.turn-queued" : "thread.turn-start-requested",
+        payload: turnRequestPayload,
+      };
+      if (shouldQueue && dispatchMode === "steer") {
+        return [
+          userMessageEvent,
+          queuedEvent,
+          {
+            ...withEventBase({
+              aggregateKind: "thread",
+              aggregateId: command.threadId,
+              occurredAt: command.createdAt,
+              commandId: command.commandId,
+            }),
+            causationEventId: queuedEvent.eventId,
+            type: "thread.turn-interrupt-requested",
+            payload: {
+              threadId: command.threadId,
+              turnId: targetThread.session?.activeTurnId ?? undefined,
+              createdAt: command.createdAt,
+            },
+          },
+        ];
+      }
+      return [userMessageEvent, queuedEvent];
+    }
+
+    case "thread.turn.dispatch-queued": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
         type: "thread.turn-start-requested",
         payload: {
           threadId: command.threadId,
-          messageId: command.message.messageId,
+          messageId: command.messageId,
           ...(command.modelSelection !== undefined
             ? { modelSelection: command.modelSelection }
             : {}),
@@ -515,13 +577,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             : {}),
           ...(command.reviewTarget !== undefined ? { reviewTarget: command.reviewTarget } : {}),
           assistantDeliveryMode: command.assistantDeliveryMode ?? DEFAULT_ASSISTANT_DELIVERY_MODE,
-          runtimeMode: targetThread.runtimeMode,
-          interactionMode: targetThread.interactionMode,
-          ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
+          dispatchMode: command.dispatchMode ?? "queue",
+          runtimeMode: command.runtimeMode,
+          interactionMode: command.interactionMode,
+          ...(command.sourceProposedPlan !== undefined
+            ? { sourceProposedPlan: command.sourceProposedPlan }
+            : {}),
           createdAt: command.createdAt,
         },
       };
-      return [userMessageEvent, turnStartRequestedEvent];
     }
 
     case "thread.turn.interrupt": {

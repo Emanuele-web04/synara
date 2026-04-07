@@ -32,7 +32,7 @@ interface ActiveThreadSnapshot {
   modelSelection: ModelSelection;
   runtimeMode: RuntimeMode;
   interactionMode: ProviderInteractionMode;
-  envMode?: ThreadEnvironmentMode;
+  envMode?: ThreadEnvironmentMode | undefined;
 }
 
 export interface DraftReusePlanStored {
@@ -80,7 +80,7 @@ export function createActiveThreadSnapshot(
         modelSelection: ModelSelection;
         projectId: ProjectId;
         runtimeMode: RuntimeMode;
-        envMode?: ThreadEnvironmentMode;
+        envMode?: ThreadEnvironmentMode | undefined;
       }
     | null
     | undefined,

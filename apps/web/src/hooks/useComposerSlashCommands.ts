@@ -1,5 +1,6 @@
 import {
   type ModelSelection,
+  type OrchestrationReadModel,
   type ProviderInteractionMode,
   type ProviderKind,
   type ProviderModelOptions,
@@ -47,7 +48,7 @@ export function useComposerSlashCommands(input: {
   runtimeMode: RuntimeMode;
   interactionMode: ProviderInteractionMode;
   threadId: ThreadId;
-  syncServerReadModel: (snapshot: unknown) => void;
+  syncServerReadModel: (snapshot: OrchestrationReadModel) => void;
   navigateToThread: (threadId: ThreadId) => Promise<void>;
   handleClearConversation: () => Promise<void> | void;
   handleInteractionModeChange: (mode: "default" | "plan") => Promise<void> | void;
@@ -244,7 +245,8 @@ export function useComposerSlashCommands(input: {
           modelSelection: input.selectedModelSelection,
           runtimeMode: input.runtimeMode,
           interactionMode: "default",
-          envMode: input.activeThread.envMode ?? (input.activeThread.worktreePath ? "worktree" : "local"),
+          envMode:
+            input.activeThread.envMode ?? (input.activeThread.worktreePath ? "worktree" : "local"),
           branch: input.activeThread.branch,
           worktreePath: input.activeThread.worktreePath,
           createdAt,
@@ -265,10 +267,11 @@ export function useComposerSlashCommands(input: {
               ? {
                   type: "baseBranch",
                   branch: input.activeRootBranch!,
-              }
-            : {
-                type: "uncommittedChanges",
-              },
+                }
+              : {
+                  type: "uncommittedChanges",
+                },
+          dispatchMode: "queue",
           runtimeMode: input.runtimeMode,
           interactionMode: "default",
           createdAt,
@@ -583,7 +586,9 @@ export function useComposerSlashCommands(input: {
             input.editorActions.scheduleComposerFocus();
             return;
           }
-          const replacement = buildSlashReviewComposerPrompt(target === "base-branch" ? "base" : "");
+          const replacement = buildSlashReviewComposerPrompt(
+            target === "base-branch" ? "base" : "",
+          );
           const applied = input.editorActions.applyPromptReplacement(
             trigger.rangeStart,
             trigger.rangeEnd,

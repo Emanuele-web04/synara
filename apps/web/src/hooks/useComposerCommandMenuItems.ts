@@ -99,16 +99,17 @@ export function useComposerCommandMenuItems(input: {
         canOfferReviewCommand,
         canOfferForkCommand,
       });
-      const builtInItems = filterComposerSlashCommands(composerTrigger.query, availableCommands).map(
-        (definition) => ({
-          id: `slash:${definition.command}`,
-          type: "slash-command" as const,
-          command: definition.command,
-          label: definition.label,
-          description: definition.description,
-          source: definition.source,
-        }),
-      );
+      const builtInItems = filterComposerSlashCommands(
+        composerTrigger.query,
+        availableCommands,
+      ).map((definition) => ({
+        id: `slash:${definition.command}`,
+        type: "slash-command" as const,
+        command: definition.command,
+        label: definition.label,
+        description: definition.description,
+        source: definition.source,
+      }));
       const reservedSlashNames = new Set<string>(BUILT_IN_COMPOSER_SLASH_COMMANDS);
       const providerCommandItems = providerNativeCommands
         .filter((command) => {

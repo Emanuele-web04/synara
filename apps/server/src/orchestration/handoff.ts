@@ -57,9 +57,7 @@ export function hasNativeAssistantMessagesBefore(
   }
   return thread.messages.slice(0, currentIndex).some((message) => {
     return (
-      message.role === "assistant" &&
-      message.source === "native" &&
-      message.streaming === false
+      message.role === "assistant" && message.source === "native" && message.streaming === false
     );
   });
 }

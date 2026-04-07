@@ -37,10 +37,9 @@ function humanizeProviderCommandName(command: string): string {
     .join(" ");
 }
 
-function commandMenuTitle(item: Extract<
-  ComposerCommandItem,
-  { type: "slash-command" | "provider-native-command" }
->): string {
+function commandMenuTitle(
+  item: Extract<ComposerCommandItem, { type: "slash-command" | "provider-native-command" }>,
+): string {
   switch (item.command) {
     case "clear":
       return "Clear";
@@ -254,11 +253,13 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
           theme={props.resolvedTheme}
         />
       ) : null}
-      {props.item.type === "fork-target"
-        ? props.item.target === "local"
-          ? <TbDeviceLaptop className="size-3.5 text-muted-foreground/60" />
-          : <TbGitFork className="size-3.5 text-muted-foreground/60" />
-        : null}
+      {props.item.type === "fork-target" ? (
+        props.item.target === "local" ? (
+          <TbDeviceLaptop className="size-3.5 text-muted-foreground/60" />
+        ) : (
+          <TbGitFork className="size-3.5 text-muted-foreground/60" />
+        )
+      ) : null}
       {props.item.type === "slash-command" || props.item.type === "provider-native-command"
         ? (() => {
             const cls = "size-3.5 text-muted-foreground/60";

@@ -88,15 +88,11 @@ export function ComposerSlashStatusDialog(props: {
               <p className="font-medium text-foreground">{selectedModel}</p>
             </div>
             <div className="space-y-1">
-              <p className="text-xs uppercase tracking-[0.08em] text-muted-foreground">
-                Fast Mode
-              </p>
+              <p className="text-xs uppercase tracking-[0.08em] text-muted-foreground">Fast Mode</p>
               <p className="font-medium text-foreground">{fastModeEnabled ? "On" : "Off"}</p>
             </div>
             <div className="space-y-1">
-              <p className="text-xs uppercase tracking-[0.08em] text-muted-foreground">
-                Reasoning
-              </p>
+              <p className="text-xs uppercase tracking-[0.08em] text-muted-foreground">Reasoning</p>
               <p className="font-medium text-foreground">{selectedPromptEffort ?? "Default"}</p>
             </div>
             <div className="space-y-1">
@@ -109,7 +105,9 @@ export function ComposerSlashStatusDialog(props: {
               <p className="text-xs uppercase tracking-[0.08em] text-muted-foreground">
                 Environment
               </p>
-              <p className="font-medium text-foreground">{formatEnvironmentLabel(envMode, envState)}</p>
+              <p className="font-medium text-foreground">
+                {formatEnvironmentLabel(envMode, envState)}
+              </p>
             </div>
             <div className="space-y-1">
               <p className="text-xs uppercase tracking-[0.08em] text-muted-foreground">Branch</p>
@@ -128,10 +126,7 @@ export function ComposerSlashStatusDialog(props: {
                 </p>
               </div>
               {contextWindow ? (
-                <ContextWindowMeter
-                  usage={contextWindow}
-                  cumulativeCostUsd={cumulativeCostUsd}
-                />
+                <ContextWindowMeter usage={contextWindow} cumulativeCostUsd={cumulativeCostUsd} />
               ) : null}
             </div>
             {contextWindow ? (
@@ -157,7 +152,9 @@ export function ComposerSlashStatusDialog(props: {
                 <div>
                   <p className="text-muted-foreground">Cost</p>
                   <p className="font-medium text-foreground">
-                    {cumulativeCostUsd !== null ? formatCostUsd(cumulativeCostUsd) : "Not available"}
+                    {cumulativeCostUsd !== null
+                      ? formatCostUsd(cumulativeCostUsd)
+                      : "Not available"}
                   </p>
                 </div>
               </div>
@@ -169,9 +166,7 @@ export function ComposerSlashStatusDialog(props: {
           </div>
 
           <div className="space-y-2 rounded-lg border border-border/60 bg-card p-4">
-            <p className="text-xs uppercase tracking-[0.08em] text-muted-foreground">
-              Rate Limits
-            </p>
+            <p className="text-xs uppercase tracking-[0.08em] text-muted-foreground">Rate Limits</p>
             {rateLimitStatus ? (
               <p className="text-sm text-foreground">{formatRateLimitMessage(rateLimitStatus)}</p>
             ) : (

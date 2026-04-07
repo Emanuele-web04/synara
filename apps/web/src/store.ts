@@ -303,10 +303,10 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
         updatedAt: thread.updatedAt,
         latestTurn: thread.latestTurn,
         lastVisitedAt: existing?.lastVisitedAt ?? thread.updatedAt,
-        envMode: thread.envMode,
+        envMode: thread.envMode ?? "local",
         branch: thread.branch,
         worktreePath: thread.worktreePath,
-        forkSourceThreadId: thread.forkSourceThreadId,
+        forkSourceThreadId: thread.forkSourceThreadId ?? null,
         handoff: thread.handoff,
         turnDiffSummaries: thread.checkpoints.map((checkpoint) => ({
           turnId: checkpoint.turnId,

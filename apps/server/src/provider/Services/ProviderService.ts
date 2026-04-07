@@ -21,6 +21,7 @@ import type {
   ProviderRuntimeEvent,
   ProviderSendTurnInput,
   ProviderStartReviewInput,
+  ProviderSteerTurnInput,
   ProviderSession,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
@@ -50,6 +51,13 @@ export interface ProviderServiceShape {
    */
   readonly sendTurn: (
     input: ProviderSendTurnInput,
+  ) => Effect.Effect<ProviderTurnStartResult, ProviderServiceError>;
+
+  /**
+   * Redirect an active provider turn toward a new prompt when supported.
+   */
+  readonly steerTurn: (
+    input: ProviderSteerTurnInput,
   ) => Effect.Effect<ProviderTurnStartResult, ProviderServiceError>;
 
   /**

@@ -1261,6 +1261,12 @@ describe("WebSocket Server", () => {
           threadId,
           turnId: asTurnId("provider-turn-1"),
         }),
+      steerTurn: ({ threadId }) =>
+        Effect.succeed({
+          threadId,
+          turnId: asTurnId("provider-turn-steer-1"),
+        }),
+      startReview: () => unsupported(),
       forkThread: () => Effect.succeed(null),
       interruptTurn: () => unsupported(),
       respondToRequest: () => unsupported(),
@@ -1279,11 +1285,13 @@ describe("WebSocket Server", () => {
             provider: "codex" as const,
             supportsSkillMentions: false,
             supportsSkillDiscovery: false,
+            supportsNativeSlashCommandDiscovery: false,
             supportsPluginMentions: false,
             supportsPluginDiscovery: false,
             supportsRuntimeModelList: false,
           }),
         listSkills: () => Effect.succeed({ skills: [], source: "test", cached: false }),
+        listCommands: () => Effect.succeed({ commands: [], source: "test", cached: false }),
         listPlugins: () =>
           Effect.succeed({
             marketplaces: [],

@@ -38,6 +38,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 const asProjectId = (value: string): ProjectId => ProjectId.makeUnsafe(value);
 const asApprovalRequestId = (value: string): ApprovalRequestId =>
   ApprovalRequestId.makeUnsafe(value);
+const asEventId = (value: string): EventId => EventId.makeUnsafe(value);
 const asMessageId = (value: string): MessageId => MessageId.makeUnsafe(value);
 const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
 
@@ -146,7 +147,15 @@ describe("ProviderCommandReactor", () => {
         turnId: asTurnId("turn-1"),
       }),
     );
-    const forkThread = vi.fn(() => Effect.succeed(null));
+    const steerTurn = vi.fn((_: unknown) =>
+      Effect.succeed({
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        turnId: asTurnId("turn-steer-1"),
+      }),
+    );
+    const forkThread = vi.fn<NonNullable<ProviderServiceShape["forkThread"]>>(() =>
+      Effect.succeed(null),
+    );
     const interruptTurn = vi.fn((_: unknown) => Effect.void);
     const respondToRequest = vi.fn<ProviderServiceShape["respondToRequest"]>(() => Effect.void);
     const respondToUserInput = vi.fn<ProviderServiceShape["respondToUserInput"]>(() => Effect.void);
@@ -189,7 +198,9 @@ describe("ProviderCommandReactor", () => {
     const service: ProviderServiceShape = {
       startSession: startSession as ProviderServiceShape["startSession"],
       sendTurn: sendTurn as ProviderServiceShape["sendTurn"],
-      forkThread: forkThread as ProviderServiceShape["forkThread"],
+      steerTurn: steerTurn as ProviderServiceShape["steerTurn"],
+      startReview: unsupported as ProviderServiceShape["startReview"],
+      forkThread,
       interruptTurn: interruptTurn as ProviderServiceShape["interruptTurn"],
       respondToRequest: respondToRequest as ProviderServiceShape["respondToRequest"],
       respondToUserInput: respondToUserInput as ProviderServiceShape["respondToUserInput"],
@@ -220,6 +231,8 @@ describe("ProviderCommandReactor", () => {
       Layer.provideMerge(NodeServices.layer),
     );
     const runtime = ManagedRuntime.make(layer);
+    const emitRuntimeEvent = (event: ProviderRuntimeEvent) =>
+      Effect.runPromise(PubSub.publish(runtimeEventPubSub, event).pipe(Effect.asVoid));
 
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
     const reactor = await runtime.runPromise(Effect.service(ProviderCommandReactor));
@@ -258,6 +271,7 @@ describe("ProviderCommandReactor", () => {
       engine,
       startSession,
       sendTurn,
+      steerTurn,
       forkThread,
       interruptTurn,
       respondToRequest,
@@ -267,6 +281,7 @@ describe("ProviderCommandReactor", () => {
       generateBranchName,
       stateDir,
       drain,
+      emitRuntimeEvent,
     };
   }
 
@@ -307,6 +322,199 @@ describe("ProviderCommandReactor", () => {
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
+  });
+
+  it("queues a follow-up turn while the current turn is still running", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-running-queue"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-running"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    harness.sendTurn.mockClear();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-queue-1"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("msg-queue-1"),
+          role: "user",
+          text: "queue this next",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await harness.drain();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    expect(harness.interruptTurn).not.toHaveBeenCalled();
+
+    await harness.emitRuntimeEvent({
+      type: "turn.completed",
+      eventId: asEventId("evt-turn-completed-queue"),
+      provider: "codex",
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      createdAt: new Date().toISOString(),
+      turnId: asTurnId("turn-running"),
+      payload: {
+        state: "completed",
+      },
+      providerRefs: {},
+    } as ProviderRuntimeEvent);
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      input: "queue this next",
+    });
+  });
+
+  it("steers immediately for codex sessions when Cmd/Ctrl+Enter is used", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-running-steer-codex"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-running"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    harness.sendTurn.mockClear();
+    harness.steerTurn.mockClear();
+    harness.interruptTurn.mockClear();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-steer-codex"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("msg-steer-codex"),
+          role: "user",
+          text: "pivot now",
+          attachments: [],
+        },
+        dispatchMode: "steer",
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.steerTurn.mock.calls.length === 1);
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    expect(harness.interruptTurn).not.toHaveBeenCalled();
+    expect(harness.steerTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      input: "pivot now",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+    });
+  });
+
+  it("falls back to interrupt plus priority queue for claude steering", async () => {
+    const harness = await createHarness({
+      threadModelSelection: {
+        provider: "claudeAgent",
+        model: "claude-opus-4-6",
+      },
+    });
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-running-steer-claude"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "running",
+          providerName: "claudeAgent",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-running"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    harness.sendTurn.mockClear();
+    harness.steerTurn.mockClear();
+    harness.interruptTurn.mockClear();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-steer-claude"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("msg-steer-claude"),
+          role: "user",
+          text: "switch directions",
+          attachments: [],
+        },
+        dispatchMode: "steer",
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await harness.drain();
+    expect(harness.steerTurn).not.toHaveBeenCalled();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    expect(harness.interruptTurn.mock.calls.length).toBe(1);
+
+    await harness.emitRuntimeEvent({
+      type: "turn.completed",
+      eventId: asEventId("evt-turn-completed-steer-claude"),
+      provider: "claudeAgent",
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      createdAt: new Date().toISOString(),
+      turnId: asTurnId("turn-running"),
+      payload: {
+        state: "interrupted",
+      },
+      providerRefs: {},
+    } as ProviderRuntimeEvent);
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      input: "switch directions",
+    });
   });
 
   it("forwards codex model options through session start and turn send", async () => {

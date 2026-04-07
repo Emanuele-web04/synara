@@ -262,9 +262,7 @@ function SkillGridItem({ skill }: { skill: ProviderSkillDescriptor }) {
 }
 
 function SectionHeader({ title }: { title: string }) {
-  return (
-    <h2 className="px-3 pb-1 pt-2 text-[15px] font-semibold text-foreground">{title}</h2>
-  );
+  return <h2 className="px-3 pb-1 pt-2 text-[15px] font-semibold text-foreground">{title}</h2>;
 }
 
 // ── Main component ─────────────────────────────────────────────────────────
@@ -431,7 +429,6 @@ export function PluginLibrary() {
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden bg-background isolate">
       <div className="flex h-full flex-col">
-
         {/* ── Top nav ───────────────────────────────────────────────────── */}
         <div className="flex shrink-0 items-center gap-3 border-b border-border px-4 sm:px-6">
           <SidebarTrigger className="size-7 shrink-0 md:hidden" />
@@ -487,7 +484,6 @@ export function PluginLibrary() {
 
         {/* ── Scrollable body ───────────────────────────────────────────── */}
         <div className="min-h-0 flex-1 overflow-y-auto">
-
           {/* Hero */}
           <div className="px-6 py-10 text-center">
             <h1 className="text-[28px] font-semibold tracking-tight text-foreground">
@@ -558,7 +554,10 @@ export function PluginLibrary() {
                     ))}
                   </div>
                 ) : filteredPluginEntries.length === 0 ? (
-                  <EmptyPanel title="No plugins found" description="No plugins match this search." />
+                  <EmptyPanel
+                    title="No plugins found"
+                    description="No plugins match this search."
+                  />
                 ) : (
                   <div className="space-y-6">
                     {featuredPluginEntries.length > 0 && (
@@ -614,7 +613,6 @@ export function PluginLibrary() {
               </>
             )}
           </div>
-
         </div>
       </div>
     </SidebarInset>

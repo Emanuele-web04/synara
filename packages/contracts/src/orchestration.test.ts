@@ -146,7 +146,7 @@ it.effect("rejects command fields that become empty after trim", () =>
   }),
 );
 
-it.effect("decodes thread.turn.start defaults for provider and runtime mode", () =>
+it.effect("decodes thread.turn.start defaults for provider, runtime mode, and dispatch mode", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeThreadTurnStartCommand({
       type: "thread.turn.start",
@@ -163,6 +163,7 @@ it.effect("decodes thread.turn.start defaults for provider and runtime mode", ()
     assert.strictEqual(parsed.modelSelection, undefined);
     assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
     assert.strictEqual(parsed.interactionMode, DEFAULT_PROVIDER_INTERACTION_MODE);
+    assert.strictEqual(parsed.dispatchMode, "queue");
   }),
 );
 
@@ -292,6 +293,7 @@ it.effect(
       assert.strictEqual(parsed.modelSelection, undefined);
       assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
       assert.strictEqual(parsed.interactionMode, DEFAULT_PROVIDER_INTERACTION_MODE);
+      assert.strictEqual(parsed.dispatchMode, "queue");
       assert.strictEqual(parsed.sourceProposedPlan, undefined);
     }),
 );

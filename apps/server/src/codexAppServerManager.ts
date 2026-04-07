@@ -785,6 +785,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const context = this.requireSession(input.threadId);
     context.collabReceiverTurns.clear();
 
+    // Normal sends never interrupt active work. The orchestration layer decides
+    // when a queued follow-up is ready to become a provider turn.
     const turnInput: Array<
       | { type: "text"; text: string; text_elements: [] }
       | { type: "image"; url: string }
@@ -881,11 +883,95 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
 
     const response = await this.sendRequest(context, "turn/start", turnStartParams);
-
-    const turn = this.readObject(this.readObject(response), "turn");
-    const turnIdRaw = this.readString(turn, "id");
+    const turnIdRaw = this.readString(this.readObject(this.readObject(response), "turn"), "id");
     if (!turnIdRaw) {
       throw new Error("turn/start response did not include a turn id.");
+    }
+    const turnId = TurnId.makeUnsafe(turnIdRaw);
+
+    this.updateSession(context, {
+      status: "running",
+      activeTurnId: turnId,
+      ...(context.session.resumeCursor !== undefined
+        ? { resumeCursor: context.session.resumeCursor }
+        : {}),
+    });
+
+    return {
+      threadId: context.session.threadId,
+      turnId,
+      ...(context.session.resumeCursor !== undefined
+        ? { resumeCursor: context.session.resumeCursor }
+        : {}),
+    };
+  }
+
+  async steerTurn(input: CodexAppServerSendTurnInput): Promise<ProviderTurnStartResult> {
+    const context = this.requireSession(input.threadId);
+    context.collabReceiverTurns.clear();
+
+    const activeTurnId = context.session.activeTurnId;
+    if (context.session.status !== "running" || activeTurnId === undefined) {
+      return this.sendTurn(input);
+    }
+
+    const turnInput: Array<
+      | { type: "text"; text: string; text_elements: [] }
+      | { type: "image"; url: string }
+      | { type: "skill"; name: string; path: string }
+      | { type: "mention"; name: string; path: string }
+    > = [];
+    if (input.input) {
+      turnInput.push({
+        type: "text",
+        text: input.input,
+        text_elements: [],
+      });
+    }
+    for (const attachment of input.attachments ?? []) {
+      if (attachment.type === "image") {
+        turnInput.push({
+          type: "image",
+          url: attachment.url,
+        });
+      }
+    }
+    for (const skill of input.skills ?? []) {
+      turnInput.push({
+        type: "skill",
+        name: skill.name,
+        path: skill.path,
+      });
+    }
+    for (const mention of input.mentions ?? []) {
+      turnInput.push({
+        type: "mention",
+        name: mention.name,
+        path: mention.path,
+      });
+    }
+    if (turnInput.length === 0) {
+      throw new Error("Turn input must include text or attachments.");
+    }
+
+    const providerThreadId = readResumeThreadId({
+      threadId: context.session.threadId,
+      runtimeMode: context.session.runtimeMode,
+      resumeCursor: context.session.resumeCursor,
+    });
+    if (!providerThreadId) {
+      throw new Error("Session is missing provider resume thread id.");
+    }
+
+    const response = await this.sendRequest(context, "turn/steer", {
+      threadId: providerThreadId,
+      input: turnInput,
+      expectedTurnId: activeTurnId,
+    });
+
+    const turnIdRaw = this.readString(this.readObject(response), "turnId");
+    if (!turnIdRaw) {
+      throw new Error("turn/steer response did not include a turn id.");
     }
     const turnId = TurnId.makeUnsafe(turnIdRaw);
 
@@ -1094,7 +1180,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         resumeCursor: { threadId: forkedProviderThreadId },
       });
       this.emitLifecycleEvent(context, "session/threadOpenResolved", "Codex thread/fork resolved.");
-      this.emitLifecycleEvent(context, "session/ready", `Connected to thread ${forkedProviderThreadId}`);
+      this.emitLifecycleEvent(
+        context,
+        "session/ready",
+        `Connected to thread ${forkedProviderThreadId}`,
+      );
 
       return {
         threadId,

@@ -1,8 +1,6 @@
 import { Encoding } from "effect";
 import { CheckpointRef, ProjectId, type ThreadId } from "@t3tools/contracts";
-import {
-  resolveThreadWorkspaceCwd as resolveSharedThreadWorkspaceCwd,
-} from "@t3tools/shared/threadEnvironment";
+import { resolveThreadWorkspaceCwd as resolveSharedThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
 
 export const CHECKPOINT_REFS_PREFIX = "refs/t3/checkpoints";
 
@@ -15,7 +13,7 @@ export function checkpointRefForThreadTurn(threadId: ThreadId, turnCount: number
 export function resolveThreadWorkspaceCwd(input: {
   readonly thread: {
     readonly projectId: ProjectId;
-    readonly envMode?: "local" | "worktree";
+    readonly envMode?: "local" | "worktree" | undefined;
     readonly worktreePath: string | null;
   };
   readonly projects: ReadonlyArray<{
@@ -23,8 +21,9 @@ export function resolveThreadWorkspaceCwd(input: {
     readonly workspaceRoot: string;
   }>;
 }): string | undefined {
-  const projectCwd = input.projects.find((project) => project.id === input.thread.projectId)
-    ?.workspaceRoot;
+  const projectCwd = input.projects.find(
+    (project) => project.id === input.thread.projectId,
+  )?.workspaceRoot;
   return (
     resolveSharedThreadWorkspaceCwd({
       projectCwd,

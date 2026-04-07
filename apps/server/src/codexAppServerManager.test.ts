@@ -28,6 +28,7 @@ function createSendTurnHarness() {
       threadId: "thread_1",
       runtimeMode: "full-access",
       model: "gpt-5.3-codex",
+      activeTurnId: undefined as string | undefined,
       resumeCursor: { threadId: "thread_1" },
       createdAt: "2026-02-10T00:00:00.000Z",
       updatedAt: "2026-02-10T00:00:00.000Z",
@@ -640,6 +641,66 @@ describe("sendTurn", () => {
     });
   });
 
+  it("starts a fresh turn even when the session currently reports running", async () => {
+    const { manager, context, sendRequest, updateSession } = createSendTurnHarness();
+    context.session.status = "running";
+    context.session.activeTurnId = "turn_active";
+    sendRequest.mockResolvedValueOnce({
+      turn: { id: "turn_next" },
+    });
+
+    const result = await manager.sendTurn({
+      threadId: asThreadId("thread_1"),
+      input: "Focus on the failing tests first",
+      attachments: [
+        {
+          type: "image",
+          url: "data:image/png;base64,AAAA",
+        },
+      ],
+      model: "gpt-5.4",
+      serviceTier: "fast",
+      effort: "high",
+      interactionMode: "plan",
+    });
+
+    expect(result).toEqual({
+      threadId: "thread_1",
+      turnId: "turn_next",
+      resumeCursor: { threadId: "thread_1" },
+    });
+    expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
+      threadId: "thread_1",
+      input: [
+        {
+          type: "text",
+          text: "Focus on the failing tests first",
+          text_elements: [],
+        },
+        {
+          type: "image",
+          url: "data:image/png;base64,AAAA",
+        },
+      ],
+      model: "gpt-5.4",
+      serviceTier: "fast",
+      effort: "high",
+      collaborationMode: {
+        mode: "plan",
+        settings: {
+          model: "gpt-5.4",
+          reasoning_effort: "high",
+          developer_instructions: CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
+        },
+      },
+    });
+    expect(updateSession).toHaveBeenCalledWith(context, {
+      status: "running",
+      activeTurnId: "turn_next",
+      resumeCursor: { threadId: "thread_1" },
+    });
+  });
+
   it("rejects empty turn input", async () => {
     const { manager } = createSendTurnHarness();
 
@@ -648,6 +709,53 @@ describe("sendTurn", () => {
         threadId: asThreadId("thread_1"),
       }),
     ).rejects.toThrow("Turn input must include text or attachments.");
+  });
+});
+
+describe("steerTurn", () => {
+  it("steers the active Codex turn when the session is already running", async () => {
+    const { manager, context, sendRequest } = createSendTurnHarness();
+    context.session.status = "running";
+    context.session.activeTurnId = "turn_active";
+    sendRequest.mockResolvedValueOnce({
+      turnId: "turn_active",
+    });
+
+    const result = await manager.steerTurn({
+      threadId: asThreadId("thread_1"),
+      input: "Keep going",
+    });
+
+    expect(result).toEqual({
+      threadId: "thread_1",
+      turnId: "turn_active",
+      resumeCursor: { threadId: "thread_1" },
+    });
+    expect(sendRequest).toHaveBeenCalledWith(context, "turn/steer", {
+      threadId: "thread_1",
+      input: [
+        {
+          type: "text",
+          text: "Keep going",
+          text_elements: [],
+        },
+      ],
+      expectedTurnId: "turn_active",
+    });
+  });
+
+  it("requires turn/steer to return the active turn id", async () => {
+    const { manager, context, sendRequest } = createSendTurnHarness();
+    context.session.status = "running";
+    context.session.activeTurnId = "turn_active";
+    sendRequest.mockResolvedValueOnce({});
+
+    await expect(
+      manager.steerTurn({
+        threadId: asThreadId("thread_1"),
+        input: "Keep going",
+      }),
+    ).rejects.toThrow("turn/steer response did not include a turn id.");
   });
 });
 

@@ -2,6 +2,7 @@ import type { GitBranch } from "@t3tools/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronDownIcon } from "~/lib/icons";
+import { GoGitBranch } from "react-icons/go";
 import {
   type CSSProperties,
   useCallback,
@@ -415,9 +416,10 @@ export function BranchToolbarBranchSelector({
     >
       <ComboboxTrigger
         render={<Button variant="ghost" size="xs" />}
-        className="text-muted-foreground/70 hover:text-foreground/80"
+        className="inline-flex items-center text-muted-foreground/70 hover:text-foreground/80"
         disabled={(branchesQuery.isLoading && branches.length === 0) || isBranchActionPending}
       >
+        <GoGitBranch className="size-3 shrink-0" />
         <span className="max-w-[240px] truncate">{triggerLabel}</span>
         <ChevronDownIcon />
       </ComboboxTrigger>

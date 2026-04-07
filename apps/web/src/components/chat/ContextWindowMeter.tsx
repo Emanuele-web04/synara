@@ -1,5 +1,9 @@
 import { cn } from "~/lib/utils";
-import { type ContextWindowSnapshot, formatContextWindowTokens, formatCostUsd } from "~/lib/contextWindow";
+import {
+  type ContextWindowSnapshot,
+  formatContextWindowTokens,
+  formatCostUsd,
+} from "~/lib/contextWindow";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 
 function formatPercentage(value: number | null): string | null {

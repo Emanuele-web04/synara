@@ -1422,33 +1422,97 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             }),
           { concurrency: 1 },
         );
+        const managerInput = {
+          threadId: input.threadId,
+          ...(input.input !== undefined ? { input: input.input } : {}),
+          ...(input.skills !== undefined ? { skills: input.skills } : {}),
+          ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
+          ...(input.modelSelection?.provider === "codex"
+            ? { model: input.modelSelection.model }
+            : {}),
+          ...(input.modelSelection?.provider === "codex" &&
+          input.modelSelection.options?.reasoningEffort !== undefined
+            ? { effort: input.modelSelection.options.reasoningEffort }
+            : {}),
+          ...(input.modelSelection?.provider === "codex" && input.modelSelection.options?.fastMode
+            ? { serviceTier: "fast" }
+            : {}),
+          ...(input.interactionMode !== undefined
+            ? { interactionMode: input.interactionMode }
+            : {}),
+          ...(codexAttachments.length > 0 ? { attachments: codexAttachments } : {}),
+        };
 
         return yield* Effect.tryPromise({
-          try: () => {
-            const managerInput = {
-              threadId: input.threadId,
-              ...(input.input !== undefined ? { input: input.input } : {}),
-              ...(input.skills !== undefined ? { skills: input.skills } : {}),
-              ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
-              ...(input.modelSelection?.provider === "codex"
-                ? { model: input.modelSelection.model }
-                : {}),
-              ...(input.modelSelection?.provider === "codex" &&
-              input.modelSelection.options?.reasoningEffort !== undefined
-                ? { effort: input.modelSelection.options.reasoningEffort }
-                : {}),
-              ...(input.modelSelection?.provider === "codex" &&
-              input.modelSelection.options?.fastMode
-                ? { serviceTier: "fast" }
-                : {}),
-              ...(input.interactionMode !== undefined
-                ? { interactionMode: input.interactionMode }
-                : {}),
-              ...(codexAttachments.length > 0 ? { attachments: codexAttachments } : {}),
-            };
-            return manager.sendTurn(managerInput);
-          },
+          try: () => manager.sendTurn(managerInput),
           catch: (cause) => toRequestError(input.threadId, "turn/start", cause),
+        }).pipe(
+          Effect.map((result) => ({
+            ...result,
+            threadId: input.threadId,
+          })),
+        );
+      });
+
+    const steerTurn: CodexAdapterShape["steerTurn"] = (input) =>
+      Effect.gen(function* () {
+        const codexAttachments = yield* Effect.forEach(
+          input.attachments ?? [],
+          (attachment) =>
+            Effect.gen(function* () {
+              const attachmentPath = resolveAttachmentPath({
+                attachmentsDir: serverConfig.attachmentsDir,
+                attachment,
+              });
+              if (!attachmentPath) {
+                return yield* toRequestError(
+                  input.threadId,
+                  "turn/steer",
+                  new Error(`Invalid attachment id '${attachment.id}'.`),
+                );
+              }
+              const bytes = yield* fileSystem.readFile(attachmentPath).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderAdapterRequestError({
+                      provider: PROVIDER,
+                      method: "turn/steer",
+                      detail: toMessage(cause, "Failed to read attachment file."),
+                      cause,
+                    }),
+                ),
+              );
+              return {
+                type: "image" as const,
+                url: `data:${attachment.mimeType};base64,${Buffer.from(bytes).toString("base64")}`,
+              };
+            }),
+          { concurrency: 1 },
+        );
+        const managerInput = {
+          threadId: input.threadId,
+          ...(input.input !== undefined ? { input: input.input } : {}),
+          ...(input.skills !== undefined ? { skills: input.skills } : {}),
+          ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
+          ...(input.modelSelection?.provider === "codex"
+            ? { model: input.modelSelection.model }
+            : {}),
+          ...(input.modelSelection?.provider === "codex" &&
+          input.modelSelection.options?.reasoningEffort !== undefined
+            ? { effort: input.modelSelection.options.reasoningEffort }
+            : {}),
+          ...(input.modelSelection?.provider === "codex" && input.modelSelection.options?.fastMode
+            ? { serviceTier: "fast" }
+            : {}),
+          ...(input.interactionMode !== undefined
+            ? { interactionMode: input.interactionMode }
+            : {}),
+          ...(codexAttachments.length > 0 ? { attachments: codexAttachments } : {}),
+        };
+
+        return yield* Effect.tryPromise({
+          try: () => manager.steerTurn(managerInput),
+          catch: (cause) => toRequestError(input.threadId, "turn/steer", cause),
         }).pipe(
           Effect.map((result) => ({
             ...result,
@@ -1667,9 +1731,11 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         supportsPluginMentions: true,
         supportsPluginDiscovery: true,
         supportsRuntimeModelList: true,
+        supportsTurnSteering: true,
       },
       startSession,
       sendTurn,
+      steerTurn,
       startReview,
       interruptTurn,
       readThread,

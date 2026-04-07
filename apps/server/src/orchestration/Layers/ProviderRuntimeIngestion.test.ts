@@ -68,6 +68,8 @@ function createProviderServiceHarness() {
   const service: ProviderServiceShape = {
     startSession: () => unsupported(),
     sendTurn: () => unsupported(),
+    steerTurn: () => unsupported(),
+    startReview: () => unsupported(),
     forkThread: () => Effect.succeed(null),
     interruptTurn: () => unsupported(),
     respondToRequest: () => unsupported(),

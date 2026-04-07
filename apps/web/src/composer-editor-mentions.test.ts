@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { splitPromptIntoComposerSegments } from "./composer-editor-mentions";
+import {
+  splitPromptIntoComposerSegments,
+  splitPromptIntoDisplaySegments,
+} from "./composer-editor-mentions";
 import { INLINE_TERMINAL_CONTEXT_PLACEHOLDER } from "./lib/terminalContext";
 
 describe("splitPromptIntoComposerSegments", () => {
@@ -30,16 +33,17 @@ describe("splitPromptIntoComposerSegments", () => {
     ]);
   });
 
-  it("converts completed skill tokens once a trailing delimiter exists", () => {
+  it("converts completed dollar skill tokens once a trailing delimiter exists", () => {
     expect(splitPromptIntoComposerSegments("Use $check-code please")).toEqual([
       { type: "text", text: "Use " },
       { type: "skill", name: "check-code", prefix: "$" },
       { type: "text", text: " please" },
     ]);
+  });
+
+  it("keeps slash-prefixed text as plain text even when it is delimited", () => {
     expect(splitPromptIntoComposerSegments("Use /check-code please")).toEqual([
-      { type: "text", text: "Use " },
-      { type: "skill", name: "check-code", prefix: "/" },
-      { type: "text", text: " please" },
+      { type: "text", text: "Use /check-code please" },
     ]);
   });
 
@@ -68,6 +72,21 @@ describe("splitPromptIntoComposerSegments", () => {
       { type: "terminal-context", context: null },
       { type: "mention", path: "AGENTS.md" },
       { type: "text", text: " please" },
+    ]);
+  });
+});
+
+describe("splitPromptIntoDisplaySegments", () => {
+  it("converts a trailing skill token for read-only rendering", () => {
+    expect(splitPromptIntoDisplaySegments("$check-code")).toEqual([
+      { type: "skill", name: "check-code", prefix: "$" },
+    ]);
+  });
+
+  it("converts a trailing skill token at the end of surrounding text", () => {
+    expect(splitPromptIntoDisplaySegments("Use $check-code")).toEqual([
+      { type: "text", text: "Use " },
+      { type: "skill", name: "check-code", prefix: "$" },
     ]);
   });
 });

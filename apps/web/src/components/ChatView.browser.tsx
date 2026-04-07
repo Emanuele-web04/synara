@@ -253,6 +253,7 @@ function createSnapshotForTargetUser(options: {
         },
         interactionMode: "default",
         runtimeMode: "full-access",
+        envMode: "local",
         branch: "main",
         worktreePath: null,
         latestTurn: null,
@@ -341,6 +342,7 @@ function addThreadToSnapshot(
         },
         interactionMode: "default",
         runtimeMode: "full-access",
+        envMode: "local",
         branch: "main",
         worktreePath: null,
         latestTurn: null,
@@ -1618,6 +1620,49 @@ describe("ChatView timeline estimator parity (full app)", () => {
       );
 
       expect(getComputedStyle(stopButton).cursor).toBe("pointer");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows a queued follow-up row while a turn is running", async () => {
+    useComposerDraftStore.getState().setPrompt(THREAD_ID, "queue this follow-up");
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-running-queue-button" as MessageId,
+        targetText: "running queue button target",
+        sessionStatus: "running",
+      }),
+    });
+
+    try {
+      const composerForm = await waitForElement(
+        () => document.querySelector<HTMLFormElement>('form[data-chat-composer-form="true"]'),
+        "Unable to find composer form.",
+      );
+      composerForm.requestSubmit();
+
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("queue this follow-up");
+          expect(document.body.textContent).toContain("Steer");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const queuedRow = await waitForElement(
+        () => document.querySelector<HTMLElement>('[data-testid="queued-follow-up-row"]'),
+        "Unable to find queued follow-up row.",
+      );
+      expect(queuedRow).not.toBeNull();
+
+      const stopButton = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Stop generation"]'),
+        "Unable to find stop generation button.",
+      );
+      expect(stopButton).not.toBeNull();
     } finally {
       await mounted.cleanup();
     }

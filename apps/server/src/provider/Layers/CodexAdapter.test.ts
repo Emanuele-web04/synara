@@ -55,6 +55,13 @@ class FakeCodexManager extends CodexAppServerManager {
     }),
   );
 
+  public steerTurnImpl = vi.fn(
+    async (_input: CodexAppServerSendTurnInput): Promise<ProviderTurnStartResult> => ({
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-steer-1"),
+    }),
+  );
+
   public interruptTurnImpl = vi.fn(
     async (_threadId: ThreadId, _turnId?: TurnId): Promise<void> => undefined,
   );
@@ -93,6 +100,10 @@ class FakeCodexManager extends CodexAppServerManager {
 
   override sendTurn(input: CodexAppServerSendTurnInput): Promise<ProviderTurnStartResult> {
     return this.sendTurnImpl(input);
+  }
+
+  override steerTurn(input: CodexAppServerSendTurnInput): Promise<ProviderTurnStartResult> {
+    return this.steerTurnImpl(input);
   }
 
   override interruptTurn(threadId: ThreadId, turnId?: TurnId): Promise<void> {
