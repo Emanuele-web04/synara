@@ -396,6 +396,7 @@ async function defaultSubprocessChecker(terminalPid: number): Promise<TerminalSu
   if (!Number.isInteger(terminalPid) || terminalPid <= 0) {
     return {
       cliKind: null,
+      hasNonProviderSubprocess: false,
       hasProviderDescendant: false,
       hasRunningSubprocess: false,
     };
@@ -739,6 +740,7 @@ function resetSessionHistory(session: TerminalSessionState): void {
   session.pendingHistoryControlSequence = "";
   session.pendingInputBuffer = "";
   session.managedAgentRunning = false;
+  session.managedAgentObserved = false;
 }
 
 function appendSessionHistory(
@@ -884,6 +886,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           hasRunningSubprocess: false,
           detectedCliKind: cliKindFromRuntimeEnv(normalizedRuntimeEnv(input.env)),
           managedAgentRunning: false,
+          managedAgentObserved: false,
           runtimeEnv: normalizedRuntimeEnv(input.env),
           pendingInputBuffer: "",
           pendingOutputChunks: [],
@@ -1042,6 +1045,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           hasRunningSubprocess: false,
           detectedCliKind: cliKindFromRuntimeEnv(normalizedRuntimeEnv(input.env)),
           managedAgentRunning: false,
+          managedAgentObserved: false,
           runtimeEnv: normalizedRuntimeEnv(input.env),
           pendingInputBuffer: "",
           pendingOutputChunks: [],
@@ -1141,6 +1145,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     session.hasRunningSubprocess = false;
     session.detectedCliKind = cliKindFromRuntimeEnv(session.runtimeEnv);
     session.managedAgentRunning = false;
+    session.managedAgentObserved = false;
     session.pendingInputBuffer = "";
     session.lastInputAt = null;
     session.lastOutputAt = null;
@@ -1272,6 +1277,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     session.pendingHistoryControlSequence = sanitized.pendingControlSequence;
     const latestHookEvent = sanitized.hookEvents.at(-1) ?? null;
     if (latestHookEvent) {
+      session.managedAgentObserved = true;
       const nextManagedAgentRunning = latestHookEvent !== "Stop";
       if (session.managedAgentRunning !== nextManagedAgentRunning) {
         session.managedAgentRunning = nextManagedAgentRunning;
@@ -1382,6 +1388,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     session.hasRunningSubprocess = false;
     session.detectedCliKind = null;
     session.managedAgentRunning = false;
+    session.managedAgentObserved = false;
     session.lastInputAt = null;
     session.lastOutputAt = null;
     session.lastOutputSignature = null;
@@ -1414,6 +1421,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     session.hasRunningSubprocess = false;
     session.detectedCliKind = null;
     session.managedAgentRunning = false;
+    session.managedAgentObserved = false;
     session.lastInputAt = null;
     session.lastOutputAt = null;
     session.lastOutputSignature = null;
@@ -1736,11 +1744,15 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
               await this.subprocessChecker(terminalPid),
             );
             terminalCliKind = subprocessActivity.cliKind ?? session.detectedCliKind;
-            hasRunningSubprocess = subprocessActivity.hasProviderDescendant
-              ? subprocessActivity.hasNonProviderSubprocess || isProviderSessionBusy(session, Date.now())
-              : subprocessActivity.hasRunningSubprocess;
-            if (session.managedAgentRunning) {
-              hasRunningSubprocess = true;
+            if (session.managedAgentObserved) {
+              // Hooks have fired — trust them as the sole source of truth (superset model).
+              // Only override with non-provider subprocesses (e.g. user spawned a build).
+              hasRunningSubprocess = session.managedAgentRunning || subprocessActivity.hasNonProviderSubprocess;
+            } else {
+              // No hooks observed — fall back to process-tree + output heuristic.
+              hasRunningSubprocess = subprocessActivity.hasProviderDescendant
+                ? subprocessActivity.hasNonProviderSubprocess || isProviderSessionBusy(session, Date.now())
+                : subprocessActivity.hasRunningSubprocess;
             }
           } catch (error) {
             this.logger.warn("failed to check terminal subprocess activity", {

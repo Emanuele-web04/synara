@@ -47,6 +47,8 @@ export interface TerminalSessionState {
   hasRunningSubprocess: boolean;
   detectedCliKind: TerminalCliKind | null;
   managedAgentRunning: boolean;
+  /** True once at least one hook event (Start/Stop/PermissionRequest) has been observed. */
+  managedAgentObserved: boolean;
   runtimeEnv: Record<string, string> | null;
   /** Buffered shell input used to detect canonical CLI commands at submit time. */
   pendingInputBuffer: string;

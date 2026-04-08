@@ -1,5 +1,5 @@
 import { type FC, type SVGProps } from "react";
-import { PiGitCommit } from "react-icons/pi";
+import { PiGitCommit, PiSquareSplitHorizontal, PiSquareSplitVertical } from "react-icons/pi";
 import { TbArrowsRightLeft, TbPlug } from "react-icons/tb";
 import {
   IconAlertCircle,
@@ -7,7 +7,6 @@ import {
   IconArrowBackUp,
   IconArrowLeft,
   IconArrowRight,
-  IconArrowsSplit2,
   IconArrowsUpDown,
   IconBolt,
   IconBug,
@@ -132,7 +131,12 @@ export const Rows3Icon = adaptIcon(IconLayoutDistributeHorizontal);
 export const SearchIcon = adaptIcon(IconSearch);
 export const SettingsIcon = adaptIcon(IconSettings);
 export const SquarePenIcon = adaptIcon(IconEdit);
-export const SquareSplitHorizontal = adaptIcon(IconArrowsSplit2);
+export const SquareSplitHorizontal: LucideIcon = (props) => (
+  <PiSquareSplitHorizontal className={props.className} style={props.style} />
+);
+export const SquareSplitVertical: LucideIcon = (props) => (
+  <PiSquareSplitVertical className={props.className} style={props.style} />
+);
 export const TerminalIcon = adaptIcon(IconTerminal);
 export const TerminalSquare = adaptIcon(IconTerminal2);
 export const TerminalSquareIcon = adaptIcon(IconTerminal2);

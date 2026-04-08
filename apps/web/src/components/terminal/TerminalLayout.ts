@@ -1,7 +1,7 @@
 // FILE: TerminalLayout.ts
-// Purpose: Pure layout resolution for terminal tabs, groups, and visual identities.
+// Purpose: Pure layout resolution for terminal pane tabs, pane trees, and visual identities.
 // Layer: Terminal view-model helpers
-// Depends on: shared terminal identity logic plus thread terminal group types.
+// Depends on: shared terminal identity logic plus terminal pane-tree helpers.
 
 import {
   resolveTerminalVisualIdentity,
@@ -10,17 +10,31 @@ import {
 } from "@t3tools/shared/terminalThreads";
 
 import {
+  collectTerminalIdsFromLayout,
+  findFirstTerminalIdInLayout,
+  normalizeTerminalPaneGroup,
+} from "../../terminalPaneLayout";
+import {
   DEFAULT_THREAD_TERMINAL_ID,
   MAX_TERMINALS_PER_GROUP,
   type ThreadTerminalGroup,
+  type ThreadTerminalLayoutNode,
 } from "../../types";
+
+export interface ResolvedTerminalGroupLayout {
+  id: string;
+  activeTerminalId: string;
+  layout: ThreadTerminalLayoutNode;
+  terminalIds: string[];
+}
 
 export interface ResolvedThreadTerminalLayout {
   normalizedTerminalIds: string[];
   resolvedActiveTerminalId: string;
-  resolvedTerminalGroups: ThreadTerminalGroup[];
+  resolvedActiveGroupId: string;
+  resolvedTerminalGroups: ResolvedTerminalGroupLayout[];
+  activeGroupLayout: ThreadTerminalLayoutNode;
   visibleTerminalIds: string[];
-  workspaceTerminalIds: string[];
   hasTerminalSidebar: boolean;
   isSplitView: boolean;
   showGroupHeaders: boolean;
@@ -48,43 +62,46 @@ function normalizeTerminalIds(terminalIds: string[]): string[] {
 }
 
 function resolveTerminalGroups(input: {
-  activeTerminalId: string;
   normalizedTerminalIds: string[];
   terminalGroups: ThreadTerminalGroup[];
-}): ThreadTerminalGroup[] {
-  const validTerminalIdSet = new Set(input.normalizedTerminalIds);
+}): ResolvedTerminalGroupLayout[] {
   const assignedTerminalIds = new Set<string>();
   const usedGroupIds = new Set<string>();
-  const nextGroups: ThreadTerminalGroup[] = [];
+  const nextGroups: ResolvedTerminalGroupLayout[] = [];
 
   for (const terminalGroup of input.terminalGroups) {
-    const nextTerminalIds = [
-      ...new Set(terminalGroup.terminalIds.map((id) => id.trim()).filter((id) => id.length > 0)),
-    ].filter((terminalId) => {
-      if (!validTerminalIdSet.has(terminalId)) return false;
+    const normalizedGroup = normalizeTerminalPaneGroup(terminalGroup, input.normalizedTerminalIds);
+    if (!normalizedGroup) continue;
+    const groupTerminalIds = collectTerminalIdsFromLayout(normalizedGroup.layout).filter((terminalId) => {
       if (assignedTerminalIds.has(terminalId)) return false;
       return true;
     });
-    if (nextTerminalIds.length === 0) continue;
-
-    for (const terminalId of nextTerminalIds) {
+    if (groupTerminalIds.length === 0) continue;
+    const filteredGroup = normalizeTerminalPaneGroup(normalizedGroup, groupTerminalIds);
+    if (!filteredGroup) continue;
+    const groupId = assignUniqueGroupId(filteredGroup.id, usedGroupIds);
+    collectTerminalIdsFromLayout(filteredGroup.layout).forEach((terminalId) => {
       assignedTerminalIds.add(terminalId);
-    }
-
-    const baseGroupId =
-      terminalGroup.id.trim().length > 0
-        ? terminalGroup.id.trim()
-        : `group-${nextTerminalIds[0] ?? DEFAULT_THREAD_TERMINAL_ID}`;
+    });
     nextGroups.push({
-      id: assignUniqueGroupId(baseGroupId, usedGroupIds),
-      terminalIds: nextTerminalIds,
+      ...filteredGroup,
+      id: groupId,
+      terminalIds: collectTerminalIdsFromLayout(filteredGroup.layout),
     });
   }
 
   for (const terminalId of input.normalizedTerminalIds) {
     if (assignedTerminalIds.has(terminalId)) continue;
+    const id = assignUniqueGroupId(`group-${terminalId}`, usedGroupIds);
     nextGroups.push({
-      id: assignUniqueGroupId(`group-${terminalId}`, usedGroupIds),
+      id,
+      activeTerminalId: terminalId,
+      layout: {
+        type: "terminal",
+        paneId: `pane-${terminalId}`,
+        terminalIds: [terminalId],
+        activeTerminalId: terminalId,
+      },
       terminalIds: [terminalId],
     });
   }
@@ -95,25 +112,41 @@ function resolveTerminalGroups(input: {
 
   return [
     {
-      id: `group-${input.activeTerminalId}`,
-      terminalIds: [input.activeTerminalId],
+      id: `group-${DEFAULT_THREAD_TERMINAL_ID}`,
+      activeTerminalId: DEFAULT_THREAD_TERMINAL_ID,
+      layout: {
+        type: "terminal",
+        paneId: `pane-${DEFAULT_THREAD_TERMINAL_ID}`,
+        terminalIds: [DEFAULT_THREAD_TERMINAL_ID],
+        activeTerminalId: DEFAULT_THREAD_TERMINAL_ID,
+      },
+      terminalIds: [DEFAULT_THREAD_TERMINAL_ID],
     },
   ];
 }
 
-function resolveActiveGroupIndex(input: {
+function resolveActiveGroup(input: {
   activeTerminalGroupId: string;
-  resolvedActiveTerminalId: string;
-  resolvedTerminalGroups: ThreadTerminalGroup[];
-}): number {
-  const indexById = input.resolvedTerminalGroups.findIndex(
-    (terminalGroup) => terminalGroup.id === input.activeTerminalGroupId,
+  activeTerminalId: string;
+  resolvedTerminalGroups: ResolvedTerminalGroupLayout[];
+}): ResolvedTerminalGroupLayout {
+  return (
+    input.resolvedTerminalGroups.find((terminalGroup) => terminalGroup.id === input.activeTerminalGroupId) ??
+    input.resolvedTerminalGroups.find((terminalGroup) =>
+      terminalGroup.terminalIds.includes(input.activeTerminalId),
+    ) ??
+    input.resolvedTerminalGroups[0] ?? {
+      id: `group-${DEFAULT_THREAD_TERMINAL_ID}`,
+      activeTerminalId: DEFAULT_THREAD_TERMINAL_ID,
+      layout: {
+        type: "terminal",
+        paneId: `pane-${DEFAULT_THREAD_TERMINAL_ID}`,
+        terminalIds: [DEFAULT_THREAD_TERMINAL_ID],
+        activeTerminalId: DEFAULT_THREAD_TERMINAL_ID,
+      },
+      terminalIds: [DEFAULT_THREAD_TERMINAL_ID],
+    }
   );
-  if (indexById >= 0) return indexById;
-  const indexByTerminal = input.resolvedTerminalGroups.findIndex((terminalGroup) =>
-    terminalGroup.terminalIds.includes(input.resolvedActiveTerminalId),
-  );
-  return indexByTerminal >= 0 ? indexByTerminal : 0;
 }
 
 function resolveTerminalVisualIdentityMap(input: {
@@ -153,24 +186,22 @@ export function resolveThreadTerminalLayout(input: {
   terminalTitleOverridesById: Record<string, string>;
 }): ResolvedThreadTerminalLayout {
   const normalizedTerminalIds = normalizeTerminalIds(input.terminalIds);
-  const resolvedActiveTerminalId = normalizedTerminalIds.includes(input.activeTerminalId)
-    ? input.activeTerminalId
-    : (normalizedTerminalIds[0] ?? DEFAULT_THREAD_TERMINAL_ID);
   const resolvedTerminalGroups = resolveTerminalGroups({
-    activeTerminalId: resolvedActiveTerminalId,
     normalizedTerminalIds,
     terminalGroups: input.terminalGroups,
   });
-  const resolvedActiveGroupIndex = resolveActiveGroupIndex({
+  const activeGroup = resolveActiveGroup({
     activeTerminalGroupId: input.activeTerminalGroupId,
-    resolvedActiveTerminalId,
+    activeTerminalId: input.activeTerminalId,
     resolvedTerminalGroups,
   });
-  const visibleTerminalIds = resolvedTerminalGroups[resolvedActiveGroupIndex]?.terminalIds ?? [
-    resolvedActiveTerminalId,
-  ];
-  const workspaceTerminalIds = normalizedTerminalIds;
-  const hasTerminalSidebar = normalizedTerminalIds.length > 1;
+  const resolvedActiveTerminalId = activeGroup.terminalIds.includes(input.activeTerminalId)
+    ? input.activeTerminalId
+    : activeGroup.terminalIds.includes(activeGroup.activeTerminalId)
+      ? activeGroup.activeTerminalId
+      : findFirstTerminalIdInLayout(activeGroup.layout);
+  const visibleTerminalIds = activeGroup.terminalIds;
+  const hasTerminalSidebar = false;
   const isSplitView = visibleTerminalIds.length > 1;
   const showGroupHeaders =
     resolvedTerminalGroups.length > 1 ||
@@ -187,9 +218,10 @@ export function resolveThreadTerminalLayout(input: {
   return {
     normalizedTerminalIds,
     resolvedActiveTerminalId,
+    resolvedActiveGroupId: activeGroup.id,
     resolvedTerminalGroups,
+    activeGroupLayout: activeGroup.layout,
     visibleTerminalIds,
-    workspaceTerminalIds,
     hasTerminalSidebar,
     isSplitView,
     showGroupHeaders,

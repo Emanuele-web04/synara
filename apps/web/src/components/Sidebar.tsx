@@ -1587,6 +1587,7 @@ export default function Sidebar() {
       const handoffBadgeLabel = resolveThreadHandoffBadgeLabel(thread);
       const prStatus = prStatusIndicator(prByThreadId.get(thread.id) ?? null);
       const terminalStatus = terminalStatusFromRunningIds(threadTerminalState.runningTerminalIds);
+      const terminalCount = threadTerminalState.terminalIds.length;
       const isDisposableThread =
         temporaryThreadIds[thread.id] === true ||
         draftThreadsByThreadId[thread.id]?.isTemporary === true;
@@ -1725,7 +1726,27 @@ export default function Sidebar() {
               ) : null}
             </div>
             <div className="ml-auto flex shrink-0 items-center gap-1.5">
-              {terminalStatus && (
+              {terminalCount > 1 ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <span
+                        className={`inline-flex items-center gap-0.5 ${
+                          terminalStatus ? terminalStatus.colorClass : "text-muted-foreground/55"
+                        }`}
+                      >
+                        <span className="text-[10px] leading-none">{terminalCount}</span>
+                        <TerminalIcon
+                          className={`size-3 ${terminalStatus?.pulse ? "animate-pulse" : ""}`}
+                        />
+                      </span>
+                    }
+                  />
+                  <TooltipPopup side="top">
+                    {terminalCount} terminal{terminalCount === 1 ? "" : "s"} open
+                  </TooltipPopup>
+                </Tooltip>
+              ) : terminalStatus ? (
                 <span
                   role="img"
                   aria-label={terminalStatus.label}
@@ -1736,7 +1757,7 @@ export default function Sidebar() {
                     className={`size-3 ${terminalStatus.pulse ? "animate-pulse" : ""}`}
                   />
                 </span>
-              )}
+              ) : null}
               {isDisposableThread ? (
                 <Tooltip>
                   <TooltipTrigger

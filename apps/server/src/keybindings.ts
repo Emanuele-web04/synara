@@ -68,6 +68,10 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+b", command: "sidebar.toggle", when: "!terminalFocus" },
   { key: "mod+j", command: "terminal.toggle" },
   { key: "mod+d", command: "terminal.split", when: "terminalFocus" },
+  { key: "mod+shift+arrowright", command: "terminal.splitRight", when: "terminalFocus" },
+  { key: "mod+shift+arrowleft", command: "terminal.splitLeft", when: "terminalFocus" },
+  { key: "mod+shift+arrowdown", command: "terminal.splitDown", when: "terminalFocus" },
+  { key: "mod+shift+arrowup", command: "terminal.splitUp", when: "terminalFocus" },
   // Reserve Cmd/Ctrl+T for the terminal workspace's "new tab" action while focused.
   { key: "mod+t", command: "terminal.new", when: "terminalFocus" },
   { key: "mod+w", command: "terminal.close", when: "terminalFocus" },
