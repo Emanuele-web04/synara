@@ -60,7 +60,6 @@ const DEFAULT_OPEN_COLS = 120;
 const DEFAULT_OPEN_ROWS = 30;
 const PROVIDER_INPUT_ACTIVITY_GRACE_MS = 8_000;
 const PROVIDER_OUTPUT_ACTIVITY_GRACE_MS = 4_000;
-const PROVIDER_REPEAT_OUTPUT_REFRESH_MS = 1_500;
 const TERMINAL_ENV_BLOCKLIST = new Set(["PORT", "ELECTRON_RENDERER_PORT", "ELECTRON_RUN_AS_NODE"]);
 const MANAGED_TERMINAL_WRAPPER_DIRNAME = "_managed-bin";
 const MANAGED_TERMINAL_ZSH_DIRNAME = "_managed-zsh";
@@ -1314,19 +1313,15 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       appendSessionHistory(session, sanitized.visibleText, this.historyLineLimit);
       this.queuePersist(session.threadId, session.terminalId, session.history);
       const normalizedSignature = normalizeProviderOutputSignature(sanitized.visibleText);
-      const now = Date.now();
-      const shouldRefreshRepeatedSignature =
-        normalizedSignature.length > 0 &&
-        normalizedSignature === session.lastOutputSignature &&
-        session.lastOutputAt !== null &&
-        now - session.lastOutputAt >= PROVIDER_REPEAT_OUTPUT_REFRESH_MS;
       if (
         normalizedSignature.length > 0 &&
-        (normalizedSignature !== session.lastOutputSignature || shouldRefreshRepeatedSignature)
+        normalizedSignature !== session.lastOutputSignature
       ) {
-        // Keep provider sessions alive on repeated visible redraws, but only after a small gap
-        // so idle prompt repaints do not pin the tab in a running state forever.
-        session.lastOutputAt = now;
+        // Only refresh on genuinely new output. Repeated identical redraws (idle prompt
+        // repaints) are ignored so they do not pin the provider in a "busy" state forever.
+        // When hooks are active (managedAgentObserved), hooks are the source of truth anyway;
+        // this heuristic only matters for unmanaged terminals.
+        session.lastOutputAt = Date.now();
         session.lastOutputSignature = normalizedSignature;
       }
     }
