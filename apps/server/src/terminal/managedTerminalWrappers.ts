@@ -8,12 +8,17 @@ import path from "node:path";
 import {
   defaultTerminalTitleForCliKind,
   managedTerminalCommandNameForCliKind,
+  T3CODE_TERMINAL_HOOK_OSC_PREFIX,
   T3CODE_TERMINAL_CLI_KIND_ENV_KEY,
+  type TerminalAgentHookEventType,
   type TerminalCliKind,
 } from "@t3tools/shared/terminalThreads";
 
 export interface ManagedTerminalWrapperState {
   binDir: string | null;
+  codexHomeDir: string | null;
+  hookScriptPath: string | null;
+  claudeSettingsPath: string | null;
   zshDir: string | null;
   targetPathByCliKind: Partial<Record<TerminalCliKind, string>>;
 }
@@ -77,15 +82,114 @@ function resolveExecutableOnPath(commandName: string, env: NodeJS.ProcessEnv): s
   return null;
 }
 
-function buildWrapperScript(cliKind: TerminalCliKind, targetPath: string): string {
+function buildHookOscSequence(eventType: TerminalAgentHookEventType): string {
+  return `\\033]${T3CODE_TERMINAL_HOOK_OSC_PREFIX}${eventType}\\007`;
+}
+
+function buildNotifyHookScript(): string {
+  return `#!/bin/sh
+set -eu
+if [ "$#" -gt 0 ]; then
+  _t3code_hook_input="$1"
+else
+  _t3code_hook_input="$(cat)"
+fi
+
+_t3code_extract_event() {
+  printf '%s' "$_t3code_hook_input" | sed -n "s/.*\\\"$1\\\"[[:space:]]*:[[:space:]]*\\\"\\([^\\\"]*\\)\\\".*/\\1/p" | head -n 1
+}
+
+_t3code_event="$(_t3code_extract_event hook_event_name)"
+if [ -z "$_t3code_event" ]; then
+  _t3code_type="$(_t3code_extract_event type)"
+  case "$_t3code_type" in
+    task_started|userPromptSubmitted|user_prompt_submit)
+      _t3code_event="Start"
+      ;;
+    task_complete|agent-turn-complete|stop|session_end|sessionEnd)
+      _t3code_event="Stop"
+      ;;
+    exec_approval_request|apply_patch_approval_request|request_user_input)
+      _t3code_event="PermissionRequest"
+      ;;
+  esac
+fi
+
+_t3code_emit_osc() {
+  _t3code_sequence="$1"
+  if [ -w /dev/tty ]; then
+    printf '%b' "$_t3code_sequence" > /dev/tty 2>/dev/null || printf '%b' "$_t3code_sequence"
+    return
+  fi
+  printf '%b' "$_t3code_sequence"
+}
+
+case "$_t3code_event" in
+  UserPromptSubmit|PostToolUse|PostToolUseFailure|Start)
+    _t3code_emit_osc '${buildHookOscSequence("Start")}'
+    ;;
+  Stop)
+    _t3code_emit_osc '${buildHookOscSequence("Stop")}'
+    ;;
+  PermissionRequest|PreToolUse|Notification)
+    _t3code_emit_osc '${buildHookOscSequence("PermissionRequest")}'
+    ;;
+esac
+`;
+}
+
+function buildClaudeSettingsJson(notifyHookPath: string): string {
+  const command = notifyHookPath;
+  return JSON.stringify(
+    {
+      hooks: {
+        UserPromptSubmit: [{ hooks: [{ type: "command", command }] }],
+        Stop: [{ hooks: [{ type: "command", command }] }],
+        PostToolUse: [{ matcher: "*", hooks: [{ type: "command", command }] }],
+        PostToolUseFailure: [{ matcher: "*", hooks: [{ type: "command", command }] }],
+        PermissionRequest: [{ matcher: "*", hooks: [{ type: "command", command }] }],
+      },
+    },
+    null,
+    2,
+  );
+}
+
+function buildCodexHooksJson(notifyHookPath: string): string {
+  const command = notifyHookPath;
+  return JSON.stringify(
+    {
+      hooks: {
+        UserPromptSubmit: [{ hooks: [{ type: "command", command }] }],
+        Stop: [{ hooks: [{ type: "command", command }] }],
+      },
+    },
+    null,
+    2,
+  );
+}
+
+function buildWrapperScript(input: {
+  claudeSettingsPath: string;
+  cliKind: TerminalCliKind;
+  codexHomeDir: string;
+  notifyHookPath: string;
+  targetPath: string;
+}): string {
+  const { claudeSettingsPath, cliKind, codexHomeDir, notifyHookPath, targetPath } = input;
   const commandName = managedTerminalCommandNameForCliKind(cliKind);
   const title = defaultTerminalTitleForCliKind(cliKind);
+  const execLine =
+    cliKind === "claude"
+      ? `exec ${shellQuote(targetPath)} --settings ${shellQuote(claudeSettingsPath)} "$@"`
+      : `export CODEX_HOME=${shellQuote(codexHomeDir)}
+exec ${shellQuote(targetPath)} --enable codex_hooks -c ${shellQuote(`notify=["bash",${JSON.stringify(notifyHookPath)}]`)} "$@"`;
   return [
     "#!/bin/sh",
     `# Managed ${commandName} wrapper injected by t3code terminal sessions.`,
     `printf '\\033]0;%s\\007' ${shellQuote(title)}`,
     `export ${T3CODE_TERMINAL_CLI_KIND_ENV_KEY}=${shellQuote(cliKind)}`,
-    `exec ${shellQuote(targetPath)} "$@"`,
+    execLine,
     "",
   ].join("\n");
 }
@@ -175,7 +279,14 @@ export function prepareManagedTerminalWrappers(options: {
   zshRootDir: string;
 }): ManagedTerminalWrapperState {
   if (process.platform === "win32") {
-    return { binDir: null, zshDir: null, targetPathByCliKind: {} };
+    return {
+      binDir: null,
+      codexHomeDir: null,
+      hookScriptPath: null,
+      claudeSettingsPath: null,
+      zshDir: null,
+      targetPathByCliKind: {},
+    };
   }
 
   const targetPathByCliKind: Partial<Record<TerminalCliKind, string>> = {};
@@ -189,19 +300,50 @@ export function prepareManagedTerminalWrappers(options: {
   }
 
   if (Object.keys(targetPathByCliKind).length === 0) {
-    return { binDir: null, zshDir: null, targetPathByCliKind };
+    return {
+      binDir: null,
+      codexHomeDir: null,
+      hookScriptPath: null,
+      claudeSettingsPath: null,
+      zshDir: null,
+      targetPathByCliKind,
+    };
   }
 
   fs.mkdirSync(options.rootDir, { recursive: true });
+  const codexHomeDir = path.join(options.rootDir, "codex-home");
+  const hookScriptPath = path.join(options.rootDir, "notify-hook.sh");
+  const claudeSettingsPath = path.join(options.rootDir, "claude-settings.json");
+  fs.mkdirSync(codexHomeDir, { recursive: true });
+  writeFileIfChanged(hookScriptPath, buildNotifyHookScript(), 0o755);
+  writeFileIfChanged(claudeSettingsPath, buildClaudeSettingsJson(hookScriptPath), 0o644);
+  writeFileIfChanged(path.join(codexHomeDir, "hooks.json"), buildCodexHooksJson(hookScriptPath), 0o644);
   for (const [cliKind, targetPath] of Object.entries(targetPathByCliKind) as Array<
     [TerminalCliKind, string]
   >) {
     const wrapperPath = path.join(options.rootDir, managedTerminalCommandNameForCliKind(cliKind));
-    writeFileIfChanged(wrapperPath, buildWrapperScript(cliKind, targetPath), 0o755);
+    writeFileIfChanged(
+      wrapperPath,
+      buildWrapperScript({
+        claudeSettingsPath,
+        cliKind,
+        codexHomeDir,
+        notifyHookPath: hookScriptPath,
+        targetPath,
+      }),
+      0o755,
+    );
   }
   ensureManagedZshWrappers(options.zshRootDir);
 
-  return { binDir: options.rootDir, zshDir: options.zshRootDir, targetPathByCliKind };
+  return {
+    binDir: options.rootDir,
+    codexHomeDir,
+    hookScriptPath,
+    claudeSettingsPath,
+    zshDir: options.zshRootDir,
+    targetPathByCliKind,
+  };
 }
 
 function applyManagedTerminalWrapperEnvState(

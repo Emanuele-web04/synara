@@ -46,6 +46,7 @@ export interface TerminalSessionState {
   unsubscribeExit: (() => void) | null;
   hasRunningSubprocess: boolean;
   detectedCliKind: TerminalCliKind | null;
+  managedAgentRunning: boolean;
   runtimeEnv: Record<string, string> | null;
   /** Buffered shell input used to detect canonical CLI commands at submit time. */
   pendingInputBuffer: string;

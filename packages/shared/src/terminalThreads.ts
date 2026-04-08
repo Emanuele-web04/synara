@@ -7,7 +7,9 @@ export const GENERIC_TERMINAL_THREAD_TITLE = "New terminal";
 export type TerminalCliKind = "codex" | "claude";
 export type TerminalIconKey = "terminal" | "openai" | "claude";
 export type TerminalVisualState = "idle" | "running";
+export type TerminalAgentHookEventType = "Start" | "Stop" | "PermissionRequest";
 export const T3CODE_TERMINAL_CLI_KIND_ENV_KEY = "T3CODE_TERMINAL_CLI_KIND";
+export const T3CODE_TERMINAL_HOOK_OSC_PREFIX = "633;T3CODE_AGENT_EVENT=";
 export const MANAGED_TERMINAL_COMMAND_NAME_BY_CLI_KIND: Record<TerminalCliKind, string> = {
   codex: "codex",
   claude: "claude",

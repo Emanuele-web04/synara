@@ -21,7 +21,9 @@ import {
   deriveTerminalProcessIdentity,
   deriveTerminalTitleSignalIdentity,
   terminalCliKindFromValue,
+  T3CODE_TERMINAL_HOOK_OSC_PREFIX,
   T3CODE_TERMINAL_CLI_KIND_ENV_KEY,
+  type TerminalAgentHookEventType,
   type TerminalCliKind,
 } from "@t3tools/shared/terminalThreads";
 import { Effect, Encoding, Layer, Schema } from "effect";
@@ -74,6 +76,7 @@ interface TerminalSubprocessActivity {
   cliKind: TerminalCliKind | null;
   hasRunningSubprocess: boolean;
   hasProviderDescendant: boolean;
+  hasNonProviderSubprocess: boolean;
 }
 
 type TerminalSubprocessChecker = (
@@ -84,7 +87,12 @@ function normalizeSubprocessActivity(
   result: boolean | TerminalSubprocessActivity,
 ): TerminalSubprocessActivity {
   return typeof result === "boolean"
-    ? { cliKind: null, hasProviderDescendant: false, hasRunningSubprocess: result }
+    ? {
+        cliKind: null,
+        hasNonProviderSubprocess: result,
+        hasProviderDescendant: false,
+        hasRunningSubprocess: result,
+      }
     : result;
 }
 
@@ -252,12 +260,14 @@ async function checkWindowsSubprocessActivity(
     );
     return {
       cliKind: null,
+      hasNonProviderSubprocess: false,
       hasProviderDescendant: false,
       hasRunningSubprocess: result.code === 0,
     };
   } catch {
     return {
       cliKind: null,
+      hasNonProviderSubprocess: false,
       hasProviderDescendant: false,
       hasRunningSubprocess: false,
     };
@@ -293,6 +303,7 @@ async function checkPosixSubprocessActivity(
   ): TerminalSubprocessActivity => {
     const children = childrenByParentPid.get(parentPid) ?? [];
     let cliKind: TerminalCliKind | null = null;
+    let hasNonProviderSubprocess = false;
     let hasProviderDescendant = false;
     let hasRunningSubprocess = false;
     for (const child of children) {
@@ -301,12 +312,15 @@ async function checkPosixSubprocessActivity(
       if (childCliKind || nestedActivity.hasProviderDescendant) {
         hasProviderDescendant = true;
       }
+      if ((!childCliKind && !isShellLikeProcessName(child.command)) || nestedActivity.hasNonProviderSubprocess) {
+        hasNonProviderSubprocess = true;
+      }
       cliKind = cliKind ?? childCliKind ?? nestedActivity.cliKind;
       if (!isShellLikeProcessName(child.command) || nestedActivity.hasRunningSubprocess) {
         hasRunningSubprocess = true;
       }
     }
-    return { cliKind, hasProviderDescendant, hasRunningSubprocess };
+    return { cliKind, hasNonProviderSubprocess, hasProviderDescendant, hasRunningSubprocess };
   };
 
   try {
@@ -320,6 +334,7 @@ async function checkPosixSubprocessActivity(
       if (pgrepResult.stdout.trim().length === 0) {
         return {
           cliKind: null,
+          hasNonProviderSubprocess: false,
           hasProviderDescendant: false,
           hasRunningSubprocess: false,
         };
@@ -328,6 +343,7 @@ async function checkPosixSubprocessActivity(
     if (pgrepResult.code === 1) {
       return {
         cliKind: null,
+        hasNonProviderSubprocess: false,
         hasProviderDescendant: false,
         hasRunningSubprocess: false,
       };
@@ -346,6 +362,7 @@ async function checkPosixSubprocessActivity(
     if (psResult.code !== 0) {
       return {
         cliKind: null,
+        hasNonProviderSubprocess: false,
         hasProviderDescendant: false,
         hasRunningSubprocess: false,
       };
@@ -368,6 +385,7 @@ async function checkPosixSubprocessActivity(
   } catch {
     return {
       cliKind: null,
+      hasNonProviderSubprocess: false,
       hasProviderDescendant: false,
       hasRunningSubprocess: false,
     };
@@ -447,12 +465,25 @@ function shouldStripCsiSequence(body: string, finalByte: string): boolean {
 }
 
 function shouldStripOscSequence(content: string): boolean {
-  return /^(10|11|12);(?:\?|rgb:)/.test(content);
+  return (
+    /^(10|11|12);(?:\?|rgb:)/.test(content) ||
+    content.startsWith(T3CODE_TERMINAL_HOOK_OSC_PREFIX)
+  );
 }
 
 function extractOscTitle(content: string): string | null {
   const match = content.match(/^(?:0|2);([\s\S]+)$/);
   return match?.[1]?.trim() || null;
+}
+
+function extractOscHookEvent(content: string): TerminalAgentHookEventType | null {
+  if (!content.startsWith(T3CODE_TERMINAL_HOOK_OSC_PREFIX)) {
+    return null;
+  }
+  const eventType = content.slice(T3CODE_TERMINAL_HOOK_OSC_PREFIX.length).trim();
+  return eventType === "Start" || eventType === "Stop" || eventType === "PermissionRequest"
+    ? eventType
+    : null;
 }
 
 function stripStringTerminator(value: string): string {
@@ -501,11 +532,17 @@ function findEscapeSequenceEndIndex(input: string, start: number): number | null
 function sanitizeTerminalHistoryChunk(
   pendingControlSequence: string,
   data: string,
-): { visibleText: string; pendingControlSequence: string; titleSignals: string[] } {
+): {
+  visibleText: string;
+  pendingControlSequence: string;
+  titleSignals: string[];
+  hookEvents: TerminalAgentHookEventType[];
+} {
   const input = `${pendingControlSequence}${data}`;
   let visibleText = "";
   let index = 0;
   const titleSignals: string[] = [];
+  const hookEvents: TerminalAgentHookEventType[] = [];
 
   const append = (value: string) => {
     visibleText += value;
@@ -517,7 +554,7 @@ function sanitizeTerminalHistoryChunk(
     if (codePoint === 0x1b) {
       const nextCodePoint = input.charCodeAt(index + 1);
       if (Number.isNaN(nextCodePoint)) {
-        return { visibleText, pendingControlSequence: input.slice(index), titleSignals };
+        return { visibleText, pendingControlSequence: input.slice(index), titleSignals, hookEvents };
       }
 
       if (nextCodePoint === 0x5b) {
@@ -535,7 +572,7 @@ function sanitizeTerminalHistoryChunk(
           cursor += 1;
         }
         if (cursor >= input.length) {
-          return { visibleText, pendingControlSequence: input.slice(index), titleSignals };
+          return { visibleText, pendingControlSequence: input.slice(index), titleSignals, hookEvents };
         }
         continue;
       }
@@ -548,10 +585,14 @@ function sanitizeTerminalHistoryChunk(
       ) {
         const terminatorIndex = findStringTerminatorIndex(input, index + 2);
         if (terminatorIndex === null) {
-          return { visibleText, pendingControlSequence: input.slice(index), titleSignals };
+          return { visibleText, pendingControlSequence: input.slice(index), titleSignals, hookEvents };
         }
         const sequence = input.slice(index, terminatorIndex);
         const content = stripStringTerminator(input.slice(index + 2, terminatorIndex));
+        const hookEvent = extractOscHookEvent(content);
+        if (hookEvent) {
+          hookEvents.push(hookEvent);
+        }
         if (nextCodePoint === 0x5d) {
           const titleSignal = extractOscTitle(content);
           if (titleSignal) {
@@ -567,7 +608,7 @@ function sanitizeTerminalHistoryChunk(
 
       const escapeSequenceEndIndex = findEscapeSequenceEndIndex(input, index + 1);
       if (escapeSequenceEndIndex === null) {
-        return { visibleText, pendingControlSequence: input.slice(index), titleSignals };
+        return { visibleText, pendingControlSequence: input.slice(index), titleSignals, hookEvents };
       }
       append(input.slice(index, escapeSequenceEndIndex));
       index = escapeSequenceEndIndex;
@@ -589,7 +630,7 @@ function sanitizeTerminalHistoryChunk(
         cursor += 1;
       }
       if (cursor >= input.length) {
-        return { visibleText, pendingControlSequence: input.slice(index), titleSignals };
+        return { visibleText, pendingControlSequence: input.slice(index), titleSignals, hookEvents };
       }
       continue;
     }
@@ -597,10 +638,14 @@ function sanitizeTerminalHistoryChunk(
     if (codePoint === 0x9d || codePoint === 0x90 || codePoint === 0x9e || codePoint === 0x9f) {
       const terminatorIndex = findStringTerminatorIndex(input, index + 1);
       if (terminatorIndex === null) {
-        return { visibleText, pendingControlSequence: input.slice(index), titleSignals };
+        return { visibleText, pendingControlSequence: input.slice(index), titleSignals, hookEvents };
       }
       const sequence = input.slice(index, terminatorIndex);
       const content = stripStringTerminator(input.slice(index + 1, terminatorIndex));
+      const hookEvent = extractOscHookEvent(content);
+      if (hookEvent) {
+        hookEvents.push(hookEvent);
+      }
       if (codePoint === 0x9d) {
         const titleSignal = extractOscTitle(content);
         if (titleSignal) {
@@ -618,7 +663,7 @@ function sanitizeTerminalHistoryChunk(
     index += 1;
   }
 
-  return { visibleText, pendingControlSequence: "", titleSignals };
+  return { visibleText, pendingControlSequence: "", titleSignals, hookEvents };
 }
 
 function legacySafeThreadId(threadId: string): string {
@@ -693,6 +738,7 @@ function resetSessionHistory(session: TerminalSessionState): void {
   session.historyEndsWithNewline = false;
   session.pendingHistoryControlSequence = "";
   session.pendingInputBuffer = "";
+  session.managedAgentRunning = false;
 }
 
 function appendSessionHistory(
@@ -837,6 +883,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           unsubscribeExit: null,
           hasRunningSubprocess: false,
           detectedCliKind: cliKindFromRuntimeEnv(normalizedRuntimeEnv(input.env)),
+          managedAgentRunning: false,
           runtimeEnv: normalizedRuntimeEnv(input.env),
           pendingInputBuffer: "",
           pendingOutputChunks: [],
@@ -918,6 +965,18 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         cliKind: session.detectedCliKind,
       });
     }
+    const submittedPrompt = input.data.includes("\r") || input.data.includes("\n");
+    if (submittedPrompt && session.detectedCliKind !== null && !session.hasRunningSubprocess) {
+      session.hasRunningSubprocess = true;
+      this.emitEvent({
+        type: "activity",
+        threadId: session.threadId,
+        terminalId: session.terminalId,
+        createdAt: new Date().toISOString(),
+        hasRunningSubprocess: true,
+        cliKind: session.detectedCliKind,
+      });
+    }
     session.lastInputAt = Date.now();
     session.process.write(input.data);
   }
@@ -982,6 +1041,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           unsubscribeExit: null,
           hasRunningSubprocess: false,
           detectedCliKind: cliKindFromRuntimeEnv(normalizedRuntimeEnv(input.env)),
+          managedAgentRunning: false,
           runtimeEnv: normalizedRuntimeEnv(input.env),
           pendingInputBuffer: "",
           pendingOutputChunks: [],
@@ -1080,6 +1140,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     session.exitSignal = null;
     session.hasRunningSubprocess = false;
     session.detectedCliKind = cliKindFromRuntimeEnv(session.runtimeEnv);
+    session.managedAgentRunning = false;
     session.pendingInputBuffer = "";
     session.lastInputAt = null;
     session.lastOutputAt = null;
@@ -1185,6 +1246,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       session.process = null;
       session.hasRunningSubprocess = false;
       session.detectedCliKind = null;
+      session.managedAgentRunning = false;
       session.updatedAt = new Date().toISOString();
       this.evictInactiveSessionsIfNeeded();
       this.updateSubprocessPollingState();
@@ -1208,6 +1270,23 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   private onProcessData(session: TerminalSessionState, data: string): void {
     const sanitized = sanitizeTerminalHistoryChunk(session.pendingHistoryControlSequence, data);
     session.pendingHistoryControlSequence = sanitized.pendingControlSequence;
+    const latestHookEvent = sanitized.hookEvents.at(-1) ?? null;
+    if (latestHookEvent) {
+      const nextManagedAgentRunning = latestHookEvent !== "Stop";
+      if (session.managedAgentRunning !== nextManagedAgentRunning) {
+        session.managedAgentRunning = nextManagedAgentRunning;
+        const nextHasRunningSubprocess = nextManagedAgentRunning;
+        session.hasRunningSubprocess = nextHasRunningSubprocess;
+        this.emitEvent({
+          type: "activity",
+          threadId: session.threadId,
+          terminalId: session.terminalId,
+          createdAt: new Date().toISOString(),
+          hasRunningSubprocess: nextHasRunningSubprocess,
+          cliKind: session.detectedCliKind,
+        });
+      }
+    }
     const titleSignalCliKind =
       sanitized.titleSignals
         .map((titleSignal) => deriveTerminalTitleSignalIdentity(titleSignal)?.cliKind ?? null)
@@ -1302,6 +1381,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     session.pid = null;
     session.hasRunningSubprocess = false;
     session.detectedCliKind = null;
+    session.managedAgentRunning = false;
     session.lastInputAt = null;
     session.lastOutputAt = null;
     session.lastOutputSignature = null;
@@ -1333,6 +1413,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     session.pid = null;
     session.hasRunningSubprocess = false;
     session.detectedCliKind = null;
+    session.managedAgentRunning = false;
     session.lastInputAt = null;
     session.lastOutputAt = null;
     session.lastOutputSignature = null;
@@ -1655,10 +1736,12 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
               await this.subprocessChecker(terminalPid),
             );
             terminalCliKind = subprocessActivity.cliKind ?? session.detectedCliKind;
-            hasRunningSubprocess =
-              subprocessActivity.hasProviderDescendant && subprocessActivity.hasRunningSubprocess
-                ? isProviderSessionBusy(session, Date.now())
-                : subprocessActivity.hasRunningSubprocess;
+            hasRunningSubprocess = subprocessActivity.hasProviderDescendant
+              ? subprocessActivity.hasNonProviderSubprocess || isProviderSessionBusy(session, Date.now())
+              : subprocessActivity.hasRunningSubprocess;
+            if (session.managedAgentRunning) {
+              hasRunningSubprocess = true;
+            }
           } catch (error) {
             this.logger.warn("failed to check terminal subprocess activity", {
               threadId: session.threadId,

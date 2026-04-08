@@ -756,9 +756,6 @@ function TerminalViewport({
           label: nextIdentityState.identity.title,
         });
       }
-      if (terminalCliKindRef.current !== null && (data.includes("\r") || data.includes("\n"))) {
-        onTerminalActivityChangeRef.current(terminalId, true);
-      }
       void api.terminal
         .write({ threadId, terminalId, data })
         .catch((err) =>
