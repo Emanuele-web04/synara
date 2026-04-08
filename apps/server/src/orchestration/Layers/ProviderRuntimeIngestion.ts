@@ -551,10 +551,10 @@ function runtimeEventToActivities(
         return [];
       }
       const rl = rawRateLimits as Record<string, unknown>;
-      const status = rl.status;
-      if (status !== "rejected" && status !== "allowed_warning") {
+      if (Object.keys(rl).length === 0) {
         return [];
       }
+      const status = rl.status;
       // Normalize resetsAt: Claude SDK sends Unix seconds (number), Codex may send ISO string
       const resetsAtRaw = rl.resetsAt;
       const resetsAt =
@@ -563,7 +563,62 @@ function runtimeEventToActivities(
           : typeof resetsAtRaw === "string"
             ? resetsAtRaw
             : undefined;
+      // Preserve per-window rate limit breakdown when the provider sends it.
+      // Claude SDK may include a `limits` array with per-window entries
+      // (e.g. { window: "5h", utilization: 0.06, resetsAt: ... }).
+      const rawLimits = Array.isArray(rl.limits) ? rl.limits : undefined;
+      const limits = rawLimits
+        ?.filter(
+          (l): l is Record<string, unknown> =>
+            l !== null &&
+            typeof l === "object" &&
+            typeof (l as Record<string, unknown>).window === "string",
+        )
+        .map((l) => {
+          const lResetsAtRaw = l.resetsAt;
+          const lResetsAt =
+            typeof lResetsAtRaw === "number"
+              ? new Date(lResetsAtRaw * 1000).toISOString()
+              : typeof lResetsAtRaw === "string"
+                ? lResetsAtRaw
+                : undefined;
+          const limit = { window: l.window as string } as {
+            window: string;
+            utilization?: number;
+            resetsAt?: string;
+          };
+          if (typeof l.utilization === "number") {
+            limit.utilization = l.utilization;
+          }
+          if (lResetsAt) {
+            limit.resetsAt = lResetsAt;
+          }
+          return limit;
+        });
+      const normalizedPayload = {
+        provider: event.provider,
+        ...rl,
+        ...(resetsAt ? { resetsAt } : {}),
+        ...(typeof rl.utilization === "number" ? { utilization: rl.utilization } : {}),
+        ...(limits && limits.length > 0 ? { limits } : {}),
+      };
+      const activities: OrchestrationThreadActivity[] = [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "account.rate-limits.updated",
+          summary: "Rate limits updated",
+          payload: normalizedPayload,
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+      if (status !== "rejected" && status !== "allowed_warning") {
+        return activities;
+      }
       return [
+        ...activities,
         {
           id: event.eventId,
           createdAt: event.createdAt,
@@ -571,9 +626,8 @@ function runtimeEventToActivities(
           kind: "account.rate-limited",
           summary: status === "rejected" ? "Rate limited" : "Approaching rate limit",
           payload: {
+            ...normalizedPayload,
             status,
-            ...(resetsAt ? { resetsAt } : {}),
-            ...(typeof rl.utilization === "number" ? { utilization: rl.utilization } : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,

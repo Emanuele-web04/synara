@@ -44,6 +44,8 @@ describe("terminalStateStore actions", () => {
       workspaceActiveTab: "terminal",
       terminalHeight: 280,
       terminalIds: ["default"],
+      terminalLabelsById: {},
+      terminalCliKindsById: {},
       runningTerminalIds: [],
       activeTerminalId: "default",
       terminalGroups: [{ id: "group-default", terminalIds: ["default"] }],
@@ -223,6 +225,31 @@ describe("terminalStateStore actions", () => {
       { id: "group-default", terminalIds: ["default"] },
       { id: "group-terminal-2", terminalIds: ["terminal-2"] },
     ]);
+  });
+
+  it("stores terminal labels and removes them when a terminal closes", () => {
+    const store = useTerminalStateStore.getState();
+    store.newTerminal(THREAD_ID, "terminal-2");
+    store.setTerminalMetadata(THREAD_ID, "terminal-2", {
+      cliKind: "codex",
+      label: "Codex CLI",
+    });
+
+    let terminalState = selectThreadTerminalState(
+      useTerminalStateStore.getState().terminalStateByThreadId,
+      THREAD_ID,
+    );
+    expect(terminalState.terminalLabelsById).toEqual({ "terminal-2": "Codex CLI" });
+    expect(terminalState.terminalCliKindsById).toEqual({ "terminal-2": "codex" });
+
+    store.closeTerminal(THREAD_ID, "terminal-2");
+
+    terminalState = selectThreadTerminalState(
+      useTerminalStateStore.getState().terminalStateByThreadId,
+      THREAD_ID,
+    );
+    expect(terminalState.terminalLabelsById).toEqual({});
+    expect(terminalState.terminalCliKindsById).toEqual({});
   });
 
   it("allows unlimited groups while keeping each group capped at four terminals", () => {

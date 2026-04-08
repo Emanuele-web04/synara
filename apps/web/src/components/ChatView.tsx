@@ -39,6 +39,7 @@ import {
   resolveThreadBranchSourceCwd,
   resolveThreadWorkspaceCwd as resolveSharedThreadWorkspaceCwd,
 } from "@t3tools/shared/threadEnvironment";
+import { deriveTerminalCommandIdentity } from "@t3tools/shared/terminalThreads";
 import { deriveAssociatedWorktreeMetadata } from "@t3tools/shared/threadWorkspace";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { GoTasklist } from "react-icons/go";
@@ -687,6 +688,8 @@ export default function ChatView({
   );
   const storeSetTerminalWorkspaceTab = useTerminalStateStore((s) => s.setTerminalWorkspaceTab);
   const storeSetTerminalHeight = useTerminalStateStore((s) => s.setTerminalHeight);
+  const storeSetTerminalMetadata = useTerminalStateStore((s) => s.setTerminalMetadata);
+  const storeSetTerminalActivity = useTerminalStateStore((s) => s.setTerminalActivity);
   const storeSplitTerminal = useTerminalStateStore((s) => s.splitTerminal);
   const storeNewTerminal = useTerminalStateStore((s) => s.newTerminal);
   const storeOpenNewFullWidthTerminal = useTerminalStateStore((s) => s.openNewFullWidthTerminal);
@@ -1863,6 +1866,25 @@ export default function ChatView({
     storeOpenNewFullWidthTerminal(activeThreadId, terminalId);
     setTerminalFocusRequestId((value) => value + 1);
   }, [activeProject, activeThreadId, storeOpenNewFullWidthTerminal]);
+  // Desktop accelerators like Cmd+T can be claimed by Electron before the page sees keydown.
+  useEffect(() => {
+    const onMenuAction = window.desktopBridge?.onMenuAction;
+    if (typeof onMenuAction !== "function" || !isFocusedPane) {
+      return;
+    }
+
+    const unsubscribe = onMenuAction((action) => {
+      if (action !== "new-terminal-tab") return;
+      if (!terminalState.terminalOpen) {
+        setTerminalOpen(true);
+      }
+      createNewTerminal();
+    });
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, [createNewTerminal, isFocusedPane, setTerminalOpen, terminalState.terminalOpen]);
   const activateTerminal = useCallback(
     (terminalId: string) => {
       if (!activeThreadId) return;
@@ -1982,6 +2004,10 @@ export default function ChatView({
       runtimeEnv: threadTerminalRuntimeEnv,
       height: terminalState.terminalHeight,
       terminalIds: terminalState.terminalIds,
+      terminalLabelsById: terminalState.terminalLabelsById,
+      terminalTitleOverridesById: terminalState.terminalTitleOverridesById,
+      terminalCliKindsById: terminalState.terminalCliKindsById,
+      runningTerminalIds: terminalState.runningTerminalIds,
       activeTerminalId: terminalState.activeTerminalId,
       terminalGroups: terminalState.terminalGroups,
       activeTerminalGroupId: terminalState.activeTerminalGroupId,
@@ -1995,6 +2021,17 @@ export default function ChatView({
       onActiveTerminalChange: activateTerminal,
       onCloseTerminal: closeTerminal,
       onHeightChange: setTerminalHeight,
+      onTerminalMetadataChange: (
+        terminalId: string,
+        metadata: { cliKind: "codex" | "claude" | null; label: string },
+      ) => {
+        if (!activeThreadId) return;
+        storeSetTerminalMetadata(activeThreadId, terminalId, metadata);
+      },
+      onTerminalActivityChange: (terminalId: string, isRunning: boolean) => {
+        if (!activeThreadId) return;
+        storeSetTerminalActivity(activeThreadId, terminalId, isRunning);
+      },
       onAddTerminalContext: addTerminalContextToDraft,
     }),
     [
@@ -2006,16 +2043,23 @@ export default function ChatView({
       closeWorkspaceShortcutLabel,
       createNewTerminal,
       gitCwd,
+      activeThreadId,
       newTerminalShortcutLabel,
       setTerminalHeight,
       splitTerminal,
       splitTerminalShortcutLabel,
+      storeSetTerminalActivity,
+      storeSetTerminalMetadata,
       terminalFocusRequestId,
       terminalState.activeTerminalGroupId,
       terminalState.activeTerminalId,
+      terminalState.terminalCliKindsById,
       terminalState.terminalGroups,
       terminalState.terminalHeight,
       terminalState.terminalIds,
+      terminalState.terminalLabelsById,
+      terminalState.terminalTitleOverridesById,
+      terminalState.runningTerminalIds,
       threadId,
       threadTerminalRuntimeEnv,
     ],
@@ -2083,7 +2127,14 @@ export default function ChatView({
           };
 
       try {
+        const terminalCommandIdentity = deriveTerminalCommandIdentity(script.command);
         await api.terminal.open(openTerminalInput);
+        if (terminalCommandIdentity) {
+          storeSetTerminalMetadata(activeThreadId, targetTerminalId, {
+            cliKind: terminalCommandIdentity.cliKind,
+            label: terminalCommandIdentity.title,
+          });
+        }
         await api.terminal.write({
           threadId: activeThreadId,
           terminalId: targetTerminalId,
@@ -2105,6 +2156,8 @@ export default function ChatView({
       setThreadError,
       storeNewTerminal,
       storeSetActiveTerminal,
+      storeSetTerminalActivity,
+      storeSetTerminalMetadata,
       setLastInvokedScriptByProjectId,
       terminalState.activeTerminalId,
       terminalState.runningTerminalIds,
@@ -4847,6 +4900,7 @@ export default function ChatView({
           activeThreadId={activeThread.id}
           activeThreadTitle={activeThread.title}
           activeProjectName={activeProject?.name}
+          hideHandoffControls={terminalWorkspaceTerminalTabActive}
           isGitRepo={isGitRepo}
           openInCwd={threadWorkspaceCwd}
           activeProjectScripts={activeProject?.scripts}
@@ -4909,7 +4963,9 @@ export default function ChatView({
         <TerminalWorkspaceTabs
           activeTab={terminalState.workspaceActiveTab}
           isWorking={isWorking}
+          terminalHasRunningActivity={terminalState.runningTerminalIds.length > 0}
           terminalCount={terminalState.terminalIds.length}
+          workspaceLayout={terminalState.workspaceLayout}
           onSelectTab={setTerminalWorkspaceTab}
         />
       ) : null}

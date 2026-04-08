@@ -49,6 +49,7 @@ interface ChatHeaderProps {
   activeThreadId: ThreadId;
   activeThreadTitle: string;
   activeProjectName: string | undefined;
+  hideHandoffControls?: boolean;
   isGitRepo: boolean;
   openInCwd: string | null;
   activeProjectScripts: ProjectScript[] | undefined;
@@ -89,6 +90,7 @@ export const ChatHeader = memo(function ChatHeader({
   activeThreadId,
   activeThreadTitle,
   activeProjectName,
+  hideHandoffControls = false,
   isGitRepo,
   openInCwd,
   activeProjectScripts,
@@ -176,7 +178,7 @@ export const ChatHeader = memo(function ChatHeader({
           >
             {activeThreadTitle}
           </h2>
-          {handoffBadgeLabel ? (
+          {!hideHandoffControls && handoffBadgeLabel ? (
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -200,7 +202,7 @@ export const ChatHeader = memo(function ChatHeader({
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-2 [-webkit-app-region:no-drag]">
-        {!isDisposableThread ? (
+        {!isDisposableThread && !hideHandoffControls ? (
           <Tooltip>
             <TooltipTrigger
               render={

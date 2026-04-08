@@ -28,11 +28,13 @@ describe("terminalRunningSubprocessFromEvent", () => {
     const active = terminalRunningSubprocessFromEvent({
       ...eventBase(),
       type: "activity",
+      cliKind: null,
       hasRunningSubprocess: true,
     });
     const idle = terminalRunningSubprocessFromEvent({
       ...eventBase(),
       type: "activity",
+      cliKind: null,
       hasRunningSubprocess: false,
     });
 

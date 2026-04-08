@@ -68,8 +68,8 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+b", command: "sidebar.toggle", when: "!terminalFocus" },
   { key: "mod+j", command: "terminal.toggle" },
   { key: "mod+d", command: "terminal.split", when: "terminalFocus" },
-  // Route Cmd/Ctrl+N to terminal creation only while a terminal has focus.
-  { key: "mod+n", command: "terminal.new", when: "terminalFocus" },
+  // Reserve Cmd/Ctrl+T for the terminal workspace's "new tab" action while focused.
+  { key: "mod+t", command: "terminal.new", when: "terminalFocus" },
   { key: "mod+w", command: "terminal.close", when: "terminalFocus" },
   { key: "mod+shift+j", command: "terminal.workspace.newFullWidth" },
   { key: "mod+w", command: "terminal.workspace.closeActive", when: "terminalWorkspaceOpen" },

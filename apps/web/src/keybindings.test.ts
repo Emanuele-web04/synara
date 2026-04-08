@@ -77,6 +77,7 @@ function compile(bindings: TestBinding[]): ResolvedKeybindingsConfig {
   }));
 }
 
+// Mirror the server defaults here so frontend shortcut resolution stays aligned.
 const DEFAULT_BINDINGS = compile([
   {
     shortcut: modShortcut("b"),
@@ -90,7 +91,7 @@ const DEFAULT_BINDINGS = compile([
     whenAst: whenIdentifier("terminalFocus"),
   },
   {
-    shortcut: modShortcut("n"),
+    shortcut: modShortcut("t"),
     command: "terminal.new",
     whenAst: whenIdentifier("terminalFocus"),
   },
@@ -186,7 +187,7 @@ describe("split/new/close terminal shortcuts", () => {
       }),
     );
     assert.isFalse(
-      isTerminalNewShortcut(event({ key: "n", ctrlKey: true }), DEFAULT_BINDINGS, {
+      isTerminalNewShortcut(event({ key: "t", ctrlKey: true }), DEFAULT_BINDINGS, {
         platform: "Linux",
         context: { terminalFocus: false },
       }),
@@ -207,7 +208,7 @@ describe("split/new/close terminal shortcuts", () => {
       }),
     );
     assert.isTrue(
-      isTerminalNewShortcut(event({ key: "n", ctrlKey: true }), DEFAULT_BINDINGS, {
+      isTerminalNewShortcut(event({ key: "t", ctrlKey: true }), DEFAULT_BINDINGS, {
         platform: "Linux",
         context: { terminalFocus: true },
       }),
@@ -380,6 +381,7 @@ describe("shortcutLabelForCommand", () => {
 
   it("returns labels for non-terminal commands", () => {
     assert.strictEqual(shortcutLabelForCommand(DEFAULT_BINDINGS, "chat.new", "MacIntel"), "⌘N");
+    assert.strictEqual(shortcutLabelForCommand(DEFAULT_BINDINGS, "terminal.new", "MacIntel"), "⌘T");
     assert.strictEqual(
       shortcutLabelForCommand(DEFAULT_BINDINGS, "chat.newTerminal", "MacIntel"),
       "⇧⌘T",

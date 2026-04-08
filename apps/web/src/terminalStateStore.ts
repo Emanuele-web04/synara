@@ -5,6 +5,7 @@
  * API constrained to store actions/selectors.
  */
 
+import { type TerminalCliKind } from "@t3tools/shared/terminalThreads";
 import type { ThreadId } from "@t3tools/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
@@ -27,6 +28,9 @@ interface ThreadTerminalState {
   workspaceActiveTab: ThreadTerminalWorkspaceTab;
   terminalHeight: number;
   terminalIds: string[];
+  terminalLabelsById: Record<string, string>;
+  terminalTitleOverridesById: Record<string, string>;
+  terminalCliKindsById: Record<string, TerminalCliKind>;
   runningTerminalIds: string[];
   activeTerminalId: string;
   terminalGroups: ThreadTerminalGroup[];
@@ -49,6 +53,119 @@ function normalizeRunningTerminalIds(
   return [...new Set(runningTerminalIds)]
     .map((id) => id.trim())
     .filter((id) => id.length > 0 && validTerminalIdSet.has(id));
+}
+
+function normalizeTerminalLabels(
+  terminalLabelsById: Record<string, string> | null | undefined,
+  terminalIds: string[],
+): Record<string, string> {
+  const validTerminalIdSet = new Set(terminalIds);
+  const normalizedEntries = Object.entries(terminalLabelsById ?? {})
+    .map(([terminalId, label]) => [terminalId.trim(), label.trim()] as const)
+    .filter(([terminalId, label]) => terminalId.length > 0 && label.length > 0)
+    .filter(([terminalId]) => validTerminalIdSet.has(terminalId))
+    .sort(([leftId], [rightId]) => leftId.localeCompare(rightId));
+  return Object.fromEntries(normalizedEntries);
+}
+
+function normalizeTerminalTitleOverrides(
+  terminalTitleOverridesById: Record<string, string> | null | undefined,
+  terminalIds: string[],
+): Record<string, string> {
+  const validTerminalIdSet = new Set(terminalIds);
+  const normalizedEntries = Object.entries(terminalTitleOverridesById ?? {})
+    .map(([terminalId, titleOverride]) => [terminalId.trim(), titleOverride.trim()] as const)
+    .filter(
+      ([terminalId, titleOverride]) =>
+        terminalId.length > 0 && titleOverride.length > 0 && validTerminalIdSet.has(terminalId),
+    )
+    .sort(([leftId], [rightId]) => leftId.localeCompare(rightId));
+  return Object.fromEntries(normalizedEntries);
+}
+
+function normalizeTerminalCliKinds(
+  terminalCliKindsById: Record<string, TerminalCliKind> | null | undefined,
+  terminalIds: string[],
+): Record<string, TerminalCliKind> {
+  const validTerminalIdSet = new Set(terminalIds);
+  const normalizedEntries = Object.entries(terminalCliKindsById ?? {})
+    .map(([terminalId, cliKind]) => [terminalId.trim(), cliKind] as const)
+    .filter(
+      ([terminalId, cliKind]) =>
+        terminalId.length > 0 && (cliKind === "codex" || cliKind === "claude"),
+    )
+    .filter(([terminalId]) => validTerminalIdSet.has(terminalId))
+    .sort(([leftId], [rightId]) => leftId.localeCompare(rightId));
+  return Object.fromEntries(normalizedEntries);
+}
+
+function generatedTerminalTitleBase(cliKind: TerminalCliKind | null): string {
+  if (cliKind === "codex") return "Codex";
+  if (cliKind === "claude") return "Claude";
+  return "Terminal";
+}
+
+function resolveTerminalDisplayTitle(options: {
+  terminalId: string;
+  terminalLabelsById: Record<string, string>;
+  terminalTitleOverridesById: Record<string, string>;
+}): string {
+  return (
+    options.terminalTitleOverridesById[options.terminalId]?.trim() ||
+    options.terminalLabelsById[options.terminalId]?.trim() ||
+    ""
+  );
+}
+
+function createUniqueTerminalTitle(options: {
+  cliKind: TerminalCliKind | null;
+  excludeTerminalId?: string | undefined;
+  terminalLabelsById: Record<string, string>;
+  terminalTitleOverridesById?: Record<string, string> | undefined;
+}): string {
+  const baseTitle = generatedTerminalTitleBase(options.cliKind);
+  const takenTitles = new Set(
+    Object.keys(options.terminalLabelsById)
+      .filter((terminalId) => terminalId !== options.excludeTerminalId)
+      .map((terminalId) =>
+        resolveTerminalDisplayTitle({
+          terminalId,
+          terminalLabelsById: options.terminalLabelsById,
+          terminalTitleOverridesById: options.terminalTitleOverridesById ?? {},
+        }),
+      )
+      .filter((title) => title.length > 0),
+  );
+  let index = 1;
+  while (true) {
+    const candidate = `${baseTitle} ${index}`;
+    if (!takenTitles.has(candidate)) {
+      return candidate;
+    }
+    index += 1;
+  }
+}
+
+function ensureTerminalLabels(options: {
+  terminalCliKindsById: Record<string, TerminalCliKind>;
+  terminalIds: string[];
+  terminalLabelsById: Record<string, string>;
+  terminalTitleOverridesById: Record<string, string>;
+}): Record<string, string> {
+  const nextLabelsById = { ...options.terminalLabelsById };
+  for (const terminalId of options.terminalIds) {
+    const existingLabel = nextLabelsById[terminalId]?.trim();
+    if (existingLabel && existingLabel.length > 0) {
+      continue;
+    }
+    nextLabelsById[terminalId] = createUniqueTerminalTitle({
+      cliKind: options.terminalCliKindsById[terminalId] ?? null,
+      excludeTerminalId: terminalId,
+      terminalLabelsById: nextLabelsById,
+      terminalTitleOverridesById: options.terminalTitleOverridesById,
+    });
+  }
+  return nextLabelsById;
 }
 
 function fallbackGroupId(terminalId: string): string {
@@ -157,6 +274,10 @@ function threadTerminalStateEqual(left: ThreadTerminalState, right: ThreadTermin
     left.activeTerminalId === right.activeTerminalId &&
     left.activeTerminalGroupId === right.activeTerminalGroupId &&
     arraysEqual(left.terminalIds, right.terminalIds) &&
+    JSON.stringify(left.terminalLabelsById) === JSON.stringify(right.terminalLabelsById) &&
+    JSON.stringify(left.terminalTitleOverridesById) ===
+      JSON.stringify(right.terminalTitleOverridesById) &&
+    JSON.stringify(left.terminalCliKindsById) === JSON.stringify(right.terminalCliKindsById) &&
     arraysEqual(left.runningTerminalIds, right.runningTerminalIds) &&
     terminalGroupsEqual(left.terminalGroups, right.terminalGroups)
   );
@@ -170,6 +291,9 @@ const DEFAULT_THREAD_TERMINAL_STATE: ThreadTerminalState = Object.freeze({
   workspaceActiveTab: "terminal",
   terminalHeight: DEFAULT_THREAD_TERMINAL_HEIGHT,
   terminalIds: [DEFAULT_THREAD_TERMINAL_ID],
+  terminalLabelsById: { [DEFAULT_THREAD_TERMINAL_ID]: "Terminal 1" },
+  terminalTitleOverridesById: {},
+  terminalCliKindsById: {},
   runningTerminalIds: [],
   activeTerminalId: DEFAULT_THREAD_TERMINAL_ID,
   terminalGroups: [
@@ -185,6 +309,9 @@ function createDefaultThreadTerminalState(): ThreadTerminalState {
   return {
     ...DEFAULT_THREAD_TERMINAL_STATE,
     terminalIds: [...DEFAULT_THREAD_TERMINAL_STATE.terminalIds],
+    terminalLabelsById: { ...DEFAULT_THREAD_TERMINAL_STATE.terminalLabelsById },
+    terminalTitleOverridesById: { ...DEFAULT_THREAD_TERMINAL_STATE.terminalTitleOverridesById },
+    terminalCliKindsById: { ...DEFAULT_THREAD_TERMINAL_STATE.terminalCliKindsById },
     runningTerminalIds: [...DEFAULT_THREAD_TERMINAL_STATE.runningTerminalIds],
     terminalGroups: copyTerminalGroups(DEFAULT_THREAD_TERMINAL_STATE.terminalGroups),
   };
@@ -197,6 +324,24 @@ function getDefaultThreadTerminalState(): ThreadTerminalState {
 function normalizeThreadTerminalState(state: ThreadTerminalState): ThreadTerminalState {
   const terminalIds = normalizeTerminalIds(state.terminalIds);
   const nextTerminalIds = terminalIds.length > 0 ? terminalIds : [DEFAULT_THREAD_TERMINAL_ID];
+  const terminalLabelsById = normalizeTerminalLabels(
+    (state as Partial<ThreadTerminalState>).terminalLabelsById,
+    nextTerminalIds,
+  );
+  const terminalTitleOverridesById = normalizeTerminalTitleOverrides(
+    (state as Partial<ThreadTerminalState>).terminalTitleOverridesById,
+    nextTerminalIds,
+  );
+  const terminalCliKindsById = normalizeTerminalCliKinds(
+    (state as Partial<ThreadTerminalState>).terminalCliKindsById,
+    nextTerminalIds,
+  );
+  const ensuredTerminalLabelsById = ensureTerminalLabels({
+    terminalCliKindsById,
+    terminalIds: nextTerminalIds,
+    terminalLabelsById,
+    terminalTitleOverridesById,
+  });
   const runningTerminalIds = normalizeRunningTerminalIds(state.runningTerminalIds, nextTerminalIds);
   const activeTerminalId = nextTerminalIds.includes(state.activeTerminalId)
     ? state.activeTerminalId
@@ -221,6 +366,9 @@ function normalizeThreadTerminalState(state: ThreadTerminalState): ThreadTermina
         ? state.terminalHeight
         : DEFAULT_THREAD_TERMINAL_HEIGHT,
     terminalIds: nextTerminalIds,
+    terminalLabelsById: ensuredTerminalLabelsById,
+    terminalTitleOverridesById,
+    terminalCliKindsById,
     runningTerminalIds,
     activeTerminalId,
     terminalGroups,
@@ -460,6 +608,124 @@ function setThreadTerminalHeight(state: ThreadTerminalState, height: number): Th
   return { ...normalized, terminalHeight: height };
 }
 
+// Persist terminal identity without renaming tabs on every command; titles stay stable once assigned.
+function setThreadTerminalMetadata(
+  state: ThreadTerminalState,
+  terminalId: string,
+  metadata: {
+    cliKind: TerminalCliKind | null;
+    label: string;
+  },
+): ThreadTerminalState {
+  const normalized = normalizeThreadTerminalState(state);
+  if (!normalized.terminalIds.includes(terminalId)) {
+    return normalized;
+  }
+  const currentLabel = normalized.terminalLabelsById[terminalId] ?? "";
+  const currentTitleOverride = normalized.terminalTitleOverridesById[terminalId]?.trim() ?? "";
+  const currentCliKind = normalized.terminalCliKindsById[terminalId] ?? null;
+  const nextCliKind = metadata.cliKind ?? currentCliKind;
+  const nextLabel =
+    currentTitleOverride.length > 0
+      ? currentLabel
+      : nextCliKind !== null
+        ? createUniqueTerminalTitle({
+            cliKind: nextCliKind,
+            excludeTerminalId: terminalId,
+            terminalLabelsById: normalized.terminalLabelsById,
+            terminalTitleOverridesById: normalized.terminalTitleOverridesById,
+          })
+        : metadata.label.trim().length > 0
+          ? metadata.label.trim()
+          : currentLabel;
+  if (currentLabel === nextLabel && currentCliKind === nextCliKind) {
+    return normalized;
+  }
+  const nextCliKindsById = { ...normalized.terminalCliKindsById };
+  if (nextCliKind === null) {
+    delete nextCliKindsById[terminalId];
+  } else {
+    nextCliKindsById[terminalId] = nextCliKind;
+  }
+  return {
+    ...normalized,
+    terminalLabelsById: {
+      ...normalized.terminalLabelsById,
+      [terminalId]: nextLabel,
+    },
+    terminalCliKindsById: nextCliKindsById,
+  };
+}
+
+function setThreadTerminalCliKind(
+  state: ThreadTerminalState,
+  terminalId: string,
+  cliKind: TerminalCliKind | null,
+): ThreadTerminalState {
+  const normalized = normalizeThreadTerminalState(state);
+  if (!normalized.terminalIds.includes(terminalId)) {
+    return normalized;
+  }
+  const currentCliKind = normalized.terminalCliKindsById[terminalId] ?? null;
+  if (currentCliKind === cliKind) {
+    return normalized;
+  }
+
+  const nextCliKindsById = { ...normalized.terminalCliKindsById };
+  if (cliKind === null) {
+    delete nextCliKindsById[terminalId];
+  } else {
+    nextCliKindsById[terminalId] = cliKind;
+  }
+
+  const currentLabel = normalized.terminalLabelsById[terminalId] ?? "";
+  const currentTitleOverride = normalized.terminalTitleOverridesById[terminalId]?.trim() ?? "";
+  const terminalLabelsById =
+    cliKind !== null && currentTitleOverride.length === 0
+      ? {
+          ...normalized.terminalLabelsById,
+          [terminalId]: createUniqueTerminalTitle({
+            cliKind,
+            excludeTerminalId: terminalId,
+            terminalLabelsById: normalized.terminalLabelsById,
+            terminalTitleOverridesById: normalized.terminalTitleOverridesById,
+          }),
+        }
+      : normalized.terminalLabelsById;
+
+  return {
+    ...normalized,
+    terminalLabelsById,
+    terminalCliKindsById: nextCliKindsById,
+  };
+}
+
+function setThreadTerminalTitleOverride(
+  state: ThreadTerminalState,
+  terminalId: string,
+  titleOverride: string | null | undefined,
+): ThreadTerminalState {
+  const normalized = normalizeThreadTerminalState(state);
+  if (!normalized.terminalIds.includes(terminalId)) {
+    return normalized;
+  }
+  const normalizedTitleOverride = titleOverride?.trim() ?? "";
+  const currentTitleOverride = normalized.terminalTitleOverridesById[terminalId] ?? "";
+  if (currentTitleOverride === normalizedTitleOverride) {
+    return normalized;
+  }
+  const nextTitleOverridesById = { ...normalized.terminalTitleOverridesById };
+  if (normalizedTitleOverride.length === 0) {
+    delete nextTitleOverridesById[terminalId];
+  } else {
+    nextTitleOverridesById[terminalId] = normalizedTitleOverride;
+  }
+  return {
+    ...normalized,
+    terminalTitleOverridesById: nextTitleOverridesById,
+  };
+}
+
 function splitThreadTerminal(state: ThreadTerminalState, terminalId: string): ThreadTerminalState {
   return upsertTerminalIntoGroups(state, terminalId, "split");
 }
@@ -542,6 +808,15 @@ function closeThreadTerminal(state: ThreadTerminalState, terminalId: string): Th
     workspaceActiveTab: normalized.workspaceActiveTab,
     terminalHeight: normalized.terminalHeight,
     terminalIds: remainingTerminalIds,
+    terminalLabelsById: Object.fromEntries(
+      Object.entries(normalized.terminalLabelsById).filter(([id]) => id !== terminalId),
+    ),
+    terminalTitleOverridesById: Object.fromEntries(
+      Object.entries(normalized.terminalTitleOverridesById).filter(([id]) => id !== terminalId),
+    ),
+    terminalCliKindsById: Object.fromEntries(
+      Object.entries(normalized.terminalCliKindsById).filter(([id]) => id !== terminalId),
+    ),
     runningTerminalIds: normalized.runningTerminalIds.filter((id) => id !== terminalId),
     activeTerminalId: nextActiveTerminalId,
     terminalGroups,
@@ -646,6 +921,21 @@ interface TerminalStateStoreState {
   setTerminalWorkspaceLayout: (threadId: ThreadId, layout: ThreadTerminalWorkspaceLayout) => void;
   setTerminalWorkspaceTab: (threadId: ThreadId, tab: ThreadTerminalWorkspaceTab) => void;
   setTerminalHeight: (threadId: ThreadId, height: number) => void;
+  setTerminalMetadata: (
+    threadId: ThreadId,
+    terminalId: string,
+    metadata: { cliKind: TerminalCliKind | null; label: string },
+  ) => void;
+  setTerminalCliKind: (
+    threadId: ThreadId,
+    terminalId: string,
+    cliKind: TerminalCliKind | null,
+  ) => void;
+  setTerminalTitleOverride: (
+    threadId: ThreadId,
+    terminalId: string,
+    titleOverride: string | null | undefined,
+  ) => void;
   splitTerminal: (threadId: ThreadId, terminalId: string) => void;
   newTerminal: (threadId: ThreadId, terminalId: string) => void;
   openNewFullWidthTerminal: (threadId: ThreadId, terminalId: string) => void;
@@ -699,6 +989,16 @@ export const useTerminalStateStore = create<TerminalStateStoreState>()(
           updateTerminal(threadId, (state) => setThreadTerminalWorkspaceTab(state, tab)),
         setTerminalHeight: (threadId, height) =>
           updateTerminal(threadId, (state) => setThreadTerminalHeight(state, height)),
+        setTerminalMetadata: (threadId, terminalId, metadata) =>
+          updateTerminal(threadId, (state) =>
+            setThreadTerminalMetadata(state, terminalId, metadata),
+          ),
+        setTerminalCliKind: (threadId, terminalId, cliKind) =>
+          updateTerminal(threadId, (state) => setThreadTerminalCliKind(state, terminalId, cliKind)),
+        setTerminalTitleOverride: (threadId, terminalId, titleOverride) =>
+          updateTerminal(threadId, (state) =>
+            setThreadTerminalTitleOverride(state, terminalId, titleOverride),
+          ),
         splitTerminal: (threadId, terminalId) =>
           updateTerminal(threadId, (state) => splitThreadTerminal(state, terminalId)),
         newTerminal: (threadId, terminalId) =>

@@ -1,21 +1,33 @@
+// FILE: TerminalWorkspaceTabs.tsx
+// Purpose: Renders the top-level workspace switcher between terminal and chat surfaces.
+// Layer: Chat workspace chrome
+// Depends on: terminal workspace store layout state and shared className helpers.
+
 import { cn } from "~/lib/utils";
 
-import { type ThreadTerminalWorkspaceTab } from "../types";
+import TerminalActivityIndicator from "./terminal/TerminalActivityIndicator";
+import { type ThreadTerminalWorkspaceLayout, type ThreadTerminalWorkspaceTab } from "../types";
 
 interface TerminalWorkspaceTabsProps {
   activeTab: ThreadTerminalWorkspaceTab;
   isWorking: boolean;
+  terminalHasRunningActivity: boolean;
   terminalCount: number;
+  workspaceLayout: ThreadTerminalWorkspaceLayout;
   onSelectTab: (tab: ThreadTerminalWorkspaceTab) => void;
 }
 
 export default function TerminalWorkspaceTabs({
   activeTab,
   isWorking,
+  terminalHasRunningActivity,
   terminalCount,
+  workspaceLayout,
   onSelectTab,
 }: TerminalWorkspaceTabsProps) {
-  if (terminalCount <= 1) {
+  // Terminal-only workspaces already expose the per-terminal tab strip below,
+  // so the chat/terminal switcher would only duplicate chrome and reintroduce chat.
+  if (terminalCount <= 1 || workspaceLayout === "terminal-only") {
     return null;
   }
 
@@ -41,6 +53,9 @@ export default function TerminalWorkspaceTabs({
           <span className="ml-1.5 font-mono text-[10px] text-muted-foreground">
             {terminalCount}
           </span>
+          {terminalHasRunningActivity ? (
+            <TerminalActivityIndicator className="ml-1.5 text-foreground/75" />
+          ) : null}
         </button>
         <button
           type="button"

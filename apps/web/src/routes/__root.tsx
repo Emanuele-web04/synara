@@ -1,4 +1,5 @@
 import { ThreadId } from "@t3tools/contracts";
+import { defaultTerminalTitleForCliKind } from "@t3tools/shared/terminalThreads";
 import {
   Outlet,
   createRootRouteWithContext,
@@ -219,17 +220,22 @@ function EventRouter() {
       domainEventFlushThrottler.maybeExecute();
     });
     const unsubTerminalEvent = api.terminal.onEvent((event) => {
+      const terminalThreadId = ThreadId.makeUnsafe(event.threadId);
+      if (event.type === "activity") {
+        if (event.cliKind) {
+          useTerminalStateStore.getState().setTerminalMetadata(terminalThreadId, event.terminalId, {
+            cliKind: event.cliKind,
+            label: defaultTerminalTitleForCliKind(event.cliKind),
+          });
+        }
+      }
       const hasRunningSubprocess = terminalRunningSubprocessFromEvent(event);
       if (hasRunningSubprocess === null) {
         return;
       }
       useTerminalStateStore
         .getState()
-        .setTerminalActivity(
-          ThreadId.makeUnsafe(event.threadId),
-          event.terminalId,
-          hasRunningSubprocess,
-        );
+        .setTerminalActivity(terminalThreadId, event.terminalId, hasRunningSubprocess);
     });
     const unsubWelcome = onServerWelcome((payload) => {
       void (async () => {

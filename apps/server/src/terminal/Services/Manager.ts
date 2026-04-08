@@ -17,6 +17,7 @@ import {
   TerminalSessionStatus,
   TerminalWriteInput,
 } from "@t3tools/contracts";
+import type { TerminalCliKind } from "@t3tools/shared/terminalThreads";
 import { PtyProcess } from "./PTY";
 import { Effect, Schema, ServiceMap } from "effect";
 
@@ -44,7 +45,10 @@ export interface TerminalSessionState {
   unsubscribeData: (() => void) | null;
   unsubscribeExit: (() => void) | null;
   hasRunningSubprocess: boolean;
+  detectedCliKind: TerminalCliKind | null;
   runtimeEnv: Record<string, string> | null;
+  /** Buffered shell input used to detect canonical CLI commands at submit time. */
+  pendingInputBuffer: string;
   /** Buffered output chunks awaiting flush (output batching). */
   pendingOutputChunks: string[];
   /** Total code-unit length of buffered output chunks. */
@@ -53,6 +57,12 @@ export interface TerminalSessionState {
   outputFlushTimer: ReturnType<typeof setTimeout> | null;
   /** Whether PTY reading has been paused due to backpressure. */
   outputPaused: boolean;
+  /** Latest wall-clock timestamp when the user wrote to this PTY. */
+  lastInputAt: number | null;
+  /** Latest wall-clock timestamp when the PTY emitted output. */
+  lastOutputAt: number | null;
+  /** Normalized visible output used to ignore redraw-only PTY noise. */
+  lastOutputSignature: string | null;
 }
 
 export interface ShellCandidate {

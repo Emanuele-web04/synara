@@ -640,6 +640,12 @@ function configureApplicationMenu(): void {
       label: "View",
       submenu: [
         {
+          label: "New Terminal Tab",
+          accelerator: "CmdOrCtrl+T",
+          click: () => dispatchMenuAction("new-terminal-tab"),
+        },
+        { type: "separator" },
+        {
           label: "Toggle Sidebar",
           accelerator: "CmdOrCtrl+B",
           click: () => dispatchMenuAction("toggle-sidebar"),
