@@ -409,21 +409,25 @@ async function sendTerminalInput(
   try {
     await api.terminal.write({ threadId: entry.threadId, terminalId: entry.terminalId, data });
   } catch (error) {
-    writeSystemMessage(
-      entry.terminal,
-      error instanceof Error ? error.message : fallbackError,
-    );
+    writeSystemMessage(entry.terminal, error instanceof Error ? error.message : fallbackError);
   }
 }
 
-export function syncRuntimeConfig(entry: TerminalRuntimeEntry, config: TerminalRuntimeConfig): void {
+export function syncRuntimeConfig(
+  entry: TerminalRuntimeEntry,
+  config: TerminalRuntimeConfig,
+): void {
   entry.runtimeKey = config.runtimeKey;
   entry.threadId = config.threadId;
   entry.terminalId = config.terminalId;
   entry.terminalLabel = config.terminalLabel;
   entry.terminalCliKind = config.terminalCliKind ?? entry.terminalCliKind ?? null;
   entry.cwd = config.cwd;
-  entry.runtimeEnv = config.runtimeEnv;
+  if (config.runtimeEnv === undefined) {
+    delete entry.runtimeEnv;
+  } else {
+    entry.runtimeEnv = config.runtimeEnv;
+  }
   entry.callbacks = config.callbacks;
 }
 
@@ -469,7 +473,6 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
     terminalLabel: config.terminalLabel,
     terminalCliKind: config.terminalCliKind ?? null,
     cwd: config.cwd,
-    runtimeEnv: config.runtimeEnv,
     callbacks: config.callbacks,
     wrapper,
     container: null,
@@ -506,6 +509,9 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
     },
     unsubscribeTerminalEvents: null,
   };
+  if (config.runtimeEnv !== undefined) {
+    entry.runtimeEnv = config.runtimeEnv;
+  }
 
   entry.querySuppressionDispose = suppressQueryResponses(terminal);
 

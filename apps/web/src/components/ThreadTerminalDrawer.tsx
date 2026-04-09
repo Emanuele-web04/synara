@@ -4,12 +4,7 @@
 // Depends on: xterm addons, native terminal APIs, and terminal workspace state from ChatView.
 
 import { SearchAddon } from "@xterm/addon-search";
-import {
-  Plus,
-  SquareSplitHorizontal,
-  SquareSplitVertical,
-  Trash2,
-} from "~/lib/icons";
+import { Plus, SquareSplitHorizontal, SquareSplitVertical, Trash2 } from "~/lib/icons";
 import { type ThreadId } from "@t3tools/contracts";
 import { type TerminalCliKind } from "@t3tools/shared/terminalThreads";
 import { Terminal } from "@xterm/xterm";
@@ -17,28 +12,34 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type TerminalContextSelection } from "~/lib/terminalContext";
 import { readNativeApi } from "~/nativeApi";
 import {
-  DEFAULT_THREAD_TERMINAL_ID,
   MAX_TERMINALS_PER_GROUP,
   type ThreadTerminalGroup,
   type ThreadTerminalPresentationMode,
 } from "../types";
 import { cn } from "~/lib/utils";
 import {
-  TerminalChromeActions,
   type TerminalChromeActionItem,
   TerminalSidebar,
   TerminalWorkspaceTabBar,
 } from "./terminal/TerminalChrome";
 import { resolveThreadTerminalLayout } from "./terminal/TerminalLayout";
 import {
+  resolveTerminalSelectionActionPosition,
+  shouldHandleTerminalSelectionMouseUp,
+  terminalSelectionActionDelayForClickCount,
+} from "./terminal/terminalSelectionActions";
+import {
   buildTerminalRuntimeKey,
   terminalRuntimeRegistry,
 } from "./terminal/terminalRuntimeRegistry";
+import type {
+  TerminalRuntimeConfig,
+  TerminalRuntimeViewState,
+} from "./terminal/terminalRuntimeTypes";
 import TerminalViewportPane from "./terminal/TerminalViewportPane";
 import { useTerminalDrawerHeight } from "./terminal/useTerminalDrawerHeight";
 import { TerminalSearch } from "./TerminalSearch";
 import { TerminalScrollToBottom } from "./TerminalScrollToBottom";
-const MULTI_CLICK_SELECTION_ACTION_DELAY_MS = 260;
 
 function serializeRuntimeEnv(runtimeEnv: Record<string, string> | undefined): string {
   if (!runtimeEnv) return "";
@@ -79,52 +80,6 @@ function getTerminalSelectionRect(mountElement: HTMLElement): DOMRect | null {
 
   const boundingRect = range.getBoundingClientRect();
   return boundingRect.width > 0 || boundingRect.height > 0 ? boundingRect : null;
-}
-
-export function resolveTerminalSelectionActionPosition(options: {
-  bounds: { left: number; top: number; width: number; height: number };
-  selectionRect: { right: number; bottom: number } | null;
-  pointer: { x: number; y: number } | null;
-  viewport?: { width: number; height: number } | null;
-}): { x: number; y: number } {
-  const { bounds, selectionRect, pointer, viewport } = options;
-  const viewportWidth =
-    viewport?.width ??
-    (typeof window === "undefined" ? bounds.left + bounds.width + 8 : window.innerWidth);
-  const viewportHeight =
-    viewport?.height ??
-    (typeof window === "undefined" ? bounds.top + bounds.height + 8 : window.innerHeight);
-  const drawerLeft = Math.round(bounds.left);
-  const drawerTop = Math.round(bounds.top);
-  const drawerRight = Math.round(bounds.left + bounds.width);
-  const drawerBottom = Math.round(bounds.top + bounds.height);
-  const preferredX =
-    selectionRect !== null
-      ? Math.round(selectionRect.right)
-      : pointer === null
-        ? Math.round(bounds.left + bounds.width - 140)
-        : Math.max(drawerLeft, Math.min(Math.round(pointer.x), drawerRight));
-  const preferredY =
-    selectionRect !== null
-      ? Math.round(selectionRect.bottom + 4)
-      : pointer === null
-        ? Math.round(bounds.top + 12)
-        : Math.max(drawerTop, Math.min(Math.round(pointer.y), drawerBottom));
-  return {
-    x: Math.max(8, Math.min(preferredX, Math.max(viewportWidth - 8, 8))),
-    y: Math.max(8, Math.min(preferredY, Math.max(viewportHeight - 8, 8))),
-  };
-}
-
-export function terminalSelectionActionDelayForClickCount(clickCount: number): number {
-  return clickCount >= 2 ? MULTI_CLICK_SELECTION_ACTION_DELAY_MS : 0;
-}
-
-export function shouldHandleTerminalSelectionMouseUp(
-  selectionGestureActive: boolean,
-  button: number,
-): boolean {
-  return selectionGestureActive && button === 0;
 }
 
 interface TerminalViewportProps {
@@ -173,16 +128,61 @@ function TerminalViewport({
   const [searchOpen, setSearchOpen] = useState(false);
   const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(null);
   const [searchAddonInstance, setSearchAddonInstance] = useState<SearchAddon | null>(null);
-  const runtimeKey = useMemo(() => buildTerminalRuntimeKey(threadId, terminalId), [terminalId, threadId]);
+  const runtimeKey = useMemo(
+    () => buildTerminalRuntimeKey(threadId, terminalId),
+    [terminalId, threadId],
+  );
   const runtimeEnvSerialized = useMemo(() => serializeRuntimeEnv(runtimeEnv), [runtimeEnv]);
   const runtimeEnvPayload = useMemo(
     () => runtimeEnvFromSerialized(runtimeEnvSerialized),
     [runtimeEnvSerialized],
   );
+  const runtimeConfig = useMemo<TerminalRuntimeConfig>(
+    () => ({
+      runtimeKey,
+      threadId,
+      terminalId,
+      terminalLabel,
+      terminalCliKind,
+      cwd,
+      ...(runtimeEnvPayload ? { runtimeEnv: runtimeEnvPayload } : {}),
+      callbacks: {
+        onSessionExited,
+        onTerminalMetadataChange,
+        onTerminalActivityChange,
+      },
+    }),
+    [
+      cwd,
+      onSessionExited,
+      onTerminalActivityChange,
+      onTerminalMetadataChange,
+      runtimeEnvPayload,
+      runtimeKey,
+      terminalCliKind,
+      terminalId,
+      terminalLabel,
+      threadId,
+    ],
+  );
+  const runtimeViewState = useMemo<TerminalRuntimeViewState>(
+    () => ({ autoFocus, isVisible }),
+    [autoFocus, isVisible],
+  );
+  const runtimeConfigRef = useRef(runtimeConfig);
+  const runtimeViewStateRef = useRef(runtimeViewState);
 
   useEffect(() => {
     onAddTerminalContextRef.current = onAddTerminalContext;
   }, [onAddTerminalContext]);
+
+  useEffect(() => {
+    runtimeConfigRef.current = runtimeConfig;
+  }, [runtimeConfig]);
+
+  useEffect(() => {
+    runtimeViewStateRef.current = runtimeViewState;
+  }, [runtimeViewState]);
 
   useEffect(() => {
     terminalLabelRef.current = terminalLabel;
@@ -192,21 +192,8 @@ function TerminalViewport({
     const mount = containerRef.current;
     if (!mount) return;
     const attachedRuntime = terminalRuntimeRegistry.attach(
-      {
-        runtimeKey,
-        threadId,
-        terminalId,
-        terminalLabel,
-        terminalCliKind,
-        cwd,
-        ...(runtimeEnvPayload ? { runtimeEnv: runtimeEnvPayload } : {}),
-        callbacks: {
-          onSessionExited,
-          onTerminalMetadataChange,
-          onTerminalActivityChange,
-        },
-      },
-      { autoFocus, isVisible },
+      runtimeConfigRef.current,
+      runtimeViewStateRef.current,
       mount,
     );
 
@@ -228,36 +215,12 @@ function TerminalViewport({
   }, [runtimeKey]);
 
   useEffect(() => {
-    terminalRuntimeRegistry.syncConfig(runtimeKey, {
-      runtimeKey,
-      threadId,
-      terminalId,
-      terminalLabel,
-      terminalCliKind,
-      cwd,
-      ...(runtimeEnvPayload ? { runtimeEnv: runtimeEnvPayload } : {}),
-      callbacks: {
-        onSessionExited,
-        onTerminalMetadataChange,
-        onTerminalActivityChange,
-      },
-    });
-  }, [
-    cwd,
-    onSessionExited,
-    onTerminalActivityChange,
-    onTerminalMetadataChange,
-    runtimeEnvPayload,
-    runtimeKey,
-    terminalCliKind,
-    terminalId,
-    terminalLabel,
-    threadId,
-  ]);
+    terminalRuntimeRegistry.syncConfig(runtimeKey, runtimeConfig);
+  }, [runtimeConfig, runtimeKey]);
 
   useEffect(() => {
-    terminalRuntimeRegistry.setViewState(runtimeKey, { autoFocus, isVisible });
-  }, [autoFocus, isVisible, runtimeKey]);
+    terminalRuntimeRegistry.setViewState(runtimeKey, runtimeViewState);
+  }, [runtimeKey, runtimeViewState]);
 
   useEffect(() => {
     if (!autoFocus) return;
@@ -466,7 +429,6 @@ interface ThreadTerminalDrawerProps {
   ) => void;
   onTerminalActivityChange: (terminalId: string, isRunning: boolean) => void;
   onAddTerminalContext: (selection: TerminalContextSelection) => void;
-  onTogglePresentationMode: () => void;
 }
 
 export default function ThreadTerminalDrawer({
@@ -503,7 +465,6 @@ export default function ThreadTerminalDrawer({
   onTerminalMetadataChange,
   onTerminalActivityChange,
   onAddTerminalContext,
-  onTogglePresentationMode,
 }: ThreadTerminalDrawerProps) {
   const isWorkspaceMode = presentationMode === "workspace";
   const previousRuntimeKeysRef = useRef<Set<string>>(new Set());
@@ -669,20 +630,31 @@ export default function ThreadTerminalDrawer({
               terminalVisualIdentityById={terminalVisualIdentityById}
               onActiveTerminalChange={onActiveTerminalChange}
               onResizeSplit={onResizeTerminalSplit}
-              onSplitTerminalRight={hasReachedSplitLimit ? undefined : (terminalId) => {
-                onActiveTerminalChange(terminalId);
-                onSplitTerminal();
-              }}
-              onSplitTerminalDown={hasReachedSplitLimit ? undefined : (terminalId) => {
-                onActiveTerminalChange(terminalId);
-                onSplitTerminalDown();
-              }}
-              onNewTerminalTab={hasReachedSplitLimit ? undefined : (terminalId) => {
-                onNewTerminalTab(terminalId);
-              }}
+              onSplitTerminalRight={
+                hasReachedSplitLimit
+                  ? undefined
+                  : (terminalId) => {
+                      onActiveTerminalChange(terminalId);
+                      onSplitTerminal();
+                    }
+              }
+              onSplitTerminalDown={
+                hasReachedSplitLimit
+                  ? undefined
+                  : (terminalId) => {
+                      onActiveTerminalChange(terminalId);
+                      onSplitTerminalDown();
+                    }
+              }
+              onNewTerminalTab={
+                hasReachedSplitLimit
+                  ? undefined
+                  : (terminalId) => {
+                      onNewTerminalTab(terminalId);
+                    }
+              }
               onMoveTerminalToGroup={onMoveTerminalToGroup}
               onCloseTerminal={onCloseTerminal}
-              onTogglePresentationMode={onTogglePresentationMode}
               renderViewport={(terminalId, options) => (
                 <TerminalViewport
                   key={terminalId}

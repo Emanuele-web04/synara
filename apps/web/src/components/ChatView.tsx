@@ -1847,21 +1847,6 @@ export default function ChatView({
     }
     setTerminalOpen(!terminalState.terminalOpen);
   }, [activeThreadId, setTerminalOpen, setTerminalPresentationMode, terminalState.terminalOpen]);
-  const expandTerminalWorkspace = useCallback(() => {
-    if (!activeThreadId) return;
-    setTerminalPresentationMode("workspace");
-    setTerminalWorkspaceLayout("both");
-    setTerminalWorkspaceTab("terminal");
-  }, [
-    activeThreadId,
-    setTerminalPresentationMode,
-    setTerminalWorkspaceLayout,
-    setTerminalWorkspaceTab,
-  ]);
-  const collapseTerminalWorkspace = useCallback(() => {
-    if (!activeThreadId) return;
-    setTerminalPresentationMode("drawer");
-  }, [activeThreadId, setTerminalPresentationMode]);
   const splitTerminalRight = useCallback(() => {
     if (!activeThreadId || hasReachedSplitLimit) return;
     const terminalId = `terminal-${randomUUID()}`;
@@ -1892,12 +1877,15 @@ export default function ChatView({
     storeNewTerminal(activeThreadId, terminalId);
     setTerminalFocusRequestId((value) => value + 1);
   }, [activeThreadId, storeNewTerminal]);
-  const createNewTerminalTab = useCallback((targetTerminalId: string) => {
-    if (!activeThreadId) return;
-    const terminalId = `terminal-${randomUUID()}`;
-    storeNewTerminalTab(activeThreadId, targetTerminalId, terminalId);
-    setTerminalFocusRequestId((value) => value + 1);
-  }, [activeThreadId, storeNewTerminalTab]);
+  const createNewTerminalTab = useCallback(
+    (targetTerminalId: string) => {
+      if (!activeThreadId) return;
+      const terminalId = `terminal-${randomUUID()}`;
+      storeNewTerminalTab(activeThreadId, targetTerminalId, terminalId);
+      setTerminalFocusRequestId((value) => value + 1);
+    },
+    [activeThreadId, storeNewTerminalTab],
+  );
   const moveTerminalToNewGroup = useCallback(
     (terminalId: string) => {
       if (!activeThreadId) return;
@@ -2220,7 +2208,6 @@ export default function ChatView({
       setThreadError,
       storeNewTerminal,
       storeSetActiveTerminal,
-      storeSetTerminalActivity,
       storeSetTerminalMetadata,
       setLastInvokedScriptByProjectId,
       terminalState.activeTerminalId,
@@ -5711,7 +5698,6 @@ export default function ChatView({
                 {...terminalDrawerProps}
                 presentationMode="workspace"
                 isVisible={terminalWorkspaceTerminalTabActive}
-                onTogglePresentationMode={collapseTerminalWorkspace}
               />
             </div>
           ) : null}
@@ -5748,7 +5734,6 @@ export default function ChatView({
             key={activeThread.id}
             {...terminalDrawerProps}
             presentationMode="drawer"
-            onTogglePresentationMode={expandTerminalWorkspace}
           />
         );
       })()}

@@ -8,7 +8,6 @@ import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import type { ResolvedTerminalVisualIdentity } from "@t3tools/shared/terminalThreads";
 
 import {
-  HandoffIcon,
   Maximize2,
   Plus,
   SquareSplitHorizontal,
@@ -40,7 +39,6 @@ interface TerminalViewportPaneProps {
   onNewTerminalTab?: ((terminalId: string) => void) | undefined;
   onMoveTerminalToGroup?: ((terminalId: string) => void) | undefined;
   onCloseTerminal?: ((terminalId: string) => void) | undefined;
-  onTogglePresentationMode?: (() => void) | undefined;
 }
 
 function normalizeWeights(weights: number[]): number[] {
@@ -91,7 +89,6 @@ export default function TerminalViewportPane({
   onNewTerminalTab,
   onMoveTerminalToGroup,
   onCloseTerminal,
-  onTogglePresentationMode,
 }: TerminalViewportPaneProps) {
   const renderNode = (node: ThreadTerminalLayoutNode): ReactNode => {
     if (node.type === "terminal") {
@@ -110,8 +107,8 @@ export default function TerminalViewportPane({
             }
           }}
         >
-          <div className="flex h-8 min-h-8 items-stretch border-b border-border/70 bg-background">
-            <div className="flex min-w-0 flex-1 items-stretch overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className="relative flex h-8 min-h-8 items-stretch bg-background after:pointer-events-none after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-border/70">
+            <div className="relative z-[1] flex min-w-0 flex-1 items-stretch overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               {node.terminalIds.map((terminalId, index) => {
                 const visualIdentity = terminalVisualIdentityById.get(terminalId);
                 const isActiveTab = terminalId === activePaneTerminalId;
@@ -123,9 +120,11 @@ export default function TerminalViewportPane({
                     className={cn(
                       "group/tab relative flex h-full shrink-0 items-stretch border-r border-border/70",
                       index === 0 ? "border-l-0" : "",
-                      isActiveTab
-                        ? "border-t border-t-foreground/35 bg-background text-foreground"
-                        : "bg-muted/25 text-muted-foreground hover:bg-background/70 hover:text-foreground",
+                      isActiveTab && isFocusedPane
+                        ? "border-t border-t-blue-500 bg-background text-foreground"
+                        : isActiveTab
+                          ? "border-t border-t-foreground/35 bg-background text-foreground"
+                          : "bg-muted/25 text-muted-foreground hover:bg-background/70 hover:text-foreground",
                     )}
                   >
                     <button
@@ -176,7 +175,7 @@ export default function TerminalViewportPane({
               ) : null}
             </div>
 
-            <div className="flex shrink-0 items-stretch border-l border-border/70">
+            <div className="relative z-[1] flex shrink-0 items-stretch border-l border-border/70">
               {onMoveTerminalToGroup ? (
                 <div className="flex items-stretch border-r border-border/70">
                   <PaneActionButton
@@ -209,7 +208,9 @@ export default function TerminalViewportPane({
                 <PaneActionButton
                   label="Close active terminal tab"
                   onClick={() => onCloseTerminal(activePaneTerminalId)}
-                  className={onSplitTerminalRight || onSplitTerminalDown ? "border-l border-border/70" : ""}
+                  className={
+                    onSplitTerminalRight || onSplitTerminalDown ? "border-l border-border/70" : ""
+                  }
                 >
                   <Trash2 className="size-3.25" />
                 </PaneActionButton>
@@ -225,9 +226,7 @@ export default function TerminalViewportPane({
                   key={terminalId}
                   className={cn(
                     "absolute inset-0 min-h-0 min-w-0 transition-opacity",
-                    isActiveTab
-                      ? "z-[1] opacity-100"
-                      : "pointer-events-none z-0 opacity-0",
+                    isActiveTab ? "z-[1] opacity-100" : "pointer-events-none z-0 opacity-0",
                   )}
                 >
                   {renderViewport(terminalId, {
@@ -243,7 +242,8 @@ export default function TerminalViewportPane({
     }
 
     const weights = normalizeWeights(node.weights);
-    const totalWeight = weights.reduce((sum, weight) => sum + weight, 0) || node.children.length || 1;
+    const totalWeight =
+      weights.reduce((sum, weight) => sum + weight, 0) || node.children.length || 1;
 
     const beginResize = (
       splitNode: ThreadTerminalSplitNode,
@@ -258,8 +258,7 @@ export default function TerminalViewportPane({
       const totalSize = splitNode.direction === "horizontal" ? rect.width : rect.height;
       if (totalSize <= 0) return;
 
-      const startCoordinate =
-        splitNode.direction === "horizontal" ? event.clientX : event.clientY;
+      const startCoordinate = splitNode.direction === "horizontal" ? event.clientX : event.clientY;
       const startWeights = normalizeWeights(splitNode.weights);
       const currentWeight = startWeights[handleIndex] ?? 1;
       const nextWeight = startWeights[handleIndex + 1] ?? 1;
@@ -317,7 +316,11 @@ export default function TerminalViewportPane({
                   className={splitHandleClassName(node.direction)}
                   onPointerDown={(event) => beginResize(node, index, event)}
                   onDoubleClick={() =>
-                    onResizeSplit(groupId, node.id, node.children.map(() => 1))
+                    onResizeSplit(
+                      groupId,
+                      node.id,
+                      node.children.map(() => 1),
+                    )
                   }
                 />
               ) : null}
@@ -328,5 +331,7 @@ export default function TerminalViewportPane({
     );
   };
 
-  return <div className="h-full min-h-0 min-w-0 overflow-hidden bg-background">{renderNode(layout)}</div>;
+  return (
+    <div className="h-full min-h-0 min-w-0 overflow-hidden bg-background">{renderNode(layout)}</div>
+  );
 }
