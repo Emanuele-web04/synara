@@ -128,7 +128,7 @@
 
 body {
   font-family: var(--font-ui-family);
-  letter-spacing: -0.025em;
+  letter-spacing: -0.015em;
   margin: 0;
   padding: 0;
   min-height: 100vh;
@@ -137,7 +137,7 @@ body {
 /* Reuse the OS UI stack on chat surfaces that should feel native and utilitarian. */
 .font-system-ui {
   font-family: var(--font-ui-family);
-  letter-spacing: -0.025em;
+  letter-spacing: -0.015em;
 }
 
 html,
