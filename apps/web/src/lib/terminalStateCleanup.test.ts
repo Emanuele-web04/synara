@@ -29,4 +29,16 @@ describe("collectActiveTerminalThreadIds", () => {
 
     expect(activeThreadIds).toEqual(new Set([threadId("server-active"), threadId("local-draft")]));
   });
+
+  it("retains synthetic workspace terminal scopes", () => {
+    const activeThreadIds = collectActiveTerminalThreadIds({
+      snapshotThreads: [],
+      draftThreadIds: [],
+      retainedThreadIds: [threadId("workspace:alpha"), threadId("workspace:beta")],
+    });
+
+    expect(activeThreadIds).toEqual(
+      new Set([threadId("workspace:alpha"), threadId("workspace:beta")]),
+    );
+  });
 });

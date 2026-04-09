@@ -230,6 +230,40 @@ export function getVisibleThreadsForProject(input: {
   };
 }
 
+// Preserve the persisted pin order while discarding ids that no longer exist locally.
+export function getPinnedThreadsForSidebar<T extends Pick<Thread, "id">>(
+  threads: readonly T[],
+  pinnedThreadIds: readonly T["id"][],
+): T[] {
+  const threadById = new Map(threads.map((thread) => [thread.id, thread] as const));
+  const seen = new Set<T["id"]>();
+  const pinnedThreads: T[] = [];
+
+  for (const threadId of pinnedThreadIds) {
+    if (seen.has(threadId)) continue;
+    seen.add(threadId);
+    const thread = threadById.get(threadId);
+    if (thread) {
+      pinnedThreads.push(thread);
+    }
+  }
+
+  return pinnedThreads;
+}
+
+// Hide globally pinned rows from the per-project lists so the sidebar doesn't duplicate chats.
+export function getUnpinnedThreadsForSidebar<T extends Pick<Thread, "id">>(
+  threads: readonly T[],
+  pinnedThreadIds: readonly T["id"][],
+): T[] {
+  if (pinnedThreadIds.length === 0) {
+    return [...threads];
+  }
+
+  const pinnedThreadIdSet = new Set(pinnedThreadIds);
+  return threads.filter((thread) => !pinnedThreadIdSet.has(thread.id));
+}
+
 // Match the exact rows the sidebar renders for one project, including folded previews.
 export function getRenderedThreadsForSidebarProject(input: {
   project: Pick<Project, "expanded">;

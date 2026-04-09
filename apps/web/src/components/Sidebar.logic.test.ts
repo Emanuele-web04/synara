@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   getFallbackThreadIdAfterDelete,
+  getPinnedThreadsForSidebar,
   getNextVisibleSidebarThreadId,
   getRenderedThreadsForSidebarProject,
+  getUnpinnedThreadsForSidebar,
   getVisibleSidebarThreadIds,
   getVisibleThreadsForProject,
   getProjectSortTimestamp,
@@ -96,6 +98,48 @@ describe("resolveSidebarNewThreadEnvMode", () => {
         defaultEnvMode: "worktree",
       }),
     ).toBe("local");
+  });
+});
+
+describe("pin helpers", () => {
+  const makeThread = (id: string): Thread =>
+    ({
+      id: id as ThreadId,
+      codexThreadId: null,
+      projectId: "project-1" as ProjectId,
+      title: id,
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5-codex",
+      },
+      runtimeMode: DEFAULT_RUNTIME_MODE,
+      interactionMode: DEFAULT_INTERACTION_MODE,
+      session: null,
+      messages: [],
+      proposedPlans: [],
+      error: null,
+      createdAt: "2026-03-09T10:00:00.000Z",
+      latestTurn: null,
+      turnDiffSummaries: [],
+      activities: [],
+      branch: null,
+      worktreePath: null,
+    }) satisfies Thread;
+
+  it("returns pinned threads in persisted pin order", () => {
+    const threads = [makeThread("thread-1"), makeThread("thread-2"), makeThread("thread-3")];
+
+    expect(
+      getPinnedThreadsForSidebar(threads, ["thread-3" as ThreadId, "thread-1" as ThreadId]),
+    ).toEqual([threads[2], threads[0]]);
+  });
+
+  it("filters pinned threads out of project lists", () => {
+    const threads = [makeThread("thread-1"), makeThread("thread-2"), makeThread("thread-3")];
+
+    expect(
+      getUnpinnedThreadsForSidebar(threads, ["thread-2" as ThreadId, "thread-3" as ThreadId]),
+    ).toEqual([threads[0]]);
   });
 });
 

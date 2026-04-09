@@ -7,6 +7,7 @@
  * @module ServerConfig
  */
 import { Effect, FileSystem, Layer, Path, ServiceMap } from "effect";
+import OS from "node:os";
 
 export const DEFAULT_PORT = 3773;
 
@@ -37,6 +38,7 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly port: number;
   readonly host: string | undefined;
   readonly cwd: string;
+  readonly homeDir: string;
   readonly baseDir: string;
   readonly staticDir: string | undefined;
   readonly devUrl: URL | undefined;
@@ -96,6 +98,7 @@ export class ServerConfig extends ServiceMap.Service<ServerConfig, ServerConfigS
 
         return {
           cwd,
+          homeDir: OS.homedir(),
           baseDir,
           ...derivedPaths,
           mode: "web",

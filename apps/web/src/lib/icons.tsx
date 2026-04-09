@@ -42,6 +42,8 @@ import {
   IconLockOpen,
   IconMaximize,
   IconMinimize,
+  IconPin,
+  IconPinnedFilled,
   IconPlayerPlay,
   IconPlus,
   IconRefresh,
@@ -121,6 +123,8 @@ export const Minimize2 = adaptIcon(IconMinimize);
 export const PanelLeftCloseIcon = adaptIcon(IconLayoutSidebarLeftCollapse);
 export const PanelLeftIcon = adaptIcon(IconLayoutSidebarLeftExpand);
 export const PanelRightCloseIcon = adaptIcon(IconLayoutSidebarRightCollapse);
+export const PinIcon = adaptIcon(IconPin);
+export const PinnedFilledIcon = adaptIcon(IconPinnedFilled);
 export const PlayIcon = adaptIcon(IconPlayerPlay);
 export const Plus = adaptIcon(IconPlus);
 export const PlusIcon = adaptIcon(IconPlus);

@@ -6,6 +6,7 @@
  *
  * @module CliConfig
  */
+import OS from "node:os";
 import { Config, Data, Effect, FileSystem, Layer, Option, Path, Schema, ServiceMap } from "effect";
 import { Command, Flag } from "effect/unstable/cli";
 import { NetService } from "@t3tools/shared/Net";
@@ -176,6 +177,7 @@ const ServerConfigLive = (input: CliInput) =>
         mode,
         port,
         cwd: cliConfig.cwd,
+        homeDir: OS.homedir(),
         host,
         baseDir,
         ...derivedPaths,

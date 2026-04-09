@@ -44,6 +44,7 @@ import {
   Stream,
   Struct,
 } from "effect";
+import OS from "node:os";
 import { WebSocketServer, type WebSocket } from "ws";
 
 import { createLogger } from "./logger";
@@ -304,6 +305,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const {
     port,
     cwd,
+    homeDir,
     keybindingsConfigPath,
     staticDir,
     devUrl,
@@ -996,6 +998,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         const keybindingsConfig = yield* keybindingsManager.loadConfigState;
         return {
           cwd,
+          homeDir,
           keybindingsConfigPath,
           keybindings: keybindingsConfig.keybindings,
           issues: keybindingsConfig.issues,
@@ -1115,6 +1118,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
 
     const welcomeData = {
       cwd,
+      homeDir: OS.homedir(),
       projectName,
       ...(welcomeBootstrapProjectId ? { bootstrapProjectId: welcomeBootstrapProjectId } : {}),
       ...(welcomeBootstrapThreadId ? { bootstrapThreadId: welcomeBootstrapThreadId } : {}),

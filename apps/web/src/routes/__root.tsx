@@ -26,6 +26,7 @@ import { providerQueryKeys } from "../lib/providerReactQuery";
 import { projectQueryKeys } from "../lib/projectReactQuery";
 import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
 import { TaskCompletionNotifications } from "../notifications/taskCompletion";
+import { useWorkspaceStore, workspaceThreadId } from "../workspaceStore";
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient;
@@ -139,6 +140,8 @@ function EventRouter() {
   const removeOrphanedTerminalStates = useTerminalStateStore(
     (store) => store.removeOrphanedTerminalStates,
   );
+  const setWorkspaceHomeDir = useWorkspaceStore((store) => store.setHomeDir);
+  const workspacePages = useWorkspaceStore((store) => store.workspacePages);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
@@ -168,6 +171,7 @@ function EventRouter() {
       const activeThreadIds = collectActiveTerminalThreadIds({
         snapshotThreads: snapshot.threads,
         draftThreadIds,
+        retainedThreadIds: workspacePages.map((workspace) => workspaceThreadId(workspace.id)),
       });
       removeOrphanedTerminalStates(activeThreadIds);
       if (pending) {
@@ -239,6 +243,7 @@ function EventRouter() {
     });
     const unsubWelcome = onServerWelcome((payload) => {
       void (async () => {
+        setWorkspaceHomeDir(payload.homeDir);
         await syncSnapshot();
         if (disposed) {
           return;
@@ -323,7 +328,9 @@ function EventRouter() {
     queryClient,
     removeOrphanedTerminalStates,
     setProjectExpanded,
+    setWorkspaceHomeDir,
     syncServerReadModel,
+    workspacePages,
   ]);
 
   return null;
