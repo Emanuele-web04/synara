@@ -198,7 +198,9 @@ function findGroupIndexByTerminalId(
   terminalGroups: ThreadTerminalGroup[],
   terminalId: string,
 ): number {
-  return terminalGroups.findIndex((group) => collectTerminalIdsFromLayout(group.layout).includes(terminalId));
+  return terminalGroups.findIndex((group) =>
+    collectTerminalIdsFromLayout(group.layout).includes(terminalId),
+  );
 }
 
 function normalizeTerminalGroups(
@@ -212,10 +214,12 @@ function normalizeTerminalGroups(
   for (const group of terminalGroups) {
     const normalizedGroup = normalizeTerminalPaneGroup(group, terminalIds);
     if (!normalizedGroup) continue;
-    const unassignedTerminalIds = collectTerminalIdsFromLayout(normalizedGroup.layout).filter((terminalId) => {
-      if (assignedTerminalIds.has(terminalId)) return false;
-      return true;
-    });
+    const unassignedTerminalIds = collectTerminalIdsFromLayout(normalizedGroup.layout).filter(
+      (terminalId) => {
+        if (assignedTerminalIds.has(terminalId)) return false;
+        return true;
+      },
+    );
     if (unassignedTerminalIds.length === 0) continue;
     const normalizedUnassignedGroup = normalizeTerminalPaneGroup(
       {
@@ -231,7 +235,8 @@ function normalizeTerminalGroups(
     nextGroups.push({
       ...normalizedUnassignedGroup,
       id: assignUniqueGroupId(
-        normalizedUnassignedGroup.id.trim() || fallbackGroupId(unassignedTerminalIds[0] ?? DEFAULT_THREAD_TERMINAL_ID),
+        normalizedUnassignedGroup.id.trim() ||
+          fallbackGroupId(unassignedTerminalIds[0] ?? DEFAULT_THREAD_TERMINAL_ID),
         usedGroupIds,
       ),
     });
@@ -239,11 +244,18 @@ function normalizeTerminalGroups(
 
   for (const terminalId of terminalIds) {
     if (assignedTerminalIds.has(terminalId)) continue;
-    nextGroups.push(createTerminalGroup(assignUniqueGroupId(fallbackGroupId(terminalId), usedGroupIds), terminalId));
+    nextGroups.push(
+      createTerminalGroup(
+        assignUniqueGroupId(fallbackGroupId(terminalId), usedGroupIds),
+        terminalId,
+      ),
+    );
   }
 
   if (nextGroups.length === 0) {
-    return [createTerminalGroup(fallbackGroupId(DEFAULT_THREAD_TERMINAL_ID), DEFAULT_THREAD_TERMINAL_ID)];
+    return [
+      createTerminalGroup(fallbackGroupId(DEFAULT_THREAD_TERMINAL_ID), DEFAULT_THREAD_TERMINAL_ID),
+    ];
   }
 
   return nextGroups;
@@ -357,8 +369,9 @@ function normalizeThreadTerminalState(state: ThreadTerminalState): ThreadTermina
     ? state.activeTerminalGroupId
     : null;
   const activeGroupIdFromTerminal =
-    terminalGroups.find((group) => collectTerminalIdsFromLayout(group.layout).includes(activeTerminalId))
-      ?.id ?? null;
+    terminalGroups.find((group) =>
+      collectTerminalIdsFromLayout(group.layout).includes(activeTerminalId),
+    )?.id ?? null;
   const resolvedActiveTerminalGroupId =
     activeGroupIdFromState ??
     activeGroupIdFromTerminal ??
@@ -785,8 +798,8 @@ function newThreadTerminalTab(
   }
 
   const terminalGroups = copyTerminalGroups(normalized.terminalGroups);
-  let activeGroupIndex = terminalGroups.findIndex(
-    (group) => collectTerminalIdsFromLayout(group.layout).includes(targetTerminalId),
+  let activeGroupIndex = terminalGroups.findIndex((group) =>
+    collectTerminalIdsFromLayout(group.layout).includes(targetTerminalId),
   );
   if (activeGroupIndex < 0) {
     activeGroupIndex = findGroupIndexByTerminalId(terminalGroups, normalized.activeTerminalId);
@@ -829,9 +842,9 @@ function setThreadActiveTerminal(
     return normalized;
   }
   const activeTerminalGroupId =
-    normalized.terminalGroups.find((group) => collectTerminalIdsFromLayout(group.layout).includes(terminalId))
-      ?.id ??
-    normalized.activeTerminalGroupId;
+    normalized.terminalGroups.find((group) =>
+      collectTerminalIdsFromLayout(group.layout).includes(terminalId),
+    )?.id ?? normalized.activeTerminalGroupId;
   const terminalGroups = normalized.terminalGroups.map((group) =>
     group.id === activeTerminalGroupId ? setActiveTerminalInGroupLayout(group, terminalId) : group,
   );
@@ -873,8 +886,9 @@ function closeThreadTerminal(state: ThreadTerminalState, terminalId: string): Th
   }
 
   const sourceGroupId =
-    normalized.terminalGroups.find((group) => collectTerminalIdsFromLayout(group.layout).includes(terminalId))
-      ?.id ?? normalized.activeTerminalGroupId;
+    normalized.terminalGroups.find((group) =>
+      collectTerminalIdsFromLayout(group.layout).includes(terminalId),
+    )?.id ?? normalized.activeTerminalGroupId;
 
   const terminalGroups = normalized.terminalGroups
     .map((group) => removeTerminalFromGroupLayout(group, terminalId))
@@ -890,8 +904,9 @@ function closeThreadTerminal(state: ThreadTerminalState, terminalId: string): Th
       : normalized.activeTerminalId;
 
   const nextActiveTerminalGroupId =
-    terminalGroups.find((group) => collectTerminalIdsFromLayout(group.layout).includes(nextActiveTerminalId))
-      ?.id ??
+    terminalGroups.find((group) =>
+      collectTerminalIdsFromLayout(group.layout).includes(nextActiveTerminalId),
+    )?.id ??
     terminalGroups[0]?.id ??
     fallbackGroupId(nextActiveTerminalId);
 
@@ -929,7 +944,10 @@ function closeThreadTerminalGroup(
     return normalized;
   }
   const terminalIds = collectTerminalIdsFromLayout(group.layout);
-  return terminalIds.reduce((nextState, terminalId) => closeThreadTerminal(nextState, terminalId), normalized);
+  return terminalIds.reduce(
+    (nextState, terminalId) => closeThreadTerminal(nextState, terminalId),
+    normalized,
+  );
 }
 
 function resizeThreadTerminalSplit(

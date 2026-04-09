@@ -72,10 +72,12 @@ function resolveTerminalGroups(input: {
   for (const terminalGroup of input.terminalGroups) {
     const normalizedGroup = normalizeTerminalPaneGroup(terminalGroup, input.normalizedTerminalIds);
     if (!normalizedGroup) continue;
-    const groupTerminalIds = collectTerminalIdsFromLayout(normalizedGroup.layout).filter((terminalId) => {
-      if (assignedTerminalIds.has(terminalId)) return false;
-      return true;
-    });
+    const groupTerminalIds = collectTerminalIdsFromLayout(normalizedGroup.layout).filter(
+      (terminalId) => {
+        if (assignedTerminalIds.has(terminalId)) return false;
+        return true;
+      },
+    );
     if (groupTerminalIds.length === 0) continue;
     const filteredGroup = normalizeTerminalPaneGroup(normalizedGroup, groupTerminalIds);
     if (!filteredGroup) continue;
@@ -131,7 +133,9 @@ function resolveActiveGroup(input: {
   resolvedTerminalGroups: ResolvedTerminalGroupLayout[];
 }): ResolvedTerminalGroupLayout {
   return (
-    input.resolvedTerminalGroups.find((terminalGroup) => terminalGroup.id === input.activeTerminalGroupId) ??
+    input.resolvedTerminalGroups.find(
+      (terminalGroup) => terminalGroup.id === input.activeTerminalGroupId,
+    ) ??
     input.resolvedTerminalGroups.find((terminalGroup) =>
       terminalGroup.terminalIds.includes(input.activeTerminalId),
     ) ??

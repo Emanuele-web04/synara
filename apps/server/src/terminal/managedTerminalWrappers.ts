@@ -317,7 +317,11 @@ export function prepareManagedTerminalWrappers(options: {
   fs.mkdirSync(codexHomeDir, { recursive: true });
   writeFileIfChanged(hookScriptPath, buildNotifyHookScript(), 0o755);
   writeFileIfChanged(claudeSettingsPath, buildClaudeSettingsJson(hookScriptPath), 0o644);
-  writeFileIfChanged(path.join(codexHomeDir, "hooks.json"), buildCodexHooksJson(hookScriptPath), 0o644);
+  writeFileIfChanged(
+    path.join(codexHomeDir, "hooks.json"),
+    buildCodexHooksJson(hookScriptPath),
+    0o644,
+  );
   for (const [cliKind, targetPath] of Object.entries(targetPathByCliKind) as Array<
     [TerminalCliKind, string]
   >) {

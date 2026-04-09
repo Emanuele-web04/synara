@@ -9,15 +9,21 @@ import type { ResolvedTerminalVisualIdentity } from "@t3tools/shared/terminalThr
 
 import {
   Maximize2,
+  Minimize2,
   Plus,
   SquareSplitHorizontal,
   SquareSplitVertical,
+  TerminalSquareIcon,
   Trash2,
   XIcon,
 } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
-import type { ThreadTerminalLayoutNode, ThreadTerminalSplitNode } from "../../types";
+import type {
+  ThreadTerminalLayoutNode,
+  ThreadTerminalPresentationMode,
+  ThreadTerminalSplitNode,
+} from "../../types";
 import TerminalActivityIndicator from "./TerminalActivityIndicator";
 import TerminalIdentityIcon from "./TerminalIdentityIcon";
 
@@ -39,6 +45,8 @@ interface TerminalViewportPaneProps {
   onNewTerminalTab?: ((terminalId: string) => void) | undefined;
   onMoveTerminalToGroup?: ((terminalId: string) => void) | undefined;
   onCloseTerminal?: ((terminalId: string) => void) | undefined;
+  presentationMode: ThreadTerminalPresentationMode;
+  onTogglePresentationMode?: (() => void) | undefined;
 }
 
 function normalizeWeights(weights: number[]): number[] {
@@ -49,6 +57,19 @@ function splitHandleClassName(direction: ThreadTerminalSplitNode["direction"]): 
   return direction === "horizontal"
     ? "shrink-0 w-px cursor-col-resize bg-border/70 hover:bg-accent/80"
     : "shrink-0 h-px cursor-row-resize bg-border/70 hover:bg-accent/80";
+}
+
+function canMoveTerminalToOwnGroup(node: ThreadTerminalLayoutNode, terminalId: string): boolean {
+  if (node.type === "terminal") {
+    return node.activeTerminalId === terminalId && node.terminalIds.length > 1;
+  }
+
+  return node.children.some((child) => {
+    if (child.type === "terminal") {
+      return child.terminalIds.includes(terminalId);
+    }
+    return canMoveTerminalToOwnGroup(child, terminalId);
+  });
 }
 
 function PaneActionButton(props: {
@@ -89,6 +110,8 @@ export default function TerminalViewportPane({
   onNewTerminalTab,
   onMoveTerminalToGroup,
   onCloseTerminal,
+  presentationMode,
+  onTogglePresentationMode,
 }: TerminalViewportPaneProps) {
   const renderNode = (node: ThreadTerminalLayoutNode): ReactNode => {
     if (node.type === "terminal") {
@@ -96,6 +119,12 @@ export default function TerminalViewportPane({
         ? node.activeTerminalId
         : (node.terminalIds[0] ?? resolvedActiveTerminalId);
       const isFocusedPane = activePaneTerminalId === resolvedActiveTerminalId;
+      const canMoveActiveTerminalToGroup =
+        !!onMoveTerminalToGroup && canMoveTerminalToOwnGroup(layout, activePaneTerminalId);
+      const moveActiveTerminalToGroup = () => {
+        if (!onMoveTerminalToGroup) return;
+        onMoveTerminalToGroup(activePaneTerminalId);
+      };
 
       return (
         <div
@@ -107,8 +136,8 @@ export default function TerminalViewportPane({
             }
           }}
         >
-          <div className="relative flex h-8 min-h-8 items-stretch bg-background after:pointer-events-none after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-border/70">
-            <div className="relative z-[1] flex min-w-0 flex-1 items-stretch overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className="flex h-8 min-h-8 items-stretch bg-background">
+            <div className="flex min-w-0 flex-1 items-stretch overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               {node.terminalIds.map((terminalId, index) => {
                 const visualIdentity = terminalVisualIdentityById.get(terminalId);
                 const isActiveTab = terminalId === activePaneTerminalId;
@@ -121,10 +150,10 @@ export default function TerminalViewportPane({
                       "group/tab relative flex h-full shrink-0 items-stretch border-r border-border/70",
                       index === 0 ? "border-l-0" : "",
                       isActiveTab && isFocusedPane
-                        ? "border-t border-t-blue-500 bg-background text-foreground"
+                        ? "shadow-[inset_0_1px_0_var(--color-info-foreground)] bg-background text-foreground"
                         : isActiveTab
-                          ? "border-t border-t-foreground/35 bg-background text-foreground"
-                          : "bg-muted/25 text-muted-foreground hover:bg-background/70 hover:text-foreground",
+                          ? "shadow-[inset_0_1px_0_var(--color-foreground)/0.35] bg-background text-foreground"
+                          : "border-b border-border/70 bg-muted/25 text-muted-foreground hover:bg-background/70 hover:text-foreground",
                     )}
                   >
                     <button
@@ -168,29 +197,52 @@ export default function TerminalViewportPane({
                 <PaneActionButton
                   label="New terminal tab"
                   onClick={() => onNewTerminalTab(activePaneTerminalId)}
-                  className="shrink-0 border-r border-border/70"
+                  className="h-full shrink-0 border-b border-r border-border/70"
                 >
                   <Plus className="size-3.25" />
                 </PaneActionButton>
               ) : null}
+              <div className="min-w-0 flex-1 border-b border-border/70" />
             </div>
 
-            <div className="relative z-[1] flex shrink-0 items-stretch border-l border-border/70">
-              {onMoveTerminalToGroup ? (
+            <div className="flex shrink-0 items-stretch border-b border-l border-border/70">
+              {canMoveActiveTerminalToGroup ? (
                 <div className="flex items-stretch border-r border-border/70">
                   <PaneActionButton
                     label="Move to its own terminal tab"
-                    onClick={() => onMoveTerminalToGroup(activePaneTerminalId)}
+                    onClick={moveActiveTerminalToGroup}
                   >
-                    <Maximize2 className="size-3.25" />
+                    <TerminalSquareIcon className="size-3.25" />
                   </PaneActionButton>
                 </div>
+              ) : null}
+              {onTogglePresentationMode ? (
+                <PaneActionButton
+                  label={
+                    presentationMode === "workspace"
+                      ? "Collapse terminal into chat drawer"
+                      : "Expand terminal into workspace"
+                  }
+                  onClick={onTogglePresentationMode}
+                  className={canMoveActiveTerminalToGroup ? "border-r border-border/70" : ""}
+                >
+                  {presentationMode === "workspace" ? (
+                    <Minimize2 className="size-3.25" />
+                  ) : (
+                    <Maximize2 className="size-3.25" />
+                  )}
+                </PaneActionButton>
               ) : null}
 
               {onSplitTerminalRight ? (
                 <PaneActionButton
                   label="Split right"
                   onClick={() => onSplitTerminalRight(activePaneTerminalId)}
+                  className={
+                    onTogglePresentationMode || canMoveActiveTerminalToGroup
+                      ? "border-l border-border/70"
+                      : ""
+                  }
                 >
                   <SquareSplitHorizontal className="size-3.25" />
                 </PaneActionButton>

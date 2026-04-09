@@ -18,9 +18,7 @@ type RawTerminalGroup = Partial<ThreadTerminalGroup> & {
   activeTerminalId?: string | undefined;
 };
 
-type RawTerminalLeafNode = Partial<
-  Extract<ThreadTerminalLayoutNode, { type: "terminal" }>
-> & {
+type RawTerminalLeafNode = Partial<Extract<ThreadTerminalLayoutNode, { type: "terminal" }>> & {
   terminalId?: string | undefined;
 };
 
@@ -44,7 +42,10 @@ function resolveLeafTerminalIds(
   return normalizePaneTerminalIds([node?.terminalId], validTerminalIdSet);
 }
 
-function createTerminalLeaf(terminalId: string, paneId = `pane-${terminalId}`): ThreadTerminalLayoutNode {
+function createTerminalLeaf(
+  terminalId: string,
+  paneId = `pane-${terminalId}`,
+): ThreadTerminalLayoutNode {
   return {
     type: "terminal",
     paneId,
@@ -81,7 +82,10 @@ function flattenSplitChildren(
   children.forEach((child, index) => {
     const childWeight = normalizedWeight(weights[index]);
     if (isTerminalSplitNode(child) && child.direction === direction) {
-      const totalChildWeight = child.weights.reduce((sum, weight) => sum + normalizedWeight(weight), 0);
+      const totalChildWeight = child.weights.reduce(
+        (sum, weight) => sum + normalizedWeight(weight),
+        0,
+      );
       const safeTotal = totalChildWeight > 0 ? totalChildWeight : child.children.length;
       child.children.forEach((nestedChild, nestedIndex) => {
         nextChildren.push(nestedChild);
@@ -183,12 +187,14 @@ export function findFirstTerminalIdInLayout(node: ThreadTerminalLayoutNode): str
   if (node.type === "terminal") {
     const terminalIds = collectTerminalIdsFromLayout(node);
     const activeTerminalId =
-      "activeTerminalId" in node ? node.activeTerminalId?.trim() ?? "" : "";
+      "activeTerminalId" in node ? (node.activeTerminalId?.trim() ?? "") : "";
     return terminalIds.includes(activeTerminalId)
       ? activeTerminalId
       : (terminalIds[0] ?? DEFAULT_THREAD_TERMINAL_ID);
   }
-  return findFirstTerminalIdInLayout(node.children[0] ?? createTerminalLeaf(DEFAULT_THREAD_TERMINAL_ID));
+  return findFirstTerminalIdInLayout(
+    node.children[0] ?? createTerminalLeaf(DEFAULT_THREAD_TERMINAL_ID),
+  );
 }
 
 export function layoutContainsTerminalId(
@@ -206,11 +212,10 @@ export function normalizeTerminalPaneGroup(
   validTerminalIds: string[],
 ): ThreadTerminalGroup | null {
   const validTerminalIdSet = new Set(validTerminalIds);
-  const legacyTerminalIds = [...new Set((group.terminalIds ?? []).map((id) => id.trim()).filter(Boolean))].filter(
-    (terminalId) => validTerminalIdSet.has(terminalId),
-  );
-  const fallbackLayout =
-    legacyTerminalIds.length > 0 ? buildLegacyLayout(legacyTerminalIds) : null;
+  const legacyTerminalIds = [
+    ...new Set((group.terminalIds ?? []).map((id) => id.trim()).filter(Boolean)),
+  ].filter((terminalId) => validTerminalIdSet.has(terminalId));
+  const fallbackLayout = legacyTerminalIds.length > 0 ? buildLegacyLayout(legacyTerminalIds) : null;
   const sanitizedLayout = sanitizeLayoutNode(group.layout ?? fallbackLayout, validTerminalIdSet);
   if (!sanitizedLayout) return null;
 
@@ -226,7 +231,9 @@ export function normalizeTerminalPaneGroup(
   };
 }
 
-function splitDirectionForPosition(position: ThreadTerminalSplitPosition): ThreadTerminalSplitDirection {
+function splitDirectionForPosition(
+  position: ThreadTerminalSplitPosition,
+): ThreadTerminalSplitDirection {
   return position === "left" || position === "right" ? "horizontal" : "vertical";
 }
 
@@ -357,13 +364,17 @@ function removeTerminalFromLayoutNode(
     if (!node.terminalIds.includes(terminalId)) {
       return { node, removed: false };
     }
-    const nextTerminalIds = node.terminalIds.filter((currentTerminalId) => currentTerminalId !== terminalId);
+    const nextTerminalIds = node.terminalIds.filter(
+      (currentTerminalId) => currentTerminalId !== terminalId,
+    );
     if (nextTerminalIds.length === 0) {
       return { node: null, removed: true };
     }
     const nextActiveTerminalId = nextTerminalIds.includes(node.activeTerminalId)
       ? node.activeTerminalId
-      : (nextTerminalIds[Math.min(node.terminalIds.indexOf(terminalId), nextTerminalIds.length - 1)] ??
+      : (nextTerminalIds[
+          Math.min(node.terminalIds.indexOf(terminalId), nextTerminalIds.length - 1)
+        ] ??
         nextTerminalIds[0] ??
         DEFAULT_THREAD_TERMINAL_ID);
     return {
@@ -438,7 +449,9 @@ export function removeTerminalFromGroupLayout(
 function updateLeafNode(
   node: ThreadTerminalLayoutNode,
   terminalId: string,
-  updater: (node: Extract<ThreadTerminalLayoutNode, { type: "terminal" }>) => ThreadTerminalLayoutNode,
+  updater: (
+    node: Extract<ThreadTerminalLayoutNode, { type: "terminal" }>,
+  ) => ThreadTerminalLayoutNode,
 ): { node: ThreadTerminalLayoutNode; updated: boolean } {
   if (node.type === "terminal") {
     if (!node.terminalIds.includes(terminalId)) {

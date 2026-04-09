@@ -683,10 +683,10 @@ export default function ChatView({
   const storeSetTerminalPresentationMode = useTerminalStateStore(
     (s) => s.setTerminalPresentationMode,
   );
-  const storeOpenTerminalThreadPage = useTerminalStateStore((s) => s.openTerminalThreadPage);
   const storeSetTerminalWorkspaceLayout = useTerminalStateStore(
     (s) => s.setTerminalWorkspaceLayout,
   );
+  const storeOpenTerminalThreadPage = useTerminalStateStore((s) => s.openTerminalThreadPage);
   const storeSetTerminalWorkspaceTab = useTerminalStateStore((s) => s.setTerminalWorkspaceTab);
   const storeSetTerminalHeight = useTerminalStateStore((s) => s.setTerminalHeight);
   const storeSetTerminalMetadata = useTerminalStateStore((s) => s.setTerminalMetadata);
@@ -1847,6 +1847,21 @@ export default function ChatView({
     }
     setTerminalOpen(!terminalState.terminalOpen);
   }, [activeThreadId, setTerminalOpen, setTerminalPresentationMode, terminalState.terminalOpen]);
+  const expandTerminalWorkspace = useCallback(() => {
+    if (!activeThreadId) return;
+    setTerminalPresentationMode("workspace");
+    setTerminalWorkspaceLayout("both");
+    setTerminalWorkspaceTab("terminal");
+  }, [
+    activeThreadId,
+    setTerminalPresentationMode,
+    setTerminalWorkspaceLayout,
+    setTerminalWorkspaceTab,
+  ]);
+  const collapseTerminalWorkspace = useCallback(() => {
+    if (!activeThreadId) return;
+    setTerminalPresentationMode("drawer");
+  }, [activeThreadId, setTerminalPresentationMode]);
   const splitTerminalRight = useCallback(() => {
     if (!activeThreadId || hasReachedSplitLimit) return;
     const terminalId = `terminal-${randomUUID()}`;
@@ -5698,6 +5713,9 @@ export default function ChatView({
                 {...terminalDrawerProps}
                 presentationMode="workspace"
                 isVisible={terminalWorkspaceTerminalTabActive}
+                onTogglePresentationMode={
+                  terminalState.workspaceLayout === "both" ? collapseTerminalWorkspace : undefined
+                }
               />
             </div>
           ) : null}
@@ -5734,6 +5752,7 @@ export default function ChatView({
             key={activeThread.id}
             {...terminalDrawerProps}
             presentationMode="drawer"
+            onTogglePresentationMode={expandTerminalWorkspace}
           />
         );
       })()}

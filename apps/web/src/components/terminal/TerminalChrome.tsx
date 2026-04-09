@@ -107,14 +107,13 @@ export function TerminalWorkspaceTabBar(props: {
   onCloseGroup: (groupId: string) => void;
 }) {
   return (
-    <div className="flex min-w-0 items-stretch justify-between border-b border-border/70 bg-background">
+    <div className="flex min-w-0 items-stretch justify-between bg-background">
       <div className="flex min-w-0 items-stretch overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {props.terminalGroups.map((terminalGroup) => {
           const isActive = terminalGroup.id === props.activeGroupId;
           const runningTerminalId =
             terminalGroup.terminalIds.find(
-              (terminalId) =>
-                props.terminalVisualIdentityById.get(terminalId)?.state === "running",
+              (terminalId) => props.terminalVisualIdentityById.get(terminalId)?.state === "running",
             ) ?? null;
           const previewTerminalId = runningTerminalId ?? terminalGroup.activeTerminalId;
           const visualIdentity = props.terminalVisualIdentityById.get(previewTerminalId);
@@ -125,8 +124,8 @@ export function TerminalWorkspaceTabBar(props: {
               className={cn(
                 "group relative flex h-8 shrink-0 items-center gap-2 border-r border-border/70 px-2.5 transition-colors first:border-l first:border-l-border/70",
                 isActive
-                  ? "border-t border-t-foreground/35 bg-background text-foreground"
-                  : "bg-transparent text-muted-foreground hover:bg-background/40 hover:text-foreground",
+                  ? "shadow-[inset_0_1px_0_var(--color-info-foreground)] bg-background text-foreground"
+                  : "border-b border-border/70 bg-transparent text-muted-foreground hover:bg-background/40 hover:text-foreground",
               )}
             >
               <button
@@ -167,8 +166,9 @@ export function TerminalWorkspaceTabBar(props: {
             </div>
           );
         })}
+        <div className="min-w-0 flex-1 border-b border-border/70" />
       </div>
-      <div className="shrink-0 border-l border-border/70">
+      <div className="shrink-0 border-b border-l border-border/70">
         <TerminalChromeActions actions={props.actions} variant="workspace" />
       </div>
     </div>
@@ -214,7 +214,9 @@ export function TerminalSidebar(props: {
                   onClick={() => props.onActiveTerminalChange(groupActiveTerminalId)}
                 >
                   {groupVisualIdentity?.title ?? `Terminal ${groupIndex + 1}`}
-                  {terminalGroup.terminalIds.length > 1 ? ` (${terminalGroup.terminalIds.length})` : ""}
+                  {terminalGroup.terminalIds.length > 1
+                    ? ` (${terminalGroup.terminalIds.length})`
+                    : ""}
                 </button>
               )}
 

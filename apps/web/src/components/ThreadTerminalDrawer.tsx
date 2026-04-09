@@ -429,6 +429,7 @@ interface ThreadTerminalDrawerProps {
   ) => void;
   onTerminalActivityChange: (terminalId: string, isRunning: boolean) => void;
   onAddTerminalContext: (selection: TerminalContextSelection) => void;
+  onTogglePresentationMode?: (() => void) | undefined;
 }
 
 export default function ThreadTerminalDrawer({
@@ -465,6 +466,7 @@ export default function ThreadTerminalDrawer({
   onTerminalMetadataChange,
   onTerminalActivityChange,
   onAddTerminalContext,
+  onTogglePresentationMode,
 }: ThreadTerminalDrawerProps) {
   const isWorkspaceMode = presentationMode === "workspace";
   const previousRuntimeKeysRef = useRef<Set<string>>(new Set());
@@ -653,8 +655,10 @@ export default function ThreadTerminalDrawer({
                       onNewTerminalTab(terminalId);
                     }
               }
-              onMoveTerminalToGroup={onMoveTerminalToGroup}
+              onMoveTerminalToGroup={isWorkspaceMode ? onMoveTerminalToGroup : undefined}
               onCloseTerminal={onCloseTerminal}
+              presentationMode={presentationMode}
+              onTogglePresentationMode={onTogglePresentationMode}
               renderViewport={(terminalId, options) => (
                 <TerminalViewport
                   key={terminalId}

@@ -311,7 +311,10 @@ async function checkPosixSubprocessActivity(
       if (childCliKind || nestedActivity.hasProviderDescendant) {
         hasProviderDescendant = true;
       }
-      if ((!childCliKind && !isShellLikeProcessName(child.command)) || nestedActivity.hasNonProviderSubprocess) {
+      if (
+        (!childCliKind && !isShellLikeProcessName(child.command)) ||
+        nestedActivity.hasNonProviderSubprocess
+      ) {
         hasNonProviderSubprocess = true;
       }
       cliKind = cliKind ?? childCliKind ?? nestedActivity.cliKind;
@@ -466,8 +469,7 @@ function shouldStripCsiSequence(body: string, finalByte: string): boolean {
 
 function shouldStripOscSequence(content: string): boolean {
   return (
-    /^(10|11|12);(?:\?|rgb:)/.test(content) ||
-    content.startsWith(T3CODE_TERMINAL_HOOK_OSC_PREFIX)
+    /^(10|11|12);(?:\?|rgb:)/.test(content) || content.startsWith(T3CODE_TERMINAL_HOOK_OSC_PREFIX)
   );
 }
 
@@ -554,7 +556,12 @@ function sanitizeTerminalHistoryChunk(
     if (codePoint === 0x1b) {
       const nextCodePoint = input.charCodeAt(index + 1);
       if (Number.isNaN(nextCodePoint)) {
-        return { visibleText, pendingControlSequence: input.slice(index), titleSignals, hookEvents };
+        return {
+          visibleText,
+          pendingControlSequence: input.slice(index),
+          titleSignals,
+          hookEvents,
+        };
       }
 
       if (nextCodePoint === 0x5b) {
@@ -572,7 +579,12 @@ function sanitizeTerminalHistoryChunk(
           cursor += 1;
         }
         if (cursor >= input.length) {
-          return { visibleText, pendingControlSequence: input.slice(index), titleSignals, hookEvents };
+          return {
+            visibleText,
+            pendingControlSequence: input.slice(index),
+            titleSignals,
+            hookEvents,
+          };
         }
         continue;
       }
@@ -585,7 +597,12 @@ function sanitizeTerminalHistoryChunk(
       ) {
         const terminatorIndex = findStringTerminatorIndex(input, index + 2);
         if (terminatorIndex === null) {
-          return { visibleText, pendingControlSequence: input.slice(index), titleSignals, hookEvents };
+          return {
+            visibleText,
+            pendingControlSequence: input.slice(index),
+            titleSignals,
+            hookEvents,
+          };
         }
         const sequence = input.slice(index, terminatorIndex);
         const content = stripStringTerminator(input.slice(index + 2, terminatorIndex));
@@ -608,7 +625,12 @@ function sanitizeTerminalHistoryChunk(
 
       const escapeSequenceEndIndex = findEscapeSequenceEndIndex(input, index + 1);
       if (escapeSequenceEndIndex === null) {
-        return { visibleText, pendingControlSequence: input.slice(index), titleSignals, hookEvents };
+        return {
+          visibleText,
+          pendingControlSequence: input.slice(index),
+          titleSignals,
+          hookEvents,
+        };
       }
       append(input.slice(index, escapeSequenceEndIndex));
       index = escapeSequenceEndIndex;
@@ -630,7 +652,12 @@ function sanitizeTerminalHistoryChunk(
         cursor += 1;
       }
       if (cursor >= input.length) {
-        return { visibleText, pendingControlSequence: input.slice(index), titleSignals, hookEvents };
+        return {
+          visibleText,
+          pendingControlSequence: input.slice(index),
+          titleSignals,
+          hookEvents,
+        };
       }
       continue;
     }
@@ -638,7 +665,12 @@ function sanitizeTerminalHistoryChunk(
     if (codePoint === 0x9d || codePoint === 0x90 || codePoint === 0x9e || codePoint === 0x9f) {
       const terminatorIndex = findStringTerminatorIndex(input, index + 1);
       if (terminatorIndex === null) {
-        return { visibleText, pendingControlSequence: input.slice(index), titleSignals, hookEvents };
+        return {
+          visibleText,
+          pendingControlSequence: input.slice(index),
+          titleSignals,
+          hookEvents,
+        };
       }
       const sequence = input.slice(index, terminatorIndex);
       const content = stripStringTerminator(input.slice(index + 1, terminatorIndex));
@@ -1313,10 +1345,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       appendSessionHistory(session, sanitized.visibleText, this.historyLineLimit);
       this.queuePersist(session.threadId, session.terminalId, session.history);
       const normalizedSignature = normalizeProviderOutputSignature(sanitized.visibleText);
-      if (
-        normalizedSignature.length > 0 &&
-        normalizedSignature !== session.lastOutputSignature
-      ) {
+      if (normalizedSignature.length > 0 && normalizedSignature !== session.lastOutputSignature) {
         // Only refresh on genuinely new output. Repeated identical redraws (idle prompt
         // repaints) are ignored so they do not pin the provider in a "busy" state forever.
         // When hooks are active (managedAgentObserved), hooks are the source of truth anyway;
@@ -1742,11 +1771,13 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
             if (session.managedAgentObserved) {
               // Hooks have fired — trust them as the sole source of truth (superset model).
               // Only override with non-provider subprocesses (e.g. user spawned a build).
-              hasRunningSubprocess = session.managedAgentRunning || subprocessActivity.hasNonProviderSubprocess;
+              hasRunningSubprocess =
+                session.managedAgentRunning || subprocessActivity.hasNonProviderSubprocess;
             } else {
               // No hooks observed — fall back to process-tree + output heuristic.
               hasRunningSubprocess = subprocessActivity.hasProviderDescendant
-                ? subprocessActivity.hasNonProviderSubprocess || isProviderSessionBusy(session, Date.now())
+                ? subprocessActivity.hasNonProviderSubprocess ||
+                  isProviderSessionBusy(session, Date.now())
                 : subprocessActivity.hasRunningSubprocess;
             }
           } catch (error) {
