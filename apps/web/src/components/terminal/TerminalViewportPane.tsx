@@ -205,16 +205,14 @@ export default function TerminalViewportPane({
               <div className="min-w-0 flex-1 border-b border-border/70" />
             </div>
 
-            <div className="flex shrink-0 items-stretch border-b border-l border-border/70">
+            <div className="flex shrink-0 items-stretch divide-x divide-border/70 border-b border-l border-border/70">
               {canMoveActiveTerminalToGroup ? (
-                <div className="flex items-stretch border-r border-border/70">
-                  <PaneActionButton
-                    label="Move to its own terminal tab"
-                    onClick={moveActiveTerminalToGroup}
-                  >
-                    <TerminalSquareIcon className="size-3.25" />
-                  </PaneActionButton>
-                </div>
+                <PaneActionButton
+                  label="Move to its own terminal tab"
+                  onClick={moveActiveTerminalToGroup}
+                >
+                  <TerminalSquareIcon className="size-3.25" />
+                </PaneActionButton>
               ) : null}
               {onTogglePresentationMode ? (
                 <PaneActionButton
@@ -224,7 +222,6 @@ export default function TerminalViewportPane({
                       : "Expand terminal into workspace"
                   }
                   onClick={onTogglePresentationMode}
-                  className={canMoveActiveTerminalToGroup ? "border-r border-border/70" : ""}
                 >
                   {presentationMode === "workspace" ? (
                     <Minimize2 className="size-3.25" />
@@ -233,16 +230,10 @@ export default function TerminalViewportPane({
                   )}
                 </PaneActionButton>
               ) : null}
-
               {onSplitTerminalRight ? (
                 <PaneActionButton
                   label="Split right"
                   onClick={() => onSplitTerminalRight(activePaneTerminalId)}
-                  className={
-                    onTogglePresentationMode || canMoveActiveTerminalToGroup
-                      ? "border-l border-border/70"
-                      : ""
-                  }
                 >
                   <SquareSplitHorizontal className="size-3.25" />
                 </PaneActionButton>
@@ -251,7 +242,6 @@ export default function TerminalViewportPane({
                 <PaneActionButton
                   label="Split down"
                   onClick={() => onSplitTerminalDown(activePaneTerminalId)}
-                  className={onSplitTerminalRight ? "border-l border-border/70" : ""}
                 >
                   <SquareSplitVertical className="size-3.25" />
                 </PaneActionButton>
@@ -260,9 +250,6 @@ export default function TerminalViewportPane({
                 <PaneActionButton
                   label="Close active terminal tab"
                   onClick={() => onCloseTerminal(activePaneTerminalId)}
-                  className={
-                    onSplitTerminalRight || onSplitTerminalDown ? "border-l border-border/70" : ""
-                  }
                 >
                   <Trash2 className="size-3.25" />
                 </PaneActionButton>
