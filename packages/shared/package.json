@@ -28,6 +28,10 @@
       "types": "./src/DrainableWorker.ts",
       "import": "./src/DrainableWorker.ts"
     },
+    "./chatThreads": {
+      "types": "./src/chatThreads.ts",
+      "import": "./src/chatThreads.ts"
+    },
     "./schemaJson": {
       "types": "./src/schemaJson.ts",
       "import": "./src/schemaJson.ts"

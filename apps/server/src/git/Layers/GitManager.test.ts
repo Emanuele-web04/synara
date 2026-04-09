@@ -64,6 +64,10 @@ interface FakeGitTextGeneration {
     cwd: string;
     message: string;
   }) => Effect.Effect<{ branch: string }, TextGenerationError>;
+  generateThreadTitle: (input: {
+    cwd: string;
+    message: string;
+  }) => Effect.Effect<{ title: string }, TextGenerationError>;
 }
 
 type FakePullRequest = NonNullable<FakeGhScenario["pullRequest"]>;
@@ -167,6 +171,10 @@ function createTextGeneration(overrides: Partial<FakeGitTextGeneration> = {}): T
       Effect.succeed({
         branch: "update-workflow",
       }),
+    generateThreadTitle: () =>
+      Effect.succeed({
+        title: "Update workflow",
+      }),
     ...overrides,
   };
 
@@ -199,6 +207,17 @@ function createTextGeneration(overrides: Partial<FakeGitTextGeneration> = {}): T
           (cause) =>
             new TextGenerationError({
               operation: "generateBranchName",
+              detail: "fake text generation failed",
+              ...(cause !== undefined ? { cause } : {}),
+            }),
+        ),
+      ),
+    generateThreadTitle: (input) =>
+      implementation.generateThreadTitle(input).pipe(
+        Effect.mapError(
+          (cause) =>
+            new TextGenerationError({
+              operation: "generateThreadTitle",
               detail: "fake text generation failed",
               ...(cause !== undefined ? { cause } : {}),
             }),

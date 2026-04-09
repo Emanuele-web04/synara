@@ -58,16 +58,29 @@ export interface BranchNameGenerationResult {
   branch: string;
 }
 
+export interface ThreadTitleGenerationInput {
+  cwd: string;
+  message: string;
+  attachments?: ReadonlyArray<ChatAttachment> | undefined;
+  /** Model to use for generation. Defaults to gpt-5.4-mini if not specified. */
+  model?: string;
+}
+
+export interface ThreadTitleGenerationResult {
+  title: string;
+}
+
 export interface TextGenerationService {
   generateCommitMessage(
     input: CommitMessageGenerationInput,
   ): Promise<CommitMessageGenerationResult>;
   generatePrContent(input: PrContentGenerationInput): Promise<PrContentGenerationResult>;
   generateBranchName(input: BranchNameGenerationInput): Promise<BranchNameGenerationResult>;
+  generateThreadTitle(input: ThreadTitleGenerationInput): Promise<ThreadTitleGenerationResult>;
 }
 
 /**
- * TextGenerationShape - Service API for commit/PR text generation.
+ * TextGenerationShape - Service API for AI-generated Git and thread text.
  */
 export interface TextGenerationShape {
   /**
@@ -90,6 +103,13 @@ export interface TextGenerationShape {
   readonly generateBranchName: (
     input: BranchNameGenerationInput,
   ) => Effect.Effect<BranchNameGenerationResult, TextGenerationError>;
+
+  /**
+   * Generate a concise chat-thread title from the first user message.
+   */
+  readonly generateThreadTitle: (
+    input: ThreadTitleGenerationInput,
+  ) => Effect.Effect<ThreadTitleGenerationResult, TextGenerationError>;
 }
 
 /**

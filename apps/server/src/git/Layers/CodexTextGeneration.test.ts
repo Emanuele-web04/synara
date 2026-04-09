@@ -293,6 +293,27 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
     ),
   );
 
+  it.effect("generates compact thread titles from the first user message", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({
+          title: ' "Polish sidebar loading state." ',
+        }),
+        stdinMustContain: "Never exceed 4 words.",
+      },
+      Effect.gen(function* () {
+        const textGeneration = yield* TextGeneration;
+
+        const generated = yield* textGeneration.generateThreadTitle({
+          cwd: process.cwd(),
+          message: "The sidebar loading state feels noisy and needs polish.",
+        });
+
+        expect(generated.title).toBe("Polish sidebar loading state");
+      }),
+    ),
+  );
+
   it.effect("omits attachment metadata section when no attachments are provided", () =>
     withFakeCodexEnv(
       {

@@ -35,6 +35,10 @@ import {
   normalizeModelSlug,
 } from "@t3tools/shared/model";
 import {
+  buildPromptThreadTitleFallback,
+  GENERIC_CHAT_THREAD_TITLE,
+} from "@t3tools/shared/chatThreads";
+import {
   resolveThreadWorkspaceState,
   resolveThreadBranchSourceCwd,
   resolveThreadWorkspaceCwd as resolveSharedThreadWorkspaceCwd,
@@ -3760,10 +3764,11 @@ export default function ChatView({
         } else if (composerTerminalContextsSnapshot.length > 0) {
           titleSeed = formatTerminalContextLabel(composerTerminalContextsSnapshot[0]!);
         } else {
-          titleSeed = "New thread";
+          titleSeed = GENERIC_CHAT_THREAD_TITLE;
         }
       }
-      const title = truncateTitle(titleSeed);
+      // Keep the optimistic label short while the server asks Codex for a better summary.
+      const title = buildPromptThreadTitleFallback(titleSeed);
       const threadCreateModelSelection: ModelSelection = {
         provider: selectedProviderForSend,
         model:
@@ -3816,16 +3821,6 @@ export default function ChatView({
           }
           await runProjectScript(setupScript, setupScriptOptions);
         }
-      }
-
-      // Auto-title from first message
-      if (isFirstMessage && isServerThread) {
-        await api.orchestration.dispatchCommand({
-          type: "thread.meta.update",
-          commandId: newCommandId(),
-          threadId: threadIdForSend,
-          title,
-        });
       }
 
       if (isServerThread) {

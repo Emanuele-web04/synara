@@ -3,6 +3,7 @@ import {
   FolderIcon,
   GitPullRequestIcon,
   type LucideIcon,
+  PinIcon,
   PlugIcon,
   RocketIcon,
   SettingsIcon,
@@ -1746,6 +1747,53 @@ export default function Sidebar() {
     return folderName ?? project.name ?? null;
   }
 
+  function renderPinnedThreadRow(thread: Thread) {
+    const isActive = !activeSplitView && routeThreadId === thread.id;
+    const folderLabel = resolveThreadFolderLabel(thread.projectId);
+
+    return (
+      <button
+        key={thread.id}
+        type="button"
+        data-thread-item
+        className={cn(
+          "flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[13px] transition-colors",
+          isActive
+            ? "bg-accent/62 text-foreground/90 dark:bg-accent/42"
+            : "text-foreground/72 hover:bg-accent/40 hover:text-foreground/90",
+        )}
+        onClick={() => activateThread(thread.id)}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          void handleThreadContextMenu(thread.id, {
+            x: event.clientX,
+            y: event.clientY,
+          });
+        }}
+      >
+        <PinIcon
+          aria-hidden="true"
+          className="size-3.5 shrink-0 text-muted-foreground/50"
+        />
+        <ProviderGlyph
+          provider={thread.modelSelection.provider}
+          className="size-3.5 shrink-0"
+        />
+        <span className="min-w-0 flex-1 truncate">{thread.title}</span>
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          {folderLabel ? (
+            <span className="max-w-24 truncate text-[11px] text-muted-foreground/38">
+              {folderLabel}
+            </span>
+          ) : null}
+          <span className="shrink-0 text-[11px] text-muted-foreground/38">
+            {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
+          </span>
+        </div>
+      </button>
+    );
+  }
+
   function renderThreadRow(thread: Thread, orderedProjectThreadIds: readonly ThreadId[]) {
     const threadTerminalState = selectThreadTerminalState(terminalStateByThreadId, thread.id);
     const threadEntryPoint = threadTerminalState.entryPoint;
@@ -1963,11 +2011,6 @@ export default function Sidebar() {
                 <TooltipPopup side="top">Disposable chat</TooltipPopup>
               </Tooltip>
             ) : null}
-            {folderLabel ? (
-              <span className={`max-w-24 truncate text-[11px] ${secondaryMetaClass}`}>
-                {folderLabel}
-              </span>
-            ) : null}
             <span className={`shrink-0 text-[12px] ${secondaryMetaClass}`}>
               {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
             </span>
@@ -2167,7 +2210,7 @@ export default function Sidebar() {
                 />
               ) : null}
             </span>
-            <span className="flex-1 truncate font-system-ui text-[13px] font-normal text-foreground/84">
+            <span className="flex-1 truncate font-system-ui text-[13px] font-normal text-muted-foreground/72">
               {project.name}
             </span>
           </SidebarMenuButton>
@@ -2771,18 +2814,13 @@ export default function Sidebar() {
           <SidebarGroup className="px-1.5 py-1.5">
             {pinnedThreads.length > 0 ? (
               <>
-                <SidebarMenuSub
-                  ref={attachThreadListAutoAnimateRef}
-                  className="mx-0 w-full translate-x-0 gap-0.5 border-l-0 px-0 py-0"
-                >
-                  {pinnedThreads.map((thread) =>
-                    renderThreadRow(thread, orderedThreadIdsForProject(thread.projectId)),
-                  )}
-                </SidebarMenuSub>
-                <div className="my-1.5 h-px w-full bg-border/70" />
+                <div className="flex flex-col gap-0.5">
+                  {pinnedThreads.map((thread) => renderPinnedThreadRow(thread))}
+                </div>
+                <div className="-mx-1.5 my-1.5 h-px bg-border/70" />
               </>
             ) : (
-              <div className="my-1 h-px w-full bg-border" />
+              <div className="-mx-1.5 my-1 h-px bg-border" />
             )}
             <div className="mb-1.5 flex items-center justify-between px-2">
               <span className="text-[13px] font-normal tracking-tight text-muted-foreground/58">
