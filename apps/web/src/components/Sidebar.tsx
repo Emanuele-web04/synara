@@ -1771,14 +1771,8 @@ export default function Sidebar() {
           });
         }}
       >
-        <PinIcon
-          aria-hidden="true"
-          className="size-3.5 shrink-0 text-muted-foreground/50"
-        />
-        <ProviderGlyph
-          provider={thread.modelSelection.provider}
-          className="size-3.5 shrink-0"
-        />
+        <PinIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground/50" />
+        <ProviderGlyph provider={thread.modelSelection.provider} className="size-3.5 shrink-0" />
         <span className="min-w-0 flex-1 truncate">{thread.title}</span>
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
           {folderLabel ? (

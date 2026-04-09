@@ -8,8 +8,8 @@ import {
 } from "./chatThreads";
 
 describe("chatThreads", () => {
-  it("builds a short fallback title from the first four words", () => {
-    expect(buildPromptThreadTitleFallback("Fix the broken auth redirect in production now")).toBe(
+  it("builds a short fallback title in sentence case from the first four words", () => {
+    expect(buildPromptThreadTitleFallback("FIX the BROKEN auth redirect in production now")).toBe(
       "Fix the broken auth",
     );
   });
@@ -18,9 +18,9 @@ describe("chatThreads", () => {
     expect(buildPromptThreadTitleFallback("   \n\t  ")).toBe(GENERIC_CHAT_THREAD_TITLE);
   });
 
-  it("sanitizes generated titles down to four words without wrapper punctuation", () => {
-    expect(sanitizeGeneratedThreadTitle('"Polish sidebar loading state ASAP."')).toBe(
-      "Polish sidebar loading state",
+  it("sanitizes generated titles down to four words in sentence case", () => {
+    expect(sanitizeGeneratedThreadTitle('"Workspace Logic Check ASAP."')).toBe(
+      "Workspace logic check",
     );
   });
 

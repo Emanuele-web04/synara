@@ -22,6 +22,19 @@ function titleWords(value: string): string[] {
     .filter((token) => token.length > 0);
 }
 
+function toSentenceCase(words: readonly string[]): string {
+  const [firstWord, ...restWords] = words;
+  if (!firstWord) {
+    return GENERIC_CHAT_THREAD_TITLE;
+  }
+
+  const normalizedFirstWord = `${firstWord.slice(0, 1).toUpperCase()}${firstWord
+    .slice(1)
+    .toLowerCase()}`;
+  const normalizedRestWords = restWords.map((word) => word.toLowerCase());
+  return [normalizedFirstWord, ...normalizedRestWords].join(" ");
+}
+
 export function truncateChatThreadTitle(
   text: string,
   maxLength = MAX_CHAT_THREAD_TITLE_LENGTH,
@@ -39,7 +52,7 @@ export function buildPromptThreadTitleFallback(message: string): string {
   if (words.length === 0) {
     return GENERIC_CHAT_THREAD_TITLE;
   }
-  return truncateChatThreadTitle(words.join(" "));
+  return truncateChatThreadTitle(toSentenceCase(words));
 }
 
 // Keep generated titles compact so the sidebar never renders sentence-length prompts.
@@ -49,7 +62,7 @@ export function sanitizeGeneratedThreadTitle(raw: string): string {
   if (words.length === 0) {
     return GENERIC_CHAT_THREAD_TITLE;
   }
-  return truncateChatThreadTitle(words.join(" "));
+  return truncateChatThreadTitle(toSentenceCase(words));
 }
 
 export function isGenericChatThreadTitle(title: string | null | undefined): boolean {
