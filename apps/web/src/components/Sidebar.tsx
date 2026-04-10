@@ -6,6 +6,7 @@ import {
   PinIcon,
   PlugIcon,
   RocketIcon,
+  SearchIcon,
   SettingsIcon,
   SquarePenIcon,
   TerminalIcon,
@@ -64,6 +65,7 @@ import { type Thread } from "../types";
 import { ClaudeAI, OpenAI } from "./Icons";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
+import { SidebarSearchPalette } from "./SidebarSearchPalette";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useThreadHandoff } from "../hooks/useThreadHandoff";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
@@ -82,6 +84,7 @@ import {
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
 import { Menu, MenuGroup, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
+import { ShortcutKbd } from "./ui/shortcut-kbd";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import {
   SidebarContent,
@@ -134,6 +137,11 @@ import {
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { usePinnedThreadsStore } from "../pinnedThreadsStore";
 import { useWorkspaceStore, workspaceThreadId } from "../workspaceStore";
+import type {
+  SidebarSearchAction,
+  SidebarSearchProject,
+  SidebarSearchThread,
+} from "./SidebarSearchPalette.logic";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_PREVIEW_LIMIT = 6;
@@ -215,7 +223,7 @@ function resolveSplitPreviewTitle(input: {
   return "New chat";
 }
 
-function formatRelativeTime(iso: string): string {
+export function formatRelativeTime(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
   const minutes = Math.floor(diff / 60_000);
   if (minutes < 1) return "now";
@@ -372,12 +380,14 @@ function SidebarPrimaryAction({
   onClick,
   active = false,
   disabled = false,
+  shortcutLabel,
 }: {
   icon: LucideIcon;
   label: string;
   onClick?: () => void;
   active?: boolean;
   disabled?: boolean;
+  shortcutLabel?: string | null;
 }) {
   return (
     <SidebarMenuItem>
@@ -385,7 +395,7 @@ function SidebarPrimaryAction({
         size="default"
         data-active={active}
         aria-current={active ? "page" : undefined}
-        className="h-8 gap-2.5 rounded-lg px-2 font-system-ui text-[13px] font-normal text-foreground/82 transition-colors hover:bg-accent/55 hover:text-foreground data-[active=true]:bg-accent/65"
+        className="group/sidebar-primary-action h-8 gap-2.5 rounded-lg px-2 font-system-ui text-[13px] font-normal text-foreground/82 transition-colors hover:bg-accent/55 hover:text-foreground data-[active=true]:bg-accent/65"
         aria-disabled={disabled || undefined}
         disabled={disabled}
         onClick={onClick}
@@ -394,6 +404,13 @@ function SidebarPrimaryAction({
           <Icon className="size-[15px]" />
         </span>
         <span className="truncate">{label}</span>
+        {shortcutLabel ? (
+          <ShortcutKbd
+            shortcutLabel={shortcutLabel}
+            groupClassName="ml-auto opacity-0 transition-opacity group-hover/sidebar-primary-action:opacity-100 group-focus-visible/sidebar-primary-action:opacity-100"
+            className="h-4.5 min-w-4.5 px-1 text-[10px] text-muted-foreground/72"
+          />
+        ) : null}
       </SidebarMenuButton>
     </SidebarMenuItem>
   );
@@ -455,7 +472,7 @@ function SidebarSegmentedPicker({
               className={cn(
                 "flex-1 rounded-sm px-2.5 py-1 text-[11.5px] font-medium tracking-tight transition-colors",
                 active
-                  ? "bg-background text-foreground shadow-xs"
+                  ? "bg-background dark:bg-neutral-800 text-foreground shadow-xs"
                   : "text-muted-foreground hover:text-foreground",
               )}
               onClick={() => onSelectView(view)}
@@ -566,6 +583,7 @@ export default function Sidebar() {
   const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
   const [addingProject, setAddingProject] = useState(false);
   const [newCwd, setNewCwd] = useState("");
+  const [searchPaletteOpen, setSearchPaletteOpen] = useState(false);
   const [isPickingFolder, setIsPickingFolder] = useState(false);
   const [isAddingProject, setIsAddingProject] = useState(false);
   const [addProjectError, setAddProjectError] = useState<string | null>(null);
@@ -718,6 +736,24 @@ export default function Sidebar() {
       });
     },
     [appSettings.sidebarThreadSortOrder, navigate, threads],
+  );
+
+  const handleOpenProjectFromSearch = useCallback(
+    (projectId: string) => {
+      const typedProjectId = ProjectId.makeUnsafe(projectId);
+      const hasProjectThread = threads.some((thread) => thread.projectId === typedProjectId);
+      if (hasProjectThread) {
+        focusMostRecentThreadForProject(typedProjectId);
+        return;
+      }
+
+      void handleNewThread(typedProjectId, {
+        envMode: resolveSidebarNewThreadEnvMode({
+          defaultEnvMode: appSettings.defaultThreadEnvMode,
+        }),
+      });
+    },
+    [appSettings.defaultThreadEnvMode, focusMostRecentThreadForProject, handleNewThread, threads],
   );
 
   const navigateToWorkspace = useCallback(
@@ -2409,12 +2445,25 @@ export default function Sidebar() {
         return;
       }
 
+      if ((event.metaKey || event.ctrlKey) && event.key === "k" && !event.shiftKey && !event.altKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        setSearchPaletteOpen((prev) => !prev);
+        return;
+      }
+
       const command = resolveShortcutCommand(event, keybindings, {
         context: {
           terminalFocus: isTerminalFocused(),
           terminalOpen,
         },
       });
+      if (command === "sidebar.search") {
+        event.preventDefault();
+        event.stopPropagation();
+        setSearchPaletteOpen((prev) => !prev);
+        return;
+      }
       if (command !== "chat.visible.next" && command !== "chat.visible.previous") {
         return;
       }
@@ -2439,6 +2488,7 @@ export default function Sidebar() {
     activateThread,
     activeSidebarThreadId,
     handleStartAddProject,
+    isOnWorkspace,
     keybindings,
     terminalOpen,
     visibleSidebarThreadIds,
@@ -2508,6 +2558,57 @@ export default function Sidebar() {
     shortcutLabelForCommand(keybindings, "chat.newLocal") ??
     shortcutLabelForCommand(keybindings, "chat.new");
   const newTerminalThreadShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newTerminal");
+  const searchShortcutLabel =
+    shortcutLabelForCommand(keybindings, "sidebar.search") ??
+    (isMacPlatform(navigator.platform) ? "⌘K" : "Ctrl+K");
+  const searchPaletteProjects = useMemo<SidebarSearchProject[]>(
+    () =>
+      projects.map((project) => ({
+        id: project.id,
+        name: project.name,
+        cwd: project.cwd,
+        createdAt: project.createdAt,
+        updatedAt: project.updatedAt,
+      })),
+    [projects],
+  );
+  const searchPaletteThreads = useMemo<SidebarSearchThread[]>(
+    () =>
+      threads.map((thread) => ({
+        id: thread.id,
+        title: thread.title,
+        projectId: thread.projectId,
+        projectName: projectById.get(thread.projectId)?.name ?? "Unknown project",
+        provider: thread.modelSelection.provider,
+        createdAt: thread.createdAt,
+        updatedAt: thread.updatedAt,
+      })),
+    [projectById, threads],
+  );
+  const searchPaletteActions = useMemo<SidebarSearchAction[]>(
+    () => [
+      {
+        id: "new-thread",
+        label: "New thread",
+        description: "Start a fresh chat in the current project.",
+        keywords: ["chat", "new"],
+        shortcutLabel: newThreadShortcutLabel,
+      },
+      {
+        id: "add-project",
+        label: "Add project",
+        description: "Open a repository or folder in the sidebar.",
+        keywords: ["folder", "repo", "repository", "open"],
+      },
+      {
+        id: "settings",
+        label: "Settings",
+        description: "Open app settings.",
+        keywords: ["preferences", "config"],
+      },
+    ],
+    [newThreadShortcutLabel],
+  );
 
   const handleDesktopUpdateButtonClick = useCallback(() => {
     const bridge = window.desktopBridge;
@@ -2688,6 +2789,15 @@ export default function Sidebar() {
                   icon={SquarePenIcon}
                   label="New thread"
                   onClick={handlePrimaryNewThread}
+                />
+                <SidebarPrimaryAction
+                  icon={SearchIcon}
+                  label="Search"
+                  active={searchPaletteOpen}
+                  onClick={() => {
+                    setSearchPaletteOpen(true);
+                  }}
+                  shortcutLabel={searchShortcutLabel}
                 />
                 <SidebarPrimaryAction
                   icon={PlugIcon}
@@ -2986,6 +3096,26 @@ export default function Sidebar() {
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>
+
+      <SidebarSearchPalette
+        open={searchPaletteOpen}
+        onOpenChange={setSearchPaletteOpen}
+        actions={searchPaletteActions}
+        projects={searchPaletteProjects}
+        threads={searchPaletteThreads}
+        onCreateThread={handlePrimaryNewThread}
+        onAddProject={handleStartAddProject}
+        onOpenPlugins={() => {
+          void navigate({ to: "/plugins" });
+        }}
+        onOpenSettings={() => {
+          void navigate({ to: "/settings" });
+        }}
+        onOpenProject={handleOpenProjectFromSearch}
+        onOpenThread={(threadId) => {
+          activateThread(ThreadId.makeUnsafe(threadId));
+        }}
+      />
     </>
   );
 }

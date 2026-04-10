@@ -84,6 +84,7 @@ const DEFAULT_BINDINGS = compile([
     command: "sidebar.toggle",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
+  { shortcut: modShortcut("k"), command: "sidebar.search" },
   { shortcut: modShortcut("j"), command: "terminal.toggle" },
   {
     shortcut: modShortcut("d"),
@@ -392,6 +393,10 @@ describe("shortcutLabelForCommand", () => {
       "⌘B",
     );
     assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "sidebar.search", "MacIntel"),
+      "⌘K",
+    );
+    assert.strictEqual(
       shortcutLabelForCommand(DEFAULT_BINDINGS, "browser.toggle", "MacIntel"),
       "⇧⌘B",
     );
@@ -545,6 +550,23 @@ describe("chat/editor shortcuts", () => {
     );
   });
 
+  it("resolves sidebar.search regardless of terminal focus", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "k", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "sidebar.search",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "k", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: true },
+      }),
+      "sidebar.search",
+    );
+  });
+
   it("matches browser.toggle shortcut outside terminal focus", () => {
     assert.isTrue(
       isBrowserToggleShortcut(
@@ -671,8 +693,8 @@ describe("isTerminalClearShortcut", () => {
     assert.isTrue(isTerminalClearShortcut(event({ key: "l", ctrlKey: true }), "MacIntel"));
   });
 
-  it("matches Cmd+K on macOS", () => {
-    assert.isTrue(isTerminalClearShortcut(event({ key: "k", metaKey: true }), "MacIntel"));
+  it("does not match Cmd+K (reserved for sidebar search)", () => {
+    assert.isFalse(isTerminalClearShortcut(event({ key: "k", metaKey: true }), "MacIntel"));
   });
 
   it("ignores non-keydown events", () => {

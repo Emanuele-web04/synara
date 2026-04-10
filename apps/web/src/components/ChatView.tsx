@@ -169,6 +169,7 @@ import {
   resolveAppModelSelection,
   useAppSettings,
 } from "../appSettings";
+import { resolveTerminalNewAction } from "../lib/terminalNewAction";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import {
   type ComposerImageAttachment,
@@ -1905,6 +1906,32 @@ export default function ChatView({
     },
     [activeThreadId, storeNewTerminalTab],
   );
+  const createTerminalFromShortcut = useCallback(() => {
+    const action = resolveTerminalNewAction({
+      terminalOpen: terminalState.terminalOpen,
+      activeTerminalId: terminalState.activeTerminalId,
+      activeTerminalGroupId: terminalState.activeTerminalGroupId,
+      terminalGroups: terminalState.terminalGroups,
+    });
+
+    if (action.kind === "new-group") {
+      if (!terminalState.terminalOpen) {
+        setTerminalOpen(true);
+      }
+      createNewTerminal();
+      return;
+    }
+
+    createNewTerminalTab(action.targetTerminalId);
+  }, [
+    createNewTerminal,
+    createNewTerminalTab,
+    setTerminalOpen,
+    terminalState.activeTerminalGroupId,
+    terminalState.activeTerminalId,
+    terminalState.terminalGroups,
+    terminalState.terminalOpen,
+  ]);
   const moveTerminalToNewGroup = useCallback(
     (terminalId: string) => {
       if (!activeThreadId) return;
@@ -1928,16 +1955,13 @@ export default function ChatView({
 
     const unsubscribe = onMenuAction((action) => {
       if (action !== "new-terminal-tab") return;
-      if (!terminalState.terminalOpen) {
-        setTerminalOpen(true);
-      }
-      createNewTerminal();
+      createTerminalFromShortcut();
     });
 
     return () => {
       unsubscribe?.();
     };
-  }, [createNewTerminal, isFocusedPane, setTerminalOpen, terminalState.terminalOpen]);
+  }, [createTerminalFromShortcut, isFocusedPane]);
   const activateTerminal = useCallback(
     (terminalId: string) => {
       if (!activeThreadId) return;
@@ -3165,10 +3189,7 @@ export default function ChatView({
       if (command === "terminal.new") {
         event.preventDefault();
         event.stopPropagation();
-        if (!terminalState.terminalOpen) {
-          setTerminalOpen(true);
-        }
-        createNewTerminal();
+        createTerminalFromShortcut();
         return;
       }
 
@@ -3235,7 +3256,7 @@ export default function ChatView({
     activeThreadId,
     closeTerminal,
     closeActiveWorkspaceView,
-    createNewTerminal,
+    createTerminalFromShortcut,
     setTerminalOpen,
     openNewFullWidthTerminal,
     runProjectScript,

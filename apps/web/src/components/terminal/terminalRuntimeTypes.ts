@@ -68,6 +68,9 @@ export interface TerminalRuntimeEntry {
   writeFlushTimeout: number | null;
   pendingWrites: string[];
   pendingWriteLength: number;
+  deferredWrites: string[];
+  deferredWriteLength: number;
+  webglLoadFrame: number | null;
   themeRefreshFrame: number;
   themeObserver: MutationObserver | null;
   visibilityCleanup: (() => void) | null;

@@ -11,7 +11,7 @@ export function showConfirmDialogFallback(message: string): Promise<boolean> {
 
     // Backdrop
     const backdrop = document.createElement("div");
-    backdrop.className = "fixed inset-0 z-50 bg-black/32 backdrop-blur-sm";
+    backdrop.className = "fixed inset-0 z-50 bg-black/60";
     backdrop.style.cssText = "animation:fadeIn .15s ease-out";
 
     // Viewport (centers the dialog)

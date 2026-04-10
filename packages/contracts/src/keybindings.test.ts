@@ -29,6 +29,12 @@ it.effect("parses keybinding rules", () =>
     });
     assert.strictEqual(parsed.command, "sidebar.toggle");
 
+    const parsedSearch = yield* decode(KeybindingRule, {
+      key: "mod+k",
+      command: "sidebar.search",
+    });
+    assert.strictEqual(parsedSearch.command, "sidebar.search");
+
     const parsedTerminalToggle = yield* decode(KeybindingRule, {
       key: "mod+j",
       command: "terminal.toggle",

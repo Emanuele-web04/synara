@@ -30,6 +30,7 @@ import {
   terminalThemeFromApp,
   writeSystemMessage,
 } from "./terminalRuntimeAppearance";
+import { terminalEventDispatcher } from "./terminalEventDispatcher";
 import type {
   TerminalRuntimeConfig,
   TerminalRuntimeEntry,
@@ -65,6 +66,11 @@ function clearPendingWrites(entry: TerminalRuntimeEntry): void {
   entry.pendingWriteLength = 0;
 }
 
+function clearDeferredWrites(entry: TerminalRuntimeEntry): void {
+  entry.deferredWrites.length = 0;
+  entry.deferredWriteLength = 0;
+}
+
 function flushPendingWrites(entry: TerminalRuntimeEntry): void {
   if (entry.writeRafHandle !== null) {
     window.cancelAnimationFrame(entry.writeRafHandle);
@@ -82,6 +88,22 @@ function flushPendingWrites(entry: TerminalRuntimeEntry): void {
   entry.pendingWrites.length = 0;
   entry.pendingWriteLength = 0;
   entry.terminal.write(combined);
+}
+
+function deferWrite(entry: TerminalRuntimeEntry, data: string): void {
+  entry.deferredWrites.push(data);
+  entry.deferredWriteLength += data.length;
+}
+
+function flushDeferredWrites(entry: TerminalRuntimeEntry): void {
+  if (entry.deferredWrites.length === 0) {
+    entry.deferredWriteLength = 0;
+    return;
+  }
+
+  const combined = entry.deferredWrites.join("");
+  clearDeferredWrites(entry);
+  scheduleWrite(entry, combined);
 }
 
 function scheduleWrite(entry: TerminalRuntimeEntry, data: string): void {
@@ -313,6 +335,61 @@ function syncTheme(entry: TerminalRuntimeEntry): void {
   }
 }
 
+function cancelPendingWebglLoad(entry: TerminalRuntimeEntry): void {
+  if (entry.webglLoadFrame !== null) {
+    window.cancelAnimationFrame(entry.webglLoadFrame);
+    entry.webglLoadFrame = null;
+  }
+}
+
+function disposeWebglAddon(entry: TerminalRuntimeEntry): void {
+  cancelPendingWebglLoad(entry);
+  entry.webglAddon?.dispose();
+  entry.webglAddon = null;
+}
+
+function maybeLoadWebglAddon(entry: TerminalRuntimeEntry): void {
+  if (
+    entry.disposed ||
+    !ENABLE_TERMINAL_WEBGL ||
+    suggestedRendererType === "dom" ||
+    entry.webglAddon !== null ||
+    entry.webglLoadFrame !== null ||
+    !entry.viewState.isVisible
+  ) {
+    return;
+  }
+
+  entry.webglLoadFrame = window.requestAnimationFrame(() => {
+    entry.webglLoadFrame = null;
+    if (
+      entry.disposed ||
+      !ENABLE_TERMINAL_WEBGL ||
+      suggestedRendererType === "dom" ||
+      entry.webglAddon !== null ||
+      !entry.viewState.isVisible
+    ) {
+      return;
+    }
+
+    try {
+      const nextWebglAddon = new WebglAddon();
+      nextWebglAddon.onContextLoss(() => {
+        nextWebglAddon.dispose();
+        if (entry.webglAddon === nextWebglAddon) {
+          entry.webglAddon = null;
+        }
+        entry.terminal.refresh(0, Math.max(0, entry.terminal.rows - 1));
+      });
+      entry.terminal.loadAddon(nextWebglAddon);
+      entry.webglAddon = nextWebglAddon;
+    } catch {
+      suggestedRendererType = "dom";
+      entry.webglAddon = null;
+    }
+  });
+}
+
 function maybePromoteTerminalIdentityFromOutput(entry: TerminalRuntimeEntry, output: string): void {
   if (entry.terminalCliKind !== null) {
     return;
@@ -496,6 +573,9 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
     writeFlushTimeout: null,
     pendingWrites: [],
     pendingWriteLength: 0,
+    deferredWrites: [],
+    deferredWriteLength: 0,
+    webglLoadFrame: null,
     themeRefreshFrame: 0,
     themeObserver: null,
     visibilityCleanup: null,
@@ -662,36 +742,18 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
     attributeFilter: ["class", "style"],
   });
 
-  const webglRaf = requestAnimationFrame(() => {
-    if (entry.disposed || !ENABLE_TERMINAL_WEBGL || suggestedRendererType === "dom") return;
-    try {
-      const nextWebglAddon = new WebglAddon();
-      nextWebglAddon.onContextLoss(() => {
-        nextWebglAddon.dispose();
-        if (entry.webglAddon === nextWebglAddon) {
-          entry.webglAddon = null;
-        }
-        terminal.refresh(0, Math.max(0, terminal.rows - 1));
-      });
-      terminal.loadAddon(nextWebglAddon);
-      entry.webglAddon = nextWebglAddon;
-    } catch {
-      suggestedRendererType = "dom";
-      entry.webglAddon = null;
-    }
-  });
-  entry.persistentDisposables.push(() => {
-    cancelAnimationFrame(webglRaf);
-  });
-
-  const api = readNativeApi();
-  if (api) {
-    entry.unsubscribeTerminalEvents = api.terminal.onEvent((event) => {
-      if (event.threadId !== entry.threadId || event.terminalId !== entry.terminalId) return;
-
+  entry.unsubscribeTerminalEvents = terminalEventDispatcher.subscribe(
+    entry.threadId,
+    entry.terminalId,
+    (event) => {
       if (event.type === "output") {
         maybePromoteTerminalIdentityFromOutput(entry, event.data);
-        scheduleWrite(entry, event.data);
+        if (entry.viewState.isVisible) {
+          flushDeferredWrites(entry);
+          scheduleWrite(entry, event.data);
+        } else {
+          deferWrite(entry, event.data);
+        }
         return;
       }
 
@@ -700,6 +762,7 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
         entry.titleInputBuffer = "";
         entry.outputIdentityBuffer = "";
         clearPendingWrites(entry);
+        clearDeferredWrites(entry);
         terminal.write("\u001bc");
         if (event.snapshot.history.length > 0) {
           maybePromoteTerminalIdentityFromOutput(entry, event.snapshot.history);
@@ -712,6 +775,7 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
         entry.titleInputBuffer = "";
         entry.outputIdentityBuffer = "";
         clearPendingWrites(entry);
+        clearDeferredWrites(entry);
         terminal.clear();
         terminal.write("\u001bc");
         return;
@@ -745,8 +809,8 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
           entry.callbacks.onSessionExited();
         }, 0);
       }
-    });
-  }
+    },
+  );
 
   return entry;
 }
@@ -803,6 +867,7 @@ export function attachRuntimeToContainer(
   }
 
   updateRuntimeViewState(entry, viewState);
+  maybeLoadWebglAddon(entry);
   ensureResizeObserver(entry);
   startVisibilityRecovery(entry);
   openTerminal(entry);
@@ -817,12 +882,15 @@ export function updateRuntimeViewState(
 
   if (entry.container) {
     if (nextViewState.isVisible && !wasVisible) {
+      maybeLoadWebglAddon(entry);
+      flushDeferredWrites(entry);
       applyInitialVisualResize(entry);
       ensureResizeObserver(entry);
       startVisibilityRecovery(entry);
     } else if (!nextViewState.isVisible && wasVisible) {
       cancelScheduledVisualResize(entry);
       stopVisibilityRecovery(entry);
+      disposeWebglAddon(entry);
       clearAttachDisposables(entry);
     }
   }
@@ -837,6 +905,7 @@ export function updateRuntimeViewState(
 export function detachRuntimeFromContainer(entry: TerminalRuntimeEntry): void {
   cancelScheduledVisualResize(entry);
   stopVisibilityRecovery(entry);
+  disposeWebglAddon(entry);
   clearAttachDisposables(entry);
   clearBackendResizeTimer(entry);
   entry.pendingResize = null;
@@ -850,6 +919,7 @@ export function disposeRuntimeEntry(entry: TerminalRuntimeEntry): void {
   detachRuntimeFromContainer(entry);
   entry.disposed = true;
   flushPendingWrites(entry);
+  clearDeferredWrites(entry);
   entry.unsubscribeTerminalEvents?.();
   entry.unsubscribeTerminalEvents = null;
   entry.querySuppressionDispose?.();
@@ -868,7 +938,6 @@ export function disposeRuntimeEntry(entry: TerminalRuntimeEntry): void {
     dispose();
   }
   entry.persistentDisposables.length = 0;
-  entry.webglAddon?.dispose();
-  entry.webglAddon = null;
+  disposeWebglAddon(entry);
   entry.terminal.dispose();
 }

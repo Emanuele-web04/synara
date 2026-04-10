@@ -348,18 +348,7 @@ export function isTerminalClearShortcut(
 
   const key = event.key.toLowerCase();
 
-  if (key === "l" && event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
-    return true;
-  }
-
-  return (
-    isMacPlatform(platform) &&
-    key === "k" &&
-    event.metaKey &&
-    !event.ctrlKey &&
-    !event.altKey &&
-    !event.shiftKey
-  );
+  return key === "l" && event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey;
 }
 
 export function terminalNavigationShortcutData(

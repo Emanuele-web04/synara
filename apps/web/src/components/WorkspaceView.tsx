@@ -2,7 +2,7 @@
 // Purpose: Render a dedicated terminal-only workspace page backed by a synthetic terminal scope.
 // Layer: Workspace route surface
 
-import { Plus, SettingsIcon, SquarePenIcon } from "~/lib/icons";
+import { Plus, SettingsIcon } from "~/lib/icons";
 import { type TerminalCliKind } from "@t3tools/shared/terminalThreads";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -10,6 +10,7 @@ import { useQuery } from "@tanstack/react-query";
 import { readNativeApi } from "~/nativeApi";
 import { Button } from "~/components/ui/button";
 import { SidebarInset, SidebarTrigger } from "~/components/ui/sidebar";
+import { resolveTerminalNewAction } from "~/lib/terminalNewAction";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { selectThreadTerminalState, useTerminalStateStore } from "~/terminalStateStore";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
@@ -204,6 +205,28 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
     },
     [newTerminalTab, threadId],
   );
+  const createWorkspaceTerminalFromShortcut = useCallback(() => {
+    const action = resolveTerminalNewAction({
+      terminalOpen: terminalState.terminalOpen,
+      activeTerminalId: terminalState.activeTerminalId,
+      activeTerminalGroupId: terminalState.activeTerminalGroupId,
+      terminalGroups: terminalState.terminalGroups,
+    });
+
+    if (action.kind === "new-group") {
+      createWorkspaceTerminal();
+      return;
+    }
+
+    createWorkspaceTerminalTab(action.targetTerminalId);
+  }, [
+    createWorkspaceTerminal,
+    createWorkspaceTerminalTab,
+    terminalState.activeTerminalGroupId,
+    terminalState.activeTerminalId,
+    terminalState.terminalGroups,
+    terminalState.terminalOpen,
+  ]);
 
   const moveTerminalToNewGroup = useCallback(
     (terminalId: string) => {
@@ -220,6 +243,22 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
     },
     [setActiveTerminal, threadId],
   );
+
+  useEffect(() => {
+    const onMenuAction = window.desktopBridge?.onMenuAction;
+    if (typeof onMenuAction !== "function") {
+      return;
+    }
+
+    const unsubscribe = onMenuAction((action) => {
+      if (action !== "new-terminal-tab") return;
+      createWorkspaceTerminalFromShortcut();
+    });
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, [createWorkspaceTerminalFromShortcut]);
 
   const closeTerminal = useCallback(
     (terminalId: string) => {

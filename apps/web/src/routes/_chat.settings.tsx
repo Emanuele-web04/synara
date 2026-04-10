@@ -662,12 +662,12 @@ function SettingsRouteView() {
               />
 
               <SettingsRow
-                title="Completion toasts"
-                description="Show an in-app toast when a thread changes from working to completed."
+                title="Thread activity toasts"
+                description="Show an in-app toast when a thread finishes or needs input."
                 resetAction={
                   settings.enableTaskCompletionToasts !== defaults.enableTaskCompletionToasts ? (
                     <SettingResetButton
-                      label="completion toasts"
+                      label="thread activity toasts"
                       onClick={() =>
                         updateSettings({
                           enableTaskCompletionToasts: defaults.enableTaskCompletionToasts,
@@ -682,14 +682,14 @@ function SettingsRouteView() {
                     onCheckedChange={(checked) =>
                       updateSettings({ enableTaskCompletionToasts: checked })
                     }
-                    aria-label="Completion toast notifications"
+                    aria-label="Thread activity toast notifications"
                   />
                 }
               />
 
               <SettingsRow
                 title="Desktop notifications"
-                description="Show an OS notification when a thread finishes while the app is in the background."
+                description="Show an OS notification when a thread finishes or needs input while the app is in the background."
                 status={buildNotificationSettingsSupportText(browserNotificationPermission)}
                 resetAction={
                   settings.enableSystemTaskCompletionNotifications !==
@@ -715,7 +715,7 @@ function SettingsRouteView() {
                       onCheckedChange={(checked) => {
                         void setSystemNotificationsEnabled(checked);
                       }}
-                      aria-label="Desktop task completion notifications"
+                      aria-label="Desktop thread activity notifications"
                     />
                   </div>
                 }

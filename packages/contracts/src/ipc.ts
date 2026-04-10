@@ -177,6 +177,7 @@ export interface DesktopNotificationInput {
   title: string;
   body?: string;
   silent?: boolean;
+  threadId?: ThreadId;
 }
 
 export interface DesktopBridge {

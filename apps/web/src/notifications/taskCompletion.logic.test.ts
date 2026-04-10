@@ -1,6 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { MessageId, ProjectId, ThreadId, TurnId } from "@t3tools/contracts";
-import { buildTaskCompletionCopy, collectCompletedThreadCandidates } from "./taskCompletion.logic";
+import {
+  ApprovalRequestId,
+  EventId,
+  MessageId,
+  ProjectId,
+  ThreadId,
+  TurnId,
+} from "@t3tools/contracts";
+import {
+  buildInputNeededCopy,
+  buildTaskCompletionCopy,
+  collectCompletedThreadCandidates,
+  collectInputNeededThreadCandidates,
+} from "./taskCompletion.logic";
 import type { Thread } from "../types";
 
 function makeThread(overrides: Partial<Thread>): Thread {
@@ -136,6 +148,144 @@ describe("buildTaskCompletionCopy", () => {
     ).toEqual({
       title: "Task completed",
       body: "Polish notifications: Finished the task and everything looks good.",
+    });
+  });
+});
+
+describe("collectInputNeededThreadCandidates", () => {
+  it("returns threads with newly opened approval requests", () => {
+    const previous = [makeThread({ activities: [] })];
+    const next = [
+      makeThread({
+        activities: [
+          {
+            id: EventId.makeUnsafe("activity-approval-1"),
+            tone: "approval",
+            kind: "approval.requested",
+            summary: "Command approval requested",
+            payload: {
+              requestId: "approval-request-1",
+              requestKind: "command",
+            },
+            turnId: TurnId.makeUnsafe("turn-1"),
+            createdAt: "2026-04-05T10:00:04.000Z",
+          },
+        ],
+      }),
+    ];
+
+    expect(collectInputNeededThreadCandidates(previous, next)).toEqual([
+      {
+        kind: "approval",
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: ProjectId.makeUnsafe("project-1"),
+        title: "Polish notifications",
+        createdAt: "2026-04-05T10:00:04.000Z",
+        requestId: ApprovalRequestId.makeUnsafe("approval-request-1"),
+        requestKind: "command",
+      },
+    ]);
+  });
+
+  it("returns threads with newly opened user-input requests", () => {
+    const previous = [makeThread({ activities: [] })];
+    const next = [
+      makeThread({
+        activities: [
+          {
+            id: EventId.makeUnsafe("activity-user-input-1"),
+            tone: "info",
+            kind: "user-input.requested",
+            summary: "User input requested",
+            payload: {
+              requestId: "user-input-request-1",
+              questions: [
+                {
+                  id: "question-1",
+                  header: "Question",
+                  question: "Continue?",
+                  options: [
+                    { label: "Yes", description: "Continue" },
+                    { label: "No", description: "Stop" },
+                  ],
+                },
+              ],
+            },
+            turnId: TurnId.makeUnsafe("turn-1"),
+            createdAt: "2026-04-05T10:00:06.000Z",
+          },
+        ],
+      }),
+    ];
+
+    expect(collectInputNeededThreadCandidates(previous, next)).toEqual([
+      {
+        kind: "user-input",
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: ProjectId.makeUnsafe("project-1"),
+        title: "Polish notifications",
+        createdAt: "2026-04-05T10:00:06.000Z",
+        requestId: ApprovalRequestId.makeUnsafe("user-input-request-1"),
+      },
+    ]);
+  });
+
+  it("ignores already-open requests from the previous snapshot", () => {
+    const activities = [
+      {
+        id: EventId.makeUnsafe("activity-approval-1"),
+        tone: "approval" as const,
+        kind: "approval.requested",
+        summary: "Command approval requested",
+        payload: {
+          requestId: "approval-request-1",
+          requestKind: "command",
+        },
+        turnId: TurnId.makeUnsafe("turn-1"),
+        createdAt: "2026-04-05T10:00:04.000Z",
+      },
+    ];
+
+    expect(
+      collectInputNeededThreadCandidates(
+        [makeThread({ activities })],
+        [makeThread({ activities })],
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe("buildInputNeededCopy", () => {
+  it("describes approvals succinctly", () => {
+    expect(
+      buildInputNeededCopy({
+        kind: "approval",
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: ProjectId.makeUnsafe("project-1"),
+        title: "Polish notifications",
+        createdAt: "2026-04-05T10:00:04.000Z",
+        requestId: ApprovalRequestId.makeUnsafe("approval-request-1"),
+        requestKind: "command",
+      }),
+    ).toEqual({
+      title: "Input needed",
+      body: "Polish notifications: Command approval requested.",
+    });
+  });
+
+  it("describes user-input requests succinctly", () => {
+    expect(
+      buildInputNeededCopy({
+        kind: "user-input",
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: ProjectId.makeUnsafe("project-1"),
+        title: "Polish notifications",
+        createdAt: "2026-04-05T10:00:06.000Z",
+        requestId: ApprovalRequestId.makeUnsafe("user-input-request-1"),
+      }),
+    ).toEqual({
+      title: "Input needed",
+      body: "Polish notifications: User input requested.",
     });
   });
 });

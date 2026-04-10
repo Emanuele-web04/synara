@@ -1,5 +1,5 @@
 // FILE: taskCompletion.tsx
-// Purpose: Bridges thread completion events to in-app toasts and OS notifications.
+// Purpose: Bridges thread completion and attention-needed events to in-app toasts and OS notifications.
 // Layer: Notification runtime
 // Exports: TaskCompletionNotifications and browser permission helpers
 
@@ -12,9 +12,10 @@ import { resolvePreferredSplitViewIdForThread, useSplitViewStore } from "../spli
 import { useStore } from "../store";
 import type { Thread } from "../types";
 import {
+  buildInputNeededCopy,
   buildTaskCompletionCopy,
   collectCompletedThreadCandidates,
-  type CompletedThreadCandidate,
+  collectInputNeededThreadCandidates,
 } from "./taskCompletion.logic";
 
 export type BrowserNotificationPermissionState =
@@ -58,10 +59,30 @@ function isWindowForeground(): boolean {
   return document.visibilityState === "visible" && document.hasFocus();
 }
 
-async function showSystemTaskCompletionNotification(
-  candidate: CompletedThreadCandidate,
+interface ThreadNotificationCopy {
+  title: string;
+  body: string;
+}
+
+function focusThread(
+  threadId: Thread["id"],
+  navigate: ReturnType<typeof useNavigate>,
+  splitViewId: string | null,
+): void {
+  void navigate({
+    to: "/$threadId",
+    params: { threadId },
+    ...(splitViewId ? { search: () => ({ splitViewId }) } : {}),
+  });
+}
+
+async function showSystemThreadNotification(
+  copy: ThreadNotificationCopy,
+  threadId: Thread["id"],
+  navigate: ReturnType<typeof useNavigate>,
+  splitViewId: string | null,
 ): Promise<boolean> {
-  const { body, title } = buildTaskCompletionCopy(candidate);
+  const { body, title } = copy;
 
   if (window.desktopBridge) {
     const supported = await window.desktopBridge.notifications.isSupported();
@@ -77,37 +98,34 @@ async function showSystemTaskCompletionNotification(
 
   const notification = new Notification(title, {
     body,
-    tag: `thread-completed:${candidate.threadId}`,
+    tag: `thread-notification:${threadId}`,
   });
   notification.addEventListener("click", () => {
     window.focus();
+    focusThread(threadId, navigate, splitViewId);
   });
   return true;
 }
 
-function showCompletionToast(
-  candidate: CompletedThreadCandidate,
+function showThreadToast(
+  copy: ThreadNotificationCopy,
+  threadId: Thread["id"],
+  tone: "success" | "warning",
   navigate: ReturnType<typeof useNavigate>,
   splitViewId: string | null,
 ): void {
-  const { body, title } = buildTaskCompletionCopy(candidate);
+  const { body, title } = copy;
   toastManager.add({
-    type: "success",
+    type: tone,
     title,
     description: body,
     data: {
-      threadId: candidate.threadId,
+      threadId,
       dismissAfterVisibleMs: 8000,
     },
     actionProps: {
       children: "Open thread",
-      onClick: () => {
-        void navigate({
-          to: "/$threadId",
-          params: { threadId: candidate.threadId },
-          ...(splitViewId ? { search: () => ({ splitViewId }) } : {}),
-        });
-      },
+      onClick: () => focusThread(threadId, navigate, splitViewId),
     },
   });
 }
@@ -136,9 +154,13 @@ export function TaskCompletionNotifications() {
     }
 
     const completions = collectCompletedThreadCandidates(previousThreadsRef.current, threads);
+    const inputNeededCandidates = collectInputNeededThreadCandidates(
+      previousThreadsRef.current,
+      threads,
+    );
     previousThreadsRef.current = threads;
 
-    if (completions.length === 0) {
+    if (completions.length === 0 && inputNeededCandidates.length === 0) {
       return;
     }
 
@@ -151,12 +173,34 @@ export function TaskCompletionNotifications() {
         splitViewIdBySourceThreadId,
         threadId: completion.threadId,
       });
+      const copy = buildTaskCompletionCopy(completion);
       if (settings.enableTaskCompletionToasts) {
-        showCompletionToast(completion, navigate, preferredSplitViewId);
+        showThreadToast(copy, completion.threadId, "success", navigate, preferredSplitViewId);
       }
 
       if (shouldAttemptSystemNotification) {
-        void showSystemTaskCompletionNotification(completion);
+        void showSystemThreadNotification(
+          copy,
+          completion.threadId,
+          navigate,
+          preferredSplitViewId,
+        );
+      }
+    }
+
+    for (const candidate of inputNeededCandidates) {
+      const preferredSplitViewId = resolvePreferredSplitViewIdForThread({
+        splitViewsById,
+        splitViewIdBySourceThreadId,
+        threadId: candidate.threadId,
+      });
+      const copy = buildInputNeededCopy(candidate);
+      if (settings.enableTaskCompletionToasts) {
+        showThreadToast(copy, candidate.threadId, "warning", navigate, preferredSplitViewId);
+      }
+
+      if (shouldAttemptSystemNotification) {
+        void showSystemThreadNotification(copy, candidate.threadId, navigate, preferredSplitViewId);
       }
     }
   }, [
@@ -188,6 +232,6 @@ export function buildNotificationSettingsSupportText(
     case "unsupported":
       return "This browser does not support desktop notifications.";
     case "default":
-      return "Allow browser notifications to get alerts when a thread finishes in the background.";
+      return "Allow browser notifications to get alerts when a thread finishes or needs input in the background.";
   }
 }

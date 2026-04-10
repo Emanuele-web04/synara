@@ -18,7 +18,7 @@ function AlertDialogBackdrop({ className, ...props }: AlertDialogPrimitive.Backd
   return (
     <AlertDialogPrimitive.Backdrop
       className={cn(
-        "fixed inset-0 z-50 bg-black/32 backdrop-blur-sm transition-all duration-200 ease-out data-ending-style:opacity-0 data-starting-style:opacity-0",
+        "fixed inset-0 z-50 bg-black/60 transition-all duration-200 ease-out data-ending-style:opacity-0 data-starting-style:opacity-0",
         className,
       )}
       data-slot="alert-dialog-backdrop"

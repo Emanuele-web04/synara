@@ -2,6 +2,7 @@ import {
   type ThreadId,
   type ThreadBrowserState,
   type GitActionProgressEvent,
+  type TerminalEvent,
   ORCHESTRATION_WS_CHANNELS,
   ORCHESTRATION_WS_METHODS,
   type ContextMenuItem,
@@ -20,6 +21,7 @@ let instance: { api: NativeApi; transport: WsTransport } | null = null;
 const welcomeListeners = new Set<(payload: WsWelcomePayload) => void>();
 const serverConfigUpdatedListeners = new Set<(payload: ServerConfigUpdatedPayload) => void>();
 const gitActionProgressListeners = new Set<(payload: GitActionProgressEvent) => void>();
+const terminalEventListeners = new Set<(payload: TerminalEvent) => void>();
 const fallbackBrowserStateListeners = new Set<(state: ThreadBrowserState) => void>();
 const fallbackBrowserStates = new Map<ThreadId, ThreadBrowserState>();
 
@@ -191,6 +193,16 @@ export function createWsNativeApi(): NativeApi {
       }
     }
   });
+  transport.subscribe(WS_CHANNELS.terminalEvent, (message) => {
+    const payload = message.data;
+    for (const listener of terminalEventListeners) {
+      try {
+        listener(payload);
+      } catch {
+        // Swallow listener errors
+      }
+    }
+  });
 
   const api: NativeApi = {
     dialogs: {
@@ -209,8 +221,12 @@ export function createWsNativeApi(): NativeApi {
       clear: (input) => transport.request(WS_METHODS.terminalClear, input),
       restart: (input) => transport.request(WS_METHODS.terminalRestart, input),
       close: (input) => transport.request(WS_METHODS.terminalClose, input),
-      onEvent: (callback) =>
-        transport.subscribe(WS_CHANNELS.terminalEvent, (message) => callback(message.data)),
+      onEvent: (callback) => {
+        terminalEventListeners.add(callback);
+        return () => {
+          terminalEventListeners.delete(callback);
+        };
+      },
     },
     projects: {
       searchEntries: (input) => transport.request(WS_METHODS.projectsSearchEntries, input),
