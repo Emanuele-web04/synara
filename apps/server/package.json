@@ -1,10 +1,10 @@
 {
   "name": "t3",
-  "version": "0.0.14",
+  "version": "0.0.16",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/pingdotgg/t3code",
+    "url": "https://github.com/Emanuele-web04/dpcode",
     "directory": "apps/server"
   },
   "bin": {

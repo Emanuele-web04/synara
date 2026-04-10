@@ -567,7 +567,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           )}
                         </div>
                       </div>
-                      <div className="bg-background">
+                      <div className="bg-neutral-100 dark:bg-neutral-900/60">
                         {checkpointFiles.map((file) => (
                           <button
                             key={file.path}

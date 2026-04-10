@@ -2,6 +2,8 @@
 
 DP Code is a minimal web GUI for coding agents (currently Codex and Claude, more coming soon).
 
+This project started as a clone of [T3Code](https://github.com/pingdotgg/t3code), and has since been customized into its own product with different branding, packaging, release wiring, and product-level behavior.
+
 ## How to use
 
 > [!WARNING]
@@ -13,7 +15,7 @@ npx t3
 
 You can also just install the desktop app. It's cooler.
 
-Install the [desktop app from the Releases page](https://github.com/pingdotgg/t3code/releases)
+Install the [desktop app from the Releases page](https://github.com/Emanuele-web04/dpcode/releases)
 
 ## Some notes
 

@@ -16,10 +16,23 @@ interface OpenUsageProgressLine {
   periodDurationMs?: unknown;
 }
 
+interface OpenUsageTextLine {
+  type?: unknown;
+  label?: unknown;
+  value?: unknown;
+  subtitle?: unknown;
+}
+
 interface OpenUsageSnapshot {
   providerId?: unknown;
   fetchedAt?: unknown;
   lines?: unknown;
+}
+
+export interface OpenUsageUsageLine {
+  label: string;
+  value: string;
+  subtitle?: string;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -78,6 +91,21 @@ function normalizeProgressLine(line: OpenUsageProgressLine): RateLimitWindow | n
   };
 }
 
+function normalizeTextLine(line: OpenUsageTextLine): OpenUsageUsageLine | null {
+  if (line.type !== "text") return null;
+
+  const label = asString(line.label);
+  const value = asString(line.value);
+  const subtitle = asString(line.subtitle);
+  if (!label || !value) return null;
+
+  return {
+    label,
+    value,
+    ...(subtitle ? { subtitle } : {}),
+  };
+}
+
 export function normalizeOpenUsageSnapshot(
   snapshot: unknown,
   preferredProvider?: ProviderKind | null,
@@ -102,4 +130,14 @@ export function normalizeOpenUsageSnapshot(
     updatedAt: asString(parsed.fetchedAt) ?? new Date().toISOString(),
     limits,
   };
+}
+
+export function normalizeOpenUsageUsageLines(snapshot: unknown): OpenUsageUsageLine[] {
+  const parsed = asRecord(snapshot) as OpenUsageSnapshot | null;
+  if (!parsed) return [];
+
+  const lines = Array.isArray(parsed.lines) ? parsed.lines : [];
+  return lines
+    .map((line) => normalizeTextLine(asRecord(line) ?? {}))
+    .filter((line): line is OpenUsageUsageLine => line !== null);
 }

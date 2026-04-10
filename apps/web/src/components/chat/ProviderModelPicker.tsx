@@ -34,9 +34,10 @@ const PROVIDER_ICON_BY_PROVIDER: Record<ProviderPickerKind, Icon> = {
   claudeAgent: ClaudeAI,
 };
 
-function resolveLiveProviderAvailability(
-  provider: ServerProviderStatus | undefined,
-): { disabled: boolean; label: string | null } {
+function resolveLiveProviderAvailability(provider: ServerProviderStatus | undefined): {
+  disabled: boolean;
+  label: string | null;
+} {
   if (!provider) {
     return {
       disabled: false,

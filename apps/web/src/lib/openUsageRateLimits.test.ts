@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { normalizeOpenUsageSnapshot } from "./openUsageRateLimits";
+import { normalizeOpenUsageSnapshot, normalizeOpenUsageUsageLines } from "./openUsageRateLimits";
 import { mergeProviderRateLimits } from "./rateLimits";
 
 describe("openUsageRateLimits", () => {
@@ -98,6 +98,44 @@ describe("openUsageRateLimits", () => {
             windowDurationMins: 10080,
           },
         ],
+      },
+    ]);
+  });
+
+  it("preserves OpenUsage text lines for daily token usage summaries", () => {
+    expect(
+      normalizeOpenUsageUsageLines({
+        providerId: "codex",
+        fetchedAt: "2099-04-08T18:00:00.000Z",
+        lines: [
+          {
+            type: "progress",
+            label: "Session",
+            used: 20,
+            limit: 100,
+          },
+          {
+            type: "text",
+            label: "Today",
+            value: "$5.17 · 9.2M tokens",
+          },
+          {
+            type: "text",
+            label: "Yesterday",
+            value: "$2.04 · 3.1M tokens",
+            subtitle: "via ccusage",
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        label: "Today",
+        value: "$5.17 · 9.2M tokens",
+      },
+      {
+        label: "Yesterday",
+        value: "$2.04 · 3.1M tokens",
+        subtitle: "via ccusage",
       },
     ]);
   });

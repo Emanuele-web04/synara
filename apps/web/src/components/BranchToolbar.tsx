@@ -35,7 +35,10 @@ import {
   deriveRateLimitLearnMoreHref,
   mergeProviderRateLimits,
 } from "~/lib/rateLimits";
-import { normalizeOpenUsageSnapshot } from "~/lib/openUsageRateLimits";
+import {
+  normalizeOpenUsageSnapshot,
+  normalizeOpenUsageUsageLines,
+} from "~/lib/openUsageRateLimits";
 import { openUsageProviderSnapshotQueryOptions } from "~/lib/openUsageReactQuery";
 import { RateLimitSummaryList } from "./RateLimitSummaryList";
 
@@ -188,6 +191,10 @@ export default function BranchToolbar({
     const normalized = normalizeOpenUsageSnapshot(openUsageSnapshotQuery.data, activeProvider);
     return normalized ? [normalized] : [];
   }, [activeProvider, openUsageSnapshotQuery.data]);
+  const openUsageUsageLines = useMemo(
+    () => normalizeOpenUsageUsageLines(openUsageSnapshotQuery.data),
+    [openUsageSnapshotQuery.data],
+  );
   const rateLimits = useMemo(
     () => mergeProviderRateLimits(runtimeRateLimits, openUsageRateLimits),
     [openUsageRateLimits, runtimeRateLimits],
@@ -279,6 +286,31 @@ export default function BranchToolbar({
                   </CollapsiblePanel>
                 </Collapsible>
               </div>
+
+              {openUsageUsageLines.length > 0 ? (
+                <>
+                  <div className="mx-3 border-t border-border/50" />
+                  <div className="space-y-2 px-3 pb-2 pt-2">
+                    <p className="text-[11px] font-medium text-muted-foreground">Token usage</p>
+                    {openUsageUsageLines.map((line) => (
+                      <div
+                        key={line.label}
+                        className="flex items-start justify-between gap-3 text-xs"
+                      >
+                        <span className="font-medium text-foreground">{line.label}</span>
+                        <span className="text-right tabular-nums text-muted-foreground">
+                          <span className="text-foreground">{line.value}</span>
+                          {line.subtitle ? (
+                            <span className="block text-[11px] text-muted-foreground">
+                              {line.subtitle}
+                            </span>
+                          ) : null}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : null}
             </PopoverPopup>
           </Popover>
         ) : (

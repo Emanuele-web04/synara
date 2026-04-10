@@ -199,6 +199,7 @@ const BENIGN_ERROR_LOG_SNIPPETS = [
   "state db missing rollout path for thread",
   "state db record_discrepancy: find_thread_path_by_id_str_in_subdir, falling_back",
 ];
+const BENIGN_PROCESS_OUTPUT_REGEXES = [/^(?:\^C)?Token usage:/i];
 const RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS = [
   "not found",
   "missing thread",
@@ -219,6 +220,18 @@ function asObject(value: unknown): Record<string, unknown> | undefined {
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function normalizeCodexProcessLine(rawLine: string): string {
+  return rawLine.replaceAll(ANSI_ESCAPE_REGEX, "").trim();
+}
+
+function isIgnorableCodexProcessLine(rawLine: string): boolean {
+  const line = normalizeCodexProcessLine(rawLine);
+  if (!line) {
+    return true;
+  }
+  return BENIGN_PROCESS_OUTPUT_REGEXES.some((pattern) => pattern.test(line));
 }
 
 export function readCodexAccountSnapshot(response: unknown): CodexAccountSnapshot {
@@ -523,10 +536,10 @@ function toCodexUserInputAnswers(
 }
 
 export function classifyCodexStderrLine(rawLine: string): { message: string } | null {
-  const line = rawLine.replaceAll(ANSI_ESCAPE_REGEX, "").trim();
-  if (!line) {
+  if (isIgnorableCodexProcessLine(rawLine)) {
     return null;
   }
+  const line = normalizeCodexProcessLine(rawLine);
 
   const match = line.match(CODEX_STDERR_LOG_REGEX);
   if (match) {
@@ -1629,10 +1642,16 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   private attachProcessListeners(context: CodexSessionContext): void {
     context.output.on("line", (line) => {
+      if (context.stopping || isIgnorableCodexProcessLine(line)) {
+        return;
+      }
       this.handleStdoutLine(context, line);
     });
 
     context.child.stderr.on("data", (chunk: Buffer) => {
+      if (context.stopping) {
+        return;
+      }
       const raw = chunk.toString();
       const lines = raw.split(/\r?\n/g);
       for (const rawLine of lines) {
@@ -1678,6 +1697,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   private handleStdoutLine(context: CodexSessionContext, line: string): void {
+    if (isIgnorableCodexProcessLine(line)) {
+      return;
+    }
+
     let parsed: unknown;
     try {
       parsed = JSON.parse(line);
