@@ -706,6 +706,7 @@ function setThreadTerminalMetadata(
   if (!normalized.terminalIds.includes(terminalId)) {
     return normalized;
   }
+  const currentLabel = normalized.terminalLabelsById[terminalId] ?? "";
   const currentTitleOverride = normalized.terminalTitleOverridesById[terminalId]?.trim() ?? "";
   const currentCliKind = normalized.terminalCliKindsById[terminalId] ?? null;
   const nextCliKind = metadata.cliKind ?? currentCliKind;

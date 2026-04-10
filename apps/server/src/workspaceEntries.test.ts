@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 
 import { afterEach, assert, describe, it, vi } from "vitest";
 
+import * as ProcessRunner from "./processRunner";
 import { searchWorkspaceEntries } from "./workspaceEntries";
 
 const tempDirs: string[] = [];
@@ -129,6 +130,44 @@ describe("searchWorkspaceEntries", () => {
     assert.include(paths, "src");
     assert.include(paths, "src/keep.ts");
     assert.isFalse(paths.some((entryPath) => entryPath.startsWith(".convex/")));
+  });
+
+  it("disables fsmonitor and untracked cache helpers during git workspace indexing", async () => {
+    const cwd = makeTempDir("t3code-workspace-hardened-git-");
+    runGit(cwd, ["init"]);
+    writeFile(cwd, ".gitignore", "ignored.txt\n");
+    writeFile(cwd, "src/keep.ts", "export {};");
+    writeFile(cwd, "ignored.txt", "ignore me");
+
+    const runProcessSpy = vi.spyOn(ProcessRunner, "runProcess");
+
+    await searchWorkspaceEntries({ cwd, query: "", limit: 100 });
+
+    const gitCalls = runProcessSpy.mock.calls
+      .filter(([command]) => command === "git")
+      .map(([, args]) => args);
+
+    assert.deepInclude(gitCalls, [
+      "-c",
+      "core.fsmonitor=false",
+      "-c",
+      "core.untrackedCache=false",
+      "ls-files",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+      "-z",
+    ]);
+    assert.deepInclude(gitCalls, [
+      "-c",
+      "core.fsmonitor=false",
+      "-c",
+      "core.untrackedCache=false",
+      "check-ignore",
+      "--no-index",
+      "-z",
+      "--stdin",
+    ]);
   });
 
   it("excludes .convex in non-git workspaces", async () => {

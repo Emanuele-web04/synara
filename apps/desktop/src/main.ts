@@ -115,6 +115,7 @@ let aboutCommitHashCache: string | null | undefined;
 let desktopLogSink: RotatingFileSink | null = null;
 let backendLogSink: RotatingFileSink | null = null;
 let restoreStdIoCapture: (() => void) | null = null;
+let unreadBackgroundNotificationCount = 0;
 const browserManager = new DesktopBrowserManager();
 
 browserManager.subscribe((state) => {
@@ -714,6 +715,32 @@ function resolveNotificationIconPath(): string | null {
   return resolveResourcePath("dpcode.png") ?? resolveIconPath("png");
 }
 
+// Keep the app badge aligned with desktop notifications that arrive off-focus.
+function syncUnreadNotificationBadge(): void {
+  app.setBadgeCount(unreadBackgroundNotificationCount);
+}
+
+// Count minimized, hidden, or unfocused windows as background notification targets.
+function isMainWindowForeground(window: BrowserWindow | null): boolean {
+  if (!window) {
+    return false;
+  }
+  return window.isVisible() && !window.isMinimized() && window.isFocused();
+}
+
+function incrementUnreadNotificationBadge(): void {
+  unreadBackgroundNotificationCount = Math.min(unreadBackgroundNotificationCount + 1, 99);
+  syncUnreadNotificationBadge();
+}
+
+function clearUnreadNotificationBadge(): void {
+  if (unreadBackgroundNotificationCount === 0) {
+    return;
+  }
+  unreadBackgroundNotificationCount = 0;
+  syncUnreadNotificationBadge();
+}
+
 // Show a native OS notification and refocus the app window when the alert is clicked.
 function showDesktopNotification(input: {
   title: string;
@@ -735,8 +762,12 @@ function showDesktopNotification(input: {
     silent: input.silent === true,
     ...(iconPath ? { icon: iconPath } : {}),
   });
+  if (!isMainWindowForeground(mainWindow)) {
+    incrementUnreadNotificationBadge();
+  }
 
   notification.on("click", () => {
+    clearUnreadNotificationBadge();
     if (!mainWindow) {
       return;
     }
@@ -1320,7 +1351,7 @@ function registerIpcHandlers(): void {
         title: typeof input?.title === "string" ? input.title : "",
         body: typeof input?.body === "string" ? input.body : "",
         silent: input?.silent === true,
-        threadId: typeof input?.threadId === "string" ? input.threadId : undefined,
+        ...(typeof input?.threadId === "string" ? { threadId: input.threadId } : {}),
       }),
   );
 
@@ -1468,6 +1499,9 @@ function createWindow(): BrowserWindow {
   window.once("ready-to-show", () => {
     window.show();
   });
+  window.on("focus", () => {
+    clearUnreadNotificationBadge();
+  });
 
   if (isDevelopment) {
     void window.loadURL(process.env.VITE_DEV_SERVER_URL as string);
@@ -1536,6 +1570,7 @@ app
     });
 
     app.on("activate", () => {
+      clearUnreadNotificationBadge();
       if (BrowserWindow.getAllWindows().length === 0) {
         mainWindow = createWindow();
       }

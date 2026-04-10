@@ -2120,7 +2120,10 @@ export default function ChatView({
       },
       onTerminalActivityChange: (
         terminalId: string,
-        activity: { hasRunningSubprocess: boolean; agentState: "running" | "attention" | "review" | null },
+        activity: {
+          hasRunningSubprocess: boolean;
+          agentState: "running" | "attention" | "review" | null;
+        },
       ) => {
         if (!activeThreadId) return;
         storeSetTerminalActivity(activeThreadId, terminalId, activity);

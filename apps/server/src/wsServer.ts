@@ -15,6 +15,7 @@ import {
   DEFAULT_TERMINAL_ID,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   type ClientOrchestrationCommand,
+  type OrchestrationReadModel,
   type OrchestrationCommand,
   ORCHESTRATION_WS_CHANNELS,
   ORCHESTRATION_WS_METHODS,
@@ -122,6 +123,59 @@ function rejectUpgrade(socket: Duplex, statusCode: number, message: string): voi
       `Content-Length: ${Buffer.byteLength(message)}\r\n` +
       "\r\n" +
       message,
+  );
+}
+
+type BootstrapSnapshotThread = OrchestrationReadModel["threads"][number];
+
+function toSortableBootstrapTimestamp(iso: string | undefined): number {
+  if (!iso) {
+    return Number.NEGATIVE_INFINITY;
+  }
+  const timestamp = Date.parse(iso);
+  return Number.isFinite(timestamp) ? timestamp : Number.NEGATIVE_INFINITY;
+}
+
+function getLatestBootstrapUserMessageTimestamp(thread: BootstrapSnapshotThread): number {
+  let latestUserMessageTimestamp = Number.NEGATIVE_INFINITY;
+
+  for (const message of thread.messages) {
+    if (message.role !== "user") {
+      continue;
+    }
+    latestUserMessageTimestamp = Math.max(
+      latestUserMessageTimestamp,
+      toSortableBootstrapTimestamp(message.createdAt),
+    );
+  }
+
+  if (latestUserMessageTimestamp !== Number.NEGATIVE_INFINITY) {
+    return latestUserMessageTimestamp;
+  }
+
+  return toSortableBootstrapTimestamp(thread.updatedAt ?? thread.createdAt);
+}
+
+function getMostRecentBootstrapThread(snapshot: OrchestrationReadModel): BootstrapSnapshotThread | null {
+  const activeProjectIds = new Set(
+    snapshot.projects
+      .filter((project) => project.deletedAt === null)
+      .map((project) => project.id),
+  );
+
+  return (
+    snapshot.threads
+      .filter((thread) => thread.deletedAt === null && activeProjectIds.has(thread.projectId))
+      .toSorted((left, right) => {
+        const rightTimestamp = getLatestBootstrapUserMessageTimestamp(right);
+        const leftTimestamp = getLatestBootstrapUserMessageTimestamp(left);
+        const byTimestamp =
+          rightTimestamp === leftTimestamp ? 0 : rightTimestamp > leftTimestamp ? 1 : -1;
+        if (byTimestamp !== 0) {
+          return byTimestamp;
+        }
+        return right.id.localeCompare(left.id);
+      })[0] ?? null
   );
 }
 
@@ -723,6 +777,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   if (autoBootstrapProjectFromCwd) {
     yield* Effect.gen(function* () {
       const snapshot = yield* projectionReadModelQuery.getSnapshot();
+      const mostRecentThread = getMostRecentBootstrapThread(snapshot);
       const existingProject = snapshot.projects.find(
         (project) => project.workspaceRoot === cwd && project.deletedAt === null,
       );
@@ -752,6 +807,12 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           provider: "codex" as const,
           model: "gpt-5-codex",
         };
+      }
+
+      if (mostRecentThread) {
+        welcomeBootstrapProjectId = mostRecentThread.projectId;
+        welcomeBootstrapThreadId = mostRecentThread.id;
+        return;
       }
 
       const existingThread = snapshot.threads.find(

@@ -323,7 +323,10 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
       },
       onTerminalActivityChange: (
         terminalId: string,
-        activity: { hasRunningSubprocess: boolean; agentState: "running" | "attention" | "review" | null },
+        activity: {
+          hasRunningSubprocess: boolean;
+          agentState: "running" | "attention" | "review" | null;
+        },
       ) => {
         setTerminalActivity(threadId, terminalId, activity);
       },

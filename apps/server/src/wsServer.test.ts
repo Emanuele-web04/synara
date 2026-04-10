@@ -813,6 +813,105 @@ describe("WebSocket Server", () => {
     );
   });
 
+  it("prefers the most recent existing thread over creating a cwd bootstrap thread", async () => {
+    const baseDir = makeTempDir("t3code-state-bootstrap-most-recent-");
+    const { dbPath } = deriveServerPathsSync(baseDir, undefined);
+    const persistenceLayer = makeSqlitePersistenceLive(dbPath).pipe(
+      Layer.provide(NodeServices.layer),
+    );
+
+    server = await createTestServer({
+      cwd: "/test/existing-workspace",
+      baseDir,
+      persistenceLayer,
+      autoBootstrapProjectFromCwd: false,
+    });
+    let addr = server.address();
+    let port = typeof addr === "object" && addr !== null ? addr.port : 0;
+    expect(port).toBeGreaterThan(0);
+
+    const [seedWs] = await connectAndAwaitWelcome(port);
+    connections.push(seedWs);
+
+    const createProjectResponse = await sendRequest(
+      seedWs,
+      ORCHESTRATION_WS_METHODS.dispatchCommand,
+      {
+        type: "project.create",
+        commandId: "cmd-bootstrap-project-create",
+        projectId: "project-existing",
+        title: "Existing project",
+        workspaceRoot: "/test/existing-workspace",
+        defaultModelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        createdAt: "2026-04-10T10:00:00.000Z",
+      },
+    );
+    expect(createProjectResponse.error).toBeUndefined();
+
+    const createThreadResponse = await sendRequest(
+      seedWs,
+      ORCHESTRATION_WS_METHODS.dispatchCommand,
+      {
+        type: "thread.create",
+        commandId: "cmd-bootstrap-thread-create",
+        threadId: "thread-existing",
+        projectId: "project-existing",
+        title: "Existing thread",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        interactionMode: "default",
+        runtimeMode: "full-access",
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        createdAt: "2026-04-10T10:01:00.000Z",
+      },
+    );
+    expect(createThreadResponse.error).toBeUndefined();
+
+    seedWs.close();
+    await closeTestServer();
+    server = null;
+
+    server = await createTestServer({
+      cwd: "/test/new-cwd",
+      baseDir,
+      persistenceLayer,
+      autoBootstrapProjectFromCwd: true,
+    });
+    addr = server.address();
+    port = typeof addr === "object" && addr !== null ? addr.port : 0;
+    expect(port).toBeGreaterThan(0);
+
+    const [ws, welcome] = await connectAndAwaitWelcome(port);
+    connections.push(ws);
+    expect(welcome.data).toEqual(
+      expect.objectContaining({
+        cwd: "/test/new-cwd",
+        projectName: "new-cwd",
+        bootstrapProjectId: "project-existing",
+        bootstrapThreadId: "thread-existing",
+      }),
+    );
+
+    const snapshotResponse = await sendRequest(ws, ORCHESTRATION_WS_METHODS.getSnapshot);
+    expect(snapshotResponse.error).toBeUndefined();
+    const snapshot = snapshotResponse.result as {
+      projects: Array<{ workspaceRoot: string }>;
+      threads: Array<{ id: string }>;
+    };
+
+    expect(snapshot.projects).toEqual(
+      expect.arrayContaining([expect.objectContaining({ workspaceRoot: "/test/new-cwd" })]),
+    );
+    expect(snapshot.threads).toEqual([expect.objectContaining({ id: "thread-existing" })]);
+  });
+
   it("logs outbound websocket push events when explicitly enabled", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {
       // Keep test output clean while verifying websocket logs.
