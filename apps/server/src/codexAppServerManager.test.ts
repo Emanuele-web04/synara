@@ -1438,13 +1438,17 @@ describe("thread checkpoint control", () => {
     });
 
     const result = await manager.forkThread({
-      sourceThreadId: asThreadId("thread_1"),
+      sourceResumeCursor: {
+        threadId: "thread_1",
+      },
       threadId: asThreadId("thread_2"),
       runtimeMode: "full-access",
     });
 
-    expect(sendRequest).toHaveBeenCalledWith(context, "thread/fork", {
+    expect(sendRequest).toHaveBeenNthCalledWith(3, expect.anything(), "thread/fork", {
       threadId: "thread_1",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
     });
     expect(result).toEqual({
       threadId: "thread_2",

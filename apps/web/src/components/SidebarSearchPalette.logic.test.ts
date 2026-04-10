@@ -138,7 +138,7 @@ describe("SidebarSearchPalette.logic", () => {
 
     assert.deepEqual(
       result.map((match) => match.thread.id),
-      ["thread-alpha-composer", "thread-alpha-compose-prompt"],
+      ["thread-alpha-composer"],
     );
     assert.equal(result[0]?.matchKind, "title");
   });

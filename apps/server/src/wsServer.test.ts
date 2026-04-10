@@ -816,12 +816,14 @@ describe("WebSocket Server", () => {
   it("prefers the most recent existing thread over creating a cwd bootstrap thread", async () => {
     const baseDir = makeTempDir("t3code-state-bootstrap-most-recent-");
     const { dbPath } = deriveServerPathsSync(baseDir, undefined);
+    const existingWorkspace = makeTempDir("t3code-existing-workspace-");
+    const newCwd = makeTempDir("t3code-new-cwd-");
     const persistenceLayer = makeSqlitePersistenceLive(dbPath).pipe(
       Layer.provide(NodeServices.layer),
     );
 
     server = await createTestServer({
-      cwd: "/test/existing-workspace",
+      cwd: existingWorkspace,
       baseDir,
       persistenceLayer,
       autoBootstrapProjectFromCwd: false,
@@ -841,7 +843,7 @@ describe("WebSocket Server", () => {
         commandId: "cmd-bootstrap-project-create",
         projectId: "project-existing",
         title: "Existing project",
-        workspaceRoot: "/test/existing-workspace",
+        workspaceRoot: existingWorkspace,
         defaultModelSelection: {
           provider: "codex",
           model: "gpt-5-codex",
@@ -879,7 +881,7 @@ describe("WebSocket Server", () => {
     server = null;
 
     server = await createTestServer({
-      cwd: "/test/new-cwd",
+      cwd: newCwd,
       baseDir,
       persistenceLayer,
       autoBootstrapProjectFromCwd: true,
@@ -892,8 +894,8 @@ describe("WebSocket Server", () => {
     connections.push(ws);
     expect(welcome.data).toEqual(
       expect.objectContaining({
-        cwd: "/test/new-cwd",
-        projectName: "new-cwd",
+        cwd: newCwd,
+        projectName: path.basename(newCwd),
         bootstrapProjectId: "project-existing",
         bootstrapThreadId: "thread-existing",
       }),
@@ -907,7 +909,7 @@ describe("WebSocket Server", () => {
     };
 
     expect(snapshot.projects).toEqual(
-      expect.arrayContaining([expect.objectContaining({ workspaceRoot: "/test/new-cwd" })]),
+      expect.arrayContaining([expect.objectContaining({ workspaceRoot: newCwd })]),
     );
     expect(snapshot.threads).toEqual([expect.objectContaining({ id: "thread-existing" })]);
   });
@@ -1020,6 +1022,7 @@ describe("WebSocket Server", () => {
     expect(response.error).toBeUndefined();
     expect(response.result).toEqual({
       cwd: "/my/workspace",
+      homeDir: "/Users/tester",
       keybindingsConfigPath: keybindingsPath,
       keybindings: DEFAULT_RESOLVED_KEYBINDINGS,
       issues: [
@@ -1175,6 +1178,7 @@ describe("WebSocket Server", () => {
     ) as KeybindingsConfig;
     expect(response.result).toEqual({
       cwd: "/my/workspace",
+      homeDir: "/Users/tester",
       keybindingsConfigPath: keybindingsPath,
       keybindings: compileKeybindings(persistedConfig),
       issues: [],
@@ -1223,6 +1227,7 @@ describe("WebSocket Server", () => {
     expect(configResponse.error).toBeUndefined();
     expect(configResponse.result).toEqual({
       cwd: "/my/workspace",
+      homeDir: "/Users/tester",
       keybindingsConfigPath: keybindingsPath,
       keybindings: compileKeybindings(persistedConfig),
       issues: [],

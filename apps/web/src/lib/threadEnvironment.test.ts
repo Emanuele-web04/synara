@@ -18,6 +18,9 @@ describe("threadEnvironment", () => {
       envMode: "worktree",
       branch: "feature/worktree-branch",
       worktreePath: "/repo/.worktrees/feature-worktree-branch",
+      associatedWorktreePath: "/repo/.worktrees/feature-worktree-branch",
+      associatedWorktreeBranch: "feature/worktree-branch",
+      associatedWorktreeRef: "feature/worktree-branch",
     });
   });
 
@@ -37,6 +40,9 @@ describe("threadEnvironment", () => {
       envMode: "local",
       branch: "feature/local-branch",
       worktreePath: null,
+      associatedWorktreePath: null,
+      associatedWorktreeBranch: null,
+      associatedWorktreeRef: null,
     });
   });
 
@@ -56,6 +62,9 @@ describe("threadEnvironment", () => {
       envMode: "worktree",
       branch: "feature/source-branch",
       worktreePath: null,
+      associatedWorktreePath: null,
+      associatedWorktreeBranch: "feature/source-branch",
+      associatedWorktreeRef: "feature/source-branch",
     });
   });
 });

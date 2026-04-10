@@ -46,15 +46,15 @@ describe("searchWorkspaceEntries git-ignore chunking", () => {
     let checkIgnoreCalls = 0;
 
     runProcessMock.mockImplementation(async (_command, args, options) => {
-      if (args[0] === "rev-parse") {
+      if (args.includes("rev-parse")) {
         return processResult({ code: 0, stdout: "true\n" });
       }
 
-      if (args[0] === "ls-files") {
+      if (args.includes("ls-files")) {
         return processResult({ code: 0, stdout: `${listedPaths.join("\0")}\0` });
       }
 
-      if (args[0] === "check-ignore") {
+      if (args.includes("check-ignore")) {
         checkIgnoreCalls += 1;
         const chunkPaths = (options?.stdin ?? "").split("\0").filter((value) => value.length > 0);
         const chunkIgnored = chunkPaths.filter((value) => value.startsWith("ignored/"));

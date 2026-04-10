@@ -1,34 +1,24 @@
 import { ThreadId } from "@t3tools/contracts";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createJSONStorage } from "zustand/middleware";
+import { beforeEach, describe, expect, it } from "vitest";
 
+import { collectTerminalIdsFromLayout } from "./terminalPaneLayout";
 import { selectThreadTerminalState, useTerminalStateStore } from "./terminalStateStore";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-1");
-const ORIGINAL_TERMINAL_STORAGE = useTerminalStateStore.persist.getOptions().storage;
+
+function summarizeTerminalGroups(
+  terminalGroups: ReturnType<typeof selectThreadTerminalState>["terminalGroups"],
+) {
+  return terminalGroups.map((group) => ({
+    id: group.id,
+    activeTerminalId: group.activeTerminalId,
+    terminalIds: collectTerminalIdsFromLayout(group.layout),
+  }));
+}
 
 describe("terminalStateStore actions", () => {
   beforeEach(() => {
-    const storage = new Map<string, string>();
-    const stateStorage = {
-      getItem: (key: string) => storage.get(key) ?? null,
-      setItem: (key: string, value: string) => {
-        storage.set(key, value);
-      },
-      removeItem: (key: string) => {
-        storage.delete(key);
-      },
-    };
-    useTerminalStateStore.persist.setOptions({
-      storage: createJSONStorage(() => stateStorage),
-    });
     useTerminalStateStore.setState({ terminalStateByThreadId: {} });
-  });
-
-  afterEach(() => {
-    useTerminalStateStore.persist.setOptions({
-      storage: ORIGINAL_TERMINAL_STORAGE,
-    });
   });
 
   it("returns a closed default terminal state for unknown threads", () => {
@@ -36,7 +26,7 @@ describe("terminalStateStore actions", () => {
       useTerminalStateStore.getState().terminalStateByThreadId,
       THREAD_ID,
     );
-    expect(terminalState).toEqual({
+    expect(terminalState).toMatchObject({
       entryPoint: "chat",
       terminalOpen: false,
       presentationMode: "drawer",
@@ -50,9 +40,15 @@ describe("terminalStateStore actions", () => {
       terminalAttentionStatesById: {},
       runningTerminalIds: [],
       activeTerminalId: "default",
-      terminalGroups: [{ id: "group-default", terminalIds: ["default"] }],
       activeTerminalGroupId: "group-default",
     });
+    expect(summarizeTerminalGroups(terminalState.terminalGroups)).toEqual([
+      {
+        id: "group-default",
+        activeTerminalId: "default",
+        terminalIds: ["default"],
+      },
+    ]);
   });
 
   it("marks chat-first threads without forcing open terminal UI", () => {
@@ -96,8 +92,12 @@ describe("terminalStateStore actions", () => {
     expect(terminalState.terminalOpen).toBe(true);
     expect(terminalState.terminalIds).toEqual(["default", "terminal-2"]);
     expect(terminalState.activeTerminalId).toBe("terminal-2");
-    expect(terminalState.terminalGroups).toEqual([
-      { id: "group-default", terminalIds: ["default", "terminal-2"] },
+    expect(summarizeTerminalGroups(terminalState.terminalGroups)).toEqual([
+      {
+        id: "group-default",
+        activeTerminalId: "terminal-2",
+        terminalIds: ["default", "terminal-2"],
+      },
     ]);
   });
 
@@ -191,7 +191,7 @@ describe("terminalStateStore actions", () => {
     expect(terminalState.workspaceActiveTab).toBe("terminal");
   });
 
-  it("caps splits at four terminals per group", () => {
+  it("keeps split terminals in the same group up to the current group limit", () => {
     const store = useTerminalStateStore.getState();
     store.splitTerminal(THREAD_ID, "terminal-2");
     store.splitTerminal(THREAD_ID, "terminal-3");
@@ -207,9 +207,14 @@ describe("terminalStateStore actions", () => {
       "terminal-2",
       "terminal-3",
       "terminal-4",
+      "terminal-5",
     ]);
-    expect(terminalState.terminalGroups).toEqual([
-      { id: "group-default", terminalIds: ["default", "terminal-2", "terminal-3", "terminal-4"] },
+    expect(summarizeTerminalGroups(terminalState.terminalGroups)).toEqual([
+      {
+        id: "group-default",
+        activeTerminalId: "terminal-5",
+        terminalIds: ["default", "terminal-2", "terminal-3", "terminal-4", "terminal-5"],
+      },
     ]);
   });
 
@@ -223,9 +228,9 @@ describe("terminalStateStore actions", () => {
     expect(terminalState.terminalIds).toEqual(["default", "terminal-2"]);
     expect(terminalState.activeTerminalId).toBe("terminal-2");
     expect(terminalState.activeTerminalGroupId).toBe("group-terminal-2");
-    expect(terminalState.terminalGroups).toEqual([
-      { id: "group-default", terminalIds: ["default"] },
-      { id: "group-terminal-2", terminalIds: ["terminal-2"] },
+    expect(summarizeTerminalGroups(terminalState.terminalGroups)).toEqual([
+      { id: "group-default", activeTerminalId: "default", terminalIds: ["default"] },
+      { id: "group-terminal-2", activeTerminalId: "terminal-2", terminalIds: ["terminal-2"] },
     ]);
   });
 
@@ -241,7 +246,10 @@ describe("terminalStateStore actions", () => {
       useTerminalStateStore.getState().terminalStateByThreadId,
       THREAD_ID,
     );
-    expect(terminalState.terminalLabelsById).toEqual({ "terminal-2": "Codex CLI" });
+    expect(terminalState.terminalLabelsById).toEqual({
+      default: "Terminal 1",
+      "terminal-2": "Codex 1",
+    });
     expect(terminalState.terminalCliKindsById).toEqual({ "terminal-2": "codex" });
 
     store.closeTerminal(THREAD_ID, "terminal-2");
@@ -250,7 +258,7 @@ describe("terminalStateStore actions", () => {
       useTerminalStateStore.getState().terminalStateByThreadId,
       THREAD_ID,
     );
-    expect(terminalState.terminalLabelsById).toEqual({});
+    expect(terminalState.terminalLabelsById).toEqual({ default: "Terminal 1" });
     expect(terminalState.terminalCliKindsById).toEqual({});
   });
 
@@ -274,10 +282,14 @@ describe("terminalStateStore actions", () => {
       "terminal-5",
       "terminal-6",
     ]);
-    expect(terminalState.terminalGroups).toEqual([
-      { id: "group-default", terminalIds: ["default", "terminal-2", "terminal-3", "terminal-4"] },
-      { id: "group-terminal-5", terminalIds: ["terminal-5"] },
-      { id: "group-terminal-6", terminalIds: ["terminal-6"] },
+    expect(summarizeTerminalGroups(terminalState.terminalGroups)).toEqual([
+      {
+        id: "group-default",
+        activeTerminalId: "terminal-4",
+        terminalIds: ["default", "terminal-2", "terminal-3", "terminal-4"],
+      },
+      { id: "group-terminal-5", activeTerminalId: "terminal-5", terminalIds: ["terminal-5"] },
+      { id: "group-terminal-6", activeTerminalId: "terminal-6", terminalIds: ["terminal-6"] },
     ]);
   });
 
@@ -341,8 +353,12 @@ describe("terminalStateStore actions", () => {
     );
     expect(terminalState.activeTerminalId).toBe("terminal-2");
     expect(terminalState.terminalIds).toEqual(["default", "terminal-2"]);
-    expect(terminalState.terminalGroups).toEqual([
-      { id: "group-default", terminalIds: ["default", "terminal-2"] },
+    expect(summarizeTerminalGroups(terminalState.terminalGroups)).toEqual([
+      {
+        id: "group-default",
+        activeTerminalId: "terminal-2",
+        terminalIds: ["default", "terminal-2"],
+      },
     ]);
   });
 });

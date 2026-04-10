@@ -278,6 +278,9 @@ export function createWsNativeApi(): NativeApi {
         items: readonly ContextMenuItem<T>[],
         position?: { x: number; y: number },
       ): Promise<T | null> => {
+        if (window.desktopBridge) {
+          return window.desktopBridge.showContextMenu(items, position);
+        }
         return showContextMenuFallback(items, position);
       },
     },

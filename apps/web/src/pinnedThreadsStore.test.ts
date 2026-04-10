@@ -8,7 +8,6 @@ import { usePinnedThreadsStore } from "./pinnedThreadsStore";
 
 describe("usePinnedThreadsStore", () => {
   beforeEach(() => {
-    window.localStorage.clear();
     usePinnedThreadsStore.setState({ pinnedThreadIds: [] });
   });
 

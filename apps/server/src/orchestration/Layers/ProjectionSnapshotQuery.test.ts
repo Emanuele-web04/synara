@@ -263,8 +263,13 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           },
           interactionMode: "default",
           runtimeMode: "full-access",
+          envMode: "local",
           branch: null,
           worktreePath: null,
+          associatedWorktreePath: null,
+          associatedWorktreeBranch: null,
+          associatedWorktreeRef: null,
+          forkSourceThreadId: null,
           latestTurn: {
             turnId: asTurnId("turn-1"),
             state: "completed",
