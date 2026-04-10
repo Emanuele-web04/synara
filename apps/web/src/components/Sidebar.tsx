@@ -3,7 +3,6 @@ import {
   FolderIcon,
   GitPullRequestIcon,
   type LucideIcon,
-  PinIcon,
   PlugIcon,
   RocketIcon,
   SearchIcon,
@@ -1792,43 +1791,64 @@ export default function Sidebar() {
   }
 
   function renderPinnedThreadRow(thread: Thread) {
+    const threadEntryPoint = selectThreadTerminalState(
+      terminalStateByThreadId,
+      thread.id,
+    ).entryPoint;
     const isActive = !activeSplitView && routeThreadId === thread.id;
     const folderLabel = resolveThreadFolderLabel(thread.projectId);
 
     return (
-      <button
-        key={thread.id}
-        type="button"
-        data-thread-item
-        className={cn(
-          "flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[13px] transition-colors",
-          isActive
-            ? "bg-accent/62 text-foreground/90 dark:bg-accent/42"
-            : "text-foreground/72 hover:bg-accent/40 hover:text-foreground/90",
-        )}
-        onClick={() => activateThread(thread.id)}
-        onContextMenu={(event) => {
-          event.preventDefault();
-          void handleThreadContextMenu(thread.id, {
-            x: event.clientX,
-            y: event.clientY,
-          });
-        }}
-      >
-        <PinIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground/50" />
-        <ProviderGlyph provider={thread.modelSelection.provider} className="size-3.5 shrink-0" />
-        <span className="min-w-0 flex-1 truncate">{thread.title}</span>
-        <div className="ml-auto flex shrink-0 items-center gap-1.5">
-          {folderLabel ? (
-            <span className="max-w-24 truncate text-[11px] text-muted-foreground/38">
-              {folderLabel}
+      <div key={thread.id} className="w-full">
+        <button
+          type="button"
+          data-thread-item
+          className={cn(
+            "flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[13px] transition-colors",
+            isActive
+              ? "bg-accent/62 text-foreground/90 dark:bg-accent/42"
+              : "text-foreground/72 hover:bg-accent/40 hover:text-foreground/90",
+          )}
+          onClick={() => activateThread(thread.id)}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            void handleThreadContextMenu(thread.id, {
+              x: event.clientX,
+              y: event.clientY,
+            });
+          }}
+        >
+          <ThreadPinToggleButton
+            pinned
+            presentation="inline"
+            toneClassName="text-muted-foreground/50"
+            onToggle={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              togglePinnedThread(thread.id);
+            }}
+          />
+          {threadEntryPoint === "terminal" ? (
+            <TerminalIcon aria-hidden="true" className="size-3.5 shrink-0 text-teal-600/85" />
+          ) : (
+            <ProviderGlyph
+              provider={thread.modelSelection.provider}
+              className="size-3.5 shrink-0"
+            />
+          )}
+          <span className="min-w-0 flex-1 truncate">{thread.title}</span>
+          <div className="ml-auto flex shrink-0 items-center gap-1.5">
+            {folderLabel ? (
+              <span className="max-w-24 truncate text-[11px] text-muted-foreground/38">
+                {folderLabel}
+              </span>
+            ) : null}
+            <span className="shrink-0 text-[11px] text-muted-foreground/38">
+              {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
             </span>
-          ) : null}
-          <span className="shrink-0 text-[11px] text-muted-foreground/38">
-            {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
-          </span>
-        </div>
-      </button>
+          </div>
+        </button>
+      </div>
     );
   }
 

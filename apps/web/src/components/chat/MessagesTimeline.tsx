@@ -547,18 +547,18 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     correspondingUserMessageId != null &&
                     revertTurnCountByUserMessageId.has(correspondingUserMessageId);
                   return (
-                    <div className="mt-3 overflow-hidden rounded-lg bg-muted">
-                      <div className="flex items-center justify-between gap-2 px-3.5 py-2.5">
-                        <span className="font-mono text-[12px] text-foreground/85">
+                    <div className="mt-3 overflow-hidden rounded-lg border border-border bg-neutral-50 dark:bg-neutral-900">
+                      <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
+                        <span className="text-[13px] font-normal text-foreground">
                           {checkpointFiles.length === 1
-                            ? "1 file changed"
-                            : `${checkpointFiles.length} files changed`}
+                            ? "1 File changed"
+                            : `${checkpointFiles.length} Files changed`}
                         </span>
-                        <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-4">
                           {canUndo && (
                             <button
                               type="button"
-                              className="flex items-center gap-1 font-mono text-[12px] text-muted-foreground/70 transition-colors hover:text-foreground/90"
+                              className="flex items-center gap-1 text-[13px] text-muted-foreground transition-colors hover:text-foreground"
                               onClick={() => onRevertUserMessage(correspondingUserMessageId)}
                             >
                               Undo
@@ -567,25 +567,25 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           )}
                         </div>
                       </div>
-                      <div className="px-3.5 pb-3">
+                      <div className="bg-background">
                         {checkpointFiles.map((file) => (
                           <button
                             key={file.path}
                             type="button"
-                            className="flex w-full items-center gap-1.5 rounded-md py-1 text-left hover:bg-background/50"
+                            className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-muted/60"
                             onClick={() => onOpenTurnDiff(turnSummary.turnId, file.path)}
                           >
                             <VscodeEntryIcon
                               pathValue={file.path}
                               kind="file"
                               theme={resolvedTheme}
-                              className="size-3.5 shrink-0"
+                              className="size-4 shrink-0 opacity-50"
                             />
-                            <span className="truncate font-mono text-[11px] text-muted-foreground/80">
+                            <span className="truncate font-mono text-[12px] text-primary/80 hover:text-primary">
                               {file.path}
                             </span>
                             {(file.additions ?? 0) + (file.deletions ?? 0) > 0 && (
-                              <span className="ml-auto shrink-0 font-mono text-[10px] tabular-nums">
+                              <span className="ml-auto shrink-0 font-mono text-[11px] tabular-nums">
                                 <DiffStatLabel
                                   additions={file.additions ?? 0}
                                   deletions={file.deletions ?? 0}

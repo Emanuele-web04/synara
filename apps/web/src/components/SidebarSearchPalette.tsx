@@ -187,7 +187,8 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
   return (
     <CommandDialog open={props.open} onOpenChange={props.onOpenChange}>
       <CommandDialogPopup className="max-w-2xl">
-        <Command mode="none">
+        {/* Let the first ArrowDown land on the first visible result instead of pre-highlighting it. */}
+        <Command autoHighlight={false} mode="none">
           <CommandPanel className="overflow-hidden">
             <CommandInput
               placeholder="Search projects, threads, and actions"

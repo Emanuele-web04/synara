@@ -156,11 +156,11 @@ function getLatestBootstrapUserMessageTimestamp(thread: BootstrapSnapshotThread)
   return toSortableBootstrapTimestamp(thread.updatedAt ?? thread.createdAt);
 }
 
-function getMostRecentBootstrapThread(snapshot: OrchestrationReadModel): BootstrapSnapshotThread | null {
+function getMostRecentBootstrapThread(
+  snapshot: OrchestrationReadModel,
+): BootstrapSnapshotThread | null {
   const activeProjectIds = new Set(
-    snapshot.projects
-      .filter((project) => project.deletedAt === null)
-      .map((project) => project.id),
+    snapshot.projects.filter((project) => project.deletedAt === null).map((project) => project.id),
   );
 
   return (

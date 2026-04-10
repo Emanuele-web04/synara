@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 
 const PATH_CAPTURE_START = "__T3CODE_PATH_START__";
 const PATH_CAPTURE_END = "__T3CODE_PATH_END__";
@@ -9,6 +10,32 @@ type ExecFileSyncLike = (
   args: ReadonlyArray<string>,
   options: { encoding: "utf8"; timeout: number },
 ) => string;
+
+export function resolveLoginShell(
+  platform: NodeJS.Platform,
+  shell: string | undefined,
+): string | undefined {
+  const trimmedShell = shell?.trim();
+  if (trimmedShell) {
+    return trimmedShell;
+  }
+
+  if (platform === "darwin") {
+    return "/bin/zsh";
+  }
+
+  if (platform === "linux") {
+    if (existsSync("/bin/bash")) {
+      return "/bin/bash";
+    }
+    if (existsSync("/usr/bin/bash")) {
+      return "/usr/bin/bash";
+    }
+    return "bash";
+  }
+
+  return undefined;
+}
 
 export function extractPathFromShellOutput(output: string): string | null {
   const startIndex = output.indexOf(PATH_CAPTURE_START);

@@ -1,4 +1,4 @@
-import { type ModelSlug, type ProviderKind } from "@t3tools/contracts";
+import { type ModelSlug, type ProviderKind, type ServerProviderStatus } from "@t3tools/contracts";
 import { resolveSelectableModel } from "@t3tools/shared/model";
 import { memo, useState } from "react";
 import { type ProviderPickerKind, PROVIDER_OPTIONS } from "../../session-logic";
@@ -8,9 +8,11 @@ import { COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME } from "./composerPickerStyles"
 import {
   Menu,
   MenuGroup,
+  MenuItem,
   MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
+  MenuSeparator,
   MenuSub,
   MenuSubPopup,
   MenuSubTrigger,
@@ -32,7 +34,38 @@ const PROVIDER_ICON_BY_PROVIDER: Record<ProviderPickerKind, Icon> = {
   claudeAgent: ClaudeAI,
 };
 
+function resolveLiveProviderAvailability(
+  provider: ServerProviderStatus | undefined,
+): { disabled: boolean; label: string | null } {
+  if (!provider) {
+    return {
+      disabled: false,
+      label: null,
+    };
+  }
+
+  if (!provider.available) {
+    return {
+      disabled: true,
+      label: provider.authStatus === "unauthenticated" ? "Sign in" : "Unavailable",
+    };
+  }
+
+  if (provider.authStatus === "unauthenticated") {
+    return {
+      disabled: true,
+      label: "Sign in",
+    };
+  }
+
+  return {
+    disabled: false,
+    label: null,
+  };
+}
+
 export const AVAILABLE_PROVIDER_OPTIONS = PROVIDER_OPTIONS.filter(isAvailableProviderOption);
+const UNAVAILABLE_PROVIDER_OPTIONS = PROVIDER_OPTIONS.filter((option) => !option.available);
 
 function providerIconClassName(
   provider: ProviderKind | ProviderPickerKind,
@@ -45,6 +78,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   provider: ProviderKind;
   model: ModelSlug;
   lockedProvider: ProviderKind | null;
+  providers?: ReadonlyArray<ServerProviderStatus>;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<{ slug: string; name: string }>>;
   activeProviderIconClassName?: string;
   compact?: boolean;
@@ -135,6 +169,27 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
           <>
             {AVAILABLE_PROVIDER_OPTIONS.map((option) => {
               const OptionIcon = PROVIDER_ICON_BY_PROVIDER[option.value];
+              const liveProvider = props.providers?.find(
+                (entry) => entry.provider === option.value,
+              );
+              const availability = resolveLiveProviderAvailability(liveProvider);
+              if (availability.disabled) {
+                return (
+                  <MenuItem key={option.value} disabled>
+                    <OptionIcon
+                      aria-hidden="true"
+                      className={cn(
+                        "size-4 shrink-0 opacity-80",
+                        providerIconClassName(option.value, "text-muted-foreground/85"),
+                      )}
+                    />
+                    <span>{option.label}</span>
+                    <span className="ms-auto text-[11px] text-muted-foreground/80 uppercase tracking-[0.08em]">
+                      {availability.label}
+                    </span>
+                  </MenuItem>
+                );
+              }
               return (
                 <MenuSub key={option.value}>
                   <MenuSubTrigger>
@@ -166,6 +221,22 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                     </MenuGroup>
                   </MenuSubPopup>
                 </MenuSub>
+              );
+            })}
+            {UNAVAILABLE_PROVIDER_OPTIONS.length > 0 && <MenuSeparator />}
+            {UNAVAILABLE_PROVIDER_OPTIONS.map((option) => {
+              const OptionIcon = PROVIDER_ICON_BY_PROVIDER[option.value];
+              return (
+                <MenuItem key={option.value} disabled>
+                  <OptionIcon
+                    aria-hidden="true"
+                    className="size-4 shrink-0 text-muted-foreground/85 opacity-80"
+                  />
+                  <span>{option.label}</span>
+                  <span className="ms-auto text-[11px] text-muted-foreground/80 uppercase tracking-[0.08em]">
+                    Coming soon
+                  </span>
+                </MenuItem>
               );
             })}
           </>

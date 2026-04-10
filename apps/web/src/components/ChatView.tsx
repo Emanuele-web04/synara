@@ -5431,6 +5431,7 @@ export default function ChatView({
                             provider={selectedProvider}
                             model={selectedModelForPickerWithCustomFallback}
                             lockedProvider={lockedProvider}
+                            providers={providerStatuses}
                             modelOptionsByProvider={modelOptionsByProvider}
                             {...(composerProviderState.modelPickerIconClassName
                               ? {

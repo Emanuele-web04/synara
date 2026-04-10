@@ -14,8 +14,7 @@ export const DiffStatLabel = memo(function DiffStatLabel(props: {
     <>
       {showParentheses && <span className="text-muted-foreground/70">(</span>}
       <span className="text-success">+{additions}</span>
-      <span className="mx-0.5 text-muted-foreground/70">/</span>
-      <span className="text-destructive">-{deletions}</span>
+      <span className="mx-1 text-destructive">-{deletions}</span>
       {showParentheses && <span className="text-muted-foreground/70">)</span>}
     </>
   );

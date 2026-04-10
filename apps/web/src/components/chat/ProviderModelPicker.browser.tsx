@@ -1,4 +1,4 @@
-import { type ModelSlug, type ProviderKind } from "@t3tools/contracts";
+import { type ModelSlug, type ProviderKind, type ServerProviderStatus } from "@t3tools/contracts";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
@@ -21,6 +21,7 @@ async function mountPicker(props: {
   provider: ProviderKind;
   model: ModelSlug;
   lockedProvider: ProviderKind | null;
+  providers?: ReadonlyArray<ServerProviderStatus>;
 }) {
   const host = document.createElement("div");
   document.body.append(host);
@@ -31,6 +32,7 @@ async function mountPicker(props: {
       model={props.model}
       lockedProvider={props.lockedProvider}
       modelOptionsByProvider={MODEL_OPTIONS_BY_PROVIDER}
+      {...(props.providers ? { providers: props.providers } : {})}
       onProviderModelChange={onProviderModelChange}
     />,
     { container: host },
@@ -107,6 +109,81 @@ describe("ProviderModelPicker", () => {
         "claudeAgent",
         "claude-sonnet-4-6",
       );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows unavailable providers as disabled rows", async () => {
+    const mounted = await mountPicker({
+      provider: "codex",
+      model: "gpt-5-codex",
+      lockedProvider: null,
+      providers: [
+        {
+          provider: "codex",
+          status: "ready",
+          available: true,
+          authStatus: "authenticated",
+          checkedAt: "2026-04-10T10:00:00.000Z",
+        },
+        {
+          provider: "claudeAgent",
+          status: "error",
+          available: false,
+          authStatus: "unauthenticated",
+          checkedAt: "2026-04-10T10:00:00.000Z",
+        },
+      ],
+    });
+
+    try {
+      await page.getByRole("button").click();
+
+      await vi.waitFor(() => {
+        const text = document.body.textContent ?? "";
+        expect(text).toContain("Codex");
+        expect(text).toContain("Claude");
+        expect(text).toContain("Sign in");
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps warning providers selectable when they are still available", async () => {
+    const mounted = await mountPicker({
+      provider: "codex",
+      model: "gpt-5-codex",
+      lockedProvider: null,
+      providers: [
+        {
+          provider: "codex",
+          status: "ready",
+          available: true,
+          authStatus: "authenticated",
+          checkedAt: "2026-04-10T10:00:00.000Z",
+        },
+        {
+          provider: "claudeAgent",
+          status: "warning",
+          available: true,
+          authStatus: "unknown",
+          checkedAt: "2026-04-10T10:00:00.000Z",
+          message: "Could not verify auth status.",
+        },
+      ],
+    });
+
+    try {
+      await page.getByRole("button").click();
+
+      await vi.waitFor(() => {
+        expect(document.body.textContent ?? "").toContain("Claude");
+      });
+
+      await expect.element(page.getByText("Sign in")).not.toBeInTheDocument();
+      await expect.element(page.getByText("Unavailable")).not.toBeInTheDocument();
     } finally {
       await mounted.cleanup();
     }
