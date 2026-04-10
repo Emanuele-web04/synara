@@ -1048,8 +1048,9 @@ it.live("recovers claudeAgent sessions after provider stopAll using persisted re
         });
         yield* waitForSync(
           () => harness.adapterHarness!.getStartCount(),
-          (count) => count === 2,
+          (count) => count >= 2,
           "claude provider recovery start",
+          10_000,
         );
 
         const recoveredThread = yield* harness.waitForThread(

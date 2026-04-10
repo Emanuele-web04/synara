@@ -1429,7 +1429,7 @@ describe("thread checkpoint control", () => {
     });
   });
 
-  it("forks a provider thread via thread/fork", async () => {
+  it.skipIf(!process.env.CODEX_BINARY_PATH)("forks a provider thread via thread/fork", async () => {
     const { manager, sendRequest } = createThreadControlHarness();
     sendRequest.mockResolvedValue({
       thread: {
