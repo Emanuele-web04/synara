@@ -1430,7 +1430,7 @@ describe("thread checkpoint control", () => {
   });
 
   it("forks a provider thread via thread/fork", async () => {
-    const { manager, context, sendRequest } = createThreadControlHarness();
+    const { manager, sendRequest } = createThreadControlHarness();
     sendRequest.mockResolvedValue({
       thread: {
         id: "thread_forked",
@@ -1438,6 +1438,7 @@ describe("thread checkpoint control", () => {
     });
 
     const result = await manager.forkThread({
+      sourceThreadId: asThreadId("thread_1"),
       sourceResumeCursor: {
         threadId: "thread_1",
       },
