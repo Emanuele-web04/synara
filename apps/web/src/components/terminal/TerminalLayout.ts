@@ -4,6 +4,7 @@
 // Depends on: shared terminal identity logic plus terminal pane-tree helpers.
 
 import {
+  type TerminalVisualState,
   resolveTerminalVisualIdentity,
   type ResolvedTerminalVisualIdentity,
   type TerminalCliKind,
@@ -156,6 +157,7 @@ function resolveActiveGroup(input: {
 function resolveTerminalVisualIdentityMap(input: {
   normalizedTerminalIds: string[];
   runningTerminalIds: string[];
+  terminalAttentionStatesById: Record<string, "attention" | "review">;
   terminalCliKindsById: Record<string, TerminalCliKind>;
   terminalLabelsById: Record<string, string>;
   terminalTitleOverridesById: Record<string, string>;
@@ -166,13 +168,27 @@ function resolveTerminalVisualIdentityMap(input: {
     input.runningTerminalIds.map((id) => id.trim()).filter((id) => id.length > 0),
   );
 
+  const resolveStateForTerminal = (terminalId: string): TerminalVisualState => {
+    const attentionState = input.terminalAttentionStatesById[terminalId] ?? null;
+    if (attentionState === "attention") {
+      return "attention";
+    }
+    if (runningTerminalIdSet.has(terminalId)) {
+      return "running";
+    }
+    if (attentionState === "review") {
+      return "review";
+    }
+    return "idle";
+  };
+
   return new Map(
     input.normalizedTerminalIds.map((terminalId, index) => [
       terminalId,
       resolveTerminalVisualIdentity({
         cliKind: input.terminalCliKindsById[terminalId] ?? null,
         fallbackTitle: `Terminal ${index + 1}`,
-        isRunning: runningTerminalIdSet.has(terminalId),
+        state: resolveStateForTerminal(terminalId),
         title: terminalTitleOverridesById[terminalId] ?? terminalLabelsById[terminalId],
       }),
     ]),
@@ -183,6 +199,7 @@ export function resolveThreadTerminalLayout(input: {
   activeTerminalGroupId: string;
   activeTerminalId: string;
   runningTerminalIds: string[];
+  terminalAttentionStatesById: Record<string, "attention" | "review">;
   terminalCliKindsById: Record<string, TerminalCliKind>;
   terminalGroups: ThreadTerminalGroup[];
   terminalIds: string[];
@@ -214,6 +231,7 @@ export function resolveThreadTerminalLayout(input: {
   const terminalVisualIdentityById = resolveTerminalVisualIdentityMap({
     normalizedTerminalIds,
     runningTerminalIds: input.runningTerminalIds,
+    terminalAttentionStatesById: input.terminalAttentionStatesById,
     terminalCliKindsById: input.terminalCliKindsById,
     terminalLabelsById: input.terminalLabelsById,
     terminalTitleOverridesById: input.terminalTitleOverridesById,

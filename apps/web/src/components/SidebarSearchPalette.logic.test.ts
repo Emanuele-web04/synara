@@ -48,6 +48,11 @@ const threads: SidebarSearchThread[] = [
     provider: "claudeAgent",
     createdAt: "2026-04-09T09:00:00.000Z",
     updatedAt: "2026-04-09T11:30:00.000Z",
+    messages: [
+      {
+        text: "Need to clean up the composer shell and remove duplicated state.",
+      },
+    ],
   },
   {
     id: "thread-alpha-compose-prompt",
@@ -57,6 +62,14 @@ const threads: SidebarSearchThread[] = [
     provider: "codex",
     createdAt: "2026-04-09T08:00:00.000Z",
     updatedAt: "2026-04-09T10:30:00.000Z",
+    messages: [
+      {
+        text: "composePrompt still leaks prompt state after retries.",
+      },
+      {
+        text: "Let's make composePrompt smaller before we move it.",
+      },
+    ],
   },
   {
     id: "thread-beta-settings",
@@ -66,6 +79,11 @@ const threads: SidebarSearchThread[] = [
     provider: "claudeAgent",
     createdAt: "2026-04-09T07:00:00.000Z",
     updatedAt: "2026-04-09T09:00:00.000Z",
+    messages: [
+      {
+        text: "Settings page should expose desktop notification toggles.",
+      },
+    ],
   },
 ];
 
@@ -102,5 +120,34 @@ describe("SidebarSearchPalette.logic", () => {
       result.map((match) => match.thread.id),
       ["thread-beta-settings"],
     );
+    assert.equal(result[0]?.matchKind, "project");
+  });
+
+  it("can match message content and returns a snippet", () => {
+    const result = matchSidebarSearchThreads(threads, "desktop notification");
+
+    assert.lengthOf(result, 1);
+    assert.equal(result[0]?.thread.id, "thread-beta-settings");
+    assert.equal(result[0]?.matchKind, "message");
+    assert.equal(result[0]?.messageMatchCount, 1);
+    assert.include(result[0]?.snippet ?? "", "desktop notification toggles");
+  });
+
+  it("keeps title matches ahead of message-only matches", () => {
+    const result = matchSidebarSearchThreads(threads, "composer");
+
+    assert.deepEqual(
+      result.map((match) => match.thread.id),
+      ["thread-alpha-composer", "thread-alpha-compose-prompt"],
+    );
+    assert.equal(result[0]?.matchKind, "title");
+  });
+
+  it("counts multiple message hits in the same thread", () => {
+    const result = matchSidebarSearchThreads(threads, "composeprompt");
+
+    assert.equal(result[0]?.thread.id, "thread-alpha-compose-prompt");
+    assert.equal(result[0]?.matchKind, "title");
+    assert.equal(result[0]?.messageMatchCount, 2);
   });
 });

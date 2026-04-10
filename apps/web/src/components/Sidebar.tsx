@@ -15,7 +15,7 @@ import {
 } from "~/lib/icons";
 import { autoAnimate } from "@formkit/auto-animate";
 import { FiGitBranch } from "react-icons/fi";
-import { TbFolderPlus } from "react-icons/tb";
+import { TbFolderPlus, TbCursorText } from "react-icons/tb";
 import { IoFilter } from "react-icons/io5";
 import { LuMessageCircleDashed } from "react-icons/lu";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
@@ -53,7 +53,7 @@ import {
 } from "../appSettings";
 import { isElectron } from "../env";
 import { APP_VERSION } from "../branding";
-import { isLinuxPlatform, isMacPlatform, newCommandId, newProjectId } from "../lib/utils";
+import { isMacPlatform, newCommandId, newProjectId } from "../lib/utils";
 import { useStore } from "../store";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
@@ -234,7 +234,7 @@ export function formatRelativeTime(iso: string): string {
 }
 
 interface TerminalStatusIndicator {
-  label: "Terminal process running";
+  label: "Terminal input needed" | "Terminal task completed" | "Terminal process running";
   colorClass: string;
   pulse: boolean;
 }
@@ -248,17 +248,33 @@ interface PrStatusIndicator {
 
 type ThreadPr = GitStatusResult["pr"];
 
-function terminalStatusFromRunningIds(
-  runningTerminalIds: string[],
-): TerminalStatusIndicator | null {
-  if (runningTerminalIds.length === 0) {
-    return null;
+function terminalStatusFromThreadState(input: {
+  runningTerminalIds: string[];
+  terminalAttentionStatesById: Record<string, "attention" | "review">;
+}): TerminalStatusIndicator | null {
+  const terminalAttentionStates = Object.values(input.terminalAttentionStatesById ?? {});
+  if (terminalAttentionStates.includes("attention")) {
+    return {
+      label: "Terminal input needed",
+      colorClass: "text-amber-600 dark:text-amber-300/90",
+      pulse: false,
+    };
   }
-  return {
-    label: "Terminal process running",
-    colorClass: "text-teal-600 dark:text-teal-300/90",
-    pulse: true,
-  };
+  if ((input.runningTerminalIds?.length ?? 0) > 0) {
+    return {
+      label: "Terminal process running",
+      colorClass: "text-teal-600 dark:text-teal-300/90",
+      pulse: true,
+    };
+  }
+  if (terminalAttentionStates.includes("review")) {
+    return {
+      label: "Terminal task completed",
+      colorClass: "text-emerald-600 dark:text-emerald-300/90",
+      pulse: false,
+    };
+  }
+  return null;
 }
 
 function prStatusIndicator(pr: ThreadPr): PrStatusIndicator | null {
@@ -585,6 +601,7 @@ export default function Sidebar() {
   const [newCwd, setNewCwd] = useState("");
   const [searchPaletteOpen, setSearchPaletteOpen] = useState(false);
   const [isPickingFolder, setIsPickingFolder] = useState(false);
+  const [showManualPathInput, setShowManualPathInput] = useState(false);
   const [isAddingProject, setIsAddingProject] = useState(false);
   const [addProjectError, setAddProjectError] = useState<string | null>(null);
   const addProjectInputRef = useRef<HTMLInputElement | null>(null);
@@ -606,9 +623,9 @@ export default function Sidebar() {
   const clearSelection = useThreadSelectionStore((s) => s.clearSelection);
   const removeFromSelection = useThreadSelectionStore((s) => s.removeFromSelection);
   const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
-  const isLinuxDesktop = isElectron && isLinuxPlatform(navigator.platform);
-  const shouldBrowseForProjectImmediately = isElectron && !isLinuxDesktop;
-  const shouldShowProjectPathEntry = addingProject && !shouldBrowseForProjectImmediately;
+  // Keep every platform on the same explicit submit path so desktop picker
+  // results do not depend on a separate immediate-add branch.
+  const shouldShowProjectPathEntry = addingProject;
   const activeSidebarThreadId = activeSplitView?.sourceThreadId ?? routeThreadId;
   const terminalOpen = routeThreadId
     ? selectThreadTerminalState(terminalStateByThreadId, routeThreadId).terminalOpen
@@ -643,6 +660,10 @@ export default function Sidebar() {
         return {
           ...workspace,
           terminalCount: terminalState.terminalOpen ? terminalState.terminalIds.length : 0,
+          terminalStatus: terminalStatusFromThreadState({
+            runningTerminalIds: terminalState.runningTerminalIds,
+            terminalAttentionStatesById: terminalState.terminalAttentionStatesById,
+          }),
           runningTerminalIds: terminalState.runningTerminalIds,
         };
       }),
@@ -892,15 +913,7 @@ export default function Sidebar() {
         const description =
           error instanceof Error ? error.message : "An error occurred while adding the project.";
         setIsAddingProject(false);
-        if (shouldBrowseForProjectImmediately) {
-          toastManager.add({
-            type: "error",
-            title: "Failed to add project",
-            description,
-          });
-        } else {
-          setAddProjectError(description);
-        }
+        setAddProjectError(description);
         return;
       }
       finishAddingProject();
@@ -910,7 +923,6 @@ export default function Sidebar() {
       handleNewThread,
       isAddingProject,
       projects,
-      shouldBrowseForProjectImmediately,
       appSettings.defaultThreadEnvMode,
     ],
   );
@@ -932,21 +944,17 @@ export default function Sidebar() {
       // Ignore picker failures and leave the current thread selection unchanged.
     }
     if (pickedPath) {
-      await addProjectFromPath(pickedPath);
-    } else if (!shouldBrowseForProjectImmediately) {
-      addProjectInputRef.current?.focus();
+      setAddProjectError(null);
+      void addProjectFromPath(pickedPath);
     }
     setIsPickingFolder(false);
-  }, [addProjectFromPath, isPickingFolder, shouldBrowseForProjectImmediately]);
+  }, [isPickingFolder, addProjectFromPath]);
 
   const handleStartAddProject = useCallback(() => {
     setAddProjectError(null);
-    if (shouldBrowseForProjectImmediately) {
-      void handlePickFolder();
-      return;
-    }
+    setShowManualPathInput(false);
     setAddingProject((prev) => !prev);
-  }, [handlePickFolder, shouldBrowseForProjectImmediately]);
+  }, []);
 
   const handlePrimaryNewThread = useCallback(() => {
     const activeProjectId =
@@ -1840,7 +1848,10 @@ export default function Sidebar() {
     });
     const handoffBadgeLabel = resolveThreadHandoffBadgeLabel(thread);
     const prStatus = prStatusIndicator(prByThreadId.get(thread.id) ?? null);
-    const terminalStatus = terminalStatusFromRunningIds(threadTerminalState.runningTerminalIds);
+    const terminalStatus = terminalStatusFromThreadState({
+      runningTerminalIds: threadTerminalState.runningTerminalIds,
+      terminalAttentionStatesById: threadTerminalState.terminalAttentionStatesById,
+    });
     const terminalCount = threadTerminalState.terminalIds.length;
     const isDisposableThread =
       temporaryThreadIds[thread.id] === true ||
@@ -2445,7 +2456,12 @@ export default function Sidebar() {
         return;
       }
 
-      if ((event.metaKey || event.ctrlKey) && event.key === "k" && !event.shiftKey && !event.altKey) {
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        event.key === "k" &&
+        !event.shiftKey &&
+        !event.altKey
+      ) {
         event.preventDefault();
         event.stopPropagation();
         setSearchPaletteOpen((prev) => !prev);
@@ -2582,6 +2598,9 @@ export default function Sidebar() {
         provider: thread.modelSelection.provider,
         createdAt: thread.createdAt,
         updatedAt: thread.updatedAt,
+        messages: thread.messages.map((message) => ({
+          text: message.text,
+        })),
       })),
     [projectById, threads],
   );
@@ -2884,8 +2903,18 @@ export default function Sidebar() {
                                   <TerminalIcon className="size-3.5" />
                                 </span>
                                 <span className="min-w-0 flex-1 truncate">{workspace.title}</span>
-                                {workspace.runningTerminalIds.length > 0 && (
-                                  <span className="inline-flex size-1.5 shrink-0 rounded-full bg-emerald-500/80" />
+                                {workspace.terminalStatus && (
+                                  <span
+                                    className={cn(
+                                      "inline-flex size-1.5 shrink-0 rounded-full",
+                                      workspace.terminalStatus.label === "Terminal input needed"
+                                        ? "bg-amber-500 dark:bg-amber-300/90"
+                                        : workspace.terminalStatus.label ===
+                                            "Terminal process running"
+                                          ? "bg-teal-500 dark:bg-teal-300/90"
+                                          : "bg-emerald-500 dark:bg-emerald-300/90",
+                                    )}
+                                  />
                                 )}
                                 {workspace.terminalCount > 0 && (
                                   <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/50">
@@ -2966,66 +2995,70 @@ export default function Sidebar() {
 
             {shouldShowProjectPathEntry && (
               <div className="mb-2.5 px-1">
-                {isElectron && (
-                  <button
-                    type="button"
-                    className="mb-2 flex w-full items-center justify-center gap-2 rounded-xl border border-border bg-secondary py-2 text-sm text-foreground/88 transition-colors duration-150 hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
-                    onClick={() => void handlePickFolder()}
-                    disabled={isPickingFolder || isAddingProject}
-                  >
-                    <FolderIcon className="size-3.5" />
-                    {isPickingFolder ? "Picking folder..." : "Browse for folder"}
-                  </button>
-                )}
-                <div className="flex gap-1.5">
-                  <input
-                    ref={addProjectInputRef}
-                    className={`min-w-0 flex-1 rounded-xl border bg-secondary px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none ${
+                {!showManualPathInput ? (
+                  <div className="flex gap-1.5">
+                    {isElectron && (
+                      <button
+                        type="button"
+                        className="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg bg-accent/40 px-2 text-[13px] font-normal text-muted-foreground/72 transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
+                        onClick={() => void handlePickFolder()}
+                        disabled={isPickingFolder || isAddingProject}
+                      >
+                        <FolderIcon className="size-3.5" />
+                        {isPickingFolder ? "Opening..." : "Browse"}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg bg-accent/40 px-2 text-[13px] font-normal text-muted-foreground/72 transition-colors hover:bg-accent hover:text-foreground"
+                      onClick={() => setShowManualPathInput(true)}
+                    >
+                      <TbCursorText className="size-3.5" />
+                      Type path
+                    </button>
+                  </div>
+                ) : (
+                  <div
+                    className={`flex items-center rounded-lg border bg-secondary transition-colors ${
                       addProjectError
-                        ? "border-red-500/70 focus:border-red-500"
-                        : "border-border focus:border-ring"
+                        ? "border-red-500/70 focus-within:border-red-500"
+                        : "border-border focus-within:border-ring"
                     }`}
-                    placeholder="/path/to/project"
-                    value={newCwd}
-                    onChange={(event) => {
-                      setNewCwd(event.target.value);
-                      setAddProjectError(null);
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") handleAddProject();
-                      if (event.key === "Escape") {
-                        setAddingProject(false);
-                        setAddProjectError(null);
-                      }
-                    }}
-                    autoFocus
-                  />
-                  <button
-                    type="button"
-                    className="shrink-0 rounded-xl bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-colors duration-150 hover:bg-primary/90 disabled:opacity-60"
-                    onClick={handleAddProject}
-                    disabled={!canAddProject}
                   >
-                    {isAddingProject ? "Adding..." : "Add"}
-                  </button>
-                </div>
+                    <input
+                      ref={addProjectInputRef}
+                      className="min-w-0 flex-1 bg-transparent pl-2.5 py-1.5 text-sm text-foreground placeholder:text-muted-foreground/40 focus:outline-none"
+                      placeholder="/path/to/project"
+                      value={newCwd}
+                      onChange={(event) => {
+                        setNewCwd(event.target.value);
+                        setAddProjectError(null);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") handleAddProject();
+                        if (event.key === "Escape") {
+                          setShowManualPathInput(false);
+                          setAddProjectError(null);
+                        }
+                      }}
+                      autoFocus
+                    />
+                    <button
+                      type="button"
+                      className="shrink-0 px-2.5 py-1.5 text-xs font-medium text-muted-foreground/50 transition-colors hover:text-foreground disabled:opacity-40"
+                      onClick={handleAddProject}
+                      disabled={!canAddProject}
+                      aria-label="Add project"
+                    >
+                      {isAddingProject ? "..." : "↵"}
+                    </button>
+                  </div>
+                )}
                 {addProjectError && (
-                  <p className="mt-1 px-0.5 text-sm leading-tight text-red-400">
+                  <p className="mt-1 px-0.5 text-xs leading-tight text-red-400">
                     {addProjectError}
                   </p>
                 )}
-                <div className="mt-1.5 px-0.5">
-                  <button
-                    type="button"
-                    className="text-sm text-muted-foreground/60 transition-colors hover:text-muted-foreground"
-                    onClick={() => {
-                      setAddingProject(false);
-                      setAddProjectError(null);
-                    }}
-                  >
-                    Cancel
-                  </button>
-                </div>
               </div>
             )}
 

@@ -20,7 +20,7 @@ import { readNativeApi } from "../nativeApi";
 import { clearPromotedDraftThreads, useComposerDraftStore } from "../composerDraftStore";
 import { useStore } from "../store";
 import { useTerminalStateStore } from "../terminalStateStore";
-import { terminalRunningSubprocessFromEvent } from "../terminalActivity";
+import { terminalActivityFromEvent } from "../terminalActivity";
 import { onServerConfigUpdated, onServerWelcome } from "../wsNativeApi";
 import { providerQueryKeys } from "../lib/providerReactQuery";
 import { projectQueryKeys } from "../lib/projectReactQuery";
@@ -233,13 +233,14 @@ function EventRouter() {
           });
         }
       }
-      const hasRunningSubprocess = terminalRunningSubprocessFromEvent(event);
-      if (hasRunningSubprocess === null) {
+      const activity = terminalActivityFromEvent(event);
+      if (activity === null) {
         return;
       }
-      useTerminalStateStore
-        .getState()
-        .setTerminalActivity(terminalThreadId, event.terminalId, hasRunningSubprocess);
+      useTerminalStateStore.getState().setTerminalActivity(terminalThreadId, event.terminalId, {
+        hasRunningSubprocess: activity.hasRunningSubprocess,
+        agentState: activity.agentState,
+      });
     });
     const unsubWelcome = onServerWelcome((payload) => {
       void (async () => {

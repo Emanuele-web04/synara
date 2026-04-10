@@ -1,3 +1,6 @@
+// Purpose: Scores sidebar palette results for actions, projects, and chat threads.
+// Keeps search local and deterministic so the palette can rank title hits above
+// message-content hits while still surfacing a useful snippet for chat matches.
 import { basenameOfPath } from "../vscode-icons";
 
 export interface SidebarSearchAction {
@@ -29,15 +32,131 @@ export interface SidebarSearchThread {
   provider: "codex" | "claudeAgent";
   createdAt: string;
   updatedAt?: string | undefined;
+  messages: readonly {
+    text: string;
+  }[];
 }
 
 export interface SidebarSearchThreadMatch {
   id: string;
   thread: SidebarSearchThread;
+  matchKind: "message" | "project" | "title";
+  snippet: string | null;
+  messageMatchCount: number;
 }
 
 function normalizeText(value: string): string {
-  return value.trim().toLowerCase();
+  return value.trim().replaceAll(/\s+/g, " ").toLowerCase();
+}
+
+function normalizeDisplayText(value: string): string {
+  return value.trim().replaceAll(/\s+/g, " ");
+}
+
+function tokenizeQuery(value: string): string[] {
+  return normalizeText(value)
+    .split(" ")
+    .filter((token) => token.length > 0);
+}
+
+function truncateSnippet(value: string, startIndex: number, queryLength: number): string {
+  const SNIPPET_MAX_LENGTH = 88;
+  const safeStartIndex = Math.max(0, startIndex);
+  if (value.length <= SNIPPET_MAX_LENGTH) {
+    return value;
+  }
+
+  const contextBefore = Math.min(28, safeStartIndex);
+  const queryCenter = safeStartIndex + Math.max(queryLength, 1) / 2;
+  const desiredStart = Math.max(
+    0,
+    Math.round(queryCenter - SNIPPET_MAX_LENGTH / 2) - contextBefore,
+  );
+  const boundedStart = Math.min(desiredStart, Math.max(0, value.length - SNIPPET_MAX_LENGTH));
+  const boundedEnd = Math.min(value.length, boundedStart + SNIPPET_MAX_LENGTH);
+  const prefix = boundedStart > 0 ? "..." : "";
+  const suffix = boundedEnd < value.length ? "..." : "";
+  return `${prefix}${value.slice(boundedStart, boundedEnd).trim()}${suffix}`;
+}
+
+function buildMessageSnippet(
+  messageText: string,
+  query: string,
+  queryTokens: readonly string[],
+): string {
+  const displayMessage = normalizeDisplayText(messageText);
+  if (!displayMessage) {
+    return "";
+  }
+  const normalizedMessage = displayMessage.toLowerCase();
+
+  const phraseIndex = normalizedMessage.indexOf(query);
+  if (phraseIndex >= 0) {
+    return truncateSnippet(displayMessage, phraseIndex, query.length);
+  }
+
+  let earliestTokenIndex = Number.POSITIVE_INFINITY;
+  let matchedToken = "";
+  for (const token of queryTokens) {
+    const tokenIndex = normalizedMessage.indexOf(token);
+    if (tokenIndex >= 0 && tokenIndex < earliestTokenIndex) {
+      earliestTokenIndex = tokenIndex;
+      matchedToken = token;
+    }
+  }
+
+  if (!Number.isFinite(earliestTokenIndex)) {
+    return truncateSnippet(displayMessage, 0, 0);
+  }
+
+  return truncateSnippet(displayMessage, earliestTokenIndex, matchedToken.length);
+}
+
+function scoreMessage(
+  messages: SidebarSearchThread["messages"],
+  query: string,
+  queryTokens: readonly string[],
+): {
+  messageMatchCount: number;
+  score: number | null;
+  snippet: string | null;
+} {
+  let bestScore: number | null = null;
+  let bestSnippet: string | null = null;
+  let matchCount = 0;
+
+  for (const message of messages) {
+    const normalizedMessage = normalizeText(message.text);
+    if (!normalizedMessage) continue;
+
+    let score: number | null = null;
+    if (normalizedMessage === query) {
+      score = 165;
+    } else if (normalizedMessage.startsWith(query)) {
+      score = 155;
+    } else if (normalizedMessage.includes(query)) {
+      score = 145;
+    } else if (
+      queryTokens.length > 1 &&
+      queryTokens.every((token) => normalizedMessage.includes(token))
+    ) {
+      score = 132;
+    }
+
+    if (score === null) continue;
+
+    matchCount += 1;
+    if (bestScore === null || score > bestScore) {
+      bestScore = score;
+      bestSnippet = buildMessageSnippet(message.text, query, queryTokens);
+    }
+  }
+
+  return {
+    messageMatchCount: matchCount,
+    score: bestScore,
+    snippet: bestSnippet,
+  };
 }
 
 function scoreAction(action: SidebarSearchAction, query: string): number | null {
@@ -70,20 +189,6 @@ function scoreProject(project: SidebarSearchProject, query: string): number | nu
   if (name.includes(query)) return 105;
   if (folder.includes(query)) return 95;
   if (cwd.includes(query)) return 70;
-  return null;
-}
-
-function scoreThread(thread: SidebarSearchThread, query: string): number | null {
-  if (!query) return null;
-
-  const title = normalizeText(thread.title);
-  const projectName = normalizeText(thread.projectName);
-
-  if (title === query) return 170;
-  if (title.startsWith(query)) return 145;
-  if (title.includes(query)) return 125;
-  if (projectName.startsWith(query)) return 80;
-  if (projectName.includes(query)) return 65;
   return null;
 }
 
@@ -138,28 +243,71 @@ export function matchSidebarSearchThreads(
   limit = 8,
 ): SidebarSearchThreadMatch[] {
   const normalizedQuery = normalizeText(query);
+  const queryTokens = tokenizeQuery(query);
 
   if (!normalizedQuery) {
     return threads
       .map((thread) => ({
         id: `thread:${thread.id}`,
         thread,
+        matchKind: "title" as const,
+        snippet: null,
+        messageMatchCount: 0,
         recency: Date.parse(thread.updatedAt ?? thread.createdAt) || 0,
       }))
       .toSorted((left, right) => right.recency - left.recency)
       .slice(0, 3)
-      .map(({ id, thread }) => ({ id, thread }));
+      .map(({ id, matchKind, messageMatchCount, snippet, thread }) => ({
+        id,
+        thread,
+        matchKind,
+        snippet,
+        messageMatchCount,
+      }));
   }
 
   return threads
-    .map((thread, index) => ({
-      id: `thread:${thread.id}`,
-      thread,
-      index,
-      score: scoreThread(thread, normalizedQuery),
-      recency: Date.parse(thread.updatedAt ?? thread.createdAt) || 0,
-      titleLength: thread.title.length,
-    }))
+    .map((thread, index) => {
+      const title = normalizeText(thread.title);
+      const projectName = normalizeText(thread.projectName);
+      const messageMatch = scoreMessage(thread.messages, normalizedQuery, queryTokens);
+      let score: number | null = null;
+      let matchKind: SidebarSearchThreadMatch["matchKind"] = "title";
+      let snippet: string | null = null;
+
+      if (title === normalizedQuery) {
+        score = 170;
+        matchKind = "title";
+      } else if (title.startsWith(normalizedQuery)) {
+        score = 145;
+        matchKind = "title";
+      } else if (title.includes(normalizedQuery)) {
+        score = 125;
+        matchKind = "title";
+      } else if (messageMatch.score !== null) {
+        score = messageMatch.score;
+        matchKind = "message";
+        snippet = messageMatch.snippet;
+      } else if (projectName.startsWith(normalizedQuery)) {
+        score = 80;
+        matchKind = "project";
+      } else if (projectName.includes(normalizedQuery)) {
+        score = 65;
+        matchKind = "project";
+      }
+
+      return {
+        id: `thread:${thread.id}`,
+        thread,
+        index,
+        score,
+        matchKind,
+        snippet,
+        messageMatchCount: messageMatch.messageMatchCount,
+        recency: Date.parse(thread.updatedAt ?? thread.createdAt) || 0,
+        titleLength: thread.title.length,
+      };
+    })
     .filter((candidate) => candidate.score !== null)
     .toSorted((left, right) => {
       if (left.score !== right.score) return (right.score ?? 0) - (left.score ?? 0);
@@ -168,7 +316,13 @@ export function matchSidebarSearchThreads(
       return left.index - right.index;
     })
     .slice(0, limit)
-    .map(({ id, thread }) => ({ id, thread }));
+    .map(({ id, matchKind, messageMatchCount, snippet, thread }) => ({
+      id,
+      thread,
+      matchKind,
+      snippet,
+      messageMatchCount,
+    }));
 }
 
 export function hasSidebarSearchResults(input: {

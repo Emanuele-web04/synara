@@ -5,7 +5,10 @@
 
 import type { ReactNode } from "react";
 
-import type { ResolvedTerminalVisualIdentity } from "@t3tools/shared/terminalThreads";
+import type {
+  ResolvedTerminalVisualIdentity,
+  TerminalVisualState,
+} from "@t3tools/shared/terminalThreads";
 
 import { Popover, PopoverPopup, PopoverTrigger } from "~/components/ui/popover";
 import { XIcon } from "~/lib/icons";
@@ -14,6 +17,19 @@ import { cn } from "~/lib/utils";
 import type { ResolvedTerminalGroupLayout } from "./TerminalLayout";
 import TerminalActivityIndicator from "./TerminalActivityIndicator";
 import TerminalIdentityIcon from "./TerminalIdentityIcon";
+
+function terminalVisualStatePriority(state: TerminalVisualState): number {
+  switch (state) {
+    case "attention":
+      return 4;
+    case "running":
+      return 3;
+    case "review":
+      return 2;
+    case "idle":
+      return 1;
+  }
+}
 
 export interface TerminalChromeActionItem {
   disabled?: boolean;
@@ -111,11 +127,18 @@ export function TerminalWorkspaceTabBar(props: {
       <div className="flex min-w-0 items-stretch overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {props.terminalGroups.map((terminalGroup) => {
           const isActive = terminalGroup.id === props.activeGroupId;
-          const runningTerminalId =
-            terminalGroup.terminalIds.find(
-              (terminalId) => props.terminalVisualIdentityById.get(terminalId)?.state === "running",
-            ) ?? null;
-          const previewTerminalId = runningTerminalId ?? terminalGroup.activeTerminalId;
+          const previewTerminalId =
+            terminalGroup.terminalIds.reduce<string | null>((bestTerminalId, terminalId) => {
+              const bestPriority = terminalVisualStatePriority(
+                props.terminalVisualIdentityById.get(
+                  bestTerminalId ?? terminalGroup.activeTerminalId,
+                )?.state ?? "idle",
+              );
+              const nextPriority = terminalVisualStatePriority(
+                props.terminalVisualIdentityById.get(terminalId)?.state ?? "idle",
+              );
+              return nextPriority > bestPriority ? terminalId : bestTerminalId;
+            }, null) ?? terminalGroup.activeTerminalId;
           const visualIdentity = props.terminalVisualIdentityById.get(previewTerminalId);
           const closeTabLabel = `Close ${visualIdentity?.title ?? "Terminal tab"}`;
           return (
@@ -137,8 +160,11 @@ export function TerminalWorkspaceTabBar(props: {
                   className="size-3 shrink-0"
                   iconKey={visualIdentity?.iconKey ?? "terminal"}
                 />
-                {visualIdentity?.state === "running" ? (
-                  <TerminalActivityIndicator className="text-foreground/70" />
+                {visualIdentity && visualIdentity.state !== "idle" ? (
+                  <TerminalActivityIndicator
+                    className="text-foreground/70"
+                    state={visualIdentity.state}
+                  />
                 ) : null}
                 <span className="truncate text-[12px] leading-4 text-current/90">
                   {visualIdentity?.title ?? "Terminal"}
@@ -250,8 +276,11 @@ export function TerminalSidebar(props: {
                           className="size-3 shrink-0"
                           iconKey={visualIdentity?.iconKey ?? "terminal"}
                         />
-                        {visualIdentity?.state === "running" ? (
-                          <TerminalActivityIndicator className="text-foreground/70" />
+                        {visualIdentity && visualIdentity.state !== "idle" ? (
+                          <TerminalActivityIndicator
+                            className="text-foreground/70"
+                            state={visualIdentity.state}
+                          />
                         ) : null}
                         <span className="truncate">{visualIdentity?.title ?? "Terminal"}</span>
                       </button>

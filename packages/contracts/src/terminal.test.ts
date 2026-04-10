@@ -202,6 +202,8 @@ describe("TerminalEvent", () => {
         terminalId: DEFAULT_TERMINAL_ID,
         createdAt: new Date().toISOString(),
         hasRunningSubprocess: true,
+        cliKind: "codex",
+        agentState: "running",
       }),
     ).toBe(true);
   });

@@ -17,7 +17,7 @@ import {
   TerminalSessionStatus,
   TerminalWriteInput,
 } from "@t3tools/contracts";
-import type { TerminalCliKind } from "@t3tools/shared/terminalThreads";
+import type { TerminalActivityState, TerminalCliKind } from "@t3tools/shared/terminalThreads";
 import { PtyProcess } from "./PTY";
 import { Effect, Schema, ServiceMap } from "effect";
 
@@ -47,6 +47,7 @@ export interface TerminalSessionState {
   hasRunningSubprocess: boolean;
   detectedCliKind: TerminalCliKind | null;
   managedAgentRunning: boolean;
+  managedAgentState: TerminalActivityState | null;
   /** True once at least one hook event (Start/Stop/PermissionRequest) has been observed. */
   managedAgentObserved: boolean;
   runtimeEnv: Record<string, string> | null;

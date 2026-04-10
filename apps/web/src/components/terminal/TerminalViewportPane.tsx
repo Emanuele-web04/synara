@@ -168,8 +168,11 @@ export default function TerminalViewportPane({
                         className="size-3 shrink-0"
                         iconKey={visualIdentity?.iconKey ?? "terminal"}
                       />
-                      {visualIdentity?.state === "running" ? (
-                        <TerminalActivityIndicator className="text-foreground/70" />
+                      {visualIdentity && visualIdentity.state !== "idle" ? (
+                        <TerminalActivityIndicator
+                          className="text-foreground/70"
+                          state={visualIdentity.state}
+                        />
                       ) : null}
                       <span className="max-w-40 truncate text-[11px] leading-4">
                         {visualIdentity?.title ?? "Terminal"}

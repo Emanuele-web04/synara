@@ -2084,6 +2084,7 @@ export default function ChatView({
       terminalLabelsById: terminalState.terminalLabelsById,
       terminalTitleOverridesById: terminalState.terminalTitleOverridesById,
       terminalCliKindsById: terminalState.terminalCliKindsById,
+      terminalAttentionStatesById: terminalState.terminalAttentionStatesById ?? {},
       runningTerminalIds: terminalState.runningTerminalIds,
       activeTerminalId: terminalState.activeTerminalId,
       terminalGroups: terminalState.terminalGroups,
@@ -2117,9 +2118,12 @@ export default function ChatView({
         if (!activeThreadId) return;
         storeSetTerminalMetadata(activeThreadId, terminalId, metadata);
       },
-      onTerminalActivityChange: (terminalId: string, isRunning: boolean) => {
+      onTerminalActivityChange: (
+        terminalId: string,
+        activity: { hasRunningSubprocess: boolean; agentState: "running" | "attention" | "review" | null },
+      ) => {
         if (!activeThreadId) return;
-        storeSetTerminalActivity(activeThreadId, terminalId, isRunning);
+        storeSetTerminalActivity(activeThreadId, terminalId, activity);
       },
       onAddTerminalContext: addTerminalContextToDraft,
     }),
@@ -2148,6 +2152,7 @@ export default function ChatView({
       terminalFocusRequestId,
       terminalState.activeTerminalGroupId,
       terminalState.activeTerminalId,
+      terminalState.terminalAttentionStatesById,
       terminalState.terminalCliKindsById,
       terminalState.terminalGroups,
       terminalState.terminalHeight,

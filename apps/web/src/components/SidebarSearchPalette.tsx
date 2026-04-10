@@ -4,12 +4,7 @@
  * Keeps the sidebar search UX aligned with the shared command primitives so
  * keyboard navigation and shortcut labels behave like the rest of the app.
  */
-import {
-  type LucideIcon,
-  SearchIcon,
-  SettingsIcon,
-  SquarePenIcon,
-} from "~/lib/icons";
+import { SearchIcon, SettingsIcon, SquarePenIcon } from "~/lib/icons";
 import { HiOutlineFolderOpen } from "react-icons/hi2";
 import { type ComponentType, useEffect, useMemo, useState } from "react";
 import { ClaudeAI, OpenAI } from "./Icons";
@@ -102,6 +97,66 @@ function ProviderIcon(props: { provider: "codex" | "claudeAgent" }) {
   );
 }
 
+function threadMatchLabel(input: {
+  matchKind: "message" | "project" | "title";
+  messageMatchCount: number;
+}): string | null {
+  if (input.matchKind === "message") {
+    return input.messageMatchCount > 1 ? `${input.messageMatchCount} chat hits` : "Chat match";
+  }
+  if (input.matchKind === "project") {
+    return "Project match";
+  }
+  return null;
+}
+
+function tokenizeHighlightQuery(query: string): string[] {
+  const tokens = query
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((token) => token.length > 0)
+    .filter((token, index, allTokens) => allTokens.indexOf(token) === index);
+  return tokens.toSorted((left, right) => right.length - left.length);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function HighlightedText(props: { text: string; query: string; className?: string }) {
+  const segments = useMemo(() => {
+    const tokens = tokenizeHighlightQuery(props.query);
+    if (tokens.length === 0) {
+      return [{ text: props.text, highlighted: false }];
+    }
+
+    const pattern = new RegExp(`(${tokens.map(escapeRegExp).join("|")})`, "gi");
+    const parts = props.text.split(pattern).filter((part) => part.length > 0);
+    return parts.map((part) => ({
+      text: part,
+      highlighted: tokens.some((token) => token === part.toLowerCase()),
+    }));
+  }, [props.query, props.text]);
+
+  return (
+    <span className={props.className}>
+      {segments.map((segment, index) =>
+        segment.highlighted ? (
+          <mark
+            key={`${segment.text}-${index}`}
+            className="rounded-[3px] bg-amber-200/80 px-[1px] text-current dark:bg-amber-300/25"
+          >
+            {segment.text}
+          </mark>
+        ) : (
+          <span key={`${segment.text}-${index}`}>{segment.text}</span>
+        ),
+      )}
+    </span>
+  );
+}
+
 export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
   const [query, setQuery] = useState("");
 
@@ -184,12 +239,14 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
 
               {matchedThreads.length > 0 ? (
                 <CommandGroup>
-                  <CommandGroupLabel className="py-1.5 pl-3">{query ? "Threads" : "Recent"}</CommandGroupLabel>
-                  {matchedThreads.map(({ id, thread }) => (
+                  <CommandGroupLabel className="py-1.5 pl-3">
+                    {query ? "Threads" : "Recent"}
+                  </CommandGroupLabel>
+                  {matchedThreads.map(({ id, matchKind, messageMatchCount, snippet, thread }) => (
                     <CommandItem
                       key={id}
                       value={id}
-                      className="cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5"
+                      className="cursor-pointer items-start gap-2 rounded-lg px-2.5 py-2"
                       onMouseDown={(event) => {
                         event.preventDefault();
                       }}
@@ -198,18 +255,47 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                         props.onOpenThread(thread.id);
                       }}
                     >
-                      <ProviderIcon provider={thread.provider} />
-                      <span className="min-w-0 flex-1 truncate text-sm text-foreground">
-                        {thread.title || "Untitled thread"}
-                      </span>
-                      <span className="shrink-0 text-xs text-muted-foreground/72">
-                        {thread.projectName}
-                      </span>
-                      {thread.updatedAt || thread.createdAt ? (
-                        <span className="w-8 shrink-0 text-right text-xs text-muted-foreground/72">
-                          {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
-                        </span>
-                      ) : null}
+                      <div className="pt-0.5">
+                        <ProviderIcon provider={thread.provider} />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-baseline gap-3">
+                          <div className="min-w-0 flex-1 truncate text-sm text-foreground">
+                            <HighlightedText
+                              text={thread.title || "Untitled thread"}
+                              query={query}
+                            />
+                          </div>
+                          <span className="w-24 shrink-0 truncate text-right text-xs text-muted-foreground/72">
+                            {thread.projectName}
+                          </span>
+                          {thread.updatedAt || thread.createdAt ? (
+                            <span className="w-10 shrink-0 text-right text-xs text-muted-foreground/72">
+                              {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
+                            </span>
+                          ) : (
+                            <span className="w-10 shrink-0" />
+                          )}
+                        </div>
+                        {snippet ? (
+                          <div className="mt-0.5 flex items-start gap-3">
+                            <div className="min-w-0 flex-1 line-clamp-1 text-xs leading-5 text-muted-foreground/78">
+                              <HighlightedText text={snippet} query={query} />
+                            </div>
+                            <div className="flex w-[8.5rem] shrink-0 justify-end">
+                              {threadMatchLabel({ matchKind, messageMatchCount }) ? (
+                                <span className="truncate text-[11px] text-muted-foreground/58">
+                                  {threadMatchLabel({ matchKind, messageMatchCount })}
+                                </span>
+                              ) : null}
+                            </div>
+                          </div>
+                        ) : threadMatchLabel({ matchKind, messageMatchCount }) ? (
+                          <div className="mt-0.5 text-[11px] text-muted-foreground/58">
+                            {threadMatchLabel({ matchKind, messageMatchCount })}
+                          </div>
+                        ) : null}
+                      </div>
                     </CommandItem>
                   ))}
                 </CommandGroup>

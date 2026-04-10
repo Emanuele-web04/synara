@@ -430,8 +430,8 @@ function SettingsRouteView() {
   }
 
   async function sendTestNotification() {
-    const title = "Task completed";
-    const body = "Notification test from DP Code.";
+    const title = "Activity notification";
+    const body = "Notification test for chats and terminal agents.";
 
     if (window.desktopBridge) {
       const shown = await window.desktopBridge.notifications.show({ title, body, silent: false });
@@ -662,12 +662,12 @@ function SettingsRouteView() {
               />
 
               <SettingsRow
-                title="Thread activity toasts"
-                description="Show an in-app toast when a thread finishes or needs input."
+                title="Activity toasts"
+                description="Show an in-app toast when a chat or managed terminal agent finishes or needs input."
                 resetAction={
                   settings.enableTaskCompletionToasts !== defaults.enableTaskCompletionToasts ? (
                     <SettingResetButton
-                      label="thread activity toasts"
+                      label="activity toasts"
                       onClick={() =>
                         updateSettings({
                           enableTaskCompletionToasts: defaults.enableTaskCompletionToasts,
@@ -682,14 +682,14 @@ function SettingsRouteView() {
                     onCheckedChange={(checked) =>
                       updateSettings({ enableTaskCompletionToasts: checked })
                     }
-                    aria-label="Thread activity toast notifications"
+                    aria-label="Activity toast notifications"
                   />
                 }
               />
 
               <SettingsRow
                 title="Desktop notifications"
-                description="Show an OS notification when a thread finishes or needs input while the app is in the background."
+                description="Show an OS notification when a chat or managed terminal agent finishes or needs input while the app is in the background."
                 status={buildNotificationSettingsSupportText(browserNotificationPermission)}
                 resetAction={
                   settings.enableSystemTaskCompletionNotifications !==
@@ -715,7 +715,7 @@ function SettingsRouteView() {
                       onCheckedChange={(checked) => {
                         void setSystemNotificationsEnabled(checked);
                       }}
-                      aria-label="Desktop thread activity notifications"
+                      aria-label="Desktop activity notifications"
                     />
                   </div>
                 }

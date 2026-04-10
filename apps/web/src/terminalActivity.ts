@@ -1,13 +1,25 @@
 import type { TerminalEvent } from "@t3tools/contracts";
+import type { TerminalActivityState } from "@t3tools/shared/terminalThreads";
 
-export function terminalRunningSubprocessFromEvent(event: TerminalEvent): boolean | null {
+export interface TerminalActivityUpdate {
+  agentState: TerminalActivityState | null;
+  hasRunningSubprocess: boolean;
+}
+
+export function terminalActivityFromEvent(event: TerminalEvent): TerminalActivityUpdate | null {
   switch (event.type) {
     case "activity":
-      return event.hasRunningSubprocess;
+      return {
+        hasRunningSubprocess: event.hasRunningSubprocess,
+        agentState: event.agentState,
+      };
     case "started":
     case "restarted":
     case "exited":
-      return false;
+      return {
+        hasRunningSubprocess: false,
+        agentState: null,
+      };
     default:
       return null;
   }

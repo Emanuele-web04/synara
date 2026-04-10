@@ -293,6 +293,7 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
       terminalLabelsById: terminalState.terminalLabelsById,
       terminalTitleOverridesById: terminalState.terminalTitleOverridesById,
       terminalCliKindsById: terminalState.terminalCliKindsById,
+      terminalAttentionStatesById: terminalState.terminalAttentionStatesById ?? {},
       runningTerminalIds: terminalState.runningTerminalIds,
       activeTerminalId: terminalState.activeTerminalId,
       terminalGroups: terminalState.terminalGroups,
@@ -320,8 +321,11 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
       ) => {
         setTerminalMetadata(threadId, terminalId, metadata);
       },
-      onTerminalActivityChange: (terminalId: string, isRunning: boolean) => {
-        setTerminalActivity(threadId, terminalId, isRunning);
+      onTerminalActivityChange: (
+        terminalId: string,
+        activity: { hasRunningSubprocess: boolean; agentState: "running" | "attention" | "review" | null },
+      ) => {
+        setTerminalActivity(threadId, terminalId, activity);
       },
       onAddTerminalContext: () => {},
     }),
@@ -342,6 +346,7 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
       splitWorkspaceTerminalRight,
       terminalState.activeTerminalGroupId,
       terminalState.activeTerminalId,
+      terminalState.terminalAttentionStatesById,
       terminalState.runningTerminalIds,
       terminalState.terminalCliKindsById,
       terminalState.terminalGroups,

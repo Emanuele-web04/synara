@@ -138,6 +138,13 @@ const TerminalActivityEvent = Schema.Struct({
   type: Schema.Literal("activity"),
   hasRunningSubprocess: Schema.Boolean,
   cliKind: Schema.NullOr(Schema.Union([Schema.Literal("codex"), Schema.Literal("claude")])),
+  agentState: Schema.NullOr(
+    Schema.Union([
+      Schema.Literal("running"),
+      Schema.Literal("attention"),
+      Schema.Literal("review"),
+    ]),
+  ),
 });
 
 export const TerminalEvent = Schema.Union([

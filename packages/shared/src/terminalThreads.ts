@@ -6,7 +6,8 @@
 export const GENERIC_TERMINAL_THREAD_TITLE = "New terminal";
 export type TerminalCliKind = "codex" | "claude";
 export type TerminalIconKey = "terminal" | "openai" | "claude";
-export type TerminalVisualState = "idle" | "running";
+export type TerminalActivityState = "running" | "attention" | "review";
+export type TerminalVisualState = "idle" | TerminalActivityState;
 export type TerminalAgentHookEventType = "Start" | "Stop" | "PermissionRequest";
 export const T3CODE_TERMINAL_CLI_KIND_ENV_KEY = "T3CODE_TERMINAL_CLI_KIND";
 export const T3CODE_TERMINAL_HOOK_OSC_PREFIX = "633;T3CODE_AGENT_EVENT=";
@@ -480,7 +481,8 @@ export function deriveTerminalTitleSignalIdentity(title: string): TerminalComman
 export function resolveTerminalVisualIdentity(input: {
   cliKind?: TerminalCliKind | null | undefined;
   fallbackTitle: string;
-  isRunning: boolean;
+  isRunning?: boolean | undefined;
+  state?: TerminalVisualState | null | undefined;
   title?: string | null | undefined;
 }): ResolvedTerminalVisualIdentity {
   const resolvedCliKind = input.cliKind ?? inferCliKindFromTitle(input.title);
@@ -488,10 +490,11 @@ export function resolveTerminalVisualIdentity(input: {
     input.title?.trim() ||
     (resolvedCliKind ? defaultTerminalTitleForCliKind(resolvedCliKind) : input.fallbackTitle);
   const cliKind = resolvedCliKind ?? null;
+  const state = input.state ?? (input.isRunning ? "running" : "idle");
   return {
     cliKind,
     iconKey: cliKind === "codex" ? "openai" : cliKind === "claude" ? "claude" : "terminal",
-    state: input.isRunning ? "running" : "idle",
+    state,
     title,
   };
 }

@@ -44,8 +44,10 @@ describe("terminalStateStore actions", () => {
       workspaceActiveTab: "terminal",
       terminalHeight: 280,
       terminalIds: ["default"],
-      terminalLabelsById: {},
+      terminalLabelsById: { default: "Terminal 1" },
+      terminalTitleOverridesById: {},
       terminalCliKindsById: {},
+      terminalAttentionStatesById: {},
       runningTerminalIds: [],
       activeTerminalId: "default",
       terminalGroups: [{ id: "group-default", terminalIds: ["default"] }],
@@ -282,13 +284,19 @@ describe("terminalStateStore actions", () => {
   it("tracks and clears terminal subprocess activity", () => {
     const store = useTerminalStateStore.getState();
     store.splitTerminal(THREAD_ID, "terminal-2");
-    store.setTerminalActivity(THREAD_ID, "terminal-2", true);
+    store.setTerminalActivity(THREAD_ID, "terminal-2", {
+      hasRunningSubprocess: true,
+      agentState: null,
+    });
     expect(
       selectThreadTerminalState(useTerminalStateStore.getState().terminalStateByThreadId, THREAD_ID)
         .runningTerminalIds,
     ).toEqual(["terminal-2"]);
 
-    store.setTerminalActivity(THREAD_ID, "terminal-2", false);
+    store.setTerminalActivity(THREAD_ID, "terminal-2", {
+      hasRunningSubprocess: false,
+      agentState: null,
+    });
     expect(
       selectThreadTerminalState(useTerminalStateStore.getState().terminalStateByThreadId, THREAD_ID)
         .runningTerminalIds,

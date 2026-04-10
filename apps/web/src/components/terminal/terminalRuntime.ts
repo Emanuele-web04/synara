@@ -10,6 +10,7 @@ import { SearchAddon } from "@xterm/addon-search";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
 import {
+  defaultTerminalTitleForCliKind,
   consumeTerminalIdentityInput,
   deriveTerminalOutputIdentity,
 } from "@t3tools/shared/terminalThreads";
@@ -778,6 +779,21 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
         clearDeferredWrites(entry);
         terminal.clear();
         terminal.write("\u001bc");
+        return;
+      }
+
+      if (event.type === "activity") {
+        if (event.cliKind && entry.terminalCliKind !== event.cliKind) {
+          entry.terminalCliKind = event.cliKind;
+          entry.callbacks.onTerminalMetadataChange(entry.terminalId, {
+            cliKind: event.cliKind,
+            label: defaultTerminalTitleForCliKind(event.cliKind),
+          });
+        }
+        entry.callbacks.onTerminalActivityChange(entry.terminalId, {
+          hasRunningSubprocess: event.hasRunningSubprocess,
+          agentState: event.agentState,
+        });
         return;
       }
 

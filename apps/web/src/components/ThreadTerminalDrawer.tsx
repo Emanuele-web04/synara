@@ -6,7 +6,7 @@
 import { SearchAddon } from "@xterm/addon-search";
 import { Plus, SquareSplitHorizontal, SquareSplitVertical, Trash2 } from "~/lib/icons";
 import { type ThreadId } from "@t3tools/contracts";
-import { type TerminalCliKind } from "@t3tools/shared/terminalThreads";
+import { type TerminalActivityState, type TerminalCliKind } from "@t3tools/shared/terminalThreads";
 import { Terminal } from "@xterm/xterm";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type TerminalContextSelection } from "~/lib/terminalContext";
@@ -94,7 +94,10 @@ interface TerminalViewportProps {
     terminalId: string,
     metadata: { cliKind: TerminalCliKind | null; label: string },
   ) => void;
-  onTerminalActivityChange: (terminalId: string, isRunning: boolean) => void;
+  onTerminalActivityChange: (
+    terminalId: string,
+    activity: { hasRunningSubprocess: boolean; agentState: TerminalActivityState | null },
+  ) => void;
   onAddTerminalContext: (selection: TerminalContextSelection) => void;
   focusRequestId: number;
   autoFocus: boolean;
@@ -403,6 +406,7 @@ interface ThreadTerminalDrawerProps {
   terminalLabelsById: Record<string, string>;
   terminalTitleOverridesById: Record<string, string>;
   terminalCliKindsById: Record<string, TerminalCliKind>;
+  terminalAttentionStatesById: Record<string, "attention" | "review">;
   runningTerminalIds: string[];
   activeTerminalId: string;
   terminalGroups: ThreadTerminalGroup[];
@@ -427,7 +431,10 @@ interface ThreadTerminalDrawerProps {
     terminalId: string,
     metadata: { cliKind: TerminalCliKind | null; label: string },
   ) => void;
-  onTerminalActivityChange: (terminalId: string, isRunning: boolean) => void;
+  onTerminalActivityChange: (
+    terminalId: string,
+    activity: { hasRunningSubprocess: boolean; agentState: TerminalActivityState | null },
+  ) => void;
   onAddTerminalContext: (selection: TerminalContextSelection) => void;
   onTogglePresentationMode?: (() => void) | undefined;
 }
@@ -443,6 +450,7 @@ export default function ThreadTerminalDrawer({
   terminalLabelsById,
   terminalTitleOverridesById,
   terminalCliKindsById,
+  terminalAttentionStatesById,
   runningTerminalIds,
   activeTerminalId,
   terminalGroups,
@@ -493,6 +501,7 @@ export default function ThreadTerminalDrawer({
         activeTerminalGroupId,
         activeTerminalId,
         runningTerminalIds,
+        terminalAttentionStatesById,
         terminalCliKindsById,
         terminalGroups,
         terminalIds,
@@ -503,6 +512,7 @@ export default function ThreadTerminalDrawer({
       activeTerminalGroupId,
       activeTerminalId,
       runningTerminalIds,
+      terminalAttentionStatesById,
       terminalCliKindsById,
       terminalGroups,
       terminalIds,

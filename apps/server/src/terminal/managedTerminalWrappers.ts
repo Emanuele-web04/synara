@@ -148,6 +148,7 @@ function buildClaudeSettingsJson(notifyHookPath: string): string {
         PostToolUse: [{ matcher: "*", hooks: [{ type: "command", command }] }],
         PostToolUseFailure: [{ matcher: "*", hooks: [{ type: "command", command }] }],
         PermissionRequest: [{ matcher: "*", hooks: [{ type: "command", command }] }],
+        Notification: [{ matcher: "*", hooks: [{ type: "command", command }] }],
       },
     },
     null,
@@ -169,6 +170,92 @@ function buildCodexHooksJson(notifyHookPath: string): string {
   );
 }
 
+function buildCodexWrapperScript(input: {
+  codexHomeDir: string;
+  notifyHookPath: string;
+  targetPath: string;
+}): string {
+  const { codexHomeDir, notifyHookPath, targetPath } = input;
+  return [
+    `export CODEX_HOME=${shellQuote(codexHomeDir)}`,
+    `if [ -f ${shellQuote(notifyHookPath)} ]; then`,
+    "  export CODEX_TUI_RECORD_SESSION=1",
+    '  if [ -z "${CODEX_TUI_SESSION_LOG_PATH:-}" ]; then',
+    '    _t3code_codex_ts="$(date +%s 2>/dev/null || echo "$$")"',
+    '    export CODEX_TUI_SESSION_LOG_PATH="${TMPDIR:-/tmp}/t3code-codex-session-$$_${_t3code_codex_ts}.jsonl"',
+    "  fi",
+    "  (",
+    '    _t3code_log="$CODEX_TUI_SESSION_LOG_PATH"',
+    `    _t3code_notify=${shellQuote(notifyHookPath)}`,
+    '    _t3code_last_turn_id=""',
+    '    _t3code_last_approval_id=""',
+    '    _t3code_last_exec_call_id=""',
+    '    _t3code_approval_fallback_seq=0',
+    "",
+    "    _t3code_emit_event() {",
+    '      _t3code_event="$1"',
+    `      _t3code_payload=$(printf '{"hook_event_name":"%s"}' "$_t3code_event")`,
+    '      "$_t3code_notify" "$_t3code_payload" >/dev/null 2>&1 || true',
+    "    }",
+    "",
+    "    _t3code_i=0",
+    '    while [ ! -f "$_t3code_log" ] && [ "$_t3code_i" -lt 200 ]; do',
+    '      _t3code_i=$((_t3code_i + 1))',
+    "      sleep 0.05",
+    "    done",
+    '    if [ ! -f "$_t3code_log" ]; then',
+    "      exit 0",
+    "    fi",
+    "",
+    '    tail -n 0 -F "$_t3code_log" 2>/dev/null | while IFS= read -r _t3code_line; do',
+    '      case "$_t3code_line" in',
+    `        *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"task_started"'*)`,
+    `          _t3code_turn_id=$(printf '%s\n' "$_t3code_line" | awk -F'"turn_id":"' 'NF > 1 { sub(/".*/, "", $2); print $2; exit }')`,
+    '          [ -n "$_t3code_turn_id" ] || _t3code_turn_id="task_started"',
+    '          if [ "$_t3code_turn_id" != "$_t3code_last_turn_id" ]; then',
+    '            _t3code_last_turn_id="$_t3code_turn_id"',
+    '            _t3code_emit_event "Start"',
+    "          fi",
+    "          ;;",
+    `        *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"'*'_approval_request"'*)`,
+    `          _t3code_approval_id=$(printf '%s\n' "$_t3code_line" | awk -F'"id":"' 'NF > 1 { sub(/".*/, "", $2); print $2; exit }')`,
+    `          [ -n "$_t3code_approval_id" ] || _t3code_approval_id=$(printf '%s\n' "$_t3code_line" | awk -F'"approval_id":"' 'NF > 1 { sub(/".*/, "", $2); print $2; exit }')`,
+    `          [ -n "$_t3code_approval_id" ] || _t3code_approval_id=$(printf '%s\n' "$_t3code_line" | awk -F'"call_id":"' 'NF > 1 { sub(/".*/, "", $2); print $2; exit }')`,
+    '          if [ -z "$_t3code_approval_id" ]; then',
+    '            _t3code_approval_fallback_seq=$((_t3code_approval_fallback_seq + 1))',
+    '            _t3code_approval_id="approval_request_${_t3code_approval_fallback_seq}"',
+    "          fi",
+    '          if [ "$_t3code_approval_id" != "$_t3code_last_approval_id" ]; then',
+    '            _t3code_last_approval_id="$_t3code_approval_id"',
+    '            _t3code_emit_event "PermissionRequest"',
+    "          fi",
+    "          ;;",
+    `        *'"dir":"to_tui"'*'"kind":"codex_event"'*'"msg":{"type":"exec_command_begin"'*)`,
+    `          _t3code_exec_call_id=$(printf '%s\n' "$_t3code_line" | awk -F'"call_id":"' 'NF > 1 { sub(/".*/, "", $2); print $2; exit }')`,
+    '          if [ -n "$_t3code_exec_call_id" ]; then',
+    '            if [ "$_t3code_exec_call_id" != "$_t3code_last_exec_call_id" ]; then',
+    '              _t3code_last_exec_call_id="$_t3code_exec_call_id"',
+    '              _t3code_emit_event "Start"',
+    "            fi",
+    "          else",
+    '            _t3code_emit_event "Start"',
+    "          fi",
+    "          ;;",
+    "      esac",
+    "    done",
+    "  ) &",
+    "  T3CODE_CODEX_START_WATCHER_PID=$!",
+    "fi",
+    `${shellQuote(targetPath)} --enable codex_hooks -c ${shellQuote(`notify=["bash",${JSON.stringify(notifyHookPath)}]`)} "$@"`,
+    "_t3code_status=$?",
+    'if [ -n "${T3CODE_CODEX_START_WATCHER_PID:-}" ]; then',
+    '  kill "$T3CODE_CODEX_START_WATCHER_PID" >/dev/null 2>&1 || true',
+    '  wait "$T3CODE_CODEX_START_WATCHER_PID" 2>/dev/null || true',
+    "fi",
+    'exit "$_t3code_status"',
+  ].join("\n");
+}
+
 function buildWrapperScript(input: {
   claudeSettingsPath: string;
   cliKind: TerminalCliKind;
@@ -179,17 +266,16 @@ function buildWrapperScript(input: {
   const { claudeSettingsPath, cliKind, codexHomeDir, notifyHookPath, targetPath } = input;
   const commandName = managedTerminalCommandNameForCliKind(cliKind);
   const title = defaultTerminalTitleForCliKind(cliKind);
-  const execLine =
+  const commandBody =
     cliKind === "claude"
       ? `exec ${shellQuote(targetPath)} --settings ${shellQuote(claudeSettingsPath)} "$@"`
-      : `export CODEX_HOME=${shellQuote(codexHomeDir)}
-exec ${shellQuote(targetPath)} --enable codex_hooks -c ${shellQuote(`notify=["bash",${JSON.stringify(notifyHookPath)}]`)} "$@"`;
+      : buildCodexWrapperScript({ codexHomeDir, notifyHookPath, targetPath });
   return [
     "#!/bin/sh",
     `# Managed ${commandName} wrapper injected by t3code terminal sessions.`,
     `printf '\\033]0;%s\\007' ${shellQuote(title)}`,
     `export ${T3CODE_TERMINAL_CLI_KIND_ENV_KEY}=${shellQuote(cliKind)}`,
-    execLine,
+    commandBody,
     "",
   ].join("\n");
 }

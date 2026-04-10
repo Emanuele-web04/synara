@@ -5,7 +5,7 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { WebglAddon } from "@xterm/addon-webgl";
-import { type TerminalCliKind } from "@t3tools/shared/terminalThreads";
+import { type TerminalActivityState, type TerminalCliKind } from "@t3tools/shared/terminalThreads";
 import { Terminal, type IDisposable } from "@xterm/xterm";
 
 export interface TerminalRuntimeCallbacks {
@@ -14,7 +14,10 @@ export interface TerminalRuntimeCallbacks {
     terminalId: string,
     metadata: { cliKind: TerminalCliKind | null; label: string },
   ) => void;
-  onTerminalActivityChange: (terminalId: string, isRunning: boolean) => void;
+  onTerminalActivityChange: (
+    terminalId: string,
+    activity: { hasRunningSubprocess: boolean; agentState: TerminalActivityState | null },
+  ) => void;
 }
 
 export function buildTerminalRuntimeKey(threadId: string, terminalId: string): string {

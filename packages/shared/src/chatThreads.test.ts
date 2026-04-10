@@ -8,9 +8,9 @@ import {
 } from "./chatThreads";
 
 describe("chatThreads", () => {
-  it("builds a short fallback title in sentence case from the first four words", () => {
+  it("builds a short fallback title without forcing case", () => {
     expect(buildPromptThreadTitleFallback("FIX the BROKEN auth redirect in production now")).toBe(
-      "Fix the broken auth",
+      "FIX the BROKEN auth",
     );
   });
 
@@ -18,10 +18,8 @@ describe("chatThreads", () => {
     expect(buildPromptThreadTitleFallback("   \n\t  ")).toBe(GENERIC_CHAT_THREAD_TITLE);
   });
 
-  it("sanitizes generated titles down to four words in sentence case", () => {
-    expect(sanitizeGeneratedThreadTitle('"Workspace Logic Check ASAP."')).toBe(
-      "Workspace logic check",
-    );
+  it("sanitizes generated titles down to four words without lowercasing acronyms", () => {
+    expect(sanitizeGeneratedThreadTitle('"Folder picker UI ASAP."')).toBe("Folder picker UI ASAP");
   });
 
   it("detects the generic chat placeholder title", () => {

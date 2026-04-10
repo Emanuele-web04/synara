@@ -23,6 +23,7 @@ import {
   terminalCliKindFromValue,
   T3CODE_TERMINAL_HOOK_OSC_PREFIX,
   T3CODE_TERMINAL_CLI_KIND_ENV_KEY,
+  type TerminalActivityState,
   type TerminalAgentHookEventType,
   type TerminalCliKind,
 } from "@t3tools/shared/terminalThreads";
@@ -771,7 +772,29 @@ function resetSessionHistory(session: TerminalSessionState): void {
   session.pendingHistoryControlSequence = "";
   session.pendingInputBuffer = "";
   session.managedAgentRunning = false;
+  session.managedAgentState = null;
   session.managedAgentObserved = false;
+}
+
+function deriveActivityAgentState(session: TerminalSessionState): TerminalActivityState | null {
+  if (session.managedAgentState !== null) {
+    return session.managedAgentState;
+  }
+  if (session.hasRunningSubprocess && session.detectedCliKind !== null) {
+    return "running";
+  }
+  return null;
+}
+
+function agentStateFromHookEvent(eventType: TerminalAgentHookEventType): TerminalActivityState {
+  switch (eventType) {
+    case "PermissionRequest":
+      return "attention";
+    case "Stop":
+      return "review";
+    case "Start":
+      return "running";
+  }
 }
 
 function appendSessionHistory(
@@ -917,6 +940,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           hasRunningSubprocess: false,
           detectedCliKind: cliKindFromRuntimeEnv(normalizedRuntimeEnv(input.env)),
           managedAgentRunning: false,
+          managedAgentState: null,
           managedAgentObserved: false,
           runtimeEnv: normalizedRuntimeEnv(input.env),
           pendingInputBuffer: "",
@@ -990,26 +1014,12 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     session.pendingInputBuffer = nextIdentityState.buffer;
     if (nextIdentityState.identity?.cliKind && session.detectedCliKind === null) {
       session.detectedCliKind = nextIdentityState.identity.cliKind;
-      this.emitEvent({
-        type: "activity",
-        threadId: session.threadId,
-        terminalId: session.terminalId,
-        createdAt: new Date().toISOString(),
-        hasRunningSubprocess: session.hasRunningSubprocess,
-        cliKind: session.detectedCliKind,
-      });
+      this.emitActivityEvent(session);
     }
     const submittedPrompt = input.data.includes("\r") || input.data.includes("\n");
     if (submittedPrompt && session.detectedCliKind !== null && !session.hasRunningSubprocess) {
       session.hasRunningSubprocess = true;
-      this.emitEvent({
-        type: "activity",
-        threadId: session.threadId,
-        terminalId: session.terminalId,
-        createdAt: new Date().toISOString(),
-        hasRunningSubprocess: true,
-        cliKind: session.detectedCliKind,
-      });
+      this.emitActivityEvent(session);
     }
     session.lastInputAt = Date.now();
     session.process.write(input.data);
@@ -1076,6 +1086,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           hasRunningSubprocess: false,
           detectedCliKind: cliKindFromRuntimeEnv(normalizedRuntimeEnv(input.env)),
           managedAgentRunning: false,
+          managedAgentState: null,
           managedAgentObserved: false,
           runtimeEnv: normalizedRuntimeEnv(input.env),
           pendingInputBuffer: "",
@@ -1176,6 +1187,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     session.hasRunningSubprocess = false;
     session.detectedCliKind = cliKindFromRuntimeEnv(session.runtimeEnv);
     session.managedAgentRunning = false;
+    session.managedAgentState = null;
     session.managedAgentObserved = false;
     session.pendingInputBuffer = "";
     session.lastInputAt = null;
@@ -1264,14 +1276,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         snapshot: this.snapshot(session),
       });
       if (session.detectedCliKind) {
-        this.emitEvent({
-          type: "activity",
-          threadId: session.threadId,
-          terminalId: session.terminalId,
-          createdAt: new Date().toISOString(),
-          hasRunningSubprocess: false,
-          cliKind: session.detectedCliKind,
-        });
+        this.emitActivityEvent(session);
       }
     } catch (error) {
       if (ptyProcess) {
@@ -1283,6 +1288,8 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       session.hasRunningSubprocess = false;
       session.detectedCliKind = null;
       session.managedAgentRunning = false;
+      session.managedAgentState = null;
+      session.managedAgentObserved = false;
       session.updatedAt = new Date().toISOString();
       this.evictInactiveSessionsIfNeeded();
       this.updateSubprocessPollingState();
@@ -1310,18 +1317,15 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     if (latestHookEvent) {
       session.managedAgentObserved = true;
       const nextManagedAgentRunning = latestHookEvent !== "Stop";
-      if (session.managedAgentRunning !== nextManagedAgentRunning) {
+      const nextManagedAgentState = agentStateFromHookEvent(latestHookEvent);
+      if (
+        session.managedAgentRunning !== nextManagedAgentRunning ||
+        session.managedAgentState !== nextManagedAgentState
+      ) {
         session.managedAgentRunning = nextManagedAgentRunning;
-        const nextHasRunningSubprocess = nextManagedAgentRunning;
-        session.hasRunningSubprocess = nextHasRunningSubprocess;
-        this.emitEvent({
-          type: "activity",
-          threadId: session.threadId,
-          terminalId: session.terminalId,
-          createdAt: new Date().toISOString(),
-          hasRunningSubprocess: nextHasRunningSubprocess,
-          cliKind: session.detectedCliKind,
-        });
+        session.managedAgentState = nextManagedAgentState;
+        session.hasRunningSubprocess = nextManagedAgentRunning;
+        this.emitActivityEvent(session);
       }
     }
     const titleSignalCliKind =
@@ -1332,14 +1336,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     const detectedCliKind = outputCliKind ?? titleSignalCliKind;
     if (detectedCliKind && session.detectedCliKind === null) {
       session.detectedCliKind = detectedCliKind;
-      this.emitEvent({
-        type: "activity",
-        threadId: session.threadId,
-        terminalId: session.terminalId,
-        createdAt: new Date().toISOString(),
-        hasRunningSubprocess: session.hasRunningSubprocess,
-        cliKind: detectedCliKind,
-      });
+      this.emitActivityEvent(session);
     }
     if (sanitized.visibleText.length > 0) {
       appendSessionHistory(session, sanitized.visibleText, this.historyLineLimit);
@@ -1412,6 +1409,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     session.hasRunningSubprocess = false;
     session.detectedCliKind = null;
     session.managedAgentRunning = false;
+    session.managedAgentState = null;
     session.managedAgentObserved = false;
     session.lastInputAt = null;
     session.lastOutputAt = null;
@@ -1445,6 +1443,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     session.hasRunningSubprocess = false;
     session.detectedCliKind = null;
     session.managedAgentRunning = false;
+    session.managedAgentState = null;
     session.managedAgentObserved = false;
     session.lastInputAt = null;
     session.lastOutputAt = null;
@@ -1804,14 +1803,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           liveSession.hasRunningSubprocess = hasRunningSubprocess;
           liveSession.detectedCliKind = terminalCliKind;
           liveSession.updatedAt = new Date().toISOString();
-          this.emitEvent({
-            type: "activity",
-            threadId: liveSession.threadId,
-            terminalId: liveSession.terminalId,
-            createdAt: new Date().toISOString(),
-            hasRunningSubprocess,
-            cliKind: terminalCliKind,
-          });
+          this.emitActivityEvent(liveSession);
         }),
       );
     } finally {
@@ -1899,6 +1891,18 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       exitSignal: session.exitSignal,
       updatedAt: session.updatedAt,
     };
+  }
+
+  private emitActivityEvent(session: TerminalSessionState): void {
+    this.emitEvent({
+      type: "activity",
+      threadId: session.threadId,
+      terminalId: session.terminalId,
+      createdAt: new Date().toISOString(),
+      hasRunningSubprocess: session.hasRunningSubprocess,
+      cliKind: session.detectedCliKind,
+      agentState: deriveActivityAgentState(session),
+    });
   }
 
   private emitEvent(event: TerminalEvent): void {
