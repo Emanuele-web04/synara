@@ -1242,6 +1242,27 @@ export default function Sidebar() {
     },
     [createThreadHandoff],
   );
+  const confirmAndDeleteThread = useCallback(
+    async (threadId: ThreadId) => {
+      const thread = threads.find((candidate) => candidate.id === threadId);
+      if (!thread) return;
+
+      if (appSettings.confirmThreadDelete) {
+        const api = readNativeApi();
+        const confirmationMessage = [
+          `Delete thread "${thread.title}"?`,
+          "This permanently clears conversation history for this thread.",
+        ].join("\n");
+        const confirmed = api
+          ? await api.dialogs.confirm(confirmationMessage)
+          : window.confirm(confirmationMessage);
+        if (!confirmed) return;
+      }
+
+      await deleteThread(threadId);
+    },
+    [appSettings.confirmThreadDelete, deleteThread, threads],
+  );
   const handleThreadContextMenu = useCallback(
     async (
       threadId: ThreadId,
@@ -1328,24 +1349,12 @@ export default function Sidebar() {
         return;
       }
       if (clicked !== "delete") return;
-      if (appSettings.confirmThreadDelete) {
-        const confirmed = await api.dialogs.confirm(
-          [
-            `Delete thread "${thread.title}"?`,
-            "This permanently clears conversation history for this thread.",
-          ].join("\n"),
-        );
-        if (!confirmed) {
-          return;
-        }
-      }
-      await deleteThread(threadId);
+      await confirmAndDeleteThread(threadId);
     },
     [
-      appSettings.confirmThreadDelete,
+      confirmAndDeleteThread,
       copyPathToClipboard,
       copyThreadIdToClipboard,
-      deleteThread,
       handoffThread,
       markThreadUnread,
       pinnedThreadIdSet,
@@ -1787,18 +1796,38 @@ export default function Sidebar() {
   ]);
   const isManualProjectSorting = appSettings.sidebarProjectSortOrder === "manual";
 
-  function orderedThreadIdsForProject(projectId: ProjectId): ThreadId[] {
-    return sortThreadsForSidebar(
-      threads.filter((thread) => thread.projectId === projectId),
-      appSettings.sidebarThreadSortOrder,
-    ).map((thread) => thread.id);
-  }
-
   function resolveThreadFolderLabel(projectId: ProjectId): string | null {
     const project = projectById.get(projectId);
     if (!project) return null;
     const folderName = project.cwd.split(/[/\\]/).findLast(isNonEmptyString) ?? null;
     return folderName ?? project.name ?? null;
+  }
+
+  function renderThreadDeleteButton(threadId: ThreadId, toneClassName: string) {
+    return (
+      <button
+        type="button"
+        aria-label="Delete thread"
+        title="Delete thread"
+        className={cn(
+          "pointer-events-none absolute right-0 top-1/2 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded-md transition-all opacity-0",
+          "hover:bg-accent/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+          "group-hover/thread-row:pointer-events-auto group-hover/thread-row:opacity-100 group-focus-within/thread-row:pointer-events-auto group-focus-within/thread-row:opacity-100",
+          toneClassName,
+        )}
+        onMouseDown={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        }}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          void confirmAndDeleteThread(threadId);
+        }}
+      >
+        <Trash2 className="size-3.25" />
+      </button>
+    );
   }
 
   function renderPinnedThreadRow(thread: Thread) {
@@ -1810,7 +1839,7 @@ export default function Sidebar() {
     const folderLabel = resolveThreadFolderLabel(thread.projectId);
 
     return (
-      <div key={thread.id} className="w-full">
+      <div key={thread.id} className="group/thread-row relative w-full">
         <button
           type="button"
           data-thread-item
@@ -1854,9 +1883,12 @@ export default function Sidebar() {
                 {folderLabel}
               </span>
             ) : null}
-            <span className="shrink-0 text-[11px] text-muted-foreground/38">
-              {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
-            </span>
+            <div className="relative flex h-5 shrink-0 items-center justify-end">
+              <span className="shrink-0 text-[11px] text-muted-foreground/38 transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0">
+                {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
+              </span>
+              {renderThreadDeleteButton(thread.id, "text-muted-foreground/45")}
+            </div>
           </div>
         </button>
       </div>
@@ -1887,7 +1919,6 @@ export default function Sidebar() {
     const isDisposableThread =
       temporaryThreadIds[thread.id] === true ||
       draftThreadsByThreadId[thread.id]?.isTemporary === true;
-    const folderLabel = resolveThreadFolderLabel(thread.projectId);
     const secondaryMetaClass = isHighlighted
       ? "text-foreground/54 dark:text-foreground/64"
       : "text-muted-foreground/34";
@@ -2083,9 +2114,17 @@ export default function Sidebar() {
                 <TooltipPopup side="top">Disposable chat</TooltipPopup>
               </Tooltip>
             ) : null}
-            <span className={`shrink-0 text-[12px] ${secondaryMetaClass}`}>
-              {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
-            </span>
+            <div className="relative flex h-5 shrink-0 items-center justify-end">
+              <span
+                className={cn(
+                  "shrink-0 text-[12px] transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
+                  secondaryMetaClass,
+                )}
+              >
+                {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
+              </span>
+              {renderThreadDeleteButton(thread.id, secondaryMetaClass)}
+            </div>
           </div>
         </SidebarMenuSubButton>
       </SidebarMenuSubItem>

@@ -8,8 +8,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { readNativeApi } from "~/nativeApi";
+import { useAppSettings } from "~/appSettings";
 import { Button } from "~/components/ui/button";
 import { SidebarInset, SidebarTrigger } from "~/components/ui/sidebar";
+import {
+  confirmTerminalTabClose,
+  resolveTerminalCloseTitle,
+} from "~/lib/terminalCloseConfirmation";
 import { resolveTerminalNewAction } from "~/lib/terminalNewAction";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { selectThreadTerminalState, useTerminalStateStore } from "~/terminalStateStore";
@@ -31,6 +36,7 @@ function randomTerminalId(): string {
 }
 
 export default function WorkspaceView({ workspaceId }: { workspaceId: string }) {
+  const { settings } = useAppSettings();
   const workspace = useWorkspaceStore((state) =>
     state.workspacePages.find((entry) => entry.id === workspaceId),
   );
@@ -261,8 +267,20 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
   }, [createWorkspaceTerminalFromShortcut]);
 
   const closeTerminal = useCallback(
-    (terminalId: string) => {
+    async (terminalId: string) => {
       const api = readNativeApi();
+      const confirmed = await confirmTerminalTabClose({
+        api,
+        enabled: settings.confirmTerminalTabClose,
+        terminalTitle: resolveTerminalCloseTitle({
+          terminalId,
+          terminalLabelsById: terminalState.terminalLabelsById,
+          terminalTitleOverridesById: terminalState.terminalTitleOverridesById,
+        }),
+      });
+      if (!confirmed) {
+        return;
+      }
       const fallbackExitWrite = () =>
         api?.terminal.write({ threadId, terminalId, data: "exit\n" }).catch(() => undefined);
 
@@ -281,7 +299,13 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
       closeTerminalState(threadId, terminalId);
       setFocusRequestId((value) => value + 1);
     },
-    [closeTerminalState, threadId],
+    [
+      closeTerminalState,
+      settings.confirmTerminalTabClose,
+      terminalState.terminalLabelsById,
+      terminalState.terminalTitleOverridesById,
+      threadId,
+    ],
   );
 
   const terminalDrawerProps = useMemo(

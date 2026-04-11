@@ -161,6 +161,10 @@ import { SidebarTrigger } from "./ui/sidebar";
 import { newCommandId, newMessageId, newThreadId } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import {
+  confirmTerminalTabClose,
+  resolveTerminalCloseTitle,
+} from "~/lib/terminalCloseConfirmation";
+import {
   getCustomModelOptionsByProvider,
   getCustomModelsByProvider,
   getProviderStartOptions,
@@ -1957,7 +1961,7 @@ export default function ChatView({
     [activeThreadId, storeSetActiveTerminal],
   );
   const closeTerminal = useCallback(
-    (terminalId: string) => {
+    async (terminalId: string) => {
       const api = readNativeApi();
       if (!activeThreadId || !api) return;
       const isFinalTerminal = terminalState.terminalIds.length <= 1;
@@ -1967,6 +1971,19 @@ export default function ChatView({
         terminalEntryPoint: terminalState.entryPoint,
         thread: activeThread,
       });
+      const confirmed = await confirmTerminalTabClose({
+        api,
+        enabled: settings.confirmTerminalTabClose,
+        terminalTitle: resolveTerminalCloseTitle({
+          terminalId,
+          terminalLabelsById: terminalState.terminalLabelsById,
+          terminalTitleOverridesById: terminalState.terminalTitleOverridesById,
+        }),
+        willDeleteThread: shouldDeletePlaceholderTerminalThread,
+      });
+      if (!confirmed) {
+        return;
+      }
       const fallbackExitWrite = () =>
         api.terminal
           .write({ threadId: activeThreadId, terminalId, data: "exit\n" })
@@ -2038,8 +2055,11 @@ export default function ChatView({
       storeClearTerminalState,
       storeCloseTerminal,
       syncServerReadModel,
+      settings.confirmTerminalTabClose,
       terminalState.entryPoint,
       terminalState.terminalIds.length,
+      terminalState.terminalLabelsById,
+      terminalState.terminalTitleOverridesById,
     ],
   );
   const closeActiveWorkspaceView = useCallback(() => {

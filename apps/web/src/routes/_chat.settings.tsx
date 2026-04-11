@@ -284,6 +284,9 @@ function SettingsRouteView() {
     ...(settings.confirmThreadDelete !== defaults.confirmThreadDelete
       ? ["Delete confirmation"]
       : []),
+    ...(settings.confirmTerminalTabClose !== defaults.confirmTerminalTabClose
+      ? ["Terminal close confirmation"]
+      : []),
     ...(isGitTextGenerationModelDirty ? ["Git writing model"] : []),
     ...(settings.customCodexModels.length > 0 || settings.customClaudeModels.length > 0
       ? ["Custom models"]
@@ -912,6 +915,34 @@ function SettingsRouteView() {
                       })
                     }
                     aria-label="Confirm thread deletion"
+                  />
+                }
+              />
+
+              <SettingsRow
+                title="Terminal close confirmation"
+                description="Ask before closing a terminal tab and clearing its history."
+                resetAction={
+                  settings.confirmTerminalTabClose !== defaults.confirmTerminalTabClose ? (
+                    <SettingResetButton
+                      label="terminal close confirmation"
+                      onClick={() =>
+                        updateSettings({
+                          confirmTerminalTabClose: defaults.confirmTerminalTabClose,
+                        })
+                      }
+                    />
+                  ) : null
+                }
+                control={
+                  <Switch
+                    checked={settings.confirmTerminalTabClose}
+                    onCheckedChange={(checked) =>
+                      updateSettings({
+                        confirmTerminalTabClose: Boolean(checked),
+                      })
+                    }
+                    aria-label="Confirm terminal tab close"
                   />
                 }
               />

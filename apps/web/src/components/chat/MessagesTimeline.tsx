@@ -259,7 +259,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         id: timelineEntry.id,
         createdAt: timelineEntry.createdAt,
         message: timelineEntry.message,
-        inlineWorkEntries,
+        ...(inlineWorkEntries ? { inlineWorkEntries } : {}),
         durationStart:
           durationStartByMessageId.get(timelineEntry.message.id) ?? timelineEntry.message.createdAt,
         showCompletionDivider:
@@ -878,7 +878,9 @@ function formatInlineWorkSummary(groupedEntries: TimelineWorkEntry[]): string | 
   const onlyToolEntries = groupedEntries.every((entry) => entry.tone === "tool");
   const groupLabel = onlyToolEntries ? "Tool calls" : "Work log";
   if (groupedEntries.length === 1) {
-    return `${toolWorkEntryHeading(groupedEntries[0])} • ${groupLabel}`;
+    const firstEntry = groupedEntries[0];
+    if (!firstEntry) return null;
+    return `${toolWorkEntryHeading(firstEntry)} • ${groupLabel}`;
   }
 
   return `${groupLabel} (${groupedEntries.length})`;

@@ -1,7 +1,8 @@
-/**
- * Imperative DOM-based confirm dialog that matches the app's AlertDialog styling.
- * Returns a promise that resolves with true (confirmed) or false (cancelled).
- */
+// FILE: confirmDialogFallback.ts
+// Purpose: Renders the lightweight DOM-based confirm dialog used when confirmations come from the web/native bridge.
+// Layer: UI fallback helper
+// Depends on: global document/body and shared Tailwind theme tokens already loaded by the app.
+
 export function showConfirmDialogFallback(message: string): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     // Split message into title (first line) and description (rest)
@@ -11,7 +12,7 @@ export function showConfirmDialogFallback(message: string): Promise<boolean> {
 
     // Backdrop
     const backdrop = document.createElement("div");
-    backdrop.className = "fixed inset-0 z-50 bg-black/60";
+    backdrop.className = "fixed inset-0 z-50 bg-black/50";
     backdrop.style.cssText = "animation:fadeIn .15s ease-out";
 
     // Viewport (centers the dialog)
@@ -21,21 +22,21 @@ export function showConfirmDialogFallback(message: string): Promise<boolean> {
     // Popup
     const popup = document.createElement("div");
     popup.className =
-      "flex w-full max-w-sm flex-col rounded-2xl border border-border/60 bg-popover text-popover-foreground shadow-lg/5";
+      "flex w-full max-w-[22rem] flex-col rounded-xl border border-border/55 bg-popover text-popover-foreground shadow-xl shadow-black/8";
     popup.style.cssText = "animation:scaleIn .15s ease-out";
 
     // Header
     const header = document.createElement("div");
-    header.className = "flex flex-col gap-2 p-6 text-center sm:text-left";
+    header.className = "flex flex-col gap-1.5 px-4 py-3.5 text-center sm:text-left";
 
     const titleEl = document.createElement("h2");
-    titleEl.className = "font-heading font-semibold text-lg leading-tight";
+    titleEl.className = "font-heading font-semibold text-base leading-snug tracking-tight";
     titleEl.textContent = title;
     header.appendChild(titleEl);
 
     if (description) {
       const descEl = document.createElement("p");
-      descEl.className = "text-muted-foreground text-sm";
+      descEl.className = "text-muted-foreground text-[13px] leading-5";
       descEl.textContent = description;
       header.appendChild(descEl);
     }
@@ -45,7 +46,7 @@ export function showConfirmDialogFallback(message: string): Promise<boolean> {
     // Footer
     const footer = document.createElement("div");
     footer.className =
-      "flex flex-col-reverse gap-2 px-6 py-4 border-t border-border/50 bg-muted/72 sm:flex-row sm:justify-end sm:rounded-b-[calc(var(--radius-2xl)-1px)]";
+      "flex flex-col-reverse gap-2 border-t border-border/45 bg-muted/48 px-4 py-3 sm:flex-row sm:justify-end sm:rounded-b-[calc(var(--radius-xl)-1px)]";
 
     function cleanup(result: boolean) {
       document.removeEventListener("keydown", onKeyDown);
@@ -72,7 +73,7 @@ export function showConfirmDialogFallback(message: string): Promise<boolean> {
     cancelBtn.type = "button";
     cancelBtn.textContent = "Cancel";
     cancelBtn.className =
-      "inline-flex h-9 cursor-pointer items-center justify-center whitespace-nowrap rounded-lg border border-input bg-popover px-3 text-sm font-medium text-foreground outline-none transition-shadow hover:bg-accent/50 focus-visible:ring-1 focus-visible:ring-ring/60 sm:h-8";
+      "inline-flex h-8 min-w-20 cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-input bg-popover px-3 text-[13px] font-medium text-foreground outline-none transition-colors hover:bg-accent/50 focus-visible:ring-1 focus-visible:ring-ring/60";
     cancelBtn.addEventListener("click", () => cleanup(false));
 
     // Confirm button (primary style)
@@ -80,7 +81,7 @@ export function showConfirmDialogFallback(message: string): Promise<boolean> {
     confirmBtn.type = "button";
     confirmBtn.textContent = "Confirm";
     confirmBtn.className =
-      "inline-flex h-9 cursor-pointer items-center justify-center whitespace-nowrap rounded-lg border border-primary bg-primary px-3 text-sm font-medium text-primary-foreground shadow-xs shadow-primary/24 outline-none transition-shadow hover:bg-primary/90 focus-visible:ring-1 focus-visible:ring-ring/60 sm:h-8";
+      "inline-flex h-8 min-w-20 cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-primary bg-primary px-3 text-[13px] font-medium text-primary-foreground shadow-xs shadow-primary/20 outline-none transition-colors hover:bg-primary/92 focus-visible:ring-1 focus-visible:ring-ring/60";
 
     confirmBtn.addEventListener("click", () => cleanup(true));
 

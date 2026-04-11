@@ -271,6 +271,7 @@ describe("AppSettingsSchema", () => {
       codexHomePath: "",
       defaultThreadEnvMode: "local",
       confirmThreadDelete: false,
+      confirmTerminalTabClose: true,
       enableAssistantStreaming: false,
       sidebarProjectSortOrder: DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
       sidebarThreadSortOrder: DEFAULT_SIDEBAR_THREAD_SORT_ORDER,
