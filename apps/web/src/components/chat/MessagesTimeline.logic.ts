@@ -4,6 +4,7 @@ export interface TimelineDurationMessage {
   id: string;
   role: "user" | "assistant" | "system";
   createdAt: string;
+  turnId?: string | null;
   completedAt?: string | undefined;
 }
 
@@ -28,4 +29,44 @@ export function computeMessageDurationStart(
 
 export function normalizeCompactToolLabel(value: string): string {
   return normalizeCompactToolLabelValue(value);
+}
+
+export function resolveAssistantMessageCopyState({
+  text,
+  showCopyButton,
+  streaming,
+}: {
+  text: string | null;
+  showCopyButton: boolean;
+  streaming: boolean;
+}) {
+  const normalizedText = text?.trim() ? text : null;
+  return {
+    text: normalizedText,
+    visible: showCopyButton && normalizedText !== null && !streaming,
+  };
+}
+
+export function deriveTerminalAssistantMessageIds(
+  messages: ReadonlyArray<TimelineDurationMessage>,
+): Set<string> {
+  const lastAssistantMessageIdByResponseKey = new Map<string, string>();
+  let nullTurnResponseIndex = 0;
+
+  for (const message of messages) {
+    if (message.role === "user") {
+      nullTurnResponseIndex += 1;
+      continue;
+    }
+    if (message.role !== "assistant") {
+      continue;
+    }
+
+    const responseKey = message.turnId
+      ? `turn:${message.turnId}`
+      : `unkeyed:${nullTurnResponseIndex}`;
+    lastAssistantMessageIdByResponseKey.set(responseKey, message.id);
+  }
+
+  return new Set(lastAssistantMessageIdByResponseKey.values());
 }

@@ -7,7 +7,7 @@ import {
   type ProviderPluginDescriptor,
   type ProviderSkillDescriptor,
 } from "@t3tools/contracts";
-import { memo, useEffect, useRef } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
 import { type ComposerTriggerKind } from "../../composer-logic";
 import { type ComposerSlashCommand } from "../../composerSlashCommands";
 import { ListTodoIcon, PlugIcon } from "~/lib/icons";
@@ -27,7 +27,14 @@ import {
 import { formatSkillScope } from "~/lib/providerDiscovery";
 import { cn } from "~/lib/utils";
 import { Badge } from "../ui/badge";
-import { Command, CommandItem, CommandList } from "../ui/command";
+import {
+  Command,
+  CommandGroup,
+  CommandGroupLabel,
+  CommandItem,
+  CommandList,
+  CommandSeparator,
+} from "../ui/command";
 import { VscodeEntryIcon } from "./VscodeEntryIcon";
 
 function humanizeProviderCommandName(command: string): string {
@@ -128,16 +135,57 @@ export type ComposerCommandItem =
       description: string;
     };
 
+type ComposerCommandGroupModel = {
+  id: string;
+  label: string | null;
+  items: ComposerCommandItem[];
+};
+
+function groupCommandItems(
+  items: ComposerCommandItem[],
+  triggerKind: ComposerTriggerKind | null,
+  groupSlashCommandSections: boolean,
+): ComposerCommandGroupModel[] {
+  if (triggerKind !== "slash-command" || !groupSlashCommandSections) {
+    return [{ id: "default", label: null, items }];
+  }
+
+  const builtInItems = items.filter((item) => item.type === "slash-command");
+  const providerItems = items.filter((item) => item.type === "provider-native-command");
+  const otherItems = items.filter(
+    (item) => item.type !== "slash-command" && item.type !== "provider-native-command",
+  );
+
+  const groups: ComposerCommandGroupModel[] = [];
+  if (builtInItems.length > 0) {
+    groups.push({ id: "built-in", label: "Built-in", items: builtInItems });
+  }
+  if (providerItems.length > 0) {
+    groups.push({ id: "provider", label: "Provider", items: providerItems });
+  }
+  if (otherItems.length > 0) {
+    groups.push({ id: "other", label: null, items: otherItems });
+  }
+  return groups;
+}
+
 export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
   items: ComposerCommandItem[];
   resolvedTheme: "light" | "dark";
   isLoading: boolean;
   triggerKind: ComposerTriggerKind | null;
+  groupSlashCommandSections?: boolean;
+  emptyStateText?: string;
   activeItemId: string | null;
   onHighlightedItemChange: (itemId: string | null) => void;
   onSelect: (item: ComposerCommandItem) => void;
 }) {
   const itemRefs = useRef<Record<string, HTMLElement | null>>({});
+  const groups = useMemo(
+    () =>
+      groupCommandItems(props.items, props.triggerKind, props.groupSlashCommandSections ?? true),
+    [props.groupSlashCommandSections, props.items, props.triggerKind],
+  );
 
   useEffect(() => {
     if (!props.activeItemId) {
@@ -151,6 +199,7 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
 
   return (
     <Command
+      autoHighlight={false}
       mode="none"
       onItemHighlighted={(highlightedValue) => {
         props.onHighlightedItemChange(
@@ -160,17 +209,30 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
     >
       <div className="relative overflow-hidden rounded-xl border border-border/60 bg-card shadow-[0_0_0_1px_rgba(255,255,255,0.04)_inset]">
         <CommandList className="max-h-72 py-1">
-          {props.items.map((item) => (
-            <ComposerCommandMenuItem
-              key={item.id}
-              item={item}
-              resolvedTheme={props.resolvedTheme}
-              isActive={props.activeItemId === item.id}
-              itemRef={(node) => {
-                itemRefs.current[item.id] = node;
-              }}
-              onSelect={props.onSelect}
-            />
+          {groups.map((group, groupIndex) => (
+            <div key={group.id}>
+              {groupIndex > 0 ? <CommandSeparator className="my-0.5" /> : null}
+              <CommandGroup>
+                {group.label ? (
+                  <CommandGroupLabel className="px-2.5 pt-1.5 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/55">
+                    {group.label}
+                  </CommandGroupLabel>
+                ) : null}
+                {group.items.map((item) => (
+                  <ComposerCommandMenuItem
+                    key={item.id}
+                    item={item}
+                    resolvedTheme={props.resolvedTheme}
+                    isActive={props.activeItemId === item.id}
+                    itemRef={(node) => {
+                      itemRefs.current[item.id] = node;
+                    }}
+                    onHighlight={props.onHighlightedItemChange}
+                    onSelect={props.onSelect}
+                  />
+                ))}
+              </CommandGroup>
+            </div>
           ))}
         </CommandList>
         {props.items.length === 0 && (
@@ -179,11 +241,12 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
               ? props.triggerKind === "mention"
                 ? "Searching workspace files..."
                 : "Loading commands..."
-              : props.triggerKind === "mention"
-                ? "No matching plugin or file."
-                : props.triggerKind === "skill"
-                  ? "No matching skill."
-                  : "No matching command."}
+              : (props.emptyStateText ??
+                (props.triggerKind === "mention"
+                  ? "No matching plugin or file."
+                  : props.triggerKind === "skill"
+                    ? "No matching skill."
+                    : "No matching command."))}
           </p>
         )}
       </div>
@@ -196,6 +259,7 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
   resolvedTheme: "light" | "dark";
   isActive: boolean;
   itemRef: (node: HTMLElement | null) => void;
+  onHighlight: (itemId: string | null) => void;
   onSelect: (item: ComposerCommandItem) => void;
 }) {
   if (props.item.type === "plugin" || props.item.type === "skill") {
@@ -207,6 +271,9 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
           "cursor-pointer rounded-lg px-2.5 py-1 transition-colors hover:bg-accent/40 data-highlighted:bg-accent/40 data-highlighted:text-accent-foreground",
           props.isActive && "bg-accent/40 text-accent-foreground",
         )}
+        onMouseMove={() => {
+          if (!props.isActive) props.onHighlight(props.item.id);
+        }}
         onMouseDown={(event) => {
           event.preventDefault();
         }}
@@ -247,6 +314,9 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
         "cursor-pointer select-none gap-2 rounded-lg px-2.5 py-1 transition-colors hover:bg-accent/40 data-highlighted:bg-accent/40 data-highlighted:text-accent-foreground",
         props.isActive && "bg-accent/40 text-accent-foreground",
       )}
+      onMouseMove={() => {
+        if (!props.isActive) props.onHighlight(props.item.id);
+      }}
       onMouseDown={(event) => {
         event.preventDefault();
       }}

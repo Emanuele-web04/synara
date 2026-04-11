@@ -38,6 +38,18 @@ const STATUS_UPSTREAM_REFRESH_INTERVAL = Duration.seconds(15);
 const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(5);
 const STATUS_UPSTREAM_REFRESH_CACHE_CAPACITY = 2_048;
 const DEFAULT_BASE_BRANCH_CANDIDATES = ["main", "master"] as const;
+const NON_REPOSITORY_STATUS_DETAILS = Object.freeze({
+  isRepo: false,
+  hasOriginRemote: false,
+  isDefaultBranch: false,
+  branch: null,
+  upstreamRef: null,
+  hasWorkingTreeChanges: false,
+  workingTree: { files: [], insertions: 0, deletions: 0 },
+  hasUpstream: false,
+  aheadCount: 0,
+  behindCount: 0,
+});
 
 type TraceTailState = {
   processedChars: number;
@@ -241,6 +253,16 @@ function deriveLocalBranchNameFromRemoteRef(branchName: string): string | null {
 
 function commandLabel(args: readonly string[]): string {
   return `git ${args.join(" ")}`;
+}
+
+function isMissingGitCwdError(error: GitCommandError): boolean {
+  const normalized = `${error.detail}\n${error.message}`.toLowerCase();
+  return (
+    normalized.includes("no such file or directory") ||
+    normalized.includes("notfound: filesystem.access") ||
+    normalized.includes("enoent") ||
+    normalized.includes("not a directory")
+  );
 }
 
 function parseDefaultBranchFromRemoteHeadRef(value: string, remoteName: string): string | null {
@@ -1043,15 +1065,22 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
     const statusDetails: GitCoreShape["statusDetails"] = (cwd) =>
       Effect.gen(function* () {
-        yield* refreshStatusUpstreamIfStale(cwd).pipe(Effect.ignoreCause({ log: true }));
+        yield* refreshStatusUpstreamIfStale(cwd).pipe(
+          Effect.catchIf(isMissingGitCwdError, () => Effect.void),
+          Effect.ignoreCause({ log: true }),
+        );
 
-        const [statusStdout, unstagedNumstatStdout, stagedNumstatStdout] = yield* Effect.all(
+        const statusStdout = yield* runGitStdout("GitCore.statusDetails.status", cwd, [
+          "status",
+          "--porcelain=2",
+          "--branch",
+        ]).pipe(Effect.catchIf(isMissingGitCwdError, () => Effect.succeed(null)));
+        if (statusStdout === null) {
+          return NON_REPOSITORY_STATUS_DETAILS;
+        }
+
+        const numstatOutputs = yield* Effect.all(
           [
-            runGitStdout("GitCore.statusDetails.status", cwd, [
-              "status",
-              "--porcelain=2",
-              "--branch",
-            ]),
             runGitStdout("GitCore.statusDetails.unstagedNumstat", cwd, ["diff", "--numstat"]),
             runGitStdout("GitCore.statusDetails.stagedNumstat", cwd, [
               "diff",
@@ -1060,7 +1089,12 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             ]),
           ],
           { concurrency: "unbounded" },
-        );
+        ).pipe(Effect.catchIf(isMissingGitCwdError, () => Effect.succeed(null)));
+        if (numstatOutputs === null) {
+          return NON_REPOSITORY_STATUS_DETAILS;
+        }
+
+        const [unstagedNumstatStdout, stagedNumstatStdout] = numstatOutputs;
 
         let branch: string | null = null;
         let upstreamRef: string | null = null;
@@ -1439,6 +1473,14 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             timeoutMs: 10_000,
             allowNonZeroExit: true,
           },
+        ).pipe(
+          Effect.catchIf(isMissingGitCwdError, () =>
+            Effect.succeed({
+              code: 128,
+              stdout: "",
+              stderr: "fatal: not a git repository",
+            }),
+          ),
         );
 
         if (localBranchResult.code !== 0) {
@@ -1486,33 +1528,38 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           ),
         );
 
+        const branchMetadata = yield* Effect.all(
+          [
+            executeGit(
+              "GitCore.listBranches.defaultRef",
+              input.cwd,
+              ["symbolic-ref", "refs/remotes/origin/HEAD"],
+              {
+                timeoutMs: 5_000,
+                allowNonZeroExit: true,
+              },
+            ),
+            executeGit(
+              "GitCore.listBranches.worktreeList",
+              input.cwd,
+              ["worktree", "list", "--porcelain"],
+              {
+                timeoutMs: 5_000,
+                allowNonZeroExit: true,
+              },
+            ),
+            remoteBranchResultEffect,
+            remoteNamesResultEffect,
+            branchRecencyPromise,
+          ],
+          { concurrency: "unbounded" },
+        ).pipe(Effect.catchIf(isMissingGitCwdError, () => Effect.succeed(null)));
+        if (branchMetadata === null) {
+          return { branches: [], isRepo: false, hasOriginRemote: false };
+        }
+
         const [defaultRef, worktreeList, remoteBranchResult, remoteNamesResult, branchLastCommit] =
-          yield* Effect.all(
-            [
-              executeGit(
-                "GitCore.listBranches.defaultRef",
-                input.cwd,
-                ["symbolic-ref", "refs/remotes/origin/HEAD"],
-                {
-                  timeoutMs: 5_000,
-                  allowNonZeroExit: true,
-                },
-              ),
-              executeGit(
-                "GitCore.listBranches.worktreeList",
-                input.cwd,
-                ["worktree", "list", "--porcelain"],
-                {
-                  timeoutMs: 5_000,
-                  allowNonZeroExit: true,
-                },
-              ),
-              remoteBranchResultEffect,
-              remoteNamesResultEffect,
-              branchRecencyPromise,
-            ],
-            { concurrency: "unbounded" },
-          );
+          branchMetadata;
 
         const remoteNames =
           remoteNamesResult.code === 0 ? parseRemoteNames(remoteNamesResult.stdout) : [];

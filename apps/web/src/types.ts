@@ -73,6 +73,7 @@ export interface ChatMessage {
   role: "user" | "assistant" | "system";
   text: string;
   attachments?: ChatAttachment[];
+  turnId?: TurnId | null;
   createdAt: string;
   completedAt?: string | undefined;
   streaming: boolean;

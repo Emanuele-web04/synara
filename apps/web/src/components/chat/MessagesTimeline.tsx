@@ -46,7 +46,12 @@ import { ProposedPlanCard } from "./ProposedPlanCard";
 import { DiffStatLabel } from "./DiffStatLabel";
 import { VscodeEntryIcon } from "./VscodeEntryIcon";
 import { MessageCopyButton } from "./MessageCopyButton";
-import { computeMessageDurationStart, normalizeCompactToolLabel } from "./MessagesTimeline.logic";
+import {
+  computeMessageDurationStart,
+  deriveTerminalAssistantMessageIds,
+  normalizeCompactToolLabel,
+  resolveAssistantMessageCopyState,
+} from "./MessagesTimeline.logic";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
 import {
   deriveDisplayedUserMessageState,
@@ -175,9 +180,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
   const rows = useMemo<TimelineRow[]>(() => {
     const nextRows: TimelineRow[] = [];
-    const durationStartByMessageId = computeMessageDurationStart(
-      timelineEntries.flatMap((entry) => (entry.kind === "message" ? [entry.message] : [])),
+    const timelineMessages = timelineEntries.flatMap((entry) =>
+      entry.kind === "message" ? [entry.message] : [],
     );
+    const durationStartByMessageId = computeMessageDurationStart(timelineMessages);
+    const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(timelineMessages);
 
     for (let index = 0; index < timelineEntries.length; index += 1) {
       const timelineEntry = timelineEntries[index];
@@ -224,6 +231,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         showCompletionDivider:
           timelineEntry.message.role === "assistant" &&
           completionDividerBeforeEntryId === timelineEntry.id,
+        showAssistantCopyButton:
+          timelineEntry.message.role === "assistant" &&
+          terminalAssistantMessageIds.has(timelineEntry.message.id),
       });
     }
 
@@ -281,7 +291,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     maximum: rows.length,
   });
   const [allDirectoriesExpandedByTurnId] = useState<Record<string, boolean>>({});
-  const [changedFilesExpandedByTurnId] = useState<Record<string, boolean>>({});
   const userMessageIdByAssistantMessageId = useMemo(() => {
     const map = new Map<MessageId, MessageId>();
     let lastUserMessageId: MessageId | null = null;
@@ -324,12 +333,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         showCompletionDivider: row.showCompletionDivider,
       };
       if (turnSummary) {
-        const isBlockExpanded = changedFilesExpandedByTurnId[turnSummary.turnId] ?? false;
         Object.assign(messageHeightInput, {
           diffSummaryFiles: turnSummary.files,
           diffSummaryAllDirectoriesExpanded:
             allDirectoriesExpandedByTurnId[turnSummary.turnId] ?? true,
-          diffSummaryBlockExpanded: isBlockExpanded,
         });
       }
       return estimateTimelineMessageHeight(messageHeightInput, {
@@ -381,7 +388,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     rowVirtualizer,
     expandedWorkGroups,
     allDirectoriesExpandedByTurnId,
-    changedFilesExpandedByTurnId,
     normalizedChatFontSizePx,
   ]);
   useEffect(() => {
@@ -417,7 +423,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
   const renderRowContent = (row: TimelineRow) => (
     <div
-      className="pb-4"
+      className={cn(
+        row.kind === "work" || (row.kind === "message" && row.message.role === "assistant")
+          ? "pb-2"
+          : "pb-4",
+        row.kind === "message" && row.message.role === "assistant" ? "group/assistant" : null,
+      )}
       data-timeline-row-kind={row.kind}
       data-message-id={row.kind === "message" ? row.message.id : undefined}
       data-message-role={row.kind === "message" ? row.message.role : undefined}
@@ -441,13 +452,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             <div>
               {showHeader && (
                 <div className="mb-1.5 flex items-center justify-between gap-2 px-0.5">
-                  <p className="font-mono text-[9px] text-muted-foreground/55">
+                  <p className="font-chat-code text-[9px] text-muted-foreground/55">
                     {groupLabel} ({groupedEntries.length})
                   </p>
                   {hasOverflow && (
                     <button
                       type="button"
-                      className="font-mono text-[9px] text-muted-foreground/55 transition-colors duration-150 hover:text-foreground/75"
+                      className="font-chat-code text-[9px] text-muted-foreground/55 transition-colors duration-150 hover:text-foreground/75"
                       onClick={() => onToggleWorkGroup(groupId)}
                     >
                       {isExpanded ? "Show less" : `Show ${hiddenCount} more`}
@@ -470,58 +481,43 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const userImages = row.message.attachments ?? [];
           const displayedUserMessage = deriveDisplayedUserMessageState(row.message.text);
           const terminalContexts = displayedUserMessage.contexts;
+          const showUserText =
+            displayedUserMessage.visibleText.trim().length > 0 || terminalContexts.length > 0;
           const canRevertAgentWork = revertTurnCountByUserMessageId.has(row.message.id);
           return (
             <div className="flex w-full justify-end">
-              <div className="group flex max-w-[80%] flex-col items-end gap-1">
+              <div className="group flex max-w-[80%] flex-col items-end gap-0.5">
                 {/* Keep user-message chrome outside the bubble so the message reads as one simple block. */}
-                <div className="w-max max-w-full min-w-0 self-end rounded-xl border border-border/70 bg-secondary px-[14px] py-1.5">
-                  {userImages.length > 0 && (
-                    <div className="mb-2 grid max-w-[420px] grid-cols-2 gap-2">
-                      {userImages.map(
-                        (image: NonNullable<TimelineMessage["attachments"]>[number]) => (
-                          <div
-                            key={image.id}
-                            className="overflow-hidden rounded-lg border border-border/80 bg-background/70"
-                          >
-                            {image.previewUrl ? (
-                              <button
-                                type="button"
-                                className="h-full w-full cursor-zoom-in"
-                                aria-label={`Preview ${image.name}`}
-                                onClick={() => {
-                                  const preview = buildExpandedImagePreview(userImages, image.id);
-                                  if (!preview) return;
-                                  onImageExpand(preview);
-                                }}
-                              >
-                                <img
-                                  src={image.previewUrl}
-                                  alt={image.name}
-                                  className="h-full max-h-[220px] w-full object-cover"
-                                  onLoad={onTimelineImageLoad}
-                                  onError={onTimelineImageLoad}
-                                />
-                              </button>
-                            ) : (
-                              <div className="flex min-h-[72px] items-center justify-center px-2 py-3 text-center text-[11px] text-muted-foreground/70">
-                                {image.name}
-                              </div>
-                            )}
-                          </div>
-                        ),
-                      )}
-                    </div>
-                  )}
-                  {(displayedUserMessage.visibleText.trim().length > 0 ||
-                    terminalContexts.length > 0) && (
+                {userImages.length > 0 && (
+                  <div
+                    className={cn(
+                      "flex max-w-[240px] flex-wrap justify-end gap-2 self-end",
+                      showUserText && "mb-1",
+                    )}
+                  >
+                    {userImages.map(
+                      (image: NonNullable<TimelineMessage["attachments"]>[number]) => (
+                        <UserImageAttachmentThumbnail
+                          key={image.id}
+                          image={image}
+                          userImages={userImages}
+                          onImageExpand={onImageExpand}
+                          onTimelineImageLoad={onTimelineImageLoad}
+                          resolvedTheme={resolvedTheme}
+                        />
+                      ),
+                    )}
+                  </div>
+                )}
+                {showUserText && (
+                  <div className="w-max max-w-full min-w-0 self-end rounded-xl border border-border/70 bg-secondary px-[14px] py-1.5">
                     <UserMessageBody
                       text={displayedUserMessage.visibleText}
                       terminalContexts={terminalContexts}
                       chatTypographyStyle={chatTypographyStyle}
                     />
-                  )}
-                </div>
+                  </div>
+                )}
                 <div className="flex items-center justify-end gap-1.5 pr-0.5">
                   <div className="flex items-center gap-1 opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover:opacity-100">
                     {displayedUserMessage.copyText && (
@@ -542,7 +538,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       </Button>
                     )}
                   </div>
-                  <p className="text-right font-mono text-[10px] text-muted-foreground/45">
+                  <p className="font-chat-code text-right text-[10px] text-muted-foreground/45">
                     {formatShortTimestamp(row.message.createdAt, timestampFormat)}
                   </p>
                 </div>
@@ -555,6 +551,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         row.message.role === "assistant" &&
         (() => {
           const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+          const assistantCopyState = resolveAssistantMessageCopyState({
+            text: row.message.text ?? null,
+            showCopyButton: row.showAssistantCopyButton,
+            streaming: row.message.streaming,
+          });
           return (
             <>
               {row.showCompletionDivider && (
@@ -622,11 +623,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                               theme={resolvedTheme}
                               className="size-4 shrink-0 opacity-50"
                             />
-                            <span className="truncate font-mono text-[12px] text-primary/80 hover:text-primary">
+                            <span className="font-chat-code truncate text-[12px] text-primary/80 hover:text-primary">
                               {file.path}
                             </span>
                             {(file.additions ?? 0) + (file.deletions ?? 0) > 0 && (
-                              <span className="ml-auto shrink-0 font-mono text-[11px] tabular-nums">
+                              <span className="font-chat-code ml-auto shrink-0 text-[11px] tabular-nums">
                                 <DiffStatLabel
                                   additions={file.additions ?? 0}
                                   deletions={file.deletions ?? 0}
@@ -639,15 +640,27 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     </div>
                   );
                 })()}
-                <p className="mt-1.5 font-mono text-[10px] text-muted-foreground/45">
-                  {formatMessageMeta(
-                    row.message.createdAt,
-                    row.message.streaming
-                      ? formatElapsed(row.durationStart, nowIso)
-                      : formatElapsed(row.durationStart, row.message.completedAt),
-                    timestampFormat,
-                  )}
-                </p>
+                <div className="mt-1 flex items-center gap-2">
+                  <p className="font-chat-code text-[10px] text-muted-foreground/45">
+                    {formatMessageMeta(
+                      row.message.createdAt,
+                      row.message.streaming
+                        ? formatElapsed(row.durationStart, nowIso)
+                        : formatElapsed(row.durationStart, row.message.completedAt),
+                      timestampFormat,
+                    )}
+                  </p>
+                  {assistantCopyState.visible ? (
+                    <div className="flex items-center opacity-0 transition-opacity duration-200 group-hover/assistant:opacity-100 focus-within:opacity-100">
+                      <MessageCopyButton
+                        text={assistantCopyState.text ?? ""}
+                        size="icon-xs"
+                        variant="outline"
+                        className="border-border/50 bg-background/35 text-muted-foreground/45 shadow-none hover:border-border/70 hover:bg-background/55 hover:text-muted-foreground/70"
+                      />
+                    </div>
+                  ) : null}
+                </div>
               </div>
             </>
           );
@@ -748,6 +761,7 @@ type TimelineRow =
       message: TimelineMessage;
       durationStart: string;
       showCompletionDivider: boolean;
+      showAssistantCopyButton: boolean;
     }
   | {
       kind: "proposed-plan";
@@ -822,6 +836,47 @@ const UserMessageInlineSkillChip = memo(function UserMessageInlineSkillChip(prop
         {formatComposerSkillChipLabel(props.skillName)}
       </span>
     </span>
+  );
+});
+
+const UserImageAttachmentThumbnail = memo(function UserImageAttachmentThumbnail(props: {
+  image: NonNullable<TimelineMessage["attachments"]>[number];
+  userImages: NonNullable<TimelineMessage["attachments"]>;
+  onImageExpand: (preview: ExpandedImagePreview) => void;
+  onTimelineImageLoad: () => void;
+  resolvedTheme: "light" | "dark";
+}) {
+  return (
+    <button
+      type="button"
+      className="flex size-15 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-border/70 bg-background/82 text-left shadow-[0_1px_0_rgba(255,255,255,0.2)_inset] transition-colors hover:bg-background/94"
+      aria-label={`Preview ${props.image.name}`}
+      title={props.image.name}
+      onClick={() => {
+        const preview = buildExpandedImagePreview(props.userImages, props.image.id);
+        if (!preview) return;
+        props.onImageExpand(preview);
+      }}
+    >
+      {props.image.previewUrl ? (
+        <img
+          src={props.image.previewUrl}
+          alt={props.image.name}
+          className="size-full object-cover"
+          onLoad={props.onTimelineImageLoad}
+          onError={props.onTimelineImageLoad}
+        />
+      ) : (
+        <div className="flex size-full items-center justify-center">
+          <VscodeEntryIcon
+            pathValue={props.image.name}
+            kind="file"
+            theme={props.resolvedTheme}
+            className="size-4 opacity-70"
+          />
+        </div>
+      )}
+    </button>
   );
 });
 
@@ -1104,7 +1159,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
           {workEntry.changedFiles?.slice(0, 4).map((filePath) => (
             <span
               key={`${workEntry.id}:${filePath}`}
-              className="rounded-md border border-border/55 bg-background/75 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground/75"
+              className="font-chat-code rounded-md border border-border/55 bg-background/75 px-1.5 py-0.5 text-[10px] text-muted-foreground/75"
               title={filePath}
             >
               {filePath}

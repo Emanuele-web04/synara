@@ -22,9 +22,12 @@ import { suppressQueryResponses } from "~/lib/suppressQueryResponses";
 import { openInPreferredEditor } from "../../editorPreferences";
 import { isTerminalClearShortcut, terminalNavigationShortcutData } from "../../keybindings";
 import {
+  collectWrappedTerminalLinkLine,
   extractTerminalLinks,
   isTerminalLinkActivation,
   resolvePathLinkTarget,
+  resolveWrappedTerminalLinkRange,
+  wrappedTerminalLinkRangeIntersectsBufferLine,
 } from "../../terminal-links";
 import {
   getTerminalFontFamily,
@@ -658,26 +661,31 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
   entry.terminalDisposables.push(
     terminal.registerLinkProvider({
       provideLinks: (bufferLineNumber, callback) => {
-        const line = terminal.buffer.active.getLine(bufferLineNumber - 1);
-        if (!line) {
+        const wrappedLine = collectWrappedTerminalLinkLine(bufferLineNumber, (bufferLineIndex) =>
+          terminal.buffer.active.getLine(bufferLineIndex),
+        );
+        if (!wrappedLine) {
           callback(undefined);
           return;
         }
 
-        const lineText = line.translateToString(true);
-        const matches = extractTerminalLinks(lineText);
-        if (matches.length === 0) {
+        const links = extractTerminalLinks(wrappedLine.text)
+          .map((match) => ({
+            match,
+            range: resolveWrappedTerminalLinkRange(wrappedLine, match),
+          }))
+          .filter(({ range }) =>
+            wrappedTerminalLinkRangeIntersectsBufferLine(range, bufferLineNumber),
+          );
+        if (links.length === 0) {
           callback(undefined);
           return;
         }
 
         callback(
-          matches.map((match) => ({
+          links.map(({ match, range }) => ({
             text: match.text,
-            range: {
-              start: { x: match.start + 1, y: bufferLineNumber },
-              end: { x: match.end, y: bufferLineNumber },
-            },
+            range,
             activate: (event: MouseEvent) => {
               if (!isTerminalLinkActivation(event)) return;
               const api = readNativeApi();

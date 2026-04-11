@@ -140,31 +140,37 @@ describe("estimateTimelineMessageHeight", () => {
     expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 768 })).toBe(118);
   });
 
-  it("uses collapsed header height for diff summary when block is collapsed (default)", () => {
+  it("adds diff summary chrome to assistant message estimates", () => {
     expect(
       estimateTimelineMessageHeight(
         {
           role: "assistant",
           text: "done",
           diffSummaryFiles: [{ path: "src/index.ts", additions: 3, deletions: 1 }],
-        },
-        { timelineWidthPx: 768 },
-      ),
-    ).toBe(150);
-  });
-
-  it("adds diff summary chrome to assistant message estimates when block is expanded", () => {
-    expect(
-      estimateTimelineMessageHeight(
-        {
-          role: "assistant",
-          text: "done",
-          diffSummaryFiles: [{ path: "src/index.ts", additions: 3, deletions: 1 }],
-          diffSummaryBlockExpanded: true,
         },
         { timelineWidthPx: 768 },
       ),
     ).toBe(224);
+  });
+
+  it("accounts for inline code spans that wrap wider than plain text", () => {
+    expect(
+      estimateTimelineMessageHeight(
+        {
+          role: "assistant",
+          text: "`very-long-inline-code-span`",
+        },
+        { timelineWidthPx: 120 },
+      ),
+    ).toBeGreaterThan(
+      estimateTimelineMessageHeight(
+        {
+          role: "assistant",
+          text: "very long inline code span",
+        },
+        { timelineWidthPx: 120 },
+      ),
+    );
   });
 
   it("accounts for the completion divider in assistant message estimates", () => {

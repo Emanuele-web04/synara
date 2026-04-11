@@ -256,6 +256,51 @@ describe("split/new/close terminal shortcuts", () => {
     );
   });
 
+  it("matches physical digit shortcuts even when event.key is layout-shifted", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({
+          code: "Digit1",
+          key: "&",
+          ctrlKey: true,
+        }),
+        DEFAULT_BINDINGS,
+        {
+          platform: "Win32",
+          context: { terminalWorkspaceOpen: true },
+        },
+      ),
+      "terminal.workspace.terminal",
+    );
+  });
+
+  it("matches physical bracket shortcuts even when event.key differs from the printed symbol", () => {
+    const keybindings = compile([
+      {
+        shortcut: modShortcut("[", { shiftKey: true }),
+        command: "chat.visible.previous",
+        whenAst: whenNot(whenIdentifier("terminalFocus")),
+      },
+    ]);
+
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({
+          code: "BracketLeft",
+          key: "^",
+          ctrlKey: true,
+          shiftKey: true,
+        }),
+        keybindings,
+        {
+          platform: "Win32",
+          context: { terminalFocus: false },
+        },
+      ),
+      "chat.visible.previous",
+    );
+  });
+
   it("supports when boolean literals", () => {
     const keybindings = compile([
       { shortcut: modShortcut("n"), command: "terminal.new", whenAst: whenIdentifier("true") },

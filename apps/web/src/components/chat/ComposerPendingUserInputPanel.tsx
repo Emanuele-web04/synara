@@ -97,11 +97,13 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
       if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
         return;
       }
-      // If the user has started typing a custom answer in the contenteditable
-      // composer, let digit keys pass through so they can type numbers.
-      if (target instanceof HTMLElement && target.isContentEditable) {
-        const hasCustomText = progress.customAnswer.length > 0;
-        if (hasCustomText) return;
+      // Let digit input pass through whenever focus is inside an editable region,
+      // including nested contenteditable descendants inside the composer.
+      if (
+        target instanceof HTMLElement &&
+        target.closest('[contenteditable]:not([contenteditable="false"])')
+      ) {
+        return;
       }
       const digit = Number.parseInt(event.key, 10);
       if (Number.isNaN(digit) || digit < 1 || digit > 9) return;
@@ -114,7 +116,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [activeQuestion, handleOptionSelection, isResponding, progress.customAnswer.length]);
+  }, [activeQuestion, handleOptionSelection, isResponding]);
 
   if (!activeQuestion) {
     return null;

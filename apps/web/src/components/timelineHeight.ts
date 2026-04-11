@@ -18,14 +18,18 @@ const ASSISTANT_CHARS_PER_LINE_FALLBACK = 72;
 const USER_CHARS_PER_LINE_FALLBACK = 56;
 const ASSISTANT_BASE_HEIGHT_PX = 78;
 const USER_BASE_HEIGHT_PX = 96;
-const ATTACHMENTS_PER_ROW = 2;
-// Attachment thumbnails render with `max-h-[220px]` plus ~8px row gap.
-const USER_ATTACHMENT_ROW_HEIGHT_PX = 228;
+const USER_ATTACHMENT_THUMBNAIL_SIZE_PX = 60;
+const USER_ATTACHMENT_THUMBNAIL_GAP_PX = 8;
+const USER_ATTACHMENT_THUMBNAILS_PER_ROW = 4;
+const USER_ATTACHMENT_ROW_MARGIN_BOTTOM_PX = 4;
 const USER_BUBBLE_WIDTH_RATIO = 0.8;
 const USER_BUBBLE_HORIZONTAL_PADDING_PX = 32;
 const ASSISTANT_MESSAGE_HORIZONTAL_PADDING_PX = 8;
 const MIN_USER_CHARS_PER_LINE = 4;
 const MIN_ASSISTANT_CHARS_PER_LINE = 20;
+const ASSISTANT_INLINE_CODE_WIDTH_MULTIPLIER = 1.2;
+const ASSISTANT_INLINE_CODE_WRAP_OVERHEAD_CHARS = 2;
+const INLINE_CODE_SPAN_REGEX = /`([^`\n]+)`/g;
 const COMPLETION_DIVIDER_HEIGHT_PX = 40;
 const TURN_DIFF_SUMMARY_CHROME_HEIGHT_PX = 76;
 const TURN_DIFF_TREE_ROW_HEIGHT_PX = 24;
@@ -35,8 +39,6 @@ const WORK_GROUP_HEADER_HEIGHT_PX = 20;
 const WORK_ENTRY_ROW_HEIGHT_PX = 30;
 const WORK_ENTRY_CHANGED_FILES_HEIGHT_PX = 24;
 const WORK_ENTRY_GAP_PX = 2;
-// Height of the changed files block when collapsed (just the header bar).
-const CHANGED_FILES_COLLAPSED_HEADER_HEIGHT_PX = 52;
 const changedFilesSummaryHeightCache = new WeakMap<
   ReadonlyArray<TurnDiffFileChange>,
   { collapsed?: number; expanded?: number }
@@ -48,7 +50,6 @@ interface TimelineMessageHeightInput {
   attachments?: ReadonlyArray<{ id: string }>;
   diffSummaryFiles?: ReadonlyArray<TurnDiffFileChange>;
   diffSummaryAllDirectoriesExpanded?: boolean;
-  diffSummaryBlockExpanded?: boolean;
   showCompletionDivider?: boolean;
 }
 
@@ -195,6 +196,20 @@ export function estimateTimelineWorkGroupHeight(
   );
 }
 
+function expandAssistantInlineCodeForEstimate(text: string): string {
+  return text.replace(INLINE_CODE_SPAN_REGEX, (_match, code: string) =>
+    "x".repeat(
+      Math.max(
+        code.length + 2,
+        Math.ceil(
+          code.length * ASSISTANT_INLINE_CODE_WIDTH_MULTIPLIER +
+            ASSISTANT_INLINE_CODE_WRAP_OVERHEAD_CHARS,
+        ),
+      ),
+    ),
+  );
+}
+
 export function estimateTimelineMessageHeight(
   message: TimelineMessageHeightInput,
   layout: TimelineHeightEstimateLayout = { timelineWidthPx: null },
@@ -206,19 +221,14 @@ export function estimateTimelineMessageHeight(
 
   if (message.role === "assistant") {
     const charsPerLine = estimateCharsPerLineForAssistant(layout.timelineWidthPx, chatFontSizePx);
-    const estimatedLines = estimateWrappedLineCount(message.text, charsPerLine);
-    const diffFiles = message.diffSummaryFiles ?? [];
-    const blockExpanded = message.diffSummaryBlockExpanded ?? false;
-    // When the block is collapsed, only show the header bar height.
-    const changedFilesHeight =
-      diffFiles.length === 0
-        ? 0
-        : blockExpanded
-          ? estimateChangedFilesSummaryHeight(
-              diffFiles,
-              message.diffSummaryAllDirectoriesExpanded ?? true,
-            )
-          : CHANGED_FILES_COLLAPSED_HEADER_HEIGHT_PX;
+    const estimatedLines = estimateWrappedLineCount(
+      expandAssistantInlineCodeForEstimate(message.text),
+      charsPerLine,
+    );
+    const changedFilesHeight = estimateChangedFilesSummaryHeight(
+      message.diffSummaryFiles ?? [],
+      message.diffSummaryAllDirectoriesExpanded ?? true,
+    );
     return (
       ASSISTANT_BASE_HEIGHT_PX +
       estimatedLines * lineHeightPx +
@@ -239,16 +249,26 @@ export function estimateTimelineMessageHeight(
             .filter((part) => part.length > 0)
             .join(" ")
         : displayedUserMessage.visibleText;
-    const estimatedLines = estimateWrappedLineCount(renderedText, charsPerLine);
+    const estimatedLines =
+      renderedText.length > 0 ? estimateWrappedLineCount(renderedText, charsPerLine) : 0;
     const attachmentCount = message.attachments?.length ?? 0;
-    const attachmentRows = Math.ceil(attachmentCount / ATTACHMENTS_PER_ROW);
-    const attachmentHeight = attachmentRows * USER_ATTACHMENT_ROW_HEIGHT_PX;
+    const attachmentHeight =
+      attachmentCount > 0
+        ? Math.ceil(attachmentCount / USER_ATTACHMENT_THUMBNAILS_PER_ROW) *
+            USER_ATTACHMENT_THUMBNAIL_SIZE_PX +
+          Math.max(Math.ceil(attachmentCount / USER_ATTACHMENT_THUMBNAILS_PER_ROW) - 1, 0) *
+            USER_ATTACHMENT_THUMBNAIL_GAP_PX +
+          (renderedText.length > 0 ? USER_ATTACHMENT_ROW_MARGIN_BOTTOM_PX : 0)
+        : 0;
     return USER_BASE_HEIGHT_PX + estimatedLines * lineHeightPx + attachmentHeight;
   }
 
   // `system` messages are not rendered in the chat timeline, but keep a stable
   // explicit branch in case they are present in timeline data.
   const charsPerLine = estimateCharsPerLineForAssistant(layout.timelineWidthPx, chatFontSizePx);
-  const estimatedLines = estimateWrappedLineCount(message.text, charsPerLine);
+  const estimatedLines = estimateWrappedLineCount(
+    expandAssistantInlineCodeForEstimate(message.text),
+    charsPerLine,
+  );
   return ASSISTANT_BASE_HEIGHT_PX + estimatedLines * lineHeightPx;
 }

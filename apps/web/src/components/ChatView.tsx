@@ -137,7 +137,6 @@ import {
   ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
-  CircleAlertIcon,
   EllipsisIcon,
   ListTodoIcon,
   Trash2,
@@ -148,7 +147,6 @@ import { Button } from "./ui/button";
 import { Separator } from "./ui/separator";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
 import { cn, randomUUID } from "~/lib/utils";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { toastManager } from "./ui/toast";
 import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
 import { type NewProjectScriptInput } from "./ProjectScriptsControl";
@@ -202,7 +200,7 @@ import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { ChatHeader } from "./chat/ChatHeader";
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
 import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
-import { buildExpandedImagePreview, ExpandedImagePreview } from "./chat/ExpandedImagePreview";
+import { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { AVAILABLE_PROVIDER_OPTIONS, ProviderModelPicker } from "./chat/ProviderModelPicker";
 import { ComposerCommandItem, ComposerCommandMenu } from "./chat/ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./chat/ComposerPendingApprovalActions";
@@ -210,6 +208,7 @@ import { CompactComposerControlsMenu } from "./chat/CompactComposerControlsMenu"
 import { ComposerPendingApprovalPanel } from "./chat/ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./chat/ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./chat/ComposerPlanFollowUpBanner";
+import { ComposerImageAttachmentChip } from "./chat/ComposerImageAttachmentChip";
 import { ActivePlanCard } from "./chat/ActivePlanCard";
 import { useChatAutoScrollController } from "./chat/useChatAutoScrollController";
 import {
@@ -5119,7 +5118,7 @@ export default function ChatView({
                         />
                       </div>
                     ) : null}
-                    <div className={cn("relative px-4 pb-1 pt-3.5")}>
+                    <div className={cn("relative px-3.5 pb-1 pt-3")}>
                       {composerMenuOpen && !isComposerApprovalState && (
                         <div className="absolute inset-x-0 bottom-full z-20 mb-2 px-1">
                           <ComposerCommandMenu
@@ -5141,69 +5140,16 @@ export default function ChatView({
                       {!isComposerApprovalState &&
                         pendingUserInputs.length === 0 &&
                         composerImages.length > 0 && (
-                          <div className="mb-2.5 flex flex-wrap gap-1.5">
+                          <div className="mb-2.5 flex flex-wrap gap-2">
                             {composerImages.map((image) => (
-                              <div
+                              <ComposerImageAttachmentChip
                                 key={image.id}
-                                className="relative h-14 w-14 overflow-hidden rounded-md border border-border/50 bg-background"
-                              >
-                                {image.previewUrl ? (
-                                  <button
-                                    type="button"
-                                    className="h-full w-full cursor-zoom-in"
-                                    aria-label={`Preview ${image.name}`}
-                                    onClick={() => {
-                                      const preview = buildExpandedImagePreview(
-                                        composerImages,
-                                        image.id,
-                                      );
-                                      if (!preview) return;
-                                      setExpandedImage(preview);
-                                    }}
-                                  >
-                                    <img
-                                      src={image.previewUrl}
-                                      alt={image.name}
-                                      className="h-full w-full object-cover"
-                                    />
-                                  </button>
-                                ) : (
-                                  <div className="flex h-full w-full items-center justify-center px-1 text-center text-[10px] text-muted-foreground/70">
-                                    {image.name}
-                                  </div>
-                                )}
-                                {nonPersistedComposerImageIdSet.has(image.id) && (
-                                  <Tooltip>
-                                    <TooltipTrigger
-                                      render={
-                                        <span
-                                          role="img"
-                                          aria-label="Draft attachment may not persist"
-                                          className="absolute left-1 top-1 inline-flex items-center justify-center rounded bg-background/85 p-0.5 text-amber-600"
-                                        >
-                                          <CircleAlertIcon className="size-3" />
-                                        </span>
-                                      }
-                                    />
-                                    <TooltipPopup
-                                      side="top"
-                                      className="max-w-64 whitespace-normal leading-tight"
-                                    >
-                                      Draft attachment could not be saved locally and may be lost on
-                                      navigation.
-                                    </TooltipPopup>
-                                  </Tooltip>
-                                )}
-                                <Button
-                                  variant="ghost"
-                                  size="icon-xs"
-                                  className="absolute right-1 top-1 bg-background/80 hover:bg-background/90"
-                                  onClick={() => removeComposerImage(image.id)}
-                                  aria-label={`Remove ${image.name}`}
-                                >
-                                  <XIcon />
-                                </Button>
-                              </div>
+                                image={image}
+                                images={composerImages}
+                                nonPersisted={nonPersistedComposerImageIdSet.has(image.id)}
+                                onExpandImage={setExpandedImage}
+                                onRemoveImage={removeComposerImage}
+                              />
                             ))}
                           </div>
                         )}
@@ -5246,7 +5192,7 @@ export default function ChatView({
 
                     {/* Bottom toolbar */}
                     {activePendingApproval ? (
-                      <div className="flex items-center justify-end gap-2 px-3.5 pb-2.5">
+                      <div className="flex items-center justify-end gap-2 px-3 pb-2">
                         <ComposerPendingApprovalActions
                           requestId={activePendingApproval.requestId}
                           isResponding={respondingRequestIds.includes(
@@ -5259,7 +5205,7 @@ export default function ChatView({
                       <div
                         data-chat-composer-footer="true"
                         className={cn(
-                          "flex items-end justify-between px-3 pb-2.5",
+                          "flex items-end justify-between px-2.5 pb-2",
                           isComposerFooterCompact
                             ? "gap-1.5"
                             : "flex-wrap gap-1.5 sm:flex-nowrap sm:gap-0",

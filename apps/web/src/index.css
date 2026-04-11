@@ -141,6 +141,11 @@ body {
   letter-spacing: -0.015em;
 }
 
+/* Keep transcript-only code surfaces on the chat-specific coding font stack. */
+.font-chat-code {
+  font-family: var(--font-chat-code-family);
+}
+
 html,
 body,
 #root {

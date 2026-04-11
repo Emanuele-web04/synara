@@ -9,6 +9,7 @@ import { isMacPlatform } from "./lib/utils";
 
 export interface ShortcutEventLike {
   type?: string;
+  code?: string;
   key: string;
   metaKey: boolean;
   ctrlKey: boolean;
@@ -90,6 +91,20 @@ const TERMINAL_WORD_BACKWARD = "\u001bb";
 const TERMINAL_WORD_FORWARD = "\u001bf";
 const TERMINAL_LINE_START = "\u0001";
 const TERMINAL_LINE_END = "\u0005";
+const EVENT_CODE_KEY_ALIASES: Readonly<Record<string, readonly string[]>> = {
+  BracketLeft: ["["],
+  BracketRight: ["]"],
+  Digit0: ["0"],
+  Digit1: ["1"],
+  Digit2: ["2"],
+  Digit3: ["3"],
+  Digit4: ["4"],
+  Digit5: ["5"],
+  Digit6: ["6"],
+  Digit7: ["7"],
+  Digit8: ["8"],
+  Digit9: ["9"],
+};
 
 function normalizeEventKey(key: string): string {
   const normalized = key.toLowerCase();
@@ -99,14 +114,22 @@ function normalizeEventKey(key: string): string {
   return normalized;
 }
 
-function matchesShortcut(
+function resolveEventKeys(event: ShortcutEventLike): Set<string> {
+  const keys = new Set([normalizeEventKey(event.key)]);
+  const aliases = event.code ? EVENT_CODE_KEY_ALIASES[event.code] : undefined;
+  if (!aliases) return keys;
+
+  for (const alias of aliases) {
+    keys.add(alias);
+  }
+  return keys;
+}
+
+function matchesShortcutModifiers(
   event: ShortcutEventLike,
   shortcut: KeybindingShortcut,
   platform = navigator.platform,
 ): boolean {
-  const key = normalizeEventKey(event.key);
-  if (key !== shortcut.key) return false;
-
   const useMetaForMod = isMacPlatform(platform);
   const expectedMeta = shortcut.metaKey || (shortcut.modKey && useMetaForMod);
   const expectedCtrl = shortcut.ctrlKey || (shortcut.modKey && !useMetaForMod);
@@ -116,6 +139,15 @@ function matchesShortcut(
     event.shiftKey === shortcut.shiftKey &&
     event.altKey === shortcut.altKey
   );
+}
+
+function matchesShortcut(
+  event: ShortcutEventLike,
+  shortcut: KeybindingShortcut,
+  platform = navigator.platform,
+): boolean {
+  if (!matchesShortcutModifiers(event, shortcut, platform)) return false;
+  return resolveEventKeys(event).has(shortcut.key);
 }
 
 function resolvePlatform(options: ShortcutMatchOptions | undefined): string {

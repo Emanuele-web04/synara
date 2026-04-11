@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { computeMessageDurationStart, normalizeCompactToolLabel } from "./MessagesTimeline.logic";
+import {
+  computeMessageDurationStart,
+  deriveTerminalAssistantMessageIds,
+  normalizeCompactToolLabel,
+  resolveAssistantMessageCopyState,
+} from "./MessagesTimeline.logic";
 
 describe("computeMessageDurationStart", () => {
   it("returns message createdAt when there is no preceding user message", () => {
@@ -141,5 +146,62 @@ describe("normalizeCompactToolLabel", () => {
 
   it("removes trailing completion wording from other labels", () => {
     expect(normalizeCompactToolLabel("Read file completed")).toBe("Read file");
+  });
+});
+
+describe("deriveTerminalAssistantMessageIds", () => {
+  it("keeps only the latest assistant message for a turn", () => {
+    expect(
+      deriveTerminalAssistantMessageIds([
+        { id: "u1", role: "user", createdAt: "2026-01-01T00:00:00Z" },
+        { id: "a1", role: "assistant", createdAt: "2026-01-01T00:00:01Z", turnId: "t1" },
+        { id: "a2", role: "assistant", createdAt: "2026-01-01T00:00:02Z", turnId: "t1" },
+        { id: "a3", role: "assistant", createdAt: "2026-01-01T00:00:03Z", turnId: "t2" },
+      ]),
+    ).toEqual(new Set(["a2", "a3"]));
+  });
+
+  it("treats assistant messages without turn ids as one response per user boundary", () => {
+    expect(
+      deriveTerminalAssistantMessageIds([
+        { id: "u1", role: "user", createdAt: "2026-01-01T00:00:00Z" },
+        { id: "a1", role: "assistant", createdAt: "2026-01-01T00:00:01Z" },
+        { id: "a2", role: "assistant", createdAt: "2026-01-01T00:00:02Z" },
+        { id: "u2", role: "user", createdAt: "2026-01-01T00:00:03Z" },
+        { id: "a3", role: "assistant", createdAt: "2026-01-01T00:00:04Z" },
+      ]),
+    ).toEqual(new Set(["a2", "a3"]));
+  });
+});
+
+describe("resolveAssistantMessageCopyState", () => {
+  it("shows copy only for non-empty settled assistant text", () => {
+    expect(
+      resolveAssistantMessageCopyState({
+        text: "Hello",
+        showCopyButton: true,
+        streaming: false,
+      }),
+    ).toEqual({ text: "Hello", visible: true });
+  });
+
+  it("hides copy while the active assistant response is still streaming", () => {
+    expect(
+      resolveAssistantMessageCopyState({
+        text: "Hello",
+        showCopyButton: true,
+        streaming: true,
+      }),
+    ).toEqual({ text: "Hello", visible: false });
+  });
+
+  it("hides copy for empty responses", () => {
+    expect(
+      resolveAssistantMessageCopyState({
+        text: "   ",
+        showCopyButton: true,
+        streaming: false,
+      }),
+    ).toEqual({ text: null, visible: false });
   });
 });
