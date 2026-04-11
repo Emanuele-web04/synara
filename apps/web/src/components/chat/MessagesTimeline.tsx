@@ -78,6 +78,7 @@ import {
   formatComposerSkillChipLabel,
 } from "../composerInlineChip";
 import { getChatTranscriptLineHeightPx, getChatTranscriptTextStyle } from "./chatTypography";
+import { DisclosureChevron } from "../ui/DisclosureChevron";
 
 const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
 const ALWAYS_UNVIRTUALIZED_TAIL_ROWS = 8;
@@ -142,6 +143,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   );
   const timelineRootRef = useRef<HTMLDivElement | null>(null);
   const [timelineWidthPx, setTimelineWidthPx] = useState<number | null>(null);
+  const [expandedFileChangesByMessageId, setExpandedFileChangesByMessageId] = useState<
+    Record<string, boolean>
+  >({});
 
   useLayoutEffect(() => {
     const timelineRoot = timelineRootRef.current;
@@ -441,6 +445,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     scheduleVirtualizerMeasure();
   }, [
     expandedWorkGroups,
+    expandedFileChangesByMessageId,
     allDirectoriesExpandedByTurnId,
     normalizedChatFontSizePx,
     scheduleVirtualizerMeasure,
@@ -473,6 +478,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
   const virtualRows = rowVirtualizer.getVirtualItems();
   const nonVirtualizedRows = rows.slice(virtualizedRowCount);
+  const toggleFileChangesExpanded = useCallback((messageId: MessageId) => {
+    setExpandedFileChangesByMessageId((current) => ({
+      ...current,
+      [messageId]: !(current[messageId] ?? true),
+    }));
+  }, []);
 
   const renderRowContent = (row: TimelineRow) => (
     <div
@@ -648,6 +659,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   if (!turnSummary) return null;
                   const checkpointFiles = turnSummary.files;
                   if (checkpointFiles.length === 0) return null;
+                  const fileChangesExpanded =
+                    expandedFileChangesByMessageId[row.message.id] ?? true;
                   const correspondingUserMessageId = userMessageIdByAssistantMessageId.get(
                     row.message.id,
                   );
@@ -657,12 +670,28 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   return (
                     <div className="mt-5 overflow-hidden rounded-lg border border-border bg-neutral-50 dark:bg-neutral-900">
                       <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
-                        <span className="text-[13px] font-normal text-foreground">
+                        <span className="truncate text-[13px] font-normal text-foreground">
                           {checkpointFiles.length === 1
                             ? "1 File changed"
                             : `${checkpointFiles.length} Files changed`}
                         </span>
                         <div className="flex items-center gap-4">
+                          <button
+                            type="button"
+                            className="inline-flex items-center justify-center rounded-md p-1 text-muted-foreground/70 transition-colors hover:bg-background/60 hover:text-foreground/80"
+                            aria-expanded={fileChangesExpanded}
+                            aria-label={
+                              fileChangesExpanded
+                                ? "Collapse changed files list"
+                                : "Expand changed files list"
+                            }
+                            onClick={() => toggleFileChangesExpanded(row.message.id)}
+                          >
+                            <DisclosureChevron
+                              open={fileChangesExpanded}
+                              className="dark:text-muted-foreground/50"
+                            />
+                          </button>
                           {canUndo && (
                             <button
                               type="button"
@@ -675,33 +704,50 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           )}
                         </div>
                       </div>
-                      <div className="bg-neutral-100 dark:bg-neutral-900/60">
-                        {checkpointFiles.map((file) => (
-                          <button
-                            key={file.path}
-                            type="button"
-                            className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-muted/60"
-                            onClick={() => onOpenTurnDiff(turnSummary.turnId, file.path)}
-                          >
-                            <VscodeEntryIcon
-                              pathValue={file.path}
-                              kind="file"
-                              theme={resolvedTheme}
-                              className="size-4 shrink-0 opacity-50"
-                            />
-                            <span className="font-chat-code truncate text-[12px] text-neutral-900 dark:text-foreground/80 dark:hover:text-foreground">
-                              {file.path}
-                            </span>
-                            {(file.additions ?? 0) + (file.deletions ?? 0) > 0 && (
-                              <span className="font-chat-code ml-auto shrink-0 text-[11px] tabular-nums">
-                                <DiffStatLabel
-                                  additions={file.additions ?? 0}
-                                  deletions={file.deletions ?? 0}
+                      <div
+                        className={cn(
+                          "grid transition-[grid-template-rows,opacity] duration-220 ease-out",
+                          fileChangesExpanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
+                        )}
+                      >
+                        <div
+                          className={cn(
+                            "min-h-0 overflow-hidden transition-transform duration-220 ease-out",
+                            fileChangesExpanded ? "translate-y-0" : "-translate-y-1 pointer-events-none",
+                          )}
+                        >
+                          <div className="bg-neutral-100 dark:bg-neutral-800/40">
+                            {checkpointFiles.map((file) => (
+                              <button
+                                key={file.path}
+                                type="button"
+                                className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-muted/60"
+                                onClick={() => onOpenTurnDiff(turnSummary.turnId, file.path)}
+                              >
+                                <VscodeEntryIcon
+                                  pathValue={file.path}
+                                  kind="file"
+                                  theme={resolvedTheme}
+                                  className="size-4 shrink-0 opacity-50 dark:opacity-30"
                                 />
-                              </span>
-                            )}
-                          </button>
-                        ))}
+                                <span
+                                  className="font-chat-code truncate font-normal text-neutral-900 dark:text-foreground dark:hover:text-foreground"
+                                  style={{ fontSize: chatTypographyStyle.fontSize }}
+                                >
+                                  {file.path}
+                                </span>
+                                {(file.additions ?? 0) + (file.deletions ?? 0) > 0 && (
+                                  <span className="font-chat-code ml-auto shrink-0 text-[11px] tabular-nums">
+                                    <DiffStatLabel
+                                      additions={file.additions ?? 0}
+                                      deletions={file.deletions ?? 0}
+                                    />
+                                  </span>
+                                )}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
                       </div>
                     </div>
                   );

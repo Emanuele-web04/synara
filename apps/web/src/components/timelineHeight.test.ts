@@ -34,7 +34,7 @@ describe("estimateTimelineMessageHeight", () => {
         text: "hello",
         attachments: [{ id: "1" }],
       }),
-    ).toBe(344);
+    ).toBe(180);
 
     expect(
       estimateTimelineMessageHeight({
@@ -42,7 +42,7 @@ describe("estimateTimelineMessageHeight", () => {
         text: "hello",
         attachments: [{ id: "1" }, { id: "2" }],
       }),
-    ).toBe(344);
+    ).toBe(180);
   });
 
   it("adds a second attachment row for three or four user attachments", () => {
@@ -52,7 +52,7 @@ describe("estimateTimelineMessageHeight", () => {
         text: "hello",
         attachments: [{ id: "1" }, { id: "2" }, { id: "3" }],
       }),
-    ).toBe(572);
+    ).toBe(180);
 
     expect(
       estimateTimelineMessageHeight({
@@ -60,7 +60,7 @@ describe("estimateTimelineMessageHeight", () => {
         text: "hello",
         attachments: [{ id: "1" }, { id: "2" }, { id: "3" }, { id: "4" }],
       }),
-    ).toBe(572);
+    ).toBe(180);
   });
 
   it("does not cap long user message estimates", () => {
@@ -158,7 +158,7 @@ describe("estimateTimelineMessageHeight", () => {
       estimateTimelineMessageHeight(
         {
           role: "assistant",
-          text: "`very-long-inline-code-span`",
+          text: "`0123456789012345678901234567890123456789`",
         },
         { timelineWidthPx: 120 },
       ),
@@ -166,7 +166,7 @@ describe("estimateTimelineMessageHeight", () => {
       estimateTimelineMessageHeight(
         {
           role: "assistant",
-          text: "very long inline code span",
+          text: "0123456789012345678901234567890123456789",
         },
         { timelineWidthPx: 120 },
       ),

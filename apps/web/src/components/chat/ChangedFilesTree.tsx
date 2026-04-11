@@ -2,10 +2,11 @@ import { type TurnId } from "@t3tools/contracts";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { type TurnDiffFileChange } from "../../types";
 import { buildTurnDiffTree, type TurnDiffTreeNode } from "../../lib/turnDiffTree";
-import { ChevronRightIcon, FolderIcon, FolderClosedIcon } from "~/lib/icons";
+import { FolderIcon, FolderClosedIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { DiffStatLabel, hasNonZeroStat } from "./DiffStatLabel";
 import { VscodeEntryIcon } from "./VscodeEntryIcon";
+import { DisclosureChevron } from "../ui/DisclosureChevron";
 
 export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
   turnId: TurnId;
@@ -54,11 +55,10 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
             style={{ paddingLeft: `${leftPadding}px` }}
             onClick={() => toggleDirectory(node.path, depth === 0)}
           >
-            <ChevronRightIcon
-              aria-hidden="true"
+            <DisclosureChevron
+              open={isExpanded}
               className={cn(
-                "size-3.5 shrink-0 text-muted-foreground/70 transition-transform group-hover:text-foreground/80",
-                isExpanded && "rotate-90",
+                "text-muted-foreground/70 group-hover:text-foreground/80",
               )}
             />
             {isExpanded ? (
