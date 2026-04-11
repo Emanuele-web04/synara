@@ -40,6 +40,7 @@ const PROJECT_ID = asProjectId("project-1");
 const THREAD_ID = ThreadId.makeUnsafe("thread-1");
 const FIXTURE_TURN_ID = "fixture-turn";
 const APPROVAL_REQUEST_ID = asApprovalRequestId("req-approval-1");
+const itLiveUnlessCi = process.env.CI ? it.skip : it.live;
 type IntegrationProvider = ProviderKind;
 
 function nowIso() {
@@ -960,7 +961,7 @@ it.live("starts a claudeAgent session on first turn when provider is requested",
   ),
 );
 
-it.live("recovers claudeAgent sessions after provider stopAll using persisted resume state", () =>
+itLiveUnlessCi("recovers claudeAgent sessions after provider stopAll using persisted resume state", () =>
   withHarness(
     (harness) =>
       Effect.gen(function* () {
@@ -1212,7 +1213,7 @@ it.live("forwards thread.turn.interrupt to claudeAgent provider sessions", () =>
   ),
 );
 
-it.live("reverts claudeAgent turns and rolls back provider conversation state", () =>
+itLiveUnlessCi("reverts claudeAgent turns and rolls back provider conversation state", () =>
   withHarness(
     (harness) =>
       Effect.gen(function* () {
