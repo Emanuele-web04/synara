@@ -16,6 +16,7 @@ import { useThreadSelectionStore } from "../threadSelectionStore";
 import { resolveSidebarNewThreadEnvMode } from "~/components/Sidebar.logic";
 import { useAppSettings } from "~/appSettings";
 import { Sidebar, SidebarProvider, SidebarRail, useSidebar } from "~/components/ui/sidebar";
+import { useChatCodeFont } from "~/hooks/useChatCodeFont";
 import { useUIFont } from "~/hooks/useUIFont";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
@@ -163,6 +164,7 @@ function ChatRouteGlobalShortcuts() {
 }
 
 function ChatRouteLayout() {
+  useChatCodeFont();
   useUIFont();
 
   return (

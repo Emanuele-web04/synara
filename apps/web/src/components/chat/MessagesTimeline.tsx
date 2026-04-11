@@ -1,3 +1,8 @@
+// FILE: MessagesTimeline.tsx
+// Purpose: Renders the virtualized chat transcript, including user bubbles, assistant markdown, and work logs.
+// Layer: Web chat presentation component
+// Exports: MessagesTimeline
+
 import { type MessageId, type TurnId } from "@t3tools/contracts";
 import {
   memo,
@@ -7,6 +12,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import {
@@ -47,7 +53,11 @@ import {
   type ParsedTerminalContextEntry,
 } from "~/lib/terminalContext";
 import { cn } from "~/lib/utils";
-import { type TimestampFormat } from "../../appSettings";
+import {
+  DEFAULT_CHAT_FONT_SIZE_PX,
+  normalizeChatFontSizePx,
+  type TimestampFormat,
+} from "../../appSettings";
 import { formatShortTimestamp } from "../../timestampFormat";
 import {
   buildInlineTerminalContextText,
@@ -62,6 +72,7 @@ import {
   COMPOSER_INLINE_SKILL_CHIP_ICON_SVG,
   formatComposerSkillChipLabel,
 } from "../composerInlineChip";
+import { getChatTranscriptLineHeightPx, getChatTranscriptTextStyle } from "./chatTypography";
 
 const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
 const ALWAYS_UNVIRTUALIZED_TAIL_ROWS = 8;
@@ -85,8 +96,10 @@ interface MessagesTimelineProps {
   onRevertUserMessage: (messageId: MessageId) => void;
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
+  onTimelineHeightChange?: () => void;
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
+  chatFontSizePx?: number;
   timestampFormat: TimestampFormat;
   workspaceRoot: string | undefined;
 }
@@ -109,12 +122,19 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onRevertUserMessage,
   isRevertingCheckpoint,
   onImageExpand,
+  onTimelineHeightChange,
   markdownCwd,
   resolvedTheme,
+  chatFontSizePx = DEFAULT_CHAT_FONT_SIZE_PX,
   timestampFormat,
   workspaceRoot,
   emptyStateContent,
 }: MessagesTimelineProps) {
+  const normalizedChatFontSizePx = normalizeChatFontSizePx(chatFontSizePx);
+  const chatTypographyStyle = useMemo(
+    () => getChatTranscriptTextStyle(normalizedChatFontSizePx),
+    [normalizedChatFontSizePx],
+  );
   const timelineRootRef = useRef<HTMLDivElement | null>(null);
   const [timelineWidthPx, setTimelineWidthPx] = useState<number | null>(null);
 
@@ -122,26 +142,36 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     const timelineRoot = timelineRootRef.current;
     if (!timelineRoot) return;
 
-    const updateWidth = (nextWidth: number) => {
+    let lastHeight = -1;
+    const syncRootSize = () => {
+      const { width: nextWidth, height: nextHeight } = timelineRoot.getBoundingClientRect();
       setTimelineWidthPx((previousWidth) => {
         if (previousWidth !== null && Math.abs(previousWidth - nextWidth) < 0.5) {
           return previousWidth;
         }
         return nextWidth;
       });
+
+      // Notify ChatView when async row measurement changes the rendered height so
+      // stick-to-bottom can settle again after images or virtual rows expand.
+      const heightChanged = lastHeight >= 0 && Math.abs(nextHeight - lastHeight) >= 0.5;
+      lastHeight = nextHeight;
+      if (heightChanged) {
+        onTimelineHeightChange?.();
+      }
     };
 
-    updateWidth(timelineRoot.getBoundingClientRect().width);
+    syncRootSize();
 
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => {
-      updateWidth(timelineRoot.getBoundingClientRect().width);
+      syncRootSize();
     });
     observer.observe(timelineRoot);
     return () => {
       observer.disconnect();
     };
-  }, [hasMessages, isWorking]);
+  }, [hasMessages, isWorking, onTimelineHeightChange]);
 
   const rows = useMemo<TimelineRow[]>(() => {
     const nextRows: TimelineRow[] = [];
@@ -281,7 +311,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           maxVisibleEntries: MAX_VISIBLE_WORK_LOG_ENTRIES,
         });
       }
-      if (row.kind === "proposed-plan") return estimateTimelineProposedPlanHeight(row.proposedPlan);
+      if (row.kind === "proposed-plan") {
+        return estimateTimelineProposedPlanHeight(row.proposedPlan, normalizedChatFontSizePx);
+      }
       if (row.kind === "working") return 40;
       const turnSummary =
         row.message.role === "assistant"
@@ -300,7 +332,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           diffSummaryBlockExpanded: isBlockExpanded,
         });
       }
-      return estimateTimelineMessageHeight(messageHeightInput, { timelineWidthPx });
+      return estimateTimelineMessageHeight(messageHeightInput, {
+        timelineWidthPx,
+        chatFontSizePx: normalizedChatFontSizePx,
+      });
     },
     measureElement: measureVirtualElement,
     useAnimationFrameWithResizeObserver: true,
@@ -347,6 +382,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     expandedWorkGroups,
     allDirectoriesExpandedByTurnId,
     changedFilesExpandedByTurnId,
+    normalizedChatFontSizePx,
   ]);
   useEffect(() => {
     rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = (_item, _delta, instance) => {
@@ -482,6 +518,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     <UserMessageBody
                       text={displayedUserMessage.visibleText}
                       terminalContexts={terminalContexts}
+                      chatTypographyStyle={chatTypographyStyle}
                     />
                   )}
                 </div>
@@ -523,7 +560,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               {row.showCompletionDivider && (
                 <div className="my-3 flex items-center gap-3">
                   <span className="h-px flex-1 bg-border" />
-                  <span className="rounded-full border border-border bg-background px-2.5 py-1 font-mono text-[10px] text-muted-foreground/80">
+                  <span
+                    className="text-muted-foreground/80"
+                    style={{ fontSize: chatTypographyStyle.fontSize }}
+                  >
                     {completionSummary ? `Response • ${completionSummary}` : "Response"}
                   </span>
                   <span className="h-px flex-1 bg-border" />
@@ -534,6 +574,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   text={messageText}
                   cwd={markdownCwd}
                   isStreaming={Boolean(row.message.streaming)}
+                  style={chatTypographyStyle}
                 />
                 {(() => {
                   const turnSummary = turnDiffSummaryByAssistantMessageId.get(row.message.id);
@@ -618,6 +659,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             planMarkdown={row.proposedPlan.planMarkdown}
             cwd={markdownCwd}
             workspaceRoot={workspaceRoot}
+            chatTypographyStyle={chatTypographyStyle}
           />
         </div>
       )}
@@ -715,9 +757,12 @@ type TimelineRow =
     }
   | { kind: "working"; id: string; createdAt: string | null };
 
-function estimateTimelineProposedPlanHeight(proposedPlan: TimelineProposedPlan): number {
+function estimateTimelineProposedPlanHeight(
+  proposedPlan: TimelineProposedPlan,
+  chatFontSizePx: number,
+): number {
   const estimatedLines = Math.max(1, Math.ceil(proposedPlan.planMarkdown.length / 72));
-  return 120 + Math.min(estimatedLines * 22, 880);
+  return 120 + Math.min(estimatedLines * getChatTranscriptLineHeightPx(chatFontSizePx), 880);
 }
 
 function formatWorkingTimer(startIso: string, endIso: string): string | null {
@@ -818,6 +863,7 @@ function hasOnlyInlineSkillChips(text: string): boolean {
 const UserMessageBody = memo(function UserMessageBody(props: {
   text: string;
   terminalContexts: ParsedTerminalContextEntry[];
+  chatTypographyStyle: CSSProperties;
 }) {
   if (props.terminalContexts.length > 0) {
     const hasEmbeddedInlineLabels = textContainsInlineTerminalContextLabels(
@@ -865,7 +911,10 @@ const UserMessageBody = memo(function UserMessageBody(props: {
         }
 
         return (
-          <div className="inline-block max-w-full min-w-0 wrap-break-word whitespace-pre-wrap font-system-ui text-sm leading-relaxed text-foreground">
+          <div
+            className="inline-block max-w-full min-w-0 wrap-break-word whitespace-pre-wrap font-system-ui text-foreground"
+            style={props.chatTypographyStyle}
+          >
             {inlineNodes}
           </div>
         );
@@ -895,7 +944,10 @@ const UserMessageBody = memo(function UserMessageBody(props: {
     }
 
     return (
-      <div className="inline-block max-w-full min-w-0 wrap-break-word whitespace-pre-wrap font-system-ui text-sm leading-relaxed text-foreground">
+      <div
+        className="inline-block max-w-full min-w-0 wrap-break-word whitespace-pre-wrap font-system-ui text-foreground"
+        style={props.chatTypographyStyle}
+      >
         {inlineNodes}
       </div>
     );
@@ -914,7 +966,10 @@ const UserMessageBody = memo(function UserMessageBody(props: {
   }
 
   return (
-    <div className="inline-block max-w-full min-w-0 whitespace-pre-wrap break-words font-system-ui text-sm leading-relaxed text-foreground">
+    <div
+      className="inline-block max-w-full min-w-0 whitespace-pre-wrap break-words font-system-ui text-foreground"
+      style={props.chatTypographyStyle}
+    >
       {renderUserMessageInlineText(props.text, "user-message-inline")}
     </div>
   );

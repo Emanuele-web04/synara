@@ -43,7 +43,6 @@ interface SidebarSearchPaletteProps {
   threads: readonly SidebarSearchThread[];
   onCreateThread: () => void;
   onAddProject: () => void;
-  onOpenPlugins: () => void;
   onOpenSettings: () => void;
   onOpenProject: (projectId: string) => void;
   onOpenThread: (threadId: string) => void;

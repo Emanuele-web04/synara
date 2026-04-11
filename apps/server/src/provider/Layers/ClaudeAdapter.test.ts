@@ -1358,6 +1358,147 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("maps Claude TodoWrite tool input into shared turn plan updates", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 7).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "build the feature",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-todo-start",
+        uuid: "stream-todo-start",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_start",
+          index: 0,
+          content_block: {
+            type: "tool_use",
+            id: "tool-todo-1",
+            name: "TodoWrite",
+            input: {
+              todos: [
+                {
+                  content: "Inspect files",
+                  activeForm: "Inspecting files",
+                  status: "in_progress",
+                },
+                {
+                  content: "Patch UI",
+                  status: "pending",
+                },
+                {
+                  content: "Run checks",
+                  status: "completed",
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const planEvent = runtimeEvents.find((event) => event.type === "turn.plan.updated");
+      assert.equal(planEvent?.type, "turn.plan.updated");
+      if (planEvent?.type === "turn.plan.updated") {
+        assert.deepEqual(planEvent.payload.plan, [
+          { step: "Inspecting files", status: "inProgress" },
+          { step: "Patch UI", status: "pending" },
+          { step: "Run checks", status: "completed" },
+        ]);
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("updates shared turn plans from Claude TodoWrite json deltas", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 8).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "ship the patch",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-todo-delta",
+        uuid: "stream-todo-delta-start",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_start",
+          index: 0,
+          content_block: {
+            type: "tool_use",
+            id: "tool-todo-delta-1",
+            name: "TodoWrite",
+            input: {},
+          },
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-todo-delta",
+        uuid: "stream-todo-delta-update",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_delta",
+          index: 0,
+          delta: {
+            type: "input_json_delta",
+            partial_json:
+              '{"todos":[{"content":"Inspect files","status":"pending"},{"content":"Patch UI","activeForm":"Patching UI","status":"in_progress"}]}',
+          },
+        },
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const planEvent = runtimeEvents.findLast((event) => event.type === "turn.plan.updated");
+      assert.equal(planEvent?.type, "turn.plan.updated");
+      if (planEvent?.type === "turn.plan.updated") {
+        assert.deepEqual(planEvent.payload.plan, [
+          { step: "Inspect files", status: "pending" },
+          { step: "Patching UI", status: "inProgress" },
+        ]);
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("emits thread token usage updates from Claude task progress", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

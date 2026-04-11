@@ -13,6 +13,9 @@ import { EnvMode } from "./components/BranchToolbar.logic";
 const APP_SETTINGS_STORAGE_KEY = "t3code:app-settings:v1";
 const MAX_CUSTOM_MODEL_COUNT = 32;
 export const MAX_CUSTOM_MODEL_LENGTH = 256;
+export const MIN_CHAT_FONT_SIZE_PX = 11;
+export const MAX_CHAT_FONT_SIZE_PX = 18;
+export const DEFAULT_CHAT_FONT_SIZE_PX = 12;
 
 export const TimestampFormat = Schema.Literals(["locale", "12-hour", "24-hour"]);
 export type TimestampFormat = typeof TimestampFormat.Type;
@@ -54,6 +57,8 @@ const withDefaults =
 
 export const AppSettingsSchema = Schema.Struct({
   claudeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  chatFontSizePx: Schema.Number.pipe(withDefaults(() => DEFAULT_CHAT_FONT_SIZE_PX)),
+  chatCodeFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
   codexBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   codexHomePath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   defaultThreadEnvMode: EnvMode.pipe(withDefaults(() => "local" as const satisfies EnvMode)),
@@ -134,9 +139,18 @@ export function normalizeCustomModelSlugs(
   return normalizedModels;
 }
 
+export function normalizeChatFontSizePx(value: number | null | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_CHAT_FONT_SIZE_PX;
+  }
+
+  return Math.min(MAX_CHAT_FONT_SIZE_PX, Math.max(MIN_CHAT_FONT_SIZE_PX, Math.round(value)));
+}
+
 function normalizeAppSettings(settings: AppSettings): AppSettings {
   return {
     ...settings,
+    chatFontSizePx: normalizeChatFontSizePx(settings.chatFontSizePx),
     customCodexModels: normalizeCustomModelSlugs(settings.customCodexModels, "codex"),
     customClaudeModels: normalizeCustomModelSlugs(settings.customClaudeModels, "claudeAgent"),
   };

@@ -5,10 +5,13 @@ import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { type ProviderKind, DEFAULT_GIT_TEXT_GENERATION_MODEL } from "@t3tools/contracts";
 import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
 import {
+  MAX_CHAT_FONT_SIZE_PX,
   getAppModelOptions,
   getCustomModelsForProvider,
+  MIN_CHAT_FONT_SIZE_PX,
   MAX_CUSTOM_MODEL_LENGTH,
   MODEL_PROVIDER_SETTINGS,
+  normalizeChatFontSizePx,
   patchCustomModels,
   useAppSettings,
 } from "../appSettings";
@@ -263,6 +266,8 @@ function SettingsRouteView() {
     ...(theme !== "system" ? ["Theme"] : []),
     ...(settings.defaultProvider !== defaults.defaultProvider ? ["Default provider"] : []),
     ...(settings.uiFontFamily !== defaults.uiFontFamily ? ["UI font"] : []),
+    ...(settings.chatCodeFontFamily !== defaults.chatCodeFontFamily ? ["Code font"] : []),
+    ...(settings.chatFontSizePx !== defaults.chatFontSizePx ? ["Chat font size"] : []),
     ...(settings.timestampFormat !== defaults.timestampFormat ? ["Time format"] : []),
     ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
     ...(settings.enableAssistantStreaming !== defaults.enableAssistantStreaming
@@ -613,6 +618,70 @@ function SettingsRouteView() {
                     spellCheck={false}
                     aria-label="Custom UI font family"
                   />
+                }
+              />
+
+              <SettingsRow
+                title="Code font"
+                description="Set a custom font for code blocks and inline code in chat. Leave empty for the default coding font."
+                resetAction={
+                  settings.chatCodeFontFamily !== defaults.chatCodeFontFamily ? (
+                    <SettingResetButton
+                      label="code font"
+                      onClick={() =>
+                        updateSettings({ chatCodeFontFamily: defaults.chatCodeFontFamily })
+                      }
+                    />
+                  ) : null
+                }
+                control={
+                  <Input
+                    className="w-full text-right sm:w-48"
+                    value={settings.chatCodeFontFamily}
+                    onChange={(event) => updateSettings({ chatCodeFontFamily: event.target.value })}
+                    placeholder={'"JetBrains Mono"'}
+                    spellCheck={false}
+                    aria-label="Custom chat code font family"
+                  />
+                }
+              />
+
+              <SettingsRow
+                title="Chat font size"
+                description="Adjust the chat transcript text size in pixels."
+                resetAction={
+                  settings.chatFontSizePx !== defaults.chatFontSizePx ? (
+                    <SettingResetButton
+                      label="chat font size"
+                      onClick={() =>
+                        updateSettings({
+                          chatFontSizePx: defaults.chatFontSizePx,
+                        })
+                      }
+                    />
+                  ) : null
+                }
+                control={
+                  <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
+                    <Input
+                      type="number"
+                      min={MIN_CHAT_FONT_SIZE_PX}
+                      max={MAX_CHAT_FONT_SIZE_PX}
+                      step={1}
+                      inputMode="numeric"
+                      className="w-full text-right sm:w-20"
+                      value={String(settings.chatFontSizePx)}
+                      onChange={(event) => {
+                        const nextValue = event.target.value.trim();
+                        if (nextValue.length === 0) return;
+                        updateSettings({
+                          chatFontSizePx: normalizeChatFontSizePx(Number(nextValue)),
+                        });
+                      }}
+                      aria-label="Chat font size in pixels"
+                    />
+                    <span className="text-xs text-muted-foreground">px</span>
+                  </div>
                 }
               />
 

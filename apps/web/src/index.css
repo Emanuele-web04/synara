@@ -69,6 +69,7 @@
   --font-mono-family:
     "JetBrains Mono Variable", "JetBrains Mono", "SF Mono", "SFMono-Regular", Consolas,
     "Liberation Mono", Menlo, monospace;
+  --font-chat-code-family: var(--font-mono-family);
   --terminal-font-family: "JetBrainsMono NFM", "JetBrainsMono NF", "JetBrains Mono", monospace;
   --background: var(--color-white);
   --foreground: var(--color-neutral-800);
@@ -323,6 +324,7 @@ label:has(> select#reasoning-effort) select {
   padding: 0.1rem 0.35rem;
   color: var(--foreground);
   font-size: 0.75rem;
+  font-family: var(--font-chat-code-family);
 }
 
 .chat-markdown pre {
@@ -332,6 +334,7 @@ label:has(> select#reasoning-effort) select {
   border-radius: 0.75rem;
   background: var(--muted);
   padding: 0.8rem 0.9rem;
+  font-family: var(--font-chat-code-family);
 }
 
 .chat-markdown pre code {
@@ -340,6 +343,7 @@ label:has(> select#reasoning-effort) select {
   padding: 0;
   line-height: 1.5;
   font-size: 0.875rem;
+  font-family: inherit;
 }
 
 .chat-markdown .chat-markdown-codeblock {
@@ -386,7 +390,7 @@ label:has(> select#reasoning-effort) select {
 
 .chat-markdown .chat-markdown-shiki .shiki {
   background: color-mix(in srgb, var(--muted) 78%, var(--background)) !important;
-  font-family: var(--font-mono-family) !important;
+  font-family: var(--font-chat-code-family) !important;
 }
 
 .chat-markdown .chat-markdown-shiki .shiki * {

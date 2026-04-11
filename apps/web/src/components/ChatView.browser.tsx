@@ -2,12 +2,14 @@
 import "../index.css";
 
 import {
+  EventId,
   ORCHESTRATION_WS_METHODS,
   type MessageId,
   type OrchestrationReadModel,
   type ProjectId,
   type ServerConfig,
   ThreadId,
+  TurnId,
   type WsWelcomePayload,
   WS_CHANNELS,
   WS_METHODS,
@@ -21,6 +23,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { render } from "vitest-browser-react";
 
 import { useComposerDraftStore } from "../composerDraftStore";
+import { getScrollContainerDistanceFromBottom } from "../chat-scroll";
 import {
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
   type TerminalContextDraft,
@@ -37,6 +40,7 @@ const PROJECT_ID = "project-1" as ProjectId;
 const NOW_ISO = "2026-03-04T12:00:00.000Z";
 const BASE_TIME_MS = Date.parse(NOW_ISO);
 const ATTACHMENT_SVG = "<svg xmlns='http://www.w3.org/2000/svg' width='120' height='300'></svg>";
+let attachmentResponseDelayMs = 0;
 
 interface WsRequestEnvelope {
   id: string;
@@ -103,6 +107,7 @@ interface ChatLayoutMeasurement {
   composerBottomPx: number;
   scrollClientHeightPx: number;
   scrollHeightPx: number;
+  distanceFromBottomPx: number;
 }
 
 function isoAt(offsetSeconds: number): string {
@@ -321,6 +326,54 @@ function createSnapshotWithLongAssistantResponse(): OrchestrationReadModel {
   };
 }
 
+function createSnapshotWithBottomAttachments(): OrchestrationReadModel {
+  const snapshot = createSnapshotForTargetUser({
+    targetMessageId: "msg-user-bottom-attachments" as MessageId,
+    targetText: "bottom attachments",
+  });
+
+  const threads = [...snapshot.threads];
+  const threadIndex = threads.findIndex((thread) => thread.id === THREAD_ID);
+  if (threadIndex < 0) {
+    return snapshot;
+  }
+
+  const thread = threads[threadIndex]!;
+  const messages = [...thread.messages];
+  let lastUserMessageIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === "user") {
+      lastUserMessageIndex = index;
+      break;
+    }
+  }
+  if (lastUserMessageIndex < 0) {
+    return snapshot;
+  }
+
+  const lastUserMessage = messages[lastUserMessageIndex]!;
+  messages[lastUserMessageIndex] = {
+    ...lastUserMessage,
+    text: "final user message with delayed attachments",
+    attachments: Array.from({ length: 3 }, (_, attachmentIndex) => ({
+      type: "image" as const,
+      id: `bottom-attachment-${attachmentIndex + 1}`,
+      name: `bottom-attachment-${attachmentIndex + 1}.png`,
+      mimeType: "image/png",
+      sizeBytes: 128,
+    })),
+  };
+  threads[threadIndex] = {
+    ...thread,
+    messages,
+  };
+
+  return {
+    ...snapshot,
+    threads,
+  };
+}
+
 function buildFixture(snapshot: OrchestrationReadModel): TestFixture {
   return {
     snapshot,
@@ -459,6 +512,81 @@ function createSnapshotWithLongProposedPlan(): OrchestrationReadModel {
   };
 }
 
+function createSnapshotWithActiveInlinePlan(): OrchestrationReadModel {
+  const snapshot = createSnapshotForTargetUser({
+    targetMessageId: "msg-user-inline-plan-target" as MessageId,
+    targetText: "inline plan thread",
+    sessionStatus: "running",
+  });
+  const activeTurnId = TurnId.makeUnsafe("turn-inline-plan");
+
+  return {
+    ...snapshot,
+    threads: snapshot.threads.map((thread) =>
+      thread.id === THREAD_ID
+        ? {
+            ...thread,
+            latestTurn: {
+              turnId: activeTurnId,
+              state: "running",
+              requestedAt: isoAt(1_000),
+              startedAt: isoAt(1_001),
+              completedAt: null,
+              assistantMessageId: null,
+            },
+            activities: [
+              {
+                id: EventId.makeUnsafe("activity-inline-plan"),
+                createdAt: isoAt(1_002),
+                kind: "turn.plan.updated",
+                summary: "Plan updated",
+                tone: "info",
+                turnId: activeTurnId,
+                payload: {
+                  plan: [
+                    {
+                      step: "Inspecting ChatView boundaries",
+                      status: "inProgress",
+                    },
+                    {
+                      step: "Patch the shared checklist receiver",
+                      status: "pending",
+                    },
+                    {
+                      step: "Run final validation",
+                      status: "completed",
+                    },
+                  ],
+                },
+              },
+              {
+                id: EventId.makeUnsafe("activity-inline-background-task"),
+                createdAt: isoAt(1_003),
+                kind: "task.started",
+                summary: "Background agent started",
+                tone: "info",
+                turnId: activeTurnId,
+                payload: {
+                  taskId: "task-inline-background-agent",
+                  taskType: "subagent",
+                },
+              },
+            ],
+            session: thread.session
+              ? {
+                  ...thread.session,
+                  status: "running",
+                  activeTurnId,
+                  updatedAt: isoAt(1_003),
+                }
+              : null,
+            updatedAt: isoAt(1_003),
+          }
+        : thread,
+    ),
+  };
+}
+
 function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
   const tag = body._tag;
   if (tag === ORCHESTRATION_WS_METHODS.getSnapshot) {
@@ -548,13 +676,18 @@ const worker = setupWorker(
       );
     });
   }),
-  http.get("*/attachments/:attachmentId", () =>
-    HttpResponse.text(ATTACHMENT_SVG, {
+  http.get("*/attachments/:attachmentId", async () => {
+    if (attachmentResponseDelayMs > 0) {
+      await new Promise<void>((resolve) => {
+        globalThis.setTimeout(() => resolve(), attachmentResponseDelayMs);
+      });
+    }
+    return HttpResponse.text(ATTACHMENT_SVG, {
       headers: {
         "Content-Type": "image/svg+xml",
       },
-    }),
-  ),
+    });
+  }),
   http.get("*/api/project-favicon", () => new HttpResponse(null, { status: 204 })),
 );
 
@@ -839,6 +972,7 @@ async function measureChatLayout(host: HTMLElement): Promise<ChatLayoutMeasureme
     composerBottomPx,
     scrollClientHeightPx: scrollContainer.clientHeight,
     scrollHeightPx: scrollContainer.scrollHeight,
+    distanceFromBottomPx: getScrollContainerDistanceFromBottom(scrollContainer),
   };
 }
 
@@ -931,6 +1065,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
   beforeEach(async () => {
     await setViewport(DEFAULT_VIEWPORT);
+    attachmentResponseDelayMs = 0;
     localStorage.clear();
     document.body.innerHTML = "";
     wsRequests.length = 0;
@@ -1152,6 +1287,29 @@ describe("ChatView timeline estimator parity (full app)", () => {
       expect(mobileLayout.scrollHeightPx).toBeGreaterThan(mobileLayout.scrollClientHeightPx);
       expect(mobileLayout.composerBottomPx).toBeLessThanOrEqual(mobileLayout.hostHeightPx + 1);
     } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("stays pinned to the bottom after delayed attachment loads expand the timeline", async () => {
+    attachmentResponseDelayMs = 160;
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithBottomAttachments(),
+    });
+
+    try {
+      await waitForImagesToLoad(document.body);
+      await vi.waitFor(
+        async () => {
+          const layout = await mounted.measureLayout();
+          expect(layout.scrollHeightPx).toBeGreaterThan(layout.scrollClientHeightPx);
+          expect(layout.distanceFromBottomPx).toBeLessThanOrEqual(2);
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+    } finally {
+      attachmentResponseDelayMs = 0;
       await mounted.cleanup();
     }
   });
@@ -2303,6 +2461,35 @@ describe("ChatView timeline estimator parity (full app)", () => {
     try {
       await expect.element(page.getByTitle("Show plan sidebar")).toBeInTheDocument();
       await page.getByTitle("Show plan sidebar").click();
+      await expect.element(page.getByLabelText("Close plan sidebar")).toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows the skinny inline plan card for active turn plans", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithActiveInlinePlan(),
+    });
+
+    try {
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("1 out of 3 tasks completed");
+          expect(document.body.textContent).toContain("Inspecting ChatView boundaries");
+          expect(document.body.textContent).toContain("Patch the shared checklist receiver");
+          expect(document.body.textContent).toContain("1 background agent");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const openPlanButton = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[title="Open plan sidebar"]'),
+        "Unable to find inline active plan sidebar button.",
+      );
+      openPlanButton.click();
+
       await expect.element(page.getByLabelText("Close plan sidebar")).toBeInTheDocument();
     } finally {
       await mounted.cleanup();

@@ -6,6 +6,15 @@ interface ScrollPosition {
   scrollHeight: number;
 }
 
+export function getScrollContainerDistanceFromBottom(position: ScrollPosition): number {
+  const { scrollTop, clientHeight, scrollHeight } = position;
+  if (![scrollTop, clientHeight, scrollHeight].every(Number.isFinite)) {
+    return 0;
+  }
+
+  return Math.max(0, scrollHeight - clientHeight - scrollTop);
+}
+
 export function isScrollContainerNearBottom(
   position: ScrollPosition,
   thresholdPx = AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
@@ -14,11 +23,5 @@ export function isScrollContainerNearBottom(
     ? Math.max(0, thresholdPx)
     : AUTO_SCROLL_BOTTOM_THRESHOLD_PX;
 
-  const { scrollTop, clientHeight, scrollHeight } = position;
-  if (![scrollTop, clientHeight, scrollHeight].every(Number.isFinite)) {
-    return true;
-  }
-
-  const distanceFromBottom = scrollHeight - clientHeight - scrollTop;
-  return distanceFromBottom <= threshold;
+  return getScrollContainerDistanceFromBottom(position) <= threshold;
 }

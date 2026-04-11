@@ -1,6 +1,39 @@
 import { describe, expect, it } from "vitest";
 
-import { AUTO_SCROLL_BOTTOM_THRESHOLD_PX, isScrollContainerNearBottom } from "./chat-scroll";
+import {
+  AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
+  getScrollContainerDistanceFromBottom,
+  isScrollContainerNearBottom,
+} from "./chat-scroll";
+
+describe("getScrollContainerDistanceFromBottom", () => {
+  it("returns the remaining distance when the viewport is above the bottom", () => {
+    expect(
+      getScrollContainerDistanceFromBottom({
+        scrollTop: 520,
+        clientHeight: 400,
+        scrollHeight: 1_000,
+      }),
+    ).toBe(80);
+  });
+
+  it("clamps negative distances and non-finite values", () => {
+    expect(
+      getScrollContainerDistanceFromBottom({
+        scrollTop: 620,
+        clientHeight: 400,
+        scrollHeight: 1_000,
+      }),
+    ).toBe(0);
+    expect(
+      getScrollContainerDistanceFromBottom({
+        scrollTop: Number.NaN,
+        clientHeight: 400,
+        scrollHeight: 1_000,
+      }),
+    ).toBe(0);
+  });
+});
 
 describe("isScrollContainerNearBottom", () => {
   it("returns true when already at bottom", () => {

@@ -15,7 +15,7 @@ describe("estimateTimelineMessageHeight", () => {
         role: "assistant",
         text: "a".repeat(144),
       }),
-    ).toBe(122);
+    ).toBe(118);
   });
 
   it("uses assistant sizing rules for system messages", () => {
@@ -24,7 +24,7 @@ describe("estimateTimelineMessageHeight", () => {
         role: "system",
         text: "a".repeat(144),
       }),
-    ).toBe(122);
+    ).toBe(118);
   });
 
   it("adds one attachment row for one or two user attachments", () => {
@@ -34,7 +34,7 @@ describe("estimateTimelineMessageHeight", () => {
         text: "hello",
         attachments: [{ id: "1" }],
       }),
-    ).toBe(346);
+    ).toBe(344);
 
     expect(
       estimateTimelineMessageHeight({
@@ -42,7 +42,7 @@ describe("estimateTimelineMessageHeight", () => {
         text: "hello",
         attachments: [{ id: "1" }, { id: "2" }],
       }),
-    ).toBe(346);
+    ).toBe(344);
   });
 
   it("adds a second attachment row for three or four user attachments", () => {
@@ -52,7 +52,7 @@ describe("estimateTimelineMessageHeight", () => {
         text: "hello",
         attachments: [{ id: "1" }, { id: "2" }, { id: "3" }],
       }),
-    ).toBe(574);
+    ).toBe(572);
 
     expect(
       estimateTimelineMessageHeight({
@@ -60,7 +60,7 @@ describe("estimateTimelineMessageHeight", () => {
         text: "hello",
         attachments: [{ id: "1" }, { id: "2" }, { id: "3" }, { id: "4" }],
       }),
-    ).toBe(574);
+    ).toBe(572);
   });
 
   it("does not cap long user message estimates", () => {
@@ -69,7 +69,7 @@ describe("estimateTimelineMessageHeight", () => {
         role: "user",
         text: "a".repeat(56 * 120),
       }),
-    ).toBe(2736);
+    ).toBe(2496);
   });
 
   it("counts explicit newlines for user message estimates", () => {
@@ -78,7 +78,7 @@ describe("estimateTimelineMessageHeight", () => {
         role: "user",
         text: "first\nsecond\nthird",
       }),
-    ).toBe(162);
+    ).toBe(156);
   });
 
   it("adds terminal context chrome without counting the hidden block as message text", () => {
@@ -116,8 +116,8 @@ describe("estimateTimelineMessageHeight", () => {
       text: "a".repeat(52),
     };
 
-    expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 320 })).toBe(140);
-    expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 768 })).toBe(118);
+    expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 320 })).toBe(136);
+    expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 768 })).toBe(116);
   });
 
   it("does not clamp user wrapping too aggressively on very narrow layouts", () => {
@@ -126,8 +126,8 @@ describe("estimateTimelineMessageHeight", () => {
       text: "a".repeat(20),
     };
 
-    expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 100 })).toBe(184);
-    expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 320 })).toBe(118);
+    expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 100 })).toBe(176);
+    expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 320 })).toBe(116);
   });
 
   it("uses narrower width to increase assistant line wrapping", () => {
@@ -136,8 +136,8 @@ describe("estimateTimelineMessageHeight", () => {
       text: "a".repeat(200),
     };
 
-    expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 320 })).toBe(188);
-    expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 768 })).toBe(122);
+    expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 320 })).toBe(158);
+    expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 768 })).toBe(118);
   });
 
   it("uses collapsed header height for diff summary when block is collapsed (default)", () => {
@@ -150,7 +150,7 @@ describe("estimateTimelineMessageHeight", () => {
         },
         { timelineWidthPx: 768 },
       ),
-    ).toBe(152);
+    ).toBe(150);
   });
 
   it("adds diff summary chrome to assistant message estimates when block is expanded", () => {
@@ -164,7 +164,7 @@ describe("estimateTimelineMessageHeight", () => {
         },
         { timelineWidthPx: 768 },
       ),
-    ).toBe(226);
+    ).toBe(224);
   });
 
   it("accounts for the completion divider in assistant message estimates", () => {
@@ -177,7 +177,7 @@ describe("estimateTimelineMessageHeight", () => {
         },
         { timelineWidthPx: 768 },
       ),
-    ).toBe(140);
+    ).toBe(138);
   });
 });
 

@@ -3,7 +3,6 @@ import {
   FolderIcon,
   GitPullRequestIcon,
   type LucideIcon,
-  PlugIcon,
   RocketIcon,
   SearchIcon,
   SettingsIcon,
@@ -14,7 +13,12 @@ import {
 } from "~/lib/icons";
 import { autoAnimate } from "@formkit/auto-animate";
 import { FiGitBranch } from "react-icons/fi";
-import { TbFolderPlus, TbCursorText } from "react-icons/tb";
+import {
+  TbArrowsDiagonal,
+  TbArrowsDiagonalMinimize2,
+  TbFolderPlus,
+  TbCursorText,
+} from "react-icons/tb";
 import { IoFilter } from "react-icons/io5";
 import { LuMessageCircleDashed } from "react-icons/lu";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
@@ -141,6 +145,7 @@ import type {
   SidebarSearchProject,
   SidebarSearchThread,
 } from "./SidebarSearchPalette.logic";
+import { useFocusedChatContext } from "../focusedChatContext";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_PREVIEW_LIMIT = 6;
@@ -542,6 +547,8 @@ export default function Sidebar() {
   const threads = useStore((store) => store.threads);
   const markThreadUnread = useStore((store) => store.markThreadUnread);
   const toggleProject = useStore((store) => store.toggleProject);
+  const setAllProjectsExpanded = useStore((store) => store.setAllProjectsExpanded);
+  const collapseProjectsExcept = useStore((store) => store.collapseProjectsExcept);
   const reorderProjects = useStore((store) => store.reorderProjects);
   const clearComposerDraftForThread = useComposerDraftStore((store) => store.clearDraftThread);
   const terminalStateByThreadId = useTerminalStateStore((state) => state.terminalStateByThreadId);
@@ -568,7 +575,6 @@ export default function Sidebar() {
   const navigate = useNavigate();
   const pathname = useLocation({ select: (loc) => loc.pathname });
   const isOnSettings = useLocation({ select: (loc) => loc.pathname === "/settings" });
-  const isOnPlugins = useLocation({ select: (loc) => loc.pathname === "/plugins" });
   const isOnWorkspace = pathname.startsWith("/workspace");
   const { settings: appSettings, updateSettings } = useAppSettings();
   const { handleNewThread } = useHandleNewThread();
@@ -596,6 +602,7 @@ export default function Sidebar() {
   });
   const queryClient = useQueryClient();
   const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
+  const { activeProjectId: focusedProjectId } = useFocusedChatContext();
   const [addingProject, setAddingProject] = useState(false);
   const [newCwd, setNewCwd] = useState("");
   const [searchPaletteOpen, setSearchPaletteOpen] = useState(false);
@@ -1694,6 +1701,10 @@ export default function Sidebar() {
     () => sortProjectsForSidebar(projects, threads, appSettings.sidebarProjectSortOrder),
     [appSettings.sidebarProjectSortOrder, projects, threads],
   );
+  const allProjectsExpanded = useMemo(
+    () => projects.length > 0 && projects.every((project) => project.expanded),
+    [projects],
+  );
 
   useEffect(() => {
     prunePinnedThreads(threads.map((thread) => thread.id));
@@ -2150,7 +2161,6 @@ export default function Sidebar() {
           : previewEntries;
     const pinnedCollapsedEntry = !project.expanded && activeEntry ? activeEntry : null;
     const visibleEntries = pinnedCollapsedEntry ? [pinnedCollapsedEntry] : renderedEntries;
-    const shouldShowThreadPanel = project.expanded;
     const orderedProjectThreadIds = projectThreads.map((thread) => thread.id);
     const renderSplitRow = (splitView: SplitView) => {
       const leftPreview = resolveSplitPreview(splitView.leftThreadId);
@@ -2370,49 +2380,59 @@ export default function Sidebar() {
           </Tooltip>
         </div>
 
-        {shouldShowThreadPanel ? (
-          <SidebarMenuSub
-            ref={attachThreadListAutoAnimateRef}
-            className="mx-0 my-0 w-full translate-x-0 gap-0.5 border-l-0 px-0 py-0"
-          >
-            {visibleEntries.map((entry) =>
-              entry.kind === "thread"
-                ? renderThreadRow(entry.thread, orderedProjectThreadIds)
-                : renderSplitRow(entry.splitView),
-            )}
+        <div
+          className={cn(
+            "grid transition-[grid-template-rows,opacity] duration-220 ease-out",
+            project.expanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
+          )}
+        >
+          <div className="min-h-0 overflow-hidden">
+            <SidebarMenuSub
+              ref={attachThreadListAutoAnimateRef}
+              className={cn(
+                "mx-0 my-0 w-full translate-x-0 gap-0.5 border-l-0 px-0 py-0 transition-transform duration-220 ease-out",
+                project.expanded ? "translate-y-0" : "-translate-y-1 pointer-events-none",
+              )}
+            >
+              {visibleEntries.map((entry) =>
+                entry.kind === "thread"
+                  ? renderThreadRow(entry.thread, orderedProjectThreadIds)
+                  : renderSplitRow(entry.splitView),
+              )}
 
-            {hasHiddenThreads && !isThreadListExpanded && (
-              <SidebarMenuSubItem className="w-full">
-                <SidebarMenuSubButton
-                  render={<button type="button" />}
-                  data-thread-selection-safe
-                  size="sm"
-                  className="h-7 w-full translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-[13px] text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
-                  onClick={() => {
-                    expandThreadListForProject(project.id);
-                  }}
-                >
-                  <span>Show more</span>
-                </SidebarMenuSubButton>
-              </SidebarMenuSubItem>
-            )}
-            {hasHiddenThreads && isThreadListExpanded && (
-              <SidebarMenuSubItem className="w-full">
-                <SidebarMenuSubButton
-                  render={<button type="button" />}
-                  data-thread-selection-safe
-                  size="sm"
-                  className="h-7 w-full translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-[13px] text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
-                  onClick={() => {
-                    collapseThreadListForProject(project.id);
-                  }}
-                >
-                  <span>Show less</span>
-                </SidebarMenuSubButton>
-              </SidebarMenuSubItem>
-            )}
-          </SidebarMenuSub>
-        ) : null}
+              {hasHiddenThreads && !isThreadListExpanded && (
+                <SidebarMenuSubItem className="w-full">
+                  <SidebarMenuSubButton
+                    render={<button type="button" />}
+                    data-thread-selection-safe
+                    size="sm"
+                    className="h-7 w-full translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-[13px] text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
+                    onClick={() => {
+                      expandThreadListForProject(project.id);
+                    }}
+                  >
+                    <span>Show more</span>
+                  </SidebarMenuSubButton>
+                </SidebarMenuSubItem>
+              )}
+              {hasHiddenThreads && isThreadListExpanded && (
+                <SidebarMenuSubItem className="w-full">
+                  <SidebarMenuSubButton
+                    render={<button type="button" />}
+                    data-thread-selection-safe
+                    size="sm"
+                    className="h-7 w-full translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-[13px] text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
+                    onClick={() => {
+                      collapseThreadListForProject(project.id);
+                    }}
+                  >
+                    <span>Show less</span>
+                  </SidebarMenuSubButton>
+                </SidebarMenuSubItem>
+              )}
+            </SidebarMenuSub>
+          </div>
+        </div>
       </div>
     );
   }
@@ -2725,6 +2745,14 @@ export default function Sidebar() {
     });
   }, []);
 
+  const handleToggleProjects = useCallback(() => {
+    if (allProjectsExpanded) {
+      collapseProjectsExcept(focusedProjectId);
+      return;
+    }
+    setAllProjectsExpanded(true);
+  }, [allProjectsExpanded, collapseProjectsExcept, focusedProjectId, setAllProjectsExpanded]);
+
   const wordmark = (
     <div className="flex items-center gap-1.5">
       <SidebarTrigger className="shrink-0 md:hidden" />
@@ -2837,14 +2865,6 @@ export default function Sidebar() {
                     setSearchPaletteOpen(true);
                   }}
                   shortcutLabel={searchShortcutLabel}
-                />
-                <SidebarPrimaryAction
-                  icon={PlugIcon}
-                  label="Plugins"
-                  active={isOnPlugins}
-                  onClick={() => {
-                    void navigate({ to: "/plugins" });
-                  }}
                 />
               </>
             )}
@@ -2980,6 +3000,45 @@ export default function Sidebar() {
                 Threads
               </span>
               <div className="flex items-center gap-1">
+                {projects.length > 0 ? (
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <button
+                          type="button"
+                          aria-label={
+                            allProjectsExpanded
+                              ? focusedProjectId
+                                ? "Collapse all projects except the active project"
+                                : "Collapse all projects"
+                              : "Expand all projects"
+                          }
+                          className="inline-flex size-7 items-center justify-center rounded-lg text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground disabled:cursor-default disabled:opacity-45"
+                          onClick={handleToggleProjects}
+                        >
+                          {allProjectsExpanded ? (
+                            <TbArrowsDiagonalMinimize2 className="size-3.5" />
+                          ) : (
+                            <TbArrowsDiagonal className="size-3.5" />
+                          )}
+                        </button>
+                      }
+                    >
+                      {allProjectsExpanded ? (
+                        <TbArrowsDiagonalMinimize2 className="size-3.5" />
+                      ) : (
+                        <TbArrowsDiagonal className="size-3.5" />
+                      )}
+                    </TooltipTrigger>
+                    <TooltipPopup side="bottom">
+                      {allProjectsExpanded
+                        ? focusedProjectId
+                          ? "Collapse all projects except the active chat's project"
+                          : "Collapse all projects"
+                        : "Expand all projects"}
+                    </TooltipPopup>
+                  </Tooltip>
+                ) : null}
                 <ProjectSortMenu
                   projectSortOrder={appSettings.sidebarProjectSortOrder}
                   threadSortOrder={appSettings.sidebarThreadSortOrder}
@@ -3158,9 +3217,6 @@ export default function Sidebar() {
         threads={searchPaletteThreads}
         onCreateThread={handlePrimaryNewThread}
         onAddProject={handleStartAddProject}
-        onOpenPlugins={() => {
-          void navigate({ to: "/plugins" });
-        }}
         onOpenSettings={() => {
           void navigate({ to: "/settings" });
         }}

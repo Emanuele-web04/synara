@@ -434,6 +434,9 @@ function readClaudeResumeState(resumeCursor: unknown): ClaudeResumeState | undef
 
 function classifyToolItemType(toolName: string): CanonicalItemType {
   const normalized = toolName.toLowerCase();
+  if (normalized === "todowrite" || normalized.includes("todo")) {
+    return "plan";
+  }
   if (normalized.includes("agent")) {
     return "collab_agent_tool_call";
   }
@@ -514,8 +517,62 @@ function summarizeToolRequest(toolName: string, input: Record<string, unknown>):
   return `${toolName}: ${serialized.slice(0, 397)}...`;
 }
 
+// Claude TodoWrite becomes the shared plan checklist that both providers feed into the same UI.
+function normalizeClaudeTodoStatus(value: unknown): "pending" | "inProgress" | "completed" {
+  if (value === "completed") {
+    return "completed";
+  }
+  if (value === "in_progress") {
+    return "inProgress";
+  }
+  return "pending";
+}
+
+function normalizeClaudeTodoPlan(input: Record<string, unknown>): {
+  readonly plan: ReadonlyArray<{
+    readonly step: string;
+    readonly status: "pending" | "inProgress" | "completed";
+  }>;
+} | null {
+  const todos = Array.isArray(input.todos) ? input.todos : null;
+  if (!todos) {
+    return null;
+  }
+
+  const plan = todos
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return null;
+      }
+      const todo = entry as Record<string, unknown>;
+      const status = normalizeClaudeTodoStatus(todo.status);
+      const content = trimOrNull(typeof todo.content === "string" ? todo.content : null);
+      const activeForm = trimOrNull(typeof todo.activeForm === "string" ? todo.activeForm : null);
+      const step = status === "inProgress" ? (activeForm ?? content) : (content ?? activeForm);
+      if (!step) {
+        return null;
+      }
+      return {
+        step,
+        status,
+      };
+    })
+    .filter(
+      (
+        step,
+      ): step is {
+        readonly step: string;
+        readonly status: "pending" | "inProgress" | "completed";
+      } => step !== null,
+    );
+
+  return plan.length > 0 ? { plan } : null;
+}
+
 function titleForTool(itemType: CanonicalItemType): string {
   switch (itemType) {
+    case "plan":
+      return "Plan";
     case "command_execution":
       return "Command run";
     case "file_change":
@@ -1415,6 +1472,47 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         });
       });
 
+    // Normalizes Claude TodoWrite tool calls into the same runtime plan event Codex already emits.
+    const emitTodoPlanUpdated = (
+      context: ClaudeSessionContext,
+      input: {
+        readonly toolInput: Record<string, unknown>;
+        readonly toolUseId?: string | undefined;
+        readonly rawMethod: string;
+        readonly rawPayload: unknown;
+      },
+    ): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const turnState = context.turnState;
+        if (!turnState) {
+          return;
+        }
+
+        const planPayload = normalizeClaudeTodoPlan(input.toolInput);
+        if (!planPayload) {
+          return;
+        }
+
+        const stamp = yield* makeEventStamp();
+        yield* offerRuntimeEvent({
+          type: "turn.plan.updated",
+          eventId: stamp.eventId,
+          provider: PROVIDER,
+          createdAt: stamp.createdAt,
+          threadId: context.session.threadId,
+          turnId: turnState.turnId,
+          payload: planPayload,
+          providerRefs: nativeProviderRefs(context, {
+            providerItemId: input.toolUseId,
+          }),
+          raw: {
+            source: "claude.sdk.message",
+            method: input.rawMethod,
+            payload: input.rawPayload,
+          },
+        });
+      });
+
     const completeTurn = (
       context: ClaudeSessionContext,
       status: ProviderRuntimeTurnStatus,
@@ -1714,6 +1812,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 payload: message,
               },
             });
+            if (nextTool.toolName === "TodoWrite") {
+              yield* emitTodoPlanUpdated(context, {
+                toolInput: nextTool.input,
+                toolUseId: nextTool.itemId,
+                rawMethod: "claude/stream_event/content_block_delta/input_json_delta",
+                rawPayload: message,
+              });
+            }
           }
           return;
         }
@@ -1783,6 +1889,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               payload: message,
             },
           });
+          if (toolName === "TodoWrite") {
+            yield* emitTodoPlanUpdated(context, {
+              toolInput,
+              toolUseId: tool.itemId,
+              rawMethod: "claude/stream_event/content_block_start",
+              rawPayload: message,
+            });
+          }
           return;
         }
 

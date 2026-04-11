@@ -73,6 +73,10 @@ export interface ActivePlanState {
   }>;
 }
 
+export interface ActiveBackgroundTasksState {
+  activeCount: number;
+}
+
 export interface LatestProposedPlanState {
   id: OrchestrationProposedPlanId;
   createdAt: string;
@@ -392,6 +396,57 @@ export function deriveActivePlanState(
       : {}),
     steps,
   };
+}
+
+// Counts still-running background work for the active turn so compact UI can surface agent activity.
+export function deriveActiveBackgroundTasksState(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+  latestTurnId: TurnId | undefined,
+): ActiveBackgroundTasksState | null {
+  const ordered = [...activities].toSorted(compareActivitiesByOrder);
+  const activeTasks = new Map<string, { taskType?: string | undefined }>();
+
+  for (const activity of ordered) {
+    if (
+      latestTurnId &&
+      activity.turnId &&
+      activity.turnId !== latestTurnId &&
+      activity.kind !== "task.completed"
+    ) {
+      continue;
+    }
+
+    if (
+      activity.kind !== "task.started" &&
+      activity.kind !== "task.progress" &&
+      activity.kind !== "task.completed"
+    ) {
+      continue;
+    }
+
+    const payload =
+      activity.payload && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>)
+        : null;
+    const taskId = payload && typeof payload.taskId === "string" ? payload.taskId : null;
+    if (!taskId) {
+      continue;
+    }
+
+    if (activity.kind === "task.completed") {
+      activeTasks.delete(taskId);
+      continue;
+    }
+
+    const previous = activeTasks.get(taskId);
+    const taskType = payload && typeof payload.taskType === "string" ? payload.taskType : undefined;
+    activeTasks.set(taskId, {
+      taskType: taskType ?? previous?.taskType,
+    });
+  }
+
+  const activeCount = [...activeTasks.values()].filter((task) => task.taskType !== "plan").length;
+  return activeCount > 0 ? { activeCount } : null;
 }
 
 export function findLatestProposedPlan(

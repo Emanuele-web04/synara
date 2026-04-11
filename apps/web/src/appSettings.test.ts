@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   AppSettingsSchema,
+  DEFAULT_CHAT_FONT_SIZE_PX,
   DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
   DEFAULT_SIDEBAR_THREAD_SORT_ORDER,
   DEFAULT_TIMESTAMP_FORMAT,
@@ -13,6 +14,7 @@ import {
   getDefaultCustomModelsForProvider,
   getProviderStartOptions,
   MODEL_PROVIDER_SETTINGS,
+  normalizeChatFontSizePx,
   normalizeCustomModelSlugs,
   patchCustomModels,
   resolveAppModelSelection,
@@ -110,6 +112,18 @@ describe("resolveAppModelSelection", () => {
 describe("timestamp format defaults", () => {
   it("defaults timestamp format to locale", () => {
     expect(DEFAULT_TIMESTAMP_FORMAT).toBe("locale");
+  });
+});
+
+describe("chat font size defaults", () => {
+  it("defaults chat font size to 12px", () => {
+    expect(DEFAULT_CHAT_FONT_SIZE_PX).toBe(12);
+  });
+
+  it("clamps chat font size updates into the supported range", () => {
+    expect(normalizeChatFontSizePx(9)).toBe(11);
+    expect(normalizeChatFontSizePx(18.4)).toBe(18);
+    expect(normalizeChatFontSizePx(Number.NaN)).toBe(DEFAULT_CHAT_FONT_SIZE_PX);
   });
 });
 
@@ -252,6 +266,7 @@ describe("AppSettingsSchema", () => {
       ),
     ).toMatchObject({
       claudeBinaryPath: "",
+      chatFontSizePx: DEFAULT_CHAT_FONT_SIZE_PX,
       codexBinaryPath: "/usr/local/bin/codex",
       codexHomePath: "",
       defaultThreadEnvMode: "local",

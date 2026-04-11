@@ -7,7 +7,14 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
-import { markThreadUnread, reorderProjects, syncServerReadModel, type AppState } from "./store";
+import {
+  collapseProjectsExcept,
+  markThreadUnread,
+  reorderProjects,
+  setAllProjectsExpanded,
+  syncServerReadModel,
+  type AppState,
+} from "./store";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
 
 function makeThread(overrides: Partial<Thread> = {}): Thread {
@@ -217,6 +224,121 @@ describe("store pure functions", () => {
     const next = reorderProjects(state, project1, project3);
 
     expect(next.projects.map((project) => project.id)).toEqual([project2, project3, project1]);
+  });
+
+  it("expands every project when toggled on", () => {
+    const project1 = ProjectId.makeUnsafe("project-1");
+    const project2 = ProjectId.makeUnsafe("project-2");
+    const state: AppState = {
+      projects: [
+        {
+          id: project1,
+          name: "Project 1",
+          cwd: "/tmp/project-1",
+          defaultModelSelection: {
+            provider: "codex",
+            model: DEFAULT_MODEL_BY_PROVIDER.codex,
+          },
+          expanded: true,
+          scripts: [],
+        },
+        {
+          id: project2,
+          name: "Project 2",
+          cwd: "/tmp/project-2",
+          defaultModelSelection: {
+            provider: "codex",
+            model: DEFAULT_MODEL_BY_PROVIDER.codex,
+          },
+          expanded: false,
+          scripts: [],
+        },
+      ],
+      threads: [],
+      threadsHydrated: true,
+    };
+
+    const next = setAllProjectsExpanded(state, true);
+
+    expect(next.projects.map(({ id, expanded }) => ({ id, expanded }))).toEqual([
+      { id: project1, expanded: true },
+      { id: project2, expanded: true },
+    ]);
+  });
+
+  it("collapses all projects when toggled off", () => {
+    const state: AppState = {
+      projects: [
+        {
+          id: ProjectId.makeUnsafe("project-1"),
+          name: "Project 1",
+          cwd: "/tmp/project-1",
+          defaultModelSelection: {
+            provider: "codex",
+            model: DEFAULT_MODEL_BY_PROVIDER.codex,
+          },
+          expanded: true,
+          scripts: [],
+        },
+        {
+          id: ProjectId.makeUnsafe("project-2"),
+          name: "Project 2",
+          cwd: "/tmp/project-2",
+          defaultModelSelection: {
+            provider: "codex",
+            model: DEFAULT_MODEL_BY_PROVIDER.codex,
+          },
+          expanded: true,
+          scripts: [],
+        },
+      ],
+      threads: [],
+      threadsHydrated: true,
+    };
+
+    const next = setAllProjectsExpanded(state, false);
+
+    expect(next.projects.every((project) => project.expanded === false)).toBe(true);
+  });
+
+  it("collapses every project except the active one", () => {
+    const project1 = ProjectId.makeUnsafe("project-1");
+    const project2 = ProjectId.makeUnsafe("project-2");
+    const state: AppState = {
+      projects: [
+        {
+          id: project1,
+          name: "Project 1",
+          cwd: "/tmp/project-1",
+          defaultModelSelection: {
+            provider: "codex",
+            model: DEFAULT_MODEL_BY_PROVIDER.codex,
+          },
+          expanded: true,
+          scripts: [],
+        },
+        {
+          id: project2,
+          name: "Project 2",
+          cwd: "/tmp/project-2",
+          defaultModelSelection: {
+            provider: "codex",
+            model: DEFAULT_MODEL_BY_PROVIDER.codex,
+          },
+          expanded: true,
+          scripts: [],
+        },
+      ],
+      threads: [],
+      threadsHydrated: true,
+    };
+
+    const next = collapseProjectsExcept(state, project2);
+
+    expect(next.projects.map(({ id, expanded }) => ({ id, expanded }))).toEqual([
+      { id: project1, expanded: false },
+      { id: project2, expanded: true },
+    ]);
   });
 });
 

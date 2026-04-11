@@ -400,6 +400,31 @@ export function setProjectExpanded(
   return changed ? { ...state, projects } : state;
 }
 
+export function setAllProjectsExpanded(state: AppState, expanded: boolean): AppState {
+  let changed = false;
+  const projects = state.projects.map((project) => {
+    if (project.expanded === expanded) return project;
+    changed = true;
+    return { ...project, expanded };
+  });
+  return changed ? { ...state, projects } : state;
+}
+
+// Keep just one project expanded so bulk collapse preserves the active chat context.
+export function collapseProjectsExcept(
+  state: AppState,
+  activeProjectId: Project["id"] | null,
+): AppState {
+  let changed = false;
+  const projects = state.projects.map((project) => {
+    const nextExpanded = activeProjectId !== null && project.id === activeProjectId;
+    if (project.expanded === nextExpanded) return project;
+    changed = true;
+    return { ...project, expanded: nextExpanded };
+  });
+  return changed ? { ...state, projects } : state;
+}
+
 export function reorderProjects(
   state: AppState,
   draggedProjectId: Project["id"],
@@ -478,6 +503,8 @@ interface AppStore extends AppState {
   markThreadUnread: (threadId: ThreadId) => void;
   toggleProject: (projectId: Project["id"]) => void;
   setProjectExpanded: (projectId: Project["id"], expanded: boolean) => void;
+  setAllProjectsExpanded: (expanded: boolean) => void;
+  collapseProjectsExcept: (activeProjectId: Project["id"] | null) => void;
   reorderProjects: (draggedProjectId: Project["id"], targetProjectId: Project["id"]) => void;
   setError: (threadId: ThreadId, error: string | null) => void;
   setThreadWorkspace: (threadId: ThreadId, patch: ThreadWorkspacePatch) => void;
@@ -492,6 +519,9 @@ export const useStore = create<AppStore>((set) => ({
   toggleProject: (projectId) => set((state) => toggleProject(state, projectId)),
   setProjectExpanded: (projectId, expanded) =>
     set((state) => setProjectExpanded(state, projectId, expanded)),
+  setAllProjectsExpanded: (expanded) => set((state) => setAllProjectsExpanded(state, expanded)),
+  collapseProjectsExcept: (activeProjectId) =>
+    set((state) => collapseProjectsExcept(state, activeProjectId)),
   reorderProjects: (draggedProjectId, targetProjectId) =>
     set((state) => reorderProjects(state, draggedProjectId, targetProjectId)),
   setError: (threadId, error) => set((state) => setError(state, threadId, error)),

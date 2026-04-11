@@ -8,6 +8,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import {
+  deriveActiveBackgroundTasksState,
   deriveActiveWorkStartedAt,
   deriveActivePlanState,
   PROVIDER_OPTIONS,
@@ -336,6 +337,63 @@ describe("deriveActivePlanState", () => {
       turnId: "turn-1",
       explanation: "Refined plan",
       steps: [{ step: "Implement Codex user input", status: "inProgress" }],
+    });
+  });
+});
+
+describe("deriveActiveBackgroundTasksState", () => {
+  it("counts only still-active non-plan background tasks for the current turn", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "plan-task-start",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "task.started",
+        summary: "Plan task started",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          taskId: "turn-1",
+          taskType: "plan",
+        },
+      }),
+      makeActivity({
+        id: "background-task-start",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "task.started",
+        summary: "Subagent task started",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          taskId: "task-subagent-1",
+          taskType: "subagent",
+        },
+      }),
+      makeActivity({
+        id: "background-task-progress",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "task.progress",
+        summary: "Subagent task update",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          taskId: "task-subagent-1",
+        },
+      }),
+      makeActivity({
+        id: "completed-other-turn",
+        createdAt: "2026-02-23T00:00:04.000Z",
+        kind: "task.completed",
+        summary: "Task completed",
+        tone: "info",
+        turnId: "turn-2",
+        payload: {
+          taskId: "task-other-turn",
+        },
+      }),
+    ];
+
+    expect(deriveActiveBackgroundTasksState(activities, TurnId.makeUnsafe("turn-1"))).toEqual({
+      activeCount: 1,
     });
   });
 });

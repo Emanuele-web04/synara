@@ -5,6 +5,7 @@ import {
   IconAlertCircle,
   IconAlertTriangle,
   IconArrowBackUp,
+  IconArrowDown,
   IconArrowLeft,
   IconArrowRight,
   IconArrowsUpDown,
@@ -74,6 +75,7 @@ function adaptIcon(Component: TablerIcon): LucideIcon {
 
 export const ArrowLeftIcon = adaptIcon(IconArrowLeft);
 export const ArrowRightIcon = adaptIcon(IconArrowRight);
+export const ArrowDownIcon = adaptIcon(IconArrowDown);
 export const ArrowUpDownIcon = adaptIcon(IconArrowsUpDown);
 export const BotIcon = adaptIcon(IconRobot);
 export const BugIcon = adaptIcon(IconBug);
