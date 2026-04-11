@@ -2539,6 +2539,7 @@ export default function ChatView({
   const {
     messagesScrollElement,
     showScrollToBottom,
+    setMessagesBottomAnchorRef,
     setMessagesScrollContainerRef,
     forceStickToBottom,
     onTimelineHeightChange,
@@ -4968,6 +4969,7 @@ export default function ChatView({
               activeTurnInProgress={isWorking || !latestTurnSettled}
               activeTurnStartedAt={activeWorkStartedAt}
               messagesScrollElement={messagesScrollElement}
+              setMessagesBottomAnchorRef={setMessagesBottomAnchorRef}
               setMessagesScrollContainerRef={setMessagesScrollContainerRef}
               timelineEntries={timelineEntries}
               completionDividerBeforeEntryId={completionDividerBeforeEntryId}

@@ -27,6 +27,7 @@ interface UseChatAutoScrollControllerOptions {
 interface UseChatAutoScrollControllerResult {
   messagesScrollElement: HTMLDivElement | null;
   showScrollToBottom: boolean;
+  setMessagesBottomAnchorRef: (element: HTMLDivElement | null) => void;
   setMessagesScrollContainerRef: (element: HTMLDivElement | null) => void;
   forceStickToBottom: (behavior?: ScrollBehavior) => void;
   onTimelineHeightChange: () => void;
@@ -47,6 +48,7 @@ export function useChatAutoScrollController(
   options: UseChatAutoScrollControllerOptions,
 ): UseChatAutoScrollControllerResult {
   const messagesScrollRef = useRef<HTMLDivElement | null>(null);
+  const messagesBottomAnchorRef = useRef<HTMLDivElement | null>(null);
   const [messagesScrollElement, setMessagesScrollElement] = useState<HTMLDivElement | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
 
@@ -56,24 +58,42 @@ export function useChatAutoScrollController(
   const lastTouchClientYRef = useRef<number | null>(null);
   const pendingUserScrollUpIntentRef = useRef(false);
   const pendingAutoScrollFrameRef = useRef<number | null>(null);
+  const pendingScrollFrameRef = useRef<number | null>(null);
   const pendingInteractionAnchorRef = useRef<{
     element: HTMLElement;
     top: number;
   } | null>(null);
   const pendingInteractionAnchorFrameRef = useRef<number | null>(null);
+  const showScrollToBottomRef = useRef(false);
+
+  const setMessagesBottomAnchorRef = useCallback((element: HTMLDivElement | null) => {
+    messagesBottomAnchorRef.current = element;
+  }, []);
 
   const setMessagesScrollContainerRef = useCallback((element: HTMLDivElement | null) => {
     messagesScrollRef.current = element;
     setMessagesScrollElement(element);
   }, []);
 
+  // The bottom anchor gives us a stable "true bottom" target even while the
+  // virtualizer is still reconciling row heights during an active turn.
   // Jumps to the latest known bottom and re-enables sticky behavior when the user returns there.
   const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
     const scrollContainer = messagesScrollRef.current;
     if (!scrollContainer) return;
-    scrollContainer.scrollTo({ top: scrollContainer.scrollHeight, behavior });
+    const bottomAnchor = messagesBottomAnchorRef.current;
+    if (bottomAnchor && scrollContainer.contains(bottomAnchor)) {
+      const targetTop = Math.max(
+        0,
+        bottomAnchor.offsetTop + bottomAnchor.offsetHeight - scrollContainer.clientHeight,
+      );
+      scrollContainer.scrollTo({ top: targetTop, behavior });
+    } else {
+      scrollContainer.scrollTo({ top: scrollContainer.scrollHeight, behavior });
+    }
     lastKnownScrollTopRef.current = scrollContainer.scrollTop;
     shouldAutoScrollRef.current = true;
+    showScrollToBottomRef.current = false;
     setShowScrollToBottom(false);
   }, []);
 
@@ -81,6 +101,13 @@ export function useChatAutoScrollController(
     const pendingFrame = pendingAutoScrollFrameRef.current;
     if (pendingFrame === null) return;
     pendingAutoScrollFrameRef.current = null;
+    window.cancelAnimationFrame(pendingFrame);
+  }, []);
+
+  const cancelPendingScrollProcessing = useCallback(() => {
+    const pendingFrame = pendingScrollFrameRef.current;
+    if (pendingFrame === null) return;
+    pendingScrollFrameRef.current = null;
     window.cancelAnimationFrame(pendingFrame);
   }, []);
 
@@ -106,10 +133,16 @@ export function useChatAutoScrollController(
   const forceStickToBottom = useCallback(
     (behavior: ScrollBehavior = "auto") => {
       cancelPendingStickToBottom();
+      cancelPendingScrollProcessing();
       scrollMessagesToBottom(behavior);
       scheduleStickToBottom(behavior);
     },
-    [cancelPendingStickToBottom, scheduleStickToBottom, scrollMessagesToBottom],
+    [
+      cancelPendingScrollProcessing,
+      cancelPendingStickToBottom,
+      scheduleStickToBottom,
+      scrollMessagesToBottom,
+    ],
   );
 
   const onTimelineHeightChange = useCallback(() => {
@@ -162,47 +195,72 @@ export function useChatAutoScrollController(
     [cancelPendingInteractionAnchorAdjustment],
   );
 
+  const updateScrollButtonVisibility = useCallback((visible: boolean) => {
+    if (showScrollToBottomRef.current === visible) return;
+    showScrollToBottomRef.current = visible;
+    setShowScrollToBottom(visible);
+  }, []);
+
+  // Any explicit user scroll gesture should win over queued auto-stick work.
+  // Keeping this centralized makes it easier to tweak the "manual scroll vs.
+  // stick to bottom" contract without touching every event handler.
+  const noteManualScrollIntent = useCallback(() => {
+    pendingUserScrollUpIntentRef.current = true;
+    cancelPendingStickToBottom();
+  }, [cancelPendingStickToBottom]);
+
   const onMessagesScroll = useCallback(() => {
-    const scrollContainer = messagesScrollRef.current;
-    if (!scrollContainer) return;
-    const currentScrollTop = scrollContainer.scrollTop;
-    const isNearBottom = isScrollContainerNearBottom(scrollContainer);
+    if (pendingScrollFrameRef.current !== null) return;
+    pendingScrollFrameRef.current = window.requestAnimationFrame(() => {
+      pendingScrollFrameRef.current = null;
+      const scrollContainer = messagesScrollRef.current;
+      if (!scrollContainer) return;
+      const currentScrollTop = scrollContainer.scrollTop;
+      const isNearBottom = isScrollContainerNearBottom(scrollContainer);
+      const didScrollUp = currentScrollTop < lastKnownScrollTopRef.current - 1;
 
-    if (!shouldAutoScrollRef.current && isNearBottom) {
-      shouldAutoScrollRef.current = true;
-      pendingUserScrollUpIntentRef.current = false;
-    } else if (shouldAutoScrollRef.current && pendingUserScrollUpIntentRef.current) {
-      const scrolledUp = currentScrollTop < lastKnownScrollTopRef.current - 1;
-      if (scrolledUp) {
-        shouldAutoScrollRef.current = false;
+      if (!shouldAutoScrollRef.current && isNearBottom) {
+        shouldAutoScrollRef.current = true;
+        pendingUserScrollUpIntentRef.current = false;
+      } else if (shouldAutoScrollRef.current && pendingUserScrollUpIntentRef.current) {
+        if (didScrollUp) {
+          shouldAutoScrollRef.current = false;
+        }
+        pendingUserScrollUpIntentRef.current = false;
+      } else if (shouldAutoScrollRef.current && isPointerScrollActiveRef.current) {
+        if (didScrollUp) {
+          shouldAutoScrollRef.current = false;
+        }
+      } else if (shouldAutoScrollRef.current && !isNearBottom) {
+        // Catch keyboard or assistive scroll interactions that do not expose pointer intent.
+        if (didScrollUp) {
+          shouldAutoScrollRef.current = false;
+        }
       }
-      pendingUserScrollUpIntentRef.current = false;
-    } else if (shouldAutoScrollRef.current && isPointerScrollActiveRef.current) {
-      const scrolledUp = currentScrollTop < lastKnownScrollTopRef.current - 1;
-      if (scrolledUp) {
-        shouldAutoScrollRef.current = false;
+
+      updateScrollButtonVisibility(!shouldAutoScrollRef.current);
+      lastKnownScrollTopRef.current = currentScrollTop;
+    });
+  }, [updateScrollButtonVisibility]);
+
+  const onMessagesWheel = useCallback(
+    (event: WheelEvent<HTMLDivElement>) => {
+      if (event.deltaY < 0) {
+        noteManualScrollIntent();
       }
-    } else if (shouldAutoScrollRef.current && !isNearBottom) {
-      // Catch keyboard or assistive scroll interactions that do not expose pointer intent.
-      const scrolledUp = currentScrollTop < lastKnownScrollTopRef.current - 1;
-      if (scrolledUp) {
-        shouldAutoScrollRef.current = false;
-      }
-    }
+    },
+    [noteManualScrollIntent],
+  );
 
-    setShowScrollToBottom(!shouldAutoScrollRef.current);
-    lastKnownScrollTopRef.current = currentScrollTop;
-  }, []);
-
-  const onMessagesWheel = useCallback((event: WheelEvent<HTMLDivElement>) => {
-    if (event.deltaY < 0) {
-      pendingUserScrollUpIntentRef.current = true;
-    }
-  }, []);
-
-  const onMessagesPointerDown = useCallback((_event: PointerEvent<HTMLDivElement>) => {
-    isPointerScrollActiveRef.current = true;
-  }, []);
+  const onMessagesPointerDown = useCallback(
+    (_event: PointerEvent<HTMLDivElement>) => {
+      isPointerScrollActiveRef.current = true;
+      // Pointer-driven scrollbars/trackpads can start with pointer-down before
+      // the first scroll event lands, so cancel pending stick work immediately.
+      cancelPendingStickToBottom();
+    },
+    [cancelPendingStickToBottom],
+  );
 
   const onMessagesPointerUp = useCallback((_event: PointerEvent<HTMLDivElement>) => {
     isPointerScrollActiveRef.current = false;
@@ -218,15 +276,18 @@ export function useChatAutoScrollController(
     lastTouchClientYRef.current = touch.clientY;
   }, []);
 
-  const onMessagesTouchMove = useCallback((event: TouchEvent<HTMLDivElement>) => {
-    const touch = event.touches[0];
-    if (!touch) return;
-    const previousTouchY = lastTouchClientYRef.current;
-    if (previousTouchY !== null && touch.clientY > previousTouchY + 1) {
-      pendingUserScrollUpIntentRef.current = true;
-    }
-    lastTouchClientYRef.current = touch.clientY;
-  }, []);
+  const onMessagesTouchMove = useCallback(
+    (event: TouchEvent<HTMLDivElement>) => {
+      const touch = event.touches[0];
+      if (!touch) return;
+      const previousTouchY = lastTouchClientYRef.current;
+      if (previousTouchY !== null && touch.clientY > previousTouchY + 1) {
+        noteManualScrollIntent();
+      }
+      lastTouchClientYRef.current = touch.clientY;
+    },
+    [noteManualScrollIntent],
+  );
 
   const onMessagesTouchEnd = useCallback((_event: TouchEvent<HTMLDivElement>) => {
     lastTouchClientYRef.current = null;
@@ -234,10 +295,15 @@ export function useChatAutoScrollController(
 
   useEffect(() => {
     return () => {
+      cancelPendingScrollProcessing();
       cancelPendingStickToBottom();
       cancelPendingInteractionAnchorAdjustment();
     };
-  }, [cancelPendingInteractionAnchorAdjustment, cancelPendingStickToBottom]);
+  }, [
+    cancelPendingInteractionAnchorAdjustment,
+    cancelPendingScrollProcessing,
+    cancelPendingStickToBottom,
+  ]);
 
   useLayoutEffect(() => {
     if (!options.threadId) return;
@@ -247,7 +313,9 @@ export function useChatAutoScrollController(
     lastTouchClientYRef.current = null;
     pendingUserScrollUpIntentRef.current = false;
     pendingInteractionAnchorRef.current = null;
+    showScrollToBottomRef.current = false;
     setShowScrollToBottom(false);
+    cancelPendingScrollProcessing();
     cancelPendingInteractionAnchorAdjustment();
     cancelPendingStickToBottom();
     scheduleStickToBottom();
@@ -262,6 +330,7 @@ export function useChatAutoScrollController(
     };
   }, [
     cancelPendingInteractionAnchorAdjustment,
+    cancelPendingScrollProcessing,
     cancelPendingStickToBottom,
     options.threadId,
     scheduleStickToBottom,
@@ -281,6 +350,7 @@ export function useChatAutoScrollController(
   return {
     messagesScrollElement,
     showScrollToBottom,
+    setMessagesBottomAnchorRef,
     setMessagesScrollContainerRef,
     forceStickToBottom,
     onTimelineHeightChange,

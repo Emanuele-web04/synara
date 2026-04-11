@@ -185,6 +185,29 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     );
     const durationStartByMessageId = computeMessageDurationStart(timelineMessages);
     const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(timelineMessages);
+    let pendingWorkGroup: Extract<TimelineRow, { kind: "work" }> | null = null;
+
+    const appendWorkEntriesToPreviousAssistant = (groupedEntries: TimelineWorkEntry[]): boolean => {
+      const previousRow = nextRows.at(-1);
+      if (
+        !previousRow ||
+        previousRow.kind !== "message" ||
+        previousRow.message.role !== "assistant"
+      ) {
+        return false;
+      }
+
+      previousRow.inlineWorkEntries = [...(previousRow.inlineWorkEntries ?? []), ...groupedEntries];
+      return true;
+    };
+
+    const flushPendingWorkGroup = () => {
+      if (!pendingWorkGroup) return;
+      if (!appendWorkEntriesToPreviousAssistant(pendingWorkGroup.groupedEntries)) {
+        nextRows.push(pendingWorkGroup);
+      }
+      pendingWorkGroup = null;
+    };
 
     for (let index = 0; index < timelineEntries.length; index += 1) {
       const timelineEntry = timelineEntries[index];
@@ -201,17 +224,19 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           groupedEntries.push(nextEntry.entry);
           cursor += 1;
         }
-        nextRows.push({
+        flushPendingWorkGroup();
+        pendingWorkGroup = {
           kind: "work",
           id: timelineEntry.id,
           createdAt: timelineEntry.createdAt,
           groupedEntries,
-        });
+        };
         index = cursor - 1;
         continue;
       }
 
       if (timelineEntry.kind === "proposed-plan") {
+        flushPendingWorkGroup();
         nextRows.push({
           kind: "proposed-plan",
           id: timelineEntry.id,
@@ -221,11 +246,20 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         continue;
       }
 
+      const inlineWorkEntries =
+        timelineEntry.message.role === "assistant" ? pendingWorkGroup?.groupedEntries : undefined;
+      if (timelineEntry.message.role === "assistant") {
+        pendingWorkGroup = null;
+      } else {
+        flushPendingWorkGroup();
+      }
+
       nextRows.push({
         kind: "message",
         id: timelineEntry.id,
         createdAt: timelineEntry.createdAt,
         message: timelineEntry.message,
+        inlineWorkEntries,
         durationStart:
           durationStartByMessageId.get(timelineEntry.message.id) ?? timelineEntry.message.createdAt,
         showCompletionDivider:
@@ -236,6 +270,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           terminalAssistantMessageIds.has(timelineEntry.message.id),
       });
     }
+
+    flushPendingWorkGroup();
 
     if (isWorking) {
       nextRows.push({
@@ -252,6 +288,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     const firstTailRowIndex = Math.max(rows.length - ALWAYS_UNVIRTUALIZED_TAIL_ROWS, 0);
     if (!activeTurnInProgress) return firstTailRowIndex;
 
+    // We intentionally keep a small live tail outside virtualization so the
+    // currently active turn can expand without the user seeing rows jump in and
+    // out of measurement. If this area ever becomes the next perf bottleneck,
+    // this is the pivot point to shrink first.
     const turnStartedAtMs =
       typeof activeTurnStartedAt === "string" ? Date.parse(activeTurnStartedAt) : Number.NaN;
     let firstCurrentTurnRowIndex = -1;
@@ -344,14 +384,29 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         chatFontSizePx: normalizedChatFontSizePx,
       });
     },
+    // We still dynamically measure rows because assistant markdown, images and
+    // diff cards do not have stable heights. If we revisit the virtualizer
+    // strategy, this ref is the main seam where we can switch to fixed or
+    // selectively measured rows.
     measureElement: measureVirtualElement,
     useAnimationFrameWithResizeObserver: true,
-    overscan: 8,
+    overscan: 4,
   });
+  const pendingMeasureFrameRef = useRef<number | null>(null);
+  // Coalesce all local "please remeasure" triggers into one RAF. The hot path
+  // here is less about any single measure and more about several observers
+  // firing back-to-back while the user is scrolling.
+  const scheduleVirtualizerMeasure = useCallback(() => {
+    if (pendingMeasureFrameRef.current !== null) return;
+    pendingMeasureFrameRef.current = window.requestAnimationFrame(() => {
+      pendingMeasureFrameRef.current = null;
+      rowVirtualizer.measure();
+    });
+  }, [rowVirtualizer]);
   useEffect(() => {
     if (timelineWidthPx === null) return;
-    rowVirtualizer.measure();
-  }, [rowVirtualizer, timelineWidthPx]);
+    scheduleVirtualizerMeasure();
+  }, [scheduleVirtualizerMeasure, timelineWidthPx]);
   useLayoutEffect(() => {
     if (!scrollContainer || typeof ResizeObserver === "undefined") return;
 
@@ -370,7 +425,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       }
       lastViewportWidth = nextViewportWidth;
       lastViewportHeight = nextViewportHeight;
-      rowVirtualizer.measure();
+      scheduleVirtualizerMeasure();
     };
 
     syncViewportSize();
@@ -381,16 +436,19 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     return () => {
       observer.disconnect();
     };
-  }, [rowVirtualizer, scrollContainer]);
+  }, [scheduleVirtualizerMeasure, scrollContainer]);
   useEffect(() => {
-    rowVirtualizer.measure();
+    scheduleVirtualizerMeasure();
   }, [
-    rowVirtualizer,
     expandedWorkGroups,
     allDirectoriesExpandedByTurnId,
     normalizedChatFontSizePx,
+    scheduleVirtualizerMeasure,
   ]);
   useEffect(() => {
+    // TanStack can compensate for late measurements by shifting scroll
+    // position. This keeps the bottom anchored, but it is also one of the
+    // places to revisit if future "scroll fights the user" regressions appear.
     rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = (_item, _delta, instance) => {
       const viewportHeight = instance.scrollRect?.height ?? 0;
       const scrollOffset = instance.scrollOffset ?? 0;
@@ -401,14 +459,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = undefined;
     };
   }, [rowVirtualizer]);
-  const pendingMeasureFrameRef = useRef<number | null>(null);
   const onTimelineImageLoad = useCallback(() => {
-    if (pendingMeasureFrameRef.current !== null) return;
-    pendingMeasureFrameRef.current = window.requestAnimationFrame(() => {
-      pendingMeasureFrameRef.current = null;
-      rowVirtualizer.measure();
-    });
-  }, [rowVirtualizer]);
+    scheduleVirtualizerMeasure();
+  }, [scheduleVirtualizerMeasure]);
   useEffect(() => {
     return () => {
       const frame = pendingMeasureFrameRef.current;
@@ -551,11 +604,24 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         row.message.role === "assistant" &&
         (() => {
           const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+          const inlineWorkSummary = formatInlineWorkSummary(row.inlineWorkEntries ?? []);
           const assistantCopyState = resolveAssistantMessageCopyState({
             text: row.message.text ?? null,
             showCopyButton: row.showAssistantCopyButton,
             streaming: row.message.streaming,
           });
+          const assistantMeta = [
+            formatMessageMeta(
+              row.message.createdAt,
+              row.message.streaming
+                ? formatElapsed(row.durationStart, nowIso)
+                : formatElapsed(row.durationStart, row.message.completedAt),
+              timestampFormat,
+            ),
+            inlineWorkSummary,
+          ]
+            .filter((value): value is string => Boolean(value))
+            .join(" • ");
           return (
             <>
               {row.showCompletionDivider && (
@@ -589,7 +655,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     correspondingUserMessageId != null &&
                     revertTurnCountByUserMessageId.has(correspondingUserMessageId);
                   return (
-                    <div className="mt-3 overflow-hidden rounded-lg border border-border bg-neutral-50 dark:bg-neutral-900">
+                    <div className="mt-5 overflow-hidden rounded-lg border border-border bg-neutral-50 dark:bg-neutral-900">
                       <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
                         <span className="text-[13px] font-normal text-foreground">
                           {checkpointFiles.length === 1
@@ -623,7 +689,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                               theme={resolvedTheme}
                               className="size-4 shrink-0 opacity-50"
                             />
-                            <span className="font-chat-code truncate text-[12px] text-primary/80 hover:text-primary">
+                            <span className="font-chat-code truncate text-[12px] text-neutral-900 dark:text-foreground/80 dark:hover:text-foreground">
                               {file.path}
                             </span>
                             {(file.additions ?? 0) + (file.deletions ?? 0) > 0 && (
@@ -642,13 +708,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 })()}
                 <div className="mt-1 flex items-center gap-2">
                   <p className="font-chat-code text-[10px] text-muted-foreground/45">
-                    {formatMessageMeta(
-                      row.message.createdAt,
-                      row.message.streaming
-                        ? formatElapsed(row.durationStart, nowIso)
-                        : formatElapsed(row.durationStart, row.message.completedAt),
-                      timestampFormat,
-                    )}
+                    {assistantMeta}
                   </p>
                   {assistantCopyState.visible ? (
                     <div className="flex items-center opacity-0 transition-opacity duration-200 group-hover/assistant:opacity-100 focus-within:opacity-100">
@@ -759,6 +819,7 @@ type TimelineRow =
       id: string;
       createdAt: string;
       message: TimelineMessage;
+      inlineWorkEntries?: TimelineWorkEntry[];
       durationStart: string;
       showCompletionDivider: boolean;
       showAssistantCopyButton: boolean;
@@ -809,6 +870,18 @@ function formatMessageMeta(
 ): string {
   if (!duration) return formatShortTimestamp(createdAt, timestampFormat);
   return `${formatShortTimestamp(createdAt, timestampFormat)} • ${duration}`;
+}
+
+function formatInlineWorkSummary(groupedEntries: TimelineWorkEntry[]): string | null {
+  if (groupedEntries.length === 0) return null;
+
+  const onlyToolEntries = groupedEntries.every((entry) => entry.tone === "tool");
+  const groupLabel = onlyToolEntries ? "Tool calls" : "Work log";
+  if (groupedEntries.length === 1) {
+    return `${toolWorkEntryHeading(groupedEntries[0])} • ${groupLabel}`;
+  }
+
+  return `${groupLabel} (${groupedEntries.length})`;
 }
 
 const UserMessageTerminalContextInlineLabel = memo(

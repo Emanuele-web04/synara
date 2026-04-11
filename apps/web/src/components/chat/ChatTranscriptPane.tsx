@@ -53,6 +53,7 @@ interface ChatTranscriptPaneProps {
   resolvedTheme: "light" | "dark";
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   scrollButtonVisible: boolean;
+  setMessagesBottomAnchorRef: (element: HTMLDivElement | null) => void;
   setMessagesScrollContainerRef: (element: HTMLDivElement | null) => void;
   terminalWorkspaceTerminalTabActive: boolean;
   timelineEntries: ComponentProps<typeof MessagesTimeline>["timelineEntries"];
@@ -94,6 +95,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   resolvedTheme,
   revertTurnCountByUserMessageId,
   scrollButtonVisible,
+  setMessagesBottomAnchorRef,
   setMessagesScrollContainerRef,
   terminalWorkspaceTerminalTabActive,
   timelineEntries,
@@ -151,17 +153,20 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
             workspaceRoot={workspaceRoot}
             emptyStateContent={<ChatEmptyStateHero projectName={emptyStateProjectName} />}
           />
+          {/* Keep an explicit bottom target so auto-stick can scroll to real content end
+              without depending on in-flight virtualizer height estimates. */}
+          <div ref={setMessagesBottomAnchorRef} aria-hidden="true" className="h-px w-full" />
         </div>
 
         {scrollButtonVisible ? (
-          <div className="pointer-events-none absolute bottom-1 left-1/2 z-30 flex -translate-x-1/2 justify-center py-1.5">
+          <div className="pointer-events-none absolute bottom-1 left-1/2 z-30 flex -translate-x-1/2 justify-center py-1">
             <button
               type="button"
               onClick={onScrollToBottom}
               aria-label="Scroll to bottom"
-              className="pointer-events-auto flex size-11 items-center justify-center rounded-full border border-border bg-background/95 text-muted-foreground shadow-sm backdrop-blur-sm transition-colors hover:cursor-pointer hover:border-foreground/20 hover:bg-background hover:text-foreground"
+              className="pointer-events-auto flex size-9 items-center justify-center rounded-full border border-border bg-background/95 text-muted-foreground shadow-sm backdrop-blur-sm transition-colors hover:cursor-pointer hover:border-foreground/20 hover:bg-background hover:text-foreground"
             >
-              <ArrowDownIcon className="size-5" />
+              <ArrowDownIcon className="size-4" />
             </button>
           </div>
         ) : null}
