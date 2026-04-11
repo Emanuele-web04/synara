@@ -160,6 +160,20 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       },
     },
     {
+      slug: "claude-opus-4-5",
+      name: "Claude Opus 4.5",
+      capabilities: {
+        reasoningEffortLevels: [
+          { value: "low", label: "Low" },
+          { value: "medium", label: "Medium" },
+          { value: "high", label: "High", isDefault: true },
+        ],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+      },
+    },
+    {
       slug: "claude-sonnet-4-6",
       name: "Claude Sonnet 4.6",
       capabilities: {
@@ -214,6 +228,9 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "opus-4.6": "claude-opus-4-6",
     "claude-opus-4.6": "claude-opus-4-6",
     "claude-opus-4-6-20251117": "claude-opus-4-6",
+    "opus-4.5": "claude-opus-4-5",
+    "claude-opus-4.5": "claude-opus-4-5",
+    "claude-opus-4-5-20250120": "claude-opus-4-5",
     sonnet: "claude-sonnet-4-6",
     "sonnet-4.6": "claude-sonnet-4-6",
     "claude-sonnet-4.6": "claude-sonnet-4-6",

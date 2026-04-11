@@ -161,6 +161,7 @@ interface ClaudeSessionContext {
   }>;
   readonly inFlightTools: Map<number, ToolInFlight>;
   turnState: ClaudeTurnState | undefined;
+  interruptRequestedTurnId: TurnId | undefined;
   lastKnownContextWindow: number | undefined;
   lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
   lastAssistantUuid: string | undefined;
@@ -291,6 +292,11 @@ function isInterruptedResult(result: SDKResultMessage): boolean {
       errors.includes("interrupted by user") ||
       errors.includes("aborted"))
   );
+}
+
+function hasPendingUserInterrupt(context: ClaudeSessionContext): boolean {
+  const activeTurnId = context.turnState?.turnId;
+  return activeTurnId !== undefined && context.interruptRequestedTurnId === activeTurnId;
 }
 
 function asRuntimeItemId(value: string): RuntimeItemId {
@@ -778,17 +784,48 @@ function sanitizeClaudeDisplayText(text: string): string {
     return text;
   }
 
-  return text
-    .split(/\r?\n/)
-    .filter((line) => {
-      const normalized = line.trim().toLowerCase();
-      return !(
-        normalized.startsWith("[ede_diagnostic]") &&
-        normalized.includes("result_type=") &&
-        normalized.includes("stop_reason=")
-      );
-    })
-    .join("\n");
+  const lines = text.split(/\r?\n/);
+  const filteredLines = lines.filter((line) => {
+    const normalized = line.trim().toLowerCase();
+    return !(
+      normalized.startsWith("[ede_diagnostic]") &&
+      normalized.includes("result_type=") &&
+      normalized.includes("stop_reason=")
+    );
+  });
+
+  if (
+    filteredLines.length === 0 &&
+    lines.some((line) => line.trim().toLowerCase().startsWith("[ede_diagnostic]"))
+  ) {
+    return "User interrupted response.";
+  }
+
+  return filteredLines.join("\n");
+}
+
+function normalizeClaudeUserVisibleErrorMessage(
+  text: string | undefined,
+  status: ProviderRuntimeTurnStatus,
+): string | undefined {
+  if (typeof text !== "string") {
+    return undefined;
+  }
+
+  const sanitized = sanitizeClaudeDisplayText(text).trim();
+  if (sanitized.length === 0) {
+    return undefined;
+  }
+
+  if (sanitized === "User interrupted response.") {
+    return status === "interrupted" ? "Claude runtime interrupted." : undefined;
+  }
+
+  if (/^[\]})"'`.,;:!?_-]+$/.test(sanitized)) {
+    return status === "interrupted" ? "Claude runtime interrupted." : "Claude turn failed.";
+  }
+
+  return sanitized;
 }
 
 function extractContentBlockText(block: unknown): string {
@@ -821,7 +858,7 @@ function extractTextContent(value: unknown): string {
   };
 
   if (typeof record.text === "string") {
-    return record.text;
+    return sanitizeClaudeDisplayText(record.text);
   }
 
   return extractTextContent(record.content);
@@ -1672,6 +1709,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         });
 
         const updatedAt = yield* nowIso;
+        if (context.interruptRequestedTurnId === turnState.turnId) {
+          context.interruptRequestedTurnId = undefined;
+        }
         context.turnState = undefined;
         context.session = {
           ...context.session,
@@ -2150,8 +2190,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           return;
         }
 
-        const status = turnStatusFromResult(message);
-        const errorMessage = message.subtype === "success" ? undefined : message.errors[0];
+        const status =
+          hasPendingUserInterrupt(context) && message.subtype === "error_during_execution"
+            ? "interrupted"
+            : turnStatusFromResult(message);
+        const errorMessage =
+          message.subtype === "success"
+            ? undefined
+            : normalizeClaudeUserVisibleErrorMessage(message.errors[0], status);
 
         if (status === "failed") {
           yield* emitRuntimeError(context, errorMessage ?? "Claude turn failed.");
@@ -2491,7 +2537,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         if (Exit.isFailure(exit)) {
-          if (isClaudeInterruptedCause(exit.cause)) {
+          if (hasPendingUserInterrupt(context) || isClaudeInterruptedCause(exit.cause)) {
             if (context.turnState) {
               yield* completeTurn(
                 context,
@@ -3022,6 +3068,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           turns: [],
           inFlightTools,
           turnState: undefined,
+          interruptRequestedTurnId: undefined,
           lastKnownContextWindow: undefined,
           lastKnownTokenUsage: undefined,
           lastAssistantUuid: resumeState?.resumeSessionAt,
@@ -3184,6 +3231,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     const interruptTurn: ClaudeAdapterShape["interruptTurn"] = (threadId, _turnId) =>
       Effect.gen(function* () {
         const context = yield* requireSession(threadId);
+        if (context.turnState) {
+          context.interruptRequestedTurnId = context.turnState.turnId;
+        }
         yield* Effect.tryPromise({
           try: () => context.query.interrupt(),
           catch: (cause) => toRequestError(threadId, "turn/interrupt", cause),

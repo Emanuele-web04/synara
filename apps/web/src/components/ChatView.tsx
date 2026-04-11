@@ -146,7 +146,7 @@ import {
 import { Button } from "./ui/button";
 import { Separator } from "./ui/separator";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
-import { cn, randomUUID } from "~/lib/utils";
+import { cn, isMacPlatform, randomUUID } from "~/lib/utils";
 import { toastManager } from "./ui/toast";
 import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
 import { type NewProjectScriptInput } from "./ProjectScriptsControl";
@@ -258,6 +258,14 @@ const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
 const EMPTY_PROVIDER_NATIVE_COMMANDS: ProviderNativeCommandDescriptor[] = [];
 const EMPTY_PROVIDER_SKILLS: ProviderSkillDescriptor[] = [];
+function eventTargetsComposer(
+  event: globalThis.KeyboardEvent,
+  composerForm: HTMLFormElement | null,
+): boolean {
+  if (!composerForm) return false;
+  const target = event.target;
+  return target instanceof Node ? composerForm.contains(target) : false;
+}
 const EMPTY_AVAILABLE_EDITORS: EditorId[] = [];
 const EMPTY_PROVIDER_STATUSES: ServerProviderStatus[] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
@@ -2988,6 +2996,17 @@ export default function ChatView({
     };
   }, [focusComposer, terminalState.workspaceActiveTab, terminalWorkspaceOpen]);
 
+  const onInterrupt = useCallback(async () => {
+    const api = readNativeApi();
+    if (!api || !activeThread) return;
+    await api.orchestration.dispatchCommand({
+      type: "thread.turn.interrupt",
+      commandId: newCommandId(),
+      threadId: activeThread.id,
+      createdAt: new Date().toISOString(),
+    });
+  }, [activeThread]);
+
   useEffect(() => {
     if (surfaceMode === "split" && !isFocusedPane) {
       return;
@@ -2995,6 +3014,22 @@ export default function ChatView({
 
     const handler = (event: globalThis.KeyboardEvent) => {
       if (!activeThreadId || event.defaultPrevented) return;
+      // Mirror terminal interrupt semantics without stealing regular copy shortcuts.
+      if (
+        phase === "running" &&
+        isMacPlatform(navigator.platform) &&
+        event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        !event.shiftKey &&
+        event.key.toLowerCase() === "c" &&
+        eventTargetsComposer(event, composerFormRef.current)
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        void onInterrupt();
+        return;
+      }
       const shortcutContext = {
         terminalFocus: isTerminalFocused(),
         terminalOpen: Boolean(terminalState.terminalOpen),
@@ -3148,7 +3183,9 @@ export default function ChatView({
     terminalWorkspaceTerminalTabActive,
     onToggleBrowser,
     onToggleDiff,
+    onInterrupt,
     isFocusedPane,
+    phase,
     setTerminalWorkspaceTab,
     surfaceMode,
     toggleTerminalVisibility,
@@ -3802,17 +3839,6 @@ export default function ChatView({
       resetSendPhase();
     }
     return turnStartSucceeded;
-  };
-
-  const onInterrupt = async () => {
-    const api = readNativeApi();
-    if (!api || !activeThread) return;
-    await api.orchestration.dispatchCommand({
-      type: "thread.turn.interrupt",
-      commandId: newCommandId(),
-      threadId: activeThread.id,
-      createdAt: new Date().toISOString(),
-    });
   };
 
   const onRespondToApproval = useCallback(
@@ -4981,6 +5007,11 @@ export default function ChatView({
               "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
               terminalWorkspaceTerminalTabActive ? "pointer-events-none invisible" : "",
             )}
+            style={
+              {
+                "--composer-picker-font-size": `${settings.chatFontSizePx}px`,
+              } as React.CSSProperties
+            }
           >
             <ChatTranscriptPane
               activeThreadId={activeThread.id}
@@ -5041,12 +5072,12 @@ export default function ChatView({
                 data-chat-pane-scope={paneScopeId}
               >
                 {queuedComposerTurns.length > 0 ? (
-                  <div className="mx-auto flex w-5/6 flex-col">
+                  <div className="mx-auto flex w-11/12 flex-col">
                     {queuedComposerTurns.map((queuedTurn) => (
                       <div
                         key={queuedTurn.id}
                         data-testid="queued-follow-up-row"
-                        className="flex items-center gap-2 rounded-t-sm border border-b-0 border-border/60 bg-card px-2.5 py-2 text-[12px]"
+                        className="flex items-center gap-2 rounded-t-xl border border-b-0 border-border/60 bg-card px-2.5 py-2 text-[12px]"
                       >
                         <div className="flex min-w-0 flex-1 items-center gap-1.5">
                           <Undo2Icon className="size-3 shrink-0 text-muted-foreground/70" />
@@ -5292,7 +5323,7 @@ export default function ChatView({
 
                                   <Button
                                     variant="ghost"
-                                    className="shrink-0 whitespace-nowrap px-2 text-[12px] sm:text-[12px] font-normal text-blue-400 hover:text-blue-300 sm:px-3"
+                                    className="shrink-0 whitespace-nowrap px-2 text-[length:var(--composer-picker-font-size,12px)] sm:text-[length:var(--composer-picker-font-size,12px)] font-normal text-blue-400 hover:text-blue-300 sm:px-3"
                                     size="sm"
                                     type="button"
                                     onClick={toggleInteractionMode}
@@ -5313,7 +5344,7 @@ export default function ChatView({
                                   <Button
                                     variant="ghost"
                                     className={cn(
-                                      "shrink-0 whitespace-nowrap px-2 text-[12px] sm:text-[12px] font-normal sm:px-3",
+                                      "shrink-0 whitespace-nowrap px-2 text-[length:var(--composer-picker-font-size,12px)] sm:text-[length:var(--composer-picker-font-size,12px)] font-normal sm:px-3",
                                       planSidebarOpen
                                         ? "text-blue-400 hover:text-blue-300"
                                         : "text-muted-foreground/70 hover:text-foreground/80",
@@ -5378,20 +5409,15 @@ export default function ChatView({
                           ) : phase === "running" ? (
                             <button
                               type="button"
-                              className="flex size-8 cursor-pointer items-center justify-center rounded-full bg-foreground/80 text-background transition-all duration-150 hover:bg-foreground hover:scale-105"
+                              className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full bg-foreground/80 text-background transition-all duration-150 hover:bg-foreground hover:scale-105 sm:h-7 sm:w-7"
                               onClick={() => void onInterrupt()}
                               aria-label="Stop generation"
-                              title="Stop the current response. Press Enter to queue or Cmd/Ctrl+Enter to steer."
+                              title="Stop the current response. On Mac, press Ctrl+C to interrupt."
                             >
-                              <svg
-                                width="12"
-                                height="12"
-                                viewBox="0 0 16 16"
-                                fill="currentColor"
+                              <span
                                 aria-hidden="true"
-                              >
-                                <rect x="3" y="3" width="10" height="10" rx="2" />
-                              </svg>
+                                className="block size-2 rounded-[2px] bg-current"
+                              />
                             </button>
                           ) : pendingUserInputs.length === 0 ? (
                             showPlanFollowUpPrompt ? (

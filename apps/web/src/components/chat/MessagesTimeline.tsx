@@ -83,6 +83,32 @@ import { DisclosureChevron } from "../ui/DisclosureChevron";
 const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
 const ALWAYS_UNVIRTUALIZED_TAIL_ROWS = 8;
 
+const SkillCubeIcon: LucideIcon = (props) => (
+  <svg {...props} viewBox="0 0 24 24" fill="none">
+    <path
+      d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path
+      d="m3.3 7 8.7 5 8.7-5"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M12 22V12"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
 interface MessagesTimelineProps {
   hasMessages: boolean;
   isWorking: boolean;
@@ -670,7 +696,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   return (
                     <div className="mt-5 overflow-hidden rounded-lg border border-border bg-neutral-50 dark:bg-neutral-900">
                       <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
-                        <span className="truncate text-[13px] font-normal text-foreground">
+                        <span
+                          className="truncate font-normal text-foreground"
+                          style={{ fontSize: chatTypographyStyle.fontSize }}
+                        >
                           {checkpointFiles.length === 1
                             ? "1 File changed"
                             : `${checkpointFiles.length} Files changed`}
@@ -695,7 +724,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           {canUndo && (
                             <button
                               type="button"
-                              className="flex items-center gap-1 text-[13px] text-muted-foreground transition-colors hover:text-foreground"
+                              className="flex items-center gap-1 text-muted-foreground transition-colors hover:text-foreground"
+                              style={{ fontSize: chatTypographyStyle.fontSize }}
                               onClick={() => onRevertUserMessage(correspondingUserMessageId)}
                             >
                               Undo
@@ -707,13 +737,17 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       <div
                         className={cn(
                           "grid transition-[grid-template-rows,opacity] duration-220 ease-out",
-                          fileChangesExpanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
+                          fileChangesExpanded
+                            ? "grid-rows-[1fr] opacity-100"
+                            : "grid-rows-[0fr] opacity-0",
                         )}
                       >
                         <div
                           className={cn(
                             "min-h-0 overflow-hidden transition-transform duration-220 ease-out",
-                            fileChangesExpanded ? "translate-y-0" : "-translate-y-1 pointer-events-none",
+                            fileChangesExpanded
+                              ? "translate-y-0"
+                              : "-translate-y-1 pointer-events-none",
                           )}
                         >
                           <div className="bg-neutral-100 dark:bg-neutral-800/40">
@@ -732,12 +766,15 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                                 />
                                 <span
                                   className="font-chat-code truncate font-normal text-neutral-900 dark:text-foreground dark:hover:text-foreground"
-                                  style={{ fontSize: chatTypographyStyle.fontSize }}
+                                  style={{ fontSize: `${normalizedChatFontSizePx - 1}px` }}
                                 >
                                   {file.path}
                                 </span>
                                 {(file.additions ?? 0) + (file.deletions ?? 0) > 0 && (
-                                  <span className="font-chat-code ml-auto shrink-0 text-[11px] tabular-nums">
+                                  <span
+                                    className="font-chat-code ml-auto shrink-0 tabular-nums"
+                                    style={{ fontSize: `${normalizedChatFontSizePx - 2}px` }}
+                                  >
                                     <DiffStatLabel
                                       additions={file.additions ?? 0}
                                       deletions={file.deletions ?? 0}
@@ -1215,7 +1252,7 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
 
   switch (workEntry.itemType) {
     case "mcp_tool_call":
-      return WrenchIcon;
+      return SkillCubeIcon;
     case "dynamic_tool_call":
     case "collab_agent_tool_call":
       return HammerIcon;

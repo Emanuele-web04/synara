@@ -13,6 +13,7 @@ import {
 } from "~/lib/icons";
 import { autoAnimate } from "@formkit/auto-animate";
 import { FiGitBranch } from "react-icons/fi";
+import { HiOutlineCheckCircle } from "react-icons/hi2";
 import {
   TbArrowsDiagonal,
   TbArrowsDiagonalMinimize2,
@@ -1936,18 +1937,30 @@ export default function Sidebar() {
             togglePinnedThread(thread.id);
           }}
         />
-        {threadStatus && (
-          <span
-            className={cn(
-              "pointer-events-none absolute left-3 top-1/2 z-10 h-1.5 w-1.5 -translate-y-1/2 rounded-full transition-opacity",
-              threadStatus.dotClass,
-              threadStatus.pulse ? "animate-pulse" : "",
-              isPinned
-                ? "opacity-0"
-                : "opacity-100 group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
-            )}
-          />
-        )}
+        {threadStatus &&
+          (threadStatus.label === "Completed" ? (
+            <HiOutlineCheckCircle
+              aria-hidden="true"
+              className={cn(
+                "pointer-events-none absolute left-2 top-1/2 z-10 size-4 -translate-y-1/2 transition-opacity",
+                threadStatus.colorClass,
+                isPinned
+                  ? "opacity-0"
+                  : "opacity-100 group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
+              )}
+            />
+          ) : (
+            <span
+              className={cn(
+                "pointer-events-none absolute left-3 top-1/2 z-10 h-1.5 w-1.5 -translate-y-1/2 rounded-full transition-opacity",
+                threadStatus.dotClass,
+                threadStatus.pulse ? "animate-pulse" : "",
+                isPinned
+                  ? "opacity-0"
+                  : "opacity-100 group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
+              )}
+            />
+          ))}
         <SidebarMenuSubButton
           render={<div role="button" tabIndex={0} />}
           data-thread-entry-point={threadEntryPoint}
@@ -2315,9 +2328,11 @@ export default function Sidebar() {
                 <span
                   aria-hidden="true"
                   title={projectStatus.label}
-                  className={`absolute -right-0.5 top-0.5 size-1.5 rounded-full ${projectStatus.dotClass} ${
-                    projectStatus.pulse ? "animate-pulse" : ""
-                  }`}
+                  className={cn(
+                    "absolute -right-0.5 top-0.5 size-1.5 rounded-full",
+                    projectStatus.dotClass,
+                    projectStatus.pulse ? "animate-pulse" : "",
+                  )}
                 />
               ) : null}
             </span>

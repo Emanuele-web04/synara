@@ -432,7 +432,9 @@ describe("MessagesTimeline", () => {
                 turnId: TurnId.makeUnsafe("turn-diff-1"),
                 completedAt: "2026-03-17T19:12:30.000Z",
                 assistantMessageId,
-                files: [{ path: "apps/web/src/components/Sidebar.tsx", additions: 6, deletions: 5 }],
+                files: [
+                  { path: "apps/web/src/components/Sidebar.tsx", additions: 6, deletions: 5 },
+                ],
               },
             ],
           ])

@@ -57,9 +57,7 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
           >
             <DisclosureChevron
               open={isExpanded}
-              className={cn(
-                "text-muted-foreground/70 group-hover:text-foreground/80",
-              )}
+              className={cn("text-muted-foreground/70 group-hover:text-foreground/80")}
             />
             {isExpanded ? (
               <FolderIcon className="size-3.5 shrink-0 text-muted-foreground/75" />

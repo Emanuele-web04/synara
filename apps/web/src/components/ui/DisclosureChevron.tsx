@@ -6,10 +6,7 @@
 import { ChevronRightIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
-export function DisclosureChevron(props: {
-  open: boolean;
-  className?: string | undefined;
-}) {
+export function DisclosureChevron(props: { open: boolean; className?: string | undefined }) {
   const { open, className } = props;
 
   return (
