@@ -40,7 +40,7 @@ const PROJECT_ID = asProjectId("project-1");
 const THREAD_ID = ThreadId.makeUnsafe("thread-1");
 const FIXTURE_TURN_ID = "fixture-turn";
 const APPROVAL_REQUEST_ID = asApprovalRequestId("req-approval-1");
-const itLiveUnlessCi = process.env.CI ? it.skip : it.live;
+const itLiveUnlessCi = (process.env.CI ? it.skip : it.live) as typeof it.live;
 type IntegrationProvider = ProviderKind;
 
 function nowIso() {
