@@ -1803,6 +1803,7 @@ export default function Sidebar() {
     return folderName ?? project.name ?? null;
   }
 
+  // Keep hover actions in the same trailing slot used by the timestamp they replace.
   function renderThreadDeleteButton(threadId: ThreadId, toneClassName: string) {
     return (
       <button
@@ -1810,8 +1811,8 @@ export default function Sidebar() {
         aria-label="Delete thread"
         title="Delete thread"
         className={cn(
-          "pointer-events-none absolute right-0 top-1/2 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded-md transition-all opacity-0",
-          "hover:bg-accent/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+          "pointer-events-none absolute inset-y-0 right-0 my-auto inline-flex h-5 w-4 items-center justify-end transition-opacity opacity-0",
+          "hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
           "group-hover/thread-row:pointer-events-auto group-hover/thread-row:opacity-100 group-focus-within/thread-row:pointer-events-auto group-focus-within/thread-row:opacity-100",
           toneClassName,
         )}
@@ -1825,7 +1826,7 @@ export default function Sidebar() {
           void confirmAndDeleteThread(threadId);
         }}
       >
-        <Trash2 className="size-3.25" />
+        <Trash2 className="size-3 shrink-0" />
       </button>
     );
   }
@@ -1883,8 +1884,8 @@ export default function Sidebar() {
                 {folderLabel}
               </span>
             ) : null}
-            <div className="relative flex h-5 shrink-0 items-center justify-end">
-              <span className="shrink-0 text-[11px] text-muted-foreground/38 transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0">
+            <div className="relative flex h-5 min-w-[1.75rem] shrink-0 items-center justify-end">
+              <span className="shrink-0 text-right text-[11px] leading-none tabular-nums text-muted-foreground/38 transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0">
                 {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
               </span>
               {renderThreadDeleteButton(thread.id, "text-muted-foreground/45")}
@@ -2114,10 +2115,10 @@ export default function Sidebar() {
                 <TooltipPopup side="top">Disposable chat</TooltipPopup>
               </Tooltip>
             ) : null}
-            <div className="relative flex h-5 shrink-0 items-center justify-end">
+            <div className="relative flex h-5 min-w-[1.75rem] shrink-0 items-center justify-end">
               <span
                 className={cn(
-                  "shrink-0 text-[12px] transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
+                  "shrink-0 text-right text-[12px] leading-none tabular-nums transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
                   secondaryMetaClass,
                 )}
               >
