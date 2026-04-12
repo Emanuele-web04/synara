@@ -798,7 +798,7 @@ function sanitizeClaudeDisplayText(text: string): string {
     filteredLines.length === 0 &&
     lines.some((line) => line.trim().toLowerCase().startsWith("[ede_diagnostic]"))
   ) {
-    return "User interrupted response.";
+    return "";
   }
 
   return filteredLines.join("\n");

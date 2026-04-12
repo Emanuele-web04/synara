@@ -474,6 +474,10 @@ describe("WebSocket Server", () => {
     return dir;
   }
 
+  function canonicalTestPath(targetPath: string): string {
+    return fs.realpathSync.native(targetPath);
+  }
+
   async function createTestServer(
     options: {
       persistenceLayer?: Layer.Layer<
@@ -682,8 +686,13 @@ describe("WebSocket Server", () => {
   });
 
   it("bootstraps the cwd project on startup when enabled", async () => {
+    const cwdParent = makeTempDir("t3code-bootstrap-workspace-parent-");
+    const cwd = path.join(cwdParent, "bootstrap-workspace");
+    fs.mkdirSync(cwd);
+    const canonicalCwd = canonicalTestPath(cwd);
+
     server = await createTestServer({
-      cwd: "/test/bootstrap-workspace",
+      cwd,
       autoBootstrapProjectFromCwd: true,
     });
     const addr = server.address();
@@ -694,7 +703,7 @@ describe("WebSocket Server", () => {
     connections.push(ws);
     expect(welcome.data).toEqual(
       expect.objectContaining({
-        cwd: "/test/bootstrap-workspace",
+        cwd,
         projectName: "bootstrap-workspace",
         bootstrapProjectId: expect.any(String),
         bootstrapThreadId: expect.any(String),
@@ -734,7 +743,7 @@ describe("WebSocket Server", () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: bootstrapProjectId,
-          workspaceRoot: "/test/bootstrap-workspace",
+          workspaceRoot: canonicalCwd,
           title: "bootstrap-workspace",
           defaultModelSelection: {
             provider: "codex",
@@ -766,7 +775,9 @@ describe("WebSocket Server", () => {
     const persistenceLayer = makeSqlitePersistenceLive(dbPath).pipe(
       Layer.provide(NodeServices.layer),
     );
-    const cwd = "/test/bootstrap-existing";
+    const cwdParent = makeTempDir("t3code-bootstrap-existing-parent-");
+    const cwd = path.join(cwdParent, "bootstrap-existing");
+    fs.mkdirSync(cwd);
 
     server = await createTestServer({
       cwd,
@@ -909,7 +920,9 @@ describe("WebSocket Server", () => {
     };
 
     expect(snapshot.projects).toEqual(
-      expect.arrayContaining([expect.objectContaining({ workspaceRoot: newCwd })]),
+      expect.arrayContaining([
+        expect.objectContaining({ workspaceRoot: canonicalTestPath(newCwd) }),
+      ]),
     );
     expect(snapshot.threads).toEqual([expect.objectContaining({ id: "thread-existing" })]);
   });
