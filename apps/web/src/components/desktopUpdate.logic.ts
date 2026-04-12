@@ -31,7 +31,15 @@ export function resolveDesktopUpdateButtonAction(
 }
 
 export function shouldShowDesktopUpdateButton(state: DesktopUpdateState | null): boolean {
-  return Boolean(state?.enabled);
+  if (!state?.enabled) return false;
+  // Only show the button when there's actually something to do:
+  // a new version to download, a downloaded update to install, or a retryable error
+  return (
+    state.status === "available" ||
+    state.status === "downloading" ||
+    state.status === "downloaded" ||
+    (state.status === "error" && state.errorContext !== "check")
+  );
 }
 
 export function shouldShowArm64IntelBuildWarning(state: DesktopUpdateState | null): boolean {

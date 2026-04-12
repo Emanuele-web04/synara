@@ -30,8 +30,8 @@ const baseState: DesktopUpdateState = {
 };
 
 describe("desktop update button state", () => {
-  it("keeps the button visible so desktop users can manually check for updates", () => {
-    expect(shouldShowDesktopUpdateButton(baseState)).toBe(true);
+  it("hides the button when idle (no update available)", () => {
+    expect(shouldShowDesktopUpdateButton(baseState)).toBe(false);
     expect(resolveDesktopUpdateButtonAction(baseState)).toBe("check");
     expect(getDesktopUpdateButtonTooltip(baseState)).toBe("Check for updates");
   });
@@ -83,7 +83,7 @@ describe("desktop update button state", () => {
       errorContext: "check",
       canRetry: true,
     };
-    expect(shouldShowDesktopUpdateButton(state)).toBe(true);
+    expect(shouldShowDesktopUpdateButton(state)).toBe(false);
     expect(resolveDesktopUpdateButtonAction(state)).toBe("check");
     expect(getDesktopUpdateButtonTooltip(state)).toContain("Click to check again");
   });
