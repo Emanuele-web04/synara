@@ -2822,17 +2822,17 @@ export default function Sidebar() {
       : null;
   const desktopUpdateButtonInteractivityClasses = desktopUpdateButtonDisabled
     ? "cursor-not-allowed opacity-60"
-    : "hover:bg-accent hover:text-foreground";
+    : "hover:brightness-110";
   const desktopUpdateButtonClasses =
     desktopUpdateState?.status === "downloaded"
-      ? "border-emerald-500/30 bg-emerald-500/12 text-emerald-600 hover:bg-emerald-500/18"
+      ? "bg-emerald-500 hover:bg-emerald-600"
       : desktopUpdateState?.status === "downloading"
-        ? "border-sky-500/30 bg-sky-500/10 text-sky-600 hover:bg-sky-500/16"
+        ? "bg-sky-500 hover:bg-sky-600"
         : shouldHighlightDesktopUpdateError(desktopUpdateState)
-          ? "border-rose-500/30 bg-rose-500/10 text-rose-600 hover:bg-rose-500/16"
-          : "border-info/28 bg-info/12 text-info-foreground hover:bg-info/18";
+          ? "bg-rose-500 hover:bg-rose-600"
+          : "bg-info hover:bg-info/90";
   const desktopUpdateRowButtonClasses = cn(
-    "inline-flex h-7 shrink-0 items-center justify-center rounded-md border px-2.5 text-[11px] font-medium transition-colors",
+    "inline-flex h-7 shrink-0 items-center justify-center rounded-full px-2.5 text-[11px] font-medium text-white transition-colors",
     desktopUpdateButtonInteractivityClasses,
     desktopUpdateButtonClasses,
   );
