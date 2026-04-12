@@ -397,6 +397,222 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("Work log (1)");
   });
 
+  it("shows the first four inline tool calls and collapses the remainder", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        scrollContainer={null}
+        timelineEntries={[
+          {
+            id: "entry-inline-tools",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-inline-tool-1",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "tool 1",
+              tone: "tool",
+            },
+          },
+          {
+            id: "entry-inline-tools-2",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.100Z",
+            entry: {
+              id: "work-inline-tool-2",
+              createdAt: "2026-03-17T19:12:28.100Z",
+              label: "tool 2",
+              tone: "tool",
+            },
+          },
+          {
+            id: "entry-inline-tools-3",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.200Z",
+            entry: {
+              id: "work-inline-tool-3",
+              createdAt: "2026-03-17T19:12:28.200Z",
+              label: "tool 3",
+              tone: "tool",
+            },
+          },
+          {
+            id: "entry-inline-tools-4",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.300Z",
+            entry: {
+              id: "work-inline-tool-4",
+              createdAt: "2026-03-17T19:12:28.300Z",
+              label: "tool 4",
+              tone: "tool",
+            },
+          },
+          {
+            id: "entry-inline-tools-5",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.400Z",
+            entry: {
+              id: "work-inline-tool-5",
+              createdAt: "2026-03-17T19:12:28.400Z",
+              label: "tool 5",
+              tone: "tool",
+            },
+          },
+          {
+            id: "entry-inline-tools-6",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.500Z",
+            entry: {
+              id: "work-inline-tool-6",
+              createdAt: "2026-03-17T19:12:28.500Z",
+              label: "tool 6",
+              tone: "tool",
+            },
+          },
+          {
+            id: "entry-assistant-inline-tools",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:29.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-assistant-inline-tools"),
+              role: "assistant",
+              text: "done",
+              createdAt: "2026-03-17T19:12:29.000Z",
+              completedAt: "2026-03-17T19:12:30.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("Tool 1");
+    expect(markup).toContain("Tool 4");
+    expect(markup).toContain("+2 more tool calls");
+    expect(markup).not.toContain("Tool 5");
+    expect(markup).not.toContain("Tool calls (6)");
+  });
+
+  it("expands inline tool calls when the group is toggled open", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        scrollContainer={null}
+        timelineEntries={[
+          {
+            id: "entry-inline-tools-expanded",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-inline-expanded-1",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "tool 1",
+              tone: "tool",
+            },
+          },
+          {
+            id: "entry-inline-tools-expanded-2",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.100Z",
+            entry: {
+              id: "work-inline-expanded-2",
+              createdAt: "2026-03-17T19:12:28.100Z",
+              label: "tool 2",
+              tone: "tool",
+            },
+          },
+          {
+            id: "entry-inline-tools-expanded-3",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.200Z",
+            entry: {
+              id: "work-inline-expanded-3",
+              createdAt: "2026-03-17T19:12:28.200Z",
+              label: "tool 3",
+              tone: "tool",
+            },
+          },
+          {
+            id: "entry-inline-tools-expanded-4",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.300Z",
+            entry: {
+              id: "work-inline-expanded-4",
+              createdAt: "2026-03-17T19:12:28.300Z",
+              label: "tool 4",
+              tone: "tool",
+            },
+          },
+          {
+            id: "entry-inline-tools-expanded-5",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.400Z",
+            entry: {
+              id: "work-inline-expanded-5",
+              createdAt: "2026-03-17T19:12:28.400Z",
+              label: "tool 5",
+              tone: "tool",
+            },
+          },
+          {
+            id: "entry-assistant-inline-tools-expanded",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:29.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-assistant-inline-tools-expanded"),
+              role: "assistant",
+              text: "done",
+              createdAt: "2026-03-17T19:12:29.000Z",
+              completedAt: "2026-03-17T19:12:30.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{ "entry-inline-tools-expanded": true }}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("Tool 5");
+    expect(markup).toContain("Show less");
+  });
+
   it("renders a collapsible changed files header with ui-font filenames", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const assistantMessageId = MessageId.makeUnsafe("message-assistant-diff");

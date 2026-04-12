@@ -10,7 +10,7 @@ import { useQuery } from "@tanstack/react-query";
 import { readNativeApi } from "~/nativeApi";
 import { useAppSettings } from "~/appSettings";
 import { Button } from "~/components/ui/button";
-import { SidebarInset, SidebarTrigger } from "~/components/ui/sidebar";
+import { SidebarHeaderTrigger, SidebarInset } from "~/components/ui/sidebar";
 import {
   confirmTerminalTabClose,
   resolveTerminalCloseTitle,
@@ -390,9 +390,7 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
         <header className="border-b border-border px-3 sm:px-5">
           <div className="flex h-[52px] items-center gap-2 sm:gap-3">
-            <div className="shrink-0 md:hidden">
-              <SidebarTrigger className="size-7 shrink-0" />
-            </div>
+            <SidebarHeaderTrigger className="size-7 shrink-0" />
             <div className="flex min-w-0 flex-1 items-center gap-2">
               {renaming ? (
                 <input

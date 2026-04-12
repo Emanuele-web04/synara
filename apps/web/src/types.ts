@@ -110,6 +110,9 @@ export interface TurnDiffSummary {
 export interface Project {
   id: ProjectId;
   name: string;
+  remoteName: string;
+  folderName: string;
+  localName: string | null;
   cwd: string;
   defaultModelSelection: ModelSelection | null;
   expanded: boolean;

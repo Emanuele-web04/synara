@@ -47,6 +47,7 @@ import { deriveTerminalCommandIdentity } from "@t3tools/shared/terminalThreads";
 import { deriveAssociatedWorktreeMetadata } from "@t3tools/shared/threadWorkspace";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { GoTasklist } from "react-icons/go";
+import { PiArrowBendDownRight } from "react-icons/pi";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useNavigate, useSearch } from "@tanstack/react-router";
@@ -157,7 +158,7 @@ import {
   projectScriptIdFromCommand,
   setupProjectScript,
 } from "~/projectScripts";
-import { SidebarTrigger } from "./ui/sidebar";
+import { SidebarHeaderTrigger } from "./ui/sidebar";
 import { newCommandId, newMessageId, newThreadId } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import {
@@ -183,6 +184,7 @@ import {
 } from "../composerDraftStore";
 import {
   appendTerminalContextsToPrompt,
+  IMAGE_ONLY_BOOTSTRAP_PROMPT,
   formatTerminalContextLabel,
   insertInlineTerminalContextPlaceholder,
   removeInlineTerminalContextPlaceholder,
@@ -251,8 +253,6 @@ import { resolveThreadEnvironmentMode } from "../lib/threadEnvironment";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
-const IMAGE_ONLY_BOOTSTRAP_PROMPT =
-  "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
@@ -509,8 +509,6 @@ export default function ChatView({
   onSplitSurface,
   onMaximizeSurface,
 }: ChatViewProps) {
-  const threads = useStore((store) => store.threads);
-  const projects = useStore((store) => store.projects);
   const markThreadVisited = useStore((store) => store.markThreadVisited);
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
   const setStoreThreadError = useStore((store) => store.setError);
@@ -590,6 +588,12 @@ export default function ChatView({
   );
   const draftThread = useComposerDraftStore(
     (store) => store.draftThreadsByThreadId[threadId] ?? null,
+  );
+  const serverThread = useStore((store) => store.threads.find((thread) => thread.id === threadId));
+  const fallbackDraftProject = useStore((store) =>
+    draftThread?.projectId
+      ? store.projects.find((project) => project.id === draftThread.projectId)
+      : undefined,
   );
   const promptRef = useRef(prompt);
   const [isDragOverComposer, setIsDragOverComposer] = useState(false);
@@ -757,8 +761,6 @@ export default function ChatView({
     [composerTerminalContexts, removeComposerDraftTerminalContext, setPrompt, threadId],
   );
 
-  const serverThread = threads.find((t) => t.id === threadId);
-  const fallbackDraftProject = projects.find((project) => project.id === draftThread?.projectId);
   const localDraftError = serverThread ? null : (localDraftErrorsByThreadId[threadId] ?? null);
   const localDraftThread = useMemo(
     () =>
@@ -803,7 +805,9 @@ export default function ChatView({
   );
   const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread?.session ?? null);
   const activeProjectId = activeThread?.projectId ?? draftThread?.projectId ?? null;
-  const activeProject = projects.find((p) => p.id === activeProjectId);
+  const activeProject = useStore((store) =>
+    activeProjectId ? store.projects.find((project) => project.id === activeProjectId) : undefined,
+  );
   const resolvedThreadEnvMode = isServerThread
     ? (activeThread?.envMode ?? null)
     : (draftThread?.envMode ?? null);
@@ -1090,15 +1094,42 @@ export default function ChatView({
       activeLatestTurn?.turnId ?? null,
     );
   }, [activeLatestTurn?.turnId, activeThread?.proposedPlans, latestTurnSettled]);
+  const sidebarPlanSourceThreadId = !latestTurnSettled
+    ? (activeLatestTurn?.sourceProposedPlan?.threadId ?? null)
+    : null;
+  const sidebarPlanSourceThread = useStore((store) =>
+    sidebarPlanSourceThreadId
+      ? store.threads.find((thread) => thread.id === sidebarPlanSourceThreadId)
+      : undefined,
+  );
   const sidebarProposedPlan = useMemo(
     () =>
       findSidebarProposedPlan({
-        threads,
+        threads: [
+          ...(activeThread
+            ? [{ id: activeThread.id, proposedPlans: activeThread.proposedPlans }]
+            : []),
+          ...(sidebarPlanSourceThread && sidebarPlanSourceThread.id !== activeThread?.id
+            ? [
+                {
+                  id: sidebarPlanSourceThread.id,
+                  proposedPlans: sidebarPlanSourceThread.proposedPlans,
+                },
+              ]
+            : []),
+        ],
         latestTurn: activeLatestTurn,
         latestTurnSettled,
         threadId: activeThread?.id ?? null,
       }),
-    [activeLatestTurn, activeThread?.id, latestTurnSettled, threads],
+    [
+      activeLatestTurn,
+      activeThread?.id,
+      activeThread?.proposedPlans,
+      latestTurnSettled,
+      sidebarPlanSourceThread?.id,
+      sidebarPlanSourceThread?.proposedPlans,
+    ],
   );
   const activePlan = useMemo(
     () => deriveActivePlanState(threadActivities, activeLatestTurn?.turnId ?? undefined),
@@ -1676,6 +1707,10 @@ export default function ChatView({
     () => shortcutLabelForCommand(keybindings, "browser.toggle"),
     [keybindings],
   );
+  const chatSplitShortcutLabel = useMemo(
+    () => shortcutLabelForCommand(keybindings, "chat.split"),
+    [keybindings],
+  );
   const onToggleDiff = useCallback(() => {
     if (onToggleDiffPanel) {
       onToggleDiffPanel();
@@ -1741,7 +1776,7 @@ export default function ChatView({
   const setThreadError = useCallback(
     (targetThreadId: ThreadId | null, error: string | null) => {
       if (!targetThreadId) return;
-      if (threads.some((thread) => thread.id === targetThreadId)) {
+      if (useStore.getState().threads.some((thread) => thread.id === targetThreadId)) {
         setStoreThreadError(targetThreadId, error);
         return;
       }
@@ -1755,7 +1790,7 @@ export default function ChatView({
         };
       });
     },
-    [setStoreThreadError, threads],
+    [setStoreThreadError],
   );
 
   const focusComposer = useCallback(() => {
@@ -3151,6 +3186,15 @@ export default function ChatView({
         return;
       }
 
+      if (command === "chat.split") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (surfaceMode === "single" && onSplitSurface) {
+          onSplitSurface();
+        }
+        return;
+      }
+
       const scriptId = projectScriptIdFromCommand(command);
       if (!scriptId || !activeProject) return;
       const script = activeProject.scripts.find((entry) => entry.id === scriptId);
@@ -3381,12 +3425,20 @@ export default function ChatView({
         return;
       }
       const nextPrompt = queuedTurn.kind === "chat" ? queuedTurn.prompt : queuedTurn.text;
+      const restoredImages =
+        queuedTurn.kind === "chat" ? queuedTurn.images.map(cloneComposerImageForRetry) : [];
       promptRef.current = nextPrompt;
       clearComposerDraftContent(activeThread.id);
       setComposerDraftPrompt(activeThread.id, nextPrompt);
+      // Editing a queued turn should recreate the same draft state the user queued.
+      setDraftThreadContext(activeThread.id, {
+        runtimeMode: queuedTurn.runtimeMode,
+        interactionMode: queuedTurn.interactionMode,
+        ...(queuedTurn.kind === "chat" ? { envMode: queuedTurn.envMode } : {}),
+      });
       if (queuedTurn.kind === "chat") {
-        if (queuedTurn.images.length > 0) {
-          addComposerImagesToDraft(queuedTurn.images);
+        if (restoredImages.length > 0) {
+          addComposerImagesToDraft(restoredImages);
         }
         if (queuedTurn.terminalContexts.length > 0) {
           addComposerTerminalContextsToDraft(queuedTurn.terminalContexts);
@@ -3402,14 +3454,15 @@ export default function ChatView({
       setComposerDraftInteractionMode(activeThread.id, queuedTurn.interactionMode);
       setComposerCursor(collapseExpandedComposerCursor(nextPrompt, nextPrompt.length));
       setComposerTrigger(detectComposerTrigger(nextPrompt, nextPrompt.length));
-      focusComposer();
+      scheduleComposerFocus();
     },
     [
       activeThread,
       addComposerImagesToDraft,
       addComposerTerminalContextsToDraft,
       clearComposerDraftContent,
-      focusComposer,
+      scheduleComposerFocus,
+      setDraftThreadContext,
       setComposerDraftInteractionMode,
       setComposerDraftModelSelection,
       setComposerDraftPrompt,
@@ -4901,13 +4954,14 @@ export default function ChatView({
         {!isElectron && (
           <header className="border-b border-border px-3 py-2 md:hidden">
             <div className="flex items-center gap-2">
-              <SidebarTrigger className="size-7 shrink-0" />
+              <SidebarHeaderTrigger className="size-7 shrink-0" />
               <span className="text-sm font-medium text-foreground">Threads</span>
             </div>
           </header>
         )}
         {isElectron && (
           <div className="drag-region flex h-[52px] shrink-0 items-center border-b border-border px-5">
+            <SidebarHeaderTrigger className="size-7 shrink-0" />
             <span className="text-xs text-muted-foreground/50">No active thread</span>
           </div>
         )}
@@ -4962,12 +5016,14 @@ export default function ChatView({
               ? {
                   kind: "split",
                   label: "Split chat",
+                  shortcutLabel: chatSplitShortcutLabel,
                   onClick: onSplitSurface,
                 }
               : surfaceMode === "split" && isFocusedPane && onMaximizeSurface
                 ? {
                     kind: "maximize",
                     label: "Expand this chat",
+                    shortcutLabel: null,
                     onClick: onMaximizeSurface,
                   }
                 : null
@@ -5007,11 +5063,6 @@ export default function ChatView({
               "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
               terminalWorkspaceTerminalTabActive ? "pointer-events-none invisible" : "",
             )}
-            style={
-              {
-                "--composer-picker-font-size": `${settings.chatFontSizePx}px`,
-              } as React.CSSProperties
-            }
           >
             <ChatTranscriptPane
               activeThreadId={activeThread.id}
@@ -5056,7 +5107,7 @@ export default function ChatView({
             />
 
             {/* Input bar */}
-            <div className={cn("px-3 pt-4 sm:px-5 sm:pt-4", isGitRepo ? "pb-1" : "pb-2.5 sm:pb-3")}>
+            <div className={cn("px-3 pt-0 sm:px-5 sm:pt-0", isGitRepo ? "pb-1" : "pb-2.5 sm:pb-3")}>
               {activePlan && !planSidebarOpen ? (
                 <ActivePlanCard
                   activePlan={activePlan}
@@ -5080,7 +5131,7 @@ export default function ChatView({
                         className="flex items-center gap-2 rounded-t-xl border border-b-0 border-border/60 bg-card px-2.5 py-2 text-[12px]"
                       >
                         <div className="flex min-w-0 flex-1 items-center gap-1.5">
-                          <Undo2Icon className="size-3 shrink-0 text-muted-foreground/70" />
+                          <PiArrowBendDownRight className="size-3 shrink-0 text-muted-foreground/70" />
                           <span className="truncate text-[12px] font-medium text-foreground/85">
                             {queuedTurn.previewText}
                           </span>
@@ -5323,7 +5374,7 @@ export default function ChatView({
 
                                   <Button
                                     variant="ghost"
-                                    className="shrink-0 whitespace-nowrap px-2 text-[length:var(--composer-picker-font-size,12px)] sm:text-[length:var(--composer-picker-font-size,12px)] font-normal text-blue-400 hover:text-blue-300 sm:px-3"
+                                    className="shrink-0 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-blue-400 hover:text-blue-300 sm:px-3"
                                     size="sm"
                                     type="button"
                                     onClick={toggleInteractionMode}
@@ -5344,7 +5395,7 @@ export default function ChatView({
                                   <Button
                                     variant="ghost"
                                     className={cn(
-                                      "shrink-0 whitespace-nowrap px-2 text-[length:var(--composer-picker-font-size,12px)] sm:text-[length:var(--composer-picker-font-size,12px)] font-normal sm:px-3",
+                                      "shrink-0 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal sm:px-3",
                                       planSidebarOpen
                                         ? "text-blue-400 hover:text-blue-300"
                                         : "text-muted-foreground/70 hover:text-foreground/80",
@@ -5409,7 +5460,7 @@ export default function ChatView({
                           ) : phase === "running" ? (
                             <button
                               type="button"
-                              className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full bg-foreground/80 text-background transition-all duration-150 hover:bg-foreground hover:scale-105 sm:h-7 sm:w-7"
+                              className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full bg-foreground text-background transition-all duration-150 hover:scale-105 sm:h-7 sm:w-7"
                               onClick={() => void onInterrupt()}
                               aria-label="Stop generation"
                               title="Stop the current response. On Mac, press Ctrl+C to interrupt."
@@ -5468,7 +5519,7 @@ export default function ChatView({
                             ) : (
                               <button
                                 type="submit"
-                                className="flex h-8 w-8 items-center justify-center rounded-full bg-foreground/80 text-background transition-all duration-150 hover:bg-foreground hover:scale-105 disabled:opacity-20 disabled:hover:scale-100 sm:h-7 sm:w-7"
+                                className="flex h-8 w-8 items-center justify-center rounded-full bg-foreground text-background transition-all duration-150 hover:scale-105 disabled:opacity-20 disabled:hover:scale-100 sm:h-7 sm:w-7"
                                 disabled={
                                   isSendBusy ||
                                   isConnecting ||

@@ -499,6 +499,9 @@ function makeProject(overrides: Partial<Project> = {}): Project {
   return {
     id: ProjectId.makeUnsafe("project-1"),
     name: "Project",
+    remoteName: "Project",
+    folderName: "project",
+    localName: null,
     cwd: "/tmp/project",
     defaultModelSelection: {
       provider: "codex",

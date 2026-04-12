@@ -30,6 +30,21 @@ interface ShortcutMatchOptions {
 
 const WORKSPACE_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
   {
+    command: "chat.split",
+    shortcut: {
+      key: "\\",
+      metaKey: false,
+      ctrlKey: false,
+      shiftKey: false,
+      altKey: false,
+      modKey: true,
+    },
+    whenAst: {
+      type: "not",
+      node: { type: "identifier", name: "terminalFocus" },
+    },
+  },
+  {
     command: "terminal.workspace.newFullWidth",
     shortcut: {
       key: "j",

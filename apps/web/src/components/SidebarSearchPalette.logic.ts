@@ -14,6 +14,9 @@ export interface SidebarSearchAction {
 export interface SidebarSearchProject {
   id: string;
   name: string;
+  remoteName: string;
+  folderName: string;
+  localName: string | null;
   cwd: string;
   createdAt?: string | undefined;
   updatedAt?: string | undefined;
@@ -29,6 +32,7 @@ export interface SidebarSearchThread {
   title: string;
   projectId: string;
   projectName: string;
+  projectRemoteName: string;
   provider: "codex" | "claudeAgent";
   createdAt: string;
   updatedAt?: string | undefined;
@@ -179,14 +183,18 @@ function scoreProject(project: SidebarSearchProject, query: string): number | nu
   if (!query) return null;
 
   const name = normalizeText(project.name);
+  const remoteName = normalizeText(project.remoteName);
   const cwd = normalizeText(project.cwd);
-  const folder = normalizeText(basenameOfPath(project.cwd));
+  const folder = normalizeText(project.folderName || basenameOfPath(project.cwd));
 
   if (name === query) return 150;
+  if (remoteName === query) return 150;
   if (folder === query) return 145;
   if (name.startsWith(query)) return 130;
+  if (remoteName.startsWith(query)) return 130;
   if (folder.startsWith(query)) return 120;
   if (name.includes(query)) return 105;
+  if (remoteName.includes(query)) return 105;
   if (folder.includes(query)) return 95;
   if (cwd.includes(query)) return 70;
   return null;
@@ -270,6 +278,7 @@ export function matchSidebarSearchThreads(
     .map((thread, index) => {
       const title = normalizeText(thread.title);
       const projectName = normalizeText(thread.projectName);
+      const projectRemoteName = normalizeText(thread.projectRemoteName);
       const messageMatch = scoreMessage(thread.messages, normalizedQuery, queryTokens);
       let score: number | null = null;
       let matchKind: SidebarSearchThreadMatch["matchKind"] = "title";
@@ -288,10 +297,16 @@ export function matchSidebarSearchThreads(
         score = messageMatch.score;
         matchKind = "message";
         snippet = messageMatch.snippet;
-      } else if (projectName.startsWith(normalizedQuery)) {
+      } else if (
+        projectName.startsWith(normalizedQuery) ||
+        projectRemoteName.startsWith(normalizedQuery)
+      ) {
         score = 80;
         matchKind = "project";
-      } else if (projectName.includes(normalizedQuery)) {
+      } else if (
+        projectName.includes(normalizedQuery) ||
+        projectRemoteName.includes(normalizedQuery)
+      ) {
         score = 65;
         matchKind = "project";
       }

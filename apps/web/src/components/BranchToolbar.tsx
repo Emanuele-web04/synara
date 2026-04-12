@@ -210,8 +210,8 @@ export default function BranchToolbar({
       <div className="flex items-center gap-2">
         {effectiveEnvMode === "local" ? (
           <Popover open={envPickerOpen} onOpenChange={setEnvPickerOpen}>
-            <PopoverTrigger className="inline-flex cursor-pointer items-center gap-1 px-1.5 text-[length:var(--composer-picker-font-size,12px)] font-normal text-muted-foreground/70 transition-colors hover:text-foreground/80">
-              <PiLaptop className="size-3" />
+            <PopoverTrigger className="inline-flex cursor-pointer items-center gap-1 px-1.5 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-muted-foreground/70 transition-colors hover:text-foreground/80">
+              <PiLaptop className="size-3.5" />
               Local
               <ChevronDownIcon className="size-3 opacity-60" />
             </PopoverTrigger>
@@ -314,7 +314,7 @@ export default function BranchToolbar({
             </PopoverPopup>
           </Popover>
         ) : (
-          <span className="inline-flex items-center gap-1 px-1.5 text-[length:var(--composer-picker-font-size,12px)] font-normal text-muted-foreground/70">
+          <span className="inline-flex items-center gap-1 px-1.5 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-muted-foreground/70">
             <GitForkIcon className="size-3" />
             {activeWorktreePath ? "Worktree" : "New worktree"}
           </span>
@@ -323,7 +323,7 @@ export default function BranchToolbar({
         {canHandoffToWorktree && onHandoffToWorktree ? (
           <button
             type="button"
-            className="inline-flex items-center gap-1 px-1.5 text-[length:var(--composer-picker-font-size,12px)] font-normal text-muted-foreground/70 transition-colors hover:text-foreground/80 disabled:pointer-events-none disabled:opacity-50"
+            className="inline-flex items-center gap-1 px-1.5 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-muted-foreground/70 transition-colors hover:text-foreground/80 disabled:pointer-events-none disabled:opacity-50"
             disabled={handoffBusy}
             onClick={onHandoffToWorktree}
           >
@@ -334,7 +334,7 @@ export default function BranchToolbar({
         {canHandoffToLocal && onHandoffToLocal ? (
           <button
             type="button"
-            className="inline-flex items-center gap-1 px-1.5 text-[length:var(--composer-picker-font-size,12px)] font-normal text-muted-foreground/70 transition-colors hover:text-foreground/80 disabled:pointer-events-none disabled:opacity-50"
+            className="inline-flex items-center gap-1 px-1.5 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-muted-foreground/70 transition-colors hover:text-foreground/80 disabled:pointer-events-none disabled:opacity-50"
             disabled={handoffBusy}
             onClick={onHandoffToLocal}
           >
@@ -345,7 +345,7 @@ export default function BranchToolbar({
         {runtimeMode && onRuntimeModeChange ? (
           <button
             type="button"
-            className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-[length:var(--composer-picker-font-size,12px)] font-normal text-muted-foreground/70 transition-colors hover:text-foreground/80"
+            className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-muted-foreground/70 transition-colors hover:text-foreground/80"
             onClick={() =>
               onRuntimeModeChange(
                 runtimeMode === "full-access" ? "approval-required" : "full-access",

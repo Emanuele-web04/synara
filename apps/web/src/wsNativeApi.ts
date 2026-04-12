@@ -248,6 +248,12 @@ export function createWsNativeApi(): NativeApi {
         // Avoid false negatives and let the browser handle popup policy.
         window.open(url, "_blank", "noopener,noreferrer");
       },
+      showInFolder: async (path) => {
+        if (window.desktopBridge) {
+          await window.desktopBridge.showInFolder(path);
+        }
+        // No-op in browser - this is a desktop-only feature
+      },
     },
     git: {
       pull: (input) => transport.request(WS_METHODS.gitPull, input),

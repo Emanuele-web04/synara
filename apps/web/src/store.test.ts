@@ -5,11 +5,12 @@ import {
   TurnId,
   type OrchestrationReadModel,
 } from "@t3tools/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   collapseProjectsExcept,
   markThreadUnread,
+  renameProjectLocally,
   reorderProjects,
   setAllProjectsExpanded,
   syncServerReadModel,
@@ -48,21 +49,29 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
 
 function makeState(thread: Thread): AppState {
   return {
-    projects: [
-      {
-        id: ProjectId.makeUnsafe("project-1"),
-        name: "Project",
-        cwd: "/tmp/project",
-        defaultModelSelection: {
-          provider: "codex",
-          model: "gpt-5-codex",
-        },
-        expanded: true,
-        scripts: [],
-      },
-    ],
+    projects: [makeProject()],
     threads: [thread],
     threadsHydrated: true,
+  };
+}
+
+function makeProject(
+  overrides: Partial<AppState["projects"][number]> = {},
+): AppState["projects"][number] {
+  return {
+    id: ProjectId.makeUnsafe("project-1"),
+    name: "Project",
+    remoteName: "Project",
+    folderName: "project",
+    localName: null,
+    cwd: "/tmp/project",
+    defaultModelSelection: {
+      provider: "codex",
+      model: "gpt-5-codex",
+    },
+    expanded: true,
+    scripts: [],
+    ...overrides,
   };
 }
 
@@ -183,39 +192,27 @@ describe("store pure functions", () => {
     const project3 = ProjectId.makeUnsafe("project-3");
     const state: AppState = {
       projects: [
-        {
+        makeProject({
           id: project1,
           name: "Project 1",
+          remoteName: "Project 1",
+          folderName: "project-1",
           cwd: "/tmp/project-1",
-          defaultModelSelection: {
-            provider: "codex",
-            model: DEFAULT_MODEL_BY_PROVIDER.codex,
-          },
-          expanded: true,
-          scripts: [],
-        },
-        {
+        }),
+        makeProject({
           id: project2,
           name: "Project 2",
+          remoteName: "Project 2",
+          folderName: "project-2",
           cwd: "/tmp/project-2",
-          defaultModelSelection: {
-            provider: "codex",
-            model: DEFAULT_MODEL_BY_PROVIDER.codex,
-          },
-          expanded: true,
-          scripts: [],
-        },
-        {
+        }),
+        makeProject({
           id: project3,
           name: "Project 3",
+          remoteName: "Project 3",
+          folderName: "project-3",
           cwd: "/tmp/project-3",
-          defaultModelSelection: {
-            provider: "codex",
-            model: DEFAULT_MODEL_BY_PROVIDER.codex,
-          },
-          expanded: true,
-          scripts: [],
-        },
+        }),
       ],
       threads: [],
       threadsHydrated: true,
@@ -231,28 +228,21 @@ describe("store pure functions", () => {
     const project2 = ProjectId.makeUnsafe("project-2");
     const state: AppState = {
       projects: [
-        {
+        makeProject({
           id: project1,
           name: "Project 1",
+          remoteName: "Project 1",
+          folderName: "project-1",
           cwd: "/tmp/project-1",
-          defaultModelSelection: {
-            provider: "codex",
-            model: DEFAULT_MODEL_BY_PROVIDER.codex,
-          },
-          expanded: true,
-          scripts: [],
-        },
-        {
+        }),
+        makeProject({
           id: project2,
           name: "Project 2",
+          remoteName: "Project 2",
+          folderName: "project-2",
           cwd: "/tmp/project-2",
-          defaultModelSelection: {
-            provider: "codex",
-            model: DEFAULT_MODEL_BY_PROVIDER.codex,
-          },
           expanded: false,
-          scripts: [],
-        },
+        }),
       ],
       threads: [],
       threadsHydrated: true,
@@ -269,28 +259,20 @@ describe("store pure functions", () => {
   it("collapses all projects when toggled off", () => {
     const state: AppState = {
       projects: [
-        {
+        makeProject({
           id: ProjectId.makeUnsafe("project-1"),
           name: "Project 1",
+          remoteName: "Project 1",
+          folderName: "project-1",
           cwd: "/tmp/project-1",
-          defaultModelSelection: {
-            provider: "codex",
-            model: DEFAULT_MODEL_BY_PROVIDER.codex,
-          },
-          expanded: true,
-          scripts: [],
-        },
-        {
+        }),
+        makeProject({
           id: ProjectId.makeUnsafe("project-2"),
           name: "Project 2",
+          remoteName: "Project 2",
+          folderName: "project-2",
           cwd: "/tmp/project-2",
-          defaultModelSelection: {
-            provider: "codex",
-            model: DEFAULT_MODEL_BY_PROVIDER.codex,
-          },
-          expanded: true,
-          scripts: [],
-        },
+        }),
       ],
       threads: [],
       threadsHydrated: true,
@@ -306,28 +288,20 @@ describe("store pure functions", () => {
     const project2 = ProjectId.makeUnsafe("project-2");
     const state: AppState = {
       projects: [
-        {
+        makeProject({
           id: project1,
           name: "Project 1",
+          remoteName: "Project 1",
+          folderName: "project-1",
           cwd: "/tmp/project-1",
-          defaultModelSelection: {
-            provider: "codex",
-            model: DEFAULT_MODEL_BY_PROVIDER.codex,
-          },
-          expanded: true,
-          scripts: [],
-        },
-        {
+        }),
+        makeProject({
           id: project2,
           name: "Project 2",
+          remoteName: "Project 2",
+          folderName: "project-2",
           cwd: "/tmp/project-2",
-          defaultModelSelection: {
-            provider: "codex",
-            model: DEFAULT_MODEL_BY_PROVIDER.codex,
-          },
-          expanded: true,
-          scripts: [],
-        },
+        }),
       ],
       threads: [],
       threadsHydrated: true,
@@ -339,6 +313,19 @@ describe("store pure functions", () => {
       { id: project1, expanded: false },
       { id: project2, expanded: true },
     ]);
+  });
+
+  it("renames a project locally without changing its remote or folder names", () => {
+    const state = makeState(makeThread());
+
+    const next = renameProjectLocally(state, ProjectId.makeUnsafe("project-1"), "dpcode");
+
+    expect(next.projects[0]).toMatchObject({
+      name: "dpcode",
+      localName: "dpcode",
+      remoteName: "Project",
+      folderName: "project",
+    });
   });
 });
 
@@ -404,28 +391,20 @@ describe("store read model sync", () => {
     const project3 = ProjectId.makeUnsafe("project-3");
     const initialState: AppState = {
       projects: [
-        {
+        makeProject({
           id: project2,
           name: "Project 2",
+          remoteName: "Project 2",
+          folderName: "project-2",
           cwd: "/tmp/project-2",
-          defaultModelSelection: {
-            provider: "codex",
-            model: DEFAULT_MODEL_BY_PROVIDER.codex,
-          },
-          expanded: true,
-          scripts: [],
-        },
-        {
+        }),
+        makeProject({
           id: project1,
           name: "Project 1",
+          remoteName: "Project 1",
+          folderName: "project-1",
           cwd: "/tmp/project-1",
-          defaultModelSelection: {
-            provider: "codex",
-            model: DEFAULT_MODEL_BY_PROVIDER.codex,
-          },
-          expanded: true,
-          scripts: [],
-        },
+        }),
       ],
       threads: [],
       threadsHydrated: true,
@@ -463,28 +442,20 @@ describe("store read model sync", () => {
     const project2 = ProjectId.makeUnsafe("project-2");
     const initialState: AppState = {
       projects: [
-        {
+        makeProject({
           id: project1,
           name: "Project 1",
+          remoteName: "Project 1",
+          folderName: "project-1",
           cwd: "/tmp/project-1",
-          defaultModelSelection: {
-            provider: "codex",
-            model: DEFAULT_MODEL_BY_PROVIDER.codex,
-          },
-          expanded: true,
-          scripts: [],
-        },
-        {
+        }),
+        makeProject({
           id: project2,
           name: "Project 2",
+          remoteName: "Project 2",
+          folderName: "project-2",
           cwd: "/tmp/project-2",
-          defaultModelSelection: {
-            provider: "codex",
-            model: DEFAULT_MODEL_BY_PROVIDER.codex,
-          },
-          expanded: true,
-          scripts: [],
-        },
+        }),
       ],
       threads: [],
       threadsHydrated: true,
@@ -524,5 +495,140 @@ describe("store read model sync", () => {
     const restored = syncServerReadModel(withoutProject2, snapshotWithProject2Restored);
 
     expect(restored.projects.find((project) => project.id === project2)?.expanded).toBe(true);
+  });
+
+  it("preserves a local project alias across read model syncs", () => {
+    const aliasedState = renameProjectLocally(
+      makeState(makeThread()),
+      ProjectId.makeUnsafe("project-1"),
+      "dpcode",
+    );
+
+    const next = syncServerReadModel(
+      aliasedState,
+      makeReadModel(
+        makeReadModelThread({
+          updatedAt: "2026-02-28T00:00:00.000Z",
+        }),
+      ),
+    );
+
+    expect(next.projects[0]).toMatchObject({
+      name: "dpcode",
+      localName: "dpcode",
+      remoteName: "Project",
+      folderName: "project",
+    });
+  });
+
+  it("keeps a cleared local project alias from reappearing during syncs", async () => {
+    const storage = new Map<string, string>();
+    const fakeWindow = {
+      localStorage: {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          storage.set(key, value);
+        },
+        removeItem: (key: string) => {
+          storage.delete(key);
+        },
+        clear: () => {
+          storage.clear();
+        },
+      },
+      addEventListener: vi.fn(),
+    };
+    storage.set(
+      "t3code:renderer-state:v8",
+      JSON.stringify({
+        projectNamesByCwd: {
+          "/tmp/project": "dpcode",
+        },
+      }),
+    );
+    vi.stubGlobal("window", fakeWindow);
+    try {
+      vi.resetModules();
+
+      const freshStore = await import("./store");
+      const projectId = ProjectId.makeUnsafe("project-1");
+      freshStore.useStore.setState((state) => ({
+        ...state,
+        projects: [
+          makeProject({
+            id: projectId,
+            name: "dpcode",
+            localName: "dpcode",
+          }),
+        ],
+        threads: [makeThread()],
+        threadsHydrated: true,
+      }));
+
+      freshStore.useStore.getState().renameProjectLocally(projectId, null);
+
+      const next = freshStore.syncServerReadModel(
+        freshStore.useStore.getState(),
+        makeReadModel(
+          makeReadModelThread({
+            updatedAt: "2026-02-28T00:00:00.000Z",
+          }),
+        ),
+      );
+
+      expect(next.projects[0]).toMatchObject({
+        name: "Project",
+        localName: null,
+        remoteName: "Project",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("reuses unchanged thread objects when the read model timestamp is unchanged", () => {
+    const thread = makeThread({
+      updatedAt: "2026-02-28T00:00:00.000Z",
+      lastVisitedAt: "2026-02-28T00:00:01.000Z",
+    });
+    const state: AppState = {
+      projects: [
+        makeProject({
+          defaultModelSelection: {
+            provider: "codex",
+            model: "gpt-5-codex",
+          },
+          updatedAt: "2026-02-27T00:00:00.000Z",
+        }),
+      ],
+      threads: [thread],
+      threadsHydrated: true,
+    };
+
+    const next = syncServerReadModel(state, {
+      snapshotSequence: 1,
+      updatedAt: "2026-02-28T00:00:00.000Z",
+      projects: [
+        makeReadModelProject({
+          defaultModelSelection: {
+            provider: "codex",
+            model: "gpt-5-codex",
+          },
+          updatedAt: "2026-02-27T00:00:00.000Z",
+        }),
+      ],
+      threads: [
+        makeReadModelThread({
+          modelSelection: {
+            provider: "codex",
+            model: "gpt-5-codex",
+          },
+          createdAt: thread.createdAt,
+          updatedAt: thread.updatedAt ?? "2026-02-28T00:00:00.000Z",
+        }),
+      ],
+    });
+
+    expect(next.threads[0]).toBe(thread);
   });
 });

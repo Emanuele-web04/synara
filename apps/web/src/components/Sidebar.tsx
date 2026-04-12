@@ -14,6 +14,7 @@ import {
 import { autoAnimate } from "@formkit/auto-animate";
 import { FiGitBranch } from "react-icons/fi";
 import { HiOutlineCheckCircle } from "react-icons/hi2";
+import { HiOutlineFolderOpen } from "react-icons/hi2";
 import {
   TbArrowsDiagonal,
   TbArrowsDiagonalMinimize2,
@@ -21,7 +22,7 @@ import {
   TbCursorText,
 } from "react-icons/tb";
 import { IoFilter } from "react-icons/io5";
-import { LuMessageCircleDashed } from "react-icons/lu";
+import { LuMessageSquareDashed } from "react-icons/lu";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import {
   DndContext,
@@ -50,6 +51,7 @@ import {
 import { resolveThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams, useSearch } from "@tanstack/react-router";
+import { renderToStaticMarkup } from "react-dom/server";
 import {
   type SidebarProjectSortOrder,
   type SidebarThreadSortOrder,
@@ -147,6 +149,7 @@ import type {
   SidebarSearchThread,
 } from "./SidebarSearchPalette.logic";
 import { useFocusedChatContext } from "../focusedChatContext";
+import { showContextMenuFallback } from "../contextMenuFallback";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_PREVIEW_LIMIT = 6;
@@ -163,6 +166,12 @@ const SIDEBAR_LIST_ANIMATION_OPTIONS = {
   duration: 180,
   easing: "ease-out",
 } as const;
+
+const PROJECT_CONTEXT_MENU_FOLDER_ICON = renderToStaticMarkup(<HiOutlineFolderOpen />);
+const PROJECT_CONTEXT_MENU_EDIT_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4Z"/></svg>';
+const PROJECT_CONTEXT_MENU_REMOVE_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
 
 function ProviderGlyph({
   provider,
@@ -351,7 +360,11 @@ function ProjectSortMenu({
         </TooltipTrigger>
         <TooltipPopup side="right">Sort projects</TooltipPopup>
       </Tooltip>
-      <MenuPopup align="end" side="bottom" className="min-w-44">
+      <MenuPopup
+        align="end"
+        side="bottom"
+        className="min-w-44 rounded-lg border-border bg-popover shadow-lg"
+      >
         <MenuGroup>
           <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
             Sort projects
@@ -416,7 +429,7 @@ function SidebarPrimaryAction({
         size="default"
         data-active={active}
         aria-current={active ? "page" : undefined}
-        className="group/sidebar-primary-action h-8 gap-2.5 rounded-lg px-2 font-system-ui text-[13px] font-normal text-foreground/82 transition-colors hover:bg-accent/55 hover:text-foreground data-[active=true]:bg-accent/65"
+        className="group/sidebar-primary-action h-8 gap-2.5 rounded-lg px-2 font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-foreground/82 transition-colors hover:bg-accent/55 hover:text-foreground data-[active=true]:bg-accent/65"
         aria-disabled={disabled || undefined}
         disabled={disabled}
         onClick={onClick}
@@ -429,7 +442,7 @@ function SidebarPrimaryAction({
           <ShortcutKbd
             shortcutLabel={shortcutLabel}
             groupClassName="ml-auto opacity-0 transition-opacity group-hover/sidebar-primary-action:opacity-100 group-focus-visible/sidebar-primary-action:opacity-100"
-            className="h-4.5 min-w-4.5 px-1 text-[10px] text-muted-foreground/72"
+            className="h-4.5 min-w-4.5 px-1 text-[length:var(--app-font-size-ui-2xs,9px)] text-muted-foreground/72"
           />
         ) : null}
       </SidebarMenuButton>
@@ -551,6 +564,7 @@ export default function Sidebar() {
   const setAllProjectsExpanded = useStore((store) => store.setAllProjectsExpanded);
   const collapseProjectsExcept = useStore((store) => store.collapseProjectsExcept);
   const reorderProjects = useStore((store) => store.reorderProjects);
+  const renameProjectLocally = useStore((store) => store.renameProjectLocally);
   const clearComposerDraftForThread = useComposerDraftStore((store) => store.clearDraftThread);
   const terminalStateByThreadId = useTerminalStateStore((state) => state.terminalStateByThreadId);
   const clearTerminalState = useTerminalStateStore((state) => state.clearTerminalState);
@@ -614,11 +628,15 @@ export default function Sidebar() {
   const addProjectInputRef = useRef<HTMLInputElement | null>(null);
   const [renamingThreadId, setRenamingThreadId] = useState<ThreadId | null>(null);
   const [renamingTitle, setRenamingTitle] = useState("");
+  const [renamingProjectId, setRenamingProjectId] = useState<ProjectId | null>(null);
+  const [renamingProjectName, setRenamingProjectName] = useState("");
   const [expandedThreadListsByProject, setExpandedThreadListsByProject] = useState<
     ReadonlySet<ProjectId>
   >(() => new Set());
   const renamingCommittedRef = useRef(false);
   const renamingInputRef = useRef<HTMLInputElement | null>(null);
+  const renamingProjectCommittedRef = useRef(false);
+  const renamingProjectInputRef = useRef<HTMLInputElement | null>(null);
   const dragInProgressRef = useRef(false);
   const suppressProjectClickAfterDragRef = useRef(false);
   const [desktopUpdateState, setDesktopUpdateState] = useState<DesktopUpdateState | null>(null);
@@ -940,21 +958,30 @@ export default function Sidebar() {
 
   const canAddProject = newCwd.trim().length > 0 && !isAddingProject;
 
+  // Keep the native folder picker and project creation in one awaited flow so
+  // the UI can show whether we're still opening the dialog or creating the project.
   const handlePickFolder = useCallback(async () => {
     const api = readNativeApi();
     if (!api || isPickingFolder) return;
     setIsPickingFolder(true);
-    let pickedPath: string | null = null;
     try {
-      pickedPath = await api.dialogs.pickFolder();
-    } catch {
-      // Ignore picker failures and leave the current thread selection unchanged.
+      const pickedPath = await api.dialogs.pickFolder();
+      setIsPickingFolder(false);
+      if (pickedPath) {
+        setAddProjectError(null);
+        await addProjectFromPath(pickedPath);
+      }
+    } catch (error) {
+      const description =
+        error instanceof Error ? error.message : "Unable to open the folder picker.";
+      setAddProjectError(description);
+      toastManager.add({
+        type: "error",
+        title: "Unable to open folder picker",
+        description,
+      });
+      setIsPickingFolder(false);
     }
-    if (pickedPath) {
-      setAddProjectError(null);
-      void addProjectFromPath(pickedPath);
-    }
-    setIsPickingFolder(false);
   }, [isPickingFolder, addProjectFromPath]);
 
   const handleStartAddProject = useCallback(() => {
@@ -1571,14 +1598,52 @@ export default function Sidebar() {
     async (projectId: ProjectId, position: { x: number; y: number }) => {
       const api = readNativeApi();
       if (!api) return;
-      const clicked = await api.contextMenu.show(
-        [{ id: "delete", label: "Remove project", destructive: true }],
-        position,
-      );
-      if (clicked !== "delete") return;
-
       const project = projects.find((entry) => entry.id === projectId);
       if (!project) return;
+      const clicked = await showContextMenuFallback(
+        [
+          {
+            id: "open-in-finder",
+            label: "Open in Finder",
+            icon: PROJECT_CONTEXT_MENU_FOLDER_ICON,
+          },
+          {
+            id: "rename",
+            label: "Edit name",
+            icon: PROJECT_CONTEXT_MENU_EDIT_ICON,
+          },
+          {
+            id: "delete",
+            label: "Remove",
+            destructive: true,
+            icon: PROJECT_CONTEXT_MENU_REMOVE_ICON,
+          },
+        ],
+        position,
+      );
+
+      if (clicked === "open-in-finder") {
+        try {
+          await api.shell.showInFolder(project.cwd);
+        } catch (error) {
+          toastManager.add({
+            type: "error",
+            title: "Unable to open in Finder",
+            description:
+              error instanceof Error
+                ? error.message
+                : "An unknown error occurred opening the folder.",
+          });
+        }
+        return;
+      }
+      if (clicked === "rename") {
+        renamingProjectCommittedRef.current = false;
+        setRenamingProjectId(projectId);
+        setRenamingProjectName(project.localName ?? project.name);
+        return;
+      }
+      if (clicked !== "delete") return;
 
       const projectThreads = threads.filter((thread) => thread.projectId === projectId);
       if (projectThreads.length > 0) {
@@ -1707,6 +1772,26 @@ export default function Sidebar() {
     suppressProjectClickAfterDragRef.current = false;
   }, []);
 
+  const cancelProjectRename = useCallback(() => {
+    renamingProjectCommittedRef.current = false;
+    setRenamingProjectId(null);
+    renamingProjectInputRef.current = null;
+  }, []);
+
+  const commitProjectRename = useCallback(
+    (projectId: ProjectId, nextName: string, previousLocalName: string | null) => {
+      const trimmed = nextName.trim();
+      const normalizedPrevious = previousLocalName?.trim() ?? "";
+      if (trimmed === normalizedPrevious) {
+        cancelProjectRename();
+        return;
+      }
+      renameProjectLocally(projectId, trimmed.length > 0 ? trimmed : null);
+      cancelProjectRename();
+    },
+    [cancelProjectRename, renameProjectLocally],
+  );
+
   const sortedProjects = useMemo(
     () => sortProjectsForSidebar(projects, threads, appSettings.sidebarProjectSortOrder),
     [appSettings.sidebarProjectSortOrder, projects, threads],
@@ -1800,8 +1885,7 @@ export default function Sidebar() {
   function resolveThreadFolderLabel(projectId: ProjectId): string | null {
     const project = projectById.get(projectId);
     if (!project) return null;
-    const folderName = project.cwd.split(/[/\\]/).findLast(isNonEmptyString) ?? null;
-    return folderName ?? project.name ?? null;
+    return project.folderName ?? project.name ?? null;
   }
 
   // Keep hover actions in the same trailing slot used by the timestamp they replace.
@@ -1846,7 +1930,7 @@ export default function Sidebar() {
           type="button"
           data-thread-item
           className={cn(
-            "flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[13px] transition-colors",
+            "flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[length:var(--app-font-size-ui,12px)] transition-colors",
             isActive
               ? "bg-accent/62 text-foreground/90 dark:bg-accent/42"
               : "text-foreground/72 hover:bg-accent/40 hover:text-foreground/90",
@@ -1881,12 +1965,12 @@ export default function Sidebar() {
           <span className="min-w-0 flex-1 truncate">{thread.title}</span>
           <div className="ml-auto flex shrink-0 items-center gap-1.5">
             {folderLabel ? (
-              <span className="max-w-24 truncate text-[11px] text-muted-foreground/38">
+              <span className="max-w-24 truncate text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/38">
                 {folderLabel}
               </span>
             ) : null}
             <div className="relative flex h-5 min-w-[1.75rem] shrink-0 items-center justify-end">
-              <span className="shrink-0 text-right text-[11px] leading-none tabular-nums text-muted-foreground/38 transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0">
+              <span className="shrink-0 text-right text-[length:var(--app-font-size-ui-timestamp,10px)] leading-none tabular-nums text-muted-foreground/38 transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0">
                 {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
               </span>
               {renderThreadDeleteButton(thread.id, "text-muted-foreground/45")}
@@ -2045,7 +2129,7 @@ export default function Sidebar() {
                     el.select();
                   }
                 }}
-                className="min-w-0 flex-1 truncate rounded-md border border-ring bg-transparent px-1.5 py-0.5 text-[13px] outline-none"
+                className="min-w-0 flex-1 truncate rounded-md border border-ring bg-transparent px-1.5 py-0.5 text-[length:var(--app-font-size-ui,12px)] outline-none"
                 value={renamingTitle}
                 onChange={(e) => setRenamingTitle(e.target.value)}
                 onKeyDown={(e) => {
@@ -2068,7 +2152,7 @@ export default function Sidebar() {
                 onClick={(e) => e.stopPropagation()}
               />
             ) : (
-              <span className="min-w-0 flex-1 truncate text-[13px] leading-5 text-foreground/86">
+              <span className="min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)] leading-5 text-foreground/86">
                 {thread.title}
               </span>
             )}
@@ -2095,7 +2179,9 @@ export default function Sidebar() {
                         terminalStatus ? terminalStatus.colorClass : "text-muted-foreground/55"
                       }`}
                     >
-                      <span className="text-[10px] leading-none">{terminalCount}</span>
+                      <span className="text-[length:var(--app-font-size-ui-2xs,9px)] leading-none">
+                        {terminalCount}
+                      </span>
                       <TerminalIcon
                         className={`size-3 ${terminalStatus?.pulse ? "animate-pulse" : ""}`}
                       />
@@ -2121,7 +2207,7 @@ export default function Sidebar() {
                 <TooltipTrigger
                   render={
                     <span className="inline-flex shrink-0 items-center text-muted-foreground/55">
-                      <LuMessageCircleDashed className="size-3" />
+                      <LuMessageSquareDashed className="size-3" />
                     </span>
                   }
                 />
@@ -2131,7 +2217,7 @@ export default function Sidebar() {
             <div className="relative flex h-5 min-w-[1.75rem] shrink-0 items-center justify-end">
               <span
                 className={cn(
-                  "shrink-0 text-right text-[12px] leading-none tabular-nums transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
+                  "shrink-0 text-right text-[length:var(--app-font-size-ui-timestamp,10px)] leading-none tabular-nums transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
                   secondaryMetaClass,
                 )}
               >
@@ -2149,6 +2235,7 @@ export default function Sidebar() {
     project: (typeof sortedProjects)[number],
     dragHandleProps: SortableProjectHandleProps | null,
   ) {
+    const isRenamingProject = renamingProjectId === project.id;
     const allProjectThreads = sortThreadsForSidebar(
       threads.filter((thread) => thread.projectId === project.id),
       appSettings.sidebarThreadSortOrder,
@@ -2284,14 +2371,14 @@ export default function Sidebar() {
                   }}
                 >
                   <ProviderGlyph provider={preview.provider} className="size-3 shrink-0" />
-                  <span className="min-w-0 truncate text-[12px] leading-5 text-foreground/86">
+                  <span className="min-w-0 truncate text-[length:var(--app-font-size-ui-sm,11px)] leading-5 text-foreground/86">
                     {preview.threadId ? preview.title : "Select chat"}
                   </span>
                 </div>
               ))}
             </div>
             <div className="ml-auto flex shrink-0 items-center gap-1.5">
-              <span className="text-[12px] text-muted-foreground/40">
+              <span className="text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/40">
                 {formatRelativeTime(splitView.updatedAt)}
               </span>
             </div>
@@ -2306,7 +2393,7 @@ export default function Sidebar() {
           <SidebarMenuButton
             ref={isManualProjectSorting ? dragHandleProps?.setActivatorNodeRef : undefined}
             size="sm"
-            className={`h-7.5 gap-2 rounded-lg px-2 py-0.5 text-left text-[13px] font-normal hover:bg-accent/55 group-hover/project-header:bg-accent/55 group-hover/project-header:text-sidebar-accent-foreground ${
+            className={`h-7.5 gap-2 rounded-lg px-2 py-0.5 text-left text-[length:var(--app-font-size-ui,12px)] font-normal hover:bg-accent/55 group-hover/project-header:bg-accent/55 group-hover/project-header:text-sidebar-accent-foreground ${
               isManualProjectSorting ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
             }`}
             {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.attributes : {})}
@@ -2336,9 +2423,55 @@ export default function Sidebar() {
                 />
               ) : null}
             </span>
-            <span className="flex-1 truncate font-system-ui text-[13px] font-normal text-muted-foreground/72">
-              {project.name}
-            </span>
+            <div className="flex min-w-0 flex-1 items-baseline gap-2 overflow-hidden">
+              {isRenamingProject ? (
+                <input
+                  ref={(element) => {
+                    if (element && renamingProjectInputRef.current !== element) {
+                      renamingProjectInputRef.current = element;
+                      element.focus();
+                      element.select();
+                    }
+                  }}
+                  className="min-w-0 flex-1 rounded-md border border-ring bg-transparent px-1.5 py-0.5 text-[length:var(--app-font-size-ui,12px)] font-normal text-foreground outline-none"
+                  value={renamingProjectName}
+                  placeholder={project.folderName}
+                  onChange={(event) => setRenamingProjectName(event.target.value)}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                  }}
+                  onKeyDown={(event) => {
+                    event.stopPropagation();
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      renamingProjectCommittedRef.current = true;
+                      commitProjectRename(project.id, renamingProjectName, project.localName);
+                    } else if (event.key === "Escape") {
+                      event.preventDefault();
+                      renamingProjectCommittedRef.current = true;
+                      cancelProjectRename();
+                    }
+                  }}
+                  onBlur={() => {
+                    if (!renamingProjectCommittedRef.current) {
+                      commitProjectRename(project.id, renamingProjectName, project.localName);
+                    }
+                  }}
+                />
+              ) : (
+                <>
+                  <span className="truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72">
+                    {project.name}
+                  </span>
+                  {project.localName ? (
+                    <span className="shrink-0 truncate text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/40">
+                      {project.folderName}
+                    </span>
+                  ) : null}
+                </>
+              )}
+            </div>
           </SidebarMenuButton>
           <Tooltip>
             <TooltipTrigger
@@ -2396,7 +2529,7 @@ export default function Sidebar() {
                     });
                   }}
                 >
-                  <LuMessageCircleDashed className="size-3.5" />
+                  <LuMessageSquareDashed className="size-3.5" />
                 </SidebarMenuAction>
               }
             />
@@ -2437,7 +2570,7 @@ export default function Sidebar() {
 
         <div
           className={cn(
-            "grid transition-[grid-template-rows,opacity] duration-220 ease-out",
+            "grid pt-1 transition-[grid-template-rows,opacity] duration-220 ease-out",
             project.expanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
           )}
         >
@@ -2461,7 +2594,7 @@ export default function Sidebar() {
                     render={<button type="button" />}
                     data-thread-selection-safe
                     size="sm"
-                    className="h-7 w-full translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-[13px] text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
+                    className="h-7 w-full translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
                     onClick={() => {
                       expandThreadListForProject(project.id);
                     }}
@@ -2476,7 +2609,7 @@ export default function Sidebar() {
                     render={<button type="button" />}
                     data-thread-selection-safe
                     size="sm"
-                    className="h-7 w-full translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-[13px] text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
+                    className="h-7 w-full translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
                     onClick={() => {
                       collapseThreadListForProject(project.id);
                     }}
@@ -2494,6 +2627,11 @@ export default function Sidebar() {
 
   const handleProjectTitleClick = useCallback(
     (event: React.MouseEvent<HTMLButtonElement>, projectId: ProjectId) => {
+      if (renamingProjectId === projectId) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       if (dragInProgressRef.current) {
         event.preventDefault();
         event.stopPropagation();
@@ -2511,11 +2649,12 @@ export default function Sidebar() {
       }
       toggleProject(projectId);
     },
-    [clearSelection, selectedThreadIds.size, toggleProject],
+    [clearSelection, renamingProjectId, selectedThreadIds.size, toggleProject],
   );
 
   const handleProjectTitleKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLButtonElement>, projectId: ProjectId) => {
+      if (renamingProjectId === projectId) return;
       if (event.key !== "Enter" && event.key !== " ") return;
       event.preventDefault();
       if (dragInProgressRef.current) {
@@ -2523,7 +2662,7 @@ export default function Sidebar() {
       }
       toggleProject(projectId);
     },
-    [toggleProject],
+    [renamingProjectId, toggleProject],
   );
 
   useEffect(() => {
@@ -2677,6 +2816,9 @@ export default function Sidebar() {
       projects.map((project) => ({
         id: project.id,
         name: project.name,
+        remoteName: project.remoteName,
+        folderName: project.folderName,
+        localName: project.localName,
         cwd: project.cwd,
         createdAt: project.createdAt,
         updatedAt: project.updatedAt,
@@ -2690,6 +2832,7 @@ export default function Sidebar() {
         title: thread.title,
         projectId: thread.projectId,
         projectName: projectById.get(thread.projectId)?.name ?? "Unknown project",
+        projectRemoteName: projectById.get(thread.projectId)?.remoteName ?? "Unknown project",
         provider: thread.modelSelection.provider,
         createdAt: thread.createdAt,
         updatedAt: thread.updatedAt,
@@ -2930,7 +3073,7 @@ export default function Sidebar() {
           <SidebarGroup className="px-1.5 pt-1 pb-1.5">
             <div className="my-2 h-px w-full bg-border" />
             <div className="mb-1.5 flex items-center px-2">
-              <span className="text-[13px] font-normal tracking-tight text-muted-foreground/58">
+              <span className="text-[length:var(--app-font-size-ui,12px)] font-normal tracking-tight text-muted-foreground/58">
                 Workspace
               </span>
             </div>
@@ -2972,7 +3115,7 @@ export default function Sidebar() {
                                     setRenamingWorkspaceTitle(workspace.title);
                                   }
                                 }}
-                                className="h-7 w-full rounded-md border border-border bg-background px-2 text-[13px] outline-none focus:border-ring"
+                                className="h-7 w-full rounded-md border border-border bg-background px-2 text-[length:var(--app-font-size-ui,12px)] outline-none focus:border-ring"
                               />
                             </div>
                           ) : (
@@ -2980,7 +3123,7 @@ export default function Sidebar() {
                               <SidebarMenuButton
                                 size="sm"
                                 isActive={isActive}
-                                className="group/ws h-8 gap-2 rounded-lg px-2 font-system-ui text-[13px] font-normal text-foreground/82 transition-colors hover:bg-accent/55 hover:text-foreground data-[active=true]:bg-accent/65"
+                                className="group/ws h-8 gap-2 rounded-lg px-2 font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-foreground/82 transition-colors hover:bg-accent/55 hover:text-foreground data-[active=true]:bg-accent/65"
                                 onClick={() => {
                                   navigateToWorkspace(workspace.id);
                                 }}
@@ -3012,7 +3155,7 @@ export default function Sidebar() {
                                   />
                                 )}
                                 {workspace.terminalCount > 0 && (
-                                  <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/50">
+                                  <span className="shrink-0 text-[length:var(--app-font-size-ui-xs,10px)] tabular-nums text-muted-foreground/50">
                                     {workspace.terminalCount}
                                   </span>
                                 )}
@@ -3050,11 +3193,11 @@ export default function Sidebar() {
             ) : (
               <div className="-mx-1.5 my-1 h-px bg-border" />
             )}
-            <div className="mb-1.5 flex items-center justify-between px-2">
-              <span className="text-[13px] font-normal tracking-tight text-muted-foreground/58">
+            <div className="my-2 flex items-center justify-between px-2">
+              <span className="text-[length:var(--app-font-size-ui,12px)] font-normal tracking-tight text-muted-foreground/58">
                 Threads
               </span>
-              <div className="flex items-center gap-1">
+              <div className="-mr-1 flex items-center gap-1.5">
                 {projects.length > 0 ? (
                   <Tooltip>
                     <TooltipTrigger
@@ -3068,7 +3211,7 @@ export default function Sidebar() {
                                 : "Collapse all projects"
                               : "Expand all projects"
                           }
-                          className="inline-flex size-7 items-center justify-center rounded-lg text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground disabled:cursor-default disabled:opacity-45"
+                          className="inline-flex size-5 items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground disabled:cursor-default disabled:opacity-45"
                           onClick={handleToggleProjects}
                         >
                           {allProjectsExpanded ? (
@@ -3113,7 +3256,7 @@ export default function Sidebar() {
                           shouldShowProjectPathEntry ? "Cancel add project" : "Add project"
                         }
                         aria-pressed={shouldShowProjectPathEntry}
-                        className="inline-flex size-7 cursor-pointer items-center justify-center rounded-lg text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground"
+                        className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground"
                         onClick={handleStartAddProject}
                       />
                     }
@@ -3134,17 +3277,17 @@ export default function Sidebar() {
                     {isElectron && (
                       <button
                         type="button"
-                        className="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg bg-accent/40 px-2 text-[13px] font-normal text-muted-foreground/72 transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
+                        className="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg bg-accent/40 px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
                         onClick={() => void handlePickFolder()}
                         disabled={isPickingFolder || isAddingProject}
                       >
                         <FolderIcon className="size-3.5" />
-                        {isPickingFolder ? "Opening..." : "Browse"}
+                        {isPickingFolder ? "Opening..." : isAddingProject ? "Adding..." : "Browse"}
                       </button>
                     )}
                     <button
                       type="button"
-                      className="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg bg-accent/40 px-2 text-[13px] font-normal text-muted-foreground/72 transition-colors hover:bg-accent hover:text-foreground"
+                      className="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg bg-accent/40 px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 transition-colors hover:bg-accent hover:text-foreground"
                       onClick={() => setShowManualPathInput(true)}
                     >
                       <TbCursorText className="size-3.5" />
@@ -3229,7 +3372,7 @@ export default function Sidebar() {
             )}
 
             {projects.length === 0 && !shouldShowProjectPathEntry && (
-              <div className="px-2 pt-4 text-center text-[13px] text-muted-foreground/58">
+              <div className="px-2 pt-4 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
                 No projects yet
               </div>
             )}
@@ -3244,7 +3387,7 @@ export default function Sidebar() {
             {isOnSettings ? (
               <SidebarMenuButton
                 size="default"
-                className="h-8 gap-2.5 rounded-lg px-2 text-[13px] font-normal text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
+                className="h-8 gap-2.5 rounded-lg px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
                 onClick={() => window.history.back()}
               >
                 <ArrowLeftIcon className="size-[15px]" />
@@ -3253,7 +3396,7 @@ export default function Sidebar() {
             ) : (
               <SidebarMenuButton
                 size="default"
-                className="h-8 gap-2.5 rounded-lg px-2 text-[13px] font-normal text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
+                className="h-8 gap-2.5 rounded-lg px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
                 onClick={() => void navigate({ to: "/settings" })}
               >
                 <SettingsIcon className="size-[15px]" />

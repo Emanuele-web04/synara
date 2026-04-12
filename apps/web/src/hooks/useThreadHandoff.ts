@@ -35,7 +35,8 @@ export function useThreadHandoff() {
       const nextThreadId = newThreadId();
       const createdAt = new Date().toISOString();
       const importedMessages = buildThreadHandoffImportedMessages(thread);
-      const { stickyModelSelectionByProvider } = useComposerDraftStore.getState();
+      const { copyTransferableComposerState, stickyModelSelectionByProvider } =
+        useComposerDraftStore.getState();
 
       await api.orchestration.dispatchCommand({
         type: "thread.handoff.create",
@@ -61,6 +62,8 @@ export function useThreadHandoff() {
         importedMessages: [...importedMessages],
         createdAt,
       });
+
+      copyTransferableComposerState(thread.id, nextThreadId);
 
       const snapshot = await api.orchestration.getSnapshot();
       syncServerReadModel(snapshot);

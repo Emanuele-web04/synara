@@ -233,6 +233,73 @@ describe("composerDraftStore clearComposerContent", () => {
   });
 });
 
+describe("composerDraftStore copyTransferableComposerState", () => {
+  const sourceThreadId = ThreadId.makeUnsafe("thread-source");
+  const targetThreadId = ThreadId.makeUnsafe("thread-target");
+
+  beforeEach(() => {
+    resetComposerDraftStore();
+  });
+
+  it("copies the prompt and terminal contexts to the target thread", () => {
+    const sourceContext = makeTerminalContext({
+      id: "ctx-source",
+      text: "pnpm lint",
+    });
+    const copiedPrompt = insertInlineTerminalContextPlaceholder(
+      "Please reuse this context",
+      24,
+    ).prompt;
+
+    useComposerDraftStore.getState().setPrompt(sourceThreadId, copiedPrompt);
+    useComposerDraftStore.getState().setTerminalContexts(sourceThreadId, [sourceContext]);
+
+    useComposerDraftStore.getState().copyTransferableComposerState(sourceThreadId, targetThreadId);
+
+    const sourceDraft = useComposerDraftStore.getState().draftsByThreadId[sourceThreadId];
+    const targetDraft = useComposerDraftStore.getState().draftsByThreadId[targetThreadId];
+
+    expect(targetDraft).toMatchObject({
+      prompt: sourceDraft?.prompt,
+      terminalContexts: [
+        expect.objectContaining({
+          id: sourceContext.id,
+          threadId: targetThreadId,
+          terminalId: sourceContext.terminalId,
+          terminalLabel: sourceContext.terminalLabel,
+          text: sourceContext.text,
+        }),
+      ],
+    });
+  });
+
+  it("preserves unrelated target draft state while replacing transferred composer content", () => {
+    useComposerDraftStore.getState().setPrompt(sourceThreadId, "follow-up for the other provider");
+    useComposerDraftStore.getState().setModelSelection(
+      targetThreadId,
+      modelSelection("claudeAgent", "claude-sonnet-4-6", {
+        effort: "high",
+      }),
+    );
+
+    useComposerDraftStore.getState().copyTransferableComposerState(sourceThreadId, targetThreadId);
+
+    expect(useComposerDraftStore.getState().draftsByThreadId[targetThreadId]).toMatchObject({
+      prompt: "follow-up for the other provider",
+      modelSelectionByProvider: {
+        claudeAgent: {
+          provider: "claudeAgent",
+          model: "claude-sonnet-4-6",
+          options: {
+            effort: "high",
+          },
+        },
+      },
+      activeProvider: "claudeAgent",
+    });
+  });
+});
+
 describe("composerDraftStore syncPersistedAttachments", () => {
   const threadId = ThreadId.makeUnsafe("thread-sync-persisted");
 

@@ -4,6 +4,7 @@ import {
   browserAddressDisplayValue,
   buildBrowserAddressSuggestions,
   normalizeBrowserAddressInput,
+  resolveBrowserChromeStatus,
   resolveBrowserAddressSync,
 } from "./BrowserPanel.logic";
 
@@ -121,5 +122,49 @@ describe("buildBrowserAddressSuggestions", () => {
     });
     expect(suggestions.some((suggestion) => suggestion.url === "about:blank")).toBe(false);
     expect(suggestions.some((suggestion) => suggestion.url === "https://openai.com/")).toBe(true);
+  });
+});
+
+describe("resolveBrowserChromeStatus", () => {
+  it("surfaces recoverable browser errors ahead of idle state", () => {
+    expect(
+      resolveBrowserChromeStatus({
+        localError: "Couldn't complete that browser action.",
+        threadLastError: null,
+        activeTabStatus: "ready",
+        hasActiveTab: true,
+        workspaceReady: true,
+      }),
+    ).toEqual({
+      tone: "error",
+      label: "Couldn't complete that browser action.",
+    });
+  });
+
+  it("does not duplicate the current url when a page is loaded", () => {
+    expect(
+      resolveBrowserChromeStatus({
+        localError: null,
+        threadLastError: null,
+        activeTabStatus: "ready",
+        hasActiveTab: true,
+        workspaceReady: true,
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps onboarding copy for empty browser states", () => {
+    expect(
+      resolveBrowserChromeStatus({
+        localError: null,
+        threadLastError: null,
+        activeTabStatus: "suspended",
+        hasActiveTab: false,
+        workspaceReady: false,
+      }),
+    ).toEqual({
+      tone: "default",
+      label: "Starting browser...",
+    });
   });
 });

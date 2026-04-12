@@ -7,7 +7,13 @@ import {
 } from "@t3tools/contracts";
 import { resolveModelSlugForProvider } from "@t3tools/shared/model";
 import { create } from "zustand";
-import { type ChatMessage, type Project, type Thread, type ThreadWorkspacePatch } from "./types";
+import {
+  type ChatAttachment,
+  type ChatMessage,
+  type Project,
+  type Thread,
+  type ThreadWorkspacePatch,
+} from "./types";
 import { Debouncer } from "@tanstack/react-pacer";
 
 // ── State ────────────────────────────────────────────────────────────
@@ -17,6 +23,12 @@ export interface AppState {
   threads: Thread[];
   threadsHydrated: boolean;
 }
+
+type ReadModelProject = OrchestrationReadModel["projects"][number];
+type ReadModelThread = OrchestrationReadModel["threads"][number];
+type ReadModelMessage = ReadModelThread["messages"][number];
+type ReadModelProposedPlan = ReadModelThread["proposedPlans"][number];
+type ReadModelCheckpoint = ReadModelThread["checkpoints"][number];
 
 const PERSISTED_STATE_KEY = "t3code:renderer-state:v8";
 const LEGACY_PERSISTED_STATE_KEYS = [
@@ -38,6 +50,12 @@ const initialState: AppState = {
 };
 const persistedExpandedProjectCwds = new Set<string>();
 const persistedProjectOrderCwds: string[] = [];
+const persistedProjectNamesByCwd = new Map<string, string>();
+
+function basenameOfPath(value: string): string | null {
+  const segments = value.split(/[/\\]/).filter((segment) => segment.length > 0);
+  return segments.at(-1) ?? null;
+}
 
 function rememberProjectUiState(projects: ReadonlyArray<Pick<Project, "cwd" | "expanded">>): void {
   for (const project of projects) {
@@ -52,6 +70,19 @@ function rememberProjectUiState(projects: ReadonlyArray<Pick<Project, "cwd" | "e
   }
 }
 
+function rememberProjectLocalNames(
+  projects: ReadonlyArray<Pick<Project, "cwd" | "localName">>,
+): void {
+  for (const project of projects) {
+    const localName = project.localName?.trim() ?? "";
+    if (localName.length > 0) {
+      persistedProjectNamesByCwd.set(project.cwd, localName);
+    } else {
+      persistedProjectNamesByCwd.delete(project.cwd);
+    }
+  }
+}
+
 // ── Persist helpers ──────────────────────────────────────────────────
 
 function readPersistedState(): AppState {
@@ -62,9 +93,11 @@ function readPersistedState(): AppState {
     const parsed = JSON.parse(raw) as {
       expandedProjectCwds?: string[];
       projectOrderCwds?: string[];
+      projectNamesByCwd?: Record<string, string>;
     };
     persistedExpandedProjectCwds.clear();
     persistedProjectOrderCwds.length = 0;
+    persistedProjectNamesByCwd.clear();
     for (const cwd of parsed.expandedProjectCwds ?? []) {
       if (typeof cwd === "string" && cwd.length > 0) {
         persistedExpandedProjectCwds.add(cwd);
@@ -74,6 +107,13 @@ function readPersistedState(): AppState {
       if (typeof cwd === "string" && cwd.length > 0 && !persistedProjectOrderCwds.includes(cwd)) {
         persistedProjectOrderCwds.push(cwd);
       }
+    }
+    for (const [cwd, name] of Object.entries(parsed.projectNamesByCwd ?? {})) {
+      if (typeof cwd !== "string" || cwd.length === 0) continue;
+      if (typeof name !== "string") continue;
+      const trimmedName = name.trim();
+      if (trimmedName.length === 0) continue;
+      persistedProjectNamesByCwd.set(cwd, trimmedName);
     }
     return { ...initialState };
   } catch {
@@ -87,6 +127,7 @@ function persistState(state: AppState): void {
   if (typeof window === "undefined") return;
   try {
     rememberProjectUiState(state.projects);
+    rememberProjectLocalNames(state.projects);
     window.localStorage.setItem(
       PERSISTED_STATE_KEY,
       JSON.stringify({
@@ -94,6 +135,7 @@ function persistState(state: AppState): void {
           .filter((project) => project.expanded)
           .map((project) => project.cwd),
         projectOrderCwds: state.projects.map((project) => project.cwd),
+        projectNamesByCwd: Object.fromEntries(persistedProjectNamesByCwd),
       }),
     );
     if (!legacyKeysCleanedUp) {
@@ -125,6 +167,462 @@ function updateThread(
   return changed ? next : threads;
 }
 
+// Reuse unchanged branches from the read model so per-thread selectors stay stable during streaming.
+function arraysShallowEqual<T>(
+  left: ReadonlyArray<T> | undefined,
+  right: ReadonlyArray<T>,
+): left is ReadonlyArray<T> {
+  if (!left || left.length !== right.length) {
+    return false;
+  }
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function deepEqualJson(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) {
+    return true;
+  }
+  if (left == null || right == null || typeof left !== typeof right) {
+    return false;
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
+      return false;
+    }
+    for (let index = 0; index < left.length; index += 1) {
+      if (!deepEqualJson(left[index], right[index])) {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (typeof left !== "object" || typeof right !== "object") {
+    return false;
+  }
+
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const leftKeys = Object.keys(leftRecord);
+  const rightKeys = Object.keys(rightRecord);
+  if (leftKeys.length !== rightKeys.length) {
+    return false;
+  }
+  for (const key of leftKeys) {
+    if (!(key in rightRecord) || !deepEqualJson(leftRecord[key], rightRecord[key])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function normalizeModelSelection<T extends { provider: ProviderKind; model: string }>(
+  value: T,
+  previous: T | null | undefined,
+): T {
+  const normalizedModel = resolveModelSlugForProvider(value.provider, value.model);
+  const next = normalizedModel === value.model ? value : { ...value, model: normalizedModel };
+  return previous && deepEqualJson(previous, next) ? previous : next;
+}
+
+function normalizeProjectScripts(
+  incoming: ReadModelProject["scripts"],
+  previous: Project["scripts"] | undefined,
+): Project["scripts"] {
+  const nextScripts = incoming.map((script, index) => {
+    const existing = previous?.[index];
+    return existing && deepEqualJson(existing, script) ? existing : script;
+  });
+  return arraysShallowEqual(previous, nextScripts) ? previous : nextScripts;
+}
+
+function normalizeProjectFromReadModel(
+  incoming: ReadModelProject,
+  previous: Project | undefined,
+): Project {
+  const folderName = basenameOfPath(incoming.workspaceRoot) ?? incoming.title;
+  const localName =
+    previous?.localName ?? persistedProjectNamesByCwd.get(incoming.workspaceRoot) ?? null;
+  const defaultModelSelection = incoming.defaultModelSelection
+    ? normalizeModelSelection(incoming.defaultModelSelection, previous?.defaultModelSelection)
+    : (previous?.defaultModelSelection ?? null);
+  const scripts = normalizeProjectScripts(incoming.scripts, previous?.scripts);
+  const expanded =
+    previous?.expanded ??
+    (persistedExpandedProjectCwds.size > 0
+      ? persistedExpandedProjectCwds.has(incoming.workspaceRoot)
+      : true);
+
+  if (
+    previous &&
+    previous.id === incoming.id &&
+    previous.name === (localName ?? incoming.title) &&
+    previous.remoteName === incoming.title &&
+    previous.folderName === folderName &&
+    previous.localName === localName &&
+    previous.cwd === incoming.workspaceRoot &&
+    previous.defaultModelSelection === defaultModelSelection &&
+    previous.expanded === expanded &&
+    previous.createdAt === incoming.createdAt &&
+    previous.updatedAt === incoming.updatedAt &&
+    previous.scripts === scripts
+  ) {
+    return previous;
+  }
+
+  return {
+    id: incoming.id,
+    name: localName ?? incoming.title,
+    remoteName: incoming.title,
+    folderName,
+    localName,
+    cwd: incoming.workspaceRoot,
+    defaultModelSelection,
+    expanded,
+    createdAt: incoming.createdAt,
+    updatedAt: incoming.updatedAt,
+    scripts,
+  } satisfies Project;
+}
+
+function normalizeChatAttachments(
+  incoming: ReadModelMessage["attachments"],
+  previous: ChatAttachment[] | undefined,
+): ChatAttachment[] | undefined {
+  if (!incoming || incoming.length === 0) {
+    return undefined;
+  }
+
+  const previousById = new Map(previous?.map((attachment) => [attachment.id, attachment] as const));
+  const nextAttachments = incoming.map((attachment) => {
+    const nextAttachment: ChatAttachment = {
+      type: "image",
+      id: attachment.id,
+      name: attachment.name,
+      mimeType: attachment.mimeType,
+      sizeBytes: attachment.sizeBytes,
+      previewUrl: toAttachmentPreviewUrl(attachmentPreviewRoutePath(attachment.id)),
+    };
+    const existing = previousById.get(attachment.id);
+    if (
+      existing &&
+      existing.name === nextAttachment.name &&
+      existing.mimeType === nextAttachment.mimeType &&
+      existing.sizeBytes === nextAttachment.sizeBytes &&
+      existing.previewUrl === nextAttachment.previewUrl
+    ) {
+      return existing;
+    }
+    return nextAttachment;
+  });
+
+  return arraysShallowEqual(previous, nextAttachments) ? previous : nextAttachments;
+}
+
+function normalizeChatMessage(
+  incoming: ReadModelMessage,
+  previous: ChatMessage | undefined,
+): ChatMessage {
+  const attachments = normalizeChatAttachments(incoming.attachments, previous?.attachments);
+  const completedAt = incoming.streaming ? undefined : incoming.updatedAt;
+  if (
+    previous &&
+    previous.role === incoming.role &&
+    previous.text === incoming.text &&
+    previous.turnId === incoming.turnId &&
+    previous.createdAt === incoming.createdAt &&
+    previous.streaming === incoming.streaming &&
+    previous.source === incoming.source &&
+    previous.completedAt === completedAt &&
+    previous.attachments === attachments
+  ) {
+    return previous;
+  }
+
+  return {
+    id: incoming.id,
+    role: incoming.role,
+    text: incoming.text,
+    turnId: incoming.turnId,
+    createdAt: incoming.createdAt,
+    streaming: incoming.streaming,
+    source: incoming.source,
+    ...(completedAt ? { completedAt } : {}),
+    ...(attachments ? { attachments } : {}),
+  };
+}
+
+function normalizeChatMessages(
+  incoming: ReadModelThread["messages"],
+  previous: ChatMessage[] | undefined,
+): ChatMessage[] {
+  const previousById = new Map(previous?.map((message) => [message.id, message] as const));
+  const nextMessages = incoming.map((message) =>
+    normalizeChatMessage(message, previousById.get(message.id)),
+  );
+  return arraysShallowEqual(previous, nextMessages) ? previous : nextMessages;
+}
+
+function normalizeProposedPlans(
+  incoming: ReadModelThread["proposedPlans"],
+  previous: Thread["proposedPlans"] | undefined,
+): Thread["proposedPlans"] {
+  const previousById = new Map(previous?.map((plan) => [plan.id, plan] as const));
+  const nextPlans = incoming.map((plan) => {
+    const existing = previousById.get(plan.id);
+    if (
+      existing &&
+      existing.turnId === plan.turnId &&
+      existing.planMarkdown === plan.planMarkdown &&
+      existing.implementedAt === plan.implementedAt &&
+      existing.implementationThreadId === plan.implementationThreadId &&
+      existing.createdAt === plan.createdAt &&
+      existing.updatedAt === plan.updatedAt
+    ) {
+      return existing;
+    }
+    return {
+      id: plan.id,
+      turnId: plan.turnId,
+      planMarkdown: plan.planMarkdown,
+      implementedAt: plan.implementedAt,
+      implementationThreadId: plan.implementationThreadId,
+      createdAt: plan.createdAt,
+      updatedAt: plan.updatedAt,
+    };
+  });
+  return arraysShallowEqual(previous, nextPlans) ? previous : nextPlans;
+}
+
+function normalizeTurnDiffFiles(
+  incoming: ReadModelCheckpoint["files"],
+  previous: Thread["turnDiffSummaries"][number]["files"] | undefined,
+): Thread["turnDiffSummaries"][number]["files"] {
+  const nextFiles = incoming.map((file, index) => {
+    const existing = previous?.[index];
+    if (
+      existing &&
+      existing.path === file.path &&
+      existing.kind === file.kind &&
+      existing.additions === file.additions &&
+      existing.deletions === file.deletions
+    ) {
+      return existing;
+    }
+    return file;
+  });
+  return arraysShallowEqual(previous, nextFiles) ? previous : nextFiles;
+}
+
+function normalizeTurnDiffSummaries(
+  incoming: ReadModelThread["checkpoints"],
+  previous: Thread["turnDiffSummaries"] | undefined,
+): Thread["turnDiffSummaries"] {
+  const previousByTurnId = new Map(previous?.map((summary) => [summary.turnId, summary] as const));
+  const nextSummaries = incoming.map((checkpoint) => {
+    const existing = previousByTurnId.get(checkpoint.turnId);
+    const files = normalizeTurnDiffFiles(checkpoint.files, existing?.files);
+    if (
+      existing &&
+      existing.completedAt === checkpoint.completedAt &&
+      existing.status === checkpoint.status &&
+      existing.assistantMessageId === (checkpoint.assistantMessageId ?? undefined) &&
+      existing.checkpointTurnCount === checkpoint.checkpointTurnCount &&
+      existing.checkpointRef === checkpoint.checkpointRef &&
+      existing.files === files
+    ) {
+      return existing;
+    }
+    return {
+      turnId: checkpoint.turnId,
+      completedAt: checkpoint.completedAt,
+      status: checkpoint.status,
+      assistantMessageId: checkpoint.assistantMessageId ?? undefined,
+      checkpointTurnCount: checkpoint.checkpointTurnCount,
+      checkpointRef: checkpoint.checkpointRef,
+      files,
+    };
+  });
+  return arraysShallowEqual(previous, nextSummaries) ? previous : nextSummaries;
+}
+
+function normalizeActivities(
+  incoming: ReadModelThread["activities"],
+  previous: Thread["activities"] | undefined,
+): Thread["activities"] {
+  const previousById = new Map(previous?.map((activity) => [activity.id, activity] as const));
+  const nextActivities = incoming.map((activity) => {
+    const existing = previousById.get(activity.id);
+    if (
+      existing &&
+      existing.kind === activity.kind &&
+      existing.tone === activity.tone &&
+      existing.summary === activity.summary &&
+      deepEqualJson(existing.payload, activity.payload) &&
+      existing.turnId === activity.turnId &&
+      existing.sequence === activity.sequence &&
+      existing.createdAt === activity.createdAt
+    ) {
+      return existing;
+    }
+    return activity;
+  });
+  return arraysShallowEqual(previous, nextActivities) ? previous : nextActivities;
+}
+
+function normalizeThreadSession(
+  incoming: ReadModelThread["session"],
+  previous: Thread["session"] | undefined | null,
+): Thread["session"] {
+  if (!incoming) {
+    return null;
+  }
+  const nextSession = {
+    provider: toLegacyProvider(incoming.providerName),
+    status: toLegacySessionStatus(incoming.status),
+    orchestrationStatus: incoming.status,
+    activeTurnId: incoming.activeTurnId ?? undefined,
+    createdAt: incoming.updatedAt,
+    updatedAt: incoming.updatedAt,
+    ...(incoming.lastError ? { lastError: incoming.lastError } : {}),
+  } satisfies NonNullable<Thread["session"]>;
+  if (
+    previous &&
+    previous.provider === nextSession.provider &&
+    previous.status === nextSession.status &&
+    previous.orchestrationStatus === nextSession.orchestrationStatus &&
+    previous.activeTurnId === nextSession.activeTurnId &&
+    previous.createdAt === nextSession.createdAt &&
+    previous.updatedAt === nextSession.updatedAt &&
+    previous.lastError === nextSession.lastError
+  ) {
+    return previous;
+  }
+  return nextSession;
+}
+
+function normalizeLatestTurn(
+  incoming: ReadModelThread["latestTurn"],
+  previous: Thread["latestTurn"] | undefined | null,
+): Thread["latestTurn"] {
+  if (!incoming) {
+    return null;
+  }
+  const nextSourceProposedPlan = incoming.sourceProposedPlan
+    ? previous?.sourceProposedPlan &&
+      previous.sourceProposedPlan.threadId === incoming.sourceProposedPlan.threadId &&
+      previous.sourceProposedPlan.planId === incoming.sourceProposedPlan.planId
+      ? previous.sourceProposedPlan
+      : incoming.sourceProposedPlan
+    : undefined;
+
+  if (
+    previous &&
+    previous.turnId === incoming.turnId &&
+    previous.state === incoming.state &&
+    previous.requestedAt === incoming.requestedAt &&
+    previous.startedAt === incoming.startedAt &&
+    previous.completedAt === incoming.completedAt &&
+    previous.assistantMessageId === incoming.assistantMessageId &&
+    previous.sourceProposedPlan === nextSourceProposedPlan
+  ) {
+    return previous;
+  }
+
+  return {
+    turnId: incoming.turnId,
+    state: incoming.state,
+    requestedAt: incoming.requestedAt,
+    startedAt: incoming.startedAt,
+    completedAt: incoming.completedAt,
+    assistantMessageId: incoming.assistantMessageId,
+    ...(nextSourceProposedPlan ? { sourceProposedPlan: nextSourceProposedPlan } : {}),
+  };
+}
+
+function normalizeThreadFromReadModel(
+  incoming: ReadModelThread,
+  previous: Thread | undefined,
+): Thread {
+  const modelSelection = normalizeModelSelection(incoming.modelSelection, previous?.modelSelection);
+  const session = normalizeThreadSession(incoming.session, previous?.session);
+  const messages = normalizeChatMessages(incoming.messages, previous?.messages);
+  const proposedPlans = normalizeProposedPlans(incoming.proposedPlans, previous?.proposedPlans);
+  const latestTurn = normalizeLatestTurn(incoming.latestTurn, previous?.latestTurn);
+  const handoff =
+    previous?.handoff && incoming.handoff && deepEqualJson(previous.handoff, incoming.handoff)
+      ? previous.handoff
+      : (incoming.handoff ?? null);
+  const turnDiffSummaries = normalizeTurnDiffSummaries(
+    incoming.checkpoints,
+    previous?.turnDiffSummaries,
+  );
+  const activities = normalizeActivities(incoming.activities, previous?.activities);
+  const error = incoming.session?.lastError ?? null;
+  const lastVisitedAt = previous?.lastVisitedAt ?? incoming.updatedAt;
+
+  if (
+    previous &&
+    previous.projectId === incoming.projectId &&
+    previous.title === incoming.title &&
+    previous.modelSelection === modelSelection &&
+    previous.runtimeMode === incoming.runtimeMode &&
+    previous.interactionMode === incoming.interactionMode &&
+    previous.session === session &&
+    previous.messages === messages &&
+    previous.proposedPlans === proposedPlans &&
+    previous.error === error &&
+    previous.createdAt === incoming.createdAt &&
+    previous.updatedAt === incoming.updatedAt &&
+    previous.latestTurn === latestTurn &&
+    previous.lastVisitedAt === lastVisitedAt &&
+    previous.envMode === (incoming.envMode ?? "local") &&
+    previous.branch === incoming.branch &&
+    previous.worktreePath === incoming.worktreePath &&
+    (previous.associatedWorktreePath ?? null) === (incoming.associatedWorktreePath ?? null) &&
+    (previous.associatedWorktreeBranch ?? null) === (incoming.associatedWorktreeBranch ?? null) &&
+    (previous.associatedWorktreeRef ?? null) === (incoming.associatedWorktreeRef ?? null) &&
+    (previous.forkSourceThreadId ?? null) === (incoming.forkSourceThreadId ?? null) &&
+    (previous.handoff ?? null) === handoff &&
+    previous.turnDiffSummaries === turnDiffSummaries &&
+    previous.activities === activities
+  ) {
+    return previous;
+  }
+
+  return {
+    id: incoming.id,
+    codexThreadId: null,
+    projectId: incoming.projectId,
+    title: incoming.title,
+    modelSelection,
+    runtimeMode: incoming.runtimeMode,
+    interactionMode: incoming.interactionMode,
+    session,
+    messages,
+    proposedPlans,
+    error,
+    createdAt: incoming.createdAt,
+    updatedAt: incoming.updatedAt,
+    latestTurn,
+    lastVisitedAt,
+    envMode: incoming.envMode ?? "local",
+    branch: incoming.branch,
+    worktreePath: incoming.worktreePath,
+    associatedWorktreePath: incoming.associatedWorktreePath ?? null,
+    associatedWorktreeBranch: incoming.associatedWorktreeBranch ?? null,
+    associatedWorktreeRef: incoming.associatedWorktreeRef ?? null,
+    forkSourceThreadId: incoming.forkSourceThreadId ?? null,
+    handoff,
+    turnDiffSummaries,
+    activities,
+  };
+}
+
 function mapProjectsFromReadModel(
   incoming: OrchestrationReadModel["projects"],
   previous: Project[],
@@ -140,35 +638,11 @@ function mapProjectsFromReadModel(
   );
   const usePersistedOrder = previous.length === 0;
 
-  const mappedProjects = incoming.map((project) => {
-    const existing = previousById.get(project.id) ?? previousByCwd.get(project.workspaceRoot);
-    return {
-      id: project.id,
-      name: project.title,
-      cwd: project.workspaceRoot,
-      defaultModelSelection:
-        existing?.defaultModelSelection ??
-        (project.defaultModelSelection
-          ? {
-              ...project.defaultModelSelection,
-              model: resolveModelSlugForProvider(
-                project.defaultModelSelection.provider,
-                project.defaultModelSelection.model,
-              ),
-            }
-          : null),
-      expanded:
-        existing?.expanded ??
-        (persistedExpandedProjectCwds.size > 0
-          ? persistedExpandedProjectCwds.has(project.workspaceRoot)
-          : true),
-      createdAt: project.createdAt,
-      updatedAt: project.updatedAt,
-      scripts: project.scripts.map((script) => ({ ...script })),
-    } satisfies Project;
-  });
-
-  return mappedProjects
+  const mappedProjects = incoming
+    .map((project) => {
+      const existing = previousById.get(project.id) ?? previousByCwd.get(project.workspaceRoot);
+      return normalizeProjectFromReadModel(project, existing);
+    })
     .map((project, incomingIndex) => {
       const previousIndex =
         previousOrderById.get(project.id) ?? previousOrderByCwd.get(project.cwd);
@@ -185,6 +659,8 @@ function mapProjectsFromReadModel(
       return a.incomingIndex - b.incomingIndex;
     })
     .map((entry) => entry.project);
+
+  return arraysShallowEqual(previous, mappedProjects) ? previous : mappedProjects;
 }
 
 function toLegacySessionStatus(
@@ -249,96 +725,26 @@ function attachmentPreviewRoutePath(attachmentId: string): string {
 
 export function syncServerReadModel(state: AppState, readModel: OrchestrationReadModel): AppState {
   rememberProjectUiState(state.projects);
+  rememberProjectLocalNames(state.projects);
   const projects = mapProjectsFromReadModel(
     readModel.projects.filter((project) => project.deletedAt === null),
     state.projects,
   );
   const existingThreadById = new Map(state.threads.map((thread) => [thread.id, thread] as const));
-  const threads = readModel.threads
+  const nextThreads = readModel.threads
     .filter((thread) => thread.deletedAt === null)
     .map((thread) => {
       const existing = existingThreadById.get(thread.id);
-      return {
-        id: thread.id,
-        codexThreadId: null,
-        projectId: thread.projectId,
-        title: thread.title,
-        modelSelection: {
-          ...thread.modelSelection,
-          model: resolveModelSlugForProvider(
-            thread.modelSelection.provider,
-            thread.modelSelection.model,
-          ),
-        },
-        runtimeMode: thread.runtimeMode,
-        interactionMode: thread.interactionMode,
-        session: thread.session
-          ? {
-              provider: toLegacyProvider(thread.session.providerName),
-              status: toLegacySessionStatus(thread.session.status),
-              orchestrationStatus: thread.session.status,
-              activeTurnId: thread.session.activeTurnId ?? undefined,
-              createdAt: thread.session.updatedAt,
-              updatedAt: thread.session.updatedAt,
-              ...(thread.session.lastError ? { lastError: thread.session.lastError } : {}),
-            }
-          : null,
-        messages: thread.messages.map((message) => {
-          const attachments = message.attachments?.map((attachment) => ({
-            type: "image" as const,
-            id: attachment.id,
-            name: attachment.name,
-            mimeType: attachment.mimeType,
-            sizeBytes: attachment.sizeBytes,
-            previewUrl: toAttachmentPreviewUrl(attachmentPreviewRoutePath(attachment.id)),
-          }));
-          const normalizedMessage: ChatMessage = {
-            id: message.id,
-            role: message.role,
-            text: message.text,
-            turnId: message.turnId,
-            createdAt: message.createdAt,
-            streaming: message.streaming,
-            source: message.source,
-            ...(message.streaming ? {} : { completedAt: message.updatedAt }),
-            ...(attachments && attachments.length > 0 ? { attachments } : {}),
-          };
-          return normalizedMessage;
-        }),
-        proposedPlans: thread.proposedPlans.map((proposedPlan) => ({
-          id: proposedPlan.id,
-          turnId: proposedPlan.turnId,
-          planMarkdown: proposedPlan.planMarkdown,
-          implementedAt: proposedPlan.implementedAt,
-          implementationThreadId: proposedPlan.implementationThreadId,
-          createdAt: proposedPlan.createdAt,
-          updatedAt: proposedPlan.updatedAt,
-        })),
-        error: thread.session?.lastError ?? null,
-        createdAt: thread.createdAt,
-        updatedAt: thread.updatedAt,
-        latestTurn: thread.latestTurn,
-        lastVisitedAt: existing?.lastVisitedAt ?? thread.updatedAt,
-        envMode: thread.envMode ?? "local",
-        branch: thread.branch,
-        worktreePath: thread.worktreePath,
-        associatedWorktreePath: thread.associatedWorktreePath ?? null,
-        associatedWorktreeBranch: thread.associatedWorktreeBranch ?? null,
-        associatedWorktreeRef: thread.associatedWorktreeRef ?? null,
-        forkSourceThreadId: thread.forkSourceThreadId ?? null,
-        handoff: thread.handoff,
-        turnDiffSummaries: thread.checkpoints.map((checkpoint) => ({
-          turnId: checkpoint.turnId,
-          completedAt: checkpoint.completedAt,
-          status: checkpoint.status,
-          assistantMessageId: checkpoint.assistantMessageId ?? undefined,
-          checkpointTurnCount: checkpoint.checkpointTurnCount,
-          checkpointRef: checkpoint.checkpointRef,
-          files: checkpoint.files.map((file) => ({ ...file })),
-        })),
-        activities: thread.activities.map((activity) => ({ ...activity })),
-      };
+      // Thread.updatedAt already changes for message, activity, session, plan, and diff updates.
+      if (existing && existing.updatedAt === thread.updatedAt) {
+        return existing;
+      }
+      return normalizeThreadFromReadModel(thread, existing);
     });
+  const threads = arraysShallowEqual(state.threads, nextThreads) ? state.threads : nextThreads;
+  if (projects === state.projects && threads === state.threads && state.threadsHydrated) {
+    return state;
+  }
   return {
     ...state,
     projects,
@@ -442,6 +848,32 @@ export function reorderProjects(
   return { ...state, projects };
 }
 
+export function renameProjectLocally(
+  state: AppState,
+  projectId: Project["id"],
+  name: string | null,
+): AppState {
+  const normalizedName = name?.trim() ?? null;
+  let changed = false;
+  const projects = state.projects.map((project) => {
+    if (project.id !== projectId) {
+      return project;
+    }
+    const nextLocalName = normalizedName && normalizedName.length > 0 ? normalizedName : null;
+    const nextName = nextLocalName ?? project.remoteName;
+    if (project.localName === nextLocalName && project.name === nextName) {
+      return project;
+    }
+    changed = true;
+    return {
+      ...project,
+      name: nextName,
+      localName: nextLocalName,
+    };
+  });
+  return changed ? { ...state, projects } : state;
+}
+
 export function setError(state: AppState, threadId: ThreadId, error: string | null): AppState {
   const threads = updateThread(state.threads, threadId, (t) => {
     if (t.error === error) return t;
@@ -507,6 +939,7 @@ interface AppStore extends AppState {
   setAllProjectsExpanded: (expanded: boolean) => void;
   collapseProjectsExcept: (activeProjectId: Project["id"] | null) => void;
   reorderProjects: (draggedProjectId: Project["id"], targetProjectId: Project["id"]) => void;
+  renameProjectLocally: (projectId: Project["id"], name: string | null) => void;
   setError: (threadId: ThreadId, error: string | null) => void;
   setThreadWorkspace: (threadId: ThreadId, patch: ThreadWorkspacePatch) => void;
 }
@@ -525,6 +958,8 @@ export const useStore = create<AppStore>((set) => ({
     set((state) => collapseProjectsExcept(state, activeProjectId)),
   reorderProjects: (draggedProjectId, targetProjectId) =>
     set((state) => reorderProjects(state, draggedProjectId, targetProjectId)),
+  renameProjectLocally: (projectId, name) =>
+    set((state) => renameProjectLocally(state, projectId, name)),
   setError: (threadId, error) => set((state) => setError(state, threadId, error)),
   setThreadWorkspace: (threadId, patch) =>
     set((state) => setThreadWorkspace(state, threadId, patch)),
@@ -533,6 +968,7 @@ export const useStore = create<AppStore>((set) => ({
 // Persist state changes with debouncing to avoid localStorage thrashing
 useStore.subscribe((state) => {
   rememberProjectUiState(state.projects);
+  rememberProjectLocalNames(state.projects);
   debouncedPersistState.maybeExecute(state);
 });
 

@@ -904,6 +904,71 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
+  it("collapses Claude-style partial tool-input updates into the final lifecycle row", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "claude-update-1",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.updated",
+        summary: "Read file",
+        payload: {
+          itemType: "dynamic_tool_call",
+          title: "Read file",
+          detail: 'Read: {"file_path":"',
+          data: {
+            toolName: "Read",
+            input: {},
+          },
+        },
+      }),
+      makeActivity({
+        id: "claude-update-2",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.updated",
+        summary: "Read file",
+        payload: {
+          itemType: "dynamic_tool_call",
+          title: "Read file",
+          detail: 'Read: {"file_path":"/tmp/app.ts"}',
+          data: {
+            toolName: "Read",
+            input: {
+              file_path: "/tmp/app.ts",
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "claude-complete",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "tool.completed",
+        summary: "Read file",
+        payload: {
+          itemType: "dynamic_tool_call",
+          title: "Read file",
+          detail: 'Read: {"file_path":"/tmp/app.ts"}',
+          data: {
+            toolName: "Read",
+            input: {
+              file_path: "/tmp/app.ts",
+            },
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      id: "claude-complete",
+      label: "Read file",
+      detail: 'Read: {"file_path":"/tmp/app.ts"}',
+      itemType: "dynamic_tool_call",
+      toolTitle: "Read file",
+    });
+  });
+
   it("keeps separate tool entries when an identical call starts after the prior one completed", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

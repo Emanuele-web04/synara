@@ -260,17 +260,17 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-baseline gap-3">
-                          <div className="min-w-0 flex-1 truncate text-sm text-foreground">
+                          <div className="min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)] text-foreground">
                             <HighlightedText
                               text={thread.title || "Untitled thread"}
                               query={query}
                             />
                           </div>
-                          <span className="w-24 shrink-0 truncate text-right text-xs text-muted-foreground/72">
+                          <span className="w-24 shrink-0 truncate text-right text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/72">
                             {thread.projectName}
                           </span>
                           {thread.updatedAt || thread.createdAt ? (
-                            <span className="w-10 shrink-0 text-right text-xs text-muted-foreground/72">
+                            <span className="w-10 shrink-0 text-right text-[length:var(--app-font-size-ui-timestamp,10px)] text-muted-foreground/72">
                               {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
                             </span>
                           ) : (
@@ -279,19 +279,19 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                         </div>
                         {snippet ? (
                           <div className="mt-0.5 flex items-start gap-3">
-                            <div className="min-w-0 flex-1 line-clamp-1 text-xs leading-5 text-muted-foreground/78">
+                            <div className="min-w-0 flex-1 line-clamp-1 text-[length:var(--app-font-size-ui-meta,10px)] leading-5 text-muted-foreground/78">
                               <HighlightedText text={snippet} query={query} />
                             </div>
                             <div className="flex w-[8.5rem] shrink-0 justify-end">
                               {threadMatchLabel({ matchKind, messageMatchCount }) ? (
-                                <span className="truncate text-[11px] text-muted-foreground/58">
+                                <span className="truncate text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/58">
                                   {threadMatchLabel({ matchKind, messageMatchCount })}
                                 </span>
                               ) : null}
                             </div>
                           </div>
                         ) : threadMatchLabel({ matchKind, messageMatchCount }) ? (
-                          <div className="mt-0.5 text-[11px] text-muted-foreground/58">
+                          <div className="mt-0.5 text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/58">
                             {threadMatchLabel({ matchKind, messageMatchCount })}
                           </div>
                         ) : null}
@@ -323,11 +323,13 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                     >
                       <PaletteIcon icon={HiOutlineFolderOpen} />
                       <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm text-foreground">
+                        <div className="truncate text-[length:var(--app-font-size-ui,12px)] text-foreground">
                           {project.name || "Untitled project"}
                         </div>
-                        <div className="truncate text-xs text-muted-foreground/72">
-                          {project.cwd}
+                        <div className="truncate text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/72">
+                          {project.localName
+                            ? `${project.folderName} · ${project.cwd}`
+                            : project.cwd}
                         </div>
                       </div>
                     </CommandItem>

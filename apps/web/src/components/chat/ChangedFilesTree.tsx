@@ -64,11 +64,17 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
             ) : (
               <FolderClosedIcon className="size-3.5 shrink-0 text-muted-foreground/75" />
             )}
-            <span className="font-chat-code truncate text-[11px] text-muted-foreground/90 group-hover:text-foreground/90">
+            <span
+              className="font-chat-code truncate text-muted-foreground/90 group-hover:text-foreground/90"
+              style={{ fontSize: "var(--app-font-size-chat-code,11px)" }}
+            >
               {node.name}
             </span>
             {hasNonZeroStat(node.stat) && (
-              <span className="font-chat-code ml-auto shrink-0 text-[10px] tabular-nums">
+              <span
+                className="font-chat-code ml-auto shrink-0 tabular-nums"
+                style={{ fontSize: "var(--app-font-size-chat-meta,10px)" }}
+              >
                 <DiffStatLabel additions={node.stat.additions} deletions={node.stat.deletions} />
               </span>
             )}
@@ -97,11 +103,17 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
           theme={resolvedTheme}
           className="size-3.5 text-muted-foreground/70"
         />
-        <span className="font-chat-code truncate text-[11px] text-muted-foreground/80 group-hover:text-foreground/90">
+        <span
+          className="font-chat-code truncate text-muted-foreground/80 group-hover:text-foreground/90"
+          style={{ fontSize: "var(--app-font-size-chat-code,11px)" }}
+        >
           {node.name}
         </span>
         {node.stat && (
-          <span className="font-chat-code ml-auto shrink-0 text-[10px] tabular-nums">
+          <span
+            className="font-chat-code ml-auto shrink-0 tabular-nums"
+            style={{ fontSize: "var(--app-font-size-chat-meta,10px)" }}
+          >
             <DiffStatLabel additions={node.stat.additions} deletions={node.stat.deletions} />
           </span>
         )}

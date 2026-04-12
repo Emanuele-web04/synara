@@ -22,7 +22,7 @@ import { page } from "vitest/browser";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
-import { useComposerDraftStore } from "../composerDraftStore";
+import { type ComposerImageAttachment, useComposerDraftStore } from "../composerDraftStore";
 import { getScrollContainerDistanceFromBottom } from "../chat-scroll";
 import {
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
@@ -187,6 +187,31 @@ function createTerminalContext(input: {
     lineEnd: input.lineEnd,
     text: input.text,
     createdAt: NOW_ISO,
+  };
+}
+
+function createComposerImage(input: {
+  id: string;
+  previewUrl: string;
+  name?: string;
+  mimeType?: string;
+  sizeBytes?: number;
+}): ComposerImageAttachment {
+  const name = input.name ?? "queued-image.png";
+  const mimeType = input.mimeType ?? "image/png";
+  const sizeBytes = input.sizeBytes ?? 8;
+  const file = new File([new Uint8Array(sizeBytes).fill(1)], name, {
+    type: mimeType,
+    lastModified: BASE_TIME_MS,
+  });
+  return {
+    type: "image",
+    id: input.id,
+    name,
+    mimeType,
+    sizeBytes: file.size,
+    previewUrl: input.previewUrl,
+    file,
   };
 }
 
@@ -1832,6 +1857,88 @@ describe("ChatView timeline estimator parity (full app)", () => {
         "Unable to find stop generation button.",
       );
       expect(stopButton).not.toBeNull();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("editing a queued follow-up removes only that row and restores its images to the composer", async () => {
+    const queuedImage = createComposerImage({
+      id: "queued-image-1",
+      previewUrl: "blob:queued-image-1",
+      name: "queued-image.png",
+    });
+    const firstQueuedPrompt = "first queued prompt with image";
+    const secondQueuedPrompt = "second queued prompt stays queued";
+    useComposerDraftStore.getState().setPrompt(THREAD_ID, firstQueuedPrompt);
+    useComposerDraftStore.getState().addImage(THREAD_ID, queuedImage);
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-running-edit-queue" as MessageId,
+        targetText: "running edit queue target",
+        sessionStatus: "running",
+      }),
+    });
+
+    try {
+      const composerForm = await waitForElement(
+        () => document.querySelector<HTMLFormElement>('form[data-chat-composer-form="true"]'),
+        "Unable to find composer form.",
+      );
+
+      composerForm.requestSubmit();
+      await vi.waitFor(
+        () => {
+          expect(document.querySelectorAll('[data-testid="queued-follow-up-row"]')).toHaveLength(1);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, secondQueuedPrompt);
+      composerForm.requestSubmit();
+
+      await vi.waitFor(
+        () => {
+          expect(document.querySelectorAll('[data-testid="queued-follow-up-row"]')).toHaveLength(2);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const actionButtons = document.querySelectorAll<HTMLButtonElement>(
+        'button[aria-label="Queued follow-up actions"]',
+      );
+      actionButtons[0]?.click();
+
+      const editMenuItem = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll<HTMLElement>('[data-slot="menu-item"]')).find(
+            (item) => item.textContent?.trim() === "Edit queued prompt",
+          ) ?? null,
+        "Unable to find edit queued prompt menu item.",
+      );
+      editMenuItem.click();
+
+      await vi.waitFor(
+        () => {
+          const queuedRows = document.querySelectorAll<HTMLElement>(
+            '[data-testid="queued-follow-up-row"]',
+          );
+          expect(queuedRows).toHaveLength(1);
+          expect(queuedRows[0]?.textContent ?? "").toContain(secondQueuedPrompt);
+          expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
+            firstQueuedPrompt,
+          );
+          expect(
+            useComposerDraftStore
+              .getState()
+              .draftsByThreadId[THREAD_ID]?.images.map((image) => image.name),
+          ).toEqual(["queued-image.png"]);
+          expect(document.body.textContent).toContain("queued-image.png");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
     } finally {
       await mounted.cleanup();
     }

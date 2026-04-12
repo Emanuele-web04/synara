@@ -1,7 +1,10 @@
 import { ProjectId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
-import { resolveVisibleToastThreadIds } from "./toastRouteVisibility";
+import {
+  resolveVisibleToastThreadIds,
+  shouldRenderToastForVisibleThreads,
+} from "./toastRouteVisibility";
 import type { SplitView } from "../../splitViewStore";
 
 const PROJECT_ID = ProjectId.makeUnsafe("project-1");
@@ -53,5 +56,35 @@ describe("resolveVisibleToastThreadIds", () => {
         splitView: createSplitView(),
       }),
     ).toEqual(new Set([THREAD_A, THREAD_B]));
+  });
+});
+
+describe("shouldRenderToastForVisibleThreads", () => {
+  it("shows unscoped toasts everywhere", () => {
+    expect(
+      shouldRenderToastForVisibleThreads({
+        toastThreadId: null,
+        visibleThreadIds: new Set([THREAD_A]),
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps thread-scoped toasts limited to visible threads by default", () => {
+    expect(
+      shouldRenderToastForVisibleThreads({
+        toastThreadId: THREAD_B,
+        visibleThreadIds: new Set([THREAD_A]),
+      }),
+    ).toBe(false);
+  });
+
+  it("allows explicit cross-thread visibility for deeplink notifications", () => {
+    expect(
+      shouldRenderToastForVisibleThreads({
+        allowCrossThreadVisibility: true,
+        toastThreadId: THREAD_B,
+        visibleThreadIds: new Set([THREAD_A]),
+      }),
+    ).toBe(true);
   });
 });

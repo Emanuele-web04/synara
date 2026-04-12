@@ -279,6 +279,7 @@ interface ComposerDraftStoreState {
     threadId: ThreadId,
     attachments: PersistedComposerImageAttachment[],
   ) => void;
+  copyTransferableComposerState: (sourceThreadId: ThreadId, targetThreadId: ThreadId) => void;
   clearComposerContent: (threadId: ThreadId) => void;
 }
 
@@ -432,6 +433,23 @@ function normalizeTerminalContextsForThread(
   }
 
   return normalizedContexts;
+}
+
+function buildTransferredComposerDraft(input: {
+  sourceDraft: ComposerThreadDraftState;
+  targetDraft: ComposerThreadDraftState | undefined;
+  targetThreadId: ThreadId;
+}): ComposerThreadDraftState {
+  const { sourceDraft, targetDraft, targetThreadId } = input;
+  const base = targetDraft ?? createEmptyThreadDraft();
+  return {
+    ...base,
+    prompt: sourceDraft.prompt,
+    terminalContexts: normalizeTerminalContextsForThread(
+      targetThreadId,
+      sourceDraft.terminalContexts,
+    ),
+  };
 }
 
 function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
@@ -2273,6 +2291,33 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
         });
         Promise.resolve().then(() => {
           verifyPersistedAttachments(threadId, attachments, set);
+        });
+      },
+      copyTransferableComposerState: (sourceThreadId, targetThreadId) => {
+        if (sourceThreadId.length === 0 || targetThreadId.length === 0) {
+          return;
+        }
+        set((state) => {
+          const sourceDraft = state.draftsByThreadId[sourceThreadId];
+          if (!sourceDraft) {
+            return state;
+          }
+          const nextDraft = buildTransferredComposerDraft({
+            sourceDraft,
+            targetDraft: state.draftsByThreadId[targetThreadId],
+            targetThreadId,
+          });
+          const currentTargetDraft = state.draftsByThreadId[targetThreadId];
+          if (Equal.equals(currentTargetDraft, nextDraft)) {
+            return state;
+          }
+          const nextDraftsByThreadId = { ...state.draftsByThreadId };
+          if (shouldRemoveDraft(nextDraft)) {
+            delete nextDraftsByThreadId[targetThreadId];
+          } else {
+            nextDraftsByThreadId[targetThreadId] = nextDraft;
+          }
+          return { draftsByThreadId: nextDraftsByThreadId };
         });
       },
       clearComposerContent: (threadId) => {

@@ -233,6 +233,14 @@ describe("classifyCodexStderrLine", () => {
       message: line,
     });
   });
+
+  it("normalizes duplicate tool argument parse failures", () => {
+    const line =
+      "2026-04-11T23:48:45.012578Z ERROR codex_core::tools::router: error=failed to parse function arguments: duplicate field `yield_time_ms` at line 1 column 114";
+    expect(classifyCodexStderrLine(line)).toEqual({
+      message: "Tool call failed because the same argument was sent twice (yield_time_ms).",
+    });
+  });
 });
 
 describe("handleStdoutLine", () => {
@@ -1740,6 +1748,67 @@ describe("collab child conversation routing", () => {
         method: "item/commandExecution/requestApproval",
         turnId: "turn_parent",
         itemId: "call_child_1",
+      }),
+    );
+  });
+});
+
+describe("handleServerNotification error normalization", () => {
+  it("normalizes duplicate tool argument errors on turn completion", () => {
+    const { manager, context, updateSession } = createCollabNotificationHarness();
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "turn/completed",
+      params: {
+        threadId: "provider_parent",
+        turn: {
+          id: "turn_parent",
+          status: "failed",
+          error: {
+            message:
+              "failed to parse function arguments: duplicate field `yield_time_ms` at line 1 column 114",
+          },
+        },
+      },
+    });
+
+    expect(updateSession).toHaveBeenCalledWith(
+      context,
+      expect.objectContaining({
+        status: "error",
+        lastError: "Tool call failed because the same argument was sent twice (yield_time_ms).",
+      }),
+    );
+  });
+
+  it("normalizes duplicate tool argument errors on runtime error notifications", () => {
+    const { manager, context, updateSession } = createCollabNotificationHarness();
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "error",
+      params: {
+        threadId: "provider_parent",
+        error: {
+          message:
+            "failed to parse function arguments: duplicate field `yield_time_ms` at line 1 column 114",
+        },
+        willRetry: false,
+      },
+    });
+
+    expect(updateSession).toHaveBeenCalledWith(
+      context,
+      expect.objectContaining({
+        status: "error",
+        lastError: "Tool call failed because the same argument was sent twice (yield_time_ms).",
       }),
     );
   });

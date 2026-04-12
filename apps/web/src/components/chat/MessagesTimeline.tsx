@@ -35,7 +35,6 @@ import {
   SquarePenIcon,
   TerminalIcon,
   Undo2Icon,
-  WrenchIcon,
   ZapIcon,
 } from "~/lib/icons";
 import { Button } from "../ui/button";
@@ -79,8 +78,10 @@ import {
 } from "../composerInlineChip";
 import { getChatTranscriptLineHeightPx, getChatTranscriptTextStyle } from "./chatTypography";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
+import { getAppTypographyScale } from "../../lib/appTypography";
 
 const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
+const MAX_VISIBLE_INLINE_TOOL_ENTRIES = 4;
 const ALWAYS_UNVIRTUALIZED_TAIL_ROWS = 8;
 
 const SkillCubeIcon: LucideIcon = (props) => (
@@ -163,6 +164,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   emptyStateContent,
 }: MessagesTimelineProps) {
   const normalizedChatFontSizePx = normalizeChatFontSizePx(chatFontSizePx);
+  const appTypographyScale = useMemo(
+    () => getAppTypographyScale(normalizedChatFontSizePx),
+    [normalizedChatFontSizePx],
+  );
   const chatTypographyStyle = useMemo(
     () => getChatTranscriptTextStyle(normalizedChatFontSizePx),
     [normalizedChatFontSizePx],
@@ -278,6 +283,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
       const inlineWorkEntries =
         timelineEntry.message.role === "assistant" ? pendingWorkGroup?.groupedEntries : undefined;
+      const inlineWorkGroupId =
+        timelineEntry.message.role === "assistant" ? pendingWorkGroup?.id : undefined;
       if (timelineEntry.message.role === "assistant") {
         pendingWorkGroup = null;
       } else {
@@ -290,6 +297,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         createdAt: timelineEntry.createdAt,
         message: timelineEntry.message,
         ...(inlineWorkEntries ? { inlineWorkEntries } : {}),
+        ...(inlineWorkGroupId ? { inlineWorkGroupId } : {}),
         durationStart:
           durationStartByMessageId.get(timelineEntry.message.id) ?? timelineEntry.message.createdAt,
         showCompletionDivider:
@@ -402,6 +410,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         ...row.message,
         showCompletionDivider: row.showCompletionDivider,
       };
+      if (row.message.role === "assistant" && hasOnlyToolToneEntries(row.inlineWorkEntries)) {
+        Object.assign(messageHeightInput, {
+          inlineToolEntries: row.inlineWorkEntries,
+          inlineToolExpanded: row.inlineWorkGroupId
+            ? (expandedWorkGroups[row.inlineWorkGroupId] ?? false)
+            : false,
+        });
+      }
       if (turnSummary) {
         Object.assign(messageHeightInput, {
           diffSummaryFiles: turnSummary.files,
@@ -540,15 +556,28 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
           return (
             <div>
+              <div className="space-y-0.5">
+                {visibleEntries.map((workEntry) => (
+                  <SimpleWorkEntryRow
+                    key={`work-row:${workEntry.id}`}
+                    workEntry={workEntry}
+                    chatMetaFontSizePx={appTypographyScale.chatMetaPx}
+                  />
+                ))}
+              </div>
               {showHeader && (
-                <div className="mb-1.5 flex items-center justify-between gap-2 px-0.5">
-                  <p className="font-chat-code text-[9px] text-muted-foreground/55">
+                <div className="mt-1.5 flex items-center justify-between gap-2 px-0.5">
+                  <p
+                    className="font-chat-code text-muted-foreground/55"
+                    style={{ fontSize: `${appTypographyScale.chatTinyPx}px` }}
+                  >
                     {groupLabel} ({groupedEntries.length})
                   </p>
                   {hasOverflow && (
                     <button
                       type="button"
-                      className="font-chat-code text-[9px] text-muted-foreground/55 transition-colors duration-150 hover:text-foreground/75"
+                      className="font-chat-code text-muted-foreground/55 transition-colors duration-150 hover:text-foreground/75"
+                      style={{ fontSize: `${appTypographyScale.chatTinyPx}px` }}
                       onClick={() => onToggleWorkGroup(groupId)}
                     >
                       {isExpanded ? "Show less" : `Show ${hiddenCount} more`}
@@ -556,11 +585,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   )}
                 </div>
               )}
-              <div className="space-y-0.5">
-                {visibleEntries.map((workEntry) => (
-                  <SimpleWorkEntryRow key={`work-row:${workEntry.id}`} workEntry={workEntry} />
-                ))}
-              </div>
             </div>
           );
         })()}
@@ -569,7 +593,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         row.message.role === "user" &&
         (() => {
           const userImages = row.message.attachments ?? [];
-          const displayedUserMessage = deriveDisplayedUserMessageState(row.message.text);
+          const displayedUserMessage = deriveDisplayedUserMessageState(row.message.text, {
+            hideImageOnlyBootstrapPrompt: userImages.length > 0,
+          });
           const terminalContexts = displayedUserMessage.contexts;
           const showUserText =
             displayedUserMessage.visibleText.trim().length > 0 || terminalContexts.length > 0;
@@ -628,7 +654,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       </Button>
                     )}
                   </div>
-                  <p className="font-chat-code text-right text-[10px] text-muted-foreground/45">
+                  <p
+                    className="font-chat-code text-right text-muted-foreground/45"
+                    style={{ fontSize: `${appTypographyScale.chatMetaPx}px` }}
+                  >
                     {formatShortTimestamp(row.message.createdAt, timestampFormat)}
                   </p>
                 </div>
@@ -641,7 +670,22 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         row.message.role === "assistant" &&
         (() => {
           const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
-          const inlineWorkSummary = formatInlineWorkSummary(row.inlineWorkEntries ?? []);
+          const inlineToolEntries = hasOnlyToolToneEntries(row.inlineWorkEntries)
+            ? row.inlineWorkEntries
+            : [];
+          const inlineToolGroupId =
+            inlineToolEntries.length > 0 ? (row.inlineWorkGroupId ?? null) : null;
+          const inlineToolExpanded =
+            inlineToolGroupId !== null ? (expandedWorkGroups[inlineToolGroupId] ?? false) : false;
+          const visibleInlineToolEntries =
+            inlineToolExpanded || inlineToolEntries.length <= MAX_VISIBLE_INLINE_TOOL_ENTRIES
+              ? inlineToolEntries
+              : inlineToolEntries.slice(0, MAX_VISIBLE_INLINE_TOOL_ENTRIES);
+          const hiddenInlineToolCount = inlineToolEntries.length - visibleInlineToolEntries.length;
+          const inlineWorkSummary =
+            inlineToolEntries.length > 0
+              ? null
+              : formatInlineWorkSummary(row.inlineWorkEntries ?? []);
           const assistantCopyState = resolveAssistantMessageCopyState({
             text: row.message.text ?? null,
             showCopyButton: row.showAssistantCopyButton,
@@ -680,6 +724,35 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   isStreaming={Boolean(row.message.streaming)}
                   style={chatTypographyStyle}
                 />
+                {inlineToolEntries.length > 0 && (
+                  <div className="mt-2.5 border-l border-border/40 pl-2.5">
+                    <div className="space-y-px">
+                      {visibleInlineToolEntries.map((workEntry) => (
+                        <SimpleWorkEntryRow
+                          key={`inline-tool-row:${row.message.id}:${workEntry.id}`}
+                          workEntry={workEntry}
+                          chatMetaFontSizePx={appTypographyScale.chatMetaPx}
+                          density="compact"
+                        />
+                      ))}
+                    </div>
+                    {inlineToolGroupId &&
+                      inlineToolEntries.length > MAX_VISIBLE_INLINE_TOOL_ENTRIES && (
+                        <div className="pt-1 pl-5">
+                          <button
+                            type="button"
+                            className="font-chat-code text-muted-foreground/50 transition-colors duration-150 hover:text-foreground/72"
+                            style={{ fontSize: `${appTypographyScale.chatTinyPx}px` }}
+                            onClick={() => onToggleWorkGroup(inlineToolGroupId)}
+                          >
+                            {inlineToolExpanded
+                              ? "Show less"
+                              : `+${hiddenInlineToolCount} more tool calls`}
+                          </button>
+                        </div>
+                      )}
+                  </div>
+                )}
                 {(() => {
                   const turnSummary = turnDiffSummaryByAssistantMessageId.get(row.message.id);
                   if (!turnSummary) return null;
@@ -766,14 +839,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                                 />
                                 <span
                                   className="font-chat-code truncate font-normal text-neutral-900 dark:text-foreground dark:hover:text-foreground"
-                                  style={{ fontSize: `${normalizedChatFontSizePx - 1}px` }}
+                                  style={{ fontSize: `${appTypographyScale.chatCodePx}px` }}
                                 >
                                   {file.path}
                                 </span>
                                 {(file.additions ?? 0) + (file.deletions ?? 0) > 0 && (
                                   <span
                                     className="font-chat-code ml-auto shrink-0 tabular-nums"
-                                    style={{ fontSize: `${normalizedChatFontSizePx - 2}px` }}
+                                    style={{ fontSize: `${appTypographyScale.chatMetaPx}px` }}
                                   >
                                     <DiffStatLabel
                                       additions={file.additions ?? 0}
@@ -822,7 +895,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
       {row.kind === "working" && (
         <div className="py-0.5 pl-1.5">
-          <div className="flex items-center gap-2 pt-1 text-[11px] text-muted-foreground/70">
+          <div
+            className="flex items-center gap-2 pt-1 text-muted-foreground/70"
+            style={{ fontSize: `${appTypographyScale.chatMetaPx}px` }}
+          >
             <span className="inline-flex items-center gap-[3px]">
               <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse" />
               <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse [animation-delay:200ms]" />
@@ -903,6 +979,7 @@ type TimelineRow =
       createdAt: string;
       message: TimelineMessage;
       inlineWorkEntries?: TimelineWorkEntry[];
+      inlineWorkGroupId?: string;
       durationStart: string;
       showCompletionDivider: boolean;
       showAssistantCopyButton: boolean;
@@ -967,6 +1044,15 @@ function formatInlineWorkSummary(groupedEntries: TimelineWorkEntry[]): string | 
   }
 
   return `${groupLabel} (${groupedEntries.length})`;
+}
+
+function hasOnlyToolToneEntries<T extends { tone: TimelineWorkEntry["tone"] }>(
+  entries: ReadonlyArray<T> | undefined,
+): entries is ReadonlyArray<T> {
+  if (!entries || entries.length === 0) {
+    return false;
+  }
+  return entries.every((entry) => entry.tone === "tool");
 }
 
 const UserMessageTerminalContextInlineLabel = memo(
@@ -1278,8 +1364,11 @@ function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
 
 const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   workEntry: TimelineWorkEntry;
+  chatMetaFontSizePx: number;
+  density?: "default" | "compact";
 }) {
-  const { workEntry } = props;
+  const { workEntry, chatMetaFontSizePx, density = "default" } = props;
+  const compact = density === "compact";
   const iconConfig = workToneIcon(workEntry.tone);
   const EntryIcon = workEntryIcon(workEntry);
   const heading = toolWorkEntryHeading(workEntry);
@@ -1287,44 +1376,64 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const displayText = preview ? `${heading} - ${preview}` : heading;
   const hasChangedFiles = (workEntry.changedFiles?.length ?? 0) > 0;
   const previewIsChangedFiles = hasChangedFiles && !workEntry.command && !workEntry.detail;
+  const showChangedFileChips = !compact && hasChangedFiles && !previewIsChangedFiles;
 
   return (
-    <div className="rounded-lg px-1 py-1">
-      <div className="flex items-center gap-2 transition-[opacity,translate] duration-200">
+    <div className={cn(compact ? "py-0.5" : "rounded-lg px-1 py-1")}>
+      <div
+        className={cn(
+          "flex items-center transition-[opacity,translate] duration-200",
+          compact ? "gap-1.5" : "gap-2",
+        )}
+      >
         <span
-          className={cn("flex size-5 shrink-0 items-center justify-center", iconConfig.className)}
+          className={cn(
+            "flex shrink-0 items-center justify-center",
+            compact ? "size-4" : "size-5",
+            iconConfig.className,
+          )}
         >
-          <EntryIcon className="size-3" />
+          <EntryIcon className={compact ? "size-2.5" : "size-3"} />
         </span>
         <div className="min-w-0 flex-1 overflow-hidden">
           <p
             className={cn(
-              "truncate text-[11px] leading-5",
+              compact ? "truncate leading-4" : "truncate leading-5",
               workToneClass(workEntry.tone),
               preview ? "text-muted-foreground/70" : "",
             )}
+            style={{ fontSize: `${chatMetaFontSizePx}px` }}
             title={displayText}
           >
             <span className={cn("text-foreground/80", workToneClass(workEntry.tone))}>
               {heading}
             </span>
-            {preview && <span className="text-muted-foreground/55"> - {preview}</span>}
+            {preview && (
+              <span className={compact ? "text-muted-foreground/50" : "text-muted-foreground/55"}>
+                {" "}
+                - {preview}
+              </span>
+            )}
           </p>
         </div>
       </div>
-      {hasChangedFiles && !previewIsChangedFiles && (
+      {showChangedFileChips && (
         <div className="mt-1 flex flex-wrap gap-1 pl-6">
           {workEntry.changedFiles?.slice(0, 4).map((filePath) => (
             <span
               key={`${workEntry.id}:${filePath}`}
-              className="font-chat-code rounded-md border border-border/55 bg-background/75 px-1.5 py-0.5 text-[10px] text-muted-foreground/75"
+              className="font-chat-code rounded-md border border-border/55 bg-background/75 px-1.5 py-0.5 text-muted-foreground/75"
+              style={{ fontSize: `${chatMetaFontSizePx}px` }}
               title={filePath}
             >
               {filePath}
             </span>
           ))}
           {(workEntry.changedFiles?.length ?? 0) > 4 && (
-            <span className="px-1 text-[10px] text-muted-foreground/55">
+            <span
+              className="px-1 text-muted-foreground/55"
+              style={{ fontSize: `${chatMetaFontSizePx}px` }}
+            >
               +{(workEntry.changedFiles?.length ?? 0) - 4}
             </span>
           )}

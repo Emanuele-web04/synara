@@ -11,6 +11,7 @@ import {
   Columns2Icon,
   Rows3Icon,
   TextWrapIcon,
+  XIcon,
 } from "~/lib/icons";
 import {
   type WheelEvent as ReactWheelEvent,
@@ -43,10 +44,10 @@ function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
   const titleColor = theme === "dark" ? "#6073CC" : "#526FFF";
   return `
 :host {
-  /* Feed the library's host-level font variables so shadow DOM chrome stops falling back to system-ui. */
-  --diffs-font-family: var(--font-mono-family);
-  --diffs-header-font-family: var(--font-mono-family);
-  font-family: var(--font-mono-family) !important;
+  /* Route the entire diff viewer through the chat code font so custom code fonts reach line numbers too. */
+  --diffs-font-family: var(--font-chat-code-family);
+  --diffs-header-font-family: var(--font-chat-code-family);
+  font-family: var(--font-chat-code-family) !important;
 }
 
 [data-diffs-header],
@@ -54,10 +55,10 @@ function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
 [data-file],
 [data-error-wrapper],
 [data-virtualizer-buffer] {
-  /* Drive the library through its own font variables so shadow-rooted headers and code stay on JetBrains Mono. */
-  --diffs-font-family: var(--font-mono-family) !important;
-  --diffs-header-font-family: var(--font-mono-family) !important;
-  font-family: var(--font-mono-family) !important;
+  /* Re-assert the code font inside the library chrome because these nodes live in shadow-rooted markup. */
+  --diffs-font-family: var(--font-chat-code-family) !important;
+  --diffs-header-font-family: var(--font-chat-code-family) !important;
+  font-family: var(--font-chat-code-family) !important;
   --diffs-bg: color-mix(in srgb, var(--card) 90%, var(--background)) !important;
   --diffs-light-bg: color-mix(in srgb, var(--card) 90%, var(--background)) !important;
   --diffs-dark-bg: color-mix(in srgb, var(--card) 90%, var(--background)) !important;
@@ -87,7 +88,7 @@ function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
 }
 
 [data-file-info] {
-  font-family: var(--font-mono-family) !important;
+  font-family: var(--font-chat-code-family) !important;
   background-color: color-mix(in srgb, var(--card) 94%, var(--foreground)) !important;
   border-block-color: var(--border) !important;
   color: var(--foreground) !important;
@@ -108,7 +109,7 @@ function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
 }
 
 [data-title] {
-  font-family: var(--font-mono-family) !important;
+  font-family: var(--font-chat-code-family) !important;
   cursor: pointer;
   color: ${titleColor} !important;
 }
@@ -177,6 +178,7 @@ interface DiffPanelProps {
   onUpdatePanelState?: (
     patch: Partial<Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">>,
   ) => void;
+  onClosePanel?: () => void;
 }
 
 export { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
@@ -186,6 +188,7 @@ export default function DiffPanel({
   threadId: controlledThreadId,
   panelState,
   onUpdatePanelState,
+  onClosePanel,
 }: DiffPanelProps) {
   const navigate = useNavigate();
   const { resolvedTheme } = useTheme();
@@ -321,6 +324,7 @@ export default function DiffPanel({
   const selectedPatch = selectedTurn ? selectedTurnCheckpointDiff : conversationCheckpointDiff;
   const hasResolvedPatch = typeof selectedPatch === "string";
   const hasNoNetChanges = hasResolvedPatch && selectedPatch.trim().length === 0;
+  const isSidebarMode = mode === "sidebar";
   const renderablePatch = useMemo(
     () => getRenderablePatch(selectedPatch, `diff-panel:${resolvedTheme}`),
     [resolvedTheme, selectedPatch],
@@ -555,37 +559,54 @@ export default function DiffPanel({
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
-        <ToggleGroup
-          className="shrink-0"
-          variant="outline"
-          size="xs"
-          value={[diffRenderMode]}
-          onValueChange={(value) => {
-            const next = value[0];
-            if (next === "stacked" || next === "split") {
-              setDiffRenderMode(next);
-            }
-          }}
-        >
-          <Toggle aria-label="Stacked diff view" value="stacked">
-            <Rows3Icon className="size-3" />
-          </Toggle>
-          <Toggle aria-label="Split diff view" value="split">
-            <Columns2Icon className="size-3" />
-          </Toggle>
-        </ToggleGroup>
-        <Toggle
-          aria-label={diffWordWrap ? "Disable diff line wrapping" : "Enable diff line wrapping"}
-          title={diffWordWrap ? "Disable line wrapping" : "Enable line wrapping"}
-          variant="outline"
-          size="xs"
-          pressed={diffWordWrap}
-          onPressedChange={(pressed) => {
-            setDiffWordWrap(Boolean(pressed));
-          }}
-        >
-          <TextWrapIcon className="size-3" />
-        </Toggle>
+        {!isSidebarMode ? (
+          <>
+            <ToggleGroup
+              className="shrink-0"
+              variant="outline"
+              size="xs"
+              value={[diffRenderMode]}
+              onValueChange={(value) => {
+                const next = value[0];
+                if (next === "stacked" || next === "split") {
+                  setDiffRenderMode(next);
+                }
+              }}
+            >
+              <Toggle aria-label="Stacked diff view" value="stacked">
+                <Rows3Icon className="size-3" />
+              </Toggle>
+              <Toggle aria-label="Split diff view" value="split">
+                <Columns2Icon className="size-3" />
+              </Toggle>
+            </ToggleGroup>
+            <Toggle
+              aria-label={diffWordWrap ? "Disable diff line wrapping" : "Enable diff line wrapping"}
+              title={diffWordWrap ? "Disable line wrapping" : "Enable line wrapping"}
+              variant="outline"
+              size="xs"
+              pressed={diffWordWrap}
+              onPressedChange={(pressed) => {
+                setDiffWordWrap(Boolean(pressed));
+              }}
+            >
+              <TextWrapIcon className="size-3" />
+            </Toggle>
+          </>
+        ) : null}
+        {onClosePanel ? (
+          <button
+            type="button"
+            className="inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-transparent text-foreground transition-colors hover:bg-accent [-webkit-app-region:no-drag]"
+            onClick={(event) => {
+              event.stopPropagation();
+              onClosePanel();
+            }}
+          >
+            <XIcon className="size-3.5" />
+            <span className="sr-only">Close file view</span>
+          </button>
+        ) : null}
       </div>
     </>
   );

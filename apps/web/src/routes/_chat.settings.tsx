@@ -27,9 +27,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../components/ui/select";
-import { SidebarTrigger } from "../components/ui/sidebar";
 import { Switch } from "../components/ui/switch";
-import { SidebarInset } from "../components/ui/sidebar";
+import { SidebarHeaderTrigger, SidebarInset } from "../components/ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { isElectron } from "../env";
@@ -267,7 +266,7 @@ function SettingsRouteView() {
     ...(settings.defaultProvider !== defaults.defaultProvider ? ["Default provider"] : []),
     ...(settings.uiFontFamily !== defaults.uiFontFamily ? ["UI font"] : []),
     ...(settings.chatCodeFontFamily !== defaults.chatCodeFontFamily ? ["Code font"] : []),
-    ...(settings.chatFontSizePx !== defaults.chatFontSizePx ? ["Chat font size"] : []),
+    ...(settings.chatFontSizePx !== defaults.chatFontSizePx ? ["Base font size"] : []),
     ...(settings.timestampFormat !== defaults.timestampFormat ? ["Time format"] : []),
     ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
     ...(settings.enableAssistantStreaming !== defaults.enableAssistantStreaming
@@ -481,7 +480,7 @@ function SettingsRouteView() {
         {!isElectron && (
           <header className="border-b border-border px-3 py-2 sm:px-5">
             <div className="flex items-center gap-2">
-              <SidebarTrigger className="size-7 shrink-0 md:hidden" />
+              <SidebarHeaderTrigger className="size-7 shrink-0" />
               <span className="text-sm font-medium text-foreground">Settings</span>
               <div className="ms-auto flex items-center gap-2">
                 <Button
@@ -500,6 +499,7 @@ function SettingsRouteView() {
 
         {isElectron && (
           <div className="drag-region flex h-[52px] shrink-0 items-center border-b border-border px-5">
+            <SidebarHeaderTrigger className="size-7 shrink-0" />
             <span className="text-xs font-medium tracking-wide text-muted-foreground/70">
               Settings
             </span>
@@ -650,12 +650,12 @@ function SettingsRouteView() {
               />
 
               <SettingsRow
-                title="Chat font size"
-                description="Adjust the chat transcript text size in pixels."
+                title="Base font size"
+                description="Adjust the app text base in pixels. Chat and UI typography scale proportionally from this value."
                 resetAction={
                   settings.chatFontSizePx !== defaults.chatFontSizePx ? (
                     <SettingResetButton
-                      label="chat font size"
+                      label="base font size"
                       onClick={() =>
                         updateSettings({
                           chatFontSizePx: defaults.chatFontSizePx,
@@ -681,7 +681,7 @@ function SettingsRouteView() {
                           chatFontSizePx: normalizeChatFontSizePx(Number(nextValue)),
                         });
                       }}
-                      aria-label="Chat font size in pixels"
+                      aria-label="Base font size in pixels"
                     />
                     <span className="text-xs text-muted-foreground">px</span>
                   </div>

@@ -1,3 +1,8 @@
+// FILE: GitActionsControl.tsx
+// Purpose: Render the chat-header git action control, commit dialog, and action toasts.
+// Layer: Header action control
+// Depends on: git React Query hooks, native shell bridges, and shared picker/menu primitives.
+
 import type {
   GitActionProgressEvent,
   GitStackedAction,
@@ -6,14 +11,15 @@ import type {
 } from "@t3tools/contracts";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { IoGitPullRequestOutline } from "react-icons/io5";
 import { PiCloudArrowUp } from "react-icons/pi";
-import { ChevronDownIcon, CloudUploadIcon, GitCommitIcon, InfoIcon } from "~/lib/icons";
+import { ChevronDownIcon, GitCommitIcon, InfoIcon, RefreshCwIcon } from "~/lib/icons";
 import { GitHubIcon } from "./Icons";
 import {
   buildGitActionProgressStages,
   buildMenuItems,
-  type GitActionIconName,
   type GitActionMenuItem,
+  type GitActionIconName,
   type GitQuickAction,
   type DefaultBranchConfirmableAction,
   requiresDefaultBranchConfirmation,
@@ -34,7 +40,16 @@ import {
   DialogTitle,
 } from "~/components/ui/dialog";
 import { Group, GroupSeparator } from "~/components/ui/group";
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from "~/components/ui/menu";
+import {
+  Menu,
+  MenuGroup,
+  MenuGroupLabel,
+  MenuItem,
+  MenuPopup,
+  MenuSeparator,
+  MenuShortcut,
+  MenuTrigger,
+} from "~/components/ui/menu";
 import { Popover, PopoverPopup, PopoverTrigger } from "~/components/ui/popover";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { Textarea } from "~/components/ui/textarea";
@@ -92,6 +107,16 @@ interface RunGitActionWithToastInput {
   isDefaultBranchOverride?: boolean;
   progressToastId?: GitActionToastId;
   filePaths?: string[];
+}
+
+interface GitPickerMenuItem {
+  id: "push" | "pr" | "sync" | "commit";
+  label: string;
+  description: string;
+  disabled: boolean;
+  disabledReason: string | null;
+  icon: GitActionIconName | "sync";
+  onSelect: () => void;
 }
 
 function formatElapsedDescription(startedAtMs: number | null): string | undefined {
@@ -193,14 +218,20 @@ function CommitPushHeaderIcon({ className }: { className?: string }) {
 
 function GitActionItemIcon({ icon }: { icon: GitActionIconName }) {
   if (icon === "commit") return <GitCommitIcon />;
-  if (icon === "push") return <CloudUploadIcon />;
+  if (icon === "push") return <PiCloudArrowUp />;
+  if (icon === "pr") return <IoGitPullRequestOutline />;
   return <GitHubIcon />;
+}
+
+function GitPickerItemIcon({ icon }: { icon: GitActionIconName | "sync" }) {
+  if (icon === "sync") return <RefreshCwIcon />;
+  return <GitActionItemIcon icon={icon} />;
 }
 
 function GitQuickActionIcon({ quickAction }: { quickAction: GitQuickAction }) {
   const iconClassName = "size-3.5";
   if (quickAction.kind === "open_pr") return <GitHubIcon className={iconClassName} />;
-  if (quickAction.kind === "run_pull") return <InfoIcon className={iconClassName} />;
+  if (quickAction.kind === "run_pull") return <RefreshCwIcon className={iconClassName} />;
   if (quickAction.kind === "run_action") {
     if (quickAction.action === "commit") return <GitCommitIcon className={iconClassName} />;
     if (quickAction.action === "commit_push") {
@@ -210,6 +241,20 @@ function GitQuickActionIcon({ quickAction }: { quickAction: GitQuickAction }) {
   }
   if (quickAction.label === "Commit") return <GitCommitIcon className={iconClassName} />;
   return <InfoIcon className={iconClassName} />;
+}
+
+function GitPickerMenuRow({ item }: { item: GitPickerMenuItem }) {
+  return (
+    <MenuItem className="items-center" disabled={item.disabled} onClick={item.onSelect}>
+      <span className="shrink-0 [&>svg]:size-3.5">
+        <GitPickerItemIcon icon={item.icon} />
+      </span>
+      <span className="flex flex-col gap-0.5">
+        <span>{item.label}</span>
+        <span className="text-[10px] text-muted-foreground">{item.description}</span>
+      </span>
+    </MenuItem>
+  );
 }
 
 export default function GitActionsControl({ gitCwd, activeThreadId }: GitActionsControlProps) {
@@ -285,14 +330,14 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
     return current?.isDefault ?? (branchName === "main" || branchName === "master");
   }, [branchList?.branches, gitStatusForActions?.branch]);
 
-  const gitActionMenuItems = useMemo(
-    () => buildMenuItems(gitStatusForActions, isGitActionRunning, hasOriginRemote),
-    [gitStatusForActions, hasOriginRemote, isGitActionRunning],
-  );
   const quickAction = useMemo(
     () =>
       resolveQuickAction(gitStatusForActions, isGitActionRunning, isDefaultBranch, hasOriginRemote),
     [gitStatusForActions, hasOriginRemote, isDefaultBranch, isGitActionRunning],
+  );
+  const gitActionMenuItems = useMemo(
+    () => buildMenuItems(gitStatusForActions, isGitActionRunning, hasOriginRemote),
+    [gitStatusForActions, hasOriginRemote, isGitActionRunning],
   );
   const quickActionDisabledReason = quickAction.disabled
     ? (quickAction.hint ?? "This action is currently unavailable.")
@@ -304,6 +349,10 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
         includesCommit: pendingDefaultBranchAction.includesCommit,
       })
     : null;
+  const hasWorkingTreeChanges = gitStatusForActions?.hasWorkingTreeChanges ?? false;
+  const hasBranch = gitStatusForActions?.branch !== null;
+  const isDiverged =
+    (gitStatusForActions?.aheadCount ?? 0) > 0 && (gitStatusForActions?.behindCount ?? 0) > 0;
 
   useEffect(() => {
     const api = readNativeApi();
@@ -414,6 +463,27 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
       });
     });
   }, [gitStatusForActions, threadToastData]);
+
+  const runSyncWithRemote = useCallback(() => {
+    const promise = pullMutation.mutateAsync();
+    toastManager.promise(promise, {
+      loading: { title: "Syncing with remote...", data: threadToastData },
+      success: (result) => ({
+        title: result.status === "pulled" ? "Remote synced" : "Already up to date",
+        description:
+          result.status === "pulled"
+            ? `Updated ${result.branch} from ${result.upstreamBranch ?? "upstream"}`
+            : `${result.branch} is already synchronized.`,
+        data: threadToastData,
+      }),
+      error: (err) => ({
+        title: "Sync failed",
+        description: err instanceof Error ? err.message : "An error occurred.",
+        data: threadToastData,
+      }),
+    });
+    void promise.catch(() => undefined);
+  }, [pullMutation, threadToastData]);
 
   const runGitActionWithToast = useEffectEvent(
     async ({
@@ -646,24 +716,7 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
       return;
     }
     if (quickAction.kind === "run_pull") {
-      const promise = pullMutation.mutateAsync();
-      toastManager.promise(promise, {
-        loading: { title: "Pulling...", data: threadToastData },
-        success: (result) => ({
-          title: result.status === "pulled" ? "Pulled" : "Already up to date",
-          description:
-            result.status === "pulled"
-              ? `Updated ${result.branch} from ${result.upstreamBranch ?? "upstream"}`
-              : `${result.branch} is already synchronized.`,
-          data: threadToastData,
-        }),
-        error: (err) => ({
-          title: "Pull failed",
-          description: err instanceof Error ? err.message : "An error occurred.",
-          data: threadToastData,
-        }),
-      });
-      void promise.catch(() => undefined);
+      runSyncWithRemote();
       return;
     }
     if (quickAction.kind === "show_hint") {
@@ -678,7 +731,13 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
     if (quickAction.action) {
       void runGitActionWithToast({ action: quickAction.action });
     }
-  }, [openExistingPr, pullMutation, quickAction, threadToastData]);
+  }, [openExistingPr, quickAction, runSyncWithRemote, threadToastData]);
+
+  const openCommitDialog = useCallback(() => {
+    setExcludedFiles(new Set());
+    setIsEditingFiles(false);
+    setIsCommitDialogOpen(true);
+  }, []);
 
   const openDialogForMenuItem = useCallback(
     (item: GitActionMenuItem) => {
@@ -695,12 +754,77 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
         void runGitActionWithToast({ action: "commit_push_pr" });
         return;
       }
-      setExcludedFiles(new Set());
-      setIsEditingFiles(false);
-      setIsCommitDialogOpen(true);
+      openCommitDialog();
     },
-    [openExistingPr, setIsCommitDialogOpen],
+    [openCommitDialog, openExistingPr, runGitActionWithToast],
   );
+
+  // Present git workflows as descriptive picker rows so the header menu reads
+  // more like a task launcher than a terse list of low-context verbs.
+  const gitPickerMenuItems = useMemo<GitPickerMenuItem[]>(() => {
+    const items: GitPickerMenuItem[] = [];
+    const commitMenuItem = gitActionMenuItems.find((item) => item.id === "commit");
+    const pushMenuItem = gitActionMenuItems.find((item) => item.id === "push");
+    const prMenuItem = gitActionMenuItems.find((item) => item.id === "pr");
+
+    // Commit only - first item
+    if (hasWorkingTreeChanges) {
+      items.push({
+        id: "commit",
+        label: "Commit only",
+        description: "Review files and save a local commit",
+        disabled: false,
+        disabledReason: null,
+        icon: "commit",
+        onSelect: openCommitDialog,
+      });
+    }
+
+    if (pushMenuItem) {
+      items.push({
+        id: "push",
+        label: "Commit & Push",
+        description: "Commit & push to branch",
+        disabled: false,
+        disabledReason: null,
+        icon: "push",
+        onSelect: () => openDialogForMenuItem(pushMenuItem),
+      });
+    }
+
+    if (prMenuItem) {
+      items.push({
+        id: "pr",
+        label: "Open pull request",
+        description: "Create PR from current branch",
+        disabled: prMenuItem.disabled,
+        disabledReason: getMenuActionDisabledReason({
+          item: prMenuItem,
+          gitStatus: gitStatusForActions,
+          isBusy: isGitActionRunning,
+          hasOriginRemote,
+        }),
+        icon: "pr",
+        onSelect: () => openDialogForMenuItem(prMenuItem),
+      });
+    }
+
+    // Keep the dedicated sync row out of the picker for now.
+    // We can bring it back once its rules are promoted into shared git menu logic.
+
+    return items;
+  }, [
+    gitActionMenuItems,
+    gitStatusForActions,
+    hasBranch,
+    hasOriginRemote,
+    hasWorkingTreeChanges,
+    isDiverged,
+    isGitActionRunning,
+    openCommitDialog,
+    openDialogForMenuItem,
+    runSyncWithRemote,
+  ]);
 
   const runDialogAction = useCallback(() => {
     if (!isCommitDialogOpen) return;
@@ -809,49 +933,40 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
             >
               <ChevronDownIcon aria-hidden="true" className="size-4" />
             </MenuTrigger>
-            <MenuPopup align="end" className="w-full">
-              {gitActionMenuItems.map((item) => {
-                const disabledReason = getMenuActionDisabledReason({
-                  item,
-                  gitStatus: gitStatusForActions,
-                  isBusy: isGitActionRunning,
-                  hasOriginRemote,
-                });
-                if (item.disabled && disabledReason) {
-                  return (
-                    <Popover key={`${item.id}-${item.label}`}>
-                      <PopoverTrigger
-                        openOnHover
-                        nativeButton={false}
-                        render={<span className="block w-max cursor-not-allowed" />}
-                      >
-                        <MenuItem className="w-full" disabled>
-                          <GitActionItemIcon icon={item.icon} />
-                          {item.label}
-                        </MenuItem>
-                      </PopoverTrigger>
-                      <PopoverPopup tooltipStyle side="left" align="center">
-                        {disabledReason}
-                      </PopoverPopup>
-                    </Popover>
-                  );
-                }
-
-                return (
-                  <MenuItem
-                    key={`${item.id}-${item.label}`}
-                    disabled={item.disabled}
-                    onClick={() => {
-                      openDialogForMenuItem(item);
-                    }}
-                  >
-                    <GitActionItemIcon icon={item.icon} />
-                    {item.label}
-                  </MenuItem>
-                );
-              })}
+            <MenuPopup align="end" className="w-64 rounded-lg border-border bg-popover shadow-lg">
+              <MenuGroup>
+                <MenuGroupLabel>Push & Deploy</MenuGroupLabel>
+                {gitPickerMenuItems.map((item) => {
+                  const menuRow = <GitPickerMenuRow item={item} />;
+                  if (item.disabled && item.disabledReason) {
+                    return (
+                      <Popover key={item.id}>
+                        <PopoverTrigger
+                          openOnHover
+                          nativeButton={false}
+                          render={<span className="block cursor-not-allowed" />}
+                        >
+                          {menuRow}
+                        </PopoverTrigger>
+                        <PopoverPopup tooltipStyle side="left" align="center">
+                          {item.disabledReason}
+                        </PopoverPopup>
+                      </Popover>
+                    );
+                  }
+                  return <GitPickerMenuRow key={item.id} item={item} />;
+                })}
+              </MenuGroup>
+              {(gitStatusForActions?.branch === null ||
+                (gitStatusForActions &&
+                  gitStatusForActions.branch !== null &&
+                  !gitStatusForActions.hasWorkingTreeChanges &&
+                  gitStatusForActions.behindCount > 0 &&
+                  gitStatusForActions.aheadCount === 0) ||
+                isGitStatusOutOfSync ||
+                gitStatusError) && <MenuSeparator className="mx-3 mt-2" />}
               {gitStatusForActions?.branch === null && (
-                <p className="px-2 py-1.5 text-xs text-warning">
+                <p className="px-3 py-1.5 text-xs text-warning">
                   Detached HEAD: create and checkout a branch to enable push and PR actions.
                 </p>
               )}
@@ -860,17 +975,17 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
                 !gitStatusForActions.hasWorkingTreeChanges &&
                 gitStatusForActions.behindCount > 0 &&
                 gitStatusForActions.aheadCount === 0 && (
-                  <p className="px-2 py-1.5 text-xs text-warning">
+                  <p className="px-3 py-1.5 text-xs text-warning">
                     Behind upstream. Pull/rebase first.
                   </p>
                 )}
               {isGitStatusOutOfSync && (
-                <p className="px-2 py-1.5 text-xs text-muted-foreground">
+                <p className="px-3 py-1.5 text-xs text-muted-foreground">
                   Refreshing git status...
                 </p>
               )}
               {gitStatusError && (
-                <p className="px-2 py-1.5 text-xs text-destructive">{gitStatusError.message}</p>
+                <p className="px-3 py-1.5 text-xs text-destructive">{gitStatusError.message}</p>
               )}
             </MenuPopup>
           </Menu>

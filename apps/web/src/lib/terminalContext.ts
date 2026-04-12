@@ -35,9 +35,15 @@ export interface ParsedTerminalContextEntry {
 }
 
 export const INLINE_TERMINAL_CONTEXT_PLACEHOLDER = "\uFFFC";
+export const IMAGE_ONLY_BOOTSTRAP_PROMPT =
+  "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
 
 const TRAILING_TERMINAL_CONTEXT_BLOCK_PATTERN =
   /\n*<terminal_context>\n([\s\S]*?)\n<\/terminal_context>\s*$/;
+
+interface DisplayedUserMessageOptions {
+  hideImageOnlyBootstrapPrompt?: boolean;
+}
 
 export function normalizeTerminalContextText(text: string): string {
   return text.replace(/\r\n/g, "\n").replace(/^\n+|\n+$/g, "");
@@ -234,11 +240,17 @@ export function extractTrailingTerminalContexts(prompt: string): ExtractedTermin
   };
 }
 
-export function deriveDisplayedUserMessageState(prompt: string): DisplayedUserMessageState {
+export function deriveDisplayedUserMessageState(
+  prompt: string,
+  options?: DisplayedUserMessageOptions,
+): DisplayedUserMessageState {
   const extractedContexts = extractTrailingTerminalContexts(prompt);
+  const hidePrompt =
+    options?.hideImageOnlyBootstrapPrompt === true &&
+    extractedContexts.promptText.trim() === IMAGE_ONLY_BOOTSTRAP_PROMPT;
   return {
-    visibleText: extractedContexts.promptText,
-    copyText: prompt,
+    visibleText: hidePrompt ? "" : extractedContexts.promptText,
+    copyText: hidePrompt ? "" : prompt,
     contextCount: extractedContexts.contextCount,
     previewTitle: extractedContexts.previewTitle,
     contexts: extractedContexts.contexts,

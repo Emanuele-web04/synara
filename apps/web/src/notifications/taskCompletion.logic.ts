@@ -9,7 +9,11 @@ import {
   type TerminalVisualState,
 } from "@t3tools/shared/terminalThreads";
 import type { Thread, ThreadSession } from "../types";
-import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
+import {
+  derivePendingApprovals,
+  derivePendingUserInputs,
+  isLatestTurnSettled,
+} from "../session-logic";
 
 export interface CompletedThreadCandidate {
   threadId: Thread["id"];
@@ -76,7 +80,18 @@ function summarizeLatestAssistantMessage(thread: Thread): string | null {
   return null;
 }
 
-// Compare consecutive snapshots and emit only fresh working -> completed transitions.
+function hadUnsettledTurn(thread: Thread | undefined): boolean {
+  if (!thread?.latestTurn?.startedAt) {
+    return false;
+  }
+  if (!thread.latestTurn.completedAt) {
+    return true;
+  }
+  return isRunningStatus(thread.session?.status);
+}
+
+// Compare consecutive snapshots and emit fresh settled completions, even if the
+// session snapshot skips directly to ready before the toast logic observes it.
 export function collectCompletedThreadCandidates(
   previousThreads: readonly Thread[],
   nextThreads: readonly Thread[],
@@ -89,15 +104,18 @@ export function collectCompletedThreadCandidates(
     if (!previousThread) {
       continue;
     }
-    if (!isRunningStatus(previousThread.session?.status)) {
-      continue;
-    }
-    if (isRunningStatus(thread.session?.status)) {
-      continue;
-    }
 
     const completedAt = thread.latestTurn?.completedAt;
     if (!completedAt || completedAt === previousThread.latestTurn?.completedAt) {
+      continue;
+    }
+    if (!isLatestTurnSettled(thread.latestTurn, thread.session)) {
+      continue;
+    }
+    if (!previousThread.session && !previousThread.latestTurn?.completedAt) {
+      continue;
+    }
+    if (!hadUnsettledTurn(previousThread) && !previousThread.latestTurn?.completedAt) {
       continue;
     }
 
@@ -112,7 +130,6 @@ export function collectCompletedThreadCandidates(
 
   return candidates;
 }
-
 function resolveTerminalNotificationState(
   threadState: TerminalNotificationThreadState | undefined,
   terminalId: string,
@@ -286,10 +303,8 @@ export function buildTaskCompletionCopy(candidate: CompletedThreadCandidate): {
   const threadLabel = normalizedTitle.length > 0 ? normalizedTitle : "Untitled thread";
 
   return {
-    title: "Task completed",
-    body: candidate.assistantSummary
-      ? `${threadLabel}: ${candidate.assistantSummary}`
-      : `${threadLabel} finished working.`,
+    title: threadLabel,
+    body: candidate.assistantSummary || "Finished working.",
   };
 }
 

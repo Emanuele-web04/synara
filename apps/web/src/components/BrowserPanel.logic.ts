@@ -47,6 +47,11 @@ interface BuildBrowserAddressSuggestionsInput {
   recentHistory: BrowserHistoryEntry[];
 }
 
+export interface BrowserChromeStatus {
+  tone: "default" | "error";
+  label: string;
+}
+
 // Hides about:blank from the address bar so new tabs behave like real browsers.
 export function browserAddressDisplayValue(
   tab: Pick<BrowserTabState, "url"> | null | undefined,
@@ -192,6 +197,45 @@ export function buildBrowserAddressSuggestions(
   }
 
   return suggestions.slice(0, BROWSER_SUGGESTION_LIMIT);
+}
+
+// Only shows transient browser state; the address field already reflects the active URL.
+export function resolveBrowserChromeStatus(input: {
+  localError: string | null;
+  threadLastError: string | null | undefined;
+  activeTabStatus: string;
+  hasActiveTab: boolean;
+  workspaceReady: boolean;
+}): BrowserChromeStatus | null {
+  if (input.localError) {
+    return {
+      tone: "error",
+      label: input.localError,
+    };
+  }
+
+  if (input.threadLastError) {
+    return {
+      tone: "error",
+      label: input.threadLastError,
+    };
+  }
+
+  if (!input.hasActiveTab) {
+    return {
+      tone: "default",
+      label: input.workspaceReady ? "No tabs open" : "Starting browser...",
+    };
+  }
+
+  if (input.activeTabStatus === "suspended") {
+    return {
+      tone: "default",
+      label: "Restoring tab...",
+    };
+  }
+
+  return null;
 }
 
 // Decides when browser state should replace the visible address input.

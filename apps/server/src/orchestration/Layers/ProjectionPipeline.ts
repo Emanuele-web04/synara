@@ -77,10 +77,42 @@ interface AttachmentSideEffects {
   readonly prunedThreadRelativePaths: Map<string, Set<string>>;
 }
 
+const REQUIRED_SNAPSHOT_PROJECTORS = [
+  ORCHESTRATION_PROJECTOR_NAMES.projects,
+  ORCHESTRATION_PROJECTOR_NAMES.threads,
+  ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
+  ORCHESTRATION_PROJECTOR_NAMES.threadProposedPlans,
+  ORCHESTRATION_PROJECTOR_NAMES.threadActivities,
+  ORCHESTRATION_PROJECTOR_NAMES.threadSessions,
+  ORCHESTRATION_PROJECTOR_NAMES.checkpoints,
+] as const;
+
 const materializeAttachmentsForProjection = Effect.fn(
   (input: { readonly attachments: ReadonlyArray<ChatAttachment> }) =>
     Effect.succeed(input.attachments.length === 0 ? [] : input.attachments),
 );
+
+function finalizeTurnStateFromSessionStatus(
+  status: "starting" | "running" | "ready" | "interrupted" | "stopped" | "error",
+  existingState: ProjectionTurn["state"],
+): ProjectionTurn["state"] {
+  switch (status) {
+    case "error":
+      return "error";
+    case "interrupted":
+      return "interrupted";
+    case "ready":
+    case "stopped":
+      return existingState === "error"
+        ? "error"
+        : existingState === "interrupted"
+          ? "interrupted"
+          : "completed";
+    case "starting":
+    case "running":
+      return "running";
+  }
+}
 
 function extractActivityRequestId(payload: unknown): ApprovalRequestId | null {
   if (typeof payload !== "object" || payload === null) {
@@ -808,7 +840,48 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
 
         case "thread.session-set": {
           const turnId = event.payload.session.activeTurnId;
-          if (turnId === null || event.payload.session.status !== "running") {
+          if (event.payload.session.status !== "running" || turnId === null) {
+            if (
+              event.payload.session.activeTurnId === null &&
+              (event.payload.session.status === "ready" ||
+                event.payload.session.status === "error" ||
+                event.payload.session.status === "interrupted" ||
+                event.payload.session.status === "stopped")
+            ) {
+              // Close the newest still-open turn when the runtime reports that
+              // the thread is no longer running. Assistant message completion
+              // can happen multiple times inside one turn, so session status is
+              // the safer lifecycle boundary for `completedAt`.
+              const turnToFinalize = (yield* projectionTurnRepository.listByThreadId({
+                threadId: event.payload.threadId,
+              }))
+                .filter(
+                  (
+                    row,
+                  ): row is ProjectionTurn & {
+                    turnId: Exclude<ProjectionTurn["turnId"], null>;
+                  } => row.turnId !== null && row.completedAt === null,
+                )
+                .toSorted(
+                  (left, right) =>
+                    right.requestedAt.localeCompare(left.requestedAt) ||
+                    right.turnId.localeCompare(left.turnId),
+                )
+                .at(0);
+
+              if (turnToFinalize) {
+                yield* projectionTurnRepository.upsertByTurnId({
+                  ...turnToFinalize,
+                  state: finalizeTurnStateFromSessionStatus(
+                    event.payload.session.status,
+                    turnToFinalize.state,
+                  ),
+                  startedAt: turnToFinalize.startedAt ?? event.payload.session.updatedAt,
+                  requestedAt: turnToFinalize.requestedAt ?? event.payload.session.updatedAt,
+                  completedAt: event.payload.session.updatedAt,
+                });
+              }
+            }
             return;
           }
 
@@ -895,19 +968,21 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             turnId: event.payload.turnId,
           });
           if (Option.isSome(existingTurn)) {
+            const existingIsTerminal =
+              existingTurn.value.state === "completed" ||
+              existingTurn.value.state === "error" ||
+              existingTurn.value.state === "interrupted";
             yield* projectionTurnRepository.upsertByTurnId({
               ...existingTurn.value,
               assistantMessageId: event.payload.messageId,
-              state: event.payload.streaming
-                ? existingTurn.value.state
-                : existingTurn.value.state === "interrupted"
-                  ? "interrupted"
-                  : existingTurn.value.state === "error"
-                    ? "error"
-                    : "completed",
-              completedAt: event.payload.streaming
-                ? existingTurn.value.completedAt
-                : (existingTurn.value.completedAt ?? event.payload.updatedAt),
+              state:
+                event.payload.streaming && !existingIsTerminal
+                  ? "running"
+                  : existingTurn.value.state,
+              completedAt:
+                event.payload.streaming && !existingIsTerminal
+                  ? null
+                  : existingTurn.value.completedAt,
               startedAt: existingTurn.value.startedAt ?? event.payload.createdAt,
               requestedAt: existingTurn.value.requestedAt ?? event.payload.createdAt,
             });
@@ -920,10 +995,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             sourceProposedPlanThreadId: null,
             sourceProposedPlanId: null,
             assistantMessageId: event.payload.messageId,
-            state: event.payload.streaming ? "running" : "completed",
+            state: "running",
             requestedAt: event.payload.createdAt,
             startedAt: event.payload.createdAt,
-            completedAt: event.payload.streaming ? null : event.payload.updatedAt,
+            completedAt: null,
             checkpointTurnCount: null,
             checkpointRef: null,
             checkpointStatus: null,
@@ -1177,6 +1252,24 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       apply: applyThreadsProjection,
     },
   ];
+  const projectsProjector = projectors.find(
+    (projector) => projector.name === ORCHESTRATION_PROJECTOR_NAMES.projects,
+  );
+
+  // Project metadata changes only touch the project projection, so keep them
+  // off the slower full-projector pass used by thread and runtime events.
+  const selectProjectorsForEvent = (
+    event: OrchestrationEvent,
+  ): ReadonlyArray<ProjectorDefinition> => {
+    switch (event.type) {
+      case "project.created":
+      case "project.meta-updated":
+      case "project.deleted":
+        return projectsProjector ? [projectsProjector] : projectors;
+      default:
+        return projectors;
+    }
+  };
 
   const runProjectorForEvent = (projector: ProjectorDefinition, event: OrchestrationEvent) =>
     Effect.gen(function* () {
@@ -1225,10 +1318,38 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
         ),
       );
 
+  const advanceSnapshotProjectorStates = (event: OrchestrationEvent) =>
+    sql.withTransaction(
+      Effect.forEach(
+        REQUIRED_SNAPSHOT_PROJECTORS,
+        (projector) =>
+          projectionStateRepository.upsert({
+            projector,
+            lastAppliedSequence: event.sequence,
+            updatedAt: event.occurredAt,
+          }),
+        { concurrency: 1 },
+      ),
+    );
+
   const projectEvent: OrchestrationProjectionPipelineShape["projectEvent"] = (event) =>
-    Effect.forEach(projectors, (projector) => runProjectorForEvent(projector, event), {
-      concurrency: 1,
-    }).pipe(
+    Effect.forEach(
+      selectProjectorsForEvent(event),
+      (projector) => runProjectorForEvent(projector, event),
+      {
+        concurrency: 1,
+      },
+    ).pipe(
+      Effect.flatMap(() => {
+        switch (event.type) {
+          case "project.created":
+          case "project.meta-updated":
+          case "project.deleted":
+            return advanceSnapshotProjectorStates(event);
+          default:
+            return Effect.void;
+        }
+      }),
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
       Effect.provideService(ServerConfig, serverConfig),

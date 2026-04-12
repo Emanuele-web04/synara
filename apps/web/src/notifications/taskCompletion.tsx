@@ -125,6 +125,7 @@ function showThreadToast(
     title,
     description: body,
     data: {
+      allowCrossThreadVisibility: true,
       threadId,
       dismissAfterVisibleMs: 8000,
     },
@@ -225,10 +226,6 @@ export function TaskCompletionNotifications() {
         threadId: completion.threadId,
       });
       const copy = buildTaskCompletionCopy(completion);
-      if (settings.enableTaskCompletionToasts) {
-        showThreadToast(copy, completion.threadId, "success", navigate, preferredSplitViewId);
-      }
-
       if (shouldAttemptSystemNotification) {
         void showSystemThreadNotification(
           copy,
@@ -262,10 +259,6 @@ export function TaskCompletionNotifications() {
         threadId: completion.threadId,
       });
       const copy = buildTerminalCompletionCopy(completion);
-      if (settings.enableTaskCompletionToasts) {
-        showThreadToast(copy, completion.threadId, "success", navigate, preferredSplitViewId);
-      }
-
       if (shouldAttemptSystemNotification) {
         void showSystemThreadNotification(
           copy,

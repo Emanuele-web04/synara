@@ -4,6 +4,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { FiSidebar } from "react-icons/fi";
 import * as React from "react";
 import { cn } from "~/lib/utils";
+import { isElectron } from "~/env";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { ScrollArea } from "~/components/ui/scroll-area";
@@ -322,8 +323,7 @@ function Sidebar({
 }
 
 function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<typeof Button>) {
-  const { isMobile, open, openMobile, toggleSidebar } = useSidebar();
-  const isOpen = isMobile ? openMobile : open;
+  const { toggleSidebar } = useSidebar();
 
   return (
     <Button
@@ -341,6 +341,28 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
       <FiSidebar className="size-4" />
       <span className="sr-only">Toggle Sidebar</span>
     </Button>
+  );
+}
+
+// Desktop headers lose access to the in-sidebar trigger after an off-canvas close,
+// so this companion control reuses the same trigger and only appears when hidden.
+function SidebarHeaderTrigger({
+  className,
+  onClick,
+  ...props
+}: React.ComponentProps<typeof Button>) {
+  const { isMobile, open, toggleSidebar } = useSidebar();
+
+  if (!isMobile && open) {
+    return null;
+  }
+
+  return (
+    <SidebarTrigger
+      className={cn(isElectron && !isMobile && "ml-[76px]", className)}
+      onClick={onClick}
+      {...props}
+    />
   );
 }
 
@@ -1012,6 +1034,7 @@ export {
   SidebarGroupAction,
   SidebarGroupContent,
   SidebarGroupLabel,
+  SidebarHeaderTrigger,
   SidebarHeader,
   SidebarInput,
   SidebarInset,

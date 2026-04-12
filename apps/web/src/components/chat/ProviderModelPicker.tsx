@@ -2,9 +2,6 @@ import { type ModelSlug, type ProviderKind, type ServerProviderStatus } from "@t
 import { resolveSelectableModel } from "@t3tools/shared/model";
 import { memo, useState } from "react";
 import { type ProviderPickerKind, PROVIDER_OPTIONS } from "../../session-logic";
-import { ChevronDownIcon } from "~/lib/icons";
-import { Button } from "../ui/button";
-import { COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME } from "./composerPickerStyles";
 import {
   Menu,
   MenuGroup,
@@ -20,6 +17,7 @@ import {
 } from "../ui/menu";
 import { ClaudeAI, Icon, OpenAI } from "../Icons";
 import { cn } from "~/lib/utils";
+import { PickerTriggerButton } from "./PickerTriggerButton";
 
 function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): option is {
   value: ProviderKind;
@@ -118,35 +116,24 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     >
       <MenuTrigger
         render={
-          <Button
-            size="sm"
-            variant="ghost"
-            className={cn(
-              "min-w-0 justify-start overflow-hidden whitespace-nowrap px-1.5 [&_svg]:mx-0",
-              COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
-              props.compact ? "max-w-42 shrink-0" : "max-w-48 shrink sm:max-w-56 sm:px-1.5",
-            )}
-            disabled={props.disabled}
+          <PickerTriggerButton
+            disabled={props.disabled ?? false}
+            compact={props.compact ?? false}
+            icon={
+              <ProviderIcon
+                aria-hidden="true"
+                className={cn(
+                  "size-3.5 shrink-0",
+                  providerIconClassName(activeProvider, "text-muted-foreground/70"),
+                  props.activeProviderIconClassName,
+                )}
+              />
+            }
+            label={selectedModelLabel}
           />
         }
       >
-        <span
-          className={cn(
-            "flex min-w-0 w-full items-center gap-2 overflow-hidden",
-            props.compact ? "max-w-36" : undefined,
-          )}
-        >
-          <ProviderIcon
-            aria-hidden="true"
-            className={cn(
-              "size-3.5 shrink-0",
-              providerIconClassName(activeProvider, "text-muted-foreground/70"),
-              props.activeProviderIconClassName,
-            )}
-          />
-          <span className="min-w-0 flex-1 truncate">{selectedModelLabel}</span>
-          <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 opacity-60" />
-        </span>
+        <span className="sr-only">{selectedModelLabel}</span>
       </MenuTrigger>
       <MenuPopup align="start">
         {props.lockedProvider !== null ? (

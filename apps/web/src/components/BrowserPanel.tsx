@@ -29,6 +29,7 @@ import {
   browserAddressDisplayValue,
   buildBrowserAddressSuggestions,
   normalizeBrowserAddressInput,
+  resolveBrowserChromeStatus,
   resolveBrowserAddressSync,
   type BrowserAddressSuggestion,
 } from "./BrowserPanel.logic";
@@ -83,7 +84,13 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
     null;
   const loading = activeTab?.isLoading ?? false;
   const activeTabStatus = activeTab?.status ?? "suspended";
-  const activeTabDisplayUrl = browserAddressDisplayValue(activeTab);
+  const browserChromeStatus = resolveBrowserChromeStatus({
+    localError,
+    threadLastError: threadBrowserState?.lastError,
+    activeTabStatus,
+    hasActiveTab: activeTab !== null,
+    workspaceReady,
+  });
   const browserAddressSuggestions = buildBrowserAddressSuggestions({
     query: addressValue,
     activeTabId: activeTab?.id ?? null,
@@ -378,8 +385,9 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
 
   const header = (
     <div className="flex min-w-0 flex-1 items-center gap-2">
-      <div className="relative flex min-w-0 flex-1 items-center gap-2">
-        <div className="flex shrink-0 items-center gap-1">
+      {/* Keep the browser chrome interactive inside Electron's draggable titlebar. */}
+      <div className="relative flex min-w-0 flex-1 items-center gap-2 [-webkit-app-region:no-drag]">
+        <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
           <Button
             type="button"
             variant="ghost"
@@ -446,7 +454,7 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
           </Button>
         </div>
         <form
-          className="min-w-0 flex-1"
+          className="min-w-0 flex-1 [-webkit-app-region:no-drag]"
           onSubmit={(event) => {
             event.preventDefault();
             onSubmitAddress();
@@ -465,17 +473,18 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
             }}
             onFocus={() => {
               isAddressEditingRef.current = true;
+              setIsAddressFocused(true);
             }}
             onBlur={() => {
               isAddressEditingRef.current = false;
               setIsAddressFocused(false);
             }}
             placeholder="Search or enter a URL"
-            className="font-mono h-8 min-w-0 bg-background/70 text-xs tracking-tight"
+            className="font-mono h-8 min-w-0 bg-background/70 text-xs tracking-tight [-webkit-app-region:no-drag]"
           />
         </form>
         {showBrowserAddressSuggestions ? (
-          <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-30 overflow-hidden rounded-lg border border-border bg-popover shadow-lg">
+          <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-30 overflow-hidden rounded-lg border border-border bg-popover shadow-lg [-webkit-app-region:no-drag]">
             <div className="max-h-64 overflow-auto p-1">
               {browserAddressSuggestions.map((suggestion) => (
                 <button
@@ -508,7 +517,7 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
           </div>
         ) : null}
       </div>
-      <div className="flex shrink-0 items-center gap-1">
+      <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
         <Button
           type="button"
           variant="ghost"
@@ -558,73 +567,73 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
   return (
     <DiffPanelShell mode={mode} header={header}>
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="flex items-center gap-1 overflow-x-auto border-b border-border px-2 py-1.5">
-          {threadBrowserState?.tabs.map((tab) => {
-            const isActive = tab.id === activeTab?.id;
-            return (
-              <div
-                key={tab.id}
-                className={cn(
-                  "group flex h-8 min-w-0 max-w-[14rem] items-center rounded-md border px-2 text-left text-xs transition-colors",
-                  isActive
-                    ? "border-border bg-card text-foreground shadow-sm"
-                    : "border-transparent bg-background/40 text-muted-foreground hover:bg-card/60",
-                  tab.status === "suspended" ? "opacity-75" : "",
-                )}
-              >
-                <span className="mr-2 flex size-4 shrink-0 items-center justify-center rounded-sm bg-background/80">
-                  {tab.faviconUrl ? (
-                    <img alt="" src={tab.faviconUrl} className="size-3 rounded-[2px]" />
-                  ) : (
-                    <GlobeIcon className="size-3 text-muted-foreground" />
+        <div className="flex items-center gap-2 border-b border-border px-2 py-1.5">
+          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+            {threadBrowserState?.tabs.map((tab) => {
+              const isActive = tab.id === activeTab?.id;
+              return (
+                <div
+                  key={tab.id}
+                  className={cn(
+                    "group flex h-8 min-w-0 max-w-[14rem] items-center rounded-md border px-2 text-left text-xs transition-colors",
+                    isActive
+                      ? "border-border bg-card text-foreground shadow-sm"
+                      : "border-transparent bg-background/40 text-muted-foreground hover:bg-card/60",
+                    tab.status === "suspended" ? "opacity-75" : "",
                   )}
-                </span>
-                <button
-                  type="button"
-                  className="min-w-0 flex-1 truncate text-left"
-                  onClick={() => {
-                    void runBrowserAction(() =>
-                      api.browser.selectTab({ threadId, tabId: tab.id }),
-                    ).then((state) => {
-                      if (state) {
-                        upsertThreadState(state);
-                      }
-                    });
-                  }}
                 >
-                  {tab.title || "Untitled"}
-                </button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  className={closeButtonClassName(isActive)}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onCloseTab(tab.id);
-                  }}
-                >
-                  <XIcon className="size-3" />
-                  <span className="sr-only">Close tab</span>
-                </Button>
-              </div>
-            );
-          })}
-        </div>
-        <div className="border-b border-border/60 px-3 py-1.5 text-[11px] text-muted-foreground">
-          {localError ? (
-            <span className="text-destructive">{localError}</span>
-          ) : threadBrowserState?.lastError ? (
-            <span className="text-destructive">{threadBrowserState.lastError}</span>
-          ) : activeTabStatus === "suspended" ? (
-            "Restoring tab..."
-          ) : activeTab ? (
-            activeTabDisplayUrl || "New tab"
-          ) : workspaceReady ? (
-            "No tabs open"
-          ) : (
-            "Starting browser..."
-          )}
+                  <span className="mr-2 flex size-4 shrink-0 items-center justify-center rounded-sm bg-background/80">
+                    {tab.faviconUrl ? (
+                      <img alt="" src={tab.faviconUrl} className="size-3 rounded-[2px]" />
+                    ) : (
+                      <GlobeIcon className="size-3 text-muted-foreground" />
+                    )}
+                  </span>
+                  <button
+                    type="button"
+                    className="min-w-0 flex-1 truncate text-left"
+                    onClick={() => {
+                      void runBrowserAction(() =>
+                        api.browser.selectTab({ threadId, tabId: tab.id }),
+                      ).then((state) => {
+                        if (state) {
+                          upsertThreadState(state);
+                        }
+                      });
+                    }}
+                  >
+                    {tab.title || "Untitled"}
+                  </button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    className={closeButtonClassName(isActive)}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onCloseTab(tab.id);
+                    }}
+                  >
+                    <XIcon className="size-3" />
+                    <span className="sr-only">Close tab</span>
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+          {browserChromeStatus ? (
+            <div
+              className={cn(
+                "max-w-[13rem] shrink-0 truncate rounded-full border px-2.5 py-1 text-[11px] leading-none sm:max-w-[16rem]",
+                browserChromeStatus.tone === "error"
+                  ? "border-destructive/25 bg-destructive/8 text-destructive"
+                  : "border-border/60 bg-background/80 text-muted-foreground",
+              )}
+              title={browserChromeStatus.label}
+            >
+              {browserChromeStatus.label}
+            </div>
+          ) : null}
         </div>
         <div className="relative min-h-0 flex-1 bg-background">
           {!workspaceReady ? (

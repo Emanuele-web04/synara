@@ -28,12 +28,18 @@ const projects: SidebarSearchProject[] = [
   {
     id: "project-alpha",
     name: "Alpha Repo",
+    remoteName: "Alpha Repo",
+    folderName: "alpha-repo",
+    localName: null,
     cwd: "/work/alpha-repo",
     updatedAt: "2026-04-09T10:00:00.000Z",
   },
   {
     id: "project-beta",
     name: "Docs",
+    remoteName: "Beta Repo",
+    folderName: "beta-repo",
+    localName: "Docs",
     cwd: "/work/beta-repo",
     updatedAt: "2026-04-09T11:00:00.000Z",
   },
@@ -45,6 +51,7 @@ const threads: SidebarSearchThread[] = [
     title: "Composer refactor",
     projectId: "project-alpha",
     projectName: "Alpha Repo",
+    projectRemoteName: "Alpha Repo",
     provider: "claudeAgent",
     createdAt: "2026-04-09T09:00:00.000Z",
     updatedAt: "2026-04-09T11:30:00.000Z",
@@ -59,6 +66,7 @@ const threads: SidebarSearchThread[] = [
     title: "composePrompt follow-up",
     projectId: "project-alpha",
     projectName: "Alpha Repo",
+    projectRemoteName: "Alpha Repo",
     provider: "codex",
     createdAt: "2026-04-09T08:00:00.000Z",
     updatedAt: "2026-04-09T10:30:00.000Z",
@@ -76,6 +84,7 @@ const threads: SidebarSearchThread[] = [
     title: "Settings cleanup",
     projectId: "project-beta",
     projectName: "Docs",
+    projectRemoteName: "Beta Repo",
     provider: "claudeAgent",
     createdAt: "2026-04-09T07:00:00.000Z",
     updatedAt: "2026-04-09T09:00:00.000Z",
@@ -104,6 +113,13 @@ describe("SidebarSearchPalette.logic", () => {
     assert.equal(result[0]?.project.id, "project-alpha");
   });
 
+  it("matches projects by original name when a local name override exists", () => {
+    const result = matchSidebarSearchProjects(projects, "beta");
+
+    assert.lengthOf(result, 1);
+    assert.equal(result[0]?.project.id, "project-beta");
+  });
+
   it("prefers thread title matches and then recency", () => {
     const result = matchSidebarSearchThreads(threads, "comp");
 
@@ -115,6 +131,16 @@ describe("SidebarSearchPalette.logic", () => {
 
   it("can match threads through the project name", () => {
     const result = matchSidebarSearchThreads(threads, "docs");
+
+    assert.deepEqual(
+      result.map((match) => match.thread.id),
+      ["thread-beta-settings"],
+    );
+    assert.equal(result[0]?.matchKind, "project");
+  });
+
+  it("can match threads through the original project name", () => {
+    const result = matchSidebarSearchThreads(threads, "beta");
 
     assert.deepEqual(
       result.map((match) => match.thread.id),

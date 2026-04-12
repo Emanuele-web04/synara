@@ -39,6 +39,12 @@ const WORK_GROUP_HEADER_HEIGHT_PX = 20;
 const WORK_ENTRY_ROW_HEIGHT_PX = 30;
 const WORK_ENTRY_CHANGED_FILES_HEIGHT_PX = 24;
 const WORK_ENTRY_GAP_PX = 2;
+const INLINE_TOOL_PREVIEW_MARGIN_TOP_PX = 10;
+const INLINE_TOOL_PREVIEW_ROW_HEIGHT_PX = 22;
+const INLINE_TOOL_PREVIEW_ROW_GAP_PX = 1;
+const INLINE_TOOL_PREVIEW_TOGGLE_MARGIN_TOP_PX = 4;
+const INLINE_TOOL_PREVIEW_TOGGLE_HEIGHT_PX = 18;
+const INLINE_TOOL_PREVIEW_CONTAINER_CHROME_HEIGHT_PX = 0;
 const changedFilesSummaryHeightCache = new WeakMap<
   ReadonlyArray<TurnDiffFileChange>,
   { collapsed?: number; expanded?: number }
@@ -50,6 +56,8 @@ interface TimelineMessageHeightInput {
   attachments?: ReadonlyArray<{ id: string }>;
   diffSummaryFiles?: ReadonlyArray<TurnDiffFileChange>;
   diffSummaryAllDirectoriesExpanded?: boolean;
+  inlineToolEntries?: ReadonlyArray<TimelineWorkEntryHeightInput>;
+  inlineToolExpanded?: boolean;
   showCompletionDivider?: boolean;
 }
 
@@ -196,6 +204,30 @@ export function estimateTimelineWorkGroupHeight(
   );
 }
 
+// Estimate the inline tool preview block that can appear under assistant messages.
+export function estimateTimelineInlineToolPreviewHeight(
+  entries: ReadonlyArray<TimelineWorkEntryHeightInput>,
+  options: TimelineWorkGroupEstimateOptions,
+): number {
+  if (entries.length === 0) return 0;
+
+  const visibleEntries =
+    options.expanded || entries.length <= options.maxVisibleEntries
+      ? entries
+      : entries.slice(0, options.maxVisibleEntries);
+  const hasToggle = entries.length > options.maxVisibleEntries;
+
+  return (
+    INLINE_TOOL_PREVIEW_MARGIN_TOP_PX +
+    INLINE_TOOL_PREVIEW_CONTAINER_CHROME_HEIGHT_PX +
+    visibleEntries.length * INLINE_TOOL_PREVIEW_ROW_HEIGHT_PX +
+    Math.max(visibleEntries.length - 1, 0) * INLINE_TOOL_PREVIEW_ROW_GAP_PX +
+    (hasToggle
+      ? INLINE_TOOL_PREVIEW_TOGGLE_MARGIN_TOP_PX + INLINE_TOOL_PREVIEW_TOGGLE_HEIGHT_PX
+      : 0)
+  );
+}
+
 function expandAssistantInlineCodeForEstimate(text: string): string {
   return text.replace(INLINE_CODE_SPAN_REGEX, (_match, code: string) =>
     "x".repeat(
@@ -229,17 +261,27 @@ export function estimateTimelineMessageHeight(
       message.diffSummaryFiles ?? [],
       message.diffSummaryAllDirectoriesExpanded ?? true,
     );
+    const inlineToolPreviewHeight = estimateTimelineInlineToolPreviewHeight(
+      message.inlineToolEntries ?? [],
+      {
+        expanded: message.inlineToolExpanded ?? false,
+        maxVisibleEntries: 4,
+      },
+    );
     return (
       ASSISTANT_BASE_HEIGHT_PX +
       estimatedLines * lineHeightPx +
       (message.showCompletionDivider ? COMPLETION_DIVIDER_HEIGHT_PX : 0) +
-      changedFilesHeight
+      changedFilesHeight +
+      inlineToolPreviewHeight
     );
   }
 
   if (message.role === "user") {
     const charsPerLine = estimateCharsPerLineForUser(layout.timelineWidthPx, chatFontSizePx);
-    const displayedUserMessage = deriveDisplayedUserMessageState(message.text);
+    const displayedUserMessage = deriveDisplayedUserMessageState(message.text, {
+      hideImageOnlyBootstrapPrompt: (message.attachments?.length ?? 0) > 0,
+    });
     const renderedText =
       displayedUserMessage.contexts.length > 0
         ? [

@@ -59,6 +59,7 @@ const CONFIRM_CHANNEL = "desktop:confirm";
 const SET_THEME_CHANNEL = "desktop:set-theme";
 const CONTEXT_MENU_CHANNEL = "desktop:context-menu";
 const OPEN_EXTERNAL_CHANNEL = "desktop:open-external";
+const SHOW_IN_FOLDER_CHANNEL = "desktop:show-in-folder";
 const MENU_ACTION_CHANNEL = "desktop:menu-action";
 const UPDATE_STATE_CHANNEL = "desktop:update-state";
 const UPDATE_GET_STATE_CHANNEL = "desktop:update-get-state";
@@ -1308,6 +1309,31 @@ function registerIpcHandlers(): void {
     } catch {
       return false;
     }
+  });
+
+  ipcMain.removeHandler(SHOW_IN_FOLDER_CHANNEL);
+  ipcMain.handle(SHOW_IN_FOLDER_CHANNEL, async (_event, rawPath: unknown) => {
+    if (typeof rawPath !== "string" || rawPath.trim().length === 0) {
+      throw new Error("Missing folder path.");
+    }
+    const resolvedPath = Path.resolve(rawPath);
+
+    let stats: FS.Stats;
+    try {
+      stats = await FS.promises.stat(resolvedPath);
+    } catch {
+      throw new Error(`Folder not found: ${resolvedPath}`);
+    }
+
+    if (stats.isDirectory()) {
+      const errorMessage = await shell.openPath(resolvedPath);
+      if (errorMessage.trim().length > 0) {
+        throw new Error(errorMessage);
+      }
+      return;
+    }
+
+    shell.showItemInFolder(resolvedPath);
   });
 
   ipcMain.removeHandler(UPDATE_GET_STATE_CHANNEL);

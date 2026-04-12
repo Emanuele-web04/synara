@@ -1,5 +1,6 @@
 import { type FC, type SVGProps } from "react";
 import { PiGitCommit, PiSquareSplitHorizontal, PiSquareSplitVertical } from "react-icons/pi";
+import { RiApps2Line } from "react-icons/ri";
 import { TbArrowsRightLeft, TbPlug } from "react-icons/tb";
 import {
   IconAlertCircle,
@@ -73,6 +74,9 @@ function adaptIcon(Component: TablerIcon): LucideIcon {
   };
 }
 
+export const AppsIcon: LucideIcon = (props) => (
+  <RiApps2Line className={props.className} style={props.style} />
+);
 export const ArrowLeftIcon = adaptIcon(IconArrowLeft);
 export const ArrowRightIcon = adaptIcon(IconArrowRight);
 export const ArrowDownIcon = adaptIcon(IconArrowDown);

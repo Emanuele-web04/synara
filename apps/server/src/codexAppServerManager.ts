@@ -234,6 +234,20 @@ function isIgnorableCodexProcessLine(rawLine: string): boolean {
   return BENIGN_PROCESS_OUTPUT_REGEXES.some((pattern) => pattern.test(line));
 }
 
+function normalizeCodexUserVisibleErrorMessage(rawMessage: string): string {
+  const message = normalizeCodexProcessLine(rawMessage);
+
+  const duplicateFunctionArgMatch = message.match(
+    /failed to parse function arguments: duplicate field `([^`]+)`/i,
+  );
+  if (duplicateFunctionArgMatch) {
+    const fieldName = duplicateFunctionArgMatch[1];
+    return `Tool call failed because the same argument was sent twice${fieldName ? ` (${fieldName})` : ""}.`;
+  }
+
+  return message;
+}
+
 export function readCodexAccountSnapshot(response: unknown): CodexAccountSnapshot {
   const record = asObject(response);
   const account = asObject(record?.account) ?? record;
@@ -554,7 +568,7 @@ export function classifyCodexStderrLine(rawLine: string): { message: string } | 
     }
   }
 
-  return { message: line };
+  return { message: normalizeCodexUserVisibleErrorMessage(line) };
 }
 
 export function isRecoverableThreadResumeError(error: unknown): boolean {
@@ -1665,7 +1679,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     });
 
     context.child.on("error", (error) => {
-      const message = error.message || "codex app-server process errored.";
+      const message = normalizeCodexUserVisibleErrorMessage(
+        error.message || "codex app-server process errored.",
+      );
       this.updateSession(context, {
         status: "error",
         lastError: message,
@@ -1807,7 +1823,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       context.collabReceiverTurns.clear();
       const turn = this.readObject(notification.params, "turn");
       const status = this.readString(turn, "status");
-      const errorMessage = this.readString(this.readObject(turn, "error"), "message");
+      const errorMessageRaw = this.readString(this.readObject(turn, "error"), "message");
+      const errorMessage =
+        errorMessageRaw !== undefined
+          ? normalizeCodexUserVisibleErrorMessage(errorMessageRaw)
+          : undefined;
       this.updateSession(context, {
         status: status === "failed" ? "error" : "ready",
         activeTurnId: undefined,
@@ -1820,7 +1840,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       if (isChildConversation) {
         return;
       }
-      const message = this.readString(this.readObject(notification.params)?.error, "message");
+      const rawMessage = this.readString(this.readObject(notification.params)?.error, "message");
+      const message =
+        rawMessage !== undefined ? normalizeCodexUserVisibleErrorMessage(rawMessage) : undefined;
       const willRetry = this.readBoolean(notification.params, "willRetry");
 
       this.updateSession(context, {

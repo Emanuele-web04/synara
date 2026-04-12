@@ -13,6 +13,7 @@ import {
   formatInlineTerminalContextLabel,
   formatTerminalContextLabel,
   hasTerminalContextText,
+  IMAGE_ONLY_BOOTSTRAP_PROMPT,
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
   insertInlineTerminalContextPlaceholder,
   isTerminalContextExpired,
@@ -128,6 +129,20 @@ describe("terminalContext", () => {
   it("preserves prompt text when no trailing terminal context block exists", () => {
     expect(extractTrailingTerminalContexts("No attached context")).toEqual({
       promptText: "No attached context",
+      contextCount: 0,
+      previewTitle: null,
+      contexts: [],
+    });
+  });
+
+  it("hides the image-only bootstrap prompt when requested for transcript display", () => {
+    expect(
+      deriveDisplayedUserMessageState(IMAGE_ONLY_BOOTSTRAP_PROMPT, {
+        hideImageOnlyBootstrapPrompt: true,
+      }),
+    ).toEqual({
+      visibleText: "",
+      copyText: "",
       contextCount: 0,
       previewTitle: null,
       contexts: [],

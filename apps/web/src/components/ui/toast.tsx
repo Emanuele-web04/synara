@@ -17,9 +17,13 @@ import { buttonVariants } from "~/components/ui/button";
 import { buildVisibleToastLayout, shouldHideCollapsedToastContent } from "./toast.logic";
 import { parseDiffRouteSearch } from "../../diffRouteSearch";
 import { selectSplitView, useSplitViewStore } from "../../splitViewStore";
-import { resolveVisibleToastThreadIds } from "./toastRouteVisibility";
+import {
+  resolveVisibleToastThreadIds,
+  shouldRenderToastForVisibleThreads,
+} from "./toastRouteVisibility";
 
 type ThreadToastData = {
+  allowCrossThreadVisibility?: boolean;
   threadId?: ThreadId | null;
   tooltipStyle?: boolean;
   dismissAfterVisibleMs?: number;
@@ -54,9 +58,11 @@ function shouldRenderForActiveThread(
   data: ThreadToastData | undefined,
   visibleThreadIds: ReadonlySet<ThreadId>,
 ): boolean {
-  const toastThreadId = data?.threadId;
-  if (!toastThreadId) return true;
-  return visibleThreadIds.has(toastThreadId);
+  return shouldRenderToastForVisibleThreads({
+    allowCrossThreadVisibility: data?.allowCrossThreadVisibility,
+    toastThreadId: data?.threadId,
+    visibleThreadIds,
+  });
 }
 
 function useVisibleThreadIdsFromRoute(): ReadonlySet<ThreadId> {

@@ -23,7 +23,7 @@ const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
     props.type === "search" &&
       "[&::-webkit-search-cancel-button]:appearance-none [&::-webkit-search-decoration]:appearance-none [&::-webkit-search-results-button]:appearance-none [&::-webkit-search-results-decoration]:appearance-none",
     props.type === "file" &&
-      "text-muted-foreground file:me-3 file:bg-transparent file:font-medium file:text-foreground file:text-sm",
+      "text-muted-foreground file:me-3 file:bg-transparent file:font-medium file:text-[length:var(--app-font-size-ui-sm,11px)] file:text-foreground",
   );
 
   return (
@@ -31,7 +31,7 @@ const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
       className={
         cn(
           !unstyled &&
-            "relative inline-flex w-full rounded-md border border-input bg-background not-dark:bg-clip-padding text-base text-foreground ring-ring/16 transition-shadow before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-md)-1px)] not-has-disabled:not-has-focus-visible:not-has-aria-invalid:before:shadow-[0_1px_--theme(--color-black/2%)] has-focus-visible:has-aria-invalid:border-destructive/50 has-focus-visible:has-aria-invalid:ring-destructive/12 has-aria-invalid:border-destructive/30 has-focus-visible:border-ring/70 has-autofill:bg-foreground/4 has-disabled:opacity-64 has-focus-visible:ring-2 sm:text-sm dark:bg-input/32 dark:has-autofill:bg-foreground/8 dark:has-aria-invalid:ring-destructive/24 dark:not-has-disabled:not-has-focus-visible:not-has-aria-invalid:before:shadow-[0_-1px_--theme(--color-white/3%)]",
+            "relative inline-flex w-full rounded-md border border-input bg-background not-dark:bg-clip-padding text-[length:var(--app-font-size-ui,12px)] text-foreground ring-ring/16 transition-shadow before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-md)-1px)] not-has-disabled:not-has-focus-visible:not-has-aria-invalid:before:shadow-[0_1px_--theme(--color-black/2%)] has-focus-visible:has-aria-invalid:border-destructive/50 has-focus-visible:has-aria-invalid:ring-destructive/12 has-aria-invalid:border-destructive/30 has-focus-visible:border-ring/70 has-autofill:bg-foreground/4 has-disabled:opacity-64 has-focus-visible:ring-2 sm:text-[length:var(--app-font-size-ui,12px)] dark:bg-input/32 dark:has-autofill:bg-foreground/8 dark:has-aria-invalid:ring-destructive/24 dark:not-has-disabled:not-has-focus-visible:not-has-aria-invalid:before:shadow-[0_-1px_--theme(--color-white/3%)]",
           className,
         ) || undefined
       }

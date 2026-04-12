@@ -27,6 +27,7 @@ import { projectQueryKeys } from "../lib/projectReactQuery";
 import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
 import { TaskCompletionNotifications } from "../notifications/taskCompletion";
 import { useWorkspaceStore, workspaceThreadId } from "../workspaceStore";
+import { useAppTypography } from "../hooks/useAppTypography";
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient;
@@ -39,6 +40,8 @@ export const Route = createRootRouteWithContext<{
 });
 
 function RootRouteView() {
+  useAppTypography();
+
   if (!readNativeApi()) {
     return (
       <div className="flex h-screen flex-col bg-background text-foreground">
