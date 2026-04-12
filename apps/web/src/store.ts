@@ -6,6 +6,7 @@ import {
   type OrchestrationSessionStatus,
 } from "@t3tools/contracts";
 import { resolveModelSlugForProvider } from "@t3tools/shared/model";
+import { normalizeWorkspaceRootForComparison } from "@t3tools/shared/threadWorkspace";
 import { create } from "zustand";
 import {
   type ChatAttachment,
@@ -52,6 +53,10 @@ const persistedExpandedProjectCwds = new Set<string>();
 const persistedProjectOrderCwds: string[] = [];
 const persistedProjectNamesByCwd = new Map<string, string>();
 
+function projectCwdKey(cwd: string): string {
+  return normalizeWorkspaceRootForComparison(cwd);
+}
+
 function basenameOfPath(value: string): string | null {
   const segments = value.split(/[/\\]/).filter((segment) => segment.length > 0);
   return segments.at(-1) ?? null;
@@ -59,13 +64,14 @@ function basenameOfPath(value: string): string | null {
 
 function rememberProjectUiState(projects: ReadonlyArray<Pick<Project, "cwd" | "expanded">>): void {
   for (const project of projects) {
+    const cwdKey = projectCwdKey(project.cwd);
     if (project.expanded) {
-      persistedExpandedProjectCwds.add(project.cwd);
+      persistedExpandedProjectCwds.add(cwdKey);
     } else {
-      persistedExpandedProjectCwds.delete(project.cwd);
+      persistedExpandedProjectCwds.delete(cwdKey);
     }
-    if (!persistedProjectOrderCwds.includes(project.cwd)) {
-      persistedProjectOrderCwds.push(project.cwd);
+    if (!persistedProjectOrderCwds.includes(cwdKey)) {
+      persistedProjectOrderCwds.push(cwdKey);
     }
   }
 }
@@ -74,11 +80,12 @@ function rememberProjectLocalNames(
   projects: ReadonlyArray<Pick<Project, "cwd" | "localName">>,
 ): void {
   for (const project of projects) {
+    const cwdKey = projectCwdKey(project.cwd);
     const localName = project.localName?.trim() ?? "";
     if (localName.length > 0) {
-      persistedProjectNamesByCwd.set(project.cwd, localName);
+      persistedProjectNamesByCwd.set(cwdKey, localName);
     } else {
-      persistedProjectNamesByCwd.delete(project.cwd);
+      persistedProjectNamesByCwd.delete(cwdKey);
     }
   }
 }
@@ -100,12 +107,13 @@ function readPersistedState(): AppState {
     persistedProjectNamesByCwd.clear();
     for (const cwd of parsed.expandedProjectCwds ?? []) {
       if (typeof cwd === "string" && cwd.length > 0) {
-        persistedExpandedProjectCwds.add(cwd);
+        persistedExpandedProjectCwds.add(projectCwdKey(cwd));
       }
     }
     for (const cwd of parsed.projectOrderCwds ?? []) {
-      if (typeof cwd === "string" && cwd.length > 0 && !persistedProjectOrderCwds.includes(cwd)) {
-        persistedProjectOrderCwds.push(cwd);
+      const cwdKey = typeof cwd === "string" ? projectCwdKey(cwd) : "";
+      if (cwdKey.length > 0 && !persistedProjectOrderCwds.includes(cwdKey)) {
+        persistedProjectOrderCwds.push(cwdKey);
       }
     }
     for (const [cwd, name] of Object.entries(parsed.projectNamesByCwd ?? {})) {
@@ -113,7 +121,7 @@ function readPersistedState(): AppState {
       if (typeof name !== "string") continue;
       const trimmedName = name.trim();
       if (trimmedName.length === 0) continue;
-      persistedProjectNamesByCwd.set(cwd, trimmedName);
+      persistedProjectNamesByCwd.set(projectCwdKey(cwd), trimmedName);
     }
     return { ...initialState };
   } catch {
@@ -244,9 +252,9 @@ function normalizeProjectFromReadModel(
   incoming: ReadModelProject,
   previous: Project | undefined,
 ): Project {
+  const workspaceRootKey = projectCwdKey(incoming.workspaceRoot);
   const folderName = basenameOfPath(incoming.workspaceRoot) ?? incoming.title;
-  const localName =
-    previous?.localName ?? persistedProjectNamesByCwd.get(incoming.workspaceRoot) ?? null;
+  const localName = previous?.localName ?? persistedProjectNamesByCwd.get(workspaceRootKey) ?? null;
   const defaultModelSelection = incoming.defaultModelSelection
     ? normalizeModelSelection(incoming.defaultModelSelection, previous?.defaultModelSelection)
     : (previous?.defaultModelSelection ?? null);
@@ -254,7 +262,7 @@ function normalizeProjectFromReadModel(
   const expanded =
     previous?.expanded ??
     (persistedExpandedProjectCwds.size > 0
-      ? persistedExpandedProjectCwds.has(incoming.workspaceRoot)
+      ? persistedExpandedProjectCwds.has(workspaceRootKey)
       : true);
 
   if (
@@ -628,10 +636,12 @@ function mapProjectsFromReadModel(
   previous: Project[],
 ): Project[] {
   const previousById = new Map(previous.map((project) => [project.id, project] as const));
-  const previousByCwd = new Map(previous.map((project) => [project.cwd, project] as const));
+  const previousByCwd = new Map(
+    previous.map((project) => [projectCwdKey(project.cwd), project] as const),
+  );
   const previousOrderById = new Map(previous.map((project, index) => [project.id, index] as const));
   const previousOrderByCwd = new Map(
-    previous.map((project, index) => [project.cwd, index] as const),
+    previous.map((project, index) => [projectCwdKey(project.cwd), index] as const),
   );
   const persistedOrderByCwd = new Map(
     persistedProjectOrderCwds.map((cwd, index) => [cwd, index] as const),
@@ -640,13 +650,16 @@ function mapProjectsFromReadModel(
 
   const mappedProjects = incoming
     .map((project) => {
-      const existing = previousById.get(project.id) ?? previousByCwd.get(project.workspaceRoot);
+      const existing =
+        previousById.get(project.id) ?? previousByCwd.get(projectCwdKey(project.workspaceRoot));
       return normalizeProjectFromReadModel(project, existing);
     })
     .map((project, incomingIndex) => {
       const previousIndex =
-        previousOrderById.get(project.id) ?? previousOrderByCwd.get(project.cwd);
-      const persistedIndex = usePersistedOrder ? persistedOrderByCwd.get(project.cwd) : undefined;
+        previousOrderById.get(project.id) ?? previousOrderByCwd.get(projectCwdKey(project.cwd));
+      const persistedIndex = usePersistedOrder
+        ? persistedOrderByCwd.get(projectCwdKey(project.cwd))
+        : undefined;
       const orderIndex =
         previousIndex ??
         persistedIndex ??

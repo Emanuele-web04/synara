@@ -6,6 +6,7 @@ import type {
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
+import { normalizeWorkspaceRootForComparison } from "@t3tools/shared/threadWorkspace";
 import { Effect } from "effect";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
@@ -29,6 +30,23 @@ export function findProjectById(
   projectId: ProjectId,
 ): OrchestrationProject | undefined {
   return readModel.projects.find((project) => project.id === projectId);
+}
+
+// Finds an active project by workspace root using the same comparison rules as import flows.
+export function findActiveProjectByWorkspaceRoot(
+  readModel: OrchestrationReadModel,
+  workspaceRoot: string,
+): OrchestrationProject | undefined {
+  const normalizedWorkspaceRoot = normalizeWorkspaceRootForComparison(workspaceRoot, {
+    platform: process.platform,
+  });
+  return readModel.projects.find(
+    (project) =>
+      project.deletedAt === null &&
+      normalizeWorkspaceRootForComparison(project.workspaceRoot, {
+        platform: process.platform,
+      }) === normalizedWorkspaceRoot,
+  );
 }
 
 export function listThreadsByProjectId(
@@ -67,6 +85,24 @@ export function requireProjectAbsent(input: {
     invariantError(
       input.command.type,
       `Project '${input.projectId}' already exists and cannot be created twice.`,
+    ),
+  );
+}
+
+export function requireProjectWorkspaceRootAvailable(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly command: OrchestrationCommand;
+  readonly workspaceRoot: string;
+  readonly excludeProjectId?: ProjectId;
+}): Effect.Effect<void, OrchestrationCommandInvariantError> {
+  const existingProject = findActiveProjectByWorkspaceRoot(input.readModel, input.workspaceRoot);
+  if (!existingProject || existingProject.id === input.excludeProjectId) {
+    return Effect.void;
+  }
+  return Effect.fail(
+    invariantError(
+      input.command.type,
+      `Project '${existingProject.id}' already uses workspace root '${existingProject.workspaceRoot}'.`,
     ),
   );
 }

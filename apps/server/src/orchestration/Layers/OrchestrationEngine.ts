@@ -5,7 +5,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import { OrchestrationCommand } from "@t3tools/contracts";
-import { Deferred, Effect, Layer, Option, PubSub, Queue, Schema, Stream } from "effect";
+import { Deferred, Effect, Layer, Option, PubSub, Queue, Ref, Schema, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { toPersistenceSqlError } from "../../persistence/Errors.ts";
@@ -14,9 +14,11 @@ import { OrchestrationCommandReceiptRepository } from "../../persistence/Service
 import {
   OrchestrationCommandInvariantError,
   OrchestrationCommandPreviouslyRejectedError,
+  OrchestrationCommandTimeoutError,
   type OrchestrationDispatchError,
 } from "../Errors.ts";
 import { decideOrchestrationCommand } from "../decider.ts";
+import type { ProjectMetadataOrchestrationEvent } from "../projectMetadataProjection.ts";
 import { createEmptyReadModel, projectEvent } from "../projector.ts";
 import { OrchestrationProjectionPipeline } from "../Services/ProjectionPipeline.ts";
 import {
@@ -24,9 +26,16 @@ import {
   type OrchestrationEngineShape,
 } from "../Services/OrchestrationEngine.ts";
 
+const ORCHESTRATION_DISPATCH_TIMEOUT_MS = 45_000;
+
+type CommandExecutionState = "queued" | "in-flight" | "abandoned";
+type DispatchTimeoutDecision = { kind: "abandon" } | { kind: "wait" };
+
 interface CommandEnvelope {
   command: OrchestrationCommand;
   result: Deferred.Deferred<{ sequence: number }, OrchestrationDispatchError>;
+  executionState: Ref.Ref<CommandExecutionState>;
+  deadlineAtMs: number;
 }
 
 function commandToAggregateRef(command: OrchestrationCommand): {
@@ -49,6 +58,16 @@ function commandToAggregateRef(command: OrchestrationCommand): {
   }
 }
 
+function isProjectMetadataEvent(
+  event: OrchestrationEvent,
+): event is ProjectMetadataOrchestrationEvent {
+  return (
+    event.type === "project.created" ||
+    event.type === "project.meta-updated" ||
+    event.type === "project.deleted"
+  );
+}
+
 const makeOrchestrationEngine = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const eventStore = yield* OrchestrationEventStore;
@@ -60,8 +79,40 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const commandQueue = yield* Queue.unbounded<CommandEnvelope>();
   const eventPubSub = yield* PubSub.unbounded<OrchestrationEvent>();
 
-  const processEnvelope = (envelope: CommandEnvelope): Effect.Effect<void> => {
+  const makeCommandTimeoutError = (command: OrchestrationCommand) =>
+    new OrchestrationCommandTimeoutError({
+      commandId: command.commandId,
+      commandType: command.type,
+      timeoutMs: ORCHESTRATION_DISPATCH_TIMEOUT_MS,
+    });
+
+  const resolveStoredCommandOutcome = (
+    command: OrchestrationCommand,
+  ): Effect.Effect<{ sequence: number }, OrchestrationDispatchError, never> =>
+    Effect.gen(function* () {
+      const receiptExit = yield* Effect.exit(
+        commandReceiptRepository.getByCommandId({
+          commandId: command.commandId,
+        }),
+      );
+      const existingReceipt = receiptExit._tag === "Success" ? receiptExit.value : Option.none();
+      if (Option.isNone(existingReceipt)) {
+        return yield* makeCommandTimeoutError(command);
+      }
+      if (existingReceipt.value.status === "accepted") {
+        return {
+          sequence: existingReceipt.value.resultSequence,
+        };
+      }
+      return yield* new OrchestrationCommandPreviouslyRejectedError({
+        commandId: command.commandId,
+        detail: existingReceipt.value.error ?? "Previously rejected.",
+      });
+    });
+
+  const processEnvelope = (envelope: CommandEnvelope): Effect.Effect<void, never> => {
     const dispatchStartSequence = readModel.snapshotSequence;
+    const remainingBudgetMs = Math.max(0, envelope.deadlineAtMs - Date.now());
     const reconcileReadModelAfterDispatchFailure = Effect.gen(function* () {
       const persistedEvents = yield* Stream.runCollect(
         eventStore.readFromSequence(dispatchStartSequence),
@@ -82,6 +133,20 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     });
 
     return Effect.gen(function* () {
+      const shouldSkip = yield* Ref.modify(envelope.executionState, (state) => {
+        if (state === "abandoned") {
+          return [true, state] as const;
+        }
+        return [false, "in-flight"] as const;
+      });
+      if (shouldSkip) {
+        return;
+      }
+
+      if (remainingBudgetMs === 0) {
+        return yield* makeCommandTimeoutError(envelope.command);
+      }
+
       const existingReceipt = yield* commandReceiptRepository.getByCommandId({
         commandId: envelope.command.commandId,
       });
@@ -116,7 +181,11 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             for (const nextEvent of eventBases) {
               const savedEvent = yield* eventStore.append(nextEvent);
               nextReadModel = yield* projectEvent(nextReadModel, savedEvent);
-              yield* projectionPipeline.projectEvent(savedEvent);
+              if (isProjectMetadataEvent(savedEvent)) {
+                yield* projectionPipeline.projectMetadataEvent(savedEvent);
+              } else {
+                yield* projectionPipeline.projectEvent(savedEvent);
+              }
               committedEvents.push(savedEvent);
             }
 
@@ -159,7 +228,14 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       }
       yield* Deferred.succeed(envelope.result, { sequence: committedCommand.lastSequence });
     }).pipe(
-      Effect.catch((error) =>
+      Effect.timeoutOption(remainingBudgetMs),
+      Effect.flatMap((outcome) =>
+        Option.match(outcome, {
+          onNone: () => Effect.fail(makeCommandTimeoutError(envelope.command)),
+          onSome: Effect.succeed,
+        }),
+      ),
+      Effect.catch((error: OrchestrationDispatchError) =>
         Effect.gen(function* () {
           yield* reconcileReadModelAfterDispatchFailure.pipe(
             Effect.catch(() =>
@@ -173,6 +249,22 @@ const makeOrchestrationEngine = Effect.gen(function* () {
               ),
             ),
           );
+
+          if (Schema.is(OrchestrationCommandTimeoutError)(error)) {
+            const resolvedTimeoutOutcome = yield* resolveStoredCommandOutcome(
+              envelope.command,
+            ).pipe(
+              Effect.match({
+                onFailure: (resolvedError) => ({ _tag: "Left" as const, left: resolvedError }),
+                onSuccess: (value) => ({ _tag: "Right" as const, right: value }),
+              }),
+            );
+            if (resolvedTimeoutOutcome._tag === "Right") {
+              yield* Deferred.succeed(envelope.result, resolvedTimeoutOutcome.right);
+              return;
+            }
+            error = resolvedTimeoutOutcome.left;
+          }
 
           if (Schema.is(OrchestrationCommandInvariantError)(error)) {
             const aggregateRef = commandToAggregateRef(envelope.command);
@@ -218,8 +310,53 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const dispatch: OrchestrationEngineShape["dispatch"] = (command) =>
     Effect.gen(function* () {
       const result = yield* Deferred.make<{ sequence: number }, OrchestrationDispatchError>();
-      yield* Queue.offer(commandQueue, { command, result });
-      return yield* Deferred.await(result);
+      const executionState = yield* Ref.make<CommandExecutionState>("queued");
+      yield* Queue.offer(commandQueue, {
+        command,
+        result,
+        executionState,
+        deadlineAtMs: Date.now() + ORCHESTRATION_DISPATCH_TIMEOUT_MS,
+      });
+      return yield* Deferred.await(result).pipe(
+        Effect.timeoutOption(`${ORCHESTRATION_DISPATCH_TIMEOUT_MS} millis`),
+        Effect.flatMap((outcome) =>
+          Option.match(outcome, {
+            onNone: () =>
+              Ref.modify(
+                executionState,
+                (state): readonly [DispatchTimeoutDecision, CommandExecutionState] =>
+                  state === "queued"
+                    ? [{ kind: "abandon" }, "abandoned"]
+                    : [{ kind: "wait" }, state],
+              ).pipe(
+                Effect.flatMap((decision) =>
+                  decision.kind === "wait"
+                    ? Effect.logWarning(
+                        "orchestration dispatch exceeded queue timeout while command was already in flight",
+                      ).pipe(
+                        Effect.annotateLogs({
+                          commandId: command.commandId,
+                          commandType: command.type,
+                          timeoutMs: ORCHESTRATION_DISPATCH_TIMEOUT_MS,
+                        }),
+                        Effect.flatMap(() => Deferred.await(result)),
+                      )
+                    : Effect.logWarning(
+                        "orchestration dispatch timed out before command started",
+                      ).pipe(
+                        Effect.annotateLogs({
+                          commandId: command.commandId,
+                          commandType: command.type,
+                          timeoutMs: ORCHESTRATION_DISPATCH_TIMEOUT_MS,
+                        }),
+                        Effect.flatMap(() => Effect.fail(makeCommandTimeoutError(command))),
+                      ),
+                ),
+              ),
+            onSome: Effect.succeed,
+          }),
+        ),
+      );
     });
 
   return {

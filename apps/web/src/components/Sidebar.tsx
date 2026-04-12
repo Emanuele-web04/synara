@@ -49,6 +49,7 @@ import {
   type ResolvedKeybindingsConfig,
 } from "@t3tools/contracts";
 import { resolveThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
+import { workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -59,6 +60,7 @@ import {
 } from "../appSettings";
 import { isElectron } from "../env";
 import { APP_VERSION } from "../branding";
+import { showConfirmDialogFallback } from "../confirmDialogFallback";
 import { isMacPlatform, newCommandId, newProjectId } from "../lib/utils";
 import { useStore } from "../store";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
@@ -784,6 +786,20 @@ export default function Sidebar() {
     [appSettings.sidebarThreadSortOrder, navigate, threads],
   );
 
+  const openOrCreateProjectThread = useCallback(
+    async (projectId: ProjectId) => {
+      const hasProjectThread = threads.some((thread) => thread.projectId === projectId);
+      if (hasProjectThread) {
+        focusMostRecentThreadForProject(projectId);
+        return;
+      }
+      await handleNewThread(projectId, {
+        envMode: appSettings.defaultThreadEnvMode,
+      }).catch(() => undefined);
+    },
+    [appSettings.defaultThreadEnvMode, focusMostRecentThreadForProject, handleNewThread, threads],
+  );
+
   const handleOpenProjectFromSearch = useCallback(
     (projectId: string) => {
       const typedProjectId = ProjectId.makeUnsafe(projectId);
@@ -908,9 +924,9 @@ export default function Sidebar() {
         setAddingProject(false);
       };
 
-      const existing = projects.find((project) => project.cwd === cwd);
+      const existing = projects.find((project) => workspaceRootsEqual(project.cwd, cwd));
       if (existing) {
-        focusMostRecentThreadForProject(existing.id);
+        await openOrCreateProjectThread(existing.id);
         finishAddingProject();
         return;
       }
@@ -931,10 +947,16 @@ export default function Sidebar() {
           },
           createdAt,
         });
-        await handleNewThread(projectId, {
-          envMode: appSettings.defaultThreadEnvMode,
-        }).catch(() => undefined);
+        await openOrCreateProjectThread(projectId);
       } catch (error) {
+        const recoveredProject = useStore
+          .getState()
+          .projects.find((project) => workspaceRootsEqual(project.cwd, cwd));
+        if (recoveredProject) {
+          await openOrCreateProjectThread(recoveredProject.id);
+          finishAddingProject();
+          return;
+        }
         const description =
           error instanceof Error ? error.message : "An error occurred while adding the project.";
         setIsAddingProject(false);
@@ -943,13 +965,7 @@ export default function Sidebar() {
       }
       finishAddingProject();
     },
-    [
-      focusMostRecentThreadForProject,
-      handleNewThread,
-      isAddingProject,
-      projects,
-      appSettings.defaultThreadEnvMode,
-    ],
+    [isAddingProject, openOrCreateProjectThread, projects],
   );
 
   const handleAddProject = () => {
@@ -1283,7 +1299,7 @@ export default function Sidebar() {
         ].join("\n");
         const confirmed = api
           ? await api.dialogs.confirm(confirmationMessage)
-          : window.confirm(confirmationMessage);
+          : await showConfirmDialogFallback(confirmationMessage);
         if (!confirmed) return;
       }
 

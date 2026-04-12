@@ -43,6 +43,11 @@ import {
   type OrchestrationProjectionPipelineShape,
 } from "../Services/ProjectionPipeline.ts";
 import {
+  applyProjectMetadataProjection,
+  advanceProjectMetadataSnapshotState,
+  PROJECT_METADATA_SNAPSHOT_PROJECTORS,
+} from "../projectMetadataProjection.ts";
+import {
   attachmentRelativePath,
   parseAttachmentIdFromRelativePath,
   parseThreadSegmentFromAttachmentId,
@@ -77,15 +82,7 @@ interface AttachmentSideEffects {
   readonly prunedThreadRelativePaths: Map<string, Set<string>>;
 }
 
-const REQUIRED_SNAPSHOT_PROJECTORS = [
-  ORCHESTRATION_PROJECTOR_NAMES.projects,
-  ORCHESTRATION_PROJECTOR_NAMES.threads,
-  ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
-  ORCHESTRATION_PROJECTOR_NAMES.threadProposedPlans,
-  ORCHESTRATION_PROJECTOR_NAMES.threadActivities,
-  ORCHESTRATION_PROJECTOR_NAMES.threadSessions,
-  ORCHESTRATION_PROJECTOR_NAMES.checkpoints,
-] as const;
+const REQUIRED_SNAPSHOT_PROJECTORS = PROJECT_METADATA_SNAPSHOT_PROJECTORS;
 
 const materializeAttachmentsForProjection = Effect.fn(
   (input: { readonly attachments: ReadonlyArray<ChatAttachment> }) =>
@@ -387,62 +384,14 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig;
 
   const applyProjectsProjection: ProjectorDefinition["apply"] = (event, _attachmentSideEffects) =>
-    Effect.gen(function* () {
-      switch (event.type) {
-        case "project.created":
-          yield* projectionProjectRepository.upsert({
-            projectId: event.payload.projectId,
-            title: event.payload.title,
-            workspaceRoot: event.payload.workspaceRoot,
-            defaultModelSelection: event.payload.defaultModelSelection,
-            scripts: event.payload.scripts,
-            createdAt: event.payload.createdAt,
-            updatedAt: event.payload.updatedAt,
-            deletedAt: null,
-          });
-          return;
-
-        case "project.meta-updated": {
-          const existingRow = yield* projectionProjectRepository.getById({
-            projectId: event.payload.projectId,
-          });
-          if (Option.isNone(existingRow)) {
-            return;
-          }
-          yield* projectionProjectRepository.upsert({
-            ...existingRow.value,
-            ...(event.payload.title !== undefined ? { title: event.payload.title } : {}),
-            ...(event.payload.workspaceRoot !== undefined
-              ? { workspaceRoot: event.payload.workspaceRoot }
-              : {}),
-            ...(event.payload.defaultModelSelection !== undefined
-              ? { defaultModelSelection: event.payload.defaultModelSelection }
-              : {}),
-            ...(event.payload.scripts !== undefined ? { scripts: event.payload.scripts } : {}),
-            updatedAt: event.payload.updatedAt,
-          });
-          return;
-        }
-
-        case "project.deleted": {
-          const existingRow = yield* projectionProjectRepository.getById({
-            projectId: event.payload.projectId,
-          });
-          if (Option.isNone(existingRow)) {
-            return;
-          }
-          yield* projectionProjectRepository.upsert({
-            ...existingRow.value,
-            deletedAt: event.payload.deletedAt,
-            updatedAt: event.payload.deletedAt,
-          });
-          return;
-        }
-
-        default:
-          return;
-      }
-    });
+    event.type === "project.created" ||
+    event.type === "project.meta-updated" ||
+    event.type === "project.deleted"
+      ? applyProjectMetadataProjection({
+          event,
+          projectionProjectRepository,
+        }).pipe(Effect.asVoid)
+      : Effect.void;
 
   const applyThreadsProjection: ProjectorDefinition["apply"] = (event, attachmentSideEffects) =>
     Effect.gen(function* () {
@@ -1332,6 +1281,22 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       ),
     );
 
+  const projectMetadataEvent: OrchestrationProjectionPipelineShape["projectMetadataEvent"] = (
+    event,
+  ) =>
+    applyProjectMetadataProjection({
+      event,
+      projectionProjectRepository,
+    }).pipe(
+      Effect.flatMap(() =>
+        advanceProjectMetadataSnapshotState({
+          event,
+          projectionStateRepository,
+        }),
+      ),
+      Effect.asVoid,
+    );
+
   const projectEvent: OrchestrationProjectionPipelineShape["projectEvent"] = (event) =>
     Effect.forEach(
       selectProjectorsForEvent(event),
@@ -1381,6 +1346,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   return {
     bootstrap,
     projectEvent,
+    projectMetadataEvent,
   } satisfies OrchestrationProjectionPipelineShape;
 });
 

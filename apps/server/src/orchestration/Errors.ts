@@ -52,6 +52,20 @@ export class OrchestrationCommandPreviouslyRejectedError extends Schema.TaggedEr
   }
 }
 
+export class OrchestrationCommandTimeoutError extends Schema.TaggedErrorClass<OrchestrationCommandTimeoutError>()(
+  "OrchestrationCommandTimeoutError",
+  {
+    commandId: Schema.String,
+    commandType: Schema.String,
+    timeoutMs: Schema.Number,
+    cause: Schema.optional(Schema.Defect),
+  },
+) {
+  override get message(): string {
+    return `Orchestration command timed out (${this.commandType}, ${this.commandId}) after ${this.timeoutMs}ms`;
+  }
+}
+
 export class OrchestrationProjectorDecodeError extends Schema.TaggedErrorClass<OrchestrationProjectorDecodeError>()(
   "OrchestrationProjectorDecodeError",
   {
@@ -82,6 +96,7 @@ export type OrchestrationDispatchError =
   | ProjectionRepositoryError
   | OrchestrationCommandInvariantError
   | OrchestrationCommandPreviouslyRejectedError
+  | OrchestrationCommandTimeoutError
   | OrchestrationProjectorDecodeError
   | OrchestrationListenerCallbackError;
 

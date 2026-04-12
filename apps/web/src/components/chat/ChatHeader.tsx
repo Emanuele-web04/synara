@@ -251,7 +251,7 @@ export const ChatHeader = memo(function ChatHeader({
             <MenuPopup
               align="end"
               side="bottom"
-              className="min-w-60 rounded-lg border-border bg-popover shadow-lg"
+              className="w-50 rounded-lg border-border bg-popover shadow-lg"
             >
               {activeProjectName ? (
                 <MenuItem

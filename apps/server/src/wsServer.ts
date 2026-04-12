@@ -7,6 +7,7 @@
  * @module Server
  */
 import http from "node:http";
+import { realpathSync } from "node:fs";
 import type { Duplex } from "node:stream";
 
 import Mime from "@effect/platform-node/Mime";
@@ -82,6 +83,7 @@ import { expandHomePath } from "./os-jank.ts";
 import { makeServerPushBus } from "./wsServer/pushBus.ts";
 import { makeServerReadiness } from "./wsServer/readiness.ts";
 import { decodeJsonResult, formatSchemaError } from "@t3tools/shared/schemaJson";
+import { workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
 import { TerminalThreadTitleTracker } from "./terminal/terminalThreadTitleTracker";
 
 /**
@@ -395,6 +397,28 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const logger = createLogger("ws");
   const readiness = yield* makeServerReadiness;
 
+  // Canonicalizes imported workspace roots once at the server boundary.
+  const canonicalizeProjectWorkspaceRoot = Effect.fnUntraced(function* (workspaceRoot: string) {
+    const normalizedWorkspaceRoot = path.resolve(yield* expandHomePath(workspaceRoot.trim()));
+    const workspaceStat = yield* fileSystem
+      .stat(normalizedWorkspaceRoot)
+      .pipe(Effect.catch(() => Effect.succeed(null)));
+    if (!workspaceStat) {
+      return yield* new RouteRequestError({
+        message: `Project directory does not exist: ${normalizedWorkspaceRoot}`,
+      });
+    }
+    if (workspaceStat.type !== "Directory") {
+      return yield* new RouteRequestError({
+        message: `Project path is not a directory: ${normalizedWorkspaceRoot}`,
+      });
+    }
+    return yield* Effect.try({
+      try: () => realpathSync.native(normalizedWorkspaceRoot),
+      catch: () => normalizedWorkspaceRoot,
+    });
+  });
+
   function logOutgoingPush(push: WsPushEnvelopeBase, recipients: number) {
     if (!logWebSocketEvents) return;
     logger.event("outgoing push", {
@@ -420,35 +444,17 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const normalizeDispatchCommand = Effect.fnUntraced(function* (input: {
     readonly command: ClientOrchestrationCommand;
   }) {
-    const normalizeProjectWorkspaceRoot = Effect.fnUntraced(function* (workspaceRoot: string) {
-      const normalizedWorkspaceRoot = path.resolve(yield* expandHomePath(workspaceRoot.trim()));
-      const workspaceStat = yield* fileSystem
-        .stat(normalizedWorkspaceRoot)
-        .pipe(Effect.catch(() => Effect.succeed(null)));
-      if (!workspaceStat) {
-        return yield* new RouteRequestError({
-          message: `Project directory does not exist: ${normalizedWorkspaceRoot}`,
-        });
-      }
-      if (workspaceStat.type !== "Directory") {
-        return yield* new RouteRequestError({
-          message: `Project path is not a directory: ${normalizedWorkspaceRoot}`,
-        });
-      }
-      return normalizedWorkspaceRoot;
-    });
-
     if (input.command.type === "project.create") {
       return {
         ...input.command,
-        workspaceRoot: yield* normalizeProjectWorkspaceRoot(input.command.workspaceRoot),
+        workspaceRoot: yield* canonicalizeProjectWorkspaceRoot(input.command.workspaceRoot),
       } satisfies OrchestrationCommand;
     }
 
     if (input.command.type === "project.meta.update" && input.command.workspaceRoot !== undefined) {
       return {
         ...input.command,
-        workspaceRoot: yield* normalizeProjectWorkspaceRoot(input.command.workspaceRoot),
+        workspaceRoot: yield* canonicalizeProjectWorkspaceRoot(input.command.workspaceRoot),
       } satisfies OrchestrationCommand;
     }
 
@@ -776,10 +782,15 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
 
   if (autoBootstrapProjectFromCwd) {
     yield* Effect.gen(function* () {
+      const canonicalCwd = yield* canonicalizeProjectWorkspaceRoot(cwd);
       const snapshot = yield* projectionReadModelQuery.getSnapshot();
       const mostRecentThread = getMostRecentBootstrapThread(snapshot);
       const existingProject = snapshot.projects.find(
-        (project) => project.workspaceRoot === cwd && project.deletedAt === null,
+        (project) =>
+          project.deletedAt === null &&
+          workspaceRootsEqual(project.workspaceRoot, canonicalCwd, {
+            platform: process.platform,
+          }),
       );
       let bootstrapProjectId: ProjectId;
       let bootstrapProjectDefaultModelSelection;
@@ -797,7 +808,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           commandId: CommandId.makeUnsafe(crypto.randomUUID()),
           projectId: bootstrapProjectId,
           title: bootstrapProjectTitle,
-          workspaceRoot: cwd,
+          workspaceRoot: canonicalCwd,
           defaultModelSelection: bootstrapProjectDefaultModelSelection,
           createdAt,
         });

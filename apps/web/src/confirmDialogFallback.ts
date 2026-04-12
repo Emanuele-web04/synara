@@ -76,12 +76,12 @@ export function showConfirmDialogFallback(message: string): Promise<boolean> {
       "inline-flex h-8 min-w-20 cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-input bg-popover px-3 text-[13px] font-medium text-foreground outline-none transition-colors hover:bg-accent/50 focus-visible:ring-1 focus-visible:ring-ring/60";
     cancelBtn.addEventListener("click", () => cleanup(false));
 
-    // Confirm button (primary style)
+    // Confirm button mirrors the chat send action's foreground-on-background treatment.
     const confirmBtn = document.createElement("button");
     confirmBtn.type = "button";
     confirmBtn.textContent = "Confirm";
     confirmBtn.className =
-      "inline-flex h-8 min-w-20 cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-primary bg-primary px-3 text-[13px] font-medium text-primary-foreground shadow-xs shadow-primary/20 outline-none transition-colors hover:bg-primary/92 focus-visible:ring-1 focus-visible:ring-ring/60";
+      "inline-flex h-8 min-w-20 cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-foreground bg-foreground px-3 text-[13px] font-medium text-background outline-none transition-all duration-150 hover:scale-[1.02] hover:bg-foreground/92 focus-visible:ring-1 focus-visible:ring-ring/60";
 
     confirmBtn.addEventListener("click", () => cleanup(true));
 
