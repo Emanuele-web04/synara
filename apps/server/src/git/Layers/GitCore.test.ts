@@ -84,6 +84,22 @@ function runShellCommand(input: {
   });
 }
 
+function runTruncatedNodeCommand(input: {
+  cwd: string;
+  timeoutMs?: number;
+  maxOutputBytes?: number;
+}): Effect.Effect<ProcessRunResult, Error> {
+  return Effect.promise(() =>
+    runProcess("node", ["-e", "process.stdout.write('x'.repeat(2000))"], {
+      cwd: input.cwd,
+      timeoutMs: input.timeoutMs ?? 30_000,
+      allowNonZeroExit: true,
+      maxBufferBytes: input.maxOutputBytes ?? 1_000_000,
+      outputMode: "truncate",
+    }),
+  );
+}
+
 const makeIsolatedGitCore = (executeOverride: GitCoreShape["execute"]) =>
   makeGitCore({ executeOverride }).pipe(
     Effect.provide(Layer.provideMerge(ServerConfigLayer, NodeServices.layer)),
@@ -138,8 +154,7 @@ it.layer(TestLayer)("git integration", (it) => {
   describe("shell process execution", () => {
     it.effect("caps captured output when maxOutputBytes is exceeded", () =>
       Effect.gen(function* () {
-        const result = yield* runShellCommand({
-          command: `node -e "process.stdout.write('x'.repeat(2000))"`,
+        const result = yield* runTruncatedNodeCommand({
           cwd: process.cwd(),
           timeoutMs: 10_000,
           maxOutputBytes: 128,

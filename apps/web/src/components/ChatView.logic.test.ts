@@ -5,6 +5,7 @@ import {
   shouldAutoDeleteTerminalThreadOnLastClose,
   buildExpiredTerminalContextToastCopy,
   deriveComposerSendState,
+  hasLiveChatTurn,
   shouldRenderTerminalWorkspace,
 } from "./ChatView.logic";
 
@@ -97,6 +98,35 @@ describe("shouldRenderTerminalWorkspace", () => {
         activeProjectExists: true,
         presentationMode: "drawer",
         terminalOpen: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("hasLiveChatTurn", () => {
+  it("treats running sessions as live even before settlement catches up", () => {
+    expect(
+      hasLiveChatTurn({
+        phase: "running",
+        latestTurnSettled: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps the turn live while the latest turn is still unsettled", () => {
+    expect(
+      hasLiveChatTurn({
+        phase: "ready",
+        latestTurnSettled: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false once the session is ready and the latest turn is settled", () => {
+    expect(
+      hasLiveChatTurn({
+        phase: "ready",
+        latestTurnSettled: true,
       }),
     ).toBe(false);
   });

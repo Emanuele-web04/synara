@@ -512,6 +512,121 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("Tool calls (6)");
   });
 
+  it("keeps the latest inline tool calls visible while the turn is still active", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking
+        activeTurnInProgress
+        activeTurnStartedAt="2026-03-17T19:12:28.000Z"
+        scrollContainer={null}
+        timelineEntries={[
+          {
+            id: "entry-inline-tools-live-1",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-inline-live-1",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "tool 1",
+              tone: "tool",
+            },
+          },
+          {
+            id: "entry-inline-tools-live-2",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.100Z",
+            entry: {
+              id: "work-inline-live-2",
+              createdAt: "2026-03-17T19:12:28.100Z",
+              label: "tool 2",
+              tone: "tool",
+            },
+          },
+          {
+            id: "entry-inline-tools-live-3",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.200Z",
+            entry: {
+              id: "work-inline-live-3",
+              createdAt: "2026-03-17T19:12:28.200Z",
+              label: "tool 3",
+              tone: "tool",
+            },
+          },
+          {
+            id: "entry-inline-tools-live-4",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.300Z",
+            entry: {
+              id: "work-inline-live-4",
+              createdAt: "2026-03-17T19:12:28.300Z",
+              label: "tool 4",
+              tone: "tool",
+            },
+          },
+          {
+            id: "entry-inline-tools-live-5",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.400Z",
+            entry: {
+              id: "work-inline-live-5",
+              createdAt: "2026-03-17T19:12:28.400Z",
+              label: "tool 5",
+              tone: "tool",
+            },
+          },
+          {
+            id: "entry-inline-tools-live-6",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.500Z",
+            entry: {
+              id: "work-inline-live-6",
+              createdAt: "2026-03-17T19:12:28.500Z",
+              label: "tool 6",
+              tone: "tool",
+            },
+          },
+          {
+            id: "entry-assistant-inline-tools-live",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:29.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-assistant-inline-tools-live"),
+              role: "assistant",
+              text: "done",
+              createdAt: "2026-03-17T19:12:29.000Z",
+              completedAt: "2026-03-17T19:12:30.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).not.toContain("Tool 1");
+    expect(markup).not.toContain("Tool 2");
+    expect(markup).toContain("Tool 3");
+    expect(markup).toContain("Tool 6");
+    expect(markup).toContain("+2 more tool calls");
+  });
+
   it("expands inline tool calls when the group is toggled open", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(

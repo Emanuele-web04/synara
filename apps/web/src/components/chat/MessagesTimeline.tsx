@@ -680,7 +680,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const visibleInlineToolEntries =
             inlineToolExpanded || inlineToolEntries.length <= MAX_VISIBLE_INLINE_TOOL_ENTRIES
               ? inlineToolEntries
-              : inlineToolEntries.slice(0, MAX_VISIBLE_INLINE_TOOL_ENTRIES);
+              : activeTurnInProgress
+                ? inlineToolEntries.slice(-MAX_VISIBLE_INLINE_TOOL_ENTRIES)
+                : inlineToolEntries.slice(0, MAX_VISIBLE_INLINE_TOOL_ENTRIES);
           const hiddenInlineToolCount = inlineToolEntries.length - visibleInlineToolEntries.length;
           const inlineWorkSummary =
             inlineToolEntries.length > 0

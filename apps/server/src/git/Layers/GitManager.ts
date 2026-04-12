@@ -593,6 +593,53 @@ function toPullRequestHeadRemoteInfo(pr: {
   };
 }
 
+function inferPullRequestHeadRemoteInfoFromSelector(
+  headSelector: string,
+  headContext: Pick<
+    BranchHeadContext,
+    | "headBranch"
+    | "remoteName"
+    | "headRepositoryNameWithOwner"
+    | "headRepositoryOwnerLogin"
+    | "isCrossRepository"
+  >,
+): PullRequestHeadRemoteInfo {
+  const separatorIndex = headSelector.indexOf(":");
+  if (separatorIndex > 0 && separatorIndex < headSelector.length - 1) {
+    const selectorPrefix = headSelector.slice(0, separatorIndex);
+    if (selectorPrefix === headContext.remoteName) {
+      return {
+        isCrossRepository: headContext.isCrossRepository,
+        ...(headContext.headRepositoryNameWithOwner
+          ? { headRepositoryNameWithOwner: headContext.headRepositoryNameWithOwner }
+          : {}),
+        ...(headContext.headRepositoryOwnerLogin
+          ? { headRepositoryOwnerLogin: headContext.headRepositoryOwnerLogin }
+          : {}),
+      };
+    }
+
+    return {
+      isCrossRepository: true,
+      headRepositoryOwnerLogin: selectorPrefix,
+    };
+  }
+
+  if (headContext.isCrossRepository && headSelector === headContext.headBranch) {
+    return {
+      isCrossRepository: true,
+      ...(headContext.headRepositoryNameWithOwner
+        ? { headRepositoryNameWithOwner: headContext.headRepositoryNameWithOwner }
+        : {}),
+      ...(headContext.headRepositoryOwnerLogin
+        ? { headRepositoryOwnerLogin: headContext.headRepositoryOwnerLogin }
+        : {}),
+    };
+  }
+
+  return {};
+}
+
 export const makeGitManager = Effect.gen(function* () {
   const gitCore = yield* GitCore;
   const gitHubCli = yield* GitHubCli;
@@ -777,8 +824,7 @@ export const makeGitManager = Effect.gen(function* () {
           : null;
       const remoteAliasHeadSelector =
         remoteName && headBranch.length > 0 ? `${remoteName}:${headBranch}` : null;
-      const shouldProbeRemoteOwnedSelectors =
-        isCrossRepository || (remoteName !== null && remoteName !== "origin");
+      const shouldProbeRemoteOwnedSelectors = remoteName !== null;
 
       const headSelectors: string[] = [];
       if (isCrossRepository && shouldProbeRemoteOwnedSelectors) {
@@ -787,9 +833,13 @@ export const makeGitManager = Effect.gen(function* () {
           headSelectors,
           remoteAliasHeadSelector !== ownerHeadSelector ? remoteAliasHeadSelector : null,
         );
+        appendUnique(headSelectors, headBranch);
       }
+
       appendUnique(headSelectors, details.branch);
-      appendUnique(headSelectors, headBranch !== details.branch ? headBranch : null);
+      if (!isCrossRepository) {
+        appendUnique(headSelectors, headBranch !== details.branch ? headBranch : null);
+      }
       if (!isCrossRepository && shouldProbeRemoteOwnedSelectors) {
         appendUnique(headSelectors, ownerHeadSelector);
         appendUnique(
@@ -817,6 +867,7 @@ export const makeGitManager = Effect.gen(function* () {
       BranchHeadContext,
       | "headSelectors"
       | "headBranch"
+      | "remoteName"
       | "headRepositoryNameWithOwner"
       | "headRepositoryOwnerLogin"
       | "isCrossRepository"
@@ -829,6 +880,10 @@ export const makeGitManager = Effect.gen(function* () {
           headSelector,
           limit: OPEN_PR_LOOKUP_LIMIT,
         });
+        const inferredHeadInfo = inferPullRequestHeadRemoteInfoFromSelector(
+          headSelector,
+          headContext,
+        );
 
         for (const pullRequest of pullRequests) {
           const candidate: PullRequestInfo = {
@@ -847,6 +902,11 @@ export const makeGitManager = Effect.gen(function* () {
               : {}),
             ...(pullRequest.headRepositoryOwnerLogin !== undefined
               ? { headRepositoryOwnerLogin: pullRequest.headRepositoryOwnerLogin }
+              : {}),
+            ...(pullRequest.isCrossRepository === undefined &&
+            pullRequest.headRepositoryNameWithOwner === undefined &&
+            pullRequest.headRepositoryOwnerLogin === undefined
+              ? toPullRequestHeadRemoteInfo(inferredHeadInfo)
               : {}),
           };
           if (!matchesBranchHeadContext(candidate, headContext)) {
@@ -868,6 +928,10 @@ export const makeGitManager = Effect.gen(function* () {
       const parsedByNumber = new Map<number, PullRequestInfo>();
 
       for (const headSelector of headContext.headSelectors) {
+        const inferredHeadInfo = inferPullRequestHeadRemoteInfoFromSelector(
+          headSelector,
+          headContext,
+        );
         const stdout = yield* gitHubCli
           .execute({
             cwd,
@@ -898,10 +962,19 @@ export const makeGitManager = Effect.gen(function* () {
         });
 
         for (const pr of parsePullRequestList(parsedJson)) {
-          if (!matchesBranchHeadContext(pr, headContext)) {
+          const candidate =
+            pr.isCrossRepository === undefined &&
+            pr.headRepositoryNameWithOwner === undefined &&
+            pr.headRepositoryOwnerLogin === undefined
+              ? ({
+                  ...pr,
+                  ...toPullRequestHeadRemoteInfo(inferredHeadInfo),
+                } satisfies PullRequestInfo)
+              : pr;
+          if (!matchesBranchHeadContext(candidate, headContext)) {
             continue;
           }
-          parsedByNumber.set(pr.number, pr);
+          parsedByNumber.set(candidate.number, candidate);
         }
       }
 

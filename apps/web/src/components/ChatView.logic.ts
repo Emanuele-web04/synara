@@ -1,7 +1,12 @@
 import { ProjectId, type ModelSelection, type ThreadId } from "@t3tools/contracts";
 import { sanitizeBranchFragment } from "@t3tools/shared/git";
 import { isGenericTerminalThreadTitle } from "@t3tools/shared/terminalThreads";
-import { type ChatMessage, type Thread, type ThreadPrimarySurface } from "../types";
+import {
+  type ChatMessage,
+  type SessionPhase,
+  type Thread,
+  type ThreadPrimarySurface,
+} from "../types";
 import { type ComposerImageAttachment, type DraftThreadState } from "../composerDraftStore";
 import { Schema } from "effect";
 import {
@@ -81,6 +86,13 @@ export type SendPhase = "idle" | "preparing-worktree" | "sending-turn";
 export interface PullRequestDialogState {
   initialReference: string | null;
   key: number;
+}
+
+export function hasLiveChatTurn(options: {
+  phase: SessionPhase;
+  latestTurnSettled: boolean;
+}): boolean {
+  return options.phase === "running" || !options.latestTurnSettled;
 }
 
 export function readFileAsDataUrl(file: File): Promise<string> {

@@ -650,7 +650,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           state: "open",
         });
         expect(ghCalls).toContain(
-          "pr list --head jasonLaster:statemachine --state all --limit 20 --json number,title,url,baseRefName,headRefName,state,mergedAt,updatedAt",
+          "pr list --head jasonLaster:statemachine --state all --limit 20 --json number,title,url,baseRefName,headRefName,state,mergedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
         );
       }),
     12_000,
@@ -1016,6 +1016,8 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           ghScenario: {
             prListSequence: [
               "[]",
+              "[]",
+              "[]",
               JSON.stringify([
                 {
                   number: 90,
@@ -1200,6 +1202,8 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           ghScenario: {
             prListSequence: [
               "[]",
+              "[]",
+              "[]",
               JSON.stringify([
                 {
                   number: 77,
@@ -1305,6 +1309,8 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           ghScenario: {
             prListSequence: [
               "[]",
+              "[]",
+              "[]",
               JSON.stringify([
                 {
                   number: 89,
@@ -1375,11 +1381,13 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         "remote.origin.url",
         "git@github.com:pingdotgg/codething-mvp.git",
       ]);
+      yield* runGit(repoDir, ["config", "remote.origin.pushurl", originDir]);
       yield* runGit(repoDir, [
         "config",
         "remote.fork.url",
         "git@github.com:octocat/codething-mvp.git",
       ]);
+      yield* runGit(repoDir, ["config", "remote.fork.pushurl", forkDir]);
       fs.writeFileSync(path.join(repoDir, "cross-repo-pr.txt"), "fork main change\n");
       yield* runGit(repoDir, ["add", "cross-repo-pr.txt"]);
       yield* runGit(repoDir, ["commit", "-m", "Cross repo main PR"]);
@@ -1691,6 +1699,8 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       const { manager, ghCalls } = yield* makeManager({
         ghScenario: {
           prListSequence: [
+            "[]",
+            "[]",
             "[]",
             JSON.stringify([
               {

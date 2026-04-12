@@ -234,6 +234,7 @@ import {
   cloneComposerImageForRetry,
   collectUserMessageBlobPreviewUrls,
   deriveComposerSendState,
+  hasLiveChatTurn,
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
   LastInvokedScriptByProjectSchema,
   PullRequestDialogState,
@@ -1007,9 +1008,13 @@ export default function ChatView({
     [lockedProvider, modelOptionsByProvider],
   );
   const phase = derivePhase(activeThread?.session ?? null);
+  const hasLiveTurn = hasLiveChatTurn({
+    phase,
+    latestTurnSettled,
+  });
   const isSendBusy = sendPhase !== "idle";
   const isPreparingWorktree = sendPhase === "preparing-worktree";
-  const isWorking = phase === "running" || isSendBusy || isConnecting || isRevertingCheckpoint;
+  const isWorking = hasLiveTurn || isSendBusy || isConnecting || isRevertingCheckpoint;
   const nowIso = new Date(nowTick).toISOString();
   const activeWorkStartedAt = deriveActiveWorkStartedAt(
     activeLatestTurn,
@@ -2612,7 +2617,7 @@ export default function ChatView({
   );
 
   // Scroll behavior is isolated in a dedicated controller so the renderer tree only wires events.
-  const messageCount = timelineMessages.length;
+  const messageCount = timelineEntries.length;
   const {
     messagesScrollElement,
     showScrollToBottom,
@@ -2632,7 +2637,7 @@ export default function ChatView({
     onMessagesWheel,
   } = useChatAutoScrollController({
     threadId: activeThread?.id ?? null,
-    isStreaming: phase === "running",
+    isStreaming: isWorking,
     messageCount,
   });
 
@@ -2974,7 +2979,7 @@ export default function ChatView({
       return;
     }
     if (
-      phase === "running" ||
+      hasLiveTurn ||
       activePendingApproval !== null ||
       activePendingUserInput !== null ||
       activeThread?.error
@@ -2985,7 +2990,7 @@ export default function ChatView({
     activePendingApproval,
     activePendingUserInput,
     activeThread?.error,
-    phase,
+    hasLiveTurn,
     resetSendPhase,
     sendPhase,
   ]);
@@ -3065,7 +3070,7 @@ export default function ChatView({
       if (!activeThreadId || event.defaultPrevented) return;
       // Mirror terminal interrupt semantics without stealing regular copy shortcuts.
       if (
-        phase === "running" &&
+        hasLiveTurn &&
         isMacPlatform(navigator.platform) &&
         event.ctrlKey &&
         !event.metaKey &&
@@ -3244,7 +3249,7 @@ export default function ChatView({
     onInterrupt,
     onSplitSurface,
     isFocusedPane,
-    phase,
+    hasLiveTurn,
     setTerminalWorkspaceTab,
     surfaceMode,
     toggleTerminalVisibility,
@@ -3366,7 +3371,7 @@ export default function ChatView({
       const api = readNativeApi();
       if (!api || !activeThread || isRevertingCheckpoint) return;
 
-      if (phase === "running" || isSendBusy || isConnecting) {
+      if (hasLiveTurn || isSendBusy || isConnecting) {
         setThreadError(activeThread.id, "Interrupt the current turn before reverting checkpoints.");
         return;
       }
@@ -3399,7 +3404,7 @@ export default function ChatView({
       }
       setIsRevertingCheckpoint(false);
     },
-    [activeThread, isConnecting, isRevertingCheckpoint, isSendBusy, phase, setThreadError],
+    [activeThread, hasLiveTurn, isConnecting, isRevertingCheckpoint, isSendBusy, setThreadError],
   );
 
   const onCreateHandoffThread = useCallback(async () => {
@@ -3535,7 +3540,7 @@ export default function ChatView({
         draftText: trimmed,
         planMarkdown: activeProposedPlan.planMarkdown,
       });
-      if (phase === "running" && dispatchMode === "queue" && queuedChatTurn === null) {
+      if (hasLiveTurn && dispatchMode === "queue" && queuedChatTurn === null) {
         clearComposerInput(activeThread.id);
         setQueuedComposerTurns((existing) => [
           ...existing,
@@ -3584,7 +3589,7 @@ export default function ChatView({
       return false;
     }
     if (!activeProject) return false;
-    if (phase === "running" && dispatchMode === "queue" && queuedChatTurn === null) {
+    if (hasLiveTurn && dispatchMode === "queue" && queuedChatTurn === null) {
       clearComposerInput(activeThread.id);
       setQueuedComposerTurns((existing) => [
         ...existing,
@@ -4235,7 +4240,7 @@ export default function ChatView({
       return;
     }
     if (
-      phase === "running" ||
+      hasLiveTurn ||
       phase === "disconnected" ||
       isSendBusy ||
       isConnecting ||
@@ -4265,10 +4270,11 @@ export default function ChatView({
     activePendingApproval,
     activePendingProgress,
     dispatchQueuedComposerTurn,
+    phase,
     isConnecting,
     isSendBusy,
     pendingUserInputs.length,
-    phase,
+    hasLiveTurn,
     queuedComposerTurns,
   ]);
 
@@ -5303,7 +5309,7 @@ export default function ChatView({
                               ? "Type your own answer, or leave this blank to use the selected option"
                               : showPlanFollowUpPrompt && activeProposedPlan
                                 ? "Add feedback to refine the plan, or leave this blank to implement it"
-                                : phase === "running"
+                                : hasLiveTurn
                                   ? "Ask for follow-up changes"
                                   : phase === "disconnected"
                                     ? "Ask for follow-up changes or attach images"
@@ -5476,7 +5482,7 @@ export default function ChatView({
                                     : "Next question"}
                               </Button>
                             </div>
-                          ) : phase === "running" ? (
+                          ) : hasLiveTurn ? (
                             <button
                               type="button"
                               className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full bg-foreground text-background transition-all duration-150 hover:scale-105 sm:h-7 sm:w-7"
