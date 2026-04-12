@@ -1140,12 +1140,18 @@ export default function ChatView({
     ],
   );
   const activePlan = useMemo(
-    () => deriveActivePlanState(threadActivities, activeLatestTurn?.turnId ?? undefined),
-    [activeLatestTurn?.turnId, threadActivities],
+    () =>
+      latestTurnSettled
+        ? null
+        : deriveActivePlanState(threadActivities, activeLatestTurn?.turnId ?? undefined),
+    [activeLatestTurn?.turnId, latestTurnSettled, threadActivities],
   );
   const activeBackgroundTasks = useMemo(
-    () => deriveActiveBackgroundTasksState(threadActivities, activeLatestTurn?.turnId ?? undefined),
-    [activeLatestTurn?.turnId, threadActivities],
+    () =>
+      latestTurnSettled
+        ? null
+        : deriveActiveBackgroundTasksState(threadActivities, activeLatestTurn?.turnId ?? undefined),
+    [activeLatestTurn?.turnId, latestTurnSettled, threadActivities],
   );
   const showPlanFollowUpPrompt =
     pendingUserInputs.length === 0 &&
@@ -5118,11 +5124,15 @@ export default function ChatView({
             {/* Input bar */}
             <div className={cn("px-3 pt-0 sm:px-5 sm:pt-0", isGitRepo ? "pb-1" : "pb-2.5 sm:pb-3")}>
               {activePlan && !planSidebarOpen ? (
-                <ActivePlanCard
-                  activePlan={activePlan}
-                  backgroundTaskCount={activeBackgroundTasks?.activeCount ?? 0}
-                  onOpenSidebar={() => setPlanSidebarOpen(true)}
-                />
+                <div className="mx-auto w-full max-w-3xl">
+                  <div className="mx-auto w-11/12">
+                    <ActivePlanCard
+                      activePlan={activePlan}
+                      backgroundTaskCount={activeBackgroundTasks?.activeCount ?? 0}
+                      onOpenSidebar={() => setPlanSidebarOpen(true)}
+                    />
+                  </div>
+                </div>
               ) : null}
               <form
                 ref={composerFormRef}

@@ -3,8 +3,8 @@ import "../index.css";
 
 import {
   EventId,
+  MessageId,
   ORCHESTRATION_WS_METHODS,
-  type MessageId,
   type OrchestrationReadModel,
   type ProjectId,
   type ServerConfig,
@@ -606,6 +606,53 @@ function createSnapshotWithActiveInlinePlan(): OrchestrationReadModel {
                 }
               : null,
             updatedAt: isoAt(1_003),
+          }
+        : thread,
+    ),
+  };
+}
+
+function createSnapshotWithSettledInlinePlan(): OrchestrationReadModel {
+  const snapshot = createSnapshotWithActiveInlinePlan();
+  const activeTurnId = TurnId.makeUnsafe("turn-inline-plan");
+
+  return {
+    ...snapshot,
+    threads: snapshot.threads.map((thread) =>
+      thread.id === THREAD_ID
+        ? {
+            ...thread,
+            latestTurn: {
+              turnId: activeTurnId,
+              state: "completed",
+              requestedAt: isoAt(1_000),
+              startedAt: isoAt(1_001),
+              completedAt: isoAt(1_004),
+              assistantMessageId: MessageId.makeUnsafe("msg-assistant-inline-plan-complete"),
+            },
+            messages: [
+              ...thread.messages,
+              {
+                turnId: activeTurnId,
+                id: MessageId.makeUnsafe("msg-assistant-inline-plan-complete"),
+                role: "assistant",
+                text: "Finished the investigation.",
+                createdAt: isoAt(1_004),
+                updatedAt: isoAt(1_004),
+                completedAt: isoAt(1_004),
+                streaming: false,
+                source: "native",
+              },
+            ],
+            session: thread.session
+              ? {
+                  ...thread.session,
+                  status: "ready",
+                  activeTurnId: null,
+                  updatedAt: isoAt(1_004),
+                }
+              : null,
+            updatedAt: isoAt(1_004),
           }
         : thread,
     ),
@@ -2599,6 +2646,26 @@ describe("ChatView timeline estimator parity (full app)", () => {
       openPlanButton.click();
 
       await expect.element(page.getByLabelText("Close plan sidebar")).toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("hides the inline plan card once the latest turn is settled", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithSettledInlinePlan(),
+    });
+
+    try {
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("Finished the investigation.");
+          expect(document.body.textContent).not.toContain("1 out of 3 tasks completed");
+          expect(document.body.textContent).not.toContain("1 background agent");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
     } finally {
       await mounted.cleanup();
     }

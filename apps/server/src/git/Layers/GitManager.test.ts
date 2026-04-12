@@ -405,12 +405,43 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
             "--limit",
             String(input.limit ?? 1),
             "--json",
-            "number,title,url,baseRefName,headRefName",
+            "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner",
           ],
         }).pipe(
-          Effect.map(
-            (result) => JSON.parse(result.stdout) as ReadonlyArray<GitHubPullRequestSummary>,
-          ),
+          Effect.map((result) => {
+            const parsed = JSON.parse(result.stdout) as Array<Record<string, unknown>>;
+            return parsed.map((pullRequest) => ({
+              number: pullRequest.number as number,
+              title: pullRequest.title as string,
+              url: pullRequest.url as string,
+              baseRefName: pullRequest.baseRefName as string,
+              headRefName: pullRequest.headRefName as string,
+              ...(typeof pullRequest.state === "string"
+                ? { state: pullRequest.state as GitHubPullRequestSummary["state"] }
+                : {}),
+              ...(typeof pullRequest.isCrossRepository === "boolean"
+                ? { isCrossRepository: pullRequest.isCrossRepository }
+                : {}),
+              ...(pullRequest.headRepository &&
+              typeof pullRequest.headRepository === "object" &&
+              typeof (pullRequest.headRepository as { nameWithOwner?: unknown }).nameWithOwner ===
+                "string"
+                ? {
+                    headRepositoryNameWithOwner: (
+                      pullRequest.headRepository as { nameWithOwner: string }
+                    ).nameWithOwner,
+                  }
+                : {}),
+              ...(pullRequest.headRepositoryOwner &&
+              typeof pullRequest.headRepositoryOwner === "object" &&
+              typeof (pullRequest.headRepositoryOwner as { login?: unknown }).login === "string"
+                ? {
+                    headRepositoryOwnerLogin: (pullRequest.headRepositoryOwner as { login: string })
+                      .login,
+                  }
+                : {}),
+            })) as ReadonlyArray<GitHubPullRequestSummary>;
+          }),
         ),
       createPullRequest: (input) =>
         execute({
@@ -1304,6 +1335,76 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     12_000,
   );
 
+  it.effect("rejects PR creation when base and head resolve to the same branch", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
+      fs.writeFileSync(path.join(repoDir, "self-pr.txt"), "same branch\n");
+      yield* runGit(repoDir, ["add", "self-pr.txt"]);
+      yield* runGit(repoDir, ["commit", "-m", "Attempt self PR"]);
+
+      const { manager, ghCalls } = yield* makeManager();
+      const errorMessage = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "create_pr",
+      }).pipe(
+        Effect.flip,
+        Effect.map((error) => error.message),
+      );
+
+      expect(errorMessage).toContain("Cannot create a pull request from 'main' into itself");
+      expect(ghCalls.some((call) => call.startsWith("pr create "))).toBe(false);
+    }),
+  );
+
+  it.effect("allows cross-repo PR creation when head and base branch names match", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const originDir = yield* createBareRemote();
+      const forkDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", originDir]);
+      yield* runGit(repoDir, ["remote", "add", "fork", forkDir]);
+      yield* runGit(repoDir, ["push", "origin", "main"]);
+      yield* runGit(repoDir, ["push", "-u", "fork", "main"]);
+      yield* runGit(repoDir, [
+        "config",
+        "remote.origin.url",
+        "git@github.com:pingdotgg/codething-mvp.git",
+      ]);
+      yield* runGit(repoDir, [
+        "config",
+        "remote.fork.url",
+        "git@github.com:octocat/codething-mvp.git",
+      ]);
+      fs.writeFileSync(path.join(repoDir, "cross-repo-pr.txt"), "fork main change\n");
+      yield* runGit(repoDir, ["add", "cross-repo-pr.txt"]);
+      yield* runGit(repoDir, ["commit", "-m", "Cross repo main PR"]);
+
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: {
+          prListByHeadSelector: {
+            "octocat:main": "[]",
+            "fork:main": "[]",
+            main: "[]",
+          },
+        },
+      });
+      const result = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "create_pr",
+      });
+
+      expect(result.pr.status).toBe("created");
+      expect(
+        ghCalls.some((call) => call.includes("pr create --base main --head octocat:main")),
+      ).toBe(true);
+    }),
+  );
+
   it.effect("returns existing PR metadata for commit/push/pr action", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
@@ -1337,6 +1438,74 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       expect(result.pr.status).toBe("opened_existing");
       expect(result.pr.number).toBe(42);
       expect(ghCalls.some((call) => call.startsWith("pr view "))).toBe(false);
+    }),
+  );
+
+  it.effect("ignores mismatched cross-repo PR candidates before reusing an existing PR", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/collision"]);
+      const originDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", originDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "feature/collision"]);
+      yield* runGit(repoDir, [
+        "config",
+        "remote.origin.url",
+        "git@github.com:pingdotgg/codething-mvp.git",
+      ]);
+
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: {
+          prListByHeadSelector: {
+            "feature/collision": JSON.stringify([
+              {
+                number: 201,
+                title: "Wrong repo PR",
+                url: "https://github.com/someone-else/codething-mvp/pull/201",
+                baseRefName: "main",
+                headRefName: "feature/collision",
+                isCrossRepository: true,
+                headRepository: {
+                  nameWithOwner: "someone-else/codething-mvp",
+                },
+                headRepositoryOwner: {
+                  login: "someone-else",
+                },
+              },
+            ]),
+            "origin:feature/collision": JSON.stringify([
+              {
+                number: 202,
+                title: "Correct repo PR",
+                url: "https://github.com/pingdotgg/codething-mvp/pull/202",
+                baseRefName: "main",
+                headRefName: "feature/collision",
+                isCrossRepository: false,
+                headRepository: {
+                  nameWithOwner: "pingdotgg/codething-mvp",
+                },
+                headRepositoryOwner: {
+                  login: "pingdotgg",
+                },
+              },
+            ]),
+          },
+        },
+      });
+
+      const result = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "create_pr",
+      });
+
+      expect(result.pr.status).toBe("opened_existing");
+      expect(result.pr.number).toBe(202);
+      expect(ghCalls.some((call) => call.includes("pr list --head feature/collision"))).toBe(true);
+      expect(ghCalls.some((call) => call.includes("pr list --head origin:feature/collision"))).toBe(
+        true,
+      );
+      expect(ghCalls.some((call) => call.startsWith("pr create "))).toBe(false);
     }),
   );
 

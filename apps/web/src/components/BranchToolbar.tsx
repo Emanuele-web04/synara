@@ -1,6 +1,6 @@
 // FILE: BranchToolbar.tsx
 // Purpose: Renders the chat thread's compact workspace controls, including the
-// local usage popover, workspace handoff actions, and runtime access toggle.
+// local usage popover, inline workspace handoff actions, and runtime access toggle.
 import type { ThreadId, RuntimeMode } from "@t3tools/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { deriveAssociatedWorktreeMetadata } from "@t3tools/shared/threadWorkspace";
@@ -227,7 +227,6 @@ export default function BranchToolbar({
                 <p className="px-3 pb-1 pt-1 text-[11px] font-medium text-muted-foreground">
                   Continue in
                 </p>
-                {/* Workspace switching stays in the handoff controls; this popover is the local usage view. */}
                 <div className="flex w-full items-center gap-2 px-3 py-1.5 text-sm">
                   <PiLaptop className="size-4 text-muted-foreground" />
                   <span>Local project</span>
@@ -243,6 +242,34 @@ export default function BranchToolbar({
                     <polyline points="20 6 9 17 4 12" />
                   </svg>
                 </div>
+                {canHandoffToWorktree && onHandoffToWorktree ? (
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
+                    disabled={handoffBusy}
+                    onClick={() => {
+                      setEnvPickerOpen(false);
+                      onHandoffToWorktree();
+                    }}
+                  >
+                    <HandoffIcon className="size-4 text-muted-foreground" />
+                    <span>Hand off to worktree</span>
+                  </button>
+                ) : null}
+                {canHandoffToLocal && onHandoffToLocal ? (
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
+                    disabled={handoffBusy}
+                    onClick={() => {
+                      setEnvPickerOpen(false);
+                      onHandoffToLocal();
+                    }}
+                  >
+                    <HandoffIcon className="size-4 text-muted-foreground" />
+                    <span>Hand off to local</span>
+                  </button>
+                ) : null}
               </div>
 
               <div className="mx-3 border-t border-border/50" />
@@ -322,28 +349,6 @@ export default function BranchToolbar({
           </span>
         )}
 
-        {canHandoffToWorktree && onHandoffToWorktree ? (
-          <button
-            type="button"
-            className="inline-flex items-center gap-1 px-1.5 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-muted-foreground/70 transition-colors hover:text-foreground/80 disabled:pointer-events-none disabled:opacity-50"
-            disabled={handoffBusy}
-            onClick={onHandoffToWorktree}
-          >
-            <HandoffIcon className="size-3.5" />
-            Hand off
-          </button>
-        ) : null}
-        {canHandoffToLocal && onHandoffToLocal ? (
-          <button
-            type="button"
-            className="inline-flex items-center gap-1 px-1.5 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-muted-foreground/70 transition-colors hover:text-foreground/80 disabled:pointer-events-none disabled:opacity-50"
-            disabled={handoffBusy}
-            onClick={onHandoffToLocal}
-          >
-            <HandoffIcon className="size-3.5" />
-            Hand off to local
-          </button>
-        ) : null}
         {runtimeMode && onRuntimeModeChange ? (
           <button
             type="button"

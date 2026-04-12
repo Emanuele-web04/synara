@@ -1975,6 +1975,7 @@ export default function Sidebar() {
     ).entryPoint;
     const isActive = !activeSplitView && routeThreadId === thread.id;
     const folderLabel = resolveThreadFolderLabel(thread.projectId);
+    const forkBadgeLabel = thread.forkSourceThreadId ? "Forked thread" : null;
 
     return (
       <div key={thread.id} className="group/thread-row relative w-full">
@@ -2022,8 +2023,20 @@ export default function Sidebar() {
               </span>
             ) : null}
           </div>
-          <div className="pointer-events-none absolute right-2.5 top-1/2 flex -translate-y-1/2 items-center">
-            <div className="relative flex size-5 shrink-0 items-center justify-center">
+          <div className="absolute right-2.5 top-1/2 flex -translate-y-1/2 items-center">
+            <div className="relative flex shrink-0 items-center justify-end gap-1">
+              {forkBadgeLabel ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <span className="mr-1 inline-flex items-center text-emerald-600 dark:text-emerald-300/90">
+                        <GitPullRequestIcon className="size-3" />
+                      </span>
+                    }
+                  />
+                  <TooltipPopup side="top">{forkBadgeLabel}</TooltipPopup>
+                </Tooltip>
+              ) : null}
               <span className="text-[length:var(--app-font-size-ui-timestamp,10px)] leading-none tabular-nums text-muted-foreground/38 transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0">
                 {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
               </span>
@@ -2063,6 +2076,8 @@ export default function Sidebar() {
     const secondaryMetaClass = isHighlighted
       ? "text-foreground/54 dark:text-foreground/64"
       : "text-muted-foreground/34";
+    const forkBadgeLabel = thread.forkSourceThreadId ? "Forked thread" : null;
+    const leadingPrStatus = thread.forkSourceThreadId ? null : prStatus;
 
     return (
       <SidebarMenuSubItem key={thread.id} className="group/thread-row w-full" data-thread-item>
@@ -2171,23 +2186,23 @@ export default function Sidebar() {
             />
           )}
           <div className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
-            {prStatus && (
+            {leadingPrStatus && (
               <Tooltip>
                 <TooltipTrigger
                   render={
                     <button
                       type="button"
-                      aria-label={prStatus.tooltip}
-                      className={`inline-flex items-center justify-center ${prStatus.colorClass} cursor-pointer rounded-sm outline-hidden focus-visible:ring-1 focus-visible:ring-ring`}
+                      aria-label={leadingPrStatus.tooltip}
+                      className={`inline-flex items-center justify-center ${leadingPrStatus.colorClass} cursor-pointer rounded-sm outline-hidden focus-visible:ring-1 focus-visible:ring-ring`}
                       onClick={(event) => {
-                        openPrLink(event, prStatus.url);
+                        openPrLink(event, leadingPrStatus.url);
                       }}
                     >
                       <GitPullRequestIcon className="size-3" />
                     </button>
                   }
                 />
-                <TooltipPopup side="top">{prStatus.tooltip}</TooltipPopup>
+                <TooltipPopup side="top">{leadingPrStatus.tooltip}</TooltipPopup>
               </Tooltip>
             )}
             {renamingThreadId === thread.id ? (
@@ -2285,8 +2300,20 @@ export default function Sidebar() {
               </Tooltip>
             ) : null}
           </div>
-          <div className="pointer-events-none absolute right-2.5 top-1/2 flex -translate-y-1/2 items-center">
-            <div className="relative flex size-5 shrink-0 items-center justify-center">
+          <div className="absolute right-2.5 top-1/2 flex -translate-y-1/2 items-center">
+            <div className="relative flex shrink-0 items-center justify-end gap-1">
+              {forkBadgeLabel ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <span className="mr-1 inline-flex items-center text-emerald-600 dark:text-emerald-300/90">
+                        <GitPullRequestIcon className="size-3" />
+                      </span>
+                    }
+                  />
+                  <TooltipPopup side="top">{forkBadgeLabel}</TooltipPopup>
+                </Tooltip>
+              ) : null}
               <span
                 className={cn(
                   "text-[length:var(--app-font-size-ui-timestamp,10px)] leading-none tabular-nums transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",

@@ -792,6 +792,7 @@ function sidebarThreadSummariesEqual(
     left.hasPendingApprovals === right.hasPendingApprovals &&
     left.hasPendingUserInput === right.hasPendingUserInput &&
     left.hasActionableProposedPlan === right.hasActionableProposedPlan &&
+    (left.forkSourceThreadId ?? null) === (right.forkSourceThreadId ?? null) &&
     (left.handoff ?? null) === (right.handoff ?? null)
   );
 }
@@ -819,6 +820,7 @@ function buildSidebarThreadSummary(
     hasActionableProposedPlan: hasActionableProposedPlan(
       findLatestProposedPlan(thread.proposedPlans, thread.latestTurn?.turnId ?? null),
     ),
+    forkSourceThreadId: thread.forkSourceThreadId ?? null,
     handoff: thread.handoff ?? null,
   };
   if (previous && sidebarThreadSummariesEqual(previous, nextSummary)) {

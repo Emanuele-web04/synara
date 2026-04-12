@@ -180,6 +180,7 @@ export interface SidebarThreadSummary {
   hasPendingApprovals: boolean;
   hasPendingUserInput: boolean;
   hasActionableProposedPlan: boolean;
+  forkSourceThreadId?: ThreadId | null;
   handoff?: ThreadHandoff | null;
 }
 

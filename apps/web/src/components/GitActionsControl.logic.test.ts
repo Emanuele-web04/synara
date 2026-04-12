@@ -3,6 +3,7 @@ import { assert, describe, it } from "vitest";
 import {
   buildGitActionProgressStages,
   buildMenuItems,
+  requiresFeatureBranchForDefaultBranchAction,
   requiresDefaultBranchConfirmation,
   resolveAutoFeatureBranchName,
   resolveDefaultBranchActionDialogCopy,
@@ -78,7 +79,7 @@ describe("when: branch is clean and has an open PR", () => {
       },
       {
         id: "pr",
-        label: "View PR",
+        label: "Create PR",
         disabled: false,
         icon: "pr",
         kind: "open_pr",
@@ -199,7 +200,7 @@ describe("when: branch is clean, ahead, and has an open PR", () => {
       },
       {
         id: "pr",
-        label: "View PR",
+        label: "Create PR",
         disabled: false,
         icon: "pr",
         kind: "open_pr",
@@ -440,9 +441,79 @@ describe("when: on default branch without open PR", () => {
     assert.deepInclude(quick, {
       kind: "run_action",
       action: "commit_push",
-      label: "Push",
+      label: "Commit & push",
       disabled: false,
     });
+  });
+
+  it("buildMenuItems enables commit-and-push row when local changes exist on default branch", () => {
+    const items = buildMenuItems(
+      status({ branch: "main", hasWorkingTreeChanges: true, aheadCount: 0, pr: null }),
+      false,
+      true,
+      true,
+    );
+    assert.deepEqual(items, [
+      {
+        id: "commit",
+        label: "Commit",
+        disabled: false,
+        icon: "commit",
+        kind: "open_dialog",
+        dialogAction: "commit",
+      },
+      {
+        id: "push",
+        label: "Commit & push",
+        disabled: false,
+        icon: "push",
+        kind: "open_dialog",
+        dialogAction: "commit_push",
+      },
+      {
+        id: "pr",
+        label: "Create PR",
+        disabled: true,
+        icon: "pr",
+        kind: "open_dialog",
+        dialogAction: "create_pr",
+      },
+    ]);
+  });
+
+  it("buildMenuItems uses commit-and-push row on default branch", () => {
+    const items = buildMenuItems(
+      status({ branch: "main", aheadCount: 2, pr: null }),
+      false,
+      true,
+      true,
+    );
+    assert.deepEqual(items, [
+      {
+        id: "commit",
+        label: "Commit",
+        disabled: true,
+        icon: "commit",
+        kind: "open_dialog",
+        dialogAction: "commit",
+      },
+      {
+        id: "push",
+        label: "Commit & push",
+        disabled: false,
+        icon: "push",
+        kind: "open_dialog",
+        dialogAction: "commit_push",
+      },
+      {
+        id: "pr",
+        label: "Create PR",
+        disabled: false,
+        icon: "pr",
+        kind: "open_dialog",
+        dialogAction: "create_pr",
+      },
+    ]);
   });
 });
 
@@ -754,7 +825,7 @@ describe("when: branch has no upstream configured", () => {
     assert.deepInclude(quick, {
       kind: "run_action",
       action: "commit_push",
-      label: "Push",
+      label: "Commit & push",
       disabled: false,
     });
   });
@@ -762,12 +833,15 @@ describe("when: branch has no upstream configured", () => {
   it("buildMenuItems still disables push and create PR when branch is behind", () => {
     const items = buildMenuItems(
       status({
+        branch: "main",
         hasUpstream: false,
         behindCount: 1,
         aheadCount: 0,
         pr: null,
       }),
       false,
+      true,
+      true,
     );
     assert.deepEqual(items, [
       {
@@ -780,11 +854,11 @@ describe("when: branch has no upstream configured", () => {
       },
       {
         id: "push",
-        label: "Push",
+        label: "Commit & push",
         disabled: true,
         icon: "push",
         kind: "open_dialog",
-        dialogAction: "push",
+        dialogAction: "commit_push",
       },
       {
         id: "pr",
@@ -806,6 +880,15 @@ describe("requiresDefaultBranchConfirmation", () => {
     assert.isTrue(requiresDefaultBranchConfirmation("commit_push", true));
     assert.isTrue(requiresDefaultBranchConfirmation("commit_push_pr", true));
     assert.isFalse(requiresDefaultBranchConfirmation("commit_push", false));
+  });
+});
+
+describe("requiresFeatureBranchForDefaultBranchAction", () => {
+  it("requires feature branches for PR actions on the default branch", () => {
+    assert.isFalse(requiresFeatureBranchForDefaultBranchAction("push"));
+    assert.isFalse(requiresFeatureBranchForDefaultBranchAction("commit_push"));
+    assert.isTrue(requiresFeatureBranchForDefaultBranchAction("create_pr"));
+    assert.isTrue(requiresFeatureBranchForDefaultBranchAction("commit_push_pr"));
   });
 });
 
@@ -833,10 +916,9 @@ describe("resolveDefaultBranchActionDialogCopy", () => {
     });
 
     assert.deepEqual(copy, {
-      title: "Push & create PR from default branch?",
-      description:
-        'This action will push local commits and create a PR on "main". You can continue on this branch or create a feature branch and run the same action there.',
-      continueLabel: "Push & create PR",
+      title: "Create feature branch & PR?",
+      description: `Pull requests can't be opened from "main" into itself. This action will create a feature branch from your current commits, push it, and create the PR.`,
+      continueLabel: "Create feature branch & continue",
     });
   });
 
@@ -848,10 +930,9 @@ describe("resolveDefaultBranchActionDialogCopy", () => {
     });
 
     assert.deepEqual(copy, {
-      title: "Commit, push & create PR from default branch?",
-      description:
-        'This action will commit, push, and create a PR on "main". You can continue on this branch or create a feature branch and run the same action there.',
-      continueLabel: "Commit, push & create PR",
+      title: "Create feature branch, commit & PR?",
+      description: `Pull requests can't be opened from "main" into itself. This action will create a feature branch, commit your changes there, push it, and create the PR.`,
+      continueLabel: "Create feature branch & continue",
     });
   });
 });

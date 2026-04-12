@@ -6,7 +6,7 @@ import type {
 
 export type GitActionIconName = "commit" | "push" | "pr";
 
-export type GitDialogAction = "commit" | "push" | "create_pr";
+export type GitDialogAction = "commit" | "push" | "commit_push" | "create_pr";
 
 export interface GitActionMenuItem {
   id: "commit" | "push" | "pr";
@@ -36,6 +36,12 @@ export type DefaultBranchConfirmableAction =
   | "create_pr"
   | "commit_push"
   | "commit_push_pr";
+
+export function requiresFeatureBranchForDefaultBranchAction(
+  action: DefaultBranchConfirmableAction,
+): boolean {
+  return action === "create_pr" || action === "commit_push_pr";
+}
 
 const SHORT_SHA_LENGTH = 7;
 const TOAST_DESCRIPTION_MAX = 72;
@@ -125,6 +131,7 @@ export function buildMenuItems(
   gitStatus: GitStatusResult | null,
   isBusy: boolean,
   hasOriginRemote = true,
+  isDefaultBranch = false,
 ): GitActionMenuItem[] {
   if (!gitStatus) return [];
 
@@ -140,6 +147,12 @@ export function buildMenuItems(
     !hasChanges &&
     !isBehind &&
     gitStatus.aheadCount > 0 &&
+    (gitStatus.hasUpstream || canPushWithoutUpstream);
+  const canCommitPush =
+    !isBusy &&
+    hasBranch &&
+    !isBehind &&
+    (hasChanges || gitStatus.aheadCount > 0) &&
     (gitStatus.hasUpstream || canPushWithoutUpstream);
   const canCreatePr =
     !isBusy &&
@@ -162,16 +175,16 @@ export function buildMenuItems(
     },
     {
       id: "push",
-      label: "Push",
-      disabled: !canPush,
+      label: isDefaultBranch ? "Commit & push" : "Push",
+      disabled: !(isDefaultBranch ? canCommitPush : canPush),
       icon: "push",
       kind: "open_dialog",
-      dialogAction: "push",
+      dialogAction: isDefaultBranch ? "commit_push" : "push",
     },
     hasOpenPr
       ? {
           id: "pr",
-          label: "View PR",
+          label: "Create PR",
           disabled: !canOpenPr,
           icon: "pr",
           kind: "open_pr",
@@ -262,7 +275,7 @@ export function resolveQuickAction(
     }
     if (hasOpenPr || isDefaultBranch) {
       return {
-        label: "Push",
+        label: isDefaultBranch ? "Commit & push" : "Push",
         disabled: false,
         kind: "run_action",
         action: isDefaultBranch ? "commit_push" : "push",
@@ -296,7 +309,7 @@ export function resolveQuickAction(
   if (isAhead) {
     if (hasOpenPr || isDefaultBranch) {
       return {
-        label: "Push",
+        label: isDefaultBranch ? "Commit & push" : "Push",
         disabled: false,
         kind: "run_action",
         action: isDefaultBranch ? "commit_push" : "push",
@@ -360,15 +373,15 @@ export function resolveDefaultBranchActionDialogCopy(input: {
 
   if (input.includesCommit) {
     return {
-      title: "Commit, push & create PR from default branch?",
-      description: `This action will commit, push, and create a PR${suffix}`,
-      continueLabel: `Commit, push & create PR`,
+      title: "Create feature branch, commit & PR?",
+      description: `Pull requests can't be opened from "${branchLabel}" into itself. This action will create a feature branch, commit your changes there, push it, and create the PR.`,
+      continueLabel: "Create feature branch & continue",
     };
   }
   return {
-    title: "Push & create PR from default branch?",
-    description: `This action will push local commits and create a PR${suffix}`,
-    continueLabel: "Push & create PR",
+    title: "Create feature branch & PR?",
+    description: `Pull requests can't be opened from "${branchLabel}" into itself. This action will create a feature branch from your current commits, push it, and create the PR.`,
+    continueLabel: "Create feature branch & continue",
   };
 }
 

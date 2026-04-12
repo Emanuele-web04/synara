@@ -22,6 +22,7 @@ import {
   type GitActionIconName,
   type GitQuickAction,
   type DefaultBranchConfirmableAction,
+  requiresFeatureBranchForDefaultBranchAction,
   requiresDefaultBranchConfirmation,
   resolveDefaultBranchActionDialogCopy,
   resolveQuickAction,
@@ -224,6 +225,7 @@ function GitActionItemIcon({ icon }: { icon: GitActionIconName }) {
 
 function GitPickerItemIcon({ icon }: { icon: GitActionIconName | "sync" }) {
   if (icon === "sync") return <RefreshCwIcon />;
+  if (icon === "pr") return <GitHubIcon />;
   return <GitActionItemIcon icon={icon} />;
 }
 
@@ -336,8 +338,8 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
     [gitStatusForActions, hasOriginRemote, isDefaultBranch, isGitActionRunning],
   );
   const gitActionMenuItems = useMemo(
-    () => buildMenuItems(gitStatusForActions, isGitActionRunning, hasOriginRemote),
-    [gitStatusForActions, hasOriginRemote, isGitActionRunning],
+    () => buildMenuItems(gitStatusForActions, isGitActionRunning, hasOriginRemote, isDefaultBranch),
+    [gitStatusForActions, hasOriginRemote, isDefaultBranch, isGitActionRunning],
   );
   const quickActionDisabledReason = quickAction.disabled
     ? (quickAction.hint ?? "This action is currently unavailable.")
@@ -679,6 +681,7 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
       forcePushOnlyProgress,
       ...(onConfirmed ? { onConfirmed } : {}),
       ...(filePaths ? { filePaths } : {}),
+      ...(requiresFeatureBranchForDefaultBranchAction(action) ? { featureBranch: true } : {}),
       skipDefaultBranchPrompt: true,
     });
   }, [pendingDefaultBranchAction]);
@@ -757,6 +760,10 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
         void runGitActionWithToast({ action: "push" });
         return;
       }
+      if (item.dialogAction === "commit_push") {
+        void runGitActionWithToast({ action: "commit_push" });
+        return;
+      }
       if (item.dialogAction === "create_pr") {
         void runGitActionWithToast({ action: "create_pr" });
         return;
@@ -795,7 +802,9 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
       items.push({
         id: "push",
         label: pushMenuItem.label,
-        description: "Push local commits to the current branch",
+        description: isDefaultBranch
+          ? "Commit local changes if needed, then push to the current branch"
+          : "Push local commits to the current branch",
         disabled: pushMenuItem.disabled,
         disabledReason: getMenuActionDisabledReason({
           item: pushMenuItem,
@@ -833,6 +842,7 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
     gitActionMenuItems,
     gitStatusForActions,
     hasOriginRemote,
+    isDefaultBranch,
     isGitActionRunning,
     openDialogForMenuItem,
   ]);
@@ -1190,11 +1200,17 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
               Abort
             </Button>
             <Button variant="outline" size="sm" onClick={continuePendingDefaultBranchAction}>
-              {pendingDefaultBranchActionCopy?.continueLabel ?? "Continue"}
+              {pendingDefaultBranchAction &&
+              requiresFeatureBranchForDefaultBranchAction(pendingDefaultBranchAction.action)
+                ? "Create feature branch & continue"
+                : (pendingDefaultBranchActionCopy?.continueLabel ?? "Continue")}
             </Button>
-            <Button size="sm" onClick={checkoutFeatureBranchAndContinuePendingAction}>
-              Checkout feature branch & continue
-            </Button>
+            {pendingDefaultBranchAction &&
+            !requiresFeatureBranchForDefaultBranchAction(pendingDefaultBranchAction.action) ? (
+              <Button size="sm" onClick={checkoutFeatureBranchAndContinuePendingAction}>
+                Checkout feature branch & continue
+              </Button>
+            ) : null}
           </DialogFooter>
         </DialogPopup>
       </Dialog>
