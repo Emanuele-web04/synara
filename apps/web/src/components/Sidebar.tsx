@@ -3,7 +3,6 @@ import {
   FolderIcon,
   GitPullRequestIcon,
   type LucideIcon,
-  RocketIcon,
   SearchIcon,
   SettingsIcon,
   SquarePenIcon,
@@ -12,15 +11,10 @@ import {
   TriangleAlertIcon,
 } from "~/lib/icons";
 import { autoAnimate } from "@formkit/auto-animate";
-import { FiGitBranch } from "react-icons/fi";
+import { FiGitBranch, FiPlus } from "react-icons/fi";
 import { HiOutlineCheckCircle } from "react-icons/hi2";
 import { HiOutlineFolderOpen } from "react-icons/hi2";
-import {
-  TbArrowsDiagonal,
-  TbArrowsDiagonalMinimize2,
-  TbFolderPlus,
-  TbCursorText,
-} from "react-icons/tb";
+import { TbArrowsDiagonal, TbArrowsDiagonalMinimize2, TbCursorText } from "react-icons/tb";
 import { IoFilter } from "react-icons/io5";
 import { LuMessageSquareDashed } from "react-icons/lu";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
@@ -354,9 +348,7 @@ function ProjectSortMenu({
     <Menu>
       <Tooltip>
         <TooltipTrigger
-          render={
-            <MenuTrigger className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground" />
-          }
+          render={<MenuTrigger className="sidebar-icon-button inline-flex size-5 cursor-pointer" />}
         >
           <IoFilter className="size-3.5" />
         </TooltipTrigger>
@@ -1913,8 +1905,7 @@ export default function Sidebar() {
         aria-label="Delete thread"
         title="Delete thread"
         className={cn(
-          "pointer-events-none absolute inset-y-0 right-0 my-auto inline-flex h-5 w-4 items-center justify-end transition-opacity opacity-0",
-          "hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+          "sidebar-icon-button pointer-events-none absolute inset-y-0 right-0 my-auto inline-flex size-5 justify-center opacity-0 transition-opacity hover:text-foreground/82",
           "group-hover/thread-row:pointer-events-auto group-hover/thread-row:opacity-100 group-focus-within/thread-row:pointer-events-auto group-focus-within/thread-row:opacity-100",
           toneClassName,
         )}
@@ -1947,7 +1938,7 @@ export default function Sidebar() {
           type="button"
           data-thread-item
           className={cn(
-            "flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[length:var(--app-font-size-ui,12px)] transition-colors",
+            "relative flex h-8 w-full items-center gap-2 rounded-md px-2 pr-9 text-left text-[length:var(--app-font-size-ui,12px)] transition-colors",
             isActive
               ? "bg-accent/62 text-foreground/90 dark:bg-accent/42"
               : "text-foreground/72 hover:bg-accent/40 hover:text-foreground/90",
@@ -1980,14 +1971,16 @@ export default function Sidebar() {
             />
           )}
           <span className="min-w-0 flex-1 truncate">{thread.title}</span>
-          <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          <div className="ml-auto flex shrink-0 items-center gap-1.5 pr-1">
             {folderLabel ? (
               <span className="max-w-24 truncate text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/38">
                 {folderLabel}
               </span>
             ) : null}
-            <div className="relative flex h-5 min-w-[1.75rem] shrink-0 items-center justify-end">
-              <span className="shrink-0 text-right text-[length:var(--app-font-size-ui-timestamp,10px)] leading-none tabular-nums text-muted-foreground/38 transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0">
+          </div>
+          <div className="pointer-events-none absolute right-1 top-1/2 flex -translate-y-1/2 items-center">
+            <div className="relative flex size-5 shrink-0 items-center justify-center">
+              <span className="w-full text-center text-[length:var(--app-font-size-ui-timestamp,10px)] leading-none tabular-nums text-muted-foreground/38 transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0">
                 {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
               </span>
               {renderThreadDeleteButton(thread.id, "text-muted-foreground/45")}
@@ -2050,12 +2043,27 @@ export default function Sidebar() {
                   : "opacity-100 group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
               )}
             />
+          ) : threadStatus.pulse ? (
+            <span
+              aria-hidden="true"
+              className={cn(
+                "pointer-events-none absolute left-2.5 top-1/2 z-10 size-3 -translate-y-1/2 animate-spin rounded-full text-muted-foreground/55 transition-opacity [animation-duration:1.3s]",
+                isPinned
+                  ? "opacity-0"
+                  : "opacity-100 group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
+              )}
+              style={{
+                background: "conic-gradient(from 0deg, transparent 25%, currentColor)",
+                mask: "radial-gradient(farthest-side, transparent calc(100% - 1.5px), black calc(100% - 1.5px))",
+                WebkitMask:
+                  "radial-gradient(farthest-side, transparent calc(100% - 1.5px), black calc(100% - 1.5px))",
+              }}
+            />
           ) : (
             <span
               className={cn(
                 "pointer-events-none absolute left-3 top-1/2 z-10 h-1.5 w-1.5 -translate-y-1/2 rounded-full transition-opacity",
                 threadStatus.dotClass,
-                threadStatus.pulse ? "animate-pulse" : "",
                 isPinned
                   ? "opacity-0"
                   : "opacity-100 group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
@@ -2186,7 +2194,7 @@ export default function Sidebar() {
               </Tooltip>
             ) : null}
           </div>
-          <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          <div className="ml-auto flex shrink-0 items-center gap-1.5 pr-1">
             {terminalCount > 1 ? (
               <Tooltip>
                 <TooltipTrigger
@@ -2231,10 +2239,12 @@ export default function Sidebar() {
                 <TooltipPopup side="top">Disposable chat</TooltipPopup>
               </Tooltip>
             ) : null}
-            <div className="relative flex h-5 min-w-[1.75rem] shrink-0 items-center justify-end">
+          </div>
+          <div className="pointer-events-none absolute right-1 top-1/2 flex -translate-y-1/2 items-center">
+            <div className="relative flex size-5 shrink-0 items-center justify-center">
               <span
                 className={cn(
-                  "shrink-0 text-right text-[length:var(--app-font-size-ui-timestamp,10px)] leading-none tabular-nums transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
+                  "w-full text-center text-[length:var(--app-font-size-ui-timestamp,10px)] leading-none tabular-nums transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
                   secondaryMetaClass,
                 )}
               >
@@ -2501,7 +2511,7 @@ export default function Sidebar() {
                     />
                   }
                   showOnHover
-                  className="top-1 right-7 size-5 rounded-md p-0 text-muted-foreground/60 hover:bg-white/8 hover:text-foreground"
+                  className="sidebar-icon-button top-1 right-7 size-5 p-0"
                   onClick={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
@@ -2534,7 +2544,7 @@ export default function Sidebar() {
                     />
                   }
                   showOnHover
-                  className="top-1 right-[3.25rem] size-5 rounded-md p-0 text-muted-foreground/60 hover:bg-white/8 hover:text-foreground"
+                  className="sidebar-icon-button top-1 right-[3.25rem] size-5 p-0"
                   onClick={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
@@ -2564,7 +2574,7 @@ export default function Sidebar() {
                     />
                   }
                   showOnHover
-                  className="top-1 right-1 size-5 rounded-md p-0 text-muted-foreground/60 hover:bg-white/8 hover:text-foreground"
+                  className="sidebar-icon-button top-1 right-1 size-5 p-0"
                   onClick={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
@@ -2815,12 +2825,17 @@ export default function Sidebar() {
     : "hover:bg-accent hover:text-foreground";
   const desktopUpdateButtonClasses =
     desktopUpdateState?.status === "downloaded"
-      ? "text-emerald-500"
+      ? "border-emerald-500/30 bg-emerald-500/12 text-emerald-600 hover:bg-emerald-500/18"
       : desktopUpdateState?.status === "downloading"
-        ? "text-sky-400"
+        ? "border-sky-500/30 bg-sky-500/10 text-sky-600 hover:bg-sky-500/16"
         : shouldHighlightDesktopUpdateError(desktopUpdateState)
-          ? "text-rose-500 animate-pulse"
-          : "text-amber-500 animate-pulse";
+          ? "border-rose-500/30 bg-rose-500/10 text-rose-600 hover:bg-rose-500/16"
+          : "border-info/28 bg-info/12 text-info-foreground hover:bg-info/18";
+  const desktopUpdateRowButtonClasses = cn(
+    "inline-flex h-7 shrink-0 items-center justify-center rounded-md border px-2.5 text-[11px] font-medium transition-colors",
+    desktopUpdateButtonInteractivityClasses,
+    desktopUpdateButtonClasses,
+  );
   const newThreadShortcutLabel =
     shortcutLabelForCommand(keybindings, "chat.newLocal") ??
     shortcutLabelForCommand(keybindings, "chat.new");
@@ -2888,6 +2903,47 @@ export default function Sidebar() {
     const bridge = window.desktopBridge;
     if (!bridge || !desktopUpdateState) return;
     if (desktopUpdateButtonDisabled || desktopUpdateButtonAction === "none") return;
+
+    // Keep the sidebar action as the single visible entry point for manual checks.
+    if (desktopUpdateButtonAction === "check") {
+      void bridge
+        .checkForUpdates()
+        .then((nextState) => {
+          if (nextState.status === "available") {
+            toastManager.add({
+              type: "success",
+              title: "Update available",
+              description: `Version ${nextState.availableVersion ?? "available"} is ready to download.`,
+            });
+            return;
+          }
+
+          if (nextState.status === "up-to-date") {
+            toastManager.add({
+              type: "info",
+              title: "You're up to date",
+              description: `DP Code ${nextState.currentVersion} is already the newest version.`,
+            });
+            return;
+          }
+
+          if (nextState.status === "error") {
+            toastManager.add({
+              type: "error",
+              title: "Could not check for updates",
+              description: nextState.message ?? "An unexpected error occurred.",
+            });
+          }
+        })
+        .catch((error) => {
+          toastManager.add({
+            type: "error",
+            title: "Could not check for updates",
+            description: error instanceof Error ? error.message : "An unexpected error occurred.",
+          });
+        });
+      return;
+    }
 
     if (desktopUpdateButtonAction === "download") {
       void bridge
@@ -3001,25 +3057,6 @@ export default function Sidebar() {
         <>
           <SidebarHeader className="drag-region h-[48px] flex-row items-center gap-2 px-4 py-0 pl-[90px] font-system-ui">
             {wordmark}
-            {showDesktopUpdateButton && (
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <button
-                      type="button"
-                      aria-label={desktopUpdateTooltip}
-                      aria-disabled={desktopUpdateButtonDisabled || undefined}
-                      disabled={desktopUpdateButtonDisabled}
-                      className={`inline-flex size-7 ml-auto mt-1.5 items-center justify-center rounded-md text-muted-foreground transition-colors ${desktopUpdateButtonInteractivityClasses} ${desktopUpdateButtonClasses}`}
-                      onClick={handleDesktopUpdateButtonClick}
-                    >
-                      <RocketIcon className="size-3.5" />
-                    </button>
-                  }
-                />
-                <TooltipPopup side="bottom">{desktopUpdateTooltip}</TooltipPopup>
-              </Tooltip>
-            )}
           </SidebarHeader>
         </>
       ) : (
@@ -3045,7 +3082,9 @@ export default function Sidebar() {
                   >
                     {desktopUpdateButtonAction === "download"
                       ? "Download ARM build"
-                      : "Install ARM build"}
+                      : desktopUpdateButtonAction === "install"
+                        ? "Install ARM build"
+                        : "Check for ARM build update"}
                   </Button>
                 </AlertAction>
               ) : null}
@@ -3178,7 +3217,7 @@ export default function Sidebar() {
                                 )}
                                 <button
                                   type="button"
-                                  className="ml-auto inline-flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground/50 opacity-0 transition-opacity hover:text-foreground group-hover/ws:opacity-100"
+                                  className="sidebar-icon-button ml-auto inline-flex size-5 shrink-0 text-muted-foreground/50 opacity-0 transition-opacity group-hover/ws:opacity-100"
                                   aria-label="Delete workspace"
                                   onClick={(event) => {
                                     event.stopPropagation();
@@ -3228,7 +3267,7 @@ export default function Sidebar() {
                                 : "Collapse all projects"
                               : "Expand all projects"
                           }
-                          className="inline-flex size-5 items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground disabled:cursor-default disabled:opacity-45"
+                          className="sidebar-icon-button inline-flex size-5 disabled:cursor-default disabled:opacity-45"
                           onClick={handleToggleProjects}
                         >
                           {allProjectsExpanded ? (
@@ -3273,12 +3312,12 @@ export default function Sidebar() {
                           shouldShowProjectPathEntry ? "Cancel add project" : "Add project"
                         }
                         aria-pressed={shouldShowProjectPathEntry}
-                        className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground"
+                        className="sidebar-icon-button inline-flex size-5 cursor-pointer"
                         onClick={handleStartAddProject}
                       />
                     }
                   >
-                    <TbFolderPlus className="size-3.5" />
+                    <FiPlus className="size-3.5" />
                   </TooltipTrigger>
                   <TooltipPopup side="right">
                     {shouldShowProjectPathEntry ? "Cancel add project" : "Add project"}
@@ -3401,25 +3440,46 @@ export default function Sidebar() {
       <SidebarFooter className="p-1.5 font-system-ui">
         <SidebarMenu>
           <SidebarMenuItem>
-            {isOnSettings ? (
-              <SidebarMenuButton
-                size="default"
-                className="h-8 gap-2.5 rounded-lg px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
-                onClick={() => window.history.back()}
-              >
-                <ArrowLeftIcon className="size-[15px]" />
-                <span>Back</span>
-              </SidebarMenuButton>
-            ) : (
-              <SidebarMenuButton
-                size="default"
-                className="h-8 gap-2.5 rounded-lg px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
-                onClick={() => void navigate({ to: "/settings" })}
-              >
-                <SettingsIcon className="size-[15px]" />
-                <span>Settings</span>
-              </SidebarMenuButton>
-            )}
+            <div className="flex items-center gap-2">
+              {isOnSettings ? (
+                <SidebarMenuButton
+                  size="default"
+                  className="h-8 flex-1 gap-2.5 rounded-lg px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
+                  onClick={() => window.history.back()}
+                >
+                  <ArrowLeftIcon className="size-[15px]" />
+                  <span>Back</span>
+                </SidebarMenuButton>
+              ) : (
+                <SidebarMenuButton
+                  size="default"
+                  className="h-8 flex-1 gap-2.5 rounded-lg px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
+                  onClick={() => void navigate({ to: "/settings" })}
+                >
+                  <SettingsIcon className="size-[15px]" />
+                  <span>Settings</span>
+                </SidebarMenuButton>
+              )}
+              {showDesktopUpdateButton ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        type="button"
+                        aria-label={desktopUpdateTooltip}
+                        aria-disabled={desktopUpdateButtonDisabled || undefined}
+                        disabled={desktopUpdateButtonDisabled}
+                        className={desktopUpdateRowButtonClasses}
+                        onClick={handleDesktopUpdateButtonClick}
+                      >
+                        Update
+                      </button>
+                    }
+                  />
+                  <TooltipPopup side="top">{desktopUpdateTooltip}</TooltipPopup>
+                </Tooltip>
+              ) : null}
+            </div>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>

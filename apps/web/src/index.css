@@ -53,6 +53,12 @@
   }
 }
 
+@layer components {
+  .sidebar-icon-button {
+    @apply items-center justify-center rounded-sm p-0.5 text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground/82 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring;
+  }
+}
+
 /* Suppress all transitions during theme changes */
 .no-transitions,
 .no-transitions *,

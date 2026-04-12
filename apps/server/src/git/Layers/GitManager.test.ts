@@ -468,7 +468,7 @@ function runStackedAction(
   manager: GitManagerShape,
   input: {
     cwd: string;
-    action: "commit" | "commit_push" | "commit_push_pr";
+    action: "commit" | "push" | "create_pr" | "commit_push" | "commit_push_pr";
     actionId?: string;
     commitMessage?: string;
     featureBranch?: boolean;
@@ -919,6 +919,177 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
+  it.effect(
+    "creates feature branch and pushes already-committed work",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("t3code-git-manager-");
+        yield* initRepo(repoDir);
+        const remoteDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+        yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
+        const originalMainSha = yield* runGit(repoDir, ["rev-parse", "main"]).pipe(
+          Effect.map((gitResult) => gitResult.stdout.trim()),
+        );
+        fs.writeFileSync(path.join(repoDir, "README.md"), "hello\npush-from-default\n");
+        yield* runGit(repoDir, ["add", "README.md"]);
+        yield* runGit(repoDir, ["commit", "-m", "Push from default branch"]);
+
+        const { manager } = yield* makeManager();
+        const result = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "push",
+          featureBranch: true,
+        });
+
+        expect(result.branch.status).toBe("created");
+        expect(result.branch.name).toBe("feature/push-from-default-branch");
+        expect(result.commit.status).toBe("skipped_not_requested");
+        expect(result.push.status).toBe("pushed");
+        expect(
+          yield* runGit(repoDir, ["rev-parse", "--abbrev-ref", "HEAD"]).pipe(
+            Effect.map((gitResult) => gitResult.stdout.trim()),
+          ),
+        ).toBe("feature/push-from-default-branch");
+        expect(
+          yield* runGit(repoDir, ["rev-parse", "--abbrev-ref", "@{upstream}"]).pipe(
+            Effect.map((gitResult) => gitResult.stdout.trim()),
+          ),
+        ).toBe("origin/feature/push-from-default-branch");
+        expect(
+          yield* runGit(repoDir, ["rev-parse", "main"]).pipe(
+            Effect.map((gitResult) => gitResult.stdout.trim()),
+          ),
+        ).toBe(originalMainSha);
+      }),
+    12_000,
+  );
+
+  it.effect(
+    "creates feature branch, pushes, and opens PR for already-committed work",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("t3code-git-manager-");
+        yield* initRepo(repoDir);
+        const remoteDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+        yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
+        const originalMainSha = yield* runGit(repoDir, ["rev-parse", "main"]).pipe(
+          Effect.map((gitResult) => gitResult.stdout.trim()),
+        );
+        fs.writeFileSync(path.join(repoDir, "README.md"), "hello\ncreate-pr-from-default\n");
+        yield* runGit(repoDir, ["add", "README.md"]);
+        yield* runGit(repoDir, ["commit", "-m", "Create PR from default branch"]);
+
+        const { manager, ghCalls } = yield* makeManager({
+          ghScenario: {
+            prListSequence: [
+              "[]",
+              JSON.stringify([
+                {
+                  number: 90,
+                  title: "Create PR from default branch",
+                  url: "https://github.com/pingdotgg/codething-mvp/pull/90",
+                  baseRefName: "main",
+                  headRefName: "feature/create-pr-from-default-branch",
+                },
+              ]),
+            ],
+          },
+        });
+        const result = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "create_pr",
+          featureBranch: true,
+        });
+
+        expect(result.branch.status).toBe("created");
+        expect(result.branch.name).toBe("feature/create-pr-from-default-branch");
+        expect(result.commit.status).toBe("skipped_not_requested");
+        expect(result.push.status).toBe("pushed");
+        expect(result.pr.status).toBe("created");
+        expect(
+          ghCalls.some((call) =>
+            call.includes("pr create --base main --head feature/create-pr-from-default-branch"),
+          ),
+        ).toBe(true);
+        expect(
+          yield* runGit(repoDir, ["rev-parse", "main"]).pipe(
+            Effect.map((gitResult) => gitResult.stdout.trim()),
+          ),
+        ).toBe(originalMainSha);
+      }),
+    12_000,
+  );
+
+  it.effect(
+    "restores the original branch from a matching remote branch when upstream is unset",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("t3code-git-manager-");
+        yield* initRepo(repoDir);
+        const remoteDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+        yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
+        const originalMainSha = yield* runGit(repoDir, ["rev-parse", "main"]).pipe(
+          Effect.map((gitResult) => gitResult.stdout.trim()),
+        );
+        yield* runGit(repoDir, ["branch", "--unset-upstream", "main"]);
+        fs.writeFileSync(path.join(repoDir, "README.md"), "hello\npush-no-upstream\n");
+        yield* runGit(repoDir, ["add", "README.md"]);
+        yield* runGit(repoDir, ["commit", "-m", "Push from default branch without upstream"]);
+
+        const { manager } = yield* makeManager();
+        const result = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "push",
+          featureBranch: true,
+        });
+
+        expect(result.branch.status).toBe("created");
+        expect(result.branch.name).toBe("feature/push-from-default-branch-without-upstream");
+        expect(result.push.status).toBe("pushed");
+        expect(
+          yield* runGit(repoDir, ["rev-parse", "main"]).pipe(
+            Effect.map((gitResult) => gitResult.stdout.trim()),
+          ),
+        ).toBe(originalMainSha);
+      }),
+    12_000,
+  );
+
+  it.effect(
+    "blocks feature-branch push when the source branch has no upstream and multiple remotes",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("t3code-git-manager-");
+        yield* initRepo(repoDir);
+        const originDir = yield* createBareRemote();
+        const forkDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", originDir]);
+        yield* runGit(repoDir, ["remote", "add", "fork", forkDir]);
+        yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
+        yield* runGit(repoDir, ["push", "fork", "main"]);
+        yield* runGit(repoDir, ["branch", "--unset-upstream", "main"]);
+        fs.writeFileSync(path.join(repoDir, "README.md"), "hello\nmulti-remote-block\n");
+        yield* runGit(repoDir, ["add", "README.md"]);
+        yield* runGit(repoDir, ["commit", "-m", "Push from default branch with multiple remotes"]);
+
+        const { manager } = yield* makeManager();
+        const errorMessage = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "push",
+          featureBranch: true,
+        }).pipe(
+          Effect.flip,
+          Effect.map((error) => error.message),
+        );
+
+        expect(errorMessage).toContain("has no upstream and this repository has multiple remotes");
+      }),
+    12_000,
+  );
+
   it.effect("skips commit when there are no uncommitted changes", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
@@ -1053,6 +1224,84 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       expect(result.commit.status).toBe("skipped_no_changes");
       expect(result.push.status).toBe("skipped_up_to_date");
     }),
+  );
+
+  it.effect(
+    "pushes clean local commits without running the commit step",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("t3code-git-manager-");
+        yield* initRepo(repoDir);
+        yield* runGit(repoDir, ["checkout", "-b", "feature/push-only"]);
+        const remoteDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+        fs.writeFileSync(path.join(repoDir, "push-only.txt"), "push only\n");
+        yield* runGit(repoDir, ["add", "push-only.txt"]);
+        yield* runGit(repoDir, ["commit", "-m", "Push only commit"]);
+
+        const { manager } = yield* makeManager();
+        const result = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "push",
+        });
+
+        expect(result.commit.status).toBe("skipped_not_requested");
+        expect(result.push.status).toBe("pushed");
+        expect(result.push.setUpstream).toBe(true);
+        expect(
+          yield* runGit(repoDir, ["rev-parse", "--abbrev-ref", "@{upstream}"]).pipe(
+            Effect.map((gitResult) => gitResult.stdout.trim()),
+          ),
+        ).toBe("origin/feature/push-only");
+      }),
+    12_000,
+  );
+
+  it.effect(
+    "creates PR from a clean branch and pushes first when upstream is missing",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("t3code-git-manager-");
+        yield* initRepo(repoDir);
+        yield* runGit(repoDir, ["checkout", "-b", "feature/create-pr-only"]);
+        const remoteDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+        fs.writeFileSync(path.join(repoDir, "create-pr.txt"), "create pr\n");
+        yield* runGit(repoDir, ["add", "create-pr.txt"]);
+        yield* runGit(repoDir, ["commit", "-m", "Create PR only"]);
+
+        const { manager, ghCalls } = yield* makeManager({
+          ghScenario: {
+            prListSequence: [
+              "[]",
+              JSON.stringify([
+                {
+                  number: 89,
+                  title: "Create PR only",
+                  url: "https://github.com/pingdotgg/codething-mvp/pull/89",
+                  baseRefName: "main",
+                  headRefName: "feature/create-pr-only",
+                },
+              ]),
+            ],
+          },
+        });
+        const result = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "create_pr",
+        });
+
+        expect(result.commit.status).toBe("skipped_not_requested");
+        expect(result.push.status).toBe("pushed");
+        expect(result.push.setUpstream).toBe(true);
+        expect(result.pr.status).toBe("created");
+        expect(
+          ghCalls.some((call) =>
+            call.includes("pr create --base main --head feature/create-pr-only"),
+          ),
+        ).toBe(true);
+      }),
+    12_000,
   );
 
   it.effect("returns existing PR metadata for commit/push/pr action", () =>

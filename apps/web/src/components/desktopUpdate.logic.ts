@@ -1,10 +1,18 @@
 import type { DesktopUpdateActionResult, DesktopUpdateState } from "@t3tools/contracts";
 
-export type DesktopUpdateButtonAction = "download" | "install" | "none";
+export type DesktopUpdateButtonAction = "check" | "download" | "install" | "none";
 
 export function resolveDesktopUpdateButtonAction(
   state: DesktopUpdateState,
 ): DesktopUpdateButtonAction {
+  if (
+    state.status === "idle" ||
+    state.status === "checking" ||
+    state.status === "up-to-date" ||
+    (state.status === "error" && state.errorContext === "check")
+  ) {
+    return "check";
+  }
   if (state.status === "available") {
     return "download";
   }
@@ -23,13 +31,7 @@ export function resolveDesktopUpdateButtonAction(
 }
 
 export function shouldShowDesktopUpdateButton(state: DesktopUpdateState | null): boolean {
-  if (!state || !state.enabled) {
-    return false;
-  }
-  if (state.status === "downloading") {
-    return true;
-  }
-  return resolveDesktopUpdateButtonAction(state) !== "none";
+  return Boolean(state?.enabled);
 }
 
 export function shouldShowArm64IntelBuildWarning(state: DesktopUpdateState | null): boolean {
@@ -37,7 +39,7 @@ export function shouldShowArm64IntelBuildWarning(state: DesktopUpdateState | nul
 }
 
 export function isDesktopUpdateButtonDisabled(state: DesktopUpdateState | null): boolean {
-  return state?.status === "downloading";
+  return state?.status === "downloading" || state?.status === "checking";
 }
 
 export function getArm64IntelBuildWarningDescription(state: DesktopUpdateState): string {
@@ -56,6 +58,15 @@ export function getArm64IntelBuildWarningDescription(state: DesktopUpdateState):
 }
 
 export function getDesktopUpdateButtonTooltip(state: DesktopUpdateState): string {
+  if (state.status === "idle") {
+    return "Check for updates";
+  }
+  if (state.status === "checking") {
+    return "Checking for updates...";
+  }
+  if (state.status === "up-to-date") {
+    return `You're up to date on ${state.currentVersion}. Click to check again.`;
+  }
   if (state.status === "available") {
     return `Update ${state.availableVersion ?? "available"} ready to download`;
   }
@@ -68,6 +79,11 @@ export function getDesktopUpdateButtonTooltip(state: DesktopUpdateState): string
     return `Update ${state.downloadedVersion ?? state.availableVersion ?? "ready"} downloaded. Click to restart and install.`;
   }
   if (state.status === "error") {
+    if (state.errorContext === "check") {
+      return state.message
+        ? `${state.message}. Click to check again.`
+        : "Update check failed. Click to try again.";
+    }
     if (state.errorContext === "download" && state.availableVersion) {
       return `Download failed for ${state.availableVersion}. Click to retry.`;
     }

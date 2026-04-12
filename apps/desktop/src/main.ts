@@ -63,6 +63,7 @@ const SHOW_IN_FOLDER_CHANNEL = "desktop:show-in-folder";
 const MENU_ACTION_CHANNEL = "desktop:menu-action";
 const UPDATE_STATE_CHANNEL = "desktop:update-state";
 const UPDATE_GET_STATE_CHANNEL = "desktop:update-get-state";
+const UPDATE_CHECK_CHANNEL = "desktop:update-check";
 const UPDATE_DOWNLOAD_CHANNEL = "desktop:update-download";
 const UPDATE_INSTALL_CHANNEL = "desktop:update-install";
 const NOTIFICATIONS_IS_SUPPORTED_CHANNEL = "desktop:notifications-is-supported";
@@ -1338,6 +1339,12 @@ function registerIpcHandlers(): void {
 
   ipcMain.removeHandler(UPDATE_GET_STATE_CHANNEL);
   ipcMain.handle(UPDATE_GET_STATE_CHANNEL, async () => updateState);
+
+  ipcMain.removeHandler(UPDATE_CHECK_CHANNEL);
+  ipcMain.handle(UPDATE_CHECK_CHANNEL, async () => {
+    await checkForUpdates("renderer");
+    return updateState;
+  });
 
   ipcMain.removeHandler(UPDATE_DOWNLOAD_CHANNEL);
   ipcMain.handle(UPDATE_DOWNLOAD_CHANNEL, async () => {

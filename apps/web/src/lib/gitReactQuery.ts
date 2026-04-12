@@ -139,7 +139,7 @@ export function gitRunStackedActionMutationOptions(input: {
         ...(commitMessage ? { commitMessage } : {}),
         ...(featureBranch ? { featureBranch } : {}),
         ...(filePaths ? { filePaths } : {}),
-        ...(input.model ? { model: input.model } : {}),
+        ...(input.model ? { textGenerationModel: input.model } : {}),
       });
     },
     onSettled: async () => {

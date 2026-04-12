@@ -47,7 +47,6 @@ import {
   MenuItem,
   MenuPopup,
   MenuSeparator,
-  MenuShortcut,
   MenuTrigger,
 } from "~/components/ui/menu";
 import { Popover, PopoverPopup, PopoverTrigger } from "~/components/ui/popover";
@@ -234,6 +233,7 @@ function GitQuickActionIcon({ quickAction }: { quickAction: GitQuickAction }) {
   if (quickAction.kind === "run_pull") return <RefreshCwIcon className={iconClassName} />;
   if (quickAction.kind === "run_action") {
     if (quickAction.action === "commit") return <GitCommitIcon className={iconClassName} />;
+    if (quickAction.action === "push") return <PiCloudArrowUp className={iconClassName} />;
     if (quickAction.action === "commit_push") {
       return <CommitPushHeaderIcon className={iconClassName} />;
     }
@@ -349,11 +349,6 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
         includesCommit: pendingDefaultBranchAction.includesCommit,
       })
     : null;
-  const hasWorkingTreeChanges = gitStatusForActions?.hasWorkingTreeChanges ?? false;
-  const hasBranch = gitStatusForActions?.branch !== null;
-  const isDiverged =
-    (gitStatusForActions?.aheadCount ?? 0) > 0 && (gitStatusForActions?.behindCount ?? 0) > 0;
-
   useEffect(() => {
     const api = readNativeApi();
     if (!api) {
@@ -503,15 +498,18 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
       const actionIsDefaultBranch =
         isDefaultBranchOverride ?? (featureBranch ? false : isDefaultBranch);
       const includesCommit =
-        !forcePushOnlyProgress && (action === "commit" || !!actionStatus?.hasWorkingTreeChanges);
+        !forcePushOnlyProgress &&
+        action !== "push" &&
+        action !== "create_pr" &&
+        (action === "commit" || !!actionStatus?.hasWorkingTreeChanges);
+      const shouldPushBeforePr =
+        action === "create_pr" &&
+        (!actionStatus?.hasUpstream || (actionStatus?.aheadCount ?? 0) > 0);
       if (
         !skipDefaultBranchPrompt &&
         requiresDefaultBranchConfirmation(action, actionIsDefaultBranch) &&
         actionBranch
       ) {
-        if (action !== "commit_push" && action !== "commit_push_pr") {
-          return;
-        }
         setPendingDefaultBranchAction({
           action,
           branchName: actionBranch,
@@ -531,6 +529,7 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
         hasWorkingTreeChanges: !!actionStatus?.hasWorkingTreeChanges,
         forcePushOnly: forcePushOnlyProgress,
         featureBranch,
+        shouldPushBeforePr,
       });
       const actionId = randomUUID();
       const resolvedProgressToastId =
@@ -582,16 +581,26 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
         const prUrl = result.pr.url ?? existingOpenPrUrl;
         const shouldOfferPushCta = action === "commit" && result.commit.status === "created";
         const shouldOfferOpenPrCta =
-          (action === "commit_push" || action === "commit_push_pr") &&
+          (action === "push" ||
+            action === "create_pr" ||
+            action === "commit_push" ||
+            action === "commit_push_pr") &&
           !!prUrl &&
           (!actionIsDefaultBranch ||
             result.pr.status === "created" ||
             result.pr.status === "opened_existing");
         const shouldOfferCreatePrCta =
-          action === "commit_push" &&
+          (action === "push" || action === "commit_push") &&
           !prUrl &&
           result.push.status === "pushed" &&
           !actionIsDefaultBranch;
+        const postPushStatus = actionStatus
+          ? {
+              ...actionStatus,
+              hasUpstream: true,
+              aheadCount: 0,
+            }
+          : null;
         const closeResultToast = () => {
           toastManager.close(resolvedProgressToastId);
         };
@@ -611,8 +620,7 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
                   children: "Push",
                   onClick: () => {
                     void runGitActionWithToast({
-                      action: "commit_push",
-                      forcePushOnlyProgress: true,
+                      action: "push",
                       onConfirmed: closeResultToast,
                       statusOverride: actionStatus,
                       isDefaultBranchOverride: actionIsDefaultBranch,
@@ -639,9 +647,8 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
                       onClick: () => {
                         closeResultToast();
                         void runGitActionWithToast({
-                          action: "commit_push_pr",
-                          forcePushOnlyProgress: true,
-                          statusOverride: actionStatus,
+                          action: "create_pr",
+                          statusOverride: postPushStatus,
                           isDefaultBranchOverride: actionIsDefaultBranch,
                         });
                       },
@@ -747,16 +754,16 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
         return;
       }
       if (item.dialogAction === "push") {
-        void runGitActionWithToast({ action: "commit_push", forcePushOnlyProgress: true });
+        void runGitActionWithToast({ action: "push" });
         return;
       }
       if (item.dialogAction === "create_pr") {
-        void runGitActionWithToast({ action: "commit_push_pr" });
+        void runGitActionWithToast({ action: "create_pr" });
         return;
       }
       openCommitDialog();
     },
-    [openCommitDialog, openExistingPr, runGitActionWithToast],
+    [openCommitDialog, openExistingPr],
   );
 
   // Present git workflows as descriptive picker rows so the header menu reads
@@ -767,26 +774,35 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
     const pushMenuItem = gitActionMenuItems.find((item) => item.id === "push");
     const prMenuItem = gitActionMenuItems.find((item) => item.id === "pr");
 
-    // Commit only - first item
-    if (hasWorkingTreeChanges) {
+    if (commitMenuItem) {
       items.push({
         id: "commit",
-        label: "Commit only",
+        label: commitMenuItem.label,
         description: "Review files and save a local commit",
-        disabled: false,
-        disabledReason: null,
+        disabled: commitMenuItem.disabled,
+        disabledReason: getMenuActionDisabledReason({
+          item: commitMenuItem,
+          gitStatus: gitStatusForActions,
+          isBusy: isGitActionRunning,
+          hasOriginRemote,
+        }),
         icon: "commit",
-        onSelect: openCommitDialog,
+        onSelect: () => openDialogForMenuItem(commitMenuItem),
       });
     }
 
     if (pushMenuItem) {
       items.push({
         id: "push",
-        label: "Commit & Push",
-        description: "Commit & push to branch",
-        disabled: false,
-        disabledReason: null,
+        label: pushMenuItem.label,
+        description: "Push local commits to the current branch",
+        disabled: pushMenuItem.disabled,
+        disabledReason: getMenuActionDisabledReason({
+          item: pushMenuItem,
+          gitStatus: gitStatusForActions,
+          isBusy: isGitActionRunning,
+          hasOriginRemote,
+        }),
         icon: "push",
         onSelect: () => openDialogForMenuItem(pushMenuItem),
       });
@@ -795,8 +811,11 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
     if (prMenuItem) {
       items.push({
         id: "pr",
-        label: "Open pull request",
-        description: "Create PR from current branch",
+        label: prMenuItem.label,
+        description:
+          prMenuItem.kind === "open_pr"
+            ? "Open the existing PR for this branch"
+            : "Create PR from current branch",
         disabled: prMenuItem.disabled,
         disabledReason: getMenuActionDisabledReason({
           item: prMenuItem,
@@ -809,21 +828,13 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
       });
     }
 
-    // Keep the dedicated sync row out of the picker for now.
-    // We can bring it back once its rules are promoted into shared git menu logic.
-
     return items;
   }, [
     gitActionMenuItems,
     gitStatusForActions,
-    hasBranch,
     hasOriginRemote,
-    hasWorkingTreeChanges,
-    isDiverged,
     isGitActionRunning,
-    openCommitDialog,
     openDialogForMenuItem,
-    runSyncWithRemote,
   ]);
 
   const runDialogAction = useCallback(() => {

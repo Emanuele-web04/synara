@@ -6,7 +6,13 @@ const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 
 // Domain Types
 
-export const GitStackedAction = Schema.Literals(["commit", "commit_push", "commit_push_pr"]);
+export const GitStackedAction = Schema.Literals([
+  "commit",
+  "push",
+  "create_pr",
+  "commit_push",
+  "commit_push_pr",
+]);
 export type GitStackedAction = typeof GitStackedAction.Type;
 export const GitActionProgressPhase = Schema.Literals(["branch", "commit", "push", "pr"]);
 export type GitActionProgressPhase = typeof GitActionProgressPhase.Type;
@@ -22,7 +28,11 @@ export const GitActionProgressKind = Schema.Literals([
 export type GitActionProgressKind = typeof GitActionProgressKind.Type;
 export const GitActionProgressStream = Schema.Literals(["stdout", "stderr"]);
 export type GitActionProgressStream = typeof GitActionProgressStream.Type;
-const GitCommitStepStatus = Schema.Literals(["created", "skipped_no_changes"]);
+const GitCommitStepStatus = Schema.Literals([
+  "created",
+  "skipped_no_changes",
+  "skipped_not_requested",
+]);
 const GitPushStepStatus = Schema.Literals([
   "pushed",
   "skipped_not_requested",

@@ -27,7 +27,7 @@ export function ThreadPinToggleButton({
       aria-pressed={pinned}
       title={label}
       className={cn(
-        "inline-flex size-5 items-center justify-center rounded-md transition-all pointer-events-auto hover:bg-accent/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+        "sidebar-icon-button pointer-events-auto inline-flex size-5 transition-all hover:text-foreground/82",
         toneClassName ?? "text-muted-foreground/34",
         presentation === "overlay"
           ? cn(

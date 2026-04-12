@@ -30,6 +30,12 @@ const baseState: DesktopUpdateState = {
 };
 
 describe("desktop update button state", () => {
+  it("keeps the button visible so desktop users can manually check for updates", () => {
+    expect(shouldShowDesktopUpdateButton(baseState)).toBe(true);
+    expect(resolveDesktopUpdateButtonAction(baseState)).toBe("check");
+    expect(getDesktopUpdateButtonTooltip(baseState)).toBe("Check for updates");
+  });
+
   it("shows a download action when an update is available", () => {
     const state: DesktopUpdateState = {
       ...baseState,
@@ -77,8 +83,9 @@ describe("desktop update button state", () => {
       errorContext: "check",
       canRetry: true,
     };
-    expect(shouldShowDesktopUpdateButton(state)).toBe(false);
-    expect(resolveDesktopUpdateButtonAction(state)).toBe("none");
+    expect(shouldShowDesktopUpdateButton(state)).toBe(true);
+    expect(resolveDesktopUpdateButtonAction(state)).toBe("check");
+    expect(getDesktopUpdateButtonTooltip(state)).toContain("Click to check again");
   });
 
   it("disables the button while downloading", () => {
@@ -91,6 +98,17 @@ describe("desktop update button state", () => {
     expect(shouldShowDesktopUpdateButton(state)).toBe(true);
     expect(isDesktopUpdateButtonDisabled(state)).toBe(true);
     expect(getDesktopUpdateButtonTooltip(state)).toContain("42%");
+  });
+
+  it("disables the button while a check is in flight", () => {
+    const state: DesktopUpdateState = {
+      ...baseState,
+      status: "checking",
+    };
+
+    expect(resolveDesktopUpdateButtonAction(state)).toBe("check");
+    expect(isDesktopUpdateButtonDisabled(state)).toBe(true);
+    expect(getDesktopUpdateButtonTooltip(state)).toContain("Checking for updates");
   });
 });
 

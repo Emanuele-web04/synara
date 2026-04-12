@@ -196,6 +196,7 @@ export interface DesktopBridge {
   };
   onMenuAction: (listener: (action: string) => void) => () => void;
   getUpdateState: () => Promise<DesktopUpdateState>;
+  checkForUpdates: () => Promise<DesktopUpdateState>;
   downloadUpdate: () => Promise<DesktopUpdateActionResult>;
   installUpdate: () => Promise<DesktopUpdateActionResult>;
   onUpdateState: (listener: (state: DesktopUpdateState) => void) => () => void;

@@ -894,7 +894,7 @@ function SidebarMenuAction({
 }) {
   const defaultProps = {
     className: cn(
-      "absolute top-1.5 right-1 flex aspect-square w-5 cursor-pointer items-center justify-center rounded-lg p-0 text-sidebar-foreground outline-hidden ring-ring/60 transition-transform hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-1 peer-hover/menu-button:text-sidebar-accent-foreground [&>svg:not([class*='size-'])]:size-4 [&>svg]:shrink-0",
+      "sidebar-icon-button absolute top-1.5 right-1 flex aspect-square w-5 cursor-pointer p-0 text-sidebar-foreground outline-hidden ring-ring/60 transition-transform peer-hover/menu-button:text-sidebar-accent-foreground [&>svg:not([class*='size-'])]:size-4 [&>svg]:shrink-0",
       // Increases the hit area of the button on mobile.
       "after:-inset-2 after:absolute md:after:hidden",
       "peer-data-[size=sm]/menu-button:top-1",
