@@ -66,6 +66,20 @@ export class OrchestrationCommandTimeoutError extends Schema.TaggedErrorClass<Or
   }
 }
 
+export class OrchestrationCommandInternalError extends Schema.TaggedErrorClass<OrchestrationCommandInternalError>()(
+  "OrchestrationCommandInternalError",
+  {
+    commandId: Schema.String,
+    commandType: Schema.String,
+    detail: Schema.String,
+    cause: Schema.optional(Schema.Defect),
+  },
+) {
+  override get message(): string {
+    return `Orchestration command failed unexpectedly (${this.commandType}): ${this.detail}`;
+  }
+}
+
 export class OrchestrationProjectorDecodeError extends Schema.TaggedErrorClass<OrchestrationProjectorDecodeError>()(
   "OrchestrationProjectorDecodeError",
   {
@@ -95,6 +109,7 @@ export class OrchestrationListenerCallbackError extends Schema.TaggedErrorClass<
 export type OrchestrationDispatchError =
   | ProjectionRepositoryError
   | OrchestrationCommandInvariantError
+  | OrchestrationCommandInternalError
   | OrchestrationCommandPreviouslyRejectedError
   | OrchestrationCommandTimeoutError
   | OrchestrationProjectorDecodeError

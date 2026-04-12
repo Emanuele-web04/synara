@@ -539,6 +539,111 @@ describe("OrchestrationEngine", () => {
     await runtime.dispose();
   });
 
+  it("keeps processing later commands after an unexpected worker defect", async () => {
+    type StoredEvent =
+      ReturnType<OrchestrationEventStoreShape["append"]> extends Effect.Effect<infer A, any, any>
+        ? A
+        : never;
+    const events: StoredEvent[] = [];
+    let nextSequence = 1;
+
+    const nonTransactionalStore: OrchestrationEventStoreShape = {
+      append(event) {
+        const savedEvent = {
+          ...event,
+          sequence: nextSequence,
+        } as StoredEvent;
+        nextSequence += 1;
+        events.push(savedEvent);
+        return Effect.succeed(savedEvent);
+      },
+      readFromSequence(sequenceExclusive) {
+        return Stream.fromIterable(events.filter((event) => event.sequence > sequenceExclusive));
+      },
+      readAll() {
+        return Stream.fromIterable(events);
+      },
+    };
+
+    let shouldDieProjection = true;
+    const defectiveProjectionPipeline: OrchestrationProjectionPipelineShape = {
+      bootstrap: Effect.void,
+      projectMetadataEvent: (event) => {
+        if (
+          shouldDieProjection &&
+          event.commandId === CommandId.makeUnsafe("cmd-project-defect-1")
+        ) {
+          shouldDieProjection = false;
+          return Effect.die("projection defect");
+        }
+        return Effect.void;
+      },
+      projectEvent: () => Effect.void,
+    };
+
+    const runtime = ManagedRuntime.make(
+      OrchestrationEngineLive.pipe(
+        Layer.provide(Layer.succeed(OrchestrationProjectionPipeline, defectiveProjectionPipeline)),
+        Layer.provide(Layer.succeed(OrchestrationEventStore, nonTransactionalStore)),
+        Layer.provide(OrchestrationCommandReceiptRepositoryLive),
+        Layer.provide(SqlitePersistenceMemory),
+      ),
+    );
+    const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
+    const createdAt = now();
+
+    await expect(
+      runtime.runPromise(
+        engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.makeUnsafe("cmd-project-defect-1"),
+          projectId: asProjectId("project-defect-1"),
+          title: "Defective Project",
+          workspaceRoot: "/tmp/project-defect-1",
+          defaultModelSelection: {
+            provider: "codex",
+            model: "gpt-5-codex",
+          },
+          createdAt,
+        }),
+      ),
+    ).rejects.toThrow("failed unexpectedly");
+
+    await expect(
+      runtime.runPromise(
+        engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.makeUnsafe("cmd-project-defect-2"),
+          projectId: asProjectId("project-defect-2"),
+          title: "Recovered Project",
+          workspaceRoot: "/tmp/project-defect-2",
+          defaultModelSelection: {
+            provider: "codex",
+            model: "gpt-5-codex",
+          },
+          createdAt,
+        }),
+      ),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        sequence: expect.any(Number),
+      }),
+    );
+
+    const eventsAfterRecovery = await runtime.runPromise(
+      Stream.runCollect(engine.readEvents(0)).pipe(
+        Effect.map((chunk): OrchestrationEvent[] => Array.from(chunk)),
+      ),
+    );
+    expect(eventsAfterRecovery.map((event) => event.commandId)).toEqual([
+      CommandId.makeUnsafe("cmd-project-defect-1"),
+      CommandId.makeUnsafe("cmd-project-defect-2"),
+    ]);
+    expect(eventsAfterRecovery.every((event) => event.type === "project.created")).toBe(true);
+
+    await runtime.dispose();
+  });
+
   it("reconciles in-memory state when append persists but projection fails", async () => {
     type StoredEvent =
       ReturnType<OrchestrationEventStoreShape["append"]> extends Effect.Effect<infer A, any, any>

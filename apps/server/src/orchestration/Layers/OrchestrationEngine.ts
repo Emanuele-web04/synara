@@ -5,7 +5,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import { OrchestrationCommand } from "@t3tools/contracts";
-import { Deferred, Effect, Layer, Option, PubSub, Queue, Ref, Schema, Stream } from "effect";
+import { Cause, Deferred, Effect, Layer, Option, PubSub, Queue, Ref, Schema, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { toPersistenceSqlError } from "../../persistence/Errors.ts";
@@ -13,6 +13,7 @@ import { OrchestrationEventStore } from "../../persistence/Services/Orchestratio
 import { OrchestrationCommandReceiptRepository } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
 import {
   OrchestrationCommandInvariantError,
+  OrchestrationCommandInternalError,
   OrchestrationCommandPreviouslyRejectedError,
   OrchestrationCommandTimeoutError,
   type OrchestrationDispatchError,
@@ -37,6 +38,12 @@ interface CommandEnvelope {
   executionState: Ref.Ref<CommandExecutionState>;
   deadlineAtMs: number;
 }
+
+type CommittedCommandResult = {
+  readonly committedEvents: OrchestrationEvent[];
+  readonly lastSequence: number;
+  readonly nextReadModel: OrchestrationReadModel;
+};
 
 function commandToAggregateRef(command: OrchestrationCommand): {
   readonly aggregateKind: "project" | "thread";
@@ -84,6 +91,16 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       commandId: command.commandId,
       commandType: command.type,
       timeoutMs: ORCHESTRATION_DISPATCH_TIMEOUT_MS,
+    });
+
+  const makeCommandInternalError = (
+    command: OrchestrationCommand,
+    detail = "The orchestration worker crashed before the command could finish.",
+  ) =>
+    new OrchestrationCommandInternalError({
+      commandId: command.commandId,
+      commandType: command.type,
+      detail,
     });
 
   const resolveStoredCommandOutcome = (
@@ -172,48 +189,75 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         readModel,
       });
       const eventBases = Array.isArray(eventBase) ? eventBase : [eventBase];
-      const committedCommand = yield* sql
-        .withTransaction(
-          Effect.gen(function* () {
-            const committedEvents: OrchestrationEvent[] = [];
-            let nextReadModel = readModel;
+      const transactionalCommitEffect: Effect.Effect<
+        CommittedCommandResult,
+        OrchestrationDispatchError,
+        never
+      > = Effect.gen(function* () {
+        const committedEvents: OrchestrationEvent[] = [];
+        let nextReadModel = readModel;
 
-            for (const nextEvent of eventBases) {
-              const savedEvent = yield* eventStore.append(nextEvent);
-              nextReadModel = yield* projectEvent(nextReadModel, savedEvent);
-              if (isProjectMetadataEvent(savedEvent)) {
-                yield* projectionPipeline.projectMetadataEvent(savedEvent);
-              } else {
-                yield* projectionPipeline.projectEvent(savedEvent);
-              }
-              committedEvents.push(savedEvent);
-            }
+        for (const nextEvent of eventBases) {
+          const savedEvent = yield* eventStore.append(nextEvent);
+          nextReadModel = yield* projectEvent(nextReadModel, savedEvent);
+          if (isProjectMetadataEvent(savedEvent)) {
+            yield* projectionPipeline.projectMetadataEvent(savedEvent);
+          } else {
+            yield* projectionPipeline.projectEvent(savedEvent);
+          }
+          committedEvents.push(savedEvent);
+        }
 
-            const lastSavedEvent = committedEvents.at(-1) ?? null;
-            if (lastSavedEvent === null) {
-              return yield* new OrchestrationCommandInvariantError({
-                commandType: envelope.command.type,
-                detail: "Command produced no events.",
-              });
-            }
+        const lastSavedEvent = committedEvents.at(-1) ?? null;
+        if (lastSavedEvent === null) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: envelope.command.type,
+            detail: "Command produced no events.",
+          });
+        }
 
-            yield* commandReceiptRepository.upsert({
+        yield* commandReceiptRepository.upsert({
+          commandId: envelope.command.commandId,
+          aggregateKind: lastSavedEvent.aggregateKind,
+          aggregateId: lastSavedEvent.aggregateId,
+          acceptedAt: lastSavedEvent.occurredAt,
+          resultSequence: lastSavedEvent.sequence,
+          status: "accepted",
+          error: null,
+        });
+
+        return {
+          committedEvents,
+          lastSequence: lastSavedEvent.sequence,
+          nextReadModel,
+        } as const;
+      }).pipe(
+        Effect.catchCause((cause): Effect.Effect<never, OrchestrationDispatchError, never> => {
+          if (Cause.hasInterruptsOnly(cause)) {
+            return Effect.interrupt;
+          }
+          return Effect.logError(
+            "orchestration command crashed inside persistence transaction",
+          ).pipe(
+            Effect.annotateLogs({
               commandId: envelope.command.commandId,
-              aggregateKind: lastSavedEvent.aggregateKind,
-              aggregateId: lastSavedEvent.aggregateId,
-              acceptedAt: lastSavedEvent.occurredAt,
-              resultSequence: lastSavedEvent.sequence,
-              status: "accepted",
-              error: null,
-            });
+              commandType: envelope.command.type,
+              cause: Cause.pretty(cause),
+            }),
+            Effect.flatMap(() =>
+              Effect.fail(
+                makeCommandInternalError(
+                  envelope.command,
+                  "The command hit an unexpected internal error before it could be saved.",
+                ),
+              ),
+            ),
+          );
+        }),
+      );
 
-            return {
-              committedEvents,
-              lastSequence: lastSavedEvent.sequence,
-              nextReadModel,
-            } as const;
-          }),
-        )
+      const committedCommand = yield* sql
+        .withTransaction(transactionalCommitEffect)
         .pipe(
           Effect.catchTag("SqlError", (sqlError) =>
             Effect.fail(
@@ -283,6 +327,53 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           yield* Deferred.fail(envelope.result, error);
         }),
       ),
+      Effect.catchCause((cause): Effect.Effect<void, never, never> => {
+        if (Cause.hasInterruptsOnly(cause)) {
+          return Effect.interrupt;
+        }
+        return Effect.gen(function* () {
+          yield* reconcileReadModelAfterDispatchFailure.pipe(
+            Effect.catch(() =>
+              Effect.logWarning(
+                "failed to reconcile orchestration read model after unexpected worker failure",
+              ).pipe(
+                Effect.annotateLogs({
+                  commandId: envelope.command.commandId,
+                  snapshotSequence: readModel.snapshotSequence,
+                }),
+              ),
+            ),
+          );
+
+          yield* Effect.logError("orchestration worker crashed while processing command").pipe(
+            Effect.annotateLogs({
+              commandId: envelope.command.commandId,
+              commandType: envelope.command.type,
+              cause: Cause.pretty(cause),
+            }),
+          );
+
+          const resolvedCrashOutcome = yield* resolveStoredCommandOutcome(envelope.command).pipe(
+            Effect.match({
+              onFailure: (resolvedError) => ({ _tag: "Left" as const, left: resolvedError }),
+              onSuccess: (value) => ({ _tag: "Right" as const, right: value }),
+            }),
+          );
+
+          if (resolvedCrashOutcome._tag === "Right") {
+            yield* Deferred.succeed(envelope.result, resolvedCrashOutcome.right);
+            return;
+          }
+
+          const resolvedError = resolvedCrashOutcome.left;
+          yield* Deferred.fail(
+            envelope.result,
+            Schema.is(OrchestrationCommandTimeoutError)(resolvedError)
+              ? makeCommandInternalError(envelope.command)
+              : resolvedError,
+          );
+        });
+      }),
     );
   };
 
