@@ -85,6 +85,8 @@ describe("sidebar interactive cursors", () => {
       </SidebarProvider>,
     );
 
-    expect(html).toBe("");
+    expect(html).toContain('data-slot="sidebar-wrapper"');
+    expect(html).not.toContain('data-slot="sidebar-trigger"');
+    expect(html).not.toContain("Toggle Sidebar");
   });
 });

@@ -48,6 +48,7 @@ export interface WorkLogEntry {
 interface DerivedWorkLogEntry extends WorkLogEntry {
   activityKind: OrchestrationThreadActivity["kind"];
   collapseKey?: string;
+  collapseCommand?: string;
   toolName?: string;
 }
 
@@ -524,8 +525,13 @@ export function deriveWorkLogEntries(
     .filter((activity) => !isPlanBoundaryToolActivity(activity))
     .map(toDerivedWorkLogEntry);
   return collapseDerivedWorkLogEntries(entries).map(
-    ({ activityKind: _activityKind, collapseKey: _collapseKey, toolName: _toolName, ...entry }) =>
-      entry,
+    ({
+      activityKind: _activityKind,
+      collapseCommand: _collapseCommand,
+      collapseKey: _collapseKey,
+      toolName: _toolName,
+      ...entry
+    }) => entry,
   );
 }
 
@@ -593,6 +599,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (collapseKey) {
     entry.collapseKey = collapseKey;
   }
+  const collapseCommand = deriveToolLifecycleCollapseCommand(entry);
+  if (collapseCommand) {
+    entry.collapseCommand = collapseCommand;
+  }
   return entry;
 }
 
@@ -624,7 +634,10 @@ function shouldCollapseToolLifecycleEntries(
   if (previous.activityKind === "tool.completed") {
     return false;
   }
-  return previous.collapseKey !== undefined && previous.collapseKey === next.collapseKey;
+  if (previous.collapseKey === undefined || previous.collapseKey !== next.collapseKey) {
+    return false;
+  }
+  return areToolLifecycleCommandsCompatible(previous.collapseCommand, next.collapseCommand);
 }
 
 function mergeDerivedWorkLogEntries(
@@ -683,15 +696,29 @@ function deriveToolLifecycleCollapseKey(entry: DerivedWorkLogEntry): string | un
     itemType.length === 0 &&
     requestKind.length === 0 &&
     toolName.length === 0 &&
-    command.length === 0 &&
     changedFiles.length === 0 &&
     detailHint.length === 0
   ) {
-    return undefined;
+    return command.length > 0 ? `command-only${"\u001f"}${command}` : undefined;
   }
-  return [itemType, normalizedLabel, requestKind, toolName, command, changedFiles, detailHint].join(
+  return [itemType, normalizedLabel, requestKind, toolName, changedFiles, detailHint].join(
     "\u001f",
   );
+}
+
+function deriveToolLifecycleCollapseCommand(entry: DerivedWorkLogEntry): string | undefined {
+  const command = normalizeCompactToolLabel(entry.command ?? "");
+  return command.length > 0 ? command : undefined;
+}
+
+function areToolLifecycleCommandsCompatible(
+  previous: string | undefined,
+  next: string | undefined,
+): boolean {
+  if (!previous || !next) {
+    return true;
+  }
+  return previous === next || previous.startsWith(next) || next.startsWith(previous);
 }
 
 function toLatestProposedPlanState(proposedPlan: ProposedPlan): LatestProposedPlanState {
