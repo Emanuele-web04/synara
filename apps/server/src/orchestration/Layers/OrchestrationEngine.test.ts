@@ -395,7 +395,7 @@ describe("OrchestrationEngine", () => {
           createdAt,
         }),
       ),
-    ).rejects.toThrow("append failed");
+    ).rejects.toThrow("failed unexpectedly");
 
     const result = await runtime.runPromise(
       engine.dispatch({
@@ -504,7 +504,7 @@ describe("OrchestrationEngine", () => {
     };
 
     await expect(runtime.runPromise(engine.dispatch(turnStartCommand))).rejects.toThrow(
-      "projection failed",
+      "failed unexpectedly",
     );
 
     const eventsAfterFailure = await runtime.runPromise(
@@ -744,7 +744,7 @@ describe("OrchestrationEngine", () => {
           title: "sync-after-failed-projection",
         }),
       ),
-    ).rejects.toThrow("projection failed");
+    ).rejects.toThrow("failed unexpectedly");
 
     const readModelAfterFailure = await runtime.runPromise(engine.getReadModel());
     const updatedThread = readModelAfterFailure.threads.find(

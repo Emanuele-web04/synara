@@ -626,9 +626,6 @@ export default function Sidebar() {
   const [isPickingFolder, setIsPickingFolder] = useState(false);
   const [showManualPathInput, setShowManualPathInput] = useState(false);
   const [isAddingProject, setIsAddingProject] = useState(false);
-  const [pendingProjectThreadOpenId, setPendingProjectThreadOpenId] = useState<ProjectId | null>(
-    null,
-  );
   const [addProjectError, setAddProjectError] = useState<string | null>(null);
   const addProjectInputRef = useRef<HTMLInputElement | null>(null);
   const [renamingThreadId, setRenamingThreadId] = useState<ThreadId | null>(null);
@@ -803,17 +800,6 @@ export default function Sidebar() {
     [appSettings.defaultThreadEnvMode, focusMostRecentThreadForProject, handleNewThread, threads],
   );
 
-  useEffect(() => {
-    if (pendingProjectThreadOpenId === null) {
-      return;
-    }
-    if (!projects.some((project) => project.id === pendingProjectThreadOpenId)) {
-      return;
-    }
-    setPendingProjectThreadOpenId(null);
-    void openOrCreateProjectThread(pendingProjectThreadOpenId);
-  }, [openOrCreateProjectThread, pendingProjectThreadOpenId, projects]);
-
   const handleOpenProjectFromSearch = useCallback(
     (projectId: string) => {
       const typedProjectId = ProjectId.makeUnsafe(projectId);
@@ -940,8 +926,8 @@ export default function Sidebar() {
 
       const existing = projects.find((project) => workspaceRootsEqual(project.cwd, cwd));
       if (existing) {
-        setPendingProjectThreadOpenId(existing.id);
         finishAddingProject();
+        void openOrCreateProjectThread(existing.id);
         return;
       }
 
@@ -961,16 +947,16 @@ export default function Sidebar() {
           },
           createdAt,
         });
-        setPendingProjectThreadOpenId(projectId);
         finishAddingProject();
+        void openOrCreateProjectThread(projectId);
         return;
       } catch (error) {
         const recoveredProject = useStore
           .getState()
           .projects.find((project) => workspaceRootsEqual(project.cwd, cwd));
         if (recoveredProject) {
-          setPendingProjectThreadOpenId(recoveredProject.id);
           finishAddingProject();
+          void openOrCreateProjectThread(recoveredProject.id);
           return;
         }
         const description =
@@ -980,7 +966,7 @@ export default function Sidebar() {
         return;
       }
     },
-    [isAddingProject, projects],
+    [isAddingProject, openOrCreateProjectThread, projects],
   );
 
   const handleAddProject = () => {
