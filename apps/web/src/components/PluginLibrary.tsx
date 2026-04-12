@@ -33,6 +33,7 @@ import {
   normalizeProviderDiscoveryText,
   resolveProviderDiscoveryCwd,
 } from "~/lib/providerDiscovery";
+import { createFirstProjectSelector } from "~/storeSelectors";
 import {
   providerComposerCapabilitiesQueryOptions,
   providerPluginsQueryOptions,
@@ -358,9 +359,9 @@ function SectionHeader({ title }: { title: string }) {
 // ── Main component ─────────────────────────────────────────────────────────
 
 export function PluginLibrary() {
-  const projects = useStore((store) => store.projects);
+  const firstProject = useStore(useMemo(() => createFirstProjectSelector(), []));
   const { activeProject: focusedProject, activeThread, focusedThreadId } = useFocusedChatContext();
-  const activeProject = focusedProject ?? projects[0] ?? null;
+  const activeProject = focusedProject ?? firstProject ?? null;
 
   const preferredProvider =
     activeThread?.modelSelection.provider ??

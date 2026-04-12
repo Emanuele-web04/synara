@@ -19,6 +19,7 @@ import { newCommandId, cn } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useStore } from "../store";
+import { createProjectSelector, createThreadSelector } from "../storeSelectors";
 import {
   EnvMode,
   resolveDraftEnvModeAfterBranchChange,
@@ -71,14 +72,15 @@ export default function BranchToolbar({
   cumulativeCostUsd,
 }: BranchToolbarProps) {
   const threads = useStore((store) => store.threads);
-  const projects = useStore((store) => store.projects);
   const setThreadWorkspaceAction = useStore((store) => store.setThreadWorkspace);
   const draftThread = useComposerDraftStore((store) => store.getDraftThread(threadId));
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
 
-  const serverThread = threads.find((thread) => thread.id === threadId);
+  const serverThread = useStore(useMemo(() => createThreadSelector(threadId), [threadId]));
   const activeProjectId = serverThread?.projectId ?? draftThread?.projectId ?? null;
-  const activeProject = projects.find((project) => project.id === activeProjectId);
+  const activeProject = useStore(
+    useMemo(() => createProjectSelector(activeProjectId), [activeProjectId]),
+  );
   const activeThreadId = serverThread?.id ?? (draftThread ? threadId : undefined);
   const activeThreadBranch = serverThread?.branch ?? draftThread?.branch ?? null;
   const activeWorktreePath = serverThread?.worktreePath ?? draftThread?.worktreePath ?? null;

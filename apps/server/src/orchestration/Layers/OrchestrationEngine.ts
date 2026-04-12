@@ -4,8 +4,20 @@ import type {
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
-import { OrchestrationCommand } from "@t3tools/contracts";
-import { Cause, Deferred, Effect, Layer, Option, PubSub, Queue, Ref, Schema, Stream } from "effect";
+import { OrchestrationCommand, ORCHESTRATION_WS_METHODS } from "@t3tools/contracts";
+import {
+  Cause,
+  Deferred,
+  Effect,
+  Layer,
+  Option,
+  PubSub,
+  Queue,
+  Ref,
+  Schema,
+  Semaphore,
+  Stream,
+} from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { toPersistenceSqlError } from "../../persistence/Errors.ts";
@@ -20,6 +32,7 @@ import {
 } from "../Errors.ts";
 import { decideOrchestrationCommand } from "../decider.ts";
 import type { ProjectMetadataOrchestrationEvent } from "../projectMetadataProjection.ts";
+import { PROJECT_METADATA_SNAPSHOT_PROJECTORS } from "../projectMetadataProjection.ts";
 import { createEmptyReadModel, projectEvent } from "../projector.ts";
 import { OrchestrationProjectionPipeline } from "../Services/ProjectionPipeline.ts";
 import {
@@ -85,6 +98,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
   const commandQueue = yield* Queue.unbounded<CommandEnvelope>();
   const eventPubSub = yield* PubSub.unbounded<OrchestrationEvent>();
+  const maintenanceLock = yield* Semaphore.make(1);
 
   const makeCommandTimeoutError = (command: OrchestrationCommand) =>
     new OrchestrationCommandTimeoutError({
@@ -127,6 +141,143 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       });
     });
 
+  const refreshReadModelFromProjectionState = Effect.gen(function* () {
+    const projectRows = yield* sql<{
+      readonly projectId: string;
+      readonly title: string;
+      readonly workspaceRoot: string;
+      readonly defaultModelSelectionJson: string | null;
+      readonly scriptsJson: string;
+      readonly createdAt: string;
+      readonly updatedAt: string;
+      readonly deletedAt: string | null;
+    }>`
+        SELECT
+          project_id AS "projectId",
+          title,
+          workspace_root AS "workspaceRoot",
+          default_model_selection_json AS "defaultModelSelectionJson",
+          scripts_json AS "scriptsJson",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt",
+          deleted_at AS "deletedAt"
+        FROM projection_projects
+        ORDER BY created_at ASC, project_id ASC
+      `;
+
+    const stateRows = yield* sql<{
+      readonly projector: string;
+      readonly lastAppliedSequence: number;
+    }>`
+        SELECT
+          projector,
+          last_applied_sequence AS "lastAppliedSequence"
+        FROM projection_state
+      `;
+
+    const sequenceByProjector = new Map(
+      stateRows.map((row) => [row.projector, row.lastAppliedSequence] as const),
+    );
+
+    let snapshotSequence = 0;
+    let minSequence = Number.POSITIVE_INFINITY;
+    for (const projector of PROJECT_METADATA_SNAPSHOT_PROJECTORS) {
+      const sequence = sequenceByProjector.get(projector);
+      if (sequence === undefined) {
+        minSequence = Number.POSITIVE_INFINITY;
+        break;
+      }
+      if (sequence < minSequence) {
+        minSequence = sequence;
+      }
+    }
+    if (Number.isFinite(minSequence)) {
+      snapshotSequence = minSequence;
+    }
+
+    const nextReadModel: OrchestrationReadModel = {
+      ...readModel,
+      snapshotSequence,
+      projects: projectRows.map((row) => ({
+        id: row.projectId as ProjectId,
+        title: row.title,
+        workspaceRoot: row.workspaceRoot,
+        defaultModelSelection:
+          row.defaultModelSelectionJson === null
+            ? null
+            : (JSON.parse(
+                row.defaultModelSelectionJson,
+              ) as OrchestrationReadModel["projects"][number]["defaultModelSelection"]),
+        scripts: JSON.parse(
+          row.scriptsJson,
+        ) as OrchestrationReadModel["projects"][number]["scripts"],
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+        deletedAt: row.deletedAt,
+      })),
+      updatedAt: new Date().toISOString(),
+    };
+
+    readModel = nextReadModel;
+    return nextReadModel;
+  }).pipe(
+    Effect.catchTag("SqlError", (sqlError) =>
+      Effect.logError("failed to refresh orchestration read model after project repair").pipe(
+        Effect.annotateLogs({
+          cause: Cause.pretty(Cause.fail(sqlError)),
+        }),
+        Effect.flatMap(() =>
+          Effect.fail(
+            new OrchestrationCommandInternalError({
+              commandId: "repair-local-state",
+              commandType: ORCHESTRATION_WS_METHODS.repairState,
+              detail:
+                "Project repair completed, but the refreshed local snapshot could not be loaded.",
+            }),
+          ),
+        ),
+      ),
+    ),
+  );
+
+  // Rebuild only the project projection rows and snapshot cursors.
+  // Existing thread/chat projection rows stay in place so older installs do not
+  // lose history that is no longer fully represented in orchestration_events.
+  const resetDerivedProjectionState = sql.withTransaction(
+    Effect.gen(function* () {
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`
+        DELETE FROM projection_state
+        WHERE projector IN ${sql.in(PROJECT_METADATA_SNAPSHOT_PROJECTORS)}
+      `;
+    }),
+  );
+
+  const backupDerivedProjectionState = sql.withTransaction(
+    Effect.gen(function* () {
+      yield* sql`DROP TABLE IF EXISTS temp_repair_projection_projects`;
+      yield* sql`DROP TABLE IF EXISTS temp_repair_projection_state`;
+      yield* sql`CREATE TEMP TABLE temp_repair_projection_projects AS SELECT * FROM projection_projects`;
+      yield* sql`CREATE TEMP TABLE temp_repair_projection_state AS SELECT * FROM projection_state`;
+    }),
+  );
+
+  const restoreDerivedProjectionState = sql.withTransaction(
+    Effect.gen(function* () {
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`INSERT INTO projection_projects SELECT * FROM temp_repair_projection_projects`;
+      yield* sql`DELETE FROM projection_state`;
+      yield* sql`INSERT INTO projection_state SELECT * FROM temp_repair_projection_state`;
+    }),
+  );
+
+  const dropProjectionRepairBackup = sql.withTransaction(
+    Effect.gen(function* () {
+      yield* sql`DROP TABLE IF EXISTS temp_repair_projection_projects`;
+      yield* sql`DROP TABLE IF EXISTS temp_repair_projection_state`;
+    }),
+  );
+
   const processEnvelope = (envelope: CommandEnvelope): Effect.Effect<void, never> => {
     const dispatchStartSequence = readModel.snapshotSequence;
     const remainingBudgetMs = Math.max(0, envelope.deadlineAtMs - Date.now());
@@ -149,7 +300,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       }
     });
 
-    return Effect.gen(function* () {
+    const runCommand = Effect.gen(function* () {
       const shouldSkip = yield* Ref.modify(envelope.executionState, (state) => {
         if (state === "abandoned") {
           return [true, state] as const;
@@ -375,6 +526,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         });
       }),
     );
+
+    return maintenanceLock.withPermits(1)(runCommand);
   };
 
   yield* projectionPipeline.bootstrap;
@@ -450,10 +603,101 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       );
     });
 
+  // Used by the settings screen to rebuild local indexes without deleting chats.
+  const repairState: OrchestrationEngineShape["repairState"] = () =>
+    maintenanceLock.withPermits(1)(
+      Effect.gen(function* () {
+        yield* Effect.log("repairing orchestration projection state");
+        const previousReadModel = readModel;
+
+        yield* backupDerivedProjectionState.pipe(
+          Effect.catchTag("SqlError", (sqlError) =>
+            Effect.logError("failed to back up derived orchestration projection state").pipe(
+              Effect.annotateLogs({
+                cause: Cause.pretty(Cause.fail(sqlError)),
+              }),
+              Effect.flatMap(() =>
+                Effect.fail(
+                  new OrchestrationCommandInternalError({
+                    commandId: "repair-local-state",
+                    commandType: ORCHESTRATION_WS_METHODS.repairState,
+                    detail: "Failed to stage the current local state before rebuilding it.",
+                  }),
+                ),
+              ),
+            ),
+          ),
+        );
+
+        yield* resetDerivedProjectionState.pipe(
+          Effect.catchTag("SqlError", (sqlError) =>
+            Effect.logError("failed to reset derived orchestration projection state").pipe(
+              Effect.annotateLogs({
+                cause: Cause.pretty(Cause.fail(sqlError)),
+              }),
+              Effect.tap(() =>
+                restoreDerivedProjectionState.pipe(
+                  Effect.catchCause(() =>
+                    Effect.logWarning(
+                      "failed to restore orchestration projection backup after reset failure",
+                    ),
+                  ),
+                ),
+              ),
+              Effect.flatMap(() =>
+                Effect.fail(
+                  new OrchestrationCommandInternalError({
+                    commandId: "repair-local-state",
+                    commandType: ORCHESTRATION_WS_METHODS.repairState,
+                    detail: "Failed to clear the local projection cache before rebuilding it.",
+                  }),
+                ),
+              ),
+            ),
+          ),
+        );
+
+        const rebuildResult = yield* Effect.exit(projectionPipeline.bootstrap);
+        if (rebuildResult._tag === "Failure") {
+          yield* restoreDerivedProjectionState.pipe(
+            Effect.catchCause(() =>
+              Effect.logWarning(
+                "failed to restore orchestration projection backup after rebuild failure",
+              ),
+            ),
+          );
+          readModel = previousReadModel;
+          yield* dropProjectionRepairBackup.pipe(Effect.catchCause(() => Effect.void));
+
+          return yield* Effect.logError(
+            "failed to rebuild orchestration projections from event log",
+          ).pipe(
+            Effect.annotateLogs({
+              cause: Cause.pretty(rebuildResult.cause),
+            }),
+            Effect.flatMap(() =>
+              Effect.fail(
+                new OrchestrationCommandInternalError({
+                  commandId: "repair-local-state",
+                  commandType: ORCHESTRATION_WS_METHODS.repairState,
+                  detail: "Failed to rebuild local projections from the saved event history.",
+                }),
+              ),
+            ),
+          );
+        }
+
+        const snapshot = yield* refreshReadModelFromProjectionState;
+        yield* dropProjectionRepairBackup.pipe(Effect.catchCause(() => Effect.void));
+        return snapshot;
+      }),
+    );
+
   return {
     getReadModel,
     readEvents,
     dispatch,
+    repairState,
     // Each access creates a fresh PubSub subscription so that multiple
     // consumers (wsServer, ProviderRuntimeIngestion, CheckpointReactor, etc.)
     // each independently receive all domain events.

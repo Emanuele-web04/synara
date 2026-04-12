@@ -30,6 +30,7 @@ import { buildPatchCacheKey } from "../lib/diffRendering";
 import { resolveDiffThemeName } from "../lib/diffRendering";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { useStore } from "../store";
+import { createProjectSelector, createThreadSelector } from "../storeSelectors";
 import { useAppSettings } from "../appSettings";
 import { formatShortTimestamp } from "../timestampFormat";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
@@ -208,12 +209,12 @@ export default function DiffPanel({
   const diffSearch = useSearch({ strict: false, select: (search) => parseDiffRouteSearch(search) });
   const diffOpen = panelState ? panelState.panel === "diff" : diffSearch.diff === "1";
   const activeThreadId = controlledThreadId ?? routeThreadId;
-  const activeThread = useStore((store) =>
-    activeThreadId ? store.threads.find((thread) => thread.id === activeThreadId) : undefined,
+  const activeThread = useStore(
+    useMemo(() => createThreadSelector(activeThreadId), [activeThreadId]),
   );
   const activeProjectId = activeThread?.projectId ?? null;
-  const activeProject = useStore((store) =>
-    activeProjectId ? store.projects.find((project) => project.id === activeProjectId) : undefined,
+  const activeProject = useStore(
+    useMemo(() => createProjectSelector(activeProjectId), [activeProjectId]),
   );
   const activeCwd = resolveThreadWorkspaceCwd({
     projectCwd: activeProject?.cwd ?? null,

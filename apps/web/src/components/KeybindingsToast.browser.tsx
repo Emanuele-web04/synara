@@ -313,6 +313,7 @@ describe("Keybindings update toast", () => {
     useStore.setState({
       projects: [],
       threads: [],
+      sidebarThreadSummaryById: {},
       threadsHydrated: false,
     });
   });

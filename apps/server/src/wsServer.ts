@@ -167,7 +167,12 @@ function getMostRecentBootstrapThread(
 
   return (
     snapshot.threads
-      .filter((thread) => thread.deletedAt === null && activeProjectIds.has(thread.projectId))
+      .filter(
+        (thread) =>
+          thread.deletedAt === null &&
+          (thread.archivedAt ?? null) === null &&
+          activeProjectIds.has(thread.projectId),
+      )
       .toSorted((left, right) => {
         const rightTimestamp = getLatestBootstrapUserMessageTimestamp(right);
         const leftTimestamp = getLatestBootstrapUserMessageTimestamp(left);
@@ -827,7 +832,10 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       }
 
       const existingThread = snapshot.threads.find(
-        (thread) => thread.projectId === bootstrapProjectId && thread.deletedAt === null,
+        (thread) =>
+          thread.projectId === bootstrapProjectId &&
+          thread.deletedAt === null &&
+          (thread.archivedAt ?? null) === null,
       );
       if (!existingThread) {
         const createdAt = new Date().toISOString();
@@ -883,6 +891,11 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     switch (request.body._tag) {
       case ORCHESTRATION_WS_METHODS.getSnapshot:
         return yield* projectionReadModelQuery.getSnapshot();
+
+      case ORCHESTRATION_WS_METHODS.repairState: {
+        yield* orchestrationEngine.repairState();
+        return yield* projectionReadModelQuery.getSnapshot();
+      }
 
       case ORCHESTRATION_WS_METHODS.dispatchCommand: {
         const { command } = request.body;

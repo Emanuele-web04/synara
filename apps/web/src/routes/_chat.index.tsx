@@ -1,19 +1,19 @@
 import { DEFAULT_RUNTIME_MODE } from "@t3tools/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 import { useAppSettings } from "~/appSettings";
 import { resolveSidebarNewThreadEnvMode } from "~/components/Sidebar.logic";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { newThreadId } from "../lib/utils";
 import { useStore } from "../store";
+import { createFirstProjectSelector } from "../storeSelectors";
 
 function ChatIndexRouteView() {
-  const projects = useStore((store) => store.projects);
+  const firstProject = useStore(useMemo(() => createFirstProjectSelector(), []));
   const navigate = useNavigate();
   const { settings: appSettings } = useAppSettings();
   const hasRedirected = useRef(false);
-  const firstProject = projects[0];
 
   useEffect(() => {
     if (!firstProject || hasRedirected.current) return;
@@ -22,7 +22,7 @@ function ChatIndexRouteView() {
     const { getDraftThreadByProjectId, setProjectDraftThreadId, applyStickyState } =
       useComposerDraftStore.getState();
 
-    // Reuse existing draft thread for this project if one exists
+    // Reuse existing draft thread for this project if one exists.
     const existingDraft = getDraftThreadByProjectId(firstProject.id);
     if (existingDraft) {
       void navigate({
@@ -33,7 +33,6 @@ function ChatIndexRouteView() {
       return;
     }
 
-    // Create a new draft thread
     const threadId = newThreadId();
     const envMode = resolveSidebarNewThreadEnvMode({
       defaultEnvMode: appSettings.defaultThreadEnvMode,

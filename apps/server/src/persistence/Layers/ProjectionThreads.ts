@@ -46,6 +46,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           handoff_json,
           created_at,
           updated_at,
+          archived_at,
           deleted_at
         )
         VALUES (
@@ -66,6 +67,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.handoff === null ? null : JSON.stringify(row.handoff)},
           ${row.createdAt},
           ${row.updatedAt},
+          ${row.archivedAt ?? null},
           ${row.deletedAt}
         )
         ON CONFLICT (thread_id)
@@ -86,6 +88,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           handoff_json = excluded.handoff_json,
           created_at = excluded.created_at,
           updated_at = excluded.updated_at,
+          archived_at = excluded.archived_at,
           deleted_at = excluded.deleted_at
       `,
   });
@@ -113,6 +116,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           handoff_json AS "handoff",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
+          archived_at AS "archivedAt",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE thread_id = ${threadId}
@@ -142,6 +146,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           handoff_json AS "handoff",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
+          archived_at AS "archivedAt",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE project_id = ${projectId}

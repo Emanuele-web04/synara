@@ -290,6 +290,7 @@ export interface NativeApi {
   orchestration: {
     getSnapshot: () => Promise<OrchestrationReadModel>;
     dispatchCommand: (command: ClientOrchestrationCommand) => Promise<{ sequence: number }>;
+    repairState: () => Promise<OrchestrationReadModel>;
     getTurnDiff: (input: OrchestrationGetTurnDiffInput) => Promise<OrchestrationGetTurnDiffResult>;
     getFullThreadDiff: (
       input: OrchestrationGetFullThreadDiffInput,

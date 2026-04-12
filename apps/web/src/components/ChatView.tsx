@@ -78,6 +78,7 @@ import {
   replaceTextRange,
   stripComposerTriggerText,
 } from "../composer-logic";
+import { createProjectSelector, createThreadSelector } from "../storeSelectors";
 import {
   canOfferForkSlashCommand,
   canOfferReviewSlashCommand,
@@ -589,11 +590,10 @@ export default function ChatView({
   const draftThread = useComposerDraftStore(
     (store) => store.draftThreadsByThreadId[threadId] ?? null,
   );
-  const serverThread = useStore((store) => store.threads.find((thread) => thread.id === threadId));
-  const fallbackDraftProject = useStore((store) =>
-    draftThread?.projectId
-      ? store.projects.find((project) => project.id === draftThread.projectId)
-      : undefined,
+  const serverThread = useStore(useMemo(() => createThreadSelector(threadId), [threadId]));
+  const fallbackDraftProjectId = draftThread?.projectId ?? null;
+  const fallbackDraftProject = useStore(
+    useMemo(() => createProjectSelector(fallbackDraftProjectId), [fallbackDraftProjectId]),
   );
   const promptRef = useRef(prompt);
   const [isDragOverComposer, setIsDragOverComposer] = useState(false);
@@ -805,8 +805,8 @@ export default function ChatView({
   );
   const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread?.session ?? null);
   const activeProjectId = activeThread?.projectId ?? draftThread?.projectId ?? null;
-  const activeProject = useStore((store) =>
-    activeProjectId ? store.projects.find((project) => project.id === activeProjectId) : undefined,
+  const activeProject = useStore(
+    useMemo(() => createProjectSelector(activeProjectId), [activeProjectId]),
   );
   const resolvedThreadEnvMode = isServerThread
     ? (activeThread?.envMode ?? null)
@@ -1097,38 +1097,46 @@ export default function ChatView({
   const sidebarPlanSourceThreadId = !latestTurnSettled
     ? (activeLatestTurn?.sourceProposedPlan?.threadId ?? null)
     : null;
-  const sidebarPlanSourceThread = useStore((store) =>
-    sidebarPlanSourceThreadId
-      ? store.threads.find((thread) => thread.id === sidebarPlanSourceThreadId)
-      : undefined,
+  const sidebarPlanSourceThread = useStore(
+    useMemo(() => createThreadSelector(sidebarPlanSourceThreadId), [sidebarPlanSourceThreadId]),
   );
+  const activeThreadPlanThreadId = activeThread?.id ?? null;
+  const activeThreadPlanProposedPlans = activeThread?.proposedPlans;
+  const sidebarPlanSourceThreadPlanId = sidebarPlanSourceThread?.id ?? null;
+  const sidebarPlanSourceThreadProposedPlans = sidebarPlanSourceThread?.proposedPlans;
   const sidebarProposedPlan = useMemo(
     () =>
       findSidebarProposedPlan({
         threads: [
-          ...(activeThread
-            ? [{ id: activeThread.id, proposedPlans: activeThread.proposedPlans }]
-            : []),
-          ...(sidebarPlanSourceThread && sidebarPlanSourceThread.id !== activeThread?.id
+          ...(activeThreadPlanThreadId
             ? [
                 {
-                  id: sidebarPlanSourceThread.id,
-                  proposedPlans: sidebarPlanSourceThread.proposedPlans,
+                  id: activeThreadPlanThreadId,
+                  proposedPlans: activeThreadPlanProposedPlans ?? [],
+                },
+              ]
+            : []),
+          ...(sidebarPlanSourceThreadPlanId &&
+          sidebarPlanSourceThreadPlanId !== activeThreadPlanThreadId
+            ? [
+                {
+                  id: sidebarPlanSourceThreadPlanId,
+                  proposedPlans: sidebarPlanSourceThreadProposedPlans ?? [],
                 },
               ]
             : []),
         ],
         latestTurn: activeLatestTurn,
         latestTurnSettled,
-        threadId: activeThread?.id ?? null,
+        threadId: activeThreadPlanThreadId,
       }),
     [
       activeLatestTurn,
-      activeThread?.id,
-      activeThread?.proposedPlans,
+      activeThreadPlanProposedPlans,
+      activeThreadPlanThreadId,
       latestTurnSettled,
-      sidebarPlanSourceThread?.id,
-      sidebarPlanSourceThread?.proposedPlans,
+      sidebarPlanSourceThreadPlanId,
+      sidebarPlanSourceThreadProposedPlans,
     ],
   );
   const activePlan = useMemo(
@@ -3228,6 +3236,7 @@ export default function ChatView({
     onToggleBrowser,
     onToggleDiff,
     onInterrupt,
+    onSplitSurface,
     isFocusedPane,
     phase,
     setTerminalWorkspaceTab,

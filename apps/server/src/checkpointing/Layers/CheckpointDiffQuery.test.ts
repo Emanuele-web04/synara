@@ -1,83 +1,40 @@
-import {
-  CheckpointRef,
-  DEFAULT_PROVIDER_INTERACTION_MODE,
-  ProjectId,
-  ThreadId,
-  TurnId,
-  type OrchestrationReadModel,
-} from "@t3tools/contracts";
-import { Effect, Layer } from "effect";
+import { CheckpointRef, ProjectId, ThreadId, TurnId } from "@t3tools/contracts";
+import { Effect, Layer, Option } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import {
+  ProjectionSnapshotQuery,
+  type ProjectionThreadCheckpointContext,
+} from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { checkpointRefForThreadTurn } from "../Utils.ts";
 import { CheckpointDiffQueryLive } from "./CheckpointDiffQuery.ts";
 import { CheckpointStore, type CheckpointStoreShape } from "../Services/CheckpointStore.ts";
 import { CheckpointDiffQuery } from "../Services/CheckpointDiffQuery.ts";
 
-function makeSnapshot(input: {
+function makeThreadCheckpointContext(input: {
   readonly projectId: ProjectId;
   readonly threadId: ThreadId;
   readonly workspaceRoot: string;
+  readonly envMode?: "local" | "worktree";
   readonly worktreePath: string | null;
   readonly checkpointTurnCount: number;
   readonly checkpointRef: CheckpointRef;
-}): OrchestrationReadModel {
+}): ProjectionThreadCheckpointContext {
   return {
-    snapshotSequence: 0,
-    updatedAt: "2026-01-01T00:00:00.000Z",
-    projects: [
+    threadId: input.threadId,
+    projectId: input.projectId,
+    workspaceRoot: input.workspaceRoot,
+    envMode: input.envMode ?? "local",
+    worktreePath: input.worktreePath,
+    checkpoints: [
       {
-        id: input.projectId,
-        title: "Project",
-        workspaceRoot: input.workspaceRoot,
-        defaultModelSelection: null,
-        scripts: [],
-        createdAt: "2026-01-01T00:00:00.000Z",
-        updatedAt: "2026-01-01T00:00:00.000Z",
-        deletedAt: null,
-      },
-    ],
-    threads: [
-      {
-        id: input.threadId,
-        projectId: input.projectId,
-        title: "Thread",
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5-codex",
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "full-access",
-        branch: null,
-        worktreePath: input.worktreePath,
-        latestTurn: {
-          turnId: TurnId.makeUnsafe("turn-1"),
-          state: "completed",
-          requestedAt: "2026-01-01T00:00:00.000Z",
-          startedAt: "2026-01-01T00:00:00.000Z",
-          completedAt: "2026-01-01T00:00:00.000Z",
-          assistantMessageId: null,
-        },
-        createdAt: "2026-01-01T00:00:00.000Z",
-        updatedAt: "2026-01-01T00:00:00.000Z",
-        deletedAt: null,
-        handoff: null,
-        messages: [],
-        activities: [],
-        proposedPlans: [],
-        checkpoints: [
-          {
-            turnId: TurnId.makeUnsafe("turn-1"),
-            checkpointTurnCount: input.checkpointTurnCount,
-            checkpointRef: input.checkpointRef,
-            status: "ready",
-            files: [],
-            assistantMessageId: null,
-            completedAt: "2026-01-01T00:00:00.000Z",
-          },
-        ],
-        session: null,
+        turnId: TurnId.makeUnsafe("turn-1"),
+        checkpointTurnCount: input.checkpointTurnCount,
+        checkpointRef: input.checkpointRef,
+        status: "ready",
+        files: [],
+        assistantMessageId: null,
+        completedAt: "2026-01-01T00:00:00.000Z",
       },
     ],
   };
@@ -95,10 +52,11 @@ describe("CheckpointDiffQueryLive", () => {
       readonly cwd: string;
     }> = [];
 
-    const snapshot = makeSnapshot({
+    const threadCheckpointContext = makeThreadCheckpointContext({
       projectId,
       threadId,
       workspaceRoot: "/tmp/workspace",
+      envMode: "local",
       worktreePath: null,
       checkpointTurnCount: 1,
       checkpointRef: toCheckpointRef,
@@ -125,7 +83,11 @@ describe("CheckpointDiffQueryLive", () => {
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
-          getSnapshot: () => Effect.succeed(snapshot),
+          getSnapshot: () => Effect.die("unused"),
+          getCounts: () => Effect.die("unused"),
+          getActiveProjectByWorkspaceRoot: () => Effect.die("unused"),
+          getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
+          getThreadCheckpointContext: () => Effect.succeed(Option.some(threadCheckpointContext)),
         }),
       ),
     );
@@ -174,13 +136,11 @@ describe("CheckpointDiffQueryLive", () => {
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
-          getSnapshot: () =>
-            Effect.succeed({
-              snapshotSequence: 0,
-              projects: [],
-              threads: [],
-              updatedAt: "2026-01-01T00:00:00.000Z",
-            } satisfies OrchestrationReadModel),
+          getSnapshot: () => Effect.die("unused"),
+          getCounts: () => Effect.die("unused"),
+          getActiveProjectByWorkspaceRoot: () => Effect.die("unused"),
+          getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
+          getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         }),
       ),
     );
@@ -197,5 +157,56 @@ describe("CheckpointDiffQueryLive", () => {
         }).pipe(Effect.provide(layer)),
       ),
     ).rejects.toThrow("Thread 'thread-missing' not found.");
+  });
+
+  it("fails when a worktree-mode thread has no materialized worktree path", async () => {
+    const projectId = ProjectId.makeUnsafe("project-worktree");
+    const threadId = ThreadId.makeUnsafe("thread-worktree");
+    const toCheckpointRef = checkpointRefForThreadTurn(threadId, 1);
+
+    const threadCheckpointContext = makeThreadCheckpointContext({
+      projectId,
+      threadId,
+      workspaceRoot: "/tmp/project-root",
+      envMode: "worktree",
+      worktreePath: null,
+      checkpointTurnCount: 1,
+      checkpointRef: toCheckpointRef,
+    });
+
+    const checkpointStore: CheckpointStoreShape = {
+      isGitRepository: () => Effect.succeed(true),
+      captureCheckpoint: () => Effect.void,
+      hasCheckpointRef: () => Effect.succeed(true),
+      restoreCheckpoint: () => Effect.succeed(true),
+      diffCheckpoints: () => Effect.succeed("diff patch"),
+      deleteCheckpointRefs: () => Effect.void,
+    };
+
+    const layer = CheckpointDiffQueryLive.pipe(
+      Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
+      Layer.provideMerge(
+        Layer.succeed(ProjectionSnapshotQuery, {
+          getSnapshot: () => Effect.die("unused"),
+          getCounts: () => Effect.die("unused"),
+          getActiveProjectByWorkspaceRoot: () => Effect.die("unused"),
+          getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
+          getThreadCheckpointContext: () => Effect.succeed(Option.some(threadCheckpointContext)),
+        }),
+      ),
+    );
+
+    await expect(
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const query = yield* CheckpointDiffQuery;
+          return yield* query.getTurnDiff({
+            threadId,
+            fromTurnCount: 0,
+            toTurnCount: 1,
+          });
+        }).pipe(Effect.provide(layer)),
+      ),
+    ).rejects.toThrow("Workspace path missing");
   });
 });

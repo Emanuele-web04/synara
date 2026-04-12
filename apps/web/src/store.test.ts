@@ -51,6 +51,7 @@ function makeState(thread: Thread): AppState {
   return {
     projects: [makeProject()],
     threads: [thread],
+    sidebarThreadSummaryById: {},
     threadsHydrated: true,
   };
 }
@@ -215,6 +216,7 @@ describe("store pure functions", () => {
         }),
       ],
       threads: [],
+      sidebarThreadSummaryById: {},
       threadsHydrated: true,
     };
 
@@ -245,6 +247,7 @@ describe("store pure functions", () => {
         }),
       ],
       threads: [],
+      sidebarThreadSummaryById: {},
       threadsHydrated: true,
     };
 
@@ -275,6 +278,7 @@ describe("store pure functions", () => {
         }),
       ],
       threads: [],
+      sidebarThreadSummaryById: {},
       threadsHydrated: true,
     };
 
@@ -304,6 +308,7 @@ describe("store pure functions", () => {
         }),
       ],
       threads: [],
+      sidebarThreadSummaryById: {},
       threadsHydrated: true,
     };
 
@@ -407,6 +412,7 @@ describe("store read model sync", () => {
         }),
       ],
       threads: [],
+      sidebarThreadSummaryById: {},
       threadsHydrated: true,
     };
     const readModel: OrchestrationReadModel = {
@@ -458,6 +464,7 @@ describe("store read model sync", () => {
         }),
       ],
       threads: [],
+      sidebarThreadSummaryById: {},
       threadsHydrated: true,
     };
 
@@ -562,6 +569,7 @@ describe("store read model sync", () => {
           }),
         ],
         threads: [makeThread()],
+        sidebarThreadSummaryById: {},
         threadsHydrated: true,
       }));
 
@@ -602,6 +610,7 @@ describe("store read model sync", () => {
         }),
       ],
       threads: [thread],
+      sidebarThreadSummaryById: {},
       threadsHydrated: true,
     };
 

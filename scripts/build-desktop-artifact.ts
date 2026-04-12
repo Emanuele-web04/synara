@@ -680,7 +680,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     t3codeCommitHash: commitHash,
     private: true,
     description: "DP Code desktop build",
-    author: "T3 Tools",
+    author: "Emanuele Di Pietro",
     main: "apps/desktop/dist-electron/main.js",
     build: yield* createBuildConfig(
       options.platform,

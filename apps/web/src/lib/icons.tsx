@@ -3,6 +3,7 @@ import { PiGitCommit, PiSquareSplitHorizontal, PiSquareSplitVertical } from "rea
 import { RiApps2Line } from "react-icons/ri";
 import { TbArrowsRightLeft, TbPlug } from "react-icons/tb";
 import {
+  IconAdjustments,
   IconAlertCircle,
   IconAlertTriangle,
   IconArrowBackUp,
@@ -10,7 +11,9 @@ import {
   IconArrowLeft,
   IconArrowRight,
   IconArrowsUpDown,
+  IconBell,
   IconBolt,
+  IconBrain,
   IconBug,
   IconCheck,
   IconChevronDown,
@@ -44,6 +47,7 @@ import {
   IconLockOpen,
   IconMaximize,
   IconMinimize,
+  IconPalette,
   IconPin,
   IconPinnedFilled,
   IconPlayerPlay,
@@ -78,6 +82,7 @@ export const AppsIcon: LucideIcon = (props) => (
   <RiApps2Line className={props.className} style={props.style} />
 );
 export const ArrowLeftIcon = adaptIcon(IconArrowLeft);
+export const BellIcon = adaptIcon(IconBell);
 export const ArrowRightIcon = adaptIcon(IconArrowRight);
 export const ArrowDownIcon = adaptIcon(IconArrowDown);
 export const ArrowUpDownIcon = adaptIcon(IconArrowsUpDown);
@@ -98,6 +103,9 @@ export const DiffIcon = adaptIcon(IconGitCompare);
 export const EllipsisIcon = adaptIcon(IconDots);
 export const ExternalLinkIcon = adaptIcon(IconExternalLink);
 export const EyeIcon = adaptIcon(IconEye);
+export const PaletteIcon = adaptIcon(IconPalette);
+export const AdjustmentsIcon = adaptIcon(IconAdjustments);
+export const BrainIcon = adaptIcon(IconBrain);
 export const FileIcon = adaptIcon(IconFile);
 export const FlaskConicalIcon = adaptIcon(IconFlask2);
 export const FolderClosedIcon = adaptIcon(IconFolder);

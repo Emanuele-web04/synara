@@ -19,6 +19,30 @@ class CliError extends Data.TaggedError("CliError")<{
   readonly cause?: unknown;
 }> {}
 
+// Some desktop builds do not expose workspace metadata in the root package.json.
+// Publish prep only needs the catalog map when it exists.
+function resolveRootWorkspaceCatalog(): Record<string, unknown> {
+  const rootWorkspaces =
+    typeof rootPackageJson === "object" &&
+    rootPackageJson !== null &&
+    "workspaces" in rootPackageJson
+      ? rootPackageJson.workspaces
+      : null;
+
+  if (
+    typeof rootWorkspaces !== "object" ||
+    rootWorkspaces === null ||
+    !("catalog" in rootWorkspaces)
+  ) {
+    return {};
+  }
+
+  const catalog = rootWorkspaces.catalog;
+  return typeof catalog === "object" && catalog !== null
+    ? (catalog as Record<string, unknown>)
+    : {};
+}
+
 const RepoRoot = Effect.service(Path.Path).pipe(
   Effect.flatMap((path) => path.fromFileUrl(new URL("../../..", import.meta.url))),
 );
@@ -205,7 +229,7 @@ const publishCmd = Command.make(
 
           pkg.dependencies = resolveCatalogDependencies(
             pkg.dependencies,
-            rootPackageJson.workspaces.catalog,
+            resolveRootWorkspaceCatalog(),
             "apps/server dependencies",
           );
 

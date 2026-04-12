@@ -6,11 +6,32 @@
  *
  * @module ProjectionSnapshotQuery
  */
-import type { OrchestrationReadModel } from "@t3tools/contracts";
+import type {
+  OrchestrationCheckpointSummary,
+  OrchestrationProject,
+  OrchestrationReadModel,
+  ProjectId,
+  ThreadId,
+  ThreadEnvironmentMode,
+} from "@t3tools/contracts";
 import { ServiceMap } from "effect";
-import type { Effect } from "effect";
+import type { Effect, Option } from "effect";
 
 import type { ProjectionRepositoryError } from "../../persistence/Errors.ts";
+
+export interface ProjectionSnapshotCounts {
+  readonly projectCount: number;
+  readonly threadCount: number;
+}
+
+export interface ProjectionThreadCheckpointContext {
+  readonly threadId: ThreadId;
+  readonly projectId: ProjectId;
+  readonly workspaceRoot: string;
+  readonly envMode: ThreadEnvironmentMode;
+  readonly worktreePath: string | null;
+  readonly checkpoints: ReadonlyArray<OrchestrationCheckpointSummary>;
+}
 
 /**
  * ProjectionSnapshotQueryShape - Service API for read-model snapshots.
@@ -23,6 +44,32 @@ export interface ProjectionSnapshotQueryShape {
    * projector cursor state.
    */
   readonly getSnapshot: () => Effect.Effect<OrchestrationReadModel, ProjectionRepositoryError>;
+
+  /**
+   * Read aggregate projection counts without hydrating the full read model.
+   */
+  readonly getCounts: () => Effect.Effect<ProjectionSnapshotCounts, ProjectionRepositoryError>;
+
+  /**
+   * Read the active project for an exact workspace root match.
+   */
+  readonly getActiveProjectByWorkspaceRoot: (
+    workspaceRoot: string,
+  ) => Effect.Effect<Option.Option<OrchestrationProject>, ProjectionRepositoryError>;
+
+  /**
+   * Read the earliest active thread for a project.
+   */
+  readonly getFirstActiveThreadIdByProjectId: (
+    projectId: ProjectId,
+  ) => Effect.Effect<Option.Option<ThreadId>, ProjectionRepositoryError>;
+
+  /**
+   * Read the checkpoint context needed to resolve a single thread diff.
+   */
+  readonly getThreadCheckpointContext: (
+    threadId: ThreadId,
+  ) => Effect.Effect<Option.Option<ProjectionThreadCheckpointContext>, ProjectionRepositoryError>;
 }
 
 /**

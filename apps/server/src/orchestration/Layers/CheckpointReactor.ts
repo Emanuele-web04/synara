@@ -63,11 +63,88 @@ function checkpointStatusFromRuntime(status: string | undefined): "ready" | "mis
 const serverCommandId = (tag: string): CommandId =>
   CommandId.makeUnsafe(`server:${tag}:${crypto.randomUUID()}`);
 
+const ASSISTANT_MESSAGE_ID_RETRY_DELAY_MS = 20;
+const ASSISTANT_MESSAGE_ID_RETRY_ATTEMPTS = 6;
+
+function defaultAssistantMessageIdForTurn(turnId: TurnId): MessageId {
+  return MessageId.makeUnsafe(`assistant:${turnId}`);
+}
+
+function resolveExistingAssistantMessageIdForTurn(
+  thread:
+    | {
+        readonly messages: ReadonlyArray<{
+          readonly id: MessageId;
+          readonly role: string;
+          readonly turnId: TurnId | null;
+        }>;
+      }
+    | undefined,
+  turnId: TurnId,
+  assistantMessageId: MessageId | undefined,
+): MessageId | undefined {
+  if (!thread || assistantMessageId === undefined) {
+    return undefined;
+  }
+  return thread.messages.some(
+    (entry) =>
+      entry.id === assistantMessageId && entry.role === "assistant" && entry.turnId === turnId,
+  )
+    ? assistantMessageId
+    : undefined;
+}
+
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const providerService = yield* ProviderService;
   const checkpointStore = yield* CheckpointStore;
   const receiptBus = yield* RuntimeReceiptBus;
+
+  // Wait a short time for ProviderRuntimeIngestion to persist the final
+  // assistant message id when turn completion wins the subscriber race.
+  const resolveAssistantMessageIdForTurn = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly turnId: TurnId;
+    readonly assistantMessageId: MessageId | undefined;
+  }) {
+    const fallbackAssistantMessageId = defaultAssistantMessageIdForTurn(input.turnId);
+    const currentReadModel = yield* orchestrationEngine.getReadModel();
+    const currentThread = currentReadModel.threads.find((entry) => entry.id === input.threadId);
+    const knownInputAssistantMessageId = resolveExistingAssistantMessageIdForTurn(
+      currentThread,
+      input.turnId,
+      input.assistantMessageId,
+    );
+    if (knownInputAssistantMessageId !== undefined) {
+      return knownInputAssistantMessageId;
+    }
+
+    for (let attempt = 0; attempt < ASSISTANT_MESSAGE_ID_RETRY_ATTEMPTS; attempt += 1) {
+      const readModel = yield* orchestrationEngine.getReadModel();
+      const thread = readModel.threads.find((entry) => entry.id === input.threadId);
+      const candidateAssistantMessageId =
+        resolveExistingAssistantMessageIdForTurn(
+          thread,
+          input.turnId,
+          thread?.latestTurn?.turnId === input.turnId
+            ? (thread.latestTurn.assistantMessageId ?? undefined)
+            : undefined,
+        ) ??
+        thread?.messages
+          .toReversed()
+          .find((entry) => entry.role === "assistant" && entry.turnId === input.turnId)?.id;
+
+      if (candidateAssistantMessageId !== undefined) {
+        return candidateAssistantMessageId;
+      }
+
+      if (attempt < ASSISTANT_MESSAGE_ID_RETRY_ATTEMPTS - 1) {
+        yield* Effect.sleep(`${ASSISTANT_MESSAGE_ID_RETRY_DELAY_MS} millis`);
+      }
+    }
+
+    return knownInputAssistantMessageId ?? fallbackAssistantMessageId;
+  });
 
   const appendRevertFailureActivity = (input: {
     readonly threadId: ThreadId;
@@ -262,12 +339,15 @@ const make = Effect.gen(function* () {
         ),
       );
 
-    const assistantMessageId =
-      input.assistantMessageId ??
-      input.thread.messages
-        .toReversed()
-        .find((entry) => entry.role === "assistant" && entry.turnId === input.turnId)?.id ??
-      MessageId.makeUnsafe(`assistant:${input.turnId}`);
+    const assistantMessageId = yield* resolveAssistantMessageIdForTurn({
+      threadId: input.threadId,
+      turnId: input.turnId,
+      assistantMessageId:
+        input.assistantMessageId ??
+        input.thread.messages
+          .toReversed()
+          .find((entry) => entry.role === "assistant" && entry.turnId === input.turnId)?.id,
+    });
 
     yield* orchestrationEngine.dispatch({
       type: "thread.turn.diff.complete",

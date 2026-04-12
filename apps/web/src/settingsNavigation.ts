@@ -1,0 +1,85 @@
+// FILE: settingsNavigation.ts
+// Purpose: Share the settings topic taxonomy between the main sidebar and the settings screen.
+// Layer: Route/UI support
+// Exports: section ids, nav items, and search normalization helper
+
+import {
+  AdjustmentsIcon,
+  BellIcon,
+  BrainIcon,
+  type LucideIcon,
+  PaletteIcon,
+  SettingsIcon,
+  WrenchIcon,
+} from "./lib/icons";
+
+export const SETTINGS_SECTION_IDS = [
+  "general",
+  "appearance",
+  "notifications",
+  "behavior",
+  "models",
+  "advanced",
+] as const;
+
+export type SettingsSectionId = (typeof SETTINGS_SECTION_IDS)[number];
+
+export type SettingsNavItem = {
+  id: SettingsSectionId;
+  label: string;
+  description: string;
+  icon: LucideIcon;
+  eyebrow: string;
+};
+
+export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
+  {
+    id: "general",
+    label: "General",
+    description: "Default provider, thread mode, and sidebar organization.",
+    icon: SettingsIcon,
+    eyebrow: "Workflow defaults",
+  },
+  {
+    id: "appearance",
+    label: "Appearance",
+    description: "Theme, typography, and timestamp formatting.",
+    icon: PaletteIcon,
+    eyebrow: "Visual language",
+  },
+  {
+    id: "notifications",
+    label: "Notifications",
+    description: "In-app toasts and desktop alerts.",
+    icon: BellIcon,
+    eyebrow: "Alerts",
+  },
+  {
+    id: "behavior",
+    label: "Behavior",
+    description: "Streaming, diff handling, and destructive confirmations.",
+    icon: AdjustmentsIcon,
+    eyebrow: "Interaction rules",
+  },
+  {
+    id: "models",
+    label: "Models",
+    description: "Git writing defaults and custom model slugs.",
+    icon: BrainIcon,
+    eyebrow: "AI configuration",
+  },
+  {
+    id: "advanced",
+    label: "Advanced",
+    description: "Provider installs, keybindings, recovery, and version info.",
+    icon: WrenchIcon,
+    eyebrow: "System tools",
+  },
+] as const;
+
+export function normalizeSettingsSection(value: unknown): SettingsSectionId {
+  if (typeof value !== "string") {
+    return "general";
+  }
+  return SETTINGS_SECTION_IDS.find((candidate) => candidate === value) ?? "general";
+}

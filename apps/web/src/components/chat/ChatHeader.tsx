@@ -362,29 +362,29 @@ export const ChatHeader = memo(function ChatHeader({
             render={
               <Toggle
                 className={cn(
-                  "shrink-0",
+                  "shrink-0 border-0",
                   showDiffTotals
-                    ? "gap-1 px-1.5 text-[length:var(--app-font-size-ui-sm,11px)]"
+                    ? "gap-2 px-1.5 text-[length:var(--app-font-size-ui-sm,11px)]"
                     : "",
                 )}
                 pressed={diffOpen}
                 onPressedChange={onToggleDiff}
                 aria-label="Toggle diff panel"
-                variant="outline"
+                variant="default"
                 size="xs"
                 disabled={!isGitRepo}
               >
-                <DiffIcon className="size-3" />
                 {showDiffTotals ? (
-                  <>
+                  <span className="inline-flex items-center gap-1">
                     <span className="font-chat-code text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-xs,10px)] font-normal tracking-normal tabular-nums text-success">
                       +{diffTotals?.insertions ?? 0}
                     </span>
                     <span className="font-chat-code text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-xs,10px)] font-normal tracking-normal tabular-nums text-destructive">
                       -{diffTotals?.deletions ?? 0}
                     </span>
-                  </>
+                  </span>
                 ) : null}
+                <DiffIcon className="size-3.5" />
               </Toggle>
             }
           />

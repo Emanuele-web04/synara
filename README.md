@@ -9,10 +9,6 @@ This project started as a clone of [T3Code](https://github.com/pingdotgg/t3code)
 > [!WARNING]
 > You need to have [Codex CLI](https://github.com/openai/codex) installed and authorized for DP Code to work.
 
-```bash
-npx t3
-```
-
 You can also just install the desktop app. It's cooler.
 
 Install the [desktop app from the Releases page](https://github.com/Emanuele-web04/dpcode/releases)

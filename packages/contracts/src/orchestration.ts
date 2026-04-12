@@ -19,6 +19,7 @@ import {
 export const ORCHESTRATION_WS_METHODS = {
   getSnapshot: "orchestration.getSnapshot",
   dispatchCommand: "orchestration.dispatchCommand",
+  repairState: "orchestration.repairState",
   getTurnDiff: "orchestration.getTurnDiff",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
   replayEvents: "orchestration.replayEvents",
@@ -350,6 +351,9 @@ export const OrchestrationThread = Schema.Struct({
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
+  archivedAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   deletedAt: Schema.NullOr(IsoDateTime),
   handoff: Schema.NullOr(ThreadHandoff).pipe(Schema.withDecodingDefault(() => null)),
   messages: Schema.Array(OrchestrationMessage),
@@ -748,6 +752,9 @@ export const OrchestrationEventType = Schema.Literals([
   "project.deleted",
   "thread.created",
   "thread.deleted",
+  // Legacy desktop installs can still contain these rows in orchestration_events.
+  "thread.archived",
+  "thread.unarchived",
   "thread.meta-updated",
   "thread.runtime-mode-set",
   "thread.interaction-mode-set",
@@ -827,6 +834,18 @@ export const ThreadCreatedPayload = Schema.Struct({
 export const ThreadDeletedPayload = Schema.Struct({
   threadId: ThreadId,
   deletedAt: IsoDateTime,
+});
+
+export const ThreadArchivedPayload = Schema.Struct({
+  threadId: ThreadId,
+  archivedAt: Schema.optional(IsoDateTime),
+  updatedAt: Schema.optional(IsoDateTime),
+});
+
+export const ThreadUnarchivedPayload = Schema.Struct({
+  threadId: ThreadId,
+  unarchivedAt: Schema.optional(IsoDateTime),
+  updatedAt: Schema.optional(IsoDateTime),
 });
 
 export const ThreadMetaUpdatedPayload = Schema.Struct({
@@ -1001,6 +1020,16 @@ export const OrchestrationEvent = Schema.Union([
   }),
   Schema.Struct({
     ...EventBaseFields,
+    type: Schema.Literal("thread.archived"),
+    payload: ThreadArchivedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.unarchived"),
+    payload: ThreadUnarchivedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
     type: Schema.Literal("thread.meta-updated"),
     payload: ThreadMetaUpdatedPayload,
   }),
@@ -1151,6 +1180,11 @@ export type OrchestrationGetSnapshotInput = typeof OrchestrationGetSnapshotInput
 const OrchestrationGetSnapshotResult = OrchestrationReadModel;
 export type OrchestrationGetSnapshotResult = typeof OrchestrationGetSnapshotResult.Type;
 
+export const OrchestrationRepairStateInput = Schema.Struct({});
+export type OrchestrationRepairStateInput = typeof OrchestrationRepairStateInput.Type;
+const OrchestrationRepairStateResult = OrchestrationReadModel;
+export type OrchestrationRepairStateResult = typeof OrchestrationRepairStateResult.Type;
+
 export const OrchestrationGetTurnDiffInput = TurnCountRange.mapFields(
   Struct.assign({ threadId: ThreadId }),
   { unsafePreserveChecks: true },
@@ -1181,6 +1215,10 @@ export const OrchestrationRpcSchemas = {
   getSnapshot: {
     input: OrchestrationGetSnapshotInput,
     output: OrchestrationGetSnapshotResult,
+  },
+  repairState: {
+    input: OrchestrationRepairStateInput,
+    output: OrchestrationRepairStateResult,
   },
   dispatchCommand: {
     input: ClientOrchestrationCommand,

@@ -114,7 +114,10 @@ async function waitForThread(
   engine: OrchestrationEngineShape,
   predicate: (thread: {
     latestTurn: { turnId: string } | null;
-    checkpoints: ReadonlyArray<{ checkpointTurnCount: number }>;
+    checkpoints: ReadonlyArray<{
+      checkpointTurnCount: number;
+      assistantMessageId?: MessageId | null;
+    }>;
     activities: ReadonlyArray<{ kind: string }>;
   }) => boolean,
   timeoutMs = 20_000,
@@ -122,7 +125,10 @@ async function waitForThread(
   const deadline = Date.now() + timeoutMs;
   const poll = async (): Promise<{
     latestTurn: { turnId: string } | null;
-    checkpoints: ReadonlyArray<{ checkpointTurnCount: number }>;
+    checkpoints: ReadonlyArray<{
+      checkpointTurnCount: number;
+      assistantMessageId?: MessageId | null;
+    }>;
     activities: ReadonlyArray<{ kind: string }>;
   }> => {
     const readModel = await Effect.runPromise(engine.getReadModel());
@@ -416,6 +422,147 @@ describe("CheckpointReactor", () => {
         "README.md",
       ),
     ).toBe("v2\n");
+  });
+
+  it("waits briefly for the assistant message id before finalizing a completed turn checkpoint", async () => {
+    const harness = await createHarness({ seedFilesystemCheckpoints: false });
+    const turnId = asTurnId("turn-assistant-race");
+    const assistantMessageId = MessageId.makeUnsafe("assistant:item-race");
+    const createdAt = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-set-assistant-race"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+
+    harness.provider.emit({
+      type: "turn.started",
+      eventId: EventId.makeUnsafe("evt-turn-started-assistant-race"),
+      provider: "codex",
+      createdAt,
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      turnId,
+    });
+
+    await waitForGitRefExists(
+      harness.cwd,
+      checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 0),
+    );
+
+    fs.writeFileSync(path.join(harness.cwd, "README.md"), "race\n", "utf8");
+
+    setTimeout(() => {
+      void Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.message.assistant.complete",
+          commandId: CommandId.makeUnsafe("cmd-assistant-complete-race"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          messageId: assistantMessageId,
+          turnId,
+          createdAt: new Date().toISOString(),
+        }),
+      );
+    }, 10);
+
+    harness.provider.emit({
+      type: "turn.completed",
+      eventId: EventId.makeUnsafe("evt-turn-completed-assistant-race"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      turnId,
+      payload: { state: "completed" },
+    });
+
+    await waitForEvent(harness.engine, (event) => event.type === "thread.turn-diff-completed");
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.checkpoints.some((checkpoint) => checkpoint.checkpointTurnCount === 1),
+    );
+
+    expect(thread.checkpoints[0]?.assistantMessageId).toBe(assistantMessageId);
+  });
+
+  it("replaces placeholder assistant ids with the real assistant message id before capturing", async () => {
+    const harness = await createHarness({ seedFilesystemCheckpoints: false });
+    const turnId = asTurnId("turn-placeholder-race");
+    const assistantMessageId = MessageId.makeUnsafe("assistant:item-placeholder-real");
+    const syntheticAssistantMessageId = MessageId.makeUnsafe("assistant:evt-placeholder-synthetic");
+    const createdAt = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-placeholder-baseline"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: MessageId.makeUnsafe("message-user-placeholder"),
+          role: "user",
+          text: "start turn",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt,
+      }),
+    );
+    await waitForGitRefExists(
+      harness.cwd,
+      checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 0),
+    );
+
+    fs.writeFileSync(path.join(harness.cwd, "README.md"), "placeholder\n", "utf8");
+
+    setTimeout(() => {
+      void Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.message.assistant.complete",
+          commandId: CommandId.makeUnsafe("cmd-assistant-complete-placeholder-race"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          messageId: assistantMessageId,
+          turnId,
+          createdAt: new Date().toISOString(),
+        }),
+      );
+    }, 10);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.diff.complete",
+        commandId: CommandId.makeUnsafe("cmd-turn-diff-placeholder"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        turnId,
+        completedAt: createdAt,
+        checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 1),
+        status: "missing",
+        files: [],
+        assistantMessageId: syntheticAssistantMessageId,
+        checkpointTurnCount: 1,
+        createdAt,
+      }),
+    );
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.checkpoints.some(
+        (checkpoint) =>
+          checkpoint.checkpointTurnCount === 1 &&
+          checkpoint.assistantMessageId === assistantMessageId,
+      ),
+    );
+
+    expect(thread.checkpoints[0]?.assistantMessageId).toBe(assistantMessageId);
   });
 
   it("ignores auxiliary thread turn completion while primary turn is active", async () => {

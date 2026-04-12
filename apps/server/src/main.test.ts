@@ -238,21 +238,26 @@ it.layer(testLayer)("server CLI command", (it) => {
       const recordTelemetry = vi.fn(
         (_event: string, _properties?: Readonly<Record<string, unknown>>) => Effect.void,
       );
-      const getSnapshot = vi.fn(() =>
+      const getCounts = vi.fn(() =>
         Effect.succeed({
-          snapshotSequence: 2,
-          projects: [{} as OrchestrationReadModel["projects"][number]],
-          threads: [
-            {} as OrchestrationReadModel["threads"][number],
-            {} as OrchestrationReadModel["threads"][number],
-          ],
-          updatedAt: new Date(1).toISOString(),
-        } satisfies OrchestrationReadModel),
+          threadCount: 2,
+          projectCount: 1,
+        }),
       );
 
       yield* recordStartupHeartbeat.pipe(
         Effect.provideService(ProjectionSnapshotQuery, {
-          getSnapshot,
+          getSnapshot: () =>
+            Effect.succeed({
+              snapshotSequence: 0,
+              projects: [] as OrchestrationReadModel["projects"],
+              threads: [] as OrchestrationReadModel["threads"],
+              updatedAt: new Date(0).toISOString(),
+            }),
+          getCounts,
+          getActiveProjectByWorkspaceRoot: () => Effect.die("unused"),
+          getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
+          getThreadCheckpointContext: () => Effect.die("unused"),
         }),
         Effect.provideService(AnalyticsService, {
           record: recordTelemetry,

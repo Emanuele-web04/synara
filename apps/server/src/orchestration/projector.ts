@@ -13,6 +13,7 @@ import {
   ProjectCreatedPayload,
   ProjectDeletedPayload,
   ProjectMetaUpdatedPayload,
+  ThreadArchivedPayload,
   ThreadActivityAppendedPayload,
   ThreadCreatedPayload,
   ThreadDeletedPayload,
@@ -20,6 +21,7 @@ import {
   ThreadMetaUpdatedPayload,
   ThreadProposedPlanUpsertedPayload,
   ThreadRuntimeModeSetPayload,
+  ThreadUnarchivedPayload,
   ThreadRevertedPayload,
   ThreadSessionSetPayload,
   ThreadTurnDiffCompletedPayload,
@@ -265,6 +267,7 @@ export function projectEvent(
             latestTurn: null,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
+            archivedAt: null,
             deletedAt: null,
             handoff: payload.handoff,
             messages: [],
@@ -293,6 +296,34 @@ export function projectEvent(
             updatedAt: payload.deletedAt,
           }),
         })),
+      );
+
+    case "thread.archived":
+      return decodeForEvent(ThreadArchivedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const archivedAt = payload.archivedAt ?? payload.updatedAt ?? event.occurredAt;
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              archivedAt,
+              updatedAt: payload.updatedAt ?? archivedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.unarchived":
+      return decodeForEvent(ThreadUnarchivedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const updatedAt = payload.updatedAt ?? payload.unarchivedAt ?? event.occurredAt;
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              archivedAt: null,
+              updatedAt,
+            }),
+          };
+        }),
       );
 
     case "thread.meta-updated":

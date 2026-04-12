@@ -1,3 +1,7 @@
+// FILE: types.ts
+// Purpose: Shared web-app view models for threads, projects, terminal layout, and sidebar rows.
+// Exports: Runtime UI types consumed across store, routes, and components.
+
 import type {
   ModelSelection,
   OrchestrationMessageSource,
@@ -159,6 +163,24 @@ export interface Thread extends ThreadWorkspaceState {
   handoff?: ThreadHandoff | null;
   turnDiffSummaries: TurnDiffSummary[];
   activities: OrchestrationThreadActivity[];
+}
+
+export interface SidebarThreadSummary {
+  id: ThreadId;
+  projectId: ProjectId;
+  title: string;
+  modelSelection: ModelSelection;
+  interactionMode: ProviderInteractionMode;
+  session: ThreadSession | null;
+  createdAt: string;
+  updatedAt?: string | undefined;
+  latestTurn: OrchestrationLatestTurn | null;
+  lastVisitedAt?: string | undefined;
+  latestUserMessageAt: string | null;
+  hasPendingApprovals: boolean;
+  hasPendingUserInput: boolean;
+  hasActionableProposedPlan: boolean;
+  handoff?: ThreadHandoff | null;
 }
 
 export interface ThreadSession {

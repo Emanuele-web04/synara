@@ -1,3 +1,7 @@
+// FILE: store.ts
+// Purpose: Normalizes orchestration snapshots into stable client state for the web app.
+// Exports: Zustand store plus pure state transition helpers shared by runtime bootstrap flows.
+
 import { Fragment, type ReactNode, createElement, useEffect } from "react";
 import {
   type ProviderKind,
@@ -12,24 +16,30 @@ import {
   type ChatAttachment,
   type ChatMessage,
   type Project,
+  type SidebarThreadSummary,
   type Thread,
   type ThreadWorkspacePatch,
 } from "./types";
 import { Debouncer } from "@tanstack/react-pacer";
+import {
+  derivePendingApprovals,
+  derivePendingUserInputs,
+  findLatestProposedPlan,
+  hasActionableProposedPlan,
+} from "./session-logic";
 
 // ── State ────────────────────────────────────────────────────────────
 
 export interface AppState {
   projects: Project[];
   threads: Thread[];
+  sidebarThreadSummaryById: Record<string, SidebarThreadSummary>;
   threadsHydrated: boolean;
 }
 
 type ReadModelProject = OrchestrationReadModel["projects"][number];
 type ReadModelThread = OrchestrationReadModel["threads"][number];
-type ReadModelMessage = ReadModelThread["messages"][number];
-type ReadModelProposedPlan = ReadModelThread["proposedPlans"][number];
-type ReadModelCheckpoint = ReadModelThread["checkpoints"][number];
+type ReadModelMessage = OrchestrationReadModel["threads"][number]["messages"][number];
 
 const PERSISTED_STATE_KEY = "t3code:renderer-state:v8";
 const LEGACY_PERSISTED_STATE_KEYS = [
@@ -47,6 +57,7 @@ const LEGACY_PERSISTED_STATE_KEYS = [
 const initialState: AppState = {
   projects: [],
   threads: [],
+  sidebarThreadSummaryById: {},
   threadsHydrated: false,
 };
 const persistedExpandedProjectCwds = new Set<string>();
@@ -185,6 +196,20 @@ function arraysShallowEqual<T>(
   }
   for (let index = 0; index < left.length; index += 1) {
     if (left[index] !== right[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function recordsShallowEqual<T>(left: Record<string, T>, right: Record<string, T>): boolean {
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  if (leftKeys.length !== rightKeys.length) {
+    return false;
+  }
+  for (const key of leftKeys) {
+    if (!(key in right) || left[key] !== right[key]) {
       return false;
     }
   }
@@ -407,7 +432,7 @@ function normalizeProposedPlans(
 }
 
 function normalizeTurnDiffFiles(
-  incoming: ReadModelCheckpoint["files"],
+  incoming: ReadonlyArray<Thread["turnDiffSummaries"][number]["files"][number]>,
   previous: Thread["turnDiffSummaries"][number]["files"] | undefined,
 ): Thread["turnDiffSummaries"][number]["files"] {
   const nextFiles = incoming.map((file, index) => {
@@ -734,6 +759,109 @@ function attachmentPreviewRoutePath(attachmentId: string): string {
   return `/attachments/${encodeURIComponent(attachmentId)}`;
 }
 
+function getLatestUserMessageAt(messages: ReadonlyArray<ChatMessage>): string | null {
+  let latestUserMessageAt: string | null = null;
+  for (const message of messages) {
+    if (message.role !== "user") {
+      continue;
+    }
+    if (latestUserMessageAt === null || message.createdAt > latestUserMessageAt) {
+      latestUserMessageAt = message.createdAt;
+    }
+  }
+  return latestUserMessageAt;
+}
+
+function sidebarThreadSummariesEqual(
+  left: SidebarThreadSummary | undefined,
+  right: SidebarThreadSummary,
+): boolean {
+  return (
+    left !== undefined &&
+    left.id === right.id &&
+    left.projectId === right.projectId &&
+    left.title === right.title &&
+    left.modelSelection === right.modelSelection &&
+    left.interactionMode === right.interactionMode &&
+    left.session === right.session &&
+    left.createdAt === right.createdAt &&
+    left.updatedAt === right.updatedAt &&
+    left.latestTurn === right.latestTurn &&
+    left.lastVisitedAt === right.lastVisitedAt &&
+    left.latestUserMessageAt === right.latestUserMessageAt &&
+    left.hasPendingApprovals === right.hasPendingApprovals &&
+    left.hasPendingUserInput === right.hasPendingUserInput &&
+    left.hasActionableProposedPlan === right.hasActionableProposedPlan &&
+    (left.handoff ?? null) === (right.handoff ?? null)
+  );
+}
+
+// Keep sidebar row state lightweight so live thread updates do not force row code
+// to rescan every thread message/activity collection on each render.
+function buildSidebarThreadSummary(
+  thread: Thread,
+  previous?: SidebarThreadSummary,
+): SidebarThreadSummary {
+  const nextSummary: SidebarThreadSummary = {
+    id: thread.id,
+    projectId: thread.projectId,
+    title: thread.title,
+    modelSelection: thread.modelSelection,
+    interactionMode: thread.interactionMode,
+    session: thread.session,
+    createdAt: thread.createdAt,
+    updatedAt: thread.updatedAt,
+    latestTurn: thread.latestTurn,
+    lastVisitedAt: thread.lastVisitedAt,
+    latestUserMessageAt: getLatestUserMessageAt(thread.messages),
+    hasPendingApprovals: derivePendingApprovals(thread.activities).length > 0,
+    hasPendingUserInput: derivePendingUserInputs(thread.activities).length > 0,
+    hasActionableProposedPlan: hasActionableProposedPlan(
+      findLatestProposedPlan(thread.proposedPlans, thread.latestTurn?.turnId ?? null),
+    ),
+    handoff: thread.handoff ?? null,
+  };
+  if (previous && sidebarThreadSummariesEqual(previous, nextSummary)) {
+    return previous;
+  }
+  return nextSummary;
+}
+
+function normalizeSingleTurnDiffSummary(
+  incoming: Thread["turnDiffSummaries"][number],
+  previous: Thread["turnDiffSummaries"][number] | undefined,
+): Thread["turnDiffSummaries"][number] {
+  const files = normalizeTurnDiffFiles(incoming.files, previous?.files);
+  if (
+    previous &&
+    previous.turnId === incoming.turnId &&
+    previous.completedAt === incoming.completedAt &&
+    previous.status === incoming.status &&
+    previous.assistantMessageId === incoming.assistantMessageId &&
+    previous.checkpointTurnCount === incoming.checkpointTurnCount &&
+    previous.checkpointRef === incoming.checkpointRef &&
+    previous.files === files
+  ) {
+    return previous;
+  }
+  return {
+    ...incoming,
+    files,
+  };
+}
+
+function sortTurnDiffSummaries(
+  summaries: ReadonlyArray<Thread["turnDiffSummaries"][number]>,
+): Thread["turnDiffSummaries"] {
+  return [...summaries].toSorted(
+    (left, right) =>
+      (left.checkpointTurnCount ?? Number.MAX_SAFE_INTEGER) -
+        (right.checkpointTurnCount ?? Number.MAX_SAFE_INTEGER) ||
+      left.completedAt.localeCompare(right.completedAt) ||
+      left.turnId.localeCompare(right.turnId),
+  );
+}
+
 // ── Pure state transition functions ────────────────────────────────────
 
 export function syncServerReadModel(state: AppState, readModel: OrchestrationReadModel): AppState {
@@ -745,7 +873,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
   );
   const existingThreadById = new Map(state.threads.map((thread) => [thread.id, thread] as const));
   const nextThreads = readModel.threads
-    .filter((thread) => thread.deletedAt === null)
+    .filter((thread) => thread.deletedAt === null && (thread.archivedAt ?? null) === null)
     .map((thread) => {
       const existing = existingThreadById.get(thread.id);
       // Thread.updatedAt already changes for message, activity, session, plan, and diff updates.
@@ -755,15 +883,76 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
       return normalizeThreadFromReadModel(thread, existing);
     });
   const threads = arraysShallowEqual(state.threads, nextThreads) ? state.threads : nextThreads;
-  if (projects === state.projects && threads === state.threads && state.threadsHydrated) {
+  const nextSidebarThreadSummaryById = Object.fromEntries(
+    threads.map((thread) => [
+      thread.id,
+      buildSidebarThreadSummary(thread, state.sidebarThreadSummaryById[thread.id]),
+    ]),
+  ) as Record<string, SidebarThreadSummary>;
+  const sidebarThreadSummaryById = recordsShallowEqual(
+    state.sidebarThreadSummaryById,
+    nextSidebarThreadSummaryById,
+  )
+    ? state.sidebarThreadSummaryById
+    : nextSidebarThreadSummaryById;
+  if (
+    projects === state.projects &&
+    threads === state.threads &&
+    sidebarThreadSummaryById === state.sidebarThreadSummaryById &&
+    state.threadsHydrated
+  ) {
     return state;
   }
   return {
     ...state,
     projects,
     threads,
+    sidebarThreadSummaryById,
     threadsHydrated: true,
   };
+}
+
+export function applyThreadTurnDiffCompleted(
+  state: AppState,
+  input: {
+    readonly threadId: ThreadId;
+    readonly summary: Thread["turnDiffSummaries"][number];
+  },
+): AppState {
+  const threads = updateThread(state.threads, input.threadId, (thread) => {
+    const previousSummary = thread.turnDiffSummaries.find(
+      (summary) => summary.turnId === input.summary.turnId,
+    );
+    const nextSummary = normalizeSingleTurnDiffSummary(input.summary, previousSummary);
+    const turnDiffSummaries = previousSummary
+      ? thread.turnDiffSummaries.map((summary) =>
+          summary.turnId === nextSummary.turnId ? nextSummary : summary,
+        )
+      : sortTurnDiffSummaries([...thread.turnDiffSummaries, nextSummary]);
+
+    if (
+      previousSummary === nextSummary &&
+      turnDiffSummaries === thread.turnDiffSummaries &&
+      (thread.updatedAt ?? thread.createdAt) >= nextSummary.completedAt
+    ) {
+      return thread;
+    }
+
+    return {
+      ...thread,
+      turnDiffSummaries:
+        arraysShallowEqual(thread.turnDiffSummaries, turnDiffSummaries) &&
+        thread.turnDiffSummaries.length === turnDiffSummaries.length
+          ? thread.turnDiffSummaries
+          : turnDiffSummaries,
+      updatedAt:
+        (thread.updatedAt ?? thread.createdAt) > nextSummary.completedAt
+          ? thread.updatedAt
+          : nextSummary.completedAt,
+    };
+  });
+
+  return threads === state.threads ? state : { ...state, threads };
 }
 
 export function markThreadVisited(
@@ -773,6 +962,7 @@ export function markThreadVisited(
 ): AppState {
   const at = visitedAt ?? new Date().toISOString();
   const visitedAtMs = Date.parse(at);
+  let nextVisitedThread: Thread | null = null;
   const threads = updateThread(state.threads, threadId, (thread) => {
     const previousVisitedAtMs = thread.lastVisitedAt ? Date.parse(thread.lastVisitedAt) : NaN;
     if (
@@ -782,21 +972,62 @@ export function markThreadVisited(
     ) {
       return thread;
     }
-    return { ...thread, lastVisitedAt: at };
+    nextVisitedThread = { ...thread, lastVisitedAt: at };
+    return nextVisitedThread;
   });
-  return threads === state.threads ? state : { ...state, threads };
+  if (threads === state.threads) {
+    return state;
+  }
+  if (nextVisitedThread === null) {
+    return { ...state, threads };
+  }
+  const nextSummary = buildSidebarThreadSummary(
+    nextVisitedThread,
+    state.sidebarThreadSummaryById[threadId],
+  );
+  return nextSummary === state.sidebarThreadSummaryById[threadId]
+    ? { ...state, threads }
+    : {
+        ...state,
+        threads,
+        sidebarThreadSummaryById: {
+          ...state.sidebarThreadSummaryById,
+          [threadId]: nextSummary,
+        },
+      };
 }
 
 export function markThreadUnread(state: AppState, threadId: ThreadId): AppState {
+  let nextUnreadThread: Thread | null = null;
   const threads = updateThread(state.threads, threadId, (thread) => {
     if (!thread.latestTurn?.completedAt) return thread;
     const latestTurnCompletedAtMs = Date.parse(thread.latestTurn.completedAt);
     if (Number.isNaN(latestTurnCompletedAtMs)) return thread;
     const unreadVisitedAt = new Date(latestTurnCompletedAtMs - 1).toISOString();
     if (thread.lastVisitedAt === unreadVisitedAt) return thread;
-    return { ...thread, lastVisitedAt: unreadVisitedAt };
+    nextUnreadThread = { ...thread, lastVisitedAt: unreadVisitedAt };
+    return nextUnreadThread;
   });
-  return threads === state.threads ? state : { ...state, threads };
+  if (threads === state.threads) {
+    return state;
+  }
+  if (nextUnreadThread === null) {
+    return { ...state, threads };
+  }
+  const nextSummary = buildSidebarThreadSummary(
+    nextUnreadThread,
+    state.sidebarThreadSummaryById[threadId],
+  );
+  return nextSummary === state.sidebarThreadSummaryById[threadId]
+    ? { ...state, threads }
+    : {
+        ...state,
+        threads,
+        sidebarThreadSummaryById: {
+          ...state.sidebarThreadSummaryById,
+          [threadId]: nextSummary,
+        },
+      };
 }
 
 export function toggleProject(state: AppState, projectId: Project["id"]): AppState {
@@ -945,6 +1176,10 @@ export function setThreadWorkspace(
 
 interface AppStore extends AppState {
   syncServerReadModel: (readModel: OrchestrationReadModel) => void;
+  applyThreadTurnDiffCompleted: (
+    threadId: ThreadId,
+    summary: Thread["turnDiffSummaries"][number],
+  ) => void;
   markThreadVisited: (threadId: ThreadId, visitedAt?: string) => void;
   markThreadUnread: (threadId: ThreadId) => void;
   toggleProject: (projectId: Project["id"]) => void;
@@ -960,6 +1195,8 @@ interface AppStore extends AppState {
 export const useStore = create<AppStore>((set) => ({
   ...readPersistedState(),
   syncServerReadModel: (readModel) => set((state) => syncServerReadModel(state, readModel)),
+  applyThreadTurnDiffCompleted: (threadId, summary) =>
+    set((state) => applyThreadTurnDiffCompleted(state, { threadId, summary })),
   markThreadVisited: (threadId, visitedAt) =>
     set((state) => markThreadVisited(state, threadId, visitedAt)),
   markThreadUnread: (threadId) => set((state) => markThreadUnread(state, threadId)),

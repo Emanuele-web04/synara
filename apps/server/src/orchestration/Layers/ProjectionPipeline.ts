@@ -273,44 +273,84 @@ const runAttachmentSideEffects = Effect.fn(function* (sideEffects: AttachmentSid
   const path = yield* Effect.service(Path.Path);
 
   const attachmentsRootDir = serverConfig.attachmentsDir;
+  const attachmentRootEntries = yield* fileSystem
+    .readDirectory(attachmentsRootDir, { recursive: false })
+    .pipe(Effect.catch(() => Effect.succeed([] as Array<string>)));
+
+  // Deleted-thread cleanup removes every attachment owned by the thread.
+  const removeDeletedThreadAttachmentEntry = Effect.fn(function* (
+    threadSegment: string,
+    entry: string,
+  ) {
+    const normalizedEntry = entry.replace(/^[/\\]+/, "").replace(/\\/g, "/");
+    if (normalizedEntry.length === 0 || normalizedEntry.includes("/")) {
+      return;
+    }
+    const attachmentId = parseAttachmentIdFromRelativePath(normalizedEntry);
+    if (!attachmentId) {
+      return;
+    }
+    const attachmentThreadSegment = parseThreadSegmentFromAttachmentId(attachmentId);
+    if (!attachmentThreadSegment || attachmentThreadSegment !== threadSegment) {
+      return;
+    }
+    yield* fileSystem.remove(path.join(attachmentsRootDir, normalizedEntry), {
+      force: true,
+    });
+  });
+
+  const deleteThreadAttachments = Effect.fn(function* (threadId: string) {
+    const threadSegment = toSafeThreadAttachmentSegment(threadId);
+    if (!threadSegment) {
+      yield* Effect.logWarning("skipping attachment cleanup for unsafe thread id", {
+        threadId,
+      });
+      return;
+    }
+
+    yield* Effect.forEach(
+      attachmentRootEntries,
+      (entry) => removeDeletedThreadAttachmentEntry(threadSegment, entry),
+      {
+        concurrency: 1,
+      },
+    );
+  });
+
+  const pruneThreadAttachmentEntry = Effect.fn(function* (
+    threadSegment: string,
+    keptThreadRelativePaths: Set<string>,
+    entry: string,
+  ) {
+    const relativePath = entry.replace(/^[/\\]+/, "").replace(/\\/g, "/");
+    if (relativePath.length === 0 || relativePath.includes("/")) {
+      return;
+    }
+    const attachmentId = parseAttachmentIdFromRelativePath(relativePath);
+    if (!attachmentId) {
+      return;
+    }
+    const attachmentThreadSegment = parseThreadSegmentFromAttachmentId(attachmentId);
+    if (!attachmentThreadSegment || attachmentThreadSegment !== threadSegment) {
+      return;
+    }
+
+    const absolutePath = path.join(attachmentsRootDir, relativePath);
+    const fileInfo = yield* fileSystem
+      .stat(absolutePath)
+      .pipe(Effect.catch(() => Effect.succeed(null)));
+    if (!fileInfo || fileInfo.type !== "File") {
+      return;
+    }
+
+    if (!keptThreadRelativePaths.has(relativePath)) {
+      yield* fileSystem.remove(absolutePath, { force: true });
+    }
+  });
 
   yield* Effect.forEach(
     sideEffects.deletedThreadIds,
-    (threadId) =>
-      Effect.gen(function* () {
-        const threadSegment = toSafeThreadAttachmentSegment(threadId);
-        if (!threadSegment) {
-          yield* Effect.logWarning("skipping attachment cleanup for unsafe thread id", {
-            threadId,
-          });
-          return;
-        }
-        const entries = yield* fileSystem
-          .readDirectory(attachmentsRootDir, { recursive: false })
-          .pipe(Effect.catch(() => Effect.succeed([] as Array<string>)));
-        yield* Effect.forEach(
-          entries,
-          (entry) =>
-            Effect.gen(function* () {
-              const normalizedEntry = entry.replace(/^[/\\]+/, "").replace(/\\/g, "/");
-              if (normalizedEntry.length === 0 || normalizedEntry.includes("/")) {
-                return;
-              }
-              const attachmentId = parseAttachmentIdFromRelativePath(normalizedEntry);
-              if (!attachmentId) {
-                return;
-              }
-              const attachmentThreadSegment = parseThreadSegmentFromAttachmentId(attachmentId);
-              if (!attachmentThreadSegment || attachmentThreadSegment !== threadSegment) {
-                return;
-              }
-              yield* fileSystem.remove(path.join(attachmentsRootDir, normalizedEntry), {
-                force: true,
-              });
-            }),
-          { concurrency: 1 },
-        );
-      }),
+    (threadId) => deleteThreadAttachments(threadId),
     { concurrency: 1 },
   );
 
@@ -326,38 +366,9 @@ const runAttachmentSideEffects = Effect.fn(function* (sideEffects: AttachmentSid
           yield* Effect.logWarning("skipping attachment prune for unsafe thread id", { threadId });
           return;
         }
-        const entries = yield* fileSystem
-          .readDirectory(attachmentsRootDir, { recursive: false })
-          .pipe(Effect.catch(() => Effect.succeed([] as Array<string>)));
         yield* Effect.forEach(
-          entries,
-          (entry) =>
-            Effect.gen(function* () {
-              const relativePath = entry.replace(/^[/\\]+/, "").replace(/\\/g, "/");
-              if (relativePath.length === 0 || relativePath.includes("/")) {
-                return;
-              }
-              const attachmentId = parseAttachmentIdFromRelativePath(relativePath);
-              if (!attachmentId) {
-                return;
-              }
-              const attachmentThreadSegment = parseThreadSegmentFromAttachmentId(attachmentId);
-              if (!attachmentThreadSegment || attachmentThreadSegment !== threadSegment) {
-                return;
-              }
-
-              const absolutePath = path.join(attachmentsRootDir, relativePath);
-              const fileInfo = yield* fileSystem
-                .stat(absolutePath)
-                .pipe(Effect.catch(() => Effect.succeed(null)));
-              if (!fileInfo || fileInfo.type !== "File") {
-                return;
-              }
-
-              if (!keptThreadRelativePaths.has(relativePath)) {
-                yield* fileSystem.remove(absolutePath, { force: true });
-              }
-            }),
+          attachmentRootEntries,
+          (entry) => pruneThreadAttachmentEntry(threadSegment, keptThreadRelativePaths, entry),
           { concurrency: 1 },
         );
       });
@@ -415,6 +426,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             handoff: event.payload.handoff,
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
+            archivedAt: null,
             deletedAt: null,
           });
           return;
@@ -494,6 +506,38 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             ...existingRow.value,
             deletedAt: event.payload.deletedAt,
             updatedAt: event.payload.deletedAt,
+          });
+          return;
+        }
+
+        case "thread.archived": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          const archivedAt =
+            event.payload.archivedAt ?? event.payload.updatedAt ?? event.occurredAt;
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            archivedAt,
+            updatedAt: event.payload.updatedAt ?? archivedAt,
+          });
+          return;
+        }
+
+        case "thread.unarchived": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            archivedAt: null,
+            updatedAt: event.payload.updatedAt ?? event.payload.unarchivedAt ?? event.occurredAt,
           });
           return;
         }

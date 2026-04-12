@@ -1,5 +1,9 @@
+// FILE: Sidebar.logic.ts
+// Purpose: Shared sidebar sorting and status helpers used by the thread list UI.
+// Exports: Sidebar row state derivation, sort utilities, and visibility helpers.
+
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "../appSettings";
-import type { Project, Thread } from "../types";
+import type { ChatMessage, Project, SidebarThreadSummary, Thread } from "../types";
 import { cn } from "../lib/utils";
 import {
   findLatestProposedPlan,
@@ -15,7 +19,12 @@ type SidebarProject = {
   createdAt?: string | undefined;
   updatedAt?: string | undefined;
 };
-type SidebarThreadSortInput = Pick<Thread, "createdAt" | "updatedAt" | "messages">;
+type SidebarThreadSortInput = {
+  createdAt: string;
+  updatedAt?: string | undefined;
+  latestUserMessageAt?: string | null | undefined;
+  messages?: ReadonlyArray<Pick<ChatMessage, "role" | "createdAt">> | undefined;
+};
 
 export interface ThreadStatusPill {
   label:
@@ -41,8 +50,11 @@ const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
 
 type ThreadStatusInput = Pick<
   Thread,
-  "interactionMode" | "latestTurn" | "lastVisitedAt" | "proposedPlans" | "session"
->;
+  "interactionMode" | "latestTurn" | "lastVisitedAt" | "session"
+> & {
+  proposedPlans?: Thread["proposedPlans"] | undefined;
+  hasActionableProposedPlan?: boolean | undefined;
+};
 
 export function hasUnseenCompletion(thread: ThreadStatusInput): boolean {
   if (!thread.latestTurn?.completedAt) return false;
@@ -145,9 +157,10 @@ export function resolveThreadStatusPill(input: {
     !hasPendingUserInput &&
     thread.interactionMode === "plan" &&
     isLatestTurnSettled(thread.latestTurn, thread.session) &&
-    hasActionableProposedPlan(
-      findLatestProposedPlan(thread.proposedPlans, thread.latestTurn?.turnId ?? null),
-    );
+    (thread.hasActionableProposedPlan ??
+      hasActionableProposedPlan(
+        findLatestProposedPlan(thread.proposedPlans ?? [], thread.latestTurn?.turnId ?? null),
+      ));
   if (hasPlanReadyPrompt) {
     return {
       label: "Plan Ready",
@@ -187,14 +200,14 @@ export function resolveProjectStatusIndicator(
   return highestPriorityStatus;
 }
 
-export function getVisibleThreadsForProject(input: {
-  threads: readonly Thread[];
+export function getVisibleThreadsForProject<T extends Pick<SidebarThreadSummary, "id">>(input: {
+  threads: readonly T[];
   activeThreadId: Thread["id"] | undefined;
   isThreadListExpanded: boolean;
   previewLimit: number;
 }): {
   hasHiddenThreads: boolean;
-  visibleThreads: Thread[];
+  visibleThreads: T[];
 } {
   const { activeThreadId, isThreadListExpanded, previewLimit, threads } = input;
   const hasHiddenThreads = threads.length > previewLimit;
@@ -265,15 +278,17 @@ export function getUnpinnedThreadsForSidebar<T extends Pick<Thread, "id">>(
 }
 
 // Match the exact rows the sidebar renders for one project, including folded previews.
-export function getRenderedThreadsForSidebarProject(input: {
+export function getRenderedThreadsForSidebarProject<
+  T extends Pick<SidebarThreadSummary, "id"> & SidebarThreadSortInput,
+>(input: {
   project: Pick<Project, "expanded">;
-  threads: readonly Thread[];
+  threads: readonly T[];
   activeThreadId: Thread["id"] | undefined;
   isThreadListExpanded: boolean;
   previewLimit: number;
 }): {
   hasHiddenThreads: boolean;
-  renderedThreads: Thread[];
+  renderedThreads: T[];
 } {
   const { activeThreadId, isThreadListExpanded, previewLimit, project, threads } = input;
   const pinnedCollapsedThread =
@@ -296,7 +311,7 @@ export function getRenderedThreadsForSidebarProject(input: {
 // Flatten the sidebar's current project/thread visibility into the same order the user sees.
 export function getVisibleSidebarThreadIds(input: {
   projects: readonly Pick<Project, "id" | "expanded">[];
-  threads: readonly Thread[];
+  threads: readonly (Pick<SidebarThreadSummary, "id" | "projectId"> & SidebarThreadSortInput)[];
   activeThreadId: Thread["id"] | undefined;
   expandedThreadListsByProject: ReadonlySet<Project["id"]>;
   previewLimit: number;
@@ -371,9 +386,14 @@ function toSortableTimestamp(iso: string | undefined): number | null {
 }
 
 function getLatestUserMessageTimestamp(thread: SidebarThreadSortInput): number {
+  const latestUserMessageAt = toSortableTimestamp(thread.latestUserMessageAt ?? undefined);
+  if (latestUserMessageAt !== null) {
+    return latestUserMessageAt;
+  }
+
   let latestUserMessageTimestamp: number | null = null;
 
-  for (const message of thread.messages) {
+  for (const message of thread.messages ?? []) {
     if (message.role !== "user") continue;
     const messageTimestamp = toSortableTimestamp(message.createdAt);
     if (messageTimestamp === null) continue;
@@ -400,9 +420,10 @@ function getThreadSortTimestamp(
   return getLatestUserMessageTimestamp(thread);
 }
 
-export function sortThreadsForSidebar<
-  T extends Pick<Thread, "id" | "createdAt" | "updatedAt" | "messages">,
->(threads: readonly T[], sortOrder: SidebarThreadSortOrder): T[] {
+export function sortThreadsForSidebar<T extends { id: Thread["id"] } & SidebarThreadSortInput>(
+  threads: readonly T[],
+  sortOrder: SidebarThreadSortOrder,
+): T[] {
   return threads.toSorted((left, right) => {
     const rightTimestamp = getThreadSortTimestamp(right, sortOrder);
     const leftTimestamp = getThreadSortTimestamp(left, sortOrder);
@@ -414,7 +435,7 @@ export function sortThreadsForSidebar<
 }
 
 export function getFallbackThreadIdAfterDelete<
-  T extends Pick<Thread, "id" | "projectId" | "createdAt" | "updatedAt" | "messages">,
+  T extends { id: Thread["id"]; projectId: Thread["projectId"] } & SidebarThreadSortInput,
 >(input: {
   threads: readonly T[];
   deletedThreadId: T["id"];
@@ -458,7 +479,10 @@ export function getProjectSortTimestamp(
   return toSortableTimestamp(project.updatedAt ?? project.createdAt) ?? Number.NEGATIVE_INFINITY;
 }
 
-export function sortProjectsForSidebar<TProject extends SidebarProject, TThread extends Thread>(
+export function sortProjectsForSidebar<
+  TProject extends SidebarProject,
+  TThread extends { projectId: Thread["projectId"] } & SidebarThreadSortInput,
+>(
   projects: readonly TProject[],
   threads: readonly TThread[],
   sortOrder: SidebarProjectSortOrder,

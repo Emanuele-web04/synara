@@ -17,6 +17,7 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -53,6 +54,7 @@ import {
 } from "../splitViewStore";
 import { selectSingleChatPanelState, useSingleChatPanelStore } from "../singleChatPanelStore";
 import { useStore } from "../store";
+import { createThreadExistsSelector, createThreadProjectIdSelector } from "../storeSelectors";
 import { Button } from "../components/ui/button";
 import {
   Dialog,
@@ -1192,10 +1194,13 @@ function ChatThreadRouteView() {
     select: (params) => ThreadId.makeUnsafe(params.threadId),
   });
   const search = Route.useSearch();
-  const threadProjectId = useStore(
-    (store) => store.threads.find((thread) => thread.id === threadId)?.projectId ?? null,
+  const threadProjectIdSelector = useMemo(
+    () => createThreadProjectIdSelector(threadId),
+    [threadId],
   );
-  const threadExists = useStore((store) => store.threads.some((thread) => thread.id === threadId));
+  const threadExistsSelector = useMemo(() => createThreadExistsSelector(threadId), [threadId]);
+  const threadProjectId: ProjectId | null = useStore(threadProjectIdSelector);
+  const threadExists = useStore(threadExistsSelector);
   const draftThreadState = useComposerDraftStore(
     (store) => store.draftThreadsByThreadId[threadId] ?? null,
   );

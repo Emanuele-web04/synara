@@ -1,15 +1,19 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
-import { ChevronDownIcon, PlusIcon, RotateCcwIcon, Undo2Icon, XIcon } from "~/lib/icons";
-import { type ReactNode, useCallback, useEffect, useState } from "react";
+// FILE: _chat.settings.tsx
+// Purpose: Render the dedicated settings experience with its own section sidebar and grouped panels.
+// Layer: Route screen
+// Exports: Settings route component for `/settings`
+
 import { type ProviderKind, DEFAULT_GIT_TEXT_GENERATION_MODEL } from "@t3tools/contracts";
+import { createFileRoute, useSearch } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
 import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 import {
   MAX_CHAT_FONT_SIZE_PX,
   getAppModelOptions,
   getCustomModelsForProvider,
-  MIN_CHAT_FONT_SIZE_PX,
   MAX_CUSTOM_MODEL_LENGTH,
+  MIN_CHAT_FONT_SIZE_PX,
   MODEL_PROVIDER_SETTINGS,
   normalizeChatFontSizePx,
   patchCustomModels,
@@ -28,11 +32,13 @@ import {
   SelectValue,
 } from "../components/ui/select";
 import { Switch } from "../components/ui/switch";
+import { toastManager } from "../components/ui/toast";
 import { SidebarHeaderTrigger, SidebarInset } from "../components/ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { isElectron } from "../env";
 import { useTheme } from "../hooks/useTheme";
+import { ChevronDownIcon, PlusIcon, RotateCcwIcon, Undo2Icon, XIcon } from "../lib/icons";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { cn } from "../lib/utils";
 import { ensureNativeApi, readNativeApi } from "../nativeApi";
@@ -41,7 +47,14 @@ import {
   readBrowserNotificationPermissionState,
   requestBrowserNotificationPermission,
 } from "../notifications/taskCompletion";
-import { toastManager } from "../components/ui/toast";
+import {
+  normalizeSettingsSection,
+  SETTINGS_NAV_ITEMS,
+  type SettingsSectionId,
+} from "../settingsNavigation";
+import { useStore } from "../store";
+
+// ── Settings taxonomy ──────────────────────────────────────────────────────
 
 const THEME_OPTIONS = [
   {
@@ -65,6 +78,17 @@ const TIMESTAMP_FORMAT_LABELS = {
   locale: "System default",
   "12-hour": "12-hour",
   "24-hour": "24-hour",
+} as const;
+
+const SIDEBAR_PROJECT_SORT_ORDER_LABELS = {
+  updated_at: "Recently active",
+  created_at: "Recently added",
+  manual: "Manual order",
+} as const;
+
+const SIDEBAR_THREAD_SORT_ORDER_LABELS = {
+  updated_at: "Recently active",
+  created_at: "Newest first",
 } as const;
 
 type InstallBinarySettingsKey = "claudeBinaryPath" | "codexBinaryPath";
@@ -107,15 +131,15 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
   },
 ];
 
+// ── Settings UI primitives ────────────────────────────────────────────────
+
 function SettingsSection({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="space-y-3">
-      <h2 className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+    <section className="space-y-2">
+      <h2 className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground px-1">
         {title}
       </h2>
-      <div className="relative overflow-hidden rounded-2xl border bg-card not-dark:bg-clip-padding text-card-foreground shadow-xs/5 before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-2xl)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] dark:before:shadow-[0_-1px_--theme(--color-white/6%)]">
-        {children}
-      </div>
+      {children}
     </section>
   );
 }
@@ -139,7 +163,7 @@ function SettingsRow({
 }) {
   return (
     <div
-      className="border-t border-border px-4 py-4 first:border-t-0 sm:px-5"
+      className="rounded-xl border border-border/50 bg-card/50 px-4 py-3.5 transition-colors hover:bg-accent"
       data-slot="settings-row"
     >
       <div
@@ -149,7 +173,7 @@ function SettingsRow({
         )}
         onClick={onClick}
       >
-        <div className="min-w-0 flex-1 space-y-1">
+        <div className="min-w-0 flex-1 space-y-0.5">
           <div className="flex min-h-5 items-center gap-1.5">
             <h3 className="text-sm font-medium text-foreground">{title}</h3>
             <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center">
@@ -194,11 +218,29 @@ function SettingResetButton({ label, onClick }: { label: string; onClick: () => 
   );
 }
 
+// ── Route screen ───────────────────────────────────────────────────────────
+
 function SettingsRouteView() {
+  const routeSearch = useSearch({ strict: false }) as Record<string, unknown>;
+  const activeSection = normalizeSettingsSection(routeSearch.section);
+  const activeSectionItem = SETTINGS_NAV_ITEMS.find((item) => item.id === activeSection)!;
+
   const { theme, setTheme } = useTheme();
   const { settings, defaults, updateSettings, resetSettings } = useAppSettings();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const syncServerReadModel = useStore((store) => store.syncServerReadModel);
+  const shouldOfferRecoveryTools = useStore((store) => {
+    if (!store.threadsHydrated || store.projects.length === 0) {
+      return false;
+    }
+    return (
+      store.threads.length === 0 || store.threads.every((thread) => thread.messages.length === 0)
+    );
+  });
+
   const [isOpeningKeybindings, setIsOpeningKeybindings] = useState(false);
+  const [isRepairingLocalState, setIsRepairingLocalState] = useState(false);
+  const [showRecoveryTools, setShowRecoveryTools] = useState(false);
   const [openKeybindingsError, setOpenKeybindingsError] = useState<string | null>(null);
   const [openInstallProviders, setOpenInstallProviders] = useState<Record<ProviderKind, boolean>>({
     codex: Boolean(settings.codexBinaryPath || settings.codexHomePath),
@@ -261,25 +303,32 @@ function SettingsRouteView() {
     settings.claudeBinaryPath !== defaults.claudeBinaryPath ||
     settings.codexBinaryPath !== defaults.codexBinaryPath ||
     settings.codexHomePath !== defaults.codexHomePath;
+
   const changedSettingLabels = [
     ...(theme !== "system" ? ["Theme"] : []),
     ...(settings.defaultProvider !== defaults.defaultProvider ? ["Default provider"] : []),
+    ...(settings.defaultThreadEnvMode !== defaults.defaultThreadEnvMode ? ["New thread mode"] : []),
+    ...(settings.sidebarProjectSortOrder !== defaults.sidebarProjectSortOrder
+      ? ["Project sort order"]
+      : []),
+    ...(settings.sidebarThreadSortOrder !== defaults.sidebarThreadSortOrder
+      ? ["Thread sort order"]
+      : []),
     ...(settings.uiFontFamily !== defaults.uiFontFamily ? ["UI font"] : []),
     ...(settings.chatCodeFontFamily !== defaults.chatCodeFontFamily ? ["Code font"] : []),
     ...(settings.chatFontSizePx !== defaults.chatFontSizePx ? ["Base font size"] : []),
     ...(settings.timestampFormat !== defaults.timestampFormat ? ["Time format"] : []),
-    ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
-    ...(settings.enableAssistantStreaming !== defaults.enableAssistantStreaming
-      ? ["Assistant output"]
-      : []),
     ...(settings.enableTaskCompletionToasts !== defaults.enableTaskCompletionToasts
-      ? ["Completion toasts"]
+      ? ["Activity toasts"]
       : []),
     ...(settings.enableSystemTaskCompletionNotifications !==
     defaults.enableSystemTaskCompletionNotifications
       ? ["Desktop notifications"]
       : []),
-    ...(settings.defaultThreadEnvMode !== defaults.defaultThreadEnvMode ? ["New thread mode"] : []),
+    ...(settings.enableAssistantStreaming !== defaults.enableAssistantStreaming
+      ? ["Assistant output"]
+      : []),
+    ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
     ...(settings.confirmThreadDelete !== defaults.confirmThreadDelete
       ? ["Delete confirmation"]
       : []),
@@ -407,6 +456,9 @@ function SettingsRouteView() {
       claudeAgent: "",
     });
     setCustomModelErrorByProvider({});
+    setShowAllCustomModels(false);
+    setShowRecoveryTools(false);
+    setOpenKeybindingsError(null);
   }
 
   async function setSystemNotificationsEnabled(nextEnabled: boolean) {
@@ -474,11 +526,1058 @@ function SettingsRouteView() {
     });
   }
 
+  // Rebuild the local project indexes after an older install leaves them out of sync.
+  const repairLocalState = useCallback(async () => {
+    if (isRepairingLocalState) {
+      return;
+    }
+
+    const api = readNativeApi() ?? ensureNativeApi();
+    const confirmed = await api.dialogs.confirm(
+      [
+        "Repair local state?",
+        "This rebuilds local project indexes and refreshes project snapshots.",
+        "It keeps existing chats in place, but it may take a moment.",
+      ].join("\n"),
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setIsRepairingLocalState(true);
+    try {
+      const snapshot = await api.orchestration.repairState();
+      syncServerReadModel(snapshot);
+      toastManager.add({
+        type: "success",
+        title: "Local state repaired",
+        description: "Project indexes were rebuilt without clearing existing chats.",
+      });
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Repair failed",
+        description: error instanceof Error ? error.message : "Unable to repair local state.",
+      });
+    } finally {
+      setIsRepairingLocalState(false);
+    }
+  }, [isRepairingLocalState, syncServerReadModel]);
+
+  const renderGeneralPanel = () => (
+    <div className="space-y-6">
+      <SettingsSection title="Core defaults">
+        <div className="space-y-2">
+          <SettingsRow
+            title="Default provider"
+            description="Choose the provider used for new chats."
+            resetAction={
+              settings.defaultProvider !== defaults.defaultProvider ? (
+                <SettingResetButton
+                  label="default provider"
+                  onClick={() => updateSettings({ defaultProvider: defaults.defaultProvider })}
+                />
+              ) : null
+            }
+            control={
+              <Select
+                value={settings.defaultProvider}
+                onValueChange={(value) => {
+                  if (value !== "codex" && value !== "claudeAgent") return;
+                  updateSettings({ defaultProvider: value });
+                }}
+              >
+                <SelectTrigger className="w-full sm:w-44" aria-label="Default provider">
+                  <SelectValue>
+                    <span className="flex items-center gap-2">
+                      {settings.defaultProvider === "claudeAgent" ? (
+                        <ClaudeAI className="size-3.5 text-[#d97757]" />
+                      ) : (
+                        <OpenAI className="size-3.5" />
+                      )}
+                      {settings.defaultProvider === "claudeAgent" ? "Claude" : "Codex"}
+                    </span>
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  <SelectItem hideIndicator value="codex">
+                    <span className="flex items-center gap-2">
+                      <OpenAI className="size-3.5" />
+                      Codex
+                    </span>
+                  </SelectItem>
+                  <SelectItem hideIndicator value="claudeAgent">
+                    <span className="flex items-center gap-2">
+                      <ClaudeAI className="size-3.5 text-[#d97757]" />
+                      Claude
+                    </span>
+                  </SelectItem>
+                </SelectPopup>
+              </Select>
+            }
+          />
+
+          <SettingsRow
+            title="New threads"
+            description="Pick the default workspace mode for newly created draft threads."
+            resetAction={
+              settings.defaultThreadEnvMode !== defaults.defaultThreadEnvMode ? (
+                <SettingResetButton
+                  label="new threads"
+                  onClick={() =>
+                    updateSettings({
+                      defaultThreadEnvMode: defaults.defaultThreadEnvMode,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Select
+                value={settings.defaultThreadEnvMode}
+                onValueChange={(value) => {
+                  if (value !== "local" && value !== "worktree") return;
+                  updateSettings({
+                    defaultThreadEnvMode: value,
+                  });
+                }}
+              >
+                <SelectTrigger className="w-full sm:w-44" aria-label="Default thread mode">
+                  <SelectValue>
+                    {settings.defaultThreadEnvMode === "worktree" ? "New worktree" : "Local"}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  <SelectItem hideIndicator value="local">
+                    Local
+                  </SelectItem>
+                  <SelectItem hideIndicator value="worktree">
+                    New worktree
+                  </SelectItem>
+                </SelectPopup>
+              </Select>
+            }
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection title="Sidebar organization">
+        <div className="space-y-2">
+          <SettingsRow
+            title="Project order"
+            description="Controls how projects are arranged in the main sidebar."
+            resetAction={
+              settings.sidebarProjectSortOrder !== defaults.sidebarProjectSortOrder ? (
+                <SettingResetButton
+                  label="project order"
+                  onClick={() =>
+                    updateSettings({
+                      sidebarProjectSortOrder: defaults.sidebarProjectSortOrder,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Select
+                value={settings.sidebarProjectSortOrder}
+                onValueChange={(value) => {
+                  if (value !== "updated_at" && value !== "created_at" && value !== "manual") {
+                    return;
+                  }
+                  updateSettings({ sidebarProjectSortOrder: value });
+                }}
+              >
+                <SelectTrigger className="w-full sm:w-44" aria-label="Project sort order">
+                  <SelectValue>
+                    {SIDEBAR_PROJECT_SORT_ORDER_LABELS[settings.sidebarProjectSortOrder]}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  <SelectItem hideIndicator value="updated_at">
+                    {SIDEBAR_PROJECT_SORT_ORDER_LABELS.updated_at}
+                  </SelectItem>
+                  <SelectItem hideIndicator value="created_at">
+                    {SIDEBAR_PROJECT_SORT_ORDER_LABELS.created_at}
+                  </SelectItem>
+                  <SelectItem hideIndicator value="manual">
+                    {SIDEBAR_PROJECT_SORT_ORDER_LABELS.manual}
+                  </SelectItem>
+                </SelectPopup>
+              </Select>
+            }
+          />
+
+          <SettingsRow
+            title="Thread order"
+            description="Controls how threads are arranged inside each project in the main sidebar."
+            resetAction={
+              settings.sidebarThreadSortOrder !== defaults.sidebarThreadSortOrder ? (
+                <SettingResetButton
+                  label="thread order"
+                  onClick={() =>
+                    updateSettings({
+                      sidebarThreadSortOrder: defaults.sidebarThreadSortOrder,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Select
+                value={settings.sidebarThreadSortOrder}
+                onValueChange={(value) => {
+                  if (value !== "updated_at" && value !== "created_at") {
+                    return;
+                  }
+                  updateSettings({ sidebarThreadSortOrder: value });
+                }}
+              >
+                <SelectTrigger className="w-full sm:w-44" aria-label="Thread sort order">
+                  <SelectValue>
+                    {SIDEBAR_THREAD_SORT_ORDER_LABELS[settings.sidebarThreadSortOrder]}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  <SelectItem hideIndicator value="updated_at">
+                    {SIDEBAR_THREAD_SORT_ORDER_LABELS.updated_at}
+                  </SelectItem>
+                  <SelectItem hideIndicator value="created_at">
+                    {SIDEBAR_THREAD_SORT_ORDER_LABELS.created_at}
+                  </SelectItem>
+                </SelectPopup>
+              </Select>
+            }
+          />
+        </div>
+      </SettingsSection>
+    </div>
+  );
+
+  const renderAppearancePanel = () => (
+    <div className="space-y-6">
+      <SettingsSection title="Theme and typography">
+        <div className="space-y-2">
+          <SettingsRow
+            title="Theme"
+            description="Choose how DP Code looks across the app."
+            resetAction={
+              theme !== "system" ? (
+                <SettingResetButton label="theme" onClick={() => setTheme("system")} />
+              ) : null
+            }
+            control={
+              <Select
+                value={theme}
+                onValueChange={(value) => {
+                  if (value !== "system" && value !== "light" && value !== "dark") return;
+                  setTheme(value);
+                }}
+              >
+                <SelectTrigger className="w-full sm:w-40" aria-label="Theme preference">
+                  <SelectValue>
+                    {THEME_OPTIONS.find((option) => option.value === theme)?.label ?? "System"}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  {THEME_OPTIONS.map((option) => (
+                    <SelectItem hideIndicator key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            }
+          />
+
+          <SettingsRow
+            title="UI font"
+            description="Set a custom font for the interface. Leave empty for the default system font."
+            resetAction={
+              settings.uiFontFamily !== defaults.uiFontFamily ? (
+                <SettingResetButton
+                  label="UI font"
+                  onClick={() => updateSettings({ uiFontFamily: defaults.uiFontFamily })}
+                />
+              ) : null
+            }
+            control={
+              <Input
+                className="w-full text-right sm:w-48"
+                value={settings.uiFontFamily}
+                onChange={(event) => updateSettings({ uiFontFamily: event.target.value })}
+                placeholder="-apple-system, BlinkM…"
+                spellCheck={false}
+                aria-label="Custom UI font family"
+              />
+            }
+          />
+
+          <SettingsRow
+            title="Code font"
+            description="Set a custom font for code blocks and inline code in chat. Leave empty for the default coding font."
+            resetAction={
+              settings.chatCodeFontFamily !== defaults.chatCodeFontFamily ? (
+                <SettingResetButton
+                  label="code font"
+                  onClick={() =>
+                    updateSettings({ chatCodeFontFamily: defaults.chatCodeFontFamily })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Input
+                className="w-full text-right sm:w-48"
+                value={settings.chatCodeFontFamily}
+                onChange={(event) => updateSettings({ chatCodeFontFamily: event.target.value })}
+                placeholder={'"JetBrains Mono"'}
+                spellCheck={false}
+                aria-label="Custom chat code font family"
+              />
+            }
+          />
+
+          <SettingsRow
+            title="Base font size"
+            description="Adjust the app text base in pixels. Chat and UI typography scale proportionally from this value."
+            resetAction={
+              settings.chatFontSizePx !== defaults.chatFontSizePx ? (
+                <SettingResetButton
+                  label="base font size"
+                  onClick={() =>
+                    updateSettings({
+                      chatFontSizePx: defaults.chatFontSizePx,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
+                <Input
+                  type="number"
+                  min={MIN_CHAT_FONT_SIZE_PX}
+                  max={MAX_CHAT_FONT_SIZE_PX}
+                  step={1}
+                  inputMode="numeric"
+                  className="w-full text-right sm:w-20"
+                  value={String(settings.chatFontSizePx)}
+                  onChange={(event) => {
+                    const nextValue = event.target.value.trim();
+                    if (nextValue.length === 0) return;
+                    updateSettings({
+                      chatFontSizePx: normalizeChatFontSizePx(Number(nextValue)),
+                    });
+                  }}
+                  aria-label="Base font size in pixels"
+                />
+                <span className="text-xs text-muted-foreground">px</span>
+              </div>
+            }
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection title="Time and reading">
+        <div className="space-y-2">
+          <SettingsRow
+            title="Time format"
+            description="System default follows your browser or OS clock preference."
+            resetAction={
+              settings.timestampFormat !== defaults.timestampFormat ? (
+                <SettingResetButton
+                  label="time format"
+                  onClick={() =>
+                    updateSettings({
+                      timestampFormat: defaults.timestampFormat,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Select
+                value={settings.timestampFormat}
+                onValueChange={(value) => {
+                  if (value !== "locale" && value !== "12-hour" && value !== "24-hour") {
+                    return;
+                  }
+                  updateSettings({
+                    timestampFormat: value,
+                  });
+                }}
+              >
+                <SelectTrigger className="w-full sm:w-40" aria-label="Timestamp format">
+                  <SelectValue>{TIMESTAMP_FORMAT_LABELS[settings.timestampFormat]}</SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  <SelectItem hideIndicator value="locale">
+                    {TIMESTAMP_FORMAT_LABELS.locale}
+                  </SelectItem>
+                  <SelectItem hideIndicator value="12-hour">
+                    {TIMESTAMP_FORMAT_LABELS["12-hour"]}
+                  </SelectItem>
+                  <SelectItem hideIndicator value="24-hour">
+                    {TIMESTAMP_FORMAT_LABELS["24-hour"]}
+                  </SelectItem>
+                </SelectPopup>
+              </Select>
+            }
+          />
+        </div>
+      </SettingsSection>
+    </div>
+  );
+
+  const renderNotificationsPanel = () => (
+    <div className="space-y-6">
+      <SettingsSection title="Activity alerts">
+        <div className="space-y-2">
+          <SettingsRow
+            title="Activity toasts"
+            description="Show an in-app toast when a chat or managed terminal agent finishes or needs input."
+            resetAction={
+              settings.enableTaskCompletionToasts !== defaults.enableTaskCompletionToasts ? (
+                <SettingResetButton
+                  label="activity toasts"
+                  onClick={() =>
+                    updateSettings({
+                      enableTaskCompletionToasts: defaults.enableTaskCompletionToasts,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={settings.enableTaskCompletionToasts}
+                onCheckedChange={(checked) =>
+                  updateSettings({ enableTaskCompletionToasts: Boolean(checked) })
+                }
+                aria-label="Activity toast notifications"
+              />
+            }
+          />
+
+          <SettingsRow
+            title="Desktop notifications"
+            description="Show an OS notification when a chat or managed terminal agent finishes or needs input while the app is in the background."
+            status={buildNotificationSettingsSupportText(browserNotificationPermission)}
+            resetAction={
+              settings.enableSystemTaskCompletionNotifications !==
+              defaults.enableSystemTaskCompletionNotifications ? (
+                <SettingResetButton
+                  label="desktop notifications"
+                  onClick={() =>
+                    updateSettings({
+                      enableSystemTaskCompletionNotifications:
+                        defaults.enableSystemTaskCompletionNotifications,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <div className="flex w-full items-center gap-2 sm:w-auto sm:justify-end">
+                <Button size="xs" variant="outline" onClick={() => void sendTestNotification()}>
+                  Test
+                </Button>
+                <Switch
+                  checked={settings.enableSystemTaskCompletionNotifications}
+                  onCheckedChange={(checked) => {
+                    void setSystemNotificationsEnabled(Boolean(checked));
+                  }}
+                  aria-label="Desktop activity notifications"
+                />
+              </div>
+            }
+          />
+        </div>
+      </SettingsSection>
+    </div>
+  );
+
+  const renderBehaviorPanel = () => (
+    <div className="space-y-6">
+      <SettingsSection title="Runtime behavior">
+        <div className="space-y-2">
+          <SettingsRow
+            title="Assistant output"
+            description="Show token-by-token output while a response is in progress."
+            resetAction={
+              settings.enableAssistantStreaming !== defaults.enableAssistantStreaming ? (
+                <SettingResetButton
+                  label="assistant output"
+                  onClick={() =>
+                    updateSettings({
+                      enableAssistantStreaming: defaults.enableAssistantStreaming,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={settings.enableAssistantStreaming}
+                onCheckedChange={(checked) =>
+                  updateSettings({
+                    enableAssistantStreaming: Boolean(checked),
+                  })
+                }
+                aria-label="Stream assistant messages"
+              />
+            }
+          />
+
+          <SettingsRow
+            title="Diff line wrapping"
+            description="Set the default wrap state when the diff panel opens. The in-panel wrap toggle only affects the current diff session."
+            resetAction={
+              settings.diffWordWrap !== defaults.diffWordWrap ? (
+                <SettingResetButton
+                  label="diff line wrapping"
+                  onClick={() =>
+                    updateSettings({
+                      diffWordWrap: defaults.diffWordWrap,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={settings.diffWordWrap}
+                onCheckedChange={(checked) =>
+                  updateSettings({
+                    diffWordWrap: Boolean(checked),
+                  })
+                }
+                aria-label="Wrap diff lines by default"
+              />
+            }
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection title="Safety confirmations">
+        <div className="space-y-2">
+          <SettingsRow
+            title="Delete confirmation"
+            description="Ask before deleting a thread and its chat history."
+            resetAction={
+              settings.confirmThreadDelete !== defaults.confirmThreadDelete ? (
+                <SettingResetButton
+                  label="delete confirmation"
+                  onClick={() =>
+                    updateSettings({
+                      confirmThreadDelete: defaults.confirmThreadDelete,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={settings.confirmThreadDelete}
+                onCheckedChange={(checked) =>
+                  updateSettings({
+                    confirmThreadDelete: Boolean(checked),
+                  })
+                }
+                aria-label="Confirm thread deletion"
+              />
+            }
+          />
+
+          <SettingsRow
+            title="Terminal close confirmation"
+            description="Ask before closing a terminal tab and clearing its history."
+            resetAction={
+              settings.confirmTerminalTabClose !== defaults.confirmTerminalTabClose ? (
+                <SettingResetButton
+                  label="terminal close confirmation"
+                  onClick={() =>
+                    updateSettings({
+                      confirmTerminalTabClose: defaults.confirmTerminalTabClose,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={settings.confirmTerminalTabClose}
+                onCheckedChange={(checked) =>
+                  updateSettings({
+                    confirmTerminalTabClose: Boolean(checked),
+                  })
+                }
+                aria-label="Confirm terminal tab close"
+              />
+            }
+          />
+        </div>
+      </SettingsSection>
+    </div>
+  );
+
+  const renderModelsPanel = () => (
+    <div className="space-y-6">
+      <SettingsSection title="Generation defaults">
+        <div className="space-y-2">
+          <SettingsRow
+            title="Git writing model"
+            description="Used for generated commit messages, PR titles, and branch names."
+            resetAction={
+              isGitTextGenerationModelDirty ? (
+                <SettingResetButton
+                  label="git writing model"
+                  onClick={() =>
+                    updateSettings({
+                      textGenerationModel: defaults.textGenerationModel,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Select
+                value={currentGitTextGenerationModel}
+                onValueChange={(value) => {
+                  if (!value) return;
+                  updateSettings({
+                    textGenerationModel: value,
+                  });
+                }}
+              >
+                <SelectTrigger className="w-full sm:w-52" aria-label="Git text generation model">
+                  <SelectValue>{selectedGitTextGenerationModelLabel}</SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  {gitTextGenerationModelOptions.map((option) => (
+                    <SelectItem hideIndicator key={option.slug} value={option.slug}>
+                      {option.name}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            }
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection title="Custom models">
+        <div className="space-y-2">
+          <SettingsRow
+            title="Saved model slugs"
+            description="Add custom model slugs for supported providers."
+            resetAction={
+              totalCustomModels > 0 ? (
+                <SettingResetButton
+                  label="custom models"
+                  onClick={() => {
+                    updateSettings({
+                      customCodexModels: defaults.customCodexModels,
+                      customClaudeModels: defaults.customClaudeModels,
+                    });
+                    setCustomModelErrorByProvider({});
+                    setShowAllCustomModels(false);
+                  }}
+                />
+              ) : null
+            }
+          >
+            <div className="mt-4 border-t border-border pt-4">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <Select
+                  value={selectedCustomModelProvider}
+                  onValueChange={(value) => {
+                    if (value !== "codex" && value !== "claudeAgent") {
+                      return;
+                    }
+                    setSelectedCustomModelProvider(value);
+                  }}
+                >
+                  <SelectTrigger
+                    size="sm"
+                    className="w-full sm:w-40"
+                    aria-label="Custom model provider"
+                  >
+                    <SelectValue>{selectedCustomModelProviderSettings.title}</SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup align="start" alignItemWithTrigger={false}>
+                    {MODEL_PROVIDER_SETTINGS.map((providerSettings) => (
+                      <SelectItem
+                        hideIndicator
+                        className="min-h-7 text-sm"
+                        key={providerSettings.provider}
+                        value={providerSettings.provider}
+                      >
+                        {providerSettings.title}
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
+                <Input
+                  id="custom-model-slug"
+                  value={selectedCustomModelInput}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setCustomModelInputByProvider((existing) => ({
+                      ...existing,
+                      [selectedCustomModelProvider]: value,
+                    }));
+                    if (selectedCustomModelError) {
+                      setCustomModelErrorByProvider((existing) => ({
+                        ...existing,
+                        [selectedCustomModelProvider]: null,
+                      }));
+                    }
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter") return;
+                    event.preventDefault();
+                    addCustomModel(selectedCustomModelProvider);
+                  }}
+                  placeholder={selectedCustomModelProviderSettings.example}
+                  spellCheck={false}
+                />
+                <Button
+                  className="shrink-0"
+                  variant="outline"
+                  onClick={() => addCustomModel(selectedCustomModelProvider)}
+                >
+                  <PlusIcon className="size-3.5" />
+                  Add
+                </Button>
+              </div>
+
+              {selectedCustomModelError ? (
+                <p className="mt-2 text-xs text-destructive">{selectedCustomModelError}</p>
+              ) : null}
+
+              {totalCustomModels > 0 ? (
+                <div className="mt-3">
+                  <div>
+                    {visibleCustomModelRows.map((row) => (
+                      <div
+                        key={row.key}
+                        className="group grid grid-cols-[minmax(5rem,6rem)_minmax(0,1fr)_auto] items-center gap-3 border-t border-border/60 px-4 py-2 first:border-t-0"
+                      >
+                        <span className="truncate text-xs text-muted-foreground">
+                          {row.providerTitle}
+                        </span>
+                        <code className="min-w-0 truncate text-sm text-foreground">{row.slug}</code>
+                        <button
+                          type="button"
+                          className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100 hover:opacity-100"
+                          aria-label={`Remove ${row.slug}`}
+                          onClick={() => removeCustomModel(row.provider, row.slug)}
+                        >
+                          <XIcon className="size-3.5 text-muted-foreground hover:text-foreground" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+
+                  {savedCustomModelRows.length > 5 ? (
+                    <button
+                      type="button"
+                      className="mt-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                      onClick={() => setShowAllCustomModels((value) => !value)}
+                    >
+                      {showAllCustomModels
+                        ? "Show less"
+                        : `Show more (${savedCustomModelRows.length - 5})`}
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          </SettingsRow>
+        </div>
+      </SettingsSection>
+    </div>
+  );
+
+  const renderAdvancedPanel = () => (
+    <div className="space-y-6">
+      <SettingsSection title="Provider installs">
+        <div className="space-y-2">
+          <SettingsRow
+            title="CLI overrides"
+            description="Override the CLI used for new sessions."
+            resetAction={
+              isInstallSettingsDirty ? (
+                <SettingResetButton
+                  label="provider installs"
+                  onClick={() => {
+                    updateSettings({
+                      claudeBinaryPath: defaults.claudeBinaryPath,
+                      codexBinaryPath: defaults.codexBinaryPath,
+                      codexHomePath: defaults.codexHomePath,
+                    });
+                    setOpenInstallProviders({
+                      codex: false,
+                      claudeAgent: false,
+                    });
+                  }}
+                />
+              ) : null
+            }
+          >
+            <div className="mt-4">
+              <div className="space-y-2">
+                {INSTALL_PROVIDER_SETTINGS.map((providerSettings) => {
+                  const isOpen = openInstallProviders[providerSettings.provider];
+                  const isDirty =
+                    providerSettings.provider === "codex"
+                      ? settings.codexBinaryPath !== defaults.codexBinaryPath ||
+                        settings.codexHomePath !== defaults.codexHomePath
+                      : settings.claudeBinaryPath !== defaults.claudeBinaryPath;
+                  const binaryPathValue =
+                    providerSettings.binaryPathKey === "claudeBinaryPath"
+                      ? claudeBinaryPath
+                      : codexBinaryPath;
+
+                  return (
+                    <Collapsible
+                      key={providerSettings.provider}
+                      open={isOpen}
+                      onOpenChange={(open) =>
+                        setOpenInstallProviders((existing) => ({
+                          ...existing,
+                          [providerSettings.provider]: open,
+                        }))
+                      }
+                    >
+                      <div className="overflow-hidden rounded-xl border border-border/70">
+                        <button
+                          type="button"
+                          className="flex w-full items-center gap-3 px-4 py-3 text-left"
+                          onClick={() =>
+                            setOpenInstallProviders((existing) => ({
+                              ...existing,
+                              [providerSettings.provider]: !existing[providerSettings.provider],
+                            }))
+                          }
+                        >
+                          <span className="min-w-0 flex-1 text-sm font-medium text-foreground">
+                            {providerSettings.title}
+                          </span>
+                          {isDirty ? (
+                            <span className="text-[11px] text-muted-foreground">Custom</span>
+                          ) : null}
+                          <ChevronDownIcon
+                            className={cn(
+                              "size-4 shrink-0 text-muted-foreground transition-transform",
+                              isOpen && "rotate-180",
+                            )}
+                          />
+                        </button>
+
+                        <CollapsibleContent>
+                          <div className="border-t border-border/70 px-4 py-4">
+                            <div className="space-y-3">
+                              <label
+                                htmlFor={`provider-install-${providerSettings.binaryPathKey}`}
+                                className="block"
+                              >
+                                <span className="block text-xs font-medium text-foreground">
+                                  {providerSettings.title} binary path
+                                </span>
+                                <Input
+                                  id={`provider-install-${providerSettings.binaryPathKey}`}
+                                  className="mt-1"
+                                  value={binaryPathValue}
+                                  onChange={(event) =>
+                                    updateSettings(
+                                      providerSettings.binaryPathKey === "claudeBinaryPath"
+                                        ? { claudeBinaryPath: event.target.value }
+                                        : { codexBinaryPath: event.target.value },
+                                    )
+                                  }
+                                  placeholder={providerSettings.binaryPlaceholder}
+                                  spellCheck={false}
+                                />
+                                <span className="mt-1 block text-xs text-muted-foreground">
+                                  {providerSettings.binaryDescription}
+                                </span>
+                              </label>
+
+                              {providerSettings.homePathKey ? (
+                                <label
+                                  htmlFor={`provider-install-${providerSettings.homePathKey}`}
+                                  className="block"
+                                >
+                                  <span className="block text-xs font-medium text-foreground">
+                                    CODEX_HOME path
+                                  </span>
+                                  <Input
+                                    id={`provider-install-${providerSettings.homePathKey}`}
+                                    className="mt-1"
+                                    value={codexHomePath}
+                                    onChange={(event) =>
+                                      updateSettings({
+                                        codexHomePath: event.target.value,
+                                      })
+                                    }
+                                    placeholder={providerSettings.homePlaceholder}
+                                    spellCheck={false}
+                                  />
+                                  {providerSettings.homeDescription ? (
+                                    <span className="mt-1 block text-xs text-muted-foreground">
+                                      {providerSettings.homeDescription}
+                                    </span>
+                                  ) : null}
+                                </label>
+                              ) : null}
+                            </div>
+                          </div>
+                        </CollapsibleContent>
+                      </div>
+                    </Collapsible>
+                  );
+                })}
+              </div>
+            </div>
+          </SettingsRow>
+        </div>
+      </SettingsSection>
+
+      <SettingsSection title="Developer tools">
+        <div className="space-y-2">
+          <SettingsRow
+            title="Keybindings"
+            description="Open the persisted `keybindings.json` file to edit advanced bindings directly."
+            status={
+              <>
+                <span className="block break-all font-mono text-[11px] text-foreground">
+                  {keybindingsConfigPath ?? "Resolving keybindings path..."}
+                </span>
+                {openKeybindingsError ? (
+                  <span className="mt-1 block text-destructive">{openKeybindingsError}</span>
+                ) : (
+                  <span className="mt-1 block">Opens in your preferred editor.</span>
+                )}
+              </>
+            }
+            control={
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={!keybindingsConfigPath || isOpeningKeybindings}
+                onClick={openKeybindingsFile}
+              >
+                {isOpeningKeybindings ? "Opening..." : "Open file"}
+              </Button>
+            }
+          />
+
+          <SettingsRow
+            title="Recovery tools"
+            description="Rebuild local project indexes without clearing existing chats when the local state gets out of sync."
+            status={
+              shouldOfferRecoveryTools
+                ? "Visible because projects exist but no chat history is currently available."
+                : "Shown automatically only when recovery actions are relevant."
+            }
+            control={
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={!shouldOfferRecoveryTools || isRepairingLocalState}
+                onClick={() => void repairLocalState()}
+              >
+                {isRepairingLocalState ? "Repairing..." : "Repair state"}
+              </Button>
+            }
+          >
+            {shouldOfferRecoveryTools ? (
+              <div className="mt-3 border-t border-border/70 pt-3">
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between text-left"
+                  onClick={() => setShowRecoveryTools((current) => !current)}
+                >
+                  <span className="text-xs font-medium text-muted-foreground">What this does</span>
+                  <ChevronDownIcon
+                    className={cn(
+                      "size-4 shrink-0 text-muted-foreground transition-transform",
+                      showRecoveryTools && "rotate-180",
+                    )}
+                  />
+                </button>
+                {showRecoveryTools ? (
+                  <div className="mt-3 rounded-xl border border-border/70 px-3 py-3 text-xs text-muted-foreground">
+                    Rebuilds local project indexes and refreshes project snapshots. Existing chats
+                    stay in place.
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </SettingsRow>
+        </div>
+      </SettingsSection>
+
+      <SettingsSection title="About">
+        <div className="space-y-2">
+          <SettingsRow
+            title="Version"
+            description="Current application version."
+            control={
+              <code className="text-xs font-medium text-muted-foreground">{APP_VERSION}</code>
+            }
+          />
+        </div>
+      </SettingsSection>
+    </div>
+  );
+
+  const renderActivePanel = () => {
+    switch (activeSection) {
+      case "general":
+        return renderGeneralPanel();
+      case "appearance":
+        return renderAppearancePanel();
+      case "notifications":
+        return renderNotificationsPanel();
+      case "behavior":
+        return renderBehaviorPanel();
+      case "models":
+        return renderModelsPanel();
+      case "advanced":
+        return renderAdvancedPanel();
+      default:
+        return null;
+    }
+  };
+
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none rounded-l-2xl bg-background text-foreground isolate">
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground">
-        {!isElectron && (
-          <header className="border-b border-border px-3 py-2 sm:px-5">
+    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none rounded-none bg-background text-foreground">
+      <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
+        {/* Header */}
+        {isElectron ? (
+          <div className="drag-region flex h-[52px] shrink-0 items-center border-b border-border/70 px-5">
+            <SidebarHeaderTrigger className="size-7 shrink-0" />
+            <span className="text-xs font-medium tracking-wide text-muted-foreground/70">
+              Settings
+            </span>
+            <div className="ms-auto flex items-center gap-2">
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={changedSettingLabels.length === 0}
+                onClick={() => void restoreDefaults()}
+              >
+                <RotateCcwIcon className="size-3.5" />
+                Restore defaults
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <header className="border-b border-border/70 px-3 py-2 sm:px-5">
             <div className="flex items-center gap-2">
               <SidebarHeaderTrigger className="size-7 shrink-0" />
               <span className="text-sm font-medium text-foreground">Settings</span>
@@ -497,806 +1596,18 @@ function SettingsRouteView() {
           </header>
         )}
 
-        {isElectron && (
-          <div className="drag-region flex h-[52px] shrink-0 items-center border-b border-border px-5">
-            <SidebarHeaderTrigger className="size-7 shrink-0" />
-            <span className="text-xs font-medium tracking-wide text-muted-foreground/70">
-              Settings
-            </span>
-            <div className="ms-auto flex items-center gap-2">
-              <Button
-                size="xs"
-                variant="outline"
-                disabled={changedSettingLabels.length === 0}
-                onClick={() => void restoreDefaults()}
-              >
-                <RotateCcwIcon className="size-3.5" />
-                Restore defaults
-              </Button>
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto">
+          <div className="mx-auto w-full max-w-2xl px-6 py-6">
+            {/* Section header */}
+            <div className="mb-6">
+              <h1 className="text-2xl font-semibold tracking-tight text-foreground">
+                {activeSectionItem.label}
+              </h1>
+              <p className="mt-1 text-sm text-muted-foreground">{activeSectionItem.description}</p>
             </div>
-          </div>
-        )}
 
-        <div className="flex-1 overflow-y-auto p-6">
-          <div className="mx-auto flex w-full max-w-2xl flex-col gap-6">
-            <SettingsSection title="General">
-              <SettingsRow
-                title="Theme"
-                description="Choose how DP Code looks across the app."
-                resetAction={
-                  theme !== "system" ? (
-                    <SettingResetButton label="theme" onClick={() => setTheme("system")} />
-                  ) : null
-                }
-                control={
-                  <Select
-                    value={theme}
-                    onValueChange={(value) => {
-                      if (value !== "system" && value !== "light" && value !== "dark") return;
-                      setTheme(value);
-                    }}
-                  >
-                    <SelectTrigger className="w-full sm:w-40" aria-label="Theme preference">
-                      <SelectValue>
-                        {THEME_OPTIONS.find((option) => option.value === theme)?.label ?? "System"}
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectPopup align="end" alignItemWithTrigger={false}>
-                      {THEME_OPTIONS.map((option) => (
-                        <SelectItem hideIndicator key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectPopup>
-                  </Select>
-                }
-              />
-
-              <SettingsRow
-                title="Default provider"
-                description="Choose the provider used for new chats."
-                resetAction={
-                  settings.defaultProvider !== defaults.defaultProvider ? (
-                    <SettingResetButton
-                      label="default provider"
-                      onClick={() => updateSettings({ defaultProvider: defaults.defaultProvider })}
-                    />
-                  ) : null
-                }
-                control={
-                  <Select
-                    value={settings.defaultProvider}
-                    onValueChange={(value) => {
-                      if (value !== "codex" && value !== "claudeAgent") return;
-                      updateSettings({ defaultProvider: value });
-                    }}
-                  >
-                    <SelectTrigger className="w-full sm:w-44" aria-label="Default provider">
-                      <SelectValue>
-                        <span className="flex items-center gap-2">
-                          {settings.defaultProvider === "claudeAgent" ? (
-                            <ClaudeAI className="size-3.5 text-[#d97757]" />
-                          ) : (
-                            <OpenAI className="size-3.5" />
-                          )}
-                          {settings.defaultProvider === "claudeAgent" ? "Claude" : "Codex"}
-                        </span>
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectPopup align="end" alignItemWithTrigger={false}>
-                      <SelectItem hideIndicator value="codex">
-                        <span className="flex items-center gap-2">
-                          <OpenAI className="size-3.5" />
-                          Codex
-                        </span>
-                      </SelectItem>
-                      <SelectItem hideIndicator value="claudeAgent">
-                        <span className="flex items-center gap-2">
-                          <ClaudeAI className="size-3.5 text-[#d97757]" />
-                          Claude
-                        </span>
-                      </SelectItem>
-                    </SelectPopup>
-                  </Select>
-                }
-              />
-
-              <SettingsRow
-                title="UI font"
-                description="Set a custom font for the interface. Leave empty for the default system font."
-                resetAction={
-                  settings.uiFontFamily !== defaults.uiFontFamily ? (
-                    <SettingResetButton
-                      label="UI font"
-                      onClick={() => updateSettings({ uiFontFamily: defaults.uiFontFamily })}
-                    />
-                  ) : null
-                }
-                control={
-                  <Input
-                    className="w-full sm:w-48 text-right"
-                    value={settings.uiFontFamily}
-                    onChange={(event) => updateSettings({ uiFontFamily: event.target.value })}
-                    placeholder="-apple-system, BlinkM…"
-                    spellCheck={false}
-                    aria-label="Custom UI font family"
-                  />
-                }
-              />
-
-              <SettingsRow
-                title="Code font"
-                description="Set a custom font for code blocks and inline code in chat. Leave empty for the default coding font."
-                resetAction={
-                  settings.chatCodeFontFamily !== defaults.chatCodeFontFamily ? (
-                    <SettingResetButton
-                      label="code font"
-                      onClick={() =>
-                        updateSettings({ chatCodeFontFamily: defaults.chatCodeFontFamily })
-                      }
-                    />
-                  ) : null
-                }
-                control={
-                  <Input
-                    className="w-full text-right sm:w-48"
-                    value={settings.chatCodeFontFamily}
-                    onChange={(event) => updateSettings({ chatCodeFontFamily: event.target.value })}
-                    placeholder={'"JetBrains Mono"'}
-                    spellCheck={false}
-                    aria-label="Custom chat code font family"
-                  />
-                }
-              />
-
-              <SettingsRow
-                title="Base font size"
-                description="Adjust the app text base in pixels. Chat and UI typography scale proportionally from this value."
-                resetAction={
-                  settings.chatFontSizePx !== defaults.chatFontSizePx ? (
-                    <SettingResetButton
-                      label="base font size"
-                      onClick={() =>
-                        updateSettings({
-                          chatFontSizePx: defaults.chatFontSizePx,
-                        })
-                      }
-                    />
-                  ) : null
-                }
-                control={
-                  <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
-                    <Input
-                      type="number"
-                      min={MIN_CHAT_FONT_SIZE_PX}
-                      max={MAX_CHAT_FONT_SIZE_PX}
-                      step={1}
-                      inputMode="numeric"
-                      className="w-full text-right sm:w-20"
-                      value={String(settings.chatFontSizePx)}
-                      onChange={(event) => {
-                        const nextValue = event.target.value.trim();
-                        if (nextValue.length === 0) return;
-                        updateSettings({
-                          chatFontSizePx: normalizeChatFontSizePx(Number(nextValue)),
-                        });
-                      }}
-                      aria-label="Base font size in pixels"
-                    />
-                    <span className="text-xs text-muted-foreground">px</span>
-                  </div>
-                }
-              />
-
-              <SettingsRow
-                title="Time format"
-                description="System default follows your browser or OS clock preference."
-                resetAction={
-                  settings.timestampFormat !== defaults.timestampFormat ? (
-                    <SettingResetButton
-                      label="time format"
-                      onClick={() =>
-                        updateSettings({
-                          timestampFormat: defaults.timestampFormat,
-                        })
-                      }
-                    />
-                  ) : null
-                }
-                control={
-                  <Select
-                    value={settings.timestampFormat}
-                    onValueChange={(value) => {
-                      if (value !== "locale" && value !== "12-hour" && value !== "24-hour") {
-                        return;
-                      }
-                      updateSettings({
-                        timestampFormat: value,
-                      });
-                    }}
-                  >
-                    <SelectTrigger className="w-full sm:w-40" aria-label="Timestamp format">
-                      <SelectValue>{TIMESTAMP_FORMAT_LABELS[settings.timestampFormat]}</SelectValue>
-                    </SelectTrigger>
-                    <SelectPopup align="end" alignItemWithTrigger={false}>
-                      <SelectItem hideIndicator value="locale">
-                        {TIMESTAMP_FORMAT_LABELS.locale}
-                      </SelectItem>
-                      <SelectItem hideIndicator value="12-hour">
-                        {TIMESTAMP_FORMAT_LABELS["12-hour"]}
-                      </SelectItem>
-                      <SelectItem hideIndicator value="24-hour">
-                        {TIMESTAMP_FORMAT_LABELS["24-hour"]}
-                      </SelectItem>
-                    </SelectPopup>
-                  </Select>
-                }
-              />
-
-              <SettingsRow
-                title="Activity toasts"
-                description="Show an in-app toast when a chat or managed terminal agent finishes or needs input."
-                resetAction={
-                  settings.enableTaskCompletionToasts !== defaults.enableTaskCompletionToasts ? (
-                    <SettingResetButton
-                      label="activity toasts"
-                      onClick={() =>
-                        updateSettings({
-                          enableTaskCompletionToasts: defaults.enableTaskCompletionToasts,
-                        })
-                      }
-                    />
-                  ) : null
-                }
-                control={
-                  <Switch
-                    checked={settings.enableTaskCompletionToasts}
-                    onCheckedChange={(checked) =>
-                      updateSettings({ enableTaskCompletionToasts: checked })
-                    }
-                    aria-label="Activity toast notifications"
-                  />
-                }
-              />
-
-              <SettingsRow
-                title="Desktop notifications"
-                description="Show an OS notification when a chat or managed terminal agent finishes or needs input while the app is in the background."
-                status={buildNotificationSettingsSupportText(browserNotificationPermission)}
-                resetAction={
-                  settings.enableSystemTaskCompletionNotifications !==
-                  defaults.enableSystemTaskCompletionNotifications ? (
-                    <SettingResetButton
-                      label="desktop notifications"
-                      onClick={() =>
-                        updateSettings({
-                          enableSystemTaskCompletionNotifications:
-                            defaults.enableSystemTaskCompletionNotifications,
-                        })
-                      }
-                    />
-                  ) : null
-                }
-                control={
-                  <div className="flex w-full items-center gap-2 sm:w-auto sm:justify-end">
-                    <Button size="xs" variant="outline" onClick={() => void sendTestNotification()}>
-                      Test
-                    </Button>
-                    <Switch
-                      checked={settings.enableSystemTaskCompletionNotifications}
-                      onCheckedChange={(checked) => {
-                        void setSystemNotificationsEnabled(checked);
-                      }}
-                      aria-label="Desktop activity notifications"
-                    />
-                  </div>
-                }
-              />
-
-              <SettingsRow
-                title="Diff line wrapping"
-                description="Set the default wrap state when the diff panel opens. The in-panel wrap toggle only affects the current diff session."
-                resetAction={
-                  settings.diffWordWrap !== defaults.diffWordWrap ? (
-                    <SettingResetButton
-                      label="diff line wrapping"
-                      onClick={() =>
-                        updateSettings({
-                          diffWordWrap: defaults.diffWordWrap,
-                        })
-                      }
-                    />
-                  ) : null
-                }
-                control={
-                  <Switch
-                    checked={settings.diffWordWrap}
-                    onCheckedChange={(checked) =>
-                      updateSettings({
-                        diffWordWrap: Boolean(checked),
-                      })
-                    }
-                    aria-label="Wrap diff lines by default"
-                  />
-                }
-              />
-
-              <SettingsRow
-                title="Assistant output"
-                description="Show token-by-token output while a response is in progress."
-                resetAction={
-                  settings.enableAssistantStreaming !== defaults.enableAssistantStreaming ? (
-                    <SettingResetButton
-                      label="assistant output"
-                      onClick={() =>
-                        updateSettings({
-                          enableAssistantStreaming: defaults.enableAssistantStreaming,
-                        })
-                      }
-                    />
-                  ) : null
-                }
-                control={
-                  <Switch
-                    checked={settings.enableAssistantStreaming}
-                    onCheckedChange={(checked) =>
-                      updateSettings({
-                        enableAssistantStreaming: Boolean(checked),
-                      })
-                    }
-                    aria-label="Stream assistant messages"
-                  />
-                }
-              />
-
-              <SettingsRow
-                title="New threads"
-                description="Pick the default workspace mode for newly created draft threads."
-                resetAction={
-                  settings.defaultThreadEnvMode !== defaults.defaultThreadEnvMode ? (
-                    <SettingResetButton
-                      label="new threads"
-                      onClick={() =>
-                        updateSettings({
-                          defaultThreadEnvMode: defaults.defaultThreadEnvMode,
-                        })
-                      }
-                    />
-                  ) : null
-                }
-                control={
-                  <Select
-                    value={settings.defaultThreadEnvMode}
-                    onValueChange={(value) => {
-                      if (value !== "local" && value !== "worktree") return;
-                      updateSettings({
-                        defaultThreadEnvMode: value,
-                      });
-                    }}
-                  >
-                    <SelectTrigger className="w-full sm:w-44" aria-label="Default thread mode">
-                      <SelectValue>
-                        {settings.defaultThreadEnvMode === "worktree" ? "New worktree" : "Local"}
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectPopup align="end" alignItemWithTrigger={false}>
-                      <SelectItem hideIndicator value="local">
-                        Local
-                      </SelectItem>
-                      <SelectItem hideIndicator value="worktree">
-                        New worktree
-                      </SelectItem>
-                    </SelectPopup>
-                  </Select>
-                }
-              />
-
-              <SettingsRow
-                title="Delete confirmation"
-                description="Ask before deleting a thread and its chat history."
-                resetAction={
-                  settings.confirmThreadDelete !== defaults.confirmThreadDelete ? (
-                    <SettingResetButton
-                      label="delete confirmation"
-                      onClick={() =>
-                        updateSettings({
-                          confirmThreadDelete: defaults.confirmThreadDelete,
-                        })
-                      }
-                    />
-                  ) : null
-                }
-                control={
-                  <Switch
-                    checked={settings.confirmThreadDelete}
-                    onCheckedChange={(checked) =>
-                      updateSettings({
-                        confirmThreadDelete: Boolean(checked),
-                      })
-                    }
-                    aria-label="Confirm thread deletion"
-                  />
-                }
-              />
-
-              <SettingsRow
-                title="Terminal close confirmation"
-                description="Ask before closing a terminal tab and clearing its history."
-                resetAction={
-                  settings.confirmTerminalTabClose !== defaults.confirmTerminalTabClose ? (
-                    <SettingResetButton
-                      label="terminal close confirmation"
-                      onClick={() =>
-                        updateSettings({
-                          confirmTerminalTabClose: defaults.confirmTerminalTabClose,
-                        })
-                      }
-                    />
-                  ) : null
-                }
-                control={
-                  <Switch
-                    checked={settings.confirmTerminalTabClose}
-                    onCheckedChange={(checked) =>
-                      updateSettings({
-                        confirmTerminalTabClose: Boolean(checked),
-                      })
-                    }
-                    aria-label="Confirm terminal tab close"
-                  />
-                }
-              />
-            </SettingsSection>
-
-            <SettingsSection title="Models">
-              <SettingsRow
-                title="Git writing model"
-                description="Used for generated commit messages, PR titles, and branch names."
-                resetAction={
-                  isGitTextGenerationModelDirty ? (
-                    <SettingResetButton
-                      label="git writing model"
-                      onClick={() =>
-                        updateSettings({
-                          textGenerationModel: defaults.textGenerationModel,
-                        })
-                      }
-                    />
-                  ) : null
-                }
-                control={
-                  <Select
-                    value={currentGitTextGenerationModel}
-                    onValueChange={(value) => {
-                      if (!value) return;
-                      updateSettings({
-                        textGenerationModel: value,
-                      });
-                    }}
-                  >
-                    <SelectTrigger
-                      className="w-full sm:w-52"
-                      aria-label="Git text generation model"
-                    >
-                      <SelectValue>{selectedGitTextGenerationModelLabel}</SelectValue>
-                    </SelectTrigger>
-                    <SelectPopup align="end" alignItemWithTrigger={false}>
-                      {gitTextGenerationModelOptions.map((option) => (
-                        <SelectItem hideIndicator key={option.slug} value={option.slug}>
-                          {option.name}
-                        </SelectItem>
-                      ))}
-                    </SelectPopup>
-                  </Select>
-                }
-              />
-
-              <SettingsRow
-                title="Custom models"
-                description="Add custom model slugs for supported providers."
-                resetAction={
-                  totalCustomModels > 0 ? (
-                    <SettingResetButton
-                      label="custom models"
-                      onClick={() => {
-                        updateSettings({
-                          customCodexModels: defaults.customCodexModels,
-                          customClaudeModels: defaults.customClaudeModels,
-                        });
-                        setCustomModelErrorByProvider({});
-                        setShowAllCustomModels(false);
-                      }}
-                    />
-                  ) : null
-                }
-              >
-                <div className="mt-4 border-t border-border pt-4">
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                    <Select
-                      value={selectedCustomModelProvider}
-                      onValueChange={(value) => {
-                        if (value !== "codex" && value !== "claudeAgent") {
-                          return;
-                        }
-                        setSelectedCustomModelProvider(value);
-                      }}
-                    >
-                      <SelectTrigger
-                        size="sm"
-                        className="w-full sm:w-40"
-                        aria-label="Custom model provider"
-                      >
-                        <SelectValue>{selectedCustomModelProviderSettings.title}</SelectValue>
-                      </SelectTrigger>
-                      <SelectPopup align="start" alignItemWithTrigger={false}>
-                        {MODEL_PROVIDER_SETTINGS.map((providerSettings) => (
-                          <SelectItem
-                            hideIndicator
-                            className="min-h-7 text-sm"
-                            key={providerSettings.provider}
-                            value={providerSettings.provider}
-                          >
-                            {providerSettings.title}
-                          </SelectItem>
-                        ))}
-                      </SelectPopup>
-                    </Select>
-                    <Input
-                      id="custom-model-slug"
-                      value={selectedCustomModelInput}
-                      onChange={(event) => {
-                        const value = event.target.value;
-                        setCustomModelInputByProvider((existing) => ({
-                          ...existing,
-                          [selectedCustomModelProvider]: value,
-                        }));
-                        if (selectedCustomModelError) {
-                          setCustomModelErrorByProvider((existing) => ({
-                            ...existing,
-                            [selectedCustomModelProvider]: null,
-                          }));
-                        }
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key !== "Enter") return;
-                        event.preventDefault();
-                        addCustomModel(selectedCustomModelProvider);
-                      }}
-                      placeholder={selectedCustomModelProviderSettings.example}
-                      spellCheck={false}
-                    />
-                    <Button
-                      className="shrink-0"
-                      variant="outline"
-                      onClick={() => addCustomModel(selectedCustomModelProvider)}
-                    >
-                      <PlusIcon className="size-3.5" />
-                      Add
-                    </Button>
-                  </div>
-
-                  {selectedCustomModelError ? (
-                    <p className="mt-2 text-xs text-destructive">{selectedCustomModelError}</p>
-                  ) : null}
-
-                  {totalCustomModels > 0 ? (
-                    <div className="mt-3">
-                      <div>
-                        {visibleCustomModelRows.map((row) => (
-                          <div
-                            key={row.key}
-                            className="group grid grid-cols-[minmax(5rem,6rem)_minmax(0,1fr)_auto] items-center gap-3 border-t border-border/60 px-4 py-2 first:border-t-0"
-                          >
-                            <span className="truncate text-xs text-muted-foreground">
-                              {row.providerTitle}
-                            </span>
-                            <code className="min-w-0 truncate text-sm text-foreground">
-                              {row.slug}
-                            </code>
-                            <button
-                              type="button"
-                              className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100 hover:opacity-100"
-                              aria-label={`Remove ${row.slug}`}
-                              onClick={() => removeCustomModel(row.provider, row.slug)}
-                            >
-                              <XIcon className="size-3.5 text-muted-foreground hover:text-foreground" />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-
-                      {savedCustomModelRows.length > 5 ? (
-                        <button
-                          type="button"
-                          className="mt-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
-                          onClick={() => setShowAllCustomModels((value) => !value)}
-                        >
-                          {showAllCustomModels
-                            ? "Show less"
-                            : `Show more (${savedCustomModelRows.length - 5})`}
-                        </button>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
-              </SettingsRow>
-            </SettingsSection>
-
-            <SettingsSection title="Advanced">
-              <SettingsRow
-                title="Provider installs"
-                description="Override the CLI used for new sessions."
-                resetAction={
-                  isInstallSettingsDirty ? (
-                    <SettingResetButton
-                      label="provider installs"
-                      onClick={() => {
-                        updateSettings({
-                          claudeBinaryPath: defaults.claudeBinaryPath,
-                          codexBinaryPath: defaults.codexBinaryPath,
-                          codexHomePath: defaults.codexHomePath,
-                        });
-                        setOpenInstallProviders({
-                          codex: false,
-                          claudeAgent: false,
-                        });
-                      }}
-                    />
-                  ) : null
-                }
-              >
-                <div className="mt-4">
-                  <div className="space-y-2">
-                    {INSTALL_PROVIDER_SETTINGS.map((providerSettings) => {
-                      const isOpen = openInstallProviders[providerSettings.provider];
-                      const isDirty =
-                        providerSettings.provider === "codex"
-                          ? settings.codexBinaryPath !== defaults.codexBinaryPath ||
-                            settings.codexHomePath !== defaults.codexHomePath
-                          : settings.claudeBinaryPath !== defaults.claudeBinaryPath;
-                      const binaryPathValue =
-                        providerSettings.binaryPathKey === "claudeBinaryPath"
-                          ? claudeBinaryPath
-                          : codexBinaryPath;
-
-                      return (
-                        <Collapsible
-                          key={providerSettings.provider}
-                          open={isOpen}
-                          onOpenChange={(open) =>
-                            setOpenInstallProviders((existing) => ({
-                              ...existing,
-                              [providerSettings.provider]: open,
-                            }))
-                          }
-                        >
-                          <div className="overflow-hidden rounded-xl border border-border/70">
-                            <button
-                              type="button"
-                              className="flex w-full items-center gap-3 px-4 py-3 text-left"
-                              onClick={() =>
-                                setOpenInstallProviders((existing) => ({
-                                  ...existing,
-                                  [providerSettings.provider]: !existing[providerSettings.provider],
-                                }))
-                              }
-                            >
-                              <span className="min-w-0 flex-1 text-sm font-medium text-foreground">
-                                {providerSettings.title}
-                              </span>
-                              {isDirty ? (
-                                <span className="text-[11px] text-muted-foreground">Custom</span>
-                              ) : null}
-                              <ChevronDownIcon
-                                className={cn(
-                                  "size-4 shrink-0 text-muted-foreground transition-transform",
-                                  isOpen && "rotate-180",
-                                )}
-                              />
-                            </button>
-
-                            <CollapsibleContent>
-                              <div className="border-t border-border/70 px-4 py-4">
-                                <div className="space-y-3">
-                                  <label
-                                    htmlFor={`provider-install-${providerSettings.binaryPathKey}`}
-                                    className="block"
-                                  >
-                                    <span className="block text-xs font-medium text-foreground">
-                                      {providerSettings.title} binary path
-                                    </span>
-                                    <Input
-                                      id={`provider-install-${providerSettings.binaryPathKey}`}
-                                      className="mt-1"
-                                      value={binaryPathValue}
-                                      onChange={(event) =>
-                                        updateSettings(
-                                          providerSettings.binaryPathKey === "claudeBinaryPath"
-                                            ? { claudeBinaryPath: event.target.value }
-                                            : { codexBinaryPath: event.target.value },
-                                        )
-                                      }
-                                      placeholder={providerSettings.binaryPlaceholder}
-                                      spellCheck={false}
-                                    />
-                                    <span className="mt-1 block text-xs text-muted-foreground">
-                                      {providerSettings.binaryDescription}
-                                    </span>
-                                  </label>
-
-                                  {providerSettings.homePathKey ? (
-                                    <label
-                                      htmlFor={`provider-install-${providerSettings.homePathKey}`}
-                                      className="block"
-                                    >
-                                      <span className="block text-xs font-medium text-foreground">
-                                        CODEX_HOME path
-                                      </span>
-                                      <Input
-                                        id={`provider-install-${providerSettings.homePathKey}`}
-                                        className="mt-1"
-                                        value={codexHomePath}
-                                        onChange={(event) =>
-                                          updateSettings({
-                                            codexHomePath: event.target.value,
-                                          })
-                                        }
-                                        placeholder={providerSettings.homePlaceholder}
-                                        spellCheck={false}
-                                      />
-                                      {providerSettings.homeDescription ? (
-                                        <span className="mt-1 block text-xs text-muted-foreground">
-                                          {providerSettings.homeDescription}
-                                        </span>
-                                      ) : null}
-                                    </label>
-                                  ) : null}
-                                </div>
-                              </div>
-                            </CollapsibleContent>
-                          </div>
-                        </Collapsible>
-                      );
-                    })}
-                  </div>
-                </div>
-              </SettingsRow>
-
-              <SettingsRow
-                title="Keybindings"
-                description="Open the persisted `keybindings.json` file to edit advanced bindings directly."
-                status={
-                  <>
-                    <span className="block break-all font-mono text-[11px] text-foreground">
-                      {keybindingsConfigPath ?? "Resolving keybindings path..."}
-                    </span>
-                    {openKeybindingsError ? (
-                      <span className="mt-1 block text-destructive">{openKeybindingsError}</span>
-                    ) : (
-                      <span className="mt-1 block">Opens in your preferred editor.</span>
-                    )}
-                  </>
-                }
-                control={
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    disabled={!keybindingsConfigPath || isOpeningKeybindings}
-                    onClick={openKeybindingsFile}
-                  >
-                    {isOpeningKeybindings ? "Opening..." : "Open file"}
-                  </Button>
-                }
-              />
-
-              <SettingsRow
-                title="Version"
-                description="Current application version."
-                control={
-                  <code className="text-xs font-medium text-muted-foreground">{APP_VERSION}</code>
-                }
-              />
-            </SettingsSection>
+            {renderActivePanel()}
           </div>
         </div>
       </div>

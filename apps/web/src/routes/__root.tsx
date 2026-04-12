@@ -137,6 +137,13 @@ function errorDetails(error: unknown): string {
   }
 }
 
+const SNAPSHOT_CATCH_UP_MAX_ATTEMPTS = 5;
+const SNAPSHOT_CATCH_UP_DELAY_MS = 40;
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 function EventRouter() {
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
   const setProjectExpanded = useStore((store) => store.setProjectExpanded);
@@ -162,21 +169,44 @@ function EventRouter() {
     let pending = false;
     let needsProviderInvalidation = false;
 
-    const flushSnapshotSync = async (): Promise<void> => {
-      const snapshot = await api.orchestration.getSnapshot();
-      if (disposed) return;
-      latestSequence = Math.max(latestSequence, snapshot.snapshotSequence);
-      syncServerReadModel(snapshot);
-      clearPromotedDraftThreads(new Set(snapshot.threads.map((t) => t.id)));
+    const removeOrphanedTerminalsForCurrentState = () => {
       const draftThreadIds = Object.keys(
         useComposerDraftStore.getState().draftThreadsByThreadId,
       ) as ThreadId[];
       const activeThreadIds = collectActiveTerminalThreadIds({
-        snapshotThreads: snapshot.threads,
+        snapshotThreads: useStore
+          .getState()
+          .threads.map((thread) => ({ id: thread.id, deletedAt: null })),
         draftThreadIds,
         retainedThreadIds: workspacePages.map((workspace) => workspaceThreadId(workspace.id)),
       });
       removeOrphanedTerminalStates(activeThreadIds);
+    };
+
+    const flushSnapshotSync = async (): Promise<void> => {
+      let snapshot = await api.orchestration.getSnapshot();
+      if (disposed) return;
+      // Domain events can reach the client before the projection snapshot catches up.
+      // Wait briefly for the snapshot cursor so late turn-diff summaries do not disappear
+      // until the next user message or a manual refresh.
+      for (
+        let attempt = 1;
+        snapshot.snapshotSequence < latestSequence && attempt < SNAPSHOT_CATCH_UP_MAX_ATTEMPTS;
+        attempt += 1
+      ) {
+        await wait(SNAPSHOT_CATCH_UP_DELAY_MS * attempt);
+        if (disposed) return;
+        snapshot = await api.orchestration.getSnapshot();
+        if (disposed) return;
+      }
+      if (snapshot.snapshotSequence < latestSequence) {
+        pending = true;
+        return;
+      }
+      latestSequence = Math.max(latestSequence, snapshot.snapshotSequence);
+      syncServerReadModel(snapshot);
+      clearPromotedDraftThreads(new Set(snapshot.threads.map((t) => t.id)));
+      removeOrphanedTerminalsForCurrentState();
       if (pending) {
         pending = false;
         await flushSnapshotSync();
@@ -193,9 +223,13 @@ function EventRouter() {
       try {
         await flushSnapshotSync();
       } catch {
-        // Keep prior state and wait for next domain event to trigger a resync.
+        // Keep prior state and wait for the next domain event to trigger a resync.
       }
       syncing = false;
+      if (pending) {
+        pending = false;
+        void syncSnapshot();
+      }
     };
 
     const domainEventFlushThrottler = new Throttler(
@@ -223,6 +257,22 @@ function EventRouter() {
       latestSequence = event.sequence;
       if (event.type === "thread.turn-diff-completed" || event.type === "thread.reverted") {
         needsProviderInvalidation = true;
+      }
+      if (event.type === "thread.turn-diff-completed") {
+        useStore.getState().applyThreadTurnDiffCompleted(event.payload.threadId, {
+          turnId: event.payload.turnId,
+          completedAt: event.payload.completedAt,
+          status: event.payload.status,
+          files: event.payload.files.map((file) => ({
+            path: file.path,
+            ...(file.kind !== undefined ? { kind: file.kind } : {}),
+            ...(file.additions !== undefined ? { additions: file.additions } : {}),
+            ...(file.deletions !== undefined ? { deletions: file.deletions } : {}),
+          })),
+          checkpointRef: event.payload.checkpointRef,
+          assistantMessageId: event.payload.assistantMessageId ?? undefined,
+          checkpointTurnCount: event.payload.checkpointTurnCount,
+        });
       }
       domainEventFlushThrottler.maybeExecute();
     });
