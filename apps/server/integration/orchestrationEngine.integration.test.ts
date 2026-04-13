@@ -1010,6 +1010,12 @@ itLiveUnlessCi(
             (entry) =>
               entry.latestTurn?.turnId === "turn-1" && entry.session?.threadId === "thread-1",
           );
+          yield* harness.waitForReceipt(
+            (receipt): receipt is TurnProcessingQuiescedReceipt =>
+              receipt.type === "turn.processing.quiesced" &&
+              receipt.threadId === THREAD_ID &&
+              receipt.checkpointTurnCount === 1,
+          );
 
           yield* harness.adapterHarness!.adapter.stopAll();
           yield* waitForSync(
