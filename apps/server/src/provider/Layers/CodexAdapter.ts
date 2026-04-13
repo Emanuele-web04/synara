@@ -115,6 +115,11 @@ function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+// Keep manager-emitted stderr lines visible without escalating them into a fatal thread error.
+function providerErrorMapsToWarning(event: ProviderEvent): boolean {
+  return event.kind === "error" && event.method === "process/stderr";
+}
+
 function normalizeCodexTokenUsage(value: unknown): ThreadTokenUsageSnapshot | undefined {
   const usage = asObject(value);
   const totalUsage = asObject(usage?.total_token_usage ?? usage?.total);
@@ -583,13 +588,14 @@ function mapToRuntimeEvents(
     if (!event.message) {
       return [];
     }
+    const treatAsWarning = providerErrorMapsToWarning(event);
     return [
       {
         ...runtimeEventBase(event, canonicalThreadId),
-        type: "runtime.error",
+        type: treatAsWarning ? "runtime.warning" : "runtime.error",
         payload: {
           message: event.message,
-          class: "provider_error",
+          ...(!treatAsWarning ? { class: "provider_error" as const } : {}),
           ...(event.payload !== undefined ? { detail: event.payload } : {}),
         },
       },

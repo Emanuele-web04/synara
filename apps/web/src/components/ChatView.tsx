@@ -233,15 +233,17 @@ import {
   shouldRenderTerminalWorkspace,
   cloneComposerImageForRetry,
   collectUserMessageBlobPreviewUrls,
+  createLocalDispatchSnapshot,
   deriveComposerSendState,
+  hasServerAcknowledgedLocalDispatch,
   hasLiveChatTurn,
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
   LastInvokedScriptByProjectSchema,
+  type LocalDispatchSnapshot,
   PullRequestDialogState,
   readFileAsDataUrl,
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
-  SendPhase,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useComposerSlashCommands } from "../hooks/useComposerSlashCommands";
@@ -606,8 +608,7 @@ export default function ChatView({
   const [localDraftErrorsByThreadId, setLocalDraftErrorsByThreadId] = useState<
     Record<ThreadId, string | null>
   >({});
-  const [sendPhase, setSendPhase] = useState<SendPhase>("idle");
-  const [sendStartedAt, setSendStartedAt] = useState<string | null>(null);
+  const [localDispatch, setLocalDispatch] = useState<LocalDispatchSnapshot | null>(null);
   const [isConnecting, _setIsConnecting] = useState(false);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
   const [respondingRequestIds, setRespondingRequestIds] = useState<ApprovalRequestId[]>([]);
@@ -1008,20 +1009,6 @@ export default function ChatView({
     [lockedProvider, modelOptionsByProvider],
   );
   const phase = derivePhase(activeThread?.session ?? null);
-  const hasLiveTurn = hasLiveChatTurn({
-    phase,
-    latestTurnSettled,
-    latestTurnStartedAt: activeLatestTurn?.startedAt ?? null,
-  });
-  const isSendBusy = sendPhase !== "idle";
-  const isPreparingWorktree = sendPhase === "preparing-worktree";
-  const isWorking = hasLiveTurn || isSendBusy || isConnecting || isRevertingCheckpoint;
-  const nowIso = new Date(nowTick).toISOString();
-  const activeWorkStartedAt = deriveActiveWorkStartedAt(
-    activeLatestTurn,
-    activeThread?.session ?? null,
-    sendStartedAt,
-  );
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   const workLogEntries = useMemo(
     () => deriveWorkLogEntries(threadActivities, activeLatestTurn?.turnId ?? undefined),
@@ -1165,6 +1152,41 @@ export default function ChatView({
     latestTurnSettled &&
     hasActionableProposedPlan(activeProposedPlan);
   const activePendingApproval = pendingApprovals[0] ?? null;
+  const serverAcknowledgedLocalDispatch = useMemo(
+    () =>
+      hasServerAcknowledgedLocalDispatch({
+        localDispatch,
+        phase,
+        latestTurn: activeLatestTurn,
+        session: activeThread?.session ?? null,
+        hasPendingApproval: activePendingApproval !== null,
+        hasPendingUserInput: activePendingUserInput !== null,
+        threadError: activeThread?.error,
+      }),
+    [
+      activeLatestTurn,
+      activePendingApproval,
+      activePendingUserInput,
+      activeThread?.error,
+      activeThread?.session,
+      localDispatch,
+      phase,
+    ],
+  );
+  const hasLiveTurn = hasLiveChatTurn({
+    phase,
+    latestTurnSettled,
+    latestTurnStartedAt: activeLatestTurn?.startedAt ?? null,
+  });
+  const isSendBusy = localDispatch !== null && !serverAcknowledgedLocalDispatch;
+  const isPreparingWorktree = localDispatch?.preparingWorktree ?? false;
+  const isWorking = hasLiveTurn || isSendBusy || isConnecting || isRevertingCheckpoint;
+  const nowIso = new Date(nowTick).toISOString();
+  const activeWorkStartedAt = deriveActiveWorkStartedAt(
+    activeLatestTurn,
+    activeThread?.session ?? null,
+    localDispatch?.startedAt ?? null,
+  );
   const isComposerApprovalState = activePendingApproval !== null;
   const composerFooterHasWideActions = showPlanFollowUpPrompt || activePendingProgress !== null;
   const handoffDisabled = !(
@@ -2796,8 +2818,7 @@ export default function ChatView({
       }
       return [];
     });
-    setSendPhase("idle");
-    setSendStartedAt(null);
+    setLocalDispatch(null);
     setComposerHighlightedItemId(null);
     setComposerCursor(collapseExpandedComposerCursor(promptRef.current, promptRef.current.length));
     setComposerTrigger(detectComposerTrigger(promptRef.current, promptRef.current.length));
@@ -2965,36 +2986,31 @@ export default function ChatView({
     };
   }, [phase]);
 
-  const beginSendPhase = useCallback((nextPhase: Exclude<SendPhase, "idle">) => {
-    setSendStartedAt((current) => current ?? new Date().toISOString());
-    setSendPhase(nextPhase);
-  }, []);
+  const beginLocalDispatch = useCallback(
+    (options?: { preparingWorktree?: boolean }) => {
+      const preparingWorktree = Boolean(options?.preparingWorktree);
+      setLocalDispatch((current) => {
+        if (current) {
+          return current.preparingWorktree === preparingWorktree
+            ? current
+            : { ...current, preparingWorktree };
+        }
+        return createLocalDispatchSnapshot(activeThread, options);
+      });
+    },
+    [activeThread],
+  );
 
-  const resetSendPhase = useCallback(() => {
-    setSendPhase("idle");
-    setSendStartedAt(null);
+  const resetLocalDispatch = useCallback(() => {
+    setLocalDispatch(null);
   }, []);
 
   useEffect(() => {
-    if (sendPhase === "idle") {
+    if (!serverAcknowledgedLocalDispatch) {
       return;
     }
-    if (
-      hasLiveTurn ||
-      activePendingApproval !== null ||
-      activePendingUserInput !== null ||
-      activeThread?.error
-    ) {
-      resetSendPhase();
-    }
-  }, [
-    activePendingApproval,
-    activePendingUserInput,
-    activeThread?.error,
-    hasLiveTurn,
-    resetSendPhase,
-    sendPhase,
-  ]);
+    resetLocalDispatch();
+  }, [resetLocalDispatch, serverAcknowledgedLocalDispatch]);
 
   useEffect(() => {
     if (!activeThreadId) return;
@@ -3642,7 +3658,7 @@ export default function ChatView({
     }
 
     sendInFlightRef.current = true;
-    beginSendPhase(baseBranchForWorktree ? "preparing-worktree" : "sending-turn");
+    beginLocalDispatch({ preparingWorktree: Boolean(baseBranchForWorktree) });
 
     const composerImagesSnapshot = [...composerImagesForSend];
     const composerTerminalContextsSnapshot = [...sendableComposerTerminalContexts];
@@ -3725,7 +3741,7 @@ export default function ChatView({
     await (async () => {
       // On first message: lock in branch + create worktree if needed.
       if (baseBranchForWorktree) {
-        beginSendPhase("preparing-worktree");
+        beginLocalDispatch({ preparingWorktree: true });
         const result = await createDetachedWorktreeMutation.mutateAsync({
           cwd: activeProject.cwd,
           ref: baseBranchForWorktree,
@@ -3842,7 +3858,7 @@ export default function ChatView({
         });
       }
 
-      beginSendPhase("sending-turn");
+      beginLocalDispatch();
       const turnAttachments = await turnAttachmentsPromise;
       await api.orchestration.dispatchCommand({
         type: "thread.turn.start",
@@ -3910,7 +3926,7 @@ export default function ChatView({
     });
     sendInFlightRef.current = false;
     if (!turnStartSucceeded) {
-      resetSendPhase();
+      resetLocalDispatch();
     }
     return turnStartSucceeded;
   };
@@ -4106,7 +4122,7 @@ export default function ChatView({
     });
 
     sendInFlightRef.current = true;
-    beginSendPhase("sending-turn");
+    beginLocalDispatch();
     setThreadError(threadIdForSend, null);
     setOptimisticUserMessages((existing) => [
       ...existing,
@@ -4182,7 +4198,7 @@ export default function ChatView({
         err instanceof Error ? err.message : "Failed to send plan follow-up.",
       );
       sendInFlightRef.current = false;
-      resetSendPhase();
+      resetLocalDispatch();
       return false;
     }
   }
@@ -4308,10 +4324,10 @@ export default function ChatView({
     const nextThreadModelSelection: ModelSelection = selectedModelSelection;
 
     sendInFlightRef.current = true;
-    beginSendPhase("sending-turn");
+    beginLocalDispatch();
     const finish = () => {
       sendInFlightRef.current = false;
-      resetSendPhase();
+      resetLocalDispatch();
     };
 
     await api.orchestration
@@ -4389,12 +4405,12 @@ export default function ChatView({
     activeProposedPlan,
     activeThread,
     activeThreadAssociatedWorktree,
-    beginSendPhase,
+    beginLocalDispatch,
     isConnecting,
     isSendBusy,
     isServerThread,
     navigate,
-    resetSendPhase,
+    resetLocalDispatch,
     runtimeMode,
     selectedPromptEffort,
     selectedModelSelection,

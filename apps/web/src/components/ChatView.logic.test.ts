@@ -2,8 +2,10 @@ import { ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
+  hasServerAcknowledgedLocalDispatch,
   shouldAutoDeleteTerminalThreadOnLastClose,
   buildExpiredTerminalContextToastCopy,
+  type LocalDispatchSnapshot,
   deriveComposerSendState,
   hasLiveChatTurn,
   shouldRenderTerminalWorkspace,
@@ -142,6 +144,67 @@ describe("hasLiveChatTurn", () => {
         latestTurnStartedAt: "2026-04-13T00:00:00.000Z",
       }),
     ).toBe(false);
+  });
+});
+
+describe("hasServerAcknowledgedLocalDispatch", () => {
+  const localDispatch: LocalDispatchSnapshot = {
+    startedAt: "2026-04-13T00:00:00.000Z",
+    preparingWorktree: false,
+    latestTurnTurnId: null,
+    latestTurnRequestedAt: null,
+    latestTurnStartedAt: null,
+    latestTurnCompletedAt: null,
+    sessionOrchestrationStatus: "ready",
+    sessionUpdatedAt: "2026-04-13T00:00:00.000Z",
+  };
+
+  it("stays pending until the server-side thread/session snapshot changes", () => {
+    expect(
+      hasServerAcknowledgedLocalDispatch({
+        localDispatch,
+        phase: "ready",
+        latestTurn: null,
+        session: {
+          provider: "codex",
+          status: "ready",
+          orchestrationStatus: "ready",
+          createdAt: "2026-04-13T00:00:00.000Z",
+          updatedAt: "2026-04-13T00:00:00.000Z",
+        },
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("acknowledges the local send once the latest turn snapshot changes", () => {
+    expect(
+      hasServerAcknowledgedLocalDispatch({
+        localDispatch,
+        phase: "ready",
+        latestTurn: {
+          turnId: "turn-1" as never,
+          state: "running",
+          requestedAt: "2026-04-13T00:00:01.000Z",
+          startedAt: null,
+          completedAt: null,
+          assistantMessageId: null,
+          sourceProposedPlan: undefined,
+        },
+        session: {
+          provider: "codex",
+          status: "ready",
+          orchestrationStatus: "ready",
+          createdAt: "2026-04-13T00:00:00.000Z",
+          updatedAt: "2026-04-13T00:00:01.000Z",
+        },
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
+      }),
+    ).toBe(true);
   });
 });
 

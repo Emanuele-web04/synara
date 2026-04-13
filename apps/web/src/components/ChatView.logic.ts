@@ -81,11 +81,80 @@ export function collectUserMessageBlobPreviewUrls(message: ChatMessage): string[
   return previewUrls;
 }
 
-export type SendPhase = "idle" | "preparing-worktree" | "sending-turn";
-
 export interface PullRequestDialogState {
   initialReference: string | null;
   key: number;
+}
+
+export interface LocalDispatchSnapshot {
+  startedAt: string;
+  preparingWorktree: boolean;
+  latestTurnTurnId: Thread["latestTurn"] extends infer T
+    ? T extends { turnId: infer U }
+      ? U | null
+      : null
+    : null;
+  latestTurnRequestedAt: string | null;
+  latestTurnStartedAt: string | null;
+  latestTurnCompletedAt: string | null;
+  sessionOrchestrationStatus: Thread["session"] extends infer T
+    ? T extends { orchestrationStatus: infer U }
+      ? U | null
+      : null
+    : null;
+  sessionUpdatedAt: string | null;
+}
+
+export function createLocalDispatchSnapshot(
+  activeThread: Thread | undefined,
+  options?: { preparingWorktree?: boolean },
+): LocalDispatchSnapshot {
+  const latestTurn = activeThread?.latestTurn ?? null;
+  const session = activeThread?.session ?? null;
+  return {
+    startedAt: new Date().toISOString(),
+    preparingWorktree: Boolean(options?.preparingWorktree),
+    latestTurnTurnId: latestTurn?.turnId ?? null,
+    latestTurnRequestedAt: latestTurn?.requestedAt ?? null,
+    latestTurnStartedAt: latestTurn?.startedAt ?? null,
+    latestTurnCompletedAt: latestTurn?.completedAt ?? null,
+    sessionOrchestrationStatus: session?.orchestrationStatus ?? null,
+    sessionUpdatedAt: session?.updatedAt ?? null,
+  };
+}
+
+export function hasServerAcknowledgedLocalDispatch(input: {
+  localDispatch: LocalDispatchSnapshot | null;
+  phase: SessionPhase;
+  latestTurn: Thread["latestTurn"] | null;
+  session: Thread["session"] | null;
+  hasPendingApproval: boolean;
+  hasPendingUserInput: boolean;
+  threadError: string | null | undefined;
+}): boolean {
+  if (!input.localDispatch) {
+    return false;
+  }
+  if (
+    input.phase === "running" ||
+    input.hasPendingApproval ||
+    input.hasPendingUserInput ||
+    Boolean(input.threadError)
+  ) {
+    return true;
+  }
+
+  const latestTurn = input.latestTurn ?? null;
+  const session = input.session ?? null;
+
+  return (
+    input.localDispatch.latestTurnTurnId !== (latestTurn?.turnId ?? null) ||
+    input.localDispatch.latestTurnRequestedAt !== (latestTurn?.requestedAt ?? null) ||
+    input.localDispatch.latestTurnStartedAt !== (latestTurn?.startedAt ?? null) ||
+    input.localDispatch.latestTurnCompletedAt !== (latestTurn?.completedAt ?? null) ||
+    input.localDispatch.sessionOrchestrationStatus !== (session?.orchestrationStatus ?? null) ||
+    input.localDispatch.sessionUpdatedAt !== (session?.updatedAt ?? null)
+  );
 }
 
 export function hasLiveChatTurn(options: {
