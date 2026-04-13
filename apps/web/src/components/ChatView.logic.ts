@@ -91,8 +91,12 @@ export interface PullRequestDialogState {
 export function hasLiveChatTurn(options: {
   phase: SessionPhase;
   latestTurnSettled: boolean;
+  latestTurnStartedAt: string | null;
 }): boolean {
-  return options.phase === "running" || !options.latestTurnSettled;
+  return (
+    options.phase === "running" ||
+    (options.latestTurnStartedAt !== null && !options.latestTurnSettled)
+  );
 }
 
 export function readFileAsDataUrl(file: File): Promise<string> {

@@ -1011,6 +1011,7 @@ export default function ChatView({
   const hasLiveTurn = hasLiveChatTurn({
     phase,
     latestTurnSettled,
+    latestTurnStartedAt: activeLatestTurn?.startedAt ?? null,
   });
   const isSendBusy = sendPhase !== "idle";
   const isPreparingWorktree = sendPhase === "preparing-worktree";

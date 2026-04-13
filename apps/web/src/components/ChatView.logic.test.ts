@@ -109,6 +109,7 @@ describe("hasLiveChatTurn", () => {
       hasLiveChatTurn({
         phase: "running",
         latestTurnSettled: true,
+        latestTurnStartedAt: null,
       }),
     ).toBe(true);
   });
@@ -118,8 +119,19 @@ describe("hasLiveChatTurn", () => {
       hasLiveChatTurn({
         phase: "ready",
         latestTurnSettled: false,
+        latestTurnStartedAt: "2026-04-13T00:00:00.000Z",
       }),
     ).toBe(true);
+  });
+
+  it("keeps a brand new thread idle when no turn has started yet", () => {
+    expect(
+      hasLiveChatTurn({
+        phase: "ready",
+        latestTurnSettled: false,
+        latestTurnStartedAt: null,
+      }),
+    ).toBe(false);
   });
 
   it("returns false once the session is ready and the latest turn is settled", () => {
@@ -127,6 +139,7 @@ describe("hasLiveChatTurn", () => {
       hasLiveChatTurn({
         phase: "ready",
         latestTurnSettled: true,
+        latestTurnStartedAt: "2026-04-13T00:00:00.000Z",
       }),
     ).toBe(false);
   });
