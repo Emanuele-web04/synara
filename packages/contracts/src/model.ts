@@ -181,6 +181,7 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
           { value: "low", label: "Low" },
           { value: "medium", label: "Medium" },
           { value: "high", label: "High", isDefault: true },
+          { value: "max", label: "Max" },
           { value: "ultrathink", label: "Ultrathink" },
         ],
         supportsFastMode: false,

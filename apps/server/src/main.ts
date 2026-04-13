@@ -18,6 +18,7 @@ import {
   type RuntimeMode,
   type ServerConfigShape,
 } from "./config";
+import { migrateLegacyHomeIfNeeded } from "./homeMigration";
 import { fixPath, resolveBaseDir } from "./os-jank";
 import { Open } from "./open";
 import * as SqlitePersistence from "./persistence/Layers/Sqlite";
@@ -154,6 +155,20 @@ const ServerConfigLive = (input: CliInput) =>
 
       const devUrl = Option.getOrElse(input.devUrl, () => env.devUrl);
       const baseDir = yield* resolveBaseDir(Option.getOrUndefined(input.t3Home) ?? env.t3Home);
+      // Import legacy ~/.t3 state before runtime paths are derived under ~/.dpcode.
+      yield* migrateLegacyHomeIfNeeded({
+        baseDir,
+        homeDir: OS.homedir(),
+        devUrl,
+      }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new StartupError({
+              message: "Failed to migrate legacy T3 home directory",
+              cause,
+            }),
+        ),
+      );
       const derivedPaths = yield* deriveServerPaths(baseDir, devUrl);
       const noBrowser = resolveBooleanFlag(input.noBrowser, env.noBrowser ?? mode === "desktop");
       const authToken = Option.getOrUndefined(input.authToken) ?? env.authToken;

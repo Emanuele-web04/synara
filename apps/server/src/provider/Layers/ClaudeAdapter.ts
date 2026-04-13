@@ -615,7 +615,7 @@ function buildPromptText(input: ProviderSendTurnInput): string {
     input.modelSelection?.provider === "claudeAgent" ? input.modelSelection.model : undefined;
   const caps = getModelCapabilities("claudeAgent", claudeModel);
   const promptEffort =
-    requestedEffort === "ultrathink" && caps.reasoningEffortLevels.length > 0
+    requestedEffort === "ultrathink" && caps.promptInjectedEffortLevels.includes("ultrathink")
       ? "ultrathink"
       : requestedEffort && hasEffortLevel(caps, requestedEffort)
         ? requestedEffort

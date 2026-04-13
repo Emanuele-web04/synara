@@ -356,7 +356,7 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("ignores unsupported max effort for Sonnet 4.6", () => {
+  it.effect("forwards supported max effort for Sonnet 4.6", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -374,7 +374,7 @@ describe("ClaudeAdapterLive", () => {
       });
 
       const createInput = harness.getLastCreateQueryInput();
-      assert.equal(createInput?.options.effort, undefined);
+      assert.equal(createInput?.options.effort, "max");
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

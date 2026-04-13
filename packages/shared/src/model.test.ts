@@ -174,6 +174,7 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
       "low",
       "medium",
       "high",
+      "max",
       "ultrathink",
     ]);
   });
@@ -246,13 +247,15 @@ describe("normalizeCodexModelOptions", () => {
 });
 
 describe("normalizeClaudeModelOptions", () => {
-  it("drops unsupported fast mode and max effort for Sonnet", () => {
+  it("drops unsupported fast mode for Sonnet while preserving max effort", () => {
     expect(
       normalizeClaudeModelOptions("claude-sonnet-4-6", {
         effort: "max",
         fastMode: true,
       }),
-    ).toBeUndefined();
+    ).toEqual({
+      effort: "max",
+    });
   });
 
   it("keeps the Haiku thinking toggle and removes unsupported effort", () => {
@@ -277,11 +280,11 @@ describe("getModelCapabilities Claude capability flags", () => {
     expect(has(undefined)).toBe(false);
   });
 
-  it("only enables max effort for Opus 4.6", () => {
+  it("only enables max effort for Opus 4.6 and Sonnet 4.6", () => {
     const has = (m: string | undefined) =>
       getModelCapabilities("claudeAgent", m).reasoningEffortLevels.some((l) => l.value === "max");
     expect(has("claude-opus-4-6")).toBe(true);
-    expect(has("claude-sonnet-4-6")).toBe(false);
+    expect(has("claude-sonnet-4-6")).toBe(true);
     expect(has("claude-haiku-4-5")).toBe(false);
     expect(has(undefined)).toBe(false);
   });
@@ -297,7 +300,7 @@ describe("getModelCapabilities Claude capability flags", () => {
 
   it("only enables ultrathink keyword handling for Opus 4.6 and Sonnet 4.6", () => {
     const has = (m: string | undefined) =>
-      getModelCapabilities("claudeAgent", m).reasoningEffortLevels.length > 0;
+      getModelCapabilities("claudeAgent", m).promptInjectedEffortLevels.includes("ultrathink");
     expect(has("claude-opus-4-6")).toBe(true);
     expect(has("claude-sonnet-4-6")).toBe(true);
     expect(has("claude-haiku-4-5")).toBe(false);
