@@ -14,6 +14,7 @@ import {
   formatTerminalContextLabel,
   hasTerminalContextText,
   IMAGE_ONLY_BOOTSTRAP_PROMPT,
+  IMAGE_ONLY_VISIBLE_PLACEHOLDER,
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
   insertInlineTerminalContextPlaceholder,
   isTerminalContextExpired,
@@ -141,7 +142,7 @@ describe("terminalContext", () => {
         hideImageOnlyBootstrapPrompt: true,
       }),
     ).toEqual({
-      visibleText: "",
+      visibleText: IMAGE_ONLY_VISIBLE_PLACEHOLDER,
       copyText: "",
       contextCount: 0,
       previewTitle: null,

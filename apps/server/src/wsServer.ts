@@ -979,6 +979,16 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         return yield* gitManager.status(body);
       }
 
+      case WS_METHODS.gitReadWorkingTreeDiff: {
+        const body = stripRequestTag(request.body);
+        return yield* gitManager.readWorkingTreeDiff(body);
+      }
+
+      case WS_METHODS.gitSummarizeDiff: {
+        const body = stripRequestTag(request.body);
+        return yield* gitManager.summarizeDiff(body);
+      }
+
       case WS_METHODS.gitPull: {
         const body = stripRequestTag(request.body);
         return yield* git.pullCurrentBranch(body.cwd);

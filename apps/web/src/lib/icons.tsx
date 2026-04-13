@@ -48,6 +48,7 @@ import {
   IconMaximize,
   IconMinimize,
   IconPalette,
+  IconPaperclip,
   IconPin,
   IconPinnedFilled,
   IconPlayerPlay,
@@ -104,6 +105,7 @@ export const EllipsisIcon = adaptIcon(IconDots);
 export const ExternalLinkIcon = adaptIcon(IconExternalLink);
 export const EyeIcon = adaptIcon(IconEye);
 export const PaletteIcon = adaptIcon(IconPalette);
+export const PaperclipIcon = adaptIcon(IconPaperclip);
 export const AdjustmentsIcon = adaptIcon(IconAdjustments);
 export const BrainIcon = adaptIcon(IconBrain);
 export const FileIcon = adaptIcon(IconFile);

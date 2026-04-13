@@ -43,6 +43,7 @@ import {
   isCodexCliVersionSupported,
   parseCodexCliVersion,
 } from "./provider/codexCliVersion";
+import { isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
 
 type PendingRequestKey = string;
 
@@ -1844,9 +1845,22 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const message =
         rawMessage !== undefined ? normalizeCodexUserVisibleErrorMessage(rawMessage) : undefined;
       const willRetry = this.readBoolean(notification.params, "willRetry");
+      const isNonFatalWarning =
+        message !== undefined && !willRetry && isNonFatalCodexErrorMessage(message);
+
+      if (willRetry) {
+        this.updateSession(context, {
+          status: "running",
+        });
+        return;
+      }
+
+      if (isNonFatalWarning) {
+        return;
+      }
 
       this.updateSession(context, {
-        status: willRetry ? "running" : "error",
+        status: "error",
         lastError: message ?? context.session.lastError,
       });
     }

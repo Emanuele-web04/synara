@@ -60,6 +60,10 @@ interface FakeGitTextGeneration {
     diffSummary: string;
     diffPatch: string;
   }) => Effect.Effect<{ title: string; body: string }, TextGenerationError>;
+  generateDiffSummary: (input: {
+    cwd: string;
+    patch: string;
+  }) => Effect.Effect<{ summary: string }, TextGenerationError>;
   generateBranchName: (input: {
     cwd: string;
     message: string;
@@ -167,6 +171,10 @@ function createTextGeneration(overrides: Partial<FakeGitTextGeneration> = {}): T
         title: "Add stacked git actions",
         body: "## Summary\n- Add stacked git workflow\n\n## Testing\n- Not run",
       }),
+    generateDiffSummary: () =>
+      Effect.succeed({
+        summary: "## Summary\n- Explain the selected diff\n\n## Files Changed\n- Not run",
+      }),
     generateBranchName: () =>
       Effect.succeed({
         branch: "update-workflow",
@@ -196,6 +204,17 @@ function createTextGeneration(overrides: Partial<FakeGitTextGeneration> = {}): T
           (cause) =>
             new TextGenerationError({
               operation: "generatePrContent",
+              detail: "fake text generation failed",
+              ...(cause !== undefined ? { cause } : {}),
+            }),
+        ),
+      ),
+    generateDiffSummary: (input) =>
+      implementation.generateDiffSummary(input).pipe(
+        Effect.mapError(
+          (cause) =>
+            new TextGenerationError({
+              operation: "generateDiffSummary",
               detail: "fake text generation failed",
               ...(cause !== undefined ? { cause } : {}),
             }),

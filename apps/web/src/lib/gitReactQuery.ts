@@ -1,16 +1,22 @@
 import type { GitStackedAction } from "@t3tools/contracts";
 import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "../nativeApi";
+import { buildPatchCacheKey } from "./diffRendering";
 
 const GIT_STATUS_STALE_TIME_MS = 30_000;
 const GIT_STATUS_REFETCH_INTERVAL_MS = 60_000;
 const GIT_BRANCHES_STALE_TIME_MS = 15_000;
 const GIT_BRANCHES_REFETCH_INTERVAL_MS = 60_000;
+const GIT_DIFF_SUMMARY_GC_TIME_MS = 30 * 60_000;
+const GIT_WORKING_TREE_DIFF_STALE_TIME_MS = 5_000;
 
 export const gitQueryKeys = {
   all: ["git"] as const,
   status: (cwd: string | null) => ["git", "status", cwd] as const,
   branches: (cwd: string | null) => ["git", "branches", cwd] as const,
+  workingTreeDiff: (cwd: string | null) => ["git", "working-tree-diff", cwd] as const,
+  diffSummary: (cacheScope: string | null, model: string | null, patchKey: string | null) =>
+    ["git", "diff-summary", cacheScope, model, patchKey] as const,
 };
 
 export const gitMutationKeys = {
@@ -24,7 +30,12 @@ export const gitMutationKeys = {
 };
 
 export function invalidateGitQueries(queryClient: QueryClient) {
-  return queryClient.invalidateQueries({ queryKey: gitQueryKeys.all });
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: ["git", "status"] as const }),
+    queryClient.invalidateQueries({ queryKey: ["git", "branches"] as const }),
+    queryClient.invalidateQueries({ queryKey: ["git", "working-tree-diff"] as const }),
+    queryClient.invalidateQueries({ queryKey: ["git", "pull-request"] as const }),
+  ]);
 }
 
 export function gitStatusQueryOptions(cwd: string | null) {
@@ -74,6 +85,67 @@ export function gitResolvePullRequestQueryOptions(input: {
     },
     enabled: input.cwd !== null && input.reference !== null,
     staleTime: 30_000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+}
+
+export function gitWorkingTreeDiffQueryOptions(input: { cwd: string | null; enabled?: boolean }) {
+  return queryOptions({
+    queryKey: gitQueryKeys.workingTreeDiff(input.cwd),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      if (!input.cwd) {
+        throw new Error("Working tree diff is unavailable.");
+      }
+      return api.git.readWorkingTreeDiff({ cwd: input.cwd });
+    },
+    enabled: (input.enabled ?? true) && input.cwd !== null,
+    staleTime: GIT_WORKING_TREE_DIFF_STALE_TIME_MS,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+  });
+}
+
+export function gitSummarizeDiffQueryOptions(input: {
+  cwd: string | null;
+  cacheScope?: string | null;
+  patch: string | null;
+  model?: string | null;
+  enabled?: boolean;
+}) {
+  // Cache summaries by patch hash so reopening the same diff does not regenerate it.
+  const normalizedPatch = input.patch?.trim() ?? null;
+  const patchKey =
+    normalizedPatch && normalizedPatch.length > 0
+      ? buildPatchCacheKey(normalizedPatch, "git-diff-summary")
+      : null;
+
+  return queryOptions({
+    queryKey: gitQueryKeys.diffSummary(
+      input.cacheScope ?? input.cwd,
+      input.model ?? null,
+      patchKey,
+    ),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      if (!input.cwd || !normalizedPatch) {
+        throw new Error("Diff summary is unavailable.");
+      }
+      return api.git.summarizeDiff({
+        cwd: input.cwd,
+        patch: normalizedPatch,
+        ...(input.model ? { textGenerationModel: input.model } : {}),
+      });
+    },
+    enabled:
+      (input.enabled ?? true) &&
+      input.cwd !== null &&
+      normalizedPatch !== null &&
+      normalizedPatch.length > 0,
+    staleTime: Number.POSITIVE_INFINITY,
+    gcTime: GIT_DIFF_SUMMARY_GC_TIME_MS,
+    refetchOnMount: false,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });

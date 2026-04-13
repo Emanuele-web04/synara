@@ -507,6 +507,14 @@ function normalizeActivities(
   return arraysShallowEqual(previous, nextActivities) ? previous : nextActivities;
 }
 
+function isNonFatalThreadErrorMessage(message: string | null | undefined): boolean {
+  if (!message) {
+    return false;
+  }
+  const normalized = message.trim().toLowerCase();
+  return normalized.includes("write_stdin failed: stdin is closed for this session");
+}
+
 function normalizeThreadSession(
   incoming: ReadModelThread["session"],
   previous: Thread["session"] | undefined | null,
@@ -514,6 +522,10 @@ function normalizeThreadSession(
   if (!incoming) {
     return null;
   }
+  const nextLastError =
+    incoming.lastError && !isNonFatalThreadErrorMessage(incoming.lastError)
+      ? incoming.lastError
+      : undefined;
   const nextSession = {
     provider: toLegacyProvider(incoming.providerName),
     status: toLegacySessionStatus(incoming.status),
@@ -521,7 +533,7 @@ function normalizeThreadSession(
     activeTurnId: incoming.activeTurnId ?? undefined,
     createdAt: incoming.updatedAt,
     updatedAt: incoming.updatedAt,
-    ...(incoming.lastError ? { lastError: incoming.lastError } : {}),
+    ...(nextLastError ? { lastError: nextLastError } : {}),
   } satisfies NonNullable<Thread["session"]>;
   if (
     previous &&
@@ -595,7 +607,10 @@ function normalizeThreadFromReadModel(
     previous?.turnDiffSummaries,
   );
   const activities = normalizeActivities(incoming.activities, previous?.activities);
-  const error = incoming.session?.lastError ?? null;
+  const error =
+    incoming.session?.lastError && !isNonFatalThreadErrorMessage(incoming.session.lastError)
+      ? incoming.session.lastError
+      : null;
   const lastVisitedAt = previous?.lastVisitedAt ?? incoming.updatedAt;
 
   if (

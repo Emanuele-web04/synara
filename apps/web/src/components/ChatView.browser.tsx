@@ -2510,6 +2510,29 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("enables plan mode from the composer extras menu", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-plan-mode-toggle-test" as MessageId,
+        targetText: "plan mode toggle test",
+      }),
+    });
+
+    try {
+      await page.getByLabelText("Composer extras").click();
+      await page.getByText("Plan mode").click();
+
+      await vi.waitFor(() => {
+        expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.interactionMode).toBe(
+          "plan",
+        );
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("creates a fresh draft after the previous draft thread is promoted", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,

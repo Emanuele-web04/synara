@@ -94,6 +94,10 @@ export interface GitRangeContext {
   diffPatch: string;
 }
 
+export interface GitWorkingTreePatch {
+  patch: string;
+}
+
 export interface GitRenameBranchInput {
   cwd: string;
   oldBranch: string;
@@ -148,6 +152,13 @@ export interface GitCoreShape {
    * Read detailed working tree / branch status for a repository.
    */
   readonly statusDetails: (cwd: string) => Effect.Effect<GitStatusDetails, GitCommandError>;
+
+  /**
+   * Read a unified patch for the current working tree, including untracked files.
+   */
+  readonly readWorkingTreePatch: (
+    cwd: string,
+  ) => Effect.Effect<GitWorkingTreePatch, GitCommandError>;
 
   /**
    * Build staged change context for commit generation.

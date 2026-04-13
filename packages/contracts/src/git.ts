@@ -82,10 +82,25 @@ export const GitStatusInput = Schema.Struct({
 });
 export type GitStatusInput = typeof GitStatusInput.Type;
 
+export const GitReadWorkingTreeDiffInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+});
+export type GitReadWorkingTreeDiffInput = typeof GitReadWorkingTreeDiffInput.Type;
+
 export const GitPullInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
 });
 export type GitPullInput = typeof GitPullInput.Type;
+
+// Read-only diff summary requests reuse the shared git text-generation model settings.
+export const GitSummarizeDiffInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  patch: Schema.String,
+  textGenerationModel: Schema.optional(TrimmedNonEmptyStringSchema).pipe(
+    Schema.withConstructorDefault(() => Option.some(DEFAULT_GIT_TEXT_GENERATION_MODEL)),
+  ),
+});
+export type GitSummarizeDiffInput = typeof GitSummarizeDiffInput.Type;
 
 export const GitRunStackedActionInput = Schema.Struct({
   actionId: TrimmedNonEmptyStringSchema,
@@ -205,6 +220,11 @@ export const GitStatusResult = Schema.Struct({
 });
 export type GitStatusResult = typeof GitStatusResult.Type;
 
+export const GitReadWorkingTreeDiffResult = Schema.Struct({
+  patch: Schema.String,
+});
+export type GitReadWorkingTreeDiffResult = typeof GitReadWorkingTreeDiffResult.Type;
+
 export const GitListBranchesResult = Schema.Struct({
   branches: Schema.Array(GitBranch),
   isRepo: Schema.Boolean,
@@ -281,6 +301,11 @@ export const GitPullResult = Schema.Struct({
   upstreamBranch: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
 });
 export type GitPullResult = typeof GitPullResult.Type;
+
+export const GitSummarizeDiffResult = Schema.Struct({
+  summary: TrimmedNonEmptyStringSchema,
+});
+export type GitSummarizeDiffResult = typeof GitSummarizeDiffResult.Type;
 
 const GitActionProgressBase = Schema.Struct({
   actionId: TrimmedNonEmptyStringSchema,

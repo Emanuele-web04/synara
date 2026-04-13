@@ -2029,6 +2029,8 @@ describe("WebSocket Server", () => {
     const preparePullRequestThread = vi.fn(() => Effect.void as any);
     const gitManager: GitManagerShape = {
       status,
+      readWorkingTreeDiff: vi.fn(() => Effect.void as any),
+      summarizeDiff: vi.fn(() => Effect.void as any),
       resolvePullRequest,
       preparePullRequestThread,
       handoffThread: vi.fn(() => Effect.void as any),
@@ -2069,6 +2071,8 @@ describe("WebSocket Server", () => {
 
     const gitManager: GitManagerShape = {
       status: vi.fn(() => Effect.void as any),
+      readWorkingTreeDiff: vi.fn(() => Effect.void as any),
+      summarizeDiff: vi.fn(() => Effect.void as any),
       resolvePullRequest: vi.fn(() => Effect.succeed(resolvePullRequestResult)),
       preparePullRequestThread: vi.fn(() => Effect.succeed(preparePullRequestThreadResult)),
       handoffThread: vi.fn(() => Effect.void as any),
@@ -2107,6 +2111,76 @@ describe("WebSocket Server", () => {
     });
   });
 
+  it("supports git.diff summary routing over websocket", async () => {
+    const summarizeDiffResult = {
+      summary: "## Summary\n- Explain the diff\n\n## Files Changed\n- Update `src/index.ts`",
+    };
+    const summarizeDiff = vi.fn(() => Effect.succeed(summarizeDiffResult));
+
+    const gitManager: GitManagerShape = {
+      status: vi.fn(() => Effect.void as any),
+      readWorkingTreeDiff: vi.fn(() => Effect.void as any),
+      summarizeDiff,
+      resolvePullRequest: vi.fn(() => Effect.void as any),
+      preparePullRequestThread: vi.fn(() => Effect.void as any),
+      handoffThread: vi.fn(() => Effect.void as any),
+      runStackedAction: vi.fn(() => Effect.void as any),
+    };
+
+    server = await createTestServer({ cwd: "/test", gitManager });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const [ws] = await connectAndAwaitWelcome(port);
+    connections.push(ws);
+
+    const response = await sendRequest(ws, WS_METHODS.gitSummarizeDiff, {
+      cwd: "/test",
+      patch: "diff --git a/src/index.ts b/src/index.ts\n+console.log('hello')\n",
+    });
+
+    expect(response.error).toBeUndefined();
+    expect(response.result).toEqual(summarizeDiffResult);
+    expect(summarizeDiff).toHaveBeenCalledWith({
+      cwd: "/test",
+      patch: "diff --git a/src/index.ts b/src/index.ts\n+console.log('hello')\n",
+    });
+  });
+
+  it("supports git.readWorkingTreeDiff routing over websocket", async () => {
+    const readWorkingTreeDiffResult = {
+      patch: "diff --git a/src/index.ts b/src/index.ts\n+console.log('hello')\n",
+    };
+    const readWorkingTreeDiff = vi.fn(() => Effect.succeed(readWorkingTreeDiffResult));
+
+    const gitManager: GitManagerShape = {
+      status: vi.fn(() => Effect.void as any),
+      readWorkingTreeDiff,
+      summarizeDiff: vi.fn(() => Effect.void as any),
+      resolvePullRequest: vi.fn(() => Effect.void as any),
+      preparePullRequestThread: vi.fn(() => Effect.void as any),
+      handoffThread: vi.fn(() => Effect.void as any),
+      runStackedAction: vi.fn(() => Effect.void as any),
+    };
+
+    server = await createTestServer({ cwd: "/test", gitManager });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const [ws] = await connectAndAwaitWelcome(port);
+    connections.push(ws);
+
+    const response = await sendRequest(ws, WS_METHODS.gitReadWorkingTreeDiff, {
+      cwd: "/test",
+    });
+
+    expect(response.error).toBeUndefined();
+    expect(response.result).toEqual(readWorkingTreeDiffResult);
+    expect(readWorkingTreeDiff).toHaveBeenCalledWith({
+      cwd: "/test",
+    });
+  });
+
   it("returns errors from git.runStackedAction", async () => {
     const runStackedAction = vi.fn(() =>
       Effect.fail(
@@ -2118,6 +2192,8 @@ describe("WebSocket Server", () => {
     );
     const gitManager: GitManagerShape = {
       status: vi.fn(() => Effect.void as any),
+      readWorkingTreeDiff: vi.fn(() => Effect.void as any),
+      summarizeDiff: vi.fn(() => Effect.void as any),
       resolvePullRequest: vi.fn(() => Effect.void as any),
       preparePullRequestThread: vi.fn(() => Effect.void as any),
       handoffThread: vi.fn(() => Effect.void as any),
@@ -2181,6 +2257,8 @@ describe("WebSocket Server", () => {
     );
     const gitManager: GitManagerShape = {
       status: vi.fn(() => Effect.void as any),
+      readWorkingTreeDiff: vi.fn(() => Effect.void as any),
+      summarizeDiff: vi.fn(() => Effect.void as any),
       resolvePullRequest: vi.fn(() => Effect.void as any),
       preparePullRequestThread: vi.fn(() => Effect.void as any),
       handoffThread: vi.fn(() => Effect.void as any),

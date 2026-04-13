@@ -46,6 +46,17 @@ export interface PrContentGenerationResult {
   body: string;
 }
 
+export interface DiffSummaryGenerationInput {
+  cwd: string;
+  patch: string;
+  /** Model to use for generation. Defaults to gpt-5.4-mini if not specified. */
+  model?: string;
+}
+
+export interface DiffSummaryGenerationResult {
+  summary: string;
+}
+
 export interface BranchNameGenerationInput {
   cwd: string;
   message: string;
@@ -75,6 +86,7 @@ export interface TextGenerationService {
     input: CommitMessageGenerationInput,
   ): Promise<CommitMessageGenerationResult>;
   generatePrContent(input: PrContentGenerationInput): Promise<PrContentGenerationResult>;
+  generateDiffSummary(input: DiffSummaryGenerationInput): Promise<DiffSummaryGenerationResult>;
   generateBranchName(input: BranchNameGenerationInput): Promise<BranchNameGenerationResult>;
   generateThreadTitle(input: ThreadTitleGenerationInput): Promise<ThreadTitleGenerationResult>;
 }
@@ -96,6 +108,13 @@ export interface TextGenerationShape {
   readonly generatePrContent: (
     input: PrContentGenerationInput,
   ) => Effect.Effect<PrContentGenerationResult, TextGenerationError>;
+
+  /**
+   * Generate a GitHub-style markdown summary for an existing diff patch.
+   */
+  readonly generateDiffSummary: (
+    input: DiffSummaryGenerationInput,
+  ) => Effect.Effect<DiffSummaryGenerationResult, TextGenerationError>;
 
   /**
    * Generate a concise branch name from a user message.

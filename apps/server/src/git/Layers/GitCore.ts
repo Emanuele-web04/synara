@@ -38,6 +38,9 @@ const STATUS_UPSTREAM_REFRESH_INTERVAL = Duration.seconds(15);
 const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(5);
 const STATUS_UPSTREAM_REFRESH_CACHE_CAPACITY = 2_048;
 const DEFAULT_BASE_BRANCH_CANDIDATES = ["main", "master"] as const;
+const EMPTY_TREE_OBJECT_ID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+const WORKING_TREE_DIFF_TIMEOUT_MS = 15_000;
+const MAX_UNTRACKED_DIFF_CONCURRENCY = 4;
 const NON_REPOSITORY_STATUS_DETAILS = Object.freeze({
   isRepo: false,
   hasOriginRemote: false,
@@ -139,6 +142,21 @@ function countTextLines(contents: Uint8Array): number {
   }
 
   return contents.at(-1) === 10 ? lineFeeds : lineFeeds + 1;
+}
+
+function joinPatchSegments(segments: ReadonlyArray<string>): string {
+  let combined = "";
+  for (const segment of segments) {
+    if (segment.length === 0) continue;
+    if (combined.length > 0 && !combined.endsWith("\n")) {
+      combined += "\n";
+    }
+    combined += segment;
+    if (!combined.endsWith("\n")) {
+      combined += "\n";
+    }
+  }
+  return combined;
 }
 
 function parseBranchLine(line: string): { name: string; current: boolean } | null {
@@ -1209,6 +1227,64 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         })),
       );
 
+    const readWorkingTreePatch: GitCoreShape["readWorkingTreePatch"] = (cwd) =>
+      Effect.gen(function* () {
+        const headExists = yield* executeGit(
+          "GitCore.readWorkingTreePatch.headExists",
+          cwd,
+          ["rev-parse", "--verify", "HEAD"],
+          { allowNonZeroExit: true },
+        ).pipe(Effect.map((result) => result.code === 0));
+
+        const trackedPatch = yield* executeGit(
+          "GitCore.readWorkingTreePatch.trackedPatch",
+          cwd,
+          headExists
+            ? ["diff", "--patch", "--no-color", "--no-ext-diff", "HEAD"]
+            : ["diff", "--patch", "--no-color", "--no-ext-diff", EMPTY_TREE_OBJECT_ID],
+          {
+            allowNonZeroExit: true,
+            timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
+          },
+        ).pipe(Effect.map((result) => result.stdout));
+
+        const untrackedFiles = yield* runGitStdout(
+          "GitCore.readWorkingTreePatch.untrackedFiles",
+          cwd,
+          ["ls-files", "--others", "--exclude-standard", "-z"],
+          true,
+        ).pipe(Effect.map((stdout) => stdout.split("\0").filter((entry) => entry.length > 0)));
+
+        const untrackedPatches = yield* Effect.forEach(
+          untrackedFiles,
+          (filePath) =>
+            executeGit(
+              "GitCore.readWorkingTreePatch.untrackedPatch",
+              cwd,
+              [
+                "diff",
+                "--no-index",
+                "--patch",
+                "--no-color",
+                "--src-prefix=a/",
+                "--dst-prefix=b/",
+                "--",
+                "/dev/null",
+                filePath,
+              ],
+              {
+                allowNonZeroExit: true,
+                timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
+              },
+            ).pipe(Effect.map((result) => result.stdout)),
+          { concurrency: MAX_UNTRACKED_DIFF_CONCURRENCY },
+        );
+
+        return {
+          patch: joinPatchSegments([trackedPatch, ...untrackedPatches]),
+        };
+      });
+
     const prepareCommitContext: GitCoreShape["prepareCommitContext"] = (cwd, filePaths) =>
       Effect.gen(function* () {
         if (filePaths && filePaths.length > 0) {
@@ -1906,6 +1982,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       execute,
       status,
       statusDetails,
+      readWorkingTreePatch,
       prepareCommitContext,
       commit,
       pushCurrentBranch,

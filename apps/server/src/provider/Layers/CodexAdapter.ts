@@ -42,6 +42,7 @@ import {
   type CodexAppServerStartSessionInput,
 } from "../../codexAppServerManager.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
+import { isNonFatalCodexErrorMessage } from "../../codexErrorClassification.ts";
 import { ServerConfig } from "../../config.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
@@ -117,7 +118,13 @@ function asNumber(value: unknown): number | undefined {
 
 // Keep manager-emitted stderr lines visible without escalating them into a fatal thread error.
 function providerErrorMapsToWarning(event: ProviderEvent): boolean {
-  return event.kind === "error" && event.method === "process/stderr";
+  return (
+    event.kind === "error" &&
+    (event.method === "process/stderr" ||
+      (event.method === "error" &&
+        typeof event.message === "string" &&
+        isNonFatalCodexErrorMessage(event.message)))
+  );
 }
 
 function normalizeCodexTokenUsage(value: unknown): ThreadTokenUsageSnapshot | undefined {
@@ -1264,13 +1271,14 @@ function mapToRuntimeEvents(
     const message =
       asString(asObject(payload?.error)?.message) ?? event.message ?? "Provider runtime error";
     const willRetry = payload?.willRetry === true;
+    const treatAsWarning = willRetry || isNonFatalCodexErrorMessage(message);
     return [
       {
-        type: willRetry ? "runtime.warning" : "runtime.error",
+        type: treatAsWarning ? "runtime.warning" : "runtime.error",
         ...runtimeEventBase(event, canonicalThreadId),
         payload: {
           message,
-          ...(!willRetry ? { class: "provider_error" as const } : {}),
+          ...(!treatAsWarning ? { class: "provider_error" as const } : {}),
           ...(event.payload !== undefined ? { detail: event.payload } : {}),
         },
       },

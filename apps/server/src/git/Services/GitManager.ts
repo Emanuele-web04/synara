@@ -13,11 +13,15 @@ import {
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
   GitPullRequestRefInput,
+  GitReadWorkingTreeDiffInput,
+  GitReadWorkingTreeDiffResult,
   GitResolvePullRequestResult,
   GitRunStackedActionInput,
   GitRunStackedActionResult,
   GitStatusInput,
   GitStatusResult,
+  GitSummarizeDiffInput,
+  GitSummarizeDiffResult,
 } from "@t3tools/contracts";
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
@@ -42,6 +46,20 @@ export interface GitManagerShape {
   readonly status: (
     input: GitStatusInput,
   ) => Effect.Effect<GitStatusResult, GitManagerServiceError>;
+
+  /**
+   * Read a unified patch for the current repository working tree.
+   */
+  readonly readWorkingTreeDiff: (
+    input: GitReadWorkingTreeDiffInput,
+  ) => Effect.Effect<GitReadWorkingTreeDiffResult, GitManagerServiceError>;
+
+  /**
+   * Generate a read-only markdown summary for an existing diff patch.
+   */
+  readonly summarizeDiff: (
+    input: GitSummarizeDiffInput,
+  ) => Effect.Effect<GitSummarizeDiffResult, GitManagerServiceError>;
 
   /**
    * Resolve a pull request by URL/number against the current repository.

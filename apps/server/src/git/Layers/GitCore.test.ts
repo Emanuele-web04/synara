@@ -126,6 +126,15 @@ function initRepoWithCommit(
   });
 }
 
+function initRepoWithoutCommit(cwd: string): Effect.Effect<void, GitCommandError, GitCore> {
+  return Effect.gen(function* () {
+    const core = yield* GitCore;
+    yield* core.initRepo({ cwd });
+    yield* git(cwd, ["config", "user.email", "test@test.com"]);
+    yield* git(cwd, ["config", "user.name", "Test"]);
+  });
+}
+
 function commitWithDate(
   cwd: string,
   fileName: string,
@@ -1308,6 +1317,39 @@ it.layer(TestLayer)("git integration", (it) => {
           { path: "new-file.ts", insertions: 2, deletions: 0 },
           { path: "README.md", insertions: 1, deletions: 1 },
         ]);
+      }),
+    );
+
+    it.effect("reads first-commit working tree patches including unstaged edits", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithoutCommit(tmp);
+        const core = yield* GitCore;
+
+        yield* writeTextFile(path.join(tmp, "draft.txt"), "alpha\n");
+        yield* git(tmp, ["add", "draft.txt"]);
+        yield* writeTextFile(path.join(tmp, "draft.txt"), "alpha\nbeta\n");
+
+        const patch = (yield* core.readWorkingTreePatch(tmp)).patch;
+        expect(patch).toContain("diff --git a/draft.txt b/draft.txt");
+        expect(patch).toContain("@@ -0,0 +1,2 @@");
+        expect(patch).toContain("+alpha");
+        expect(patch).toContain("+beta");
+      }),
+    );
+
+    it.effect("preserves trailing spaces and exact untracked paths in working tree patches", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+
+        yield* writeTextFile(path.join(tmp, "README.md"), "keep\nlast line  ");
+        yield* writeTextFile(path.join(tmp, " spaced file.txt "), "hello\n");
+
+        const patch = (yield* core.readWorkingTreePatch(tmp)).patch;
+        expect(patch).toContain("+last line  ");
+        expect(patch).toContain("diff --git a/ spaced file.txt  b/ spaced file.txt ");
       }),
     );
 

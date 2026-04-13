@@ -39,6 +39,7 @@ type ProviderRegistryEntry = {
     model: ModelSlug;
     modelOptions: ProviderModelOptions[ProviderKind] | undefined;
     prompt: string;
+    includeFastMode?: boolean;
     onPromptChange: (prompt: string) => void;
   }) => ReactNode;
   renderTraitsPicker: (input: {
@@ -46,6 +47,7 @@ type ProviderRegistryEntry = {
     model: ModelSlug;
     modelOptions: ProviderModelOptions[ProviderKind] | undefined;
     prompt: string;
+    includeFastMode?: boolean;
     onPromptChange: (prompt: string) => void;
   }) => ReactNode;
 };
@@ -103,46 +105,78 @@ function getProviderStateFromCapabilities(
 const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
   codex: {
     getState: (input) => getProviderStateFromCapabilities(input),
-    renderTraitsMenuContent: ({ threadId, model, modelOptions, prompt, onPromptChange }) => (
+    renderTraitsMenuContent: ({
+      threadId,
+      model,
+      modelOptions,
+      prompt,
+      includeFastMode,
+      onPromptChange,
+    }) => (
       <TraitsMenuContent
         provider="codex"
         threadId={threadId}
         model={model}
         modelOptions={modelOptions}
         prompt={prompt}
+        {...(includeFastMode === undefined ? {} : { includeFastMode })}
         onPromptChange={onPromptChange}
       />
     ),
-    renderTraitsPicker: ({ threadId, model, modelOptions, prompt, onPromptChange }) => (
+    renderTraitsPicker: ({
+      threadId,
+      model,
+      modelOptions,
+      prompt,
+      includeFastMode,
+      onPromptChange,
+    }) => (
       <TraitsPicker
         provider="codex"
         threadId={threadId}
         model={model}
         modelOptions={modelOptions}
         prompt={prompt}
+        {...(includeFastMode === undefined ? {} : { includeFastMode })}
         onPromptChange={onPromptChange}
       />
     ),
   },
   claudeAgent: {
     getState: (input) => getProviderStateFromCapabilities(input),
-    renderTraitsMenuContent: ({ threadId, model, modelOptions, prompt, onPromptChange }) => (
+    renderTraitsMenuContent: ({
+      threadId,
+      model,
+      modelOptions,
+      prompt,
+      includeFastMode,
+      onPromptChange,
+    }) => (
       <TraitsMenuContent
         provider="claudeAgent"
         threadId={threadId}
         model={model}
         modelOptions={modelOptions}
         prompt={prompt}
+        {...(includeFastMode === undefined ? {} : { includeFastMode })}
         onPromptChange={onPromptChange}
       />
     ),
-    renderTraitsPicker: ({ threadId, model, modelOptions, prompt, onPromptChange }) => (
+    renderTraitsPicker: ({
+      threadId,
+      model,
+      modelOptions,
+      prompt,
+      includeFastMode,
+      onPromptChange,
+    }) => (
       <TraitsPicker
         provider="claudeAgent"
         threadId={threadId}
         model={model}
         modelOptions={modelOptions}
         prompt={prompt}
+        {...(includeFastMode === undefined ? {} : { includeFastMode })}
         onPromptChange={onPromptChange}
       />
     ),
@@ -159,15 +193,27 @@ export function renderProviderTraitsMenuContent(input: {
   model: ModelSlug;
   modelOptions: ProviderModelOptions[ProviderKind] | undefined;
   prompt: string;
+  includeFastMode?: boolean;
   onPromptChange: (prompt: string) => void;
 }): ReactNode {
-  return composerProviderRegistry[input.provider].renderTraitsMenuContent({
-    threadId: input.threadId,
-    model: input.model,
-    modelOptions: input.modelOptions,
-    prompt: input.prompt,
-    onPromptChange: input.onPromptChange,
-  });
+  return composerProviderRegistry[input.provider].renderTraitsMenuContent(
+    input.includeFastMode === undefined
+      ? {
+          threadId: input.threadId,
+          model: input.model,
+          modelOptions: input.modelOptions,
+          prompt: input.prompt,
+          onPromptChange: input.onPromptChange,
+        }
+      : {
+          threadId: input.threadId,
+          model: input.model,
+          modelOptions: input.modelOptions,
+          prompt: input.prompt,
+          includeFastMode: input.includeFastMode,
+          onPromptChange: input.onPromptChange,
+        },
+  );
 }
 
 export function renderProviderTraitsPicker(input: {
@@ -176,13 +222,25 @@ export function renderProviderTraitsPicker(input: {
   model: ModelSlug;
   modelOptions: ProviderModelOptions[ProviderKind] | undefined;
   prompt: string;
+  includeFastMode?: boolean;
   onPromptChange: (prompt: string) => void;
 }): ReactNode {
-  return composerProviderRegistry[input.provider].renderTraitsPicker({
-    threadId: input.threadId,
-    model: input.model,
-    modelOptions: input.modelOptions,
-    prompt: input.prompt,
-    onPromptChange: input.onPromptChange,
-  });
+  return composerProviderRegistry[input.provider].renderTraitsPicker(
+    input.includeFastMode === undefined
+      ? {
+          threadId: input.threadId,
+          model: input.model,
+          modelOptions: input.modelOptions,
+          prompt: input.prompt,
+          onPromptChange: input.onPromptChange,
+        }
+      : {
+          threadId: input.threadId,
+          model: input.model,
+          modelOptions: input.modelOptions,
+          prompt: input.prompt,
+          includeFastMode: input.includeFastMode,
+          onPromptChange: input.onPromptChange,
+        },
+  );
 }

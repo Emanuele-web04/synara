@@ -140,7 +140,6 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   EllipsisIcon,
-  ListTodoIcon,
   Trash2,
   Undo2Icon,
   XIcon,
@@ -211,7 +210,7 @@ import { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { AVAILABLE_PROVIDER_OPTIONS, ProviderModelPicker } from "./chat/ProviderModelPicker";
 import { ComposerCommandItem, ComposerCommandMenu } from "./chat/ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./chat/ComposerPendingApprovalActions";
-import { CompactComposerControlsMenu } from "./chat/CompactComposerControlsMenu";
+import { ComposerExtrasMenu } from "./chat/ComposerExtrasMenu";
 import { ComposerPendingApprovalPanel } from "./chat/ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./chat/ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./chat/ComposerPlanFollowUpBanner";
@@ -220,9 +219,9 @@ import { ActivePlanCard } from "./chat/ActivePlanCard";
 import { useChatAutoScrollController } from "./chat/useChatAutoScrollController";
 import {
   getComposerProviderState,
-  renderProviderTraitsMenuContent,
   renderProviderTraitsPicker,
 } from "./chat/composerProviderRegistry";
+import { getComposerTraitSelection } from "./chat/composerTraits";
 import { ProviderHealthBanner } from "./chat/ProviderHealthBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
 import { RateLimitBanner, deriveLatestRateLimitStatus } from "./chat/RateLimitBanner";
@@ -254,6 +253,7 @@ import {
   resolveThreadHandoffBadgeLabel,
 } from "../lib/threadHandoff";
 import { resolveThreadEnvironmentMode } from "../lib/threadEnvironment";
+import { buildNextProviderOptions } from "../providerModelOptions";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
@@ -2566,25 +2566,12 @@ export default function ChatView({
   const toggleInteractionMode = useCallback(() => {
     handleInteractionModeChange(interactionMode === "plan" ? "default" : "plan");
   }, [handleInteractionModeChange, interactionMode]);
-  const toggleRuntimeMode = useCallback(() => {
-    void handleRuntimeModeChange(
-      runtimeMode === "full-access" ? "approval-required" : "full-access",
-    );
-  }, [handleRuntimeModeChange, runtimeMode]);
-  const togglePlanSidebar = useCallback(() => {
-    setPlanSidebarOpen((open) => {
-      if (open) {
-        const turnKey = activePlan?.turnId ?? sidebarProposedPlan?.turnId ?? null;
-        if (turnKey) {
-          planSidebarDismissedForTurnRef.current = turnKey;
-        }
-      } else {
-        planSidebarDismissedForTurnRef.current = null;
-      }
-      return !open;
-    });
-  }, [activePlan?.turnId, sidebarProposedPlan?.turnId]);
-
+  const setPlanMode = useCallback(
+    (enabled: boolean) => {
+      handleInteractionModeChange(enabled ? "plan" : "default");
+    },
+    [handleInteractionModeChange],
+  );
   const persistThreadSettingsForNextTurn = useCallback(
     async (input: {
       threadId: ThreadId;
@@ -3272,6 +3259,7 @@ export default function ChatView({
     toggleTerminalVisibility,
   ]);
 
+  // --- Composer attachment entry points -------------------------------------
   const addComposerImages = (files: File[]) => {
     if (!activeThreadId || files.length === 0) return;
 
@@ -4462,22 +4450,45 @@ export default function ChatView({
     },
     [scheduleComposerFocus, setPrompt],
   );
-  const providerTraitsMenuContent = renderProviderTraitsMenuContent({
-    provider: selectedProvider,
-    threadId,
-    model: selectedModel,
-    modelOptions: composerModelOptions?.[selectedProvider],
+  const selectedProviderModelOptions = composerModelOptions?.[selectedProvider];
+  const composerTraitSelection = getComposerTraitSelection(
+    selectedProvider,
+    selectedModel,
     prompt,
-    onPromptChange: setPromptFromTraits,
-  });
+    selectedProviderModelOptions,
+  );
   const providerTraitsPicker = renderProviderTraitsPicker({
     provider: selectedProvider,
     threadId,
     model: selectedModel,
-    modelOptions: composerModelOptions?.[selectedProvider],
+    modelOptions: selectedProviderModelOptions,
     prompt,
+    includeFastMode: false,
     onPromptChange: setPromptFromTraits,
   });
+  const toggleFastMode = useCallback(() => {
+    if (!composerTraitSelection.caps.supportsFastMode) {
+      scheduleComposerFocus();
+      return;
+    }
+    setComposerDraftProviderModelOptions(
+      threadId,
+      selectedProvider,
+      buildNextProviderOptions(selectedProvider, selectedProviderModelOptions, {
+        fastMode: !composerTraitSelection.fastModeEnabled,
+      }),
+      { persistSticky: true },
+    );
+    scheduleComposerFocus();
+  }, [
+    composerTraitSelection.caps.supportsFastMode,
+    composerTraitSelection.fastModeEnabled,
+    scheduleComposerFocus,
+    selectedProvider,
+    selectedProviderModelOptions,
+    setComposerDraftProviderModelOptions,
+    threadId,
+  ]);
   const onEnvModeChange = useCallback(
     (mode: DraftThreadEnvMode) => {
       if (isLocalDraftThread) {
@@ -5365,6 +5376,15 @@ export default function ChatView({
                               : "gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:min-w-max sm:overflow-visible",
                           )}
                         >
+                          <ComposerExtrasMenu
+                            interactionMode={interactionMode}
+                            supportsFastMode={composerTraitSelection.caps.supportsFastMode}
+                            fastModeEnabled={composerTraitSelection.fastModeEnabled}
+                            onAddPhotos={addComposerImages}
+                            onToggleFastMode={toggleFastMode}
+                            onSetPlanMode={setPlanMode}
+                          />
+
                           {/* Provider/model picker */}
                           <ProviderModelPicker
                             compact={isComposerFooterCompact}
@@ -5382,80 +5402,35 @@ export default function ChatView({
                             onProviderModelChange={onProviderModelSelect}
                           />
 
-                          {isComposerFooterCompact ? (
-                            <CompactComposerControlsMenu
-                              activePlan={Boolean(
-                                activePlan || sidebarProposedPlan || planSidebarOpen,
-                              )}
-                              interactionMode={interactionMode}
-                              planSidebarOpen={planSidebarOpen}
-                              runtimeMode={runtimeMode}
-                              traitsMenuContent={providerTraitsMenuContent}
-                              onToggleInteractionMode={toggleInteractionMode}
-                              onTogglePlanSidebar={togglePlanSidebar}
-                              onToggleRuntimeMode={toggleRuntimeMode}
-                            />
-                          ) : (
+                          {providerTraitsPicker ? (
                             <>
-                              {providerTraitsPicker ? (
-                                <>
-                                  <Separator
-                                    orientation="vertical"
-                                    className="mx-0.5 hidden h-4 sm:block"
-                                  />
-                                  {providerTraitsPicker}
-                                </>
-                              ) : null}
-
-                              {interactionMode === "plan" ? (
-                                <>
-                                  <Separator
-                                    orientation="vertical"
-                                    className="mx-0.5 hidden h-4 sm:block"
-                                  />
-
-                                  <Button
-                                    variant="ghost"
-                                    className="shrink-0 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-blue-400 hover:text-blue-300 sm:px-3"
-                                    size="sm"
-                                    type="button"
-                                    onClick={toggleInteractionMode}
-                                    title="Plan mode — click to return to normal chat mode"
-                                  >
-                                    <GoTasklist className="size-3.5" />
-                                    <span className="sr-only sm:not-sr-only">Plan</span>
-                                  </Button>
-                                </>
-                              ) : null}
-
-                              {activePlan || sidebarProposedPlan || planSidebarOpen ? (
-                                <>
-                                  <Separator
-                                    orientation="vertical"
-                                    className="mx-0.5 hidden h-4 sm:block"
-                                  />
-                                  <Button
-                                    variant="ghost"
-                                    className={cn(
-                                      "shrink-0 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal sm:px-3",
-                                      planSidebarOpen
-                                        ? "text-blue-400 hover:text-blue-300"
-                                        : "text-muted-foreground/70 hover:text-foreground/80",
-                                    )}
-                                    size="sm"
-                                    type="button"
-                                    onClick={togglePlanSidebar}
-                                    title={
-                                      planSidebarOpen ? "Hide plan sidebar" : "Show plan sidebar"
-                                    }
-                                  >
-                                    <ListTodoIcon className="size-3.5" />
-                                    <span className="sr-only sm:not-sr-only">Plan</span>
-                                  </Button>
-                                </>
-                              ) : null}
+                              <Separator
+                                orientation="vertical"
+                                className="mx-0.5 hidden h-4 sm:block"
+                              />
+                              {providerTraitsPicker}
                             </>
-                          )}
+                          ) : null}
+
+                          {interactionMode === "plan" ? (
+                            <>
+                              <Separator
+                                orientation="vertical"
+                                className="mx-0.5 hidden h-4 sm:block"
+                              />
+                              <Button
+                                variant="ghost"
+                                className="shrink-0 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-blue-400 hover:text-blue-300 sm:px-3"
+                                size="sm"
+                                type="button"
+                                onClick={toggleInteractionMode}
+                                title="Plan mode — click to return to normal chat mode"
+                              >
+                                <GoTasklist className="size-3.5" />
+                                <span className="sr-only sm:not-sr-only">Plan</span>
+                              </Button>
+                            </>
+                          ) : null}
                         </div>
 
                         {/* Right side: send / stop button */}

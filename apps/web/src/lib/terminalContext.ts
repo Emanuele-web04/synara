@@ -37,6 +37,7 @@ export interface ParsedTerminalContextEntry {
 export const INLINE_TERMINAL_CONTEXT_PLACEHOLDER = "\uFFFC";
 export const IMAGE_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
+export const IMAGE_ONLY_VISIBLE_PLACEHOLDER = "(No Content)";
 
 const TRAILING_TERMINAL_CONTEXT_BLOCK_PATTERN =
   /\n*<terminal_context>\n([\s\S]*?)\n<\/terminal_context>\s*$/;
@@ -249,7 +250,9 @@ export function deriveDisplayedUserMessageState(
     options?.hideImageOnlyBootstrapPrompt === true &&
     extractedContexts.promptText.trim() === IMAGE_ONLY_BOOTSTRAP_PROMPT;
   return {
-    visibleText: hidePrompt ? "" : extractedContexts.promptText,
+    // Keep the internal bootstrap prompt hidden while still giving image-only
+    // user messages a visible bubble in the transcript.
+    visibleText: hidePrompt ? IMAGE_ONLY_VISIBLE_PLACEHOLDER : extractedContexts.promptText,
     copyText: hidePrompt ? "" : prompt,
     contextCount: extractedContexts.contextCount,
     previewTitle: extractedContexts.previewTitle,

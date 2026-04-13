@@ -1,19 +1,13 @@
-import {
-  type ClaudeModelOptions,
-  type CodexModelOptions,
-  type ProviderKind,
-  type ThreadId,
-} from "@t3tools/contracts";
-import {
-  applyClaudePromptEffortPrefix,
-  getModelCapabilities,
-  isClaudeUltrathinkPrompt,
-  trimOrNull,
-  getDefaultEffort,
-  hasEffortLevel,
-} from "@t3tools/shared/model";
+// FILE: TraitsPicker.tsx
+// Purpose: Renders composer trait controls for effort, thinking, and fast mode across menu surfaces.
+// Layer: Chat composer presentation
+// Depends on: shared trait resolution helpers, provider model option updates, and shared menu primitives.
+
+import { type ProviderKind, type ThreadId } from "@t3tools/contracts";
+import { applyClaudePromptEffortPrefix } from "@t3tools/shared/model";
 import { memo, useCallback, useState } from "react";
-import { ChevronDownIcon, ZapIcon } from "~/lib/icons";
+import { IoFlash } from "react-icons/io5";
+import { ChevronDownIcon } from "~/lib/icons";
 import { Button } from "../ui/button";
 import {
   Menu,
@@ -27,66 +21,9 @@ import {
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { buildNextProviderOptions, type ProviderOptions } from "../../providerModelOptions";
 import { COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME } from "./composerPickerStyles";
+import { getComposerTraitSelection } from "./composerTraits";
 
 const ULTRATHINK_PROMPT_PREFIX = "Ultrathink:\n";
-
-function getRawEffort(
-  provider: ProviderKind,
-  modelOptions: ProviderOptions | null | undefined,
-): string | null {
-  if (provider === "codex") {
-    return trimOrNull((modelOptions as CodexModelOptions | undefined)?.reasoningEffort);
-  }
-  return trimOrNull((modelOptions as ClaudeModelOptions | undefined)?.effort);
-}
-
-function getSelectedTraits(
-  provider: ProviderKind,
-  model: string | null | undefined,
-  prompt: string,
-  modelOptions: ProviderOptions | null | undefined,
-) {
-  const caps = getModelCapabilities(provider, model);
-  const effortLevels = caps.reasoningEffortLevels;
-  const defaultEffort = getDefaultEffort(caps);
-
-  // Resolve effort from options (provider-specific key)
-  const resolvedEffort = getRawEffort(provider, modelOptions);
-
-  // Filter out prompt-injected efforts from the "current effort" display
-  const isPromptInjected = resolvedEffort
-    ? caps.promptInjectedEffortLevels.includes(resolvedEffort)
-    : false;
-  const effort =
-    resolvedEffort && !isPromptInjected && hasEffortLevel(caps, resolvedEffort)
-      ? resolvedEffort
-      : defaultEffort && hasEffortLevel(caps, defaultEffort)
-        ? defaultEffort
-        : null;
-
-  // Thinking toggle (only for models that support it)
-  const thinkingEnabled = caps.supportsThinkingToggle
-    ? ((modelOptions as ClaudeModelOptions | undefined)?.thinking ?? true)
-    : null;
-
-  // Fast mode
-  const fastModeEnabled =
-    caps.supportsFastMode &&
-    (modelOptions as { fastMode?: boolean } | undefined)?.fastMode === true;
-
-  // Prompt-controlled effort (e.g. ultrathink in prompt text)
-  const ultrathinkPromptControlled =
-    caps.promptInjectedEffortLevels.length > 0 && isClaudeUltrathinkPrompt(prompt);
-
-  return {
-    caps,
-    effort,
-    effortLevels,
-    thinkingEnabled,
-    fastModeEnabled,
-    ultrathinkPromptControlled,
-  };
-}
 
 export interface TraitsMenuContentProps {
   provider: ProviderKind;
@@ -94,6 +31,7 @@ export interface TraitsMenuContentProps {
   model: string | null | undefined;
   prompt: string;
   onPromptChange: (prompt: string) => void;
+  includeFastMode?: boolean;
   modelOptions?: ProviderOptions | null | undefined;
 }
 
@@ -103,18 +41,19 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   model,
   prompt,
   onPromptChange,
+  includeFastMode = true,
   modelOptions,
 }: TraitsMenuContentProps) {
   const setProviderModelOptions = useComposerDraftStore((store) => store.setProviderModelOptions);
   const {
     caps,
+    defaultEffort,
     effort,
     effortLevels,
     thinkingEnabled,
     fastModeEnabled,
     ultrathinkPromptControlled,
-  } = getSelectedTraits(provider, model, prompt, modelOptions);
-  const defaultEffort = getDefaultEffort(caps);
+  } = getComposerTraitSelection(provider, model, prompt, modelOptions);
 
   const handleEffortChange = useCallback(
     (value: string) => {
@@ -199,7 +138,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
           </MenuRadioGroup>
         </MenuGroup>
       ) : null}
-      {caps.supportsFastMode ? (
+      {includeFastMode && caps.supportsFastMode ? (
         <>
           <MenuDivider />
           <MenuGroup>
@@ -231,6 +170,7 @@ export const TraitsPicker = memo(function TraitsPicker({
   model,
   prompt,
   onPromptChange,
+  includeFastMode = true,
   modelOptions,
 }: TraitsMenuContentProps) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -241,7 +181,7 @@ export const TraitsPicker = memo(function TraitsPicker({
     thinkingEnabled,
     fastModeEnabled,
     ultrathinkPromptControlled,
-  } = getSelectedTraits(provider, model, prompt, modelOptions);
+  } = getComposerTraitSelection(provider, model, prompt, modelOptions);
 
   const effortLabel = effort
     ? (effortLevels.find((l) => l.value === effort)?.label ?? effort)
@@ -287,7 +227,7 @@ export const TraitsPicker = memo(function TraitsPicker({
                     <span className="shrink-0 text-muted-foreground/45">·</span>
                   ) : null}
                   <span className="inline-flex shrink-0 items-center gap-1">
-                    <ZapIcon aria-hidden="true" className="size-3 text-[hsl(var(--chart-4))]" />
+                    <IoFlash aria-hidden="true" className="size-3 text-[hsl(var(--chart-4))]" />
                     <span>Fast</span>
                   </span>
                 </>
@@ -303,7 +243,7 @@ export const TraitsPicker = memo(function TraitsPicker({
                 <>
                   {primaryTriggerLabel ? <span className="text-muted-foreground/45">·</span> : null}
                   <span className="inline-flex items-center gap-1">
-                    <ZapIcon aria-hidden="true" className="size-3 text-[hsl(var(--chart-4))]" />
+                    <IoFlash aria-hidden="true" className="size-3 text-[hsl(var(--chart-4))]" />
                     <span>Fast</span>
                   </span>
                 </>
@@ -320,6 +260,7 @@ export const TraitsPicker = memo(function TraitsPicker({
           model={model}
           prompt={prompt}
           onPromptChange={onPromptChange}
+          includeFastMode={includeFastMode}
           modelOptions={modelOptions}
         />
       </MenuPopup>

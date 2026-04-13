@@ -1294,6 +1294,30 @@ export const makeGitManager = Effect.gen(function* () {
     };
   });
 
+  const readWorkingTreeDiff: GitManagerShape["readWorkingTreeDiff"] = Effect.fnUntraced(
+    function* (input) {
+      return yield* gitCore.readWorkingTreePatch(input.cwd);
+    },
+  );
+
+  // Keep diff summaries read-only by summarizing the patch already selected in the UI.
+  const summarizeDiff: GitManagerShape["summarizeDiff"] = Effect.fnUntraced(function* (input) {
+    const patch = input.patch.trim();
+    if (patch.length === 0) {
+      return yield* gitManagerError("summarizeDiff", "Cannot summarize an empty diff.");
+    }
+
+    const generated = yield* textGeneration.generateDiffSummary({
+      cwd: input.cwd,
+      patch,
+      ...(input.textGenerationModel ? { model: input.textGenerationModel } : {}),
+    });
+
+    return {
+      summary: generated.summary,
+    };
+  });
+
   const resolvePullRequest: GitManagerShape["resolvePullRequest"] = Effect.fnUntraced(
     function* (input) {
       const pullRequest = yield* gitHubCli
@@ -2484,6 +2508,8 @@ The local stash entry was kept for recovery.`,
 
   return {
     status,
+    readWorkingTreeDiff,
+    summarizeDiff,
     resolvePullRequest,
     preparePullRequestThread,
     handoffThread,

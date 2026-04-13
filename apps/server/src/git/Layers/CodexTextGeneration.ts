@@ -14,6 +14,7 @@ import {
   type BranchNameGenerationInput,
   type BranchNameGenerationResult,
   type CommitMessageGenerationResult,
+  type DiffSummaryGenerationResult,
   type PrContentGenerationResult,
   type ThreadTitleGenerationResult,
   type TextGenerationShape,
@@ -97,6 +98,21 @@ function sanitizePrTitle(raw: string): string {
   return "Update project changes";
 }
 
+function sanitizeDiffSummary(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.length > 0) {
+    return trimmed;
+  }
+
+  return [
+    "## Summary",
+    "- Update the current diff.",
+    "",
+    "## Files Changed",
+    "- Not available.",
+  ].join("\n");
+}
+
 const makeCodexTextGeneration = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -153,6 +169,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     _operation:
       | "generateCommitMessage"
       | "generatePrContent"
+      | "generateDiffSummary"
       | "generateBranchName"
       | "generateThreadTitle",
     attachments: BranchNameGenerationInput["attachments"],
@@ -198,6 +215,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     operation:
       | "generateCommitMessage"
       | "generatePrContent"
+      | "generateDiffSummary"
       | "generateBranchName"
       | "generateThreadTitle";
     cwd: string;
@@ -423,6 +441,40 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     );
   };
 
+  const generateDiffSummary: TextGenerationShape["generateDiffSummary"] = (input) => {
+    const prompt = [
+      "You write GitHub-style engineering summaries for git diffs.",
+      "Return a JSON object with key: summary.",
+      "Rules:",
+      "- summary must be markdown",
+      "- include headings '## Summary' and '## Files Changed'",
+      "- under each heading, use concise bullet points",
+      "- describe only changes directly supported by the diff",
+      "- mention risks or follow-ups only when clearly implied by the patch",
+      "- do not invent tests, tickets, or product context",
+      "",
+      "Diff patch:",
+      limitSection(input.patch, 50_000),
+    ].join("\n");
+
+    return runCodexJson({
+      operation: "generateDiffSummary",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson: Schema.Struct({
+        summary: Schema.String,
+      }),
+      ...(input.model ? { model: input.model } : {}),
+    }).pipe(
+      Effect.map(
+        (generated) =>
+          ({
+            summary: sanitizeDiffSummary(generated.summary),
+          }) satisfies DiffSummaryGenerationResult,
+      ),
+    );
+  };
+
   const generateBranchName: TextGenerationShape["generateBranchName"] = (input) => {
     return Effect.gen(function* () {
       const { imagePaths } = yield* materializeImageAttachments(
@@ -524,6 +576,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
   return {
     generateCommitMessage,
     generatePrContent,
+    generateDiffSummary,
     generateBranchName,
     generateThreadTitle,
   } satisfies TextGenerationShape;

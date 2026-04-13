@@ -1812,6 +1812,28 @@ describe("handleServerNotification error normalization", () => {
       }),
     );
   });
+
+  it("does not promote non-fatal tool runtime errors to session lastError", () => {
+    const { manager, context, updateSession } = createCollabNotificationHarness();
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "error",
+      params: {
+        threadId: "provider_parent",
+        error: {
+          message:
+            "write_stdin failed: stdin is closed for this session; rerun exec_command with tty=true to keep stdin open",
+        },
+        willRetry: false,
+      },
+    });
+
+    expect(updateSession).not.toHaveBeenCalled();
+  });
 });
 
 describe.skipIf(!process.env.CODEX_BINARY_PATH)("startSession live Codex resume", () => {
