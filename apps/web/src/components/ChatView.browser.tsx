@@ -35,6 +35,7 @@ import { useStore } from "../store";
 import { estimateTimelineMessageHeight } from "./timelineHeight";
 
 const THREAD_ID = "thread-browser-test" as ThreadId;
+const OTHER_THREAD_ID = "thread-browser-test-other" as ThreadId;
 const UUID_ROUTE_RE = /^\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const PROJECT_ID = "project-1" as ProjectId;
 const NOW_ISO = "2026-03-04T12:00:00.000Z";
@@ -1910,6 +1911,69 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("keeps queued follow-ups when you switch threads and come back", async () => {
+    useComposerDraftStore.getState().setPrompt(THREAD_ID, "queue survives thread switch");
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: addThreadToSnapshot(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-user-running-queue-switch" as MessageId,
+          targetText: "running queue switch target",
+          sessionStatus: "running",
+        }),
+        OTHER_THREAD_ID,
+      ),
+    });
+
+    try {
+      const composerForm = await waitForElement(
+        () => document.querySelector<HTMLFormElement>('form[data-chat-composer-form="true"]'),
+        "Unable to find composer form.",
+      );
+      composerForm.requestSubmit();
+
+      await vi.waitFor(
+        () => {
+          expect(document.querySelectorAll('[data-testid="queued-follow-up-row"]')).toHaveLength(1);
+          expect(document.body.textContent).toContain("queue survives thread switch");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await mounted.router.navigate({
+        to: "/$threadId",
+        params: { threadId: OTHER_THREAD_ID },
+      });
+      await waitForLayout();
+
+      await vi.waitFor(
+        () => {
+          expect(mounted.router.state.location.pathname).toBe(`/${OTHER_THREAD_ID}`);
+          expect(document.querySelectorAll('[data-testid="queued-follow-up-row"]')).toHaveLength(0);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await mounted.router.navigate({
+        to: "/$threadId",
+        params: { threadId: THREAD_ID },
+      });
+      await waitForLayout();
+
+      await vi.waitFor(
+        () => {
+          expect(mounted.router.state.location.pathname).toBe(`/${THREAD_ID}`);
+          expect(document.querySelectorAll('[data-testid="queued-follow-up-row"]')).toHaveLength(1);
+          expect(document.body.textContent).toContain("queue survives thread switch");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("editing a queued follow-up removes only that row and restores its images to the composer", async () => {
     const queuedImage = createComposerImage({
       id: "queued-image-1",
@@ -2400,6 +2464,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           nonPersistedImageIds: [],
           persistedAttachments: [],
           terminalContexts: [],
+          queuedTurns: [],
           modelSelectionByProvider: {
             claudeAgent: {
               provider: "claudeAgent",

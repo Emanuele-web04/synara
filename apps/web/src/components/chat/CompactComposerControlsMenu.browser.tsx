@@ -28,6 +28,7 @@ async function mountMenu(props?: {
     nonPersistedImageIds: [],
     persistedAttachments: [],
     terminalContexts: [],
+    queuedTurns: [],
     modelSelectionByProvider: {
       [provider]: {
         provider,

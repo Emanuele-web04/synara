@@ -602,7 +602,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const canRevertAgentWork = revertTurnCountByUserMessageId.has(row.message.id);
           return (
             <div className="flex w-full justify-end">
-              <div className="group flex max-w-[80%] flex-col items-end gap-0.5">
+              <div className="group flex max-w-[80%] flex-col items-end gap-px">
                 {/* Keep user-message chrome outside the bubble so the message reads as one simple block. */}
                 {userImages.length > 0 && (
                   <div
@@ -656,7 +656,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   </div>
                   <p
                     className="font-chat-code text-right text-muted-foreground/45"
-                    style={{ fontSize: `${appTypographyScale.chatMetaPx}px` }}
+                    style={{ fontSize: `${appTypographyScale.uiTimestampPx}px` }}
                   >
                     {formatShortTimestamp(row.message.createdAt, timestampFormat)}
                   </p>
@@ -864,8 +864,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     </div>
                   );
                 })()}
-                <div className="mt-1 flex items-center gap-2">
-                  <p className="font-chat-code text-[10px] text-muted-foreground/45">
+                <div className="mt-0.5 flex items-center gap-2">
+                  <p
+                    className="font-chat-code text-muted-foreground/45"
+                    style={{ fontSize: `${appTypographyScale.uiTimestampPx}px` }}
+                  >
                     {assistantMeta}
                   </p>
                   {assistantCopyState.visible ? (

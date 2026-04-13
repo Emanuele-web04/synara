@@ -50,6 +50,7 @@ function makeComposerDraftState(
     nonPersistedImageIds: [],
     persistedAttachments: [],
     terminalContexts: [],
+    queuedTurns: [],
     modelSelectionByProvider: {
       claudeAgent: modelSelection("claudeAgent", "claude-opus-4-6", { effort: "max" }),
     },
