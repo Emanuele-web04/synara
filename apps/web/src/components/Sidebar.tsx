@@ -111,6 +111,7 @@ import { useThreadSelectionStore } from "../threadSelectionStore";
 import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
 import { isNonEmpty as isNonEmptyString } from "effect/String";
 import {
+  describeAddProjectError,
   getFallbackThreadIdAfterDelete,
   getPinnedThreadsForSidebar,
   getNextVisibleSidebarThreadId,
@@ -628,6 +629,10 @@ export default function Sidebar() {
   const [showManualPathInput, setShowManualPathInput] = useState(false);
   const [isAddingProject, setIsAddingProject] = useState(false);
   const [addProjectError, setAddProjectError] = useState<string | null>(null);
+  const addProjectErrorMeaning = useMemo(
+    () => (addProjectError ? describeAddProjectError(addProjectError) : null),
+    [addProjectError],
+  );
   const addProjectInputRef = useRef<HTMLInputElement | null>(null);
   const [renamingThreadId, setRenamingThreadId] = useState<ThreadId | null>(null);
   const [renamingTitle, setRenamingTitle] = useState("");
@@ -970,29 +975,12 @@ export default function Sidebar() {
         void openOrCreateProjectThread(projectId);
         return;
       } catch (error) {
+        const description =
+          error instanceof Error ? error.message : "An error occurred while adding the project.";
         const refreshedSnapshot = await api.orchestration.getSnapshot().catch(() => null);
         if (refreshedSnapshot) {
           syncServerReadModel(refreshedSnapshot);
-          const refreshedProject = refreshedSnapshot.projects.find(
-            (project) =>
-              project.deletedAt === null && workspaceRootsEqual(project.workspaceRoot, cwd),
-          );
-          if (refreshedProject) {
-            finishAddingProject();
-            void openOrCreateProjectThread(refreshedProject.id);
-            return;
-          }
         }
-        const recoveredProject = useStore
-          .getState()
-          .projects.find((project) => workspaceRootsEqual(project.cwd, cwd));
-        if (recoveredProject) {
-          finishAddingProject();
-          void openOrCreateProjectThread(recoveredProject.id);
-          return;
-        }
-        const description =
-          error instanceof Error ? error.message : "An error occurred while adding the project.";
         setIsAddingProject(false);
         setAddProjectError(description);
         return;
@@ -3521,9 +3509,14 @@ export default function Sidebar() {
                       </div>
                     )}
                     {addProjectError && (
-                      <p className="mt-1 px-0.5 text-xs leading-tight text-red-400">
-                        {addProjectError}
-                      </p>
+                      <div className="mt-1 space-y-1 px-0.5">
+                        <p className="text-xs leading-tight text-red-400">{addProjectError}</p>
+                        {addProjectErrorMeaning && (
+                          <p className="text-xs leading-tight text-muted-foreground/70">
+                            {addProjectErrorMeaning}
+                          </p>
+                        )}
+                      </div>
                     )}
                   </div>
                 )}

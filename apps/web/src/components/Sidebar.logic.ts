@@ -1,6 +1,6 @@
 // FILE: Sidebar.logic.ts
 // Purpose: Shared sidebar sorting and status helpers used by the thread list UI.
-// Exports: Sidebar row state derivation, sort utilities, and visibility helpers.
+// Exports: Sidebar row state derivation, add-project error helpers, sort utilities, and visibility helpers.
 
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "../appSettings";
 import type { ChatMessage, Project, SidebarThreadSummary, Thread } from "../types";
@@ -25,6 +25,9 @@ type SidebarThreadSortInput = {
   latestUserMessageAt?: string | null | undefined;
   messages?: ReadonlyArray<Pick<ChatMessage, "role" | "createdAt">> | undefined;
 };
+
+const DUPLICATE_PROJECT_CREATE_ERROR_PREFIX =
+  "Orchestration command invariant failed (project.create): Project '";
 
 export interface ThreadStatusPill {
   label:
@@ -198,6 +201,26 @@ export function resolveProjectStatusIndicator(
   }
 
   return highestPriorityStatus;
+}
+
+// Detects duplicate workspace-root failures so the UI can add a human explanation.
+export function isDuplicateProjectCreateError(message: string): boolean {
+  if (!message.startsWith(DUPLICATE_PROJECT_CREATE_ERROR_PREFIX)) {
+    return false;
+  }
+
+  const duplicateMarkerIndex = message.indexOf("' already uses workspace root '");
+  return duplicateMarkerIndex > DUPLICATE_PROJECT_CREATE_ERROR_PREFIX.length;
+}
+
+// Translates low-level add-project failures into a short explanation without
+// hiding the original error text that developers may need for diagnosis.
+export function describeAddProjectError(message: string): string | null {
+  if (isDuplicateProjectCreateError(message)) {
+    return "This usually means the folder is already linked to an existing project. On Windows, the same folder can arrive with a different path format, so it looks new even when it is not.";
+  }
+
+  return null;
 }
 
 export function getVisibleThreadsForProject<T extends Pick<SidebarThreadSummary, "id">>(input: {

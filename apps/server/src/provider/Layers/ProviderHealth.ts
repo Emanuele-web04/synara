@@ -14,6 +14,7 @@ import type {
   ServerProviderStatus,
   ServerProviderStatusState,
 } from "@t3tools/contracts";
+import { parseCodexConfigModelProvider } from "@t3tools/shared/codexConfig";
 import { Array, Effect, Fiber, FileSystem, Layer, Option, Path, Result, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
@@ -198,25 +199,7 @@ export const readCodexConfigModelProvider = Effect.gen(function* () {
     return undefined;
   }
 
-  // We need to find `model_provider = "..."` at the top level of the
-  // TOML file (i.e. before any `[section]` header). Lines inside
-  // `[profiles.*]`, `[model_providers.*]`, etc. are ignored.
-  let inTopLevel = true;
-  for (const line of content.split("\n")) {
-    const trimmed = line.trim();
-    // Skip comments and empty lines.
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    // Detect section headers — once we leave the top level, stop.
-    if (trimmed.startsWith("[")) {
-      inTopLevel = false;
-      continue;
-    }
-    if (!inTopLevel) continue;
-
-    const match = trimmed.match(/^model_provider\s*=\s*["']([^"']+)["']/);
-    if (match) return match[1];
-  }
-  return undefined;
+  return parseCodexConfigModelProvider(content);
 });
 
 /**

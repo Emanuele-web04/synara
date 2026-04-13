@@ -35,7 +35,13 @@ import {
   RuntimeMode,
   ProviderInteractionMode,
 } from "@t3tools/contracts";
+import { readActiveCodexProviderEnvKey } from "@t3tools/shared/codexConfig";
 import { normalizeModelSlug } from "@t3tools/shared/model";
+import {
+  readEnvironmentFromLoginShell,
+  resolveLoginShell,
+  type ShellEnvironmentReader,
+} from "@t3tools/shared/shell";
 import { Effect, ServiceMap } from "effect";
 
 import {
@@ -211,6 +217,7 @@ const RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS = [
 const CODEX_DEFAULT_MODEL = "gpt-5.3-codex";
 const CODEX_SPARK_MODEL = "gpt-5.3-codex-spark";
 const CODEX_SPARK_DISABLED_PLAN_TYPES = new Set<CodexPlanType>(["free", "go", "plus"]);
+const CODEX_PROCESS_SHELL_ENV_NAMES = ["PATH", "SSH_AUTH_SOCK"] as const;
 
 function asObject(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object") {
@@ -221,6 +228,46 @@ function asObject(value: unknown): Record<string, unknown> | undefined {
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+export function buildCodexProcessEnv(
+  input: {
+    readonly env?: NodeJS.ProcessEnv;
+    readonly homePath?: string;
+    readonly platform?: NodeJS.Platform;
+    readonly readEnvironment?: ShellEnvironmentReader;
+  } = {},
+): NodeJS.ProcessEnv {
+  const baseEnv = { ...(input.env ?? process.env) };
+  const effectiveEnv = input.homePath ? { ...baseEnv, CODEX_HOME: input.homePath } : baseEnv;
+  const platform = input.platform ?? process.platform;
+
+  if (platform === "darwin" || platform === "linux") {
+    try {
+      const shell = resolveLoginShell(platform, effectiveEnv.SHELL);
+      const providerEnvKey = readActiveCodexProviderEnvKey(effectiveEnv);
+      if (shell && providerEnvKey && !effectiveEnv[providerEnvKey]?.trim()) {
+        const shellEnvironment = (input.readEnvironment ?? readEnvironmentFromLoginShell)(shell, [
+          ...CODEX_PROCESS_SHELL_ENV_NAMES,
+          providerEnvKey,
+        ]);
+
+        if (shellEnvironment.PATH) {
+          effectiveEnv.PATH = shellEnvironment.PATH;
+        }
+        if (!effectiveEnv.SSH_AUTH_SOCK && shellEnvironment.SSH_AUTH_SOCK) {
+          effectiveEnv.SSH_AUTH_SOCK = shellEnvironment.SSH_AUTH_SOCK;
+        }
+        if (shellEnvironment[providerEnvKey]) {
+          effectiveEnv[providerEnvKey] = shellEnvironment[providerEnvKey];
+        }
+      }
+    } catch {
+      // Keep inherited environment if shell lookup fails.
+    }
+  }
+
+  return effectiveEnv;
 }
 
 function normalizeCodexProcessLine(rawLine: string): string {
@@ -628,10 +675,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       });
       const child = spawn(codexBinaryPath, ["app-server"], {
         cwd: resolvedCwd,
-        env: {
-          ...process.env,
-          ...(codexHomePath ? { CODEX_HOME: codexHomePath } : {}),
-        },
+        env: buildCodexProcessEnv({
+          ...(codexHomePath ? { homePath: codexHomePath } : {}),
+        }),
         stdio: ["pipe", "pipe", "pipe"],
         shell: process.platform === "win32",
       });
@@ -1139,10 +1185,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       });
       const child = spawn(codexBinaryPath, ["app-server"], {
         cwd: resolvedCwd,
-        env: {
-          ...process.env,
-          ...(codexHomePath ? { CODEX_HOME: codexHomePath } : {}),
-        },
+        env: buildCodexProcessEnv({
+          ...(codexHomePath ? { homePath: codexHomePath } : {}),
+        }),
         stdio: ["pipe", "pipe", "pipe"],
         shell: process.platform === "win32",
       });
@@ -1583,7 +1628,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     });
     const child = spawn("codex", ["app-server"], {
       cwd: normalizedCwd,
-      env: { ...process.env },
+      env: buildCodexProcessEnv(),
       stdio: ["pipe", "pipe", "pipe"],
       shell: process.platform === "win32",
     });
@@ -2578,10 +2623,9 @@ function assertSupportedCodexCliVersion(input: {
 }): void {
   const result = spawnSync(input.binaryPath, ["--version"], {
     cwd: input.cwd,
-    env: {
-      ...process.env,
-      ...(input.homePath ? { CODEX_HOME: input.homePath } : {}),
-    },
+    env: buildCodexProcessEnv({
+      ...(input.homePath ? { homePath: input.homePath } : {}),
+    }),
     encoding: "utf8",
     shell: process.platform === "win32",
     stdio: ["ignore", "pipe", "pipe"],

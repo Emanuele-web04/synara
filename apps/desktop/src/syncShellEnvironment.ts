@@ -1,8 +1,10 @@
 import {
   readEnvironmentFromLoginShell,
   resolveLoginShell,
-  ShellEnvironmentReader,
+  type ShellEnvironmentReader,
 } from "@t3tools/shared/shell";
+
+const DEFAULT_SHELL_ENV_NAMES = ["PATH", "SSH_AUTH_SOCK"] as const;
 
 export function syncShellEnvironment(
   env: NodeJS.ProcessEnv = process.env,
@@ -17,17 +19,24 @@ export function syncShellEnvironment(
   try {
     const shell = resolveLoginShell(platform, env.SHELL);
     if (!shell) return;
-    const shellEnvironment = (options.readEnvironment ?? readEnvironmentFromLoginShell)(shell, [
-      "PATH",
-      "SSH_AUTH_SOCK",
-    ]);
+
+    const shellEnvironment = (options.readEnvironment ?? readEnvironmentFromLoginShell)(
+      shell,
+      DEFAULT_SHELL_ENV_NAMES,
+    );
 
     if (shellEnvironment.PATH) {
       env.PATH = shellEnvironment.PATH;
     }
 
-    if (!env.SSH_AUTH_SOCK && shellEnvironment.SSH_AUTH_SOCK) {
-      env.SSH_AUTH_SOCK = shellEnvironment.SSH_AUTH_SOCK;
+    for (const [name, value] of Object.entries(shellEnvironment)) {
+      if (name === "PATH") {
+        continue;
+      }
+
+      if (env[name] === undefined || env[name] === "") {
+        env[name] = value;
+      }
     }
   } catch {
     // Keep inherited environment if shell lookup fails.

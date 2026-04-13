@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  describeAddProjectError,
   getFallbackThreadIdAfterDelete,
   getPinnedThreadsForSidebar,
   getNextVisibleSidebarThreadId,
@@ -10,6 +11,7 @@ import {
   getVisibleThreadsForProject,
   getProjectSortTimestamp,
   hasUnseenCompletion,
+  isDuplicateProjectCreateError,
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadEnvMode,
   resolveThreadRowClassName,
@@ -98,6 +100,36 @@ describe("resolveSidebarNewThreadEnvMode", () => {
         defaultEnvMode: "worktree",
       }),
     ).toBe("local");
+  });
+});
+
+describe("add-project error helpers", () => {
+  it("detects duplicate project.create errors", () => {
+    expect(
+      isDuplicateProjectCreateError(
+        "Orchestration command invariant failed (project.create): Project 'project-123' already uses workspace root 'C:\\Labs\\influenzo'.",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not classify unrelated errors as duplicate project.create failures", () => {
+    expect(
+      isDuplicateProjectCreateError("Project directory does not exist: C:\\Labs\\influenzo"),
+    ).toBe(false);
+  });
+
+  it("adds a readable explanation for duplicate workspace-root errors", () => {
+    expect(
+      describeAddProjectError(
+        "Orchestration command invariant failed (project.create): Project 'project-duplicate' already uses workspace root 'C:\\Labs\\influenzo'.",
+      ),
+    ).toContain("already linked to an existing project");
+  });
+
+  it("returns no explanation for unrelated add-project errors", () => {
+    expect(describeAddProjectError("Project directory does not exist: C:\\Labs\\influenzo")).toBe(
+      null,
+    );
   });
 });
 

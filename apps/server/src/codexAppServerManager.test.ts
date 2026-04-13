@@ -6,6 +6,7 @@ import path from "node:path";
 import { ApprovalRequestId, ThreadId } from "@t3tools/contracts";
 
 import {
+  buildCodexProcessEnv,
   buildCodexInitializeParams,
   CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
   CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
@@ -240,6 +241,66 @@ describe("classifyCodexStderrLine", () => {
     expect(classifyCodexStderrLine(line)).toEqual({
       message: "Tool call failed because the same argument was sent twice (yield_time_ms).",
     });
+  });
+});
+
+describe("buildCodexProcessEnv", () => {
+  it("hydrates the active custom provider env_key from the effective CODEX_HOME", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "t3-codex-env-"));
+    try {
+      writeFileSync(
+        path.join(tempDir, "config.toml"),
+        [
+          'model_provider = "my-company-proxy"',
+          "",
+          '[model_providers."my-company-proxy"]',
+          'env_key = "MY_COMPANY_PROXY_KEY"',
+        ].join("\n"),
+        "utf8",
+      );
+
+      const readEnvironment = vi.fn(() => ({
+        PATH: "/opt/homebrew/bin:/usr/bin",
+        SSH_AUTH_SOCK: "/tmp/ssh.sock",
+        MY_COMPANY_PROXY_KEY: "proxy-secret",
+      }));
+
+      const env = buildCodexProcessEnv({
+        env: { SHELL: "/bin/zsh", PATH: "/usr/bin" },
+        homePath: tempDir,
+        platform: "darwin",
+        readEnvironment,
+      });
+
+      expect(readEnvironment).toHaveBeenCalledWith("/bin/zsh", [
+        "PATH",
+        "SSH_AUTH_SOCK",
+        "MY_COMPANY_PROXY_KEY",
+      ]);
+      expect(env.CODEX_HOME).toBe(tempDir);
+      expect(env.MY_COMPANY_PROXY_KEY).toBe("proxy-secret");
+      expect(env.PATH).toBe("/opt/homebrew/bin:/usr/bin");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not read shell env when the provider key is already present", () => {
+    const readEnvironment = vi.fn();
+
+    const env = buildCodexProcessEnv({
+      env: {
+        SHELL: "/bin/zsh",
+        PATH: "/usr/bin",
+        CODEX_HOME: "/tmp/.codex",
+        AZURE_OPENAI_API_KEY: "existing-secret",
+      },
+      platform: "darwin",
+      readEnvironment,
+    });
+
+    expect(readEnvironment).not.toHaveBeenCalled();
+    expect(env.AZURE_OPENAI_API_KEY).toBe("existing-secret");
   });
 });
 
