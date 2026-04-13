@@ -118,6 +118,7 @@ export const ChatHeader = memo(function ChatHeader({
   const { isMobile, state } = useSidebar();
   const headerRef = useRef<HTMLDivElement>(null);
   const [compact, setCompact] = useState(false);
+  const [openAddActionNonce, setOpenAddActionNonce] = useState(0);
   const [preferredEditor] = usePreferredEditor(availableEditors);
   const EditorIcon = preferredEditor ? resolveEditorIcon(preferredEditor) : null;
   // Reuse the shared git status query so the diff toggle can show live totals
@@ -220,12 +221,15 @@ export const ChatHeader = memo(function ChatHeader({
             <TooltipPopup side="bottom">{handoffActionLabel}</TooltipPopup>
           </Tooltip>
         ) : null}
-        {/* Inline controls — shown when there's enough room (only project scripts). */}
-        {!isDisposableThread && !compact && activeProjectScripts ? (
+        {/* Keep one shared project-actions controller mounted so both inline and
+            compact header menus open the same dialog/state machine. */}
+        {!isDisposableThread && activeProjectScripts ? (
           <ProjectScriptsControl
             scripts={activeProjectScripts}
             keybindings={keybindings}
             preferredScriptId={preferredScriptId}
+            showInlineControls={!compact}
+            openAddActionNonce={openAddActionNonce}
             onRunScript={onRunProjectScript}
             onAddScript={onAddProjectScript}
             onUpdateScript={onUpdateProjectScript}
@@ -293,40 +297,15 @@ export const ChatHeader = memo(function ChatHeader({
                   )}
                 </MenuItem>
               ) : null}
-            </MenuPopup>
-          </Menu>
-        ) : null}
-
-        {/* Compact overflow for project scripts only. */}
-        {!isDisposableThread && compact && activeProjectScripts ? (
-          <Menu modal={false}>
-            <MenuTrigger
-              render={
-                <Button
-                  size="icon-xs"
-                  variant="outline"
-                  className="shrink-0"
-                  aria-label="Project actions"
-                />
-              }
-            >
-              <PlusIcon className="size-3.5" />
-            </MenuTrigger>
-            <MenuPopup align="end" side="bottom" className="min-w-[13rem]">
-              {activeProjectScripts.map((script) => (
-                <MenuItem key={script.id} onClick={() => onRunProjectScript(script)}>
-                  <span className="truncate">{script.name}</span>
-                </MenuItem>
-              ))}
-              <MenuSeparator className="mx-1" />
-              <MenuItem
-                onClick={() => {
-                  setCompact(false);
-                }}
-              >
-                <PlusIcon className="size-3.5 shrink-0" />
-                <span>Add action</span>
-              </MenuItem>
+              {activeProjectScripts ? (
+                <>
+                  <MenuSeparator className="mx-1" />
+                  <MenuItem onClick={() => setOpenAddActionNonce((current) => current + 1)}>
+                    <PlusIcon className="size-3.5 shrink-0" />
+                    <span>Add action</span>
+                  </MenuItem>
+                </>
+              ) : null}
             </MenuPopup>
           </Menu>
         ) : null}

@@ -14,7 +14,15 @@ import {
   SettingsIcon,
   WrenchIcon,
 } from "~/lib/icons";
-import React, { type FormEvent, type KeyboardEvent, useCallback, useMemo, useState } from "react";
+import React, {
+  type FormEvent,
+  type KeyboardEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import {
   keybindingValueForCommand,
@@ -90,6 +98,8 @@ interface ProjectScriptsControlProps {
   scripts: ProjectScript[];
   keybindings: ResolvedKeybindingsConfig;
   preferredScriptId?: string | null;
+  showInlineControls?: boolean;
+  openAddActionNonce?: number;
   onRunScript: (script: ProjectScript) => void;
   onAddScript: (input: NewProjectScriptInput) => Promise<void> | void;
   onUpdateScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void> | void;
@@ -151,6 +161,8 @@ export default function ProjectScriptsControl({
   scripts,
   keybindings,
   preferredScriptId = null,
+  showInlineControls = true,
+  openAddActionNonce,
   onRunScript,
   onAddScript,
   onUpdateScript,
@@ -167,6 +179,7 @@ export default function ProjectScriptsControl({
   const [keybinding, setKeybinding] = useState("");
   const [validationError, setValidationError] = useState<string | null>(null);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const lastOpenAddActionNonceRef = useRef<number | undefined>(openAddActionNonce);
 
   const primaryScript = useMemo(() => {
     if (preferredScriptId) {
@@ -259,6 +272,19 @@ export default function ProjectScriptsControl({
     setDialogOpen(true);
   };
 
+  // Allow parent surfaces like the compact header menu to open the shared
+  // "Add action" dialog without duplicating script form logic.
+  useEffect(() => {
+    if (openAddActionNonce === undefined) return;
+    if (lastOpenAddActionNonceRef.current === undefined) {
+      lastOpenAddActionNonceRef.current = openAddActionNonce;
+      return;
+    }
+    if (openAddActionNonce === lastOpenAddActionNonceRef.current) return;
+    lastOpenAddActionNonceRef.current = openAddActionNonce;
+    openAddDialog();
+  }, [openAddActionNonce]);
+
   const confirmDeleteScript = useCallback(() => {
     if (!editingScriptId) return;
     setDeleteConfirmOpen(false);
@@ -268,7 +294,7 @@ export default function ProjectScriptsControl({
 
   return (
     <>
-      {primaryScript ? (
+      {showInlineControls && primaryScript ? (
         <Group aria-label="Project scripts">
           <Button
             size="xs"
