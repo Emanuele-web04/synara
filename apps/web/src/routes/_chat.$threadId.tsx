@@ -539,7 +539,7 @@ function SplitPaneSurface(props: {
       ) : null}
       <SidebarInset
         className={cn(
-          "min-h-0 min-w-0 overflow-hidden overscroll-y-none rounded-none bg-background text-foreground transition-shadow",
+          "min-h-0 min-w-0 overflow-hidden overscroll-y-none bg-background text-foreground transition-shadow",
           props.isFocused ? "ring-1 ring-inset ring-primary/25" : "",
         )}
         onMouseDown={props.onFocus}
@@ -1099,7 +1099,7 @@ function SingleChatSurface(props: {
   if (!shouldUseDiffSheet) {
     return (
       <div className="flex h-dvh min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
-        <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none rounded-none bg-background text-foreground">
+        <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
           <ChatView
             key={props.threadId}
             threadId={props.threadId}
@@ -1142,7 +1142,7 @@ function SingleChatSurface(props: {
 
   return (
     <>
-      <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none rounded-none bg-background text-foreground">
+      <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
         <ChatView
           key={props.threadId}
           threadId={props.threadId}

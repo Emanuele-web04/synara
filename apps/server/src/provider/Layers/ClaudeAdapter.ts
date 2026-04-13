@@ -305,6 +305,10 @@ function asRuntimeItemId(value: string): RuntimeItemId {
   return RuntimeItemId.makeUnsafe(value);
 }
 
+function asPositiveFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
 function maxClaudeContextWindowFromModelUsage(
   modelUsage: Record<string, ModelUsage> | undefined,
 ): number | undefined {
@@ -312,7 +316,10 @@ function maxClaudeContextWindowFromModelUsage(
 
   let maxContextWindow: number | undefined;
   for (const value of Object.values(modelUsage)) {
-    const contextWindow = value.contextWindow;
+    const contextWindow = asPositiveFiniteNumber(value.contextWindow);
+    if (contextWindow === undefined) {
+      continue;
+    }
     maxContextWindow = Math.max(maxContextWindow ?? 0, contextWindow);
   }
 
@@ -373,6 +380,35 @@ function normalizeClaudeTokenUsage(
     ...(typeof usage.duration_ms === "number" && Number.isFinite(usage.duration_ms)
       ? { durationMs: usage.duration_ms }
       : {}),
+  };
+}
+
+function mergeClaudeTokenUsageSnapshot(
+  previous: ThreadTokenUsageSnapshot,
+  accumulated: ThreadTokenUsageSnapshot | undefined,
+  contextWindow?: number,
+): ThreadTokenUsageSnapshot {
+  const maxTokens = asPositiveFiniteNumber(contextWindow);
+  const usedTokens =
+    maxTokens !== undefined ? Math.min(previous.usedTokens, maxTokens) : previous.usedTokens;
+  const lastUsedTokens =
+    previous.lastUsedTokens !== undefined
+      ? maxTokens !== undefined
+        ? Math.min(previous.lastUsedTokens, maxTokens)
+        : previous.lastUsedTokens
+      : usedTokens;
+  const totalProcessedTokens = Math.max(
+    previous.totalProcessedTokens ?? previous.usedTokens,
+    accumulated?.totalProcessedTokens ?? accumulated?.usedTokens ?? 0,
+    usedTokens,
+  );
+
+  return {
+    ...previous,
+    usedTokens,
+    lastUsedTokens,
+    ...(maxTokens !== undefined ? { maxTokens } : {}),
+    ...(totalProcessedTokens > usedTokens ? { totalProcessedTokens } : {}),
   };
 }
 
@@ -1568,22 +1604,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           result?.usage,
           resultContextWindow ?? context.lastKnownContextWindow,
         );
-        const accumulatedTotalProcessedTokens =
-          accumulatedSnapshot?.totalProcessedTokens ?? accumulatedSnapshot?.usedTokens;
         const lastGoodUsage = context.lastKnownTokenUsage;
         const maxTokens = resultContextWindow ?? context.lastKnownContextWindow;
         const usageSnapshot: ThreadTokenUsageSnapshot | undefined = lastGoodUsage
-          ? {
-              ...lastGoodUsage,
-              ...(typeof maxTokens === "number" && Number.isFinite(maxTokens) && maxTokens > 0
-                ? { maxTokens }
-                : {}),
-              ...(typeof accumulatedTotalProcessedTokens === "number" &&
-              Number.isFinite(accumulatedTotalProcessedTokens) &&
-              accumulatedTotalProcessedTokens > lastGoodUsage.usedTokens
-                ? { totalProcessedTokens: accumulatedTotalProcessedTokens }
-                : {}),
-            }
+          ? mergeClaudeTokenUsageSnapshot(lastGoodUsage, accumulatedSnapshot, maxTokens)
           : accumulatedSnapshot;
 
         const turnState = context.turnState;

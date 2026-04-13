@@ -1555,7 +1555,7 @@ function SettingsRouteView() {
   };
 
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none rounded-none bg-background text-foreground">
+    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
       <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
         {/* Header */}
         {isElectron ? (

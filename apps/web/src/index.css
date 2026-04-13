@@ -164,6 +164,22 @@ body,
   overscroll-behavior-y: none;
 }
 
+/* Rounded left edge on the content surface when a left sidebar is expanded */
+[data-slot="sidebar"][data-state="expanded"][data-side="left"]
+  ~ [data-slot="sidebar-inset"]
+  > [data-slot="sidebar-inset-surface"] {
+  border-top-left-radius: var(--radius-xl);
+  border-bottom-left-radius: var(--radius-xl);
+  overflow: hidden;
+}
+
+/* Preserve inset variant rounding (inherits from the main element) */
+[data-slot="sidebar"][data-variant="inset"]
+  ~ [data-slot="sidebar-inset"]
+  > [data-slot="sidebar-inset-surface"] {
+  border-radius: inherit;
+}
+
 /* Noise texture — scoped to main content so it doesn't block native vibrancy on the sidebar */
 [data-slot="sidebar-inset"]::after {
   content: "";
