@@ -34,6 +34,7 @@ import { autoUpdater } from "electron-updater";
 import type { ContextMenuItem } from "@t3tools/contracts";
 import { NetService } from "@t3tools/shared/Net";
 import { RotatingFileSink } from "@t3tools/shared/logging";
+import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness";
 import { showDesktopConfirmDialog } from "./confirmDialog";
 import { syncShellEnvironment } from "./syncShellEnvironment";
 import { getAutoUpdateDisabledReason, shouldBroadcastDownloadProgress } from "./updateState";
@@ -109,6 +110,7 @@ let backendProcess: ChildProcess.ChildProcess | null = null;
 let backendPort = 0;
 let backendAuthToken = "";
 let backendWsUrl = "";
+let backendReadinessAbortController: AbortController | null = null;
 let restartAttempt = 0;
 let restartTimer: ReturnType<typeof setTimeout> | null = null;
 let isQuitting = false;
@@ -190,6 +192,29 @@ function getSafeTheme(rawTheme: unknown): DesktopTheme | null {
   }
 
   return null;
+}
+
+// Wait for the desktop backend to accept HTTP connections before packaged startup continues.
+async function waitForBackendHttpReady(baseUrl: string): Promise<void> {
+  cancelBackendReadinessWait();
+  const controller = new AbortController();
+  backendReadinessAbortController = controller;
+
+  try {
+    await waitForHttpReady(baseUrl, {
+      signal: controller.signal,
+      path: "/health",
+    });
+  } finally {
+    if (backendReadinessAbortController === controller) {
+      backendReadinessAbortController = null;
+    }
+  }
+}
+
+function cancelBackendReadinessWait(): void {
+  backendReadinessAbortController?.abort();
+  backendReadinessAbortController = null;
 }
 
 function writeDesktopStreamChunk(
@@ -1584,6 +1609,7 @@ async function bootstrap(): Promise<void> {
   );
   writeDesktopLogHeader(`reserved backend port via NetService port=${backendPort}`);
   backendAuthToken = Crypto.randomBytes(24).toString("hex");
+  const backendHttpUrl = `http://127.0.0.1:${backendPort}`;
   backendWsUrl = `ws://127.0.0.1:${backendPort}/?token=${encodeURIComponent(backendAuthToken)}`;
   process.env.T3CODE_DESKTOP_WS_URL = backendWsUrl;
   writeDesktopLogHeader(`bootstrap resolved websocket url=${backendWsUrl}`);
@@ -1592,6 +1618,28 @@ async function bootstrap(): Promise<void> {
   writeDesktopLogHeader("bootstrap ipc handlers registered");
   startBackend();
   writeDesktopLogHeader("bootstrap backend start requested");
+
+  if (isDevelopment) {
+    mainWindow = createWindow();
+    writeDesktopLogHeader("bootstrap main window created");
+    void waitForBackendHttpReady(backendHttpUrl)
+      .then(() => {
+        writeDesktopLogHeader("bootstrap backend ready");
+      })
+      .catch((error) => {
+        if (isBackendReadinessAborted(error)) {
+          return;
+        }
+        writeDesktopLogHeader(
+          `bootstrap backend readiness warning message=${formatErrorMessage(error)}`,
+        );
+        console.warn("[desktop] backend readiness check timed out during dev bootstrap", error);
+      });
+    return;
+  }
+
+  await waitForBackendHttpReady(backendHttpUrl);
+  writeDesktopLogHeader("bootstrap backend ready");
   mainWindow = createWindow();
   writeDesktopLogHeader("bootstrap main window created");
 }
@@ -1600,6 +1648,7 @@ app.on("before-quit", () => {
   isQuitting = true;
   writeDesktopLogHeader("before-quit received");
   clearUpdatePollTimer();
+  cancelBackendReadinessWait();
   stopBackend();
   browserManager.dispose();
   restoreStdIoCapture?.();
@@ -1640,6 +1689,7 @@ if (process.platform !== "win32") {
     isQuitting = true;
     writeDesktopLogHeader("SIGINT received");
     clearUpdatePollTimer();
+    cancelBackendReadinessWait();
     stopBackend();
     restoreStdIoCapture?.();
     app.quit();
@@ -1650,6 +1700,7 @@ if (process.platform !== "win32") {
     isQuitting = true;
     writeDesktopLogHeader("SIGTERM received");
     clearUpdatePollTimer();
+    cancelBackendReadinessWait();
     stopBackend();
     restoreStdIoCapture?.();
     app.quit();
