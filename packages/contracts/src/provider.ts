@@ -112,6 +112,7 @@ export type ProviderStartReviewInput = typeof ProviderStartReviewInput.Type;
 export const ProviderInterruptTurnInput = Schema.Struct({
   threadId: ThreadId,
   turnId: Schema.optional(TurnId),
+  providerThreadId: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderInterruptTurnInput = typeof ProviderInterruptTurnInput.Type;
 
@@ -145,9 +146,12 @@ export const ProviderEvent = Schema.Struct({
   method: TrimmedNonEmptyString,
   message: Schema.optional(TrimmedNonEmptyString),
   turnId: Schema.optional(TurnId),
+  parentTurnId: Schema.optional(TurnId),
   itemId: Schema.optional(ProviderItemId),
   requestId: Schema.optional(ApprovalRequestId),
   requestKind: Schema.optional(ProviderRequestKind),
+  providerThreadId: Schema.optional(TrimmedNonEmptyString),
+  providerParentThreadId: Schema.optional(TrimmedNonEmptyString),
   textDelta: Schema.optional(Schema.String),
   payload: Schema.optional(Schema.Unknown),
 });

@@ -529,7 +529,10 @@ function providerRefsFromEvent(
   event: ProviderEvent,
 ): ProviderRuntimeEvent["providerRefs"] | undefined {
   const refs: Record<string, string> = {};
+  if (event.providerThreadId) refs.providerThreadId = event.providerThreadId;
+  if (event.providerParentThreadId) refs.providerParentThreadId = event.providerParentThreadId;
   if (event.turnId) refs.providerTurnId = event.turnId;
+  if (event.parentTurnId) refs.parentProviderTurnId = event.parentTurnId;
   if (event.itemId) refs.providerItemId = event.itemId;
   if (event.requestId) refs.providerRequestId = event.requestId;
 
@@ -547,6 +550,7 @@ function runtimeEventBase(
     threadId: canonicalThreadId,
     createdAt: event.createdAt,
     ...(event.turnId ? { turnId: event.turnId } : {}),
+    ...(event.parentTurnId ? { parentTurnId: event.parentTurnId } : {}),
     ...(event.itemId ? { itemId: asRuntimeItemId(event.itemId) } : {}),
     ...(event.requestId ? { requestId: asRuntimeRequestId(event.requestId) } : {}),
     ...(refs ? { providerRefs: refs } : {}),
@@ -1557,9 +1561,13 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         })),
       );
 
-    const interruptTurn: CodexAdapterShape["interruptTurn"] = (threadId, turnId) =>
+    const interruptTurn: CodexAdapterShape["interruptTurn"] = (
+      threadId,
+      turnId,
+      providerThreadId,
+    ) =>
       Effect.tryPromise({
-        try: () => manager.interruptTurn(threadId, turnId),
+        try: () => manager.interruptTurn(threadId, turnId, providerThreadId),
         catch: (cause) => toRequestError(threadId, "turn/interrupt", cause),
       });
 

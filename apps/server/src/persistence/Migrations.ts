@@ -37,6 +37,7 @@ import Migration0021 from "./Migrations/021_ProjectionThreadsAssociatedWorktree.
 import Migration0022 from "./Migrations/022_ProjectionThreadsAssociatedWorktreeBranch.ts";
 import Migration0023 from "./Migrations/023_ProjectionThreadsAssociatedWorktreeRef.ts";
 import Migration0024 from "./Migrations/024_ProjectionThreadsArchivedAt.ts";
+import Migration0025 from "./Migrations/025_ProjectionThreadsSubagents.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -73,6 +74,7 @@ export const migrationEntries = [
   [22, "ProjectionThreadsAssociatedWorktreeBranch", Migration0022],
   [23, "ProjectionThreadsAssociatedWorktreeRef", Migration0023],
   [24, "ProjectionThreadsArchivedAt", Migration0024],
+  [25, "ProjectionThreadsSubagents", Migration0025],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

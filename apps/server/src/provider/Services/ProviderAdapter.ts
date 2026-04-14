@@ -103,7 +103,11 @@ export interface ProviderAdapterShape<TError> {
   /**
    * Interrupt an active turn.
    */
-  readonly interruptTurn: (threadId: ThreadId, turnId?: TurnId) => Effect.Effect<void, TError>;
+  readonly interruptTurn: (
+    threadId: ThreadId,
+    turnId?: TurnId,
+    providerThreadId?: string,
+  ) => Effect.Effect<void, TError>;
 
   /**
    * Respond to an interactive approval request.

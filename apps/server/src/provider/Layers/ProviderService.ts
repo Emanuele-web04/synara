@@ -603,7 +603,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           operation: "ProviderService.interruptTurn",
           allowRecovery: true,
         });
-        yield* routed.adapter.interruptTurn(routed.threadId, input.turnId);
+        yield* routed.adapter.interruptTurn(routed.threadId, input.turnId, input.providerThreadId);
         yield* analytics.record("provider.turn.interrupted", {
           provider: routed.adapter.provider,
         });

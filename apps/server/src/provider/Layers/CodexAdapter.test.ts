@@ -63,7 +63,8 @@ class FakeCodexManager extends CodexAppServerManager {
   );
 
   public interruptTurnImpl = vi.fn(
-    async (_threadId: ThreadId, _turnId?: TurnId): Promise<void> => undefined,
+    async (_threadId: ThreadId, _turnId?: TurnId, _providerThreadId?: string): Promise<void> =>
+      undefined,
   );
 
   public readThreadImpl = vi.fn(async (_threadId: ThreadId) => ({
@@ -106,8 +107,12 @@ class FakeCodexManager extends CodexAppServerManager {
     return this.steerTurnImpl(input);
   }
 
-  override interruptTurn(threadId: ThreadId, turnId?: TurnId): Promise<void> {
-    return this.interruptTurnImpl(threadId, turnId);
+  override interruptTurn(
+    threadId: ThreadId,
+    turnId?: TurnId,
+    providerThreadId?: string,
+  ): Promise<void> {
+    return this.interruptTurnImpl(threadId, turnId, providerThreadId);
   }
 
   override readThread(threadId: ThreadId) {

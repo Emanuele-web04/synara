@@ -15,6 +15,12 @@ import {
 } from "@t3tools/contracts";
 import { Cache, Cause, Duration, Effect, Layer, Option, Ref, Stream } from "effect";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import {
+  buildSubagentIdentityDirectory,
+  collectSubagentProviderThreadIds,
+  extractSubagentIdentityHints,
+  resolveSubagentIdentityFromDirectory,
+} from "@t3tools/shared/subagents";
 
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
@@ -100,6 +106,69 @@ function proposedPlanIdFromEvent(event: ProviderRuntimeEvent, threadId: ThreadId
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function asObject(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function normalizeIdentifier(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
+function subagentThreadId(parentThreadId: ThreadId, providerThreadId: string): ThreadId {
+  return ThreadId.makeUnsafe(`subagent:${parentThreadId}:${providerThreadId}`);
+}
+
+interface SubagentIdentity {
+  readonly providerThreadId: string;
+  readonly agentId?: string;
+  readonly nickname?: string;
+  readonly role?: string;
+  readonly model?: string;
+  readonly modelIsRequestedHint?: boolean;
+}
+
+function extractCollabPayload(event: ProviderRuntimeEvent): Record<string, unknown> | undefined {
+  const payload = runtimePayloadRecord(event);
+  return asObject(payload?.data);
+}
+
+function extractSubagentIdentity(
+  event: ProviderRuntimeEvent,
+  providerThreadId: string,
+): SubagentIdentity | undefined {
+  const collabPayload = extractCollabPayload(event);
+  const item = asObject(collabPayload?.item) ?? collabPayload;
+  if (!item) {
+    return undefined;
+  }
+  return resolveSubagentIdentityFromDirectory(
+    buildSubagentIdentityDirectory(extractSubagentIdentityHints(item)),
+    {
+    providerThreadId,
+    },
+  ) as SubagentIdentity | undefined;
+}
+
+function subagentThreadTitle(identity: {
+  nickname?: string | undefined;
+  role?: string | undefined;
+  providerThreadId?: string | undefined;
+}): string {
+  if (identity.nickname && identity.role) {
+    return `${identity.nickname} [${identity.role}]`;
+  }
+  if (identity.nickname) {
+    return identity.nickname;
+  }
+  if (identity.role) {
+    return `Subagent [${identity.role}]`;
+  }
+  return identity.providerThreadId ? `Subagent ${identity.providerThreadId}` : "Subagent";
 }
 
 function buildContextWindowActivityPayload(
@@ -1020,10 +1089,150 @@ const make = Effect.gen(function* () {
   const processRuntimeEvent = (event: ProviderRuntimeEvent) =>
     Effect.gen(function* () {
       const readModel = yield* orchestrationEngine.getReadModel();
-      const thread = readModel.threads.find((entry) => entry.id === event.threadId);
-      if (!thread) return;
-
       const now = event.createdAt;
+      const parentThread = readModel.threads.find((entry) => entry.id === event.threadId);
+      if (!parentThread) return;
+
+      const ensureSubagentThread = (
+        providerThreadId: string,
+        identity?: Pick<
+          SubagentIdentity,
+          "agentId" | "nickname" | "role" | "model" | "modelIsRequestedHint"
+        >,
+      ) =>
+        Effect.gen(function* () {
+          const childThreadId = subagentThreadId(parentThread.id, providerThreadId);
+          const existingThread = readModel.threads.find((entry) => entry.id === childThreadId);
+          const resolvedModelSelection =
+            identity?.model && identity.modelIsRequestedHint !== true
+              ? {
+                  provider: parentThread.modelSelection.provider,
+                  model: identity.model,
+                }
+              : undefined;
+
+          if (!existingThread) {
+            yield* orchestrationEngine.dispatch({
+              type: "thread.create",
+              commandId: providerCommandId(event, "subagent-thread-create"),
+              threadId: childThreadId,
+              projectId: parentThread.projectId,
+              title: subagentThreadTitle({
+                nickname: identity?.nickname,
+                role: identity?.role,
+                providerThreadId,
+              }),
+              modelSelection: resolvedModelSelection ?? parentThread.modelSelection,
+              runtimeMode: parentThread.runtimeMode,
+              interactionMode: parentThread.interactionMode,
+              envMode: parentThread.envMode,
+              branch: parentThread.branch,
+              worktreePath: parentThread.worktreePath,
+              associatedWorktreePath: parentThread.associatedWorktreePath,
+              associatedWorktreeBranch: parentThread.associatedWorktreeBranch,
+              associatedWorktreeRef: parentThread.associatedWorktreeRef,
+              parentThreadId: parentThread.id,
+              subagentAgentId: identity?.agentId ?? null,
+              subagentNickname: identity?.nickname ?? null,
+              subagentRole: identity?.role ?? null,
+              createdAt: now,
+            });
+          } else if (
+            identity?.agentId !== undefined ||
+            identity?.nickname !== undefined ||
+            identity?.role !== undefined ||
+            (identity?.model !== undefined && identity.modelIsRequestedHint !== true)
+          ) {
+            yield* orchestrationEngine.dispatch({
+              type: "thread.meta.update",
+              commandId: providerCommandId(event, "subagent-thread-meta-update"),
+              threadId: childThreadId,
+              ...(identity?.nickname !== undefined || identity?.role !== undefined
+                ? {
+                    title: subagentThreadTitle({
+                      nickname: identity?.nickname ?? existingThread.subagentNickname ?? undefined,
+                      role: identity?.role ?? existingThread.subagentRole ?? undefined,
+                      providerThreadId,
+                    }),
+                  }
+                : {}),
+              parentThreadId: parentThread.id,
+              ...(resolvedModelSelection !== undefined &&
+              existingThread.modelSelection.model !== resolvedModelSelection.model
+                ? { modelSelection: resolvedModelSelection }
+                : {}),
+              ...(identity?.agentId !== undefined ? { subagentAgentId: identity.agentId } : {}),
+              ...(identity?.nickname !== undefined ? { subagentNickname: identity.nickname } : {}),
+              ...(identity?.role !== undefined ? { subagentRole: identity.role } : {}),
+            });
+          }
+
+          return {
+            threadId: childThreadId,
+            thread: existingThread ?? {
+              ...parentThread,
+              id: childThreadId,
+              title: subagentThreadTitle({
+                nickname: identity?.nickname,
+                role: identity?.role,
+                providerThreadId,
+              }),
+              parentThreadId: parentThread.id,
+              subagentAgentId: identity?.agentId ?? null,
+              subagentNickname: identity?.nickname ?? null,
+              subagentRole: identity?.role ?? null,
+              modelSelection: resolvedModelSelection ?? parentThread.modelSelection,
+              latestTurn: null,
+              messages: [],
+              proposedPlans: [],
+              activities: [],
+              checkpoints: [],
+              session: null,
+              createdAt: now,
+              updatedAt: now,
+            },
+          };
+        });
+
+      const collabPayload = extractCollabPayload(event);
+      const collabItem = asObject(collabPayload?.item) ?? collabPayload;
+      const isCollabToolEvent =
+        (event.type === "item.started" ||
+          event.type === "item.updated" ||
+          event.type === "item.completed") &&
+        event.payload.itemType === "collab_agent_tool_call" &&
+        collabItem !== undefined;
+      if (isCollabToolEvent && collabItem) {
+        const receiverThreadIds = collectSubagentProviderThreadIds(collabItem);
+        const identityDirectory = buildSubagentIdentityDirectory(
+          extractSubagentIdentityHints(collabItem),
+        );
+        for (const receiverThreadId of receiverThreadIds) {
+          yield* ensureSubagentThread(
+            receiverThreadId,
+            resolveSubagentIdentityFromDirectory(identityDirectory, {
+              providerThreadId: receiverThreadId,
+            }) as SubagentIdentity | undefined,
+          );
+        }
+      }
+
+      const providerThreadId = normalizeIdentifier(event.providerRefs?.providerThreadId);
+      const providerParentThreadId = normalizeIdentifier(
+        event.providerRefs?.providerParentThreadId,
+      );
+      const isChildThreadEvent =
+        providerThreadId !== undefined &&
+        providerParentThreadId !== undefined &&
+        providerThreadId !== providerParentThreadId;
+      const targetThreadResolution =
+        isChildThreadEvent && providerThreadId
+          ? yield* ensureSubagentThread(
+              providerThreadId,
+              extractSubagentIdentity(event, providerThreadId),
+            )
+          : { threadId: parentThread.id, thread: parentThread };
+      const thread = targetThreadResolution.thread;
       const eventTurnId = toTurnId(event.turnId);
       const activeTurnId = thread.session?.activeTurnId ?? null;
 
