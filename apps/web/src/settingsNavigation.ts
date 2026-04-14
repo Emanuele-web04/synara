@@ -11,6 +11,7 @@ import {
   PaletteIcon,
   SettingsIcon,
   WrenchIcon,
+  WorktreeIcon,
 } from "./lib/icons";
 
 export const SETTINGS_SECTION_IDS = [
@@ -18,23 +19,35 @@ export const SETTINGS_SECTION_IDS = [
   "appearance",
   "notifications",
   "behavior",
+  "worktrees",
   "models",
   "advanced",
 ] as const;
 
 export type SettingsSectionId = (typeof SETTINGS_SECTION_IDS)[number];
+export type SettingsNavGroupId = "app" | "dpcode";
 
 export type SettingsNavItem = {
   id: SettingsSectionId;
+  group: SettingsNavGroupId;
   label: string;
   description: string;
   icon: LucideIcon;
   eyebrow: string;
 };
 
+export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
+  id: SettingsNavGroupId;
+  label: string;
+}> = [
+  { id: "app", label: "App" },
+  { id: "dpcode", label: "DP Code" },
+] as const;
+
 export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
   {
     id: "general",
+    group: "app",
     label: "General",
     description: "Default provider, thread mode, and sidebar organization.",
     icon: SettingsIcon,
@@ -42,6 +55,7 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
   },
   {
     id: "appearance",
+    group: "app",
     label: "Appearance",
     description: "Theme, typography, and timestamp formatting.",
     icon: PaletteIcon,
@@ -49,6 +63,7 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
   },
   {
     id: "notifications",
+    group: "app",
     label: "Notifications",
     description: "In-app toasts and desktop alerts.",
     icon: BellIcon,
@@ -56,13 +71,23 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
   },
   {
     id: "behavior",
+    group: "app",
     label: "Behavior",
     description: "Streaming, diff handling, and destructive confirmations.",
     icon: AdjustmentsIcon,
     eyebrow: "Interaction rules",
   },
   {
+    id: "worktrees",
+    group: "app",
+    label: "Worktrees",
+    description: "Review and clean up the worktrees created by DP Code.",
+    icon: WorktreeIcon,
+    eyebrow: "Workspace management",
+  },
+  {
     id: "models",
+    group: "dpcode",
     label: "Models",
     description: "Git writing defaults and custom model slugs.",
     icon: BrainIcon,
@@ -70,6 +95,7 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
   },
   {
     id: "advanced",
+    group: "dpcode",
     label: "Advanced",
     description: "Provider installs, keybindings, recovery, and version info.",
     icon: WrenchIcon,

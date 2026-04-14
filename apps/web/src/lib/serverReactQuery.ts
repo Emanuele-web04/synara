@@ -4,6 +4,7 @@ import { ensureNativeApi } from "~/nativeApi";
 export const serverQueryKeys = {
   all: ["server"] as const,
   config: () => ["server", "config"] as const,
+  worktrees: () => ["server", "worktrees"] as const,
 };
 
 export function serverConfigQueryOptions() {
@@ -14,5 +15,18 @@ export function serverConfigQueryOptions() {
       return api.server.getConfig();
     },
     staleTime: Infinity,
+  });
+}
+
+export function serverWorktreesQueryOptions() {
+  return queryOptions({
+    queryKey: serverQueryKeys.worktrees(),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      return api.server.listWorktrees();
+    },
+    staleTime: 30_000,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
   });
 }

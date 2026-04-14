@@ -1,6 +1,7 @@
 import { type FC, type SVGProps } from "react";
 import { PiGitCommit, PiSquareSplitHorizontal, PiSquareSplitVertical } from "react-icons/pi";
 import { RiApps2Line } from "react-icons/ri";
+import { LuSplit } from "react-icons/lu";
 import { TbArrowsRightLeft, TbPlug } from "react-icons/tb";
 import {
   IconAdjustments,
@@ -169,5 +170,14 @@ export const Trash2 = adaptIcon(IconTrash);
 export const TriangleAlertIcon = adaptIcon(IconAlertTriangle);
 export const Undo2Icon = adaptIcon(IconArrowBackUp);
 export const WrenchIcon = adaptIcon(IconTool);
+export const WorktreeIcon: LucideIcon = (props) => (
+  <LuSplit
+    className={props.className}
+    style={{
+      ...props.style,
+      transform: `${props.style?.transform ?? ""} rotate(90deg)`.trim(),
+    }}
+  />
+);
 export const XIcon = adaptIcon(IconX);
 export const ZapIcon = adaptIcon(IconBolt);

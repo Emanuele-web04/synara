@@ -642,7 +642,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   </div>
                 )}
                 {showUserText && (
-                  <div className="w-max max-w-full min-w-0 self-end rounded-xl border border-border/70 bg-secondary px-[14px] py-1.5">
+                  <div className="w-max max-w-full min-w-0 self-end rounded-xl border border-border/70 bg-secondary px-3 py-1">
                     <UserMessageBody
                       text={displayedUserMessage.visibleText}
                       terminalContexts={terminalContexts}

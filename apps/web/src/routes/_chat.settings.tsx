@@ -5,7 +5,7 @@
 
 import { type ProviderKind, DEFAULT_GIT_TEXT_GENERATION_MODEL } from "@t3tools/contracts";
 import { createFileRoute, useSearch } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import {
@@ -38,9 +38,11 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip"
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { isElectron } from "../env";
 import { useTheme } from "../hooks/useTheme";
+import { gitRemoveWorktreeMutationOptions } from "../lib/gitReactQuery";
 import { ChevronDownIcon, PlusIcon, RotateCcwIcon, Undo2Icon, XIcon } from "../lib/icons";
-import { serverConfigQueryOptions } from "../lib/serverReactQuery";
+import { serverConfigQueryOptions, serverQueryKeys, serverWorktreesQueryOptions } from "../lib/serverReactQuery";
 import { cn } from "../lib/utils";
+import { newCommandId } from "../lib/utils";
 import { ensureNativeApi, readNativeApi } from "../nativeApi";
 import {
   buildNotificationSettingsSupportText,
@@ -50,9 +52,9 @@ import {
 import {
   normalizeSettingsSection,
   SETTINGS_NAV_ITEMS,
-  type SettingsSectionId,
 } from "../settingsNavigation";
 import { useStore } from "../store";
+import { formatWorktreePathForDisplay } from "../worktreeCleanup";
 
 // ── Settings taxonomy ──────────────────────────────────────────────────────
 
@@ -218,6 +220,11 @@ function SettingResetButton({ label, onClick }: { label: string; onClick: () => 
   );
 }
 
+function normalizeManagedWorktreePath(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : null;
+}
+
 // ── Route screen ───────────────────────────────────────────────────────────
 
 function SettingsRouteView() {
@@ -227,8 +234,12 @@ function SettingsRouteView() {
 
   const { theme, setTheme } = useTheme();
   const { settings, defaults, updateSettings, resetSettings } = useAppSettings();
+  const queryClient = useQueryClient();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const serverWorktreesQuery = useQuery(serverWorktreesQueryOptions());
+  const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
+  const threads = useStore((store) => store.threads);
   const shouldOfferRecoveryTools = useStore((store) => {
     if (!store.threadsHydrated || store.projects.length === 0) {
       return false;
@@ -267,6 +278,38 @@ function SettingsRouteView() {
   const claudeBinaryPath = settings.claudeBinaryPath;
   const keybindingsConfigPath = serverConfigQuery.data?.keybindingsConfigPath ?? null;
   const availableEditors = serverConfigQuery.data?.availableEditors;
+  const managedWorktrees = serverWorktreesQuery.data?.worktrees ?? [];
+  const worktreesByWorkspaceRoot = managedWorktrees.reduce<
+    Array<{
+      workspaceRoot: string;
+      worktrees: Array<{
+        path: string;
+        linkedThreads: typeof threads;
+      }>;
+    }>
+  >((groups, worktree) => {
+    const linkedThreads = threads.filter((thread) => {
+      const candidatePaths = [
+        normalizeManagedWorktreePath(thread.worktreePath),
+        normalizeManagedWorktreePath(thread.associatedWorktreePath),
+      ];
+      return candidatePaths.includes(worktree.path);
+    });
+    const existingGroup = groups.find((group) => group.workspaceRoot === worktree.workspaceRoot);
+    const nextWorktree = {
+      path: worktree.path,
+      linkedThreads,
+    };
+    if (existingGroup) {
+      existingGroup.worktrees.push(nextWorktree);
+    } else {
+      groups.push({
+        workspaceRoot: worktree.workspaceRoot,
+        worktrees: [nextWorktree],
+      });
+    }
+    return groups;
+  }, []);
 
   const gitTextGenerationModelOptions = getAppModelOptions(
     "codex",
@@ -563,6 +606,94 @@ function SettingsRouteView() {
       setIsRepairingLocalState(false);
     }
   }, [isRepairingLocalState, syncServerReadModel]);
+
+  const deleteManagedWorktree = useCallback(
+    async (input: { workspaceRoot: string; worktreePath: string }) => {
+      const api = readNativeApi() ?? ensureNativeApi();
+      const displayName = formatWorktreePathForDisplay(input.worktreePath);
+      const snapshot = await api.orchestration.getSnapshot().catch(() => null);
+      if (snapshot === null) {
+        toastManager.add({
+          type: "error",
+          title: "Could not verify linked conversations",
+          description: "Retry once the app reconnects to the server.",
+        });
+        return;
+      }
+
+      const linkedThreadsFromSnapshot = snapshot.threads.filter((thread) => {
+        if (thread.deletedAt !== null) {
+          return false;
+        }
+        const candidatePaths = [
+          normalizeManagedWorktreePath(thread.worktreePath),
+          normalizeManagedWorktreePath(thread.associatedWorktreePath ?? null),
+        ];
+        return candidatePaths.includes(input.worktreePath);
+      });
+      const linkedArchivedThreadIds = linkedThreadsFromSnapshot
+        .filter((thread) => (thread.archivedAt ?? null) !== null)
+        .map((thread) => thread.id);
+      const linkedActiveThreadCount = linkedThreadsFromSnapshot.filter(
+        (thread) => (thread.archivedAt ?? null) === null,
+      ).length;
+      const linkedConversationCount = linkedActiveThreadCount + linkedArchivedThreadIds.length;
+      const confirmed = await api.dialogs.confirm(
+        linkedConversationCount > 0
+          ? [
+              `Delete worktree "${displayName}"?`,
+              "",
+              `${linkedActiveThreadCount} active and ${linkedArchivedThreadIds.length} archived conversation${linkedConversationCount === 1 ? " is" : "s are"} linked to this worktree.`,
+              linkedArchivedThreadIds.length > 0
+                ? "Archived conversations will be deleted first."
+                : "Deleting it can break reopening those chats in the same workspace.",
+              "",
+              "Delete the worktree anyway?",
+            ].join("\n")
+          : [
+              `Delete worktree "${displayName}"?`,
+              "This removes the Git worktree from disk.",
+            ].join("\n"),
+      );
+      if (!confirmed) {
+        return;
+      }
+
+      try {
+        for (const archivedThreadId of linkedArchivedThreadIds) {
+          await api.orchestration.dispatchCommand({
+            type: "thread.delete",
+            commandId: newCommandId(),
+            threadId: archivedThreadId,
+          });
+        }
+
+        await removeWorktreeMutation.mutateAsync({
+          cwd: input.workspaceRoot,
+          path: input.worktreePath,
+          force: true,
+        });
+        await queryClient.invalidateQueries({
+          queryKey: serverQueryKeys.worktrees(),
+        });
+        toastManager.add({
+          type: "success",
+          title: "Worktree deleted",
+          description:
+            linkedArchivedThreadIds.length > 0
+              ? `${displayName} was removed and ${linkedArchivedThreadIds.length} archived conversation${linkedArchivedThreadIds.length === 1 ? "" : "s"} were deleted.`
+              : `${displayName} was removed.`,
+        });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not delete worktree",
+          description: error instanceof Error ? error.message : "Unable to delete the worktree.",
+        });
+      }
+    },
+    [queryClient, removeWorktreeMutation],
+  );
 
   const renderGeneralPanel = () => (
     <div className="space-y-6">
@@ -1122,6 +1253,102 @@ function SettingsRouteView() {
     </div>
   );
 
+  const renderWorktreesPanel = () => (
+    <div className="space-y-6">
+      <SettingsSection title="Managed worktrees">
+        <div className="space-y-4">
+          {serverWorktreesQuery.isLoading ? (
+            <div className="rounded-xl border border-dashed border-border/70 px-4 py-6 text-sm text-muted-foreground">
+              Loading managed worktrees...
+            </div>
+          ) : serverWorktreesQuery.isError ? (
+            <div className="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-6 text-sm text-destructive">
+              {serverWorktreesQuery.error instanceof Error
+                ? serverWorktreesQuery.error.message
+                : "Unable to load worktrees."}
+            </div>
+          ) : worktreesByWorkspaceRoot.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border/70 px-4 py-6 text-sm text-muted-foreground">
+              No app-managed worktrees found yet.
+            </div>
+          ) : (
+            worktreesByWorkspaceRoot.map((group) => (
+              <section key={group.workspaceRoot} className="space-y-2">
+                <h3 className="px-1 font-mono text-[11px] text-muted-foreground">
+                  {group.workspaceRoot}
+                </h3>
+
+                <div className="overflow-hidden rounded-2xl border border-border/70 bg-card/50">
+                  {group.worktrees.map((worktree, index) => {
+                    const deleteDisabled = removeWorktreeMutation.isPending;
+                    return (
+                      <div
+                        key={worktree.path}
+                        className={cn(
+                          "flex flex-col gap-4 px-4 py-4 sm:flex-row sm:items-start sm:justify-between",
+                          index > 0 && "border-t border-border/60",
+                        )}
+                      >
+                        <div className="min-w-0 flex-1 space-y-2">
+                          <div className="space-y-0.5">
+                            <div className="text-sm font-medium text-foreground">Worktree</div>
+                            <div className="font-mono text-[11px] text-muted-foreground">
+                              {worktree.path}
+                            </div>
+                          </div>
+
+                          <div className="space-y-1">
+                            <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                              Conversations
+                            </div>
+                            {worktree.linkedThreads.length > 0 ? (
+                              <div className="space-y-1">
+                                {worktree.linkedThreads.map((thread) => (
+                                  <div key={thread.id} className="text-sm text-foreground">
+                                    {thread.title}
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="text-sm text-muted-foreground">
+                                No conversations linked to this worktree.
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex shrink-0 flex-col items-end gap-2">
+                          <Button
+                            size="xs"
+                            variant="destructive"
+                            disabled={deleteDisabled}
+                            onClick={() =>
+                              void deleteManagedWorktree({
+                                workspaceRoot: group.workspaceRoot,
+                                worktreePath: worktree.path,
+                              })
+                            }
+                          >
+                            Delete
+                          </Button>
+                          {worktree.linkedThreads.length > 0 ? (
+                            <p className="max-w-40 text-right text-[11px] text-muted-foreground">
+                              Linked conversations exist. Deleting will ask for confirmation.
+                            </p>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            ))
+          )}
+        </div>
+      </SettingsSection>
+    </div>
+  );
+
   const renderModelsPanel = () => (
     <div className="space-y-6">
       <SettingsSection title="Generation defaults">
@@ -1545,6 +1772,8 @@ function SettingsRouteView() {
         return renderNotificationsPanel();
       case "behavior":
         return renderBehaviorPanel();
+      case "worktrees":
+        return renderWorktreesPanel();
       case "models":
         return renderModelsPanel();
       case "advanced":

@@ -142,7 +142,11 @@ import {
 } from "../lib/threadHandoff";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { parseDiffRouteSearch } from "../diffRouteSearch";
-import { normalizeSettingsSection, SETTINGS_NAV_ITEMS } from "../settingsNavigation";
+import {
+  normalizeSettingsSection,
+  SETTINGS_NAV_GROUPS,
+  SETTINGS_NAV_ITEMS,
+} from "../settingsNavigation";
 import {
   resolveSplitViewFocusedThreadId,
   resolveSplitViewPaneForThread,
@@ -3224,42 +3228,55 @@ export default function Sidebar() {
             </SidebarMenu>
 
             <div className="-mx-1.5 my-1.5 h-px bg-border/70" />
-            <div className="my-2 flex items-center px-2">
-              <span className="text-[length:var(--app-font-size-ui,12px)] font-normal tracking-tight text-muted-foreground/58">
-                Settings
-              </span>
-            </div>
+            <div className="space-y-4 pt-2">
+              {SETTINGS_NAV_GROUPS.map((group, groupIndex) => {
+                const items = SETTINGS_NAV_ITEMS.filter((item) => item.group === group.id);
+                if (items.length === 0) {
+                  return null;
+                }
 
-            <SidebarMenuSub className="mx-0 translate-x-0 border-l-0 px-0 py-0">
-              {SETTINGS_NAV_ITEMS.map((item) => {
-                const Icon = item.icon;
-                const isActive = item.id === activeSettingsSection;
                 return (
-                  <SidebarMenuSubItem key={item.id} className="w-full">
-                    <SidebarMenuSubButton
-                      render={<button type="button" />}
-                      size="sm"
-                      isActive={isActive}
-                      className="h-7.5 w-full justify-start gap-2 rounded-lg px-2 py-0.5 text-[length:var(--app-font-size-ui,12px)] font-normal hover:bg-accent"
-                      onClick={() => {
-                        void navigate({
-                          to: "/settings",
-                          search: (previous) => ({
-                            ...previous,
-                            section: item.id === "general" ? undefined : item.id,
-                          }),
-                        });
-                      }}
-                    >
-                      <Icon className="size-3.5 shrink-0" />
-                      <span className="truncate text-[length:var(--app-font-size-ui,12px)] leading-5">
-                        {item.label}
+                  <div key={group.id} className={groupIndex > 0 ? "pt-4" : undefined}>
+                    <div className="mb-1.5 px-2">
+                      <span className="text-[length:var(--app-font-size-ui,12px)] font-normal tracking-tight text-muted-foreground/58">
+                        {group.label}
                       </span>
-                    </SidebarMenuSubButton>
-                  </SidebarMenuSubItem>
+                    </div>
+
+                    <SidebarMenuSub className="mx-0 translate-x-0 border-l-0 px-0 py-0">
+                      {items.map((item) => {
+                        const Icon = item.icon;
+                        const isActive = item.id === activeSettingsSection;
+                        return (
+                          <SidebarMenuSubItem key={item.id} className="w-full">
+                            <SidebarMenuSubButton
+                              render={<button type="button" />}
+                              size="sm"
+                              isActive={isActive}
+                              className="h-7.5 w-full justify-start gap-2 rounded-lg px-2 py-0.5 text-[length:var(--app-font-size-ui,12px)] font-normal hover:bg-accent"
+                              onClick={() => {
+                                void navigate({
+                                  to: "/settings",
+                                  search: (previous) => ({
+                                    ...previous,
+                                    section: item.id === "general" ? undefined : item.id,
+                                  }),
+                                });
+                              }}
+                            >
+                              <Icon className="size-3.5 shrink-0" />
+                              <span className="truncate text-[length:var(--app-font-size-ui,12px)] leading-5">
+                                {item.label}
+                              </span>
+                            </SidebarMenuSubButton>
+                          </SidebarMenuSubItem>
+                        );
+                      })}
+                    </SidebarMenuSub>
+                  </div>
                 );
               })}
-            </SidebarMenuSub>
+            </div>
           </SidebarGroup>
         ) : (
           <>

@@ -451,6 +451,66 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     });
   });
 
+  const listManagedWorktrees = Effect.fnUntraced(function* () {
+    const worktreeParentEntries = yield* fileSystem
+      .readDirectory(serverConfig.worktreesDir, { recursive: false })
+      .pipe(Effect.catch(() => Effect.succeed([] as Array<string>)));
+
+    const discoveredWorktrees: Array<{ path: string; workspaceRoot: string }> = [];
+
+    for (const parentEntry of worktreeParentEntries) {
+      const parentPath = path.join(serverConfig.worktreesDir, parentEntry);
+      const parentStat = yield* fileSystem
+        .stat(parentPath)
+        .pipe(Effect.catch(() => Effect.succeed(null)));
+      if (!parentStat || parentStat.type !== "Directory") {
+        continue;
+      }
+
+      const worktreeEntries = yield* fileSystem
+        .readDirectory(parentPath, { recursive: false })
+        .pipe(Effect.catch(() => Effect.succeed([] as Array<string>)));
+
+      for (const worktreeEntry of worktreeEntries) {
+        const worktreePath = path.join(parentPath, worktreeEntry);
+        const worktreeStat = yield* fileSystem
+          .stat(worktreePath)
+          .pipe(Effect.catch(() => Effect.succeed(null)));
+        if (!worktreeStat || worktreeStat.type !== "Directory") {
+          continue;
+        }
+
+        const gitPointerFileContents = yield* fileSystem
+          .readFileString(path.join(worktreePath, ".git"))
+          .pipe(Effect.catch(() => Effect.succeed(null)));
+        if (!gitPointerFileContents) {
+          continue;
+        }
+
+        const workspaceRoot = parseManagedWorktreeWorkspaceRoot({
+          gitPointerFileContents,
+          path,
+          worktreePath,
+        });
+        if (!workspaceRoot) {
+          continue;
+        }
+
+        discoveredWorktrees.push({
+          path: worktreePath,
+          workspaceRoot,
+        });
+      }
+    }
+
+    return Array.from(
+      new Map(discoveredWorktrees.map((worktree) => [worktree.path, worktree])).values(),
+    ).toSorted(
+      (left, right) =>
+        left.workspaceRoot.localeCompare(right.workspaceRoot) || left.path.localeCompare(right.path),
+    );
+  });
+
   function logOutgoingPush(push: WsPushEnvelopeBase, recipients: number) {
     if (!logWebSocketEvents) return;
     logger.event("outgoing push", {
@@ -1126,11 +1186,17 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         return {
           cwd,
           homeDir,
+          worktreesDir: serverConfig.worktreesDir,
           keybindingsConfigPath,
           keybindings: keybindingsConfig.keybindings,
           issues: keybindingsConfig.issues,
           providers: providerStatuses,
           availableEditors,
+        };
+
+      case WS_METHODS.serverListWorktrees:
+        return {
+          worktrees: yield* listManagedWorktrees(),
         };
 
       case WS_METHODS.serverTranscribeVoice: {
