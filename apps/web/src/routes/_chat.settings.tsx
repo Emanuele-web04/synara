@@ -40,7 +40,11 @@ import { isElectron } from "../env";
 import { useTheme } from "../hooks/useTheme";
 import { gitRemoveWorktreeMutationOptions } from "../lib/gitReactQuery";
 import { ChevronDownIcon, PlusIcon, RotateCcwIcon, Undo2Icon, XIcon } from "../lib/icons";
-import { serverConfigQueryOptions, serverQueryKeys, serverWorktreesQueryOptions } from "../lib/serverReactQuery";
+import {
+  serverConfigQueryOptions,
+  serverQueryKeys,
+  serverWorktreesQueryOptions,
+} from "../lib/serverReactQuery";
 import { cn } from "../lib/utils";
 import { newCommandId } from "../lib/utils";
 import { ensureNativeApi, readNativeApi } from "../nativeApi";
@@ -49,10 +53,7 @@ import {
   readBrowserNotificationPermissionState,
   requestBrowserNotificationPermission,
 } from "../notifications/taskCompletion";
-import {
-  normalizeSettingsSection,
-  SETTINGS_NAV_ITEMS,
-} from "../settingsNavigation";
+import { normalizeSettingsSection, SETTINGS_NAV_ITEMS } from "../settingsNavigation";
 import { useStore } from "../store";
 import { formatWorktreePathForDisplay } from "../worktreeCleanup";
 
@@ -650,10 +651,9 @@ function SettingsRouteView() {
               "",
               "Delete the worktree anyway?",
             ].join("\n")
-          : [
-              `Delete worktree "${displayName}"?`,
-              "This removes the Git worktree from disk.",
-            ].join("\n"),
+          : [`Delete worktree "${displayName}"?`, "This removes the Git worktree from disk."].join(
+              "\n",
+            ),
       );
       if (!confirmed) {
         return;

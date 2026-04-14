@@ -41,9 +41,7 @@ export const ComposerVoiceRecorderBar = memo(function ComposerVoiceRecorderBar(
       if (width <= 0) {
         return;
       }
-      setVisibleBarCount(
-        Math.max(8, Math.floor(width / (BAR_WIDTH_PX + BAR_GAP_PX))),
-      );
+      setVisibleBarCount(Math.max(8, Math.floor(width / (BAR_WIDTH_PX + BAR_GAP_PX))));
     };
     computeVisibleBars();
     const observer = new ResizeObserver(computeVisibleBars);
@@ -55,10 +53,7 @@ export const ComposerVoiceRecorderBar = memo(function ComposerVoiceRecorderBar(
 
   return (
     <div className="flex min-w-0 flex-1 items-center gap-2.5">
-      <div
-        ref={trackRef}
-        className="relative flex h-7 min-w-0 flex-1 items-center overflow-hidden"
-      >
+      <div ref={trackRef} className="relative flex h-7 min-w-0 flex-1 items-center overflow-hidden">
         <div
           aria-hidden="true"
           className="pointer-events-none absolute inset-x-0 top-1/2 -translate-y-1/2 border-t border-dashed border-zinc-300 dark:border-zinc-700"

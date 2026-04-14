@@ -42,10 +42,7 @@ import {
 import { KeybindingRule } from "./keybindings";
 import { ProjectSearchEntriesInput, ProjectWriteFileInput } from "./project";
 import { OpenInEditorInput } from "./editor";
-import {
-  ServerConfigUpdatedPayload,
-  ServerVoiceTranscriptionInput,
-} from "./server";
+import { ServerConfigUpdatedPayload, ServerVoiceTranscriptionInput } from "./server";
 import {
   ProviderListCommandsInput,
   ProviderGetComposerCapabilitiesInput,

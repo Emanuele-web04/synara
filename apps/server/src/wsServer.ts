@@ -507,7 +507,8 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       new Map(discoveredWorktrees.map((worktree) => [worktree.path, worktree])).values(),
     ).toSorted(
       (left, right) =>
-        left.workspaceRoot.localeCompare(right.workspaceRoot) || left.path.localeCompare(right.path),
+        left.workspaceRoot.localeCompare(right.workspaceRoot) ||
+        left.path.localeCompare(right.path),
     );
   });
 
