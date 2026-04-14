@@ -92,6 +92,7 @@ import { toastManager } from "./ui/toast";
 import {
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
+  getDesktopUpdateButtonPresentation,
   getDesktopUpdateButtonTooltip,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
@@ -813,6 +814,7 @@ export default function Sidebar() {
   const [desktopUpdateState, setDesktopUpdateState] = useState<DesktopUpdateState | null>(null);
   const [renamingWorkspaceId, setRenamingWorkspaceId] = useState<string | null>(null);
   const [renamingWorkspaceTitle, setRenamingWorkspaceTitle] = useState("");
+  const [installingDesktopUpdate, setInstallingDesktopUpdate] = useState(false);
   const selectedThreadIds = useThreadSelectionStore((s) => s.selectedThreadIds);
   const toggleThreadSelection = useThreadSelectionStore((s) => s.toggleThread);
   const rangeSelectTo = useThreadSelectionStore((s) => s.rangeSelectTo);
@@ -3459,13 +3461,19 @@ export default function Sidebar() {
   const showDesktopUpdateButton = isElectron && shouldShowDesktopUpdateButton(desktopUpdateState);
 
   const desktopUpdateTooltip = desktopUpdateState
-    ? getDesktopUpdateButtonTooltip(desktopUpdateState)
+    ? getDesktopUpdateButtonTooltip(desktopUpdateState, {
+        installing: installingDesktopUpdate,
+      })
     : "Update available";
 
-  const desktopUpdateButtonDisabled = isDesktopUpdateButtonDisabled(desktopUpdateState);
+  const desktopUpdateButtonDisabled =
+    isDesktopUpdateButtonDisabled(desktopUpdateState) || installingDesktopUpdate;
   const desktopUpdateButtonAction = desktopUpdateState
     ? resolveDesktopUpdateButtonAction(desktopUpdateState)
     : "none";
+  const desktopUpdateButtonPresentation = getDesktopUpdateButtonPresentation(desktopUpdateState, {
+    installing: installingDesktopUpdate,
+  });
   const showArm64IntelBuildWarning =
     isElectron && shouldShowArm64IntelBuildWarning(desktopUpdateState);
   const arm64IntelBuildWarningDescription =
@@ -3475,8 +3483,9 @@ export default function Sidebar() {
   const desktopUpdateButtonInteractivityClasses = desktopUpdateButtonDisabled
     ? "cursor-not-allowed opacity-60"
     : "hover:brightness-110";
-  const desktopUpdateButtonClasses =
-    desktopUpdateState?.status === "downloaded"
+  const desktopUpdateButtonClasses = installingDesktopUpdate
+    ? "bg-sky-500 hover:bg-sky-600"
+    : desktopUpdateState?.status === "downloaded"
       ? "bg-emerald-500 hover:bg-emerald-600"
       : desktopUpdateState?.status === "downloading"
         ? "bg-sky-500 hover:bg-sky-600"
@@ -3484,7 +3493,7 @@ export default function Sidebar() {
           ? "bg-rose-500 hover:bg-rose-600"
           : "bg-[var(--info-foreground)] hover:brightness-110";
   const desktopUpdateRowButtonClasses = cn(
-    "inline-flex h-7 shrink-0 items-center justify-center rounded-full pl-2.5 pr-[12px] text-[10px] font-medium text-white transition-colors",
+    "inline-flex min-h-8 shrink-0 items-center justify-between gap-2 rounded-full px-2.5 py-1 text-left text-white transition-colors",
     desktopUpdateButtonInteractivityClasses,
     desktopUpdateButtonClasses,
   );
@@ -3561,6 +3570,8 @@ export default function Sidebar() {
       void bridge
         .checkForUpdates()
         .then((nextState) => {
+          setInstallingDesktopUpdate(false);
+          setDesktopUpdateState(nextState);
           if (nextState.status === "available") {
             toastManager.add({
               type: "success",
@@ -3601,6 +3612,8 @@ export default function Sidebar() {
       void bridge
         .downloadUpdate()
         .then((result) => {
+          setInstallingDesktopUpdate(false);
+          setDesktopUpdateState(result.state);
           if (result.completed) {
             toastManager.add({
               type: "success",
@@ -3628,9 +3641,12 @@ export default function Sidebar() {
     }
 
     if (desktopUpdateButtonAction === "install") {
+      setInstallingDesktopUpdate(true);
       void bridge
         .installUpdate()
         .then((result) => {
+          setDesktopUpdateState(result.state);
+          setInstallingDesktopUpdate(false);
           if (!shouldToastDesktopUpdateActionResult(result)) return;
           const actionError = getDesktopUpdateActionError(result);
           if (!actionError) return;
@@ -3641,6 +3657,7 @@ export default function Sidebar() {
           });
         })
         .catch((error) => {
+          setInstallingDesktopUpdate(false);
           toastManager.add({
             type: "error",
             title: "Could not install update",
@@ -4205,7 +4222,21 @@ export default function Sidebar() {
                         className={desktopUpdateRowButtonClasses}
                         onClick={handleDesktopUpdateButtonClick}
                       >
-                        Update
+                        <span className="flex min-w-0 flex-1 flex-col leading-tight">
+                          <span className="truncate text-[10px] font-semibold">
+                            {desktopUpdateButtonPresentation.label}
+                          </span>
+                          {desktopUpdateButtonPresentation.detail ? (
+                            <span className="truncate text-[8.5px] font-normal text-white/86">
+                              {desktopUpdateButtonPresentation.detail}
+                            </span>
+                          ) : null}
+                        </span>
+                        {desktopUpdateButtonPresentation.progressPercent !== null ? (
+                          <span className="rounded-full bg-white/20 px-1.5 py-0.5 text-[9px] font-semibold tabular-nums text-white/95">
+                            {desktopUpdateButtonPresentation.progressPercent}%
+                          </span>
+                        ) : null}
                       </button>
                     }
                   />
