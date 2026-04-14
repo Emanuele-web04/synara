@@ -1783,7 +1783,19 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
     const createDetachedWorktree: GitCoreShape["createDetachedWorktree"] = (input) =>
       Effect.gen(function* () {
-        const worktreePath = input.path ?? (yield* buildGeneratedDetachedWorktreePath(input.cwd));
+        const worktreePath =
+          input.path ??
+          (yield* buildGeneratedDetachedWorktreePath(input.cwd).pipe(
+            Effect.mapError((cause: unknown) =>
+              createGitCommandError(
+                "GitCore.createDetachedWorktree",
+                input.cwd,
+                ["worktree", "add", "--detach", "<generated>", input.ref],
+                "failed to prepare detached worktree path.",
+                cause,
+              ),
+            ),
+          ));
 
         yield* executeGit("GitCore.createDetachedWorktree", input.cwd, [
           "worktree",

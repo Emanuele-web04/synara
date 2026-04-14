@@ -10,6 +10,8 @@ import { createServer } from "./wsServer";
 import WebSocket from "ws";
 import { deriveServerPaths, ServerConfig, type ServerConfigShape } from "./config";
 import { makeServerProviderLayer, makeServerRuntimeServicesLayer } from "./serverLayers";
+import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
+import { ProviderUnsupportedError } from "./provider/Errors";
 import { ProviderDiscoveryService } from "./provider/Services/ProviderDiscoveryService";
 
 import {
@@ -491,7 +493,10 @@ describe("WebSocket Server", () => {
       authToken?: string;
       baseDir?: string;
       staticDir?: string;
-      providerLayer?: Layer.Layer<ProviderService | ProviderDiscoveryService, never>;
+      providerLayer?: Layer.Layer<
+        ProviderService | ProviderDiscoveryService | ProviderAdapterRegistry,
+        never
+      >;
       providerHealth?: ProviderHealthShape;
       open?: OpenShape;
       gitManager?: GitManagerShape;
@@ -1469,6 +1474,10 @@ describe("WebSocket Server", () => {
             cached: false,
           }),
         listModels: () => Effect.succeed({ models: [], source: "test", cached: false }),
+      }),
+      Layer.succeed(ProviderAdapterRegistry, {
+        getByProvider: (provider) => Effect.fail(new ProviderUnsupportedError({ provider })),
+        listProviders: () => Effect.succeed([]),
       }),
     );
 
