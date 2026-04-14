@@ -134,7 +134,8 @@ interface SubagentIdentity {
 
 function extractCollabPayload(event: ProviderRuntimeEvent): Record<string, unknown> | undefined {
   const payload = runtimePayloadRecord(event);
-  return asObject(payload?.data);
+  const rawPayload = asObject(event.raw?.payload);
+  return asObject(payload?.data) ?? rawPayload;
 }
 
 function extractSubagentIdentity(
@@ -149,9 +150,26 @@ function extractSubagentIdentity(
   return resolveSubagentIdentityFromDirectory(
     buildSubagentIdentityDirectory(extractSubagentIdentityHints(item)),
     {
-    providerThreadId,
+      providerThreadId,
     },
   ) as SubagentIdentity | undefined;
+}
+
+function extractSubagentIdentityFromParentActivities(
+  activities: ReadonlyArray<Pick<OrchestrationThreadActivity, "payload">>,
+  providerThreadId: string,
+): SubagentIdentity | undefined {
+  const identityDirectory = buildSubagentIdentityDirectory(
+    activities.flatMap((activity) => {
+      const root = asObject(activity.payload);
+      const data = asObject(root?.data);
+      const item = asObject(data?.item) ?? data ?? root;
+      return item ? extractSubagentIdentityHints(item) : [];
+    }),
+  );
+  return resolveSubagentIdentityFromDirectory(identityDirectory, {
+    providerThreadId,
+  }) as SubagentIdentity | undefined;
 }
 
 function subagentThreadTitle(identity: {
@@ -166,9 +184,9 @@ function subagentThreadTitle(identity: {
     return identity.nickname;
   }
   if (identity.role) {
-    return `Subagent [${identity.role}]`;
+    return identity.role.charAt(0).toUpperCase() + identity.role.slice(1);
   }
-  return identity.providerThreadId ? `Subagent ${identity.providerThreadId}` : "Subagent";
+  return identity.providerThreadId ?? "Agent";
 }
 
 function buildContextWindowActivityPayload(
@@ -217,6 +235,22 @@ function runtimeTurnErrorMessage(event: ProviderRuntimeEvent): string | undefine
 function runtimeErrorMessageFromEvent(event: ProviderRuntimeEvent): string | undefined {
   const payloadMessage = asString(runtimePayloadRecord(event)?.message);
   return payloadMessage;
+}
+
+function resolveTerminalTurnId(
+  event: ProviderRuntimeEvent,
+  activeTurnId: TurnId | null,
+): TurnId | undefined {
+  const eventTurnId = toTurnId(event.turnId);
+  if (eventTurnId !== undefined) {
+    return eventTurnId;
+  }
+  if (activeTurnId !== null && (event.type === "turn.completed" || event.type === "turn.aborted")) {
+    // Some Codex/ChatGPT terminal notifications omit the turn id even though
+    // the session is still scoped to a single active turn.
+    return activeTurnId;
+  }
+  return undefined;
 }
 
 function orchestrationSessionStatusFromRuntimeState(
@@ -567,6 +601,10 @@ function runtimeEventToActivities(
           payload: {
             itemType: event.payload.itemType,
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+            ...(event.payload.itemType === "collab_agent_tool_call" &&
+            event.payload.data !== undefined
+              ? { data: event.payload.data }
+              : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -588,6 +626,10 @@ function runtimeEventToActivities(
           payload: {
             itemType: event.payload.itemType,
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+            ...(event.payload.itemType === "collab_agent_tool_call" &&
+            event.payload.data !== undefined
+              ? { data: event.payload.data }
+              : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -1221,20 +1263,34 @@ const make = Effect.gen(function* () {
       const providerParentThreadId = normalizeIdentifier(
         event.providerRefs?.providerParentThreadId,
       );
+      const existingChildThread =
+        providerThreadId !== undefined
+          ? readModel.threads.find(
+              (entry) => entry.id === subagentThreadId(parentThread.id, providerThreadId),
+            )
+          : undefined;
+      const extractedSubagentIdentity =
+        providerThreadId !== undefined
+          ? (extractSubagentIdentity(event, providerThreadId) ??
+            extractSubagentIdentityFromParentActivities(
+              parentThread.activities ?? [],
+              providerThreadId,
+            ))
+          : undefined;
       const isChildThreadEvent =
         providerThreadId !== undefined &&
-        providerParentThreadId !== undefined &&
-        providerThreadId !== providerParentThreadId;
+        ((providerParentThreadId !== undefined && providerThreadId !== providerParentThreadId) ||
+          existingChildThread !== undefined ||
+          extractedSubagentIdentity !== undefined);
       const targetThreadResolution =
         isChildThreadEvent && providerThreadId
-          ? yield* ensureSubagentThread(
-              providerThreadId,
-              extractSubagentIdentity(event, providerThreadId),
-            )
+          ? yield* ensureSubagentThread(providerThreadId, extractedSubagentIdentity)
           : { threadId: parentThread.id, thread: parentThread };
       const thread = targetThreadResolution.thread;
-      const eventTurnId = toTurnId(event.turnId);
       const activeTurnId = thread.session?.activeTurnId ?? null;
+      const lifecycleTurnId = resolveTerminalTurnId(event, activeTurnId);
+      const eventTurnId = lifecycleTurnId ?? toTurnId(event.turnId);
+      const isTerminalTurnEvent = event.type === "turn.completed" || event.type === "turn.aborted";
 
       const conflictsWithActiveTurn =
         activeTurnId !== null && eventTurnId !== undefined && !sameId(activeTurnId, eventTurnId);
@@ -1253,6 +1309,7 @@ const make = Effect.gen(function* () {
           case "turn.started":
             return !conflictsWithActiveTurn;
           case "turn.completed":
+          case "turn.aborted":
             if (conflictsWithActiveTurn || missingTurnForActiveTurn) {
               return false;
             }
@@ -1277,12 +1334,13 @@ const make = Effect.gen(function* () {
         event.type === "session.exited" ||
         event.type === "thread.started" ||
         event.type === "turn.started" ||
-        event.type === "turn.completed"
+        event.type === "turn.completed" ||
+        event.type === "turn.aborted"
       ) {
         const nextActiveTurnId =
           event.type === "turn.started"
             ? (eventTurnId ?? null)
-            : event.type === "turn.completed" || event.type === "session.exited"
+            : isTerminalTurnEvent || event.type === "session.exited"
               ? null
               : activeTurnId;
         const status = (() => {
@@ -1295,6 +1353,8 @@ const make = Effect.gen(function* () {
               return "stopped";
             case "turn.completed":
               return runtimeTurnState(event) === "failed" ? "error" : "ready";
+            case "turn.aborted":
+              return "interrupted";
             case "session.started":
             case "thread.started":
               // Provider thread/session start notifications can arrive during an
@@ -1307,7 +1367,7 @@ const make = Effect.gen(function* () {
             ? (event.payload.reason ?? thread.session?.lastError ?? "Provider session error")
             : event.type === "turn.completed" && runtimeTurnState(event) === "failed"
               ? (runtimeTurnErrorMessage(event) ?? thread.session?.lastError ?? "Turn failed")
-              : status === "ready"
+              : status === "ready" || status === "interrupted"
                 ? null
                 : (thread.session?.lastError ?? null);
 
@@ -1458,10 +1518,14 @@ const make = Effect.gen(function* () {
         });
       }
 
-      if (event.type === "turn.completed") {
+      if (isTerminalTurnEvent) {
         const turnId = toTurnId(event.turnId);
-        if (turnId) {
-          const assistantMessageIds = yield* getAssistantMessageIdsForTurn(thread.id, turnId);
+        const finalizedTurnId = turnId ?? activeTurnId ?? undefined;
+        if (finalizedTurnId) {
+          const assistantMessageIds = yield* getAssistantMessageIdsForTurn(
+            thread.id,
+            finalizedTurnId,
+          );
           yield* Effect.forEach(
             assistantMessageIds,
             (assistantMessageId) =>
@@ -1469,21 +1533,21 @@ const make = Effect.gen(function* () {
                 event,
                 threadId: thread.id,
                 messageId: assistantMessageId,
-                turnId,
+                turnId: finalizedTurnId,
                 createdAt: now,
                 commandTag: "assistant-complete-finalize",
                 finalDeltaCommandTag: "assistant-delta-finalize-fallback",
               }),
             { concurrency: 1 },
           ).pipe(Effect.asVoid);
-          yield* clearAssistantMessageIdsForTurn(thread.id, turnId);
+          yield* clearAssistantMessageIdsForTurn(thread.id, finalizedTurnId);
 
           yield* finalizeBufferedProposedPlan({
             event,
             threadId: thread.id,
             threadProposedPlans: thread.proposedPlans,
-            planId: proposedPlanIdForTurn(thread.id, turnId),
-            turnId,
+            planId: proposedPlanIdForTurn(thread.id, finalizedTurnId),
+            turnId: finalizedTurnId,
             updatedAt: now,
           });
         }

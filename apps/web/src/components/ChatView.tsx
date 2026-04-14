@@ -569,7 +569,10 @@ function humanizeSubagentRawStatus(rawStatus: string | undefined): string | unde
   return humanizeSubagentStatus(rawStatus);
 }
 
-function localSubagentThreadId(parentThreadId: ThreadIdType, providerThreadId: string): ThreadIdType {
+function localSubagentThreadId(
+  parentThreadId: ThreadIdType,
+  providerThreadId: string,
+): ThreadIdType {
   return ThreadId.makeUnsafe(`subagent:${parentThreadId}:${providerThreadId}`);
 }
 

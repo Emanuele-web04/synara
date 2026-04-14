@@ -63,7 +63,9 @@ const subagentIdentityDirectoryByActivities = new WeakMap<
   ReturnType<typeof buildSubagentIdentityDirectory>
 >();
 
-const MODEL_LABEL_BY_SLUG = new Map(MODEL_OPTIONS.map((model) => [model.slug.toLowerCase(), model.name]));
+const MODEL_LABEL_BY_SLUG = new Map(
+  MODEL_OPTIONS.map((model) => [model.slug.toLowerCase(), model.name]),
+);
 
 function basename(value: string): string {
   const slashIndex = Math.max(value.lastIndexOf("/"), value.lastIndexOf("\\"));

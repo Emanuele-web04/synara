@@ -232,13 +232,29 @@ const make = Effect.gen(function* () {
     return readModel.threads.find((entry) => entry.id === threadId);
   });
 
+  // Recovers the parent thread when older/local-only subagent rows are missing parentThreadId metadata.
+  const inferParentThreadFromSyntheticSubagentId = Effect.fnUntraced(function* (
+    threadId: ThreadId,
+  ) {
+    const rawThreadId = threadId as string;
+    if (!rawThreadId.startsWith("subagent:")) {
+      return null;
+    }
+
+    const readModel = yield* orchestrationEngine.getReadModel();
+    const matchingParents = readModel.threads.filter((entry) =>
+      rawThreadId.startsWith(`subagent:${entry.id}:`),
+    );
+    return matchingParents.toSorted((left, right) => right.id.length - left.id.length)[0] ?? null;
+  });
+
   const resolveProviderSessionThread = Effect.fnUntraced(function* (threadId: ThreadId) {
     const thread = yield* resolveThread(threadId);
     if (!thread) {
       return null;
     }
     if (!thread.parentThreadId) {
-      return thread;
+      return (yield* inferParentThreadFromSyntheticSubagentId(thread.id)) ?? thread;
     }
     const parentThread = yield* resolveThread(thread.parentThreadId);
     return parentThread ?? thread;
@@ -863,7 +879,7 @@ const make = Effect.gen(function* () {
     }
 
     // Orchestration turn ids are not provider turn ids, so interrupt by session.
-    const providerThreadId = resolveSubagentProviderThreadId(thread.id, thread.parentThreadId);
+    const providerThreadId = resolveSubagentProviderThreadId(thread.id, providerThread.id);
     const turnId = event.payload.turnId ?? thread.session?.activeTurnId ?? undefined;
     yield* providerService.interruptTurn({
       threadId: providerThread.id,
@@ -968,6 +984,7 @@ const make = Effect.gen(function* () {
     event: Extract<ProviderIntentEvent, { type: "thread.session-stop-requested" }>,
   ) {
     const thread = yield* resolveThread(event.payload.threadId);
+    const providerThread = yield* resolveProviderSessionThread(event.payload.threadId);
     if (!thread) {
       return;
     }
@@ -976,8 +993,49 @@ const make = Effect.gen(function* () {
     drainingQueuedTurns.delete(thread.id);
 
     const now = event.payload.createdAt;
-    if (thread.session && thread.session.status !== "stopped") {
-      yield* providerService.stopSession({ threadId: thread.id });
+    const providerThreadId =
+      providerThread !== null
+        ? resolveSubagentProviderThreadId(thread.id, providerThread.id)
+        : undefined;
+    const isChildProviderRuntime =
+      providerThread !== null && providerThread.id !== thread.id && providerThreadId !== undefined;
+
+    // Child subagents share the parent provider session, so stop requests need
+    // to interrupt the child turn rather than terminate the whole session.
+    if (
+      isChildProviderRuntime &&
+      thread.session &&
+      thread.session.status === "running" &&
+      thread.session.activeTurnId !== null &&
+      providerThread.session &&
+      providerThread.session.status !== "stopped"
+    ) {
+      yield* providerService.interruptTurn({
+        threadId: providerThread.id,
+        turnId: thread.session.activeTurnId,
+        providerThreadId,
+      });
+
+      yield* setThreadSession({
+        threadId: thread.id,
+        session: {
+          threadId: thread.id,
+          status: "interrupted",
+          providerName: thread.session.providerName ?? null,
+          runtimeMode: thread.session.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+          // Preserve the active turn until the provider emits the terminal child event.
+          activeTurnId: thread.session.activeTurnId,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      });
+      return;
+    }
+
+    const ownsProviderSession = providerThread !== null && providerThread.id === thread.id;
+    if (thread.session && thread.session.status !== "stopped" && ownsProviderSession) {
+      yield* providerService.stopSession({ threadId: providerThread.id });
     }
 
     yield* setThreadSession({

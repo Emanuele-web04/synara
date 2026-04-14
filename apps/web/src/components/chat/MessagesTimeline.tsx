@@ -796,11 +796,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     </div>
                     {inlineToolGroupId &&
                       inlineToolEntries.length > MAX_VISIBLE_INLINE_TOOL_ENTRIES && (
-                        <div className="pt-1 pl-5">
+                        <div className="py-0.5">
                           <button
                             type="button"
-                            className="font-chat-code text-muted-foreground/50 transition-colors duration-150 hover:text-foreground/72"
-                            style={{ fontSize: `${appTypographyScale.chatTinyPx}px` }}
+                            className="text-muted-foreground/50 transition-colors duration-150 hover:text-foreground/72"
+                            style={{ fontSize: `${normalizedChatFontSizePx}px` }}
                             onClick={() => onToggleWorkGroup(inlineToolGroupId)}
                           >
                             {inlineToolExpanded

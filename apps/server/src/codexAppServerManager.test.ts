@@ -41,6 +41,7 @@ function createSendTurnHarness() {
     },
     collabReceiverTurns: new Map(),
     collabReceiverParents: new Map(),
+    collabReceiverMetadata: new Map(),
   };
 
   const requireSession = vi
@@ -81,6 +82,7 @@ function createThreadControlHarness() {
     },
     collabReceiverTurns: new Map(),
     collabReceiverParents: new Map(),
+    collabReceiverMetadata: new Map(),
   };
 
   const requireSession = vi
@@ -125,6 +127,7 @@ function createPendingUserInputHarness() {
     ]),
     collabReceiverTurns: new Map(),
     collabReceiverParents: new Map(),
+    collabReceiverMetadata: new Map(),
   };
 
   const requireSession = vi
@@ -167,6 +170,10 @@ function createCollabNotificationHarness() {
     pendingUserInputs: new Map(),
     collabReceiverTurns: new Map<string, string>(),
     collabReceiverParents: new Map<string, string>(),
+    collabReceiverMetadata: new Map<
+      string,
+      { agentId?: string; nickname?: string; role?: string }
+    >(),
     nextRequestId: 1,
     stopping: false,
   };
@@ -907,6 +914,7 @@ describe("CodexAppServerManager discovery", () => {
       pendingUserInputs: new Map(),
       collabReceiverTurns: new Map(),
       collabReceiverParents: new Map(),
+      collabReceiverMetadata: new Map(),
       nextRequestId: 1,
       stopping: false,
     };
@@ -937,6 +945,7 @@ describe("CodexAppServerManager discovery", () => {
       pendingUserInputs: new Map(),
       collabReceiverTurns: new Map(),
       collabReceiverParents: new Map(),
+      collabReceiverMetadata: new Map(),
       nextRequestId: 1,
       stopping: false,
       discovery: true,
@@ -1000,6 +1009,7 @@ describe("CodexAppServerManager discovery", () => {
       },
       collabReceiverTurns: new Map(),
       collabReceiverParents: new Map(),
+      collabReceiverMetadata: new Map(),
     };
 
     const resolveContextForDiscovery = vi
@@ -1098,6 +1108,7 @@ describe("CodexAppServerManager discovery", () => {
       },
       collabReceiverTurns: new Map(),
       collabReceiverParents: new Map(),
+      collabReceiverMetadata: new Map(),
     };
 
     vi.spyOn(
@@ -1165,6 +1176,7 @@ describe("CodexAppServerManager discovery", () => {
       },
       collabReceiverTurns: new Map(),
       collabReceiverParents: new Map(),
+      collabReceiverMetadata: new Map(),
     };
 
     const resolveContextForDiscovery = vi
@@ -1301,6 +1313,7 @@ describe("CodexAppServerManager discovery", () => {
       },
       collabReceiverTurns: new Map(),
       collabReceiverParents: new Map(),
+      collabReceiverMetadata: new Map(),
     };
 
     const resolveContextForDiscovery = vi
@@ -1652,6 +1665,7 @@ describe("respondToUserInput", () => {
       pendingUserInputs: new Map(),
       collabReceiverTurns: new Map(),
       collabReceiverParents: new Map(),
+      collabReceiverMetadata: new Map(),
     };
     type ApprovalRequestContext = {
       session: typeof context.session;
@@ -1722,6 +1736,66 @@ describe("collab child conversation routing", () => {
         itemId: "msg_child_1",
         providerThreadId: "child_provider_1",
         providerParentThreadId: "provider_parent",
+      }),
+    );
+  });
+
+  it("replays stored receiver identity metadata onto later child notifications", () => {
+    const { manager, context, emitEvent } = createCollabNotificationHarness();
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "item/completed",
+      params: {
+        item: {
+          type: "collabAgentToolCall",
+          id: "call_collab_1",
+          receiverAgents: [
+            {
+              threadId: "child_provider_1",
+              agentId: "agent-1",
+              agentNickname: "Locke",
+              agentRole: "explorer",
+            },
+          ],
+        },
+        threadId: "provider_parent",
+        turnId: "turn_parent",
+      },
+    });
+    emitEvent.mockClear();
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "turn/started",
+      params: {
+        threadId: "child_provider_1",
+        turn: { id: "turn_child_1" },
+      },
+    });
+
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "turn/started",
+        providerThreadId: "child_provider_1",
+        payload: expect.objectContaining({
+          source: {
+            subAgent: {
+              thread_spawn: {
+                threadId: "child_provider_1",
+                agentId: "agent-1",
+                agentNickname: "Locke",
+                agentRole: "explorer",
+              },
+            },
+          },
+        }),
       }),
     );
   });

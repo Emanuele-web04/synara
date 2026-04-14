@@ -2351,6 +2351,38 @@ describe("ProviderRuntimeIngestion", () => {
     ).toBe(false);
   });
 
+  it("keeps readable provider ids as placeholder titles until identity metadata arrives", async () => {
+    const harness = await createHarness();
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-child-turn-started-readable-id"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-child-readable"),
+      parentTurnId: asTurnId("turn-parent"),
+      providerRefs: {
+        providerThreadId: "child-provider-readable",
+        providerParentThreadId: "parent-provider-1",
+        providerTurnId: "turn-child-readable",
+        parentProviderTurnId: "turn-parent",
+      },
+      payload: {},
+    });
+
+    const childThread = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.id === "subagent:thread-1:child-provider-readable" &&
+        entry.session?.status === "running",
+      2000,
+      asThreadId("subagent:thread-1:child-provider-readable"),
+    );
+
+    expect(childThread.title).toBe("child-provider-readable");
+  });
+
   it("materializes subagent child threads even when the collab payload only exposes receiverAgents", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
@@ -2393,6 +2425,120 @@ describe("ProviderRuntimeIngestion", () => {
     );
 
     expect(childThread.title).toBe("Harper [reviewer]");
+  });
+
+  it("reuses collab metadata from tool completion events when child runtime turns start later", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-collab-completed"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-parent"),
+      itemId: asItemId("item-collab"),
+      payload: {
+        itemType: "collab_agent_tool_call",
+        title: "Task",
+        data: {
+          item: {
+            type: "collabAgentToolCall",
+            receiverAgents: [
+              {
+                threadId: "child-provider-3",
+                agentNickname: "Gibbs",
+                agentRole: "explorer",
+                agentId: "agent-3",
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-child-turn-started-late"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-child-3"),
+      parentTurnId: asTurnId("turn-parent"),
+      providerRefs: {
+        providerThreadId: "child-provider-3",
+        providerParentThreadId: "parent-provider-1",
+        providerTurnId: "turn-child-3",
+        parentProviderTurnId: "turn-parent",
+      },
+      payload: {},
+    });
+
+    const childThread = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.id === "subagent:thread-1:child-provider-3" &&
+        entry.subagentNickname === "Gibbs" &&
+        entry.subagentRole === "explorer" &&
+        entry.session?.status === "running",
+      2000,
+      asThreadId("subagent:thread-1:child-provider-3"),
+    );
+
+    expect(childThread.title).toBe("Gibbs [explorer]");
+  });
+
+  it("recovers child identity from raw provider payloads when runtime turn payloads are sparse", async () => {
+    const harness = await createHarness();
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-child-turn-started-raw"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-child-4"),
+      parentTurnId: asTurnId("turn-parent"),
+      providerRefs: {
+        providerThreadId: "child-provider-4",
+        providerParentThreadId: "parent-provider-1",
+        providerTurnId: "turn-child-4",
+        parentProviderTurnId: "turn-parent",
+      },
+      payload: {},
+      raw: {
+        source: "codex.app-server.notification",
+        method: "turn/started",
+        payload: {
+          threadId: "child-provider-4",
+          turn: { id: "turn-child-4" },
+          source: {
+            subAgent: {
+              thread_spawn: {
+                threadId: "child-provider-4",
+                agentId: "agent-4",
+                agentNickname: "Parker",
+                agentRole: "reviewer",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const childThread = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.id === "subagent:thread-1:child-provider-4" &&
+        entry.subagentNickname === "Parker" &&
+        entry.subagentRole === "reviewer" &&
+        entry.session?.status === "running",
+      2000,
+      asThreadId("subagent:thread-1:child-provider-4"),
+    );
+
+    expect(childThread.title).toBe("Parker [reviewer]");
   });
 
   it("continues processing runtime events after a single event handler failure", async () => {

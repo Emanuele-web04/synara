@@ -44,6 +44,15 @@ describe("resolveSubagentPresentation", () => {
     expect(presentation.title).toBeNull();
     expect(presentation.primaryLabel).toBe("agent-1");
   });
+
+  it("keeps readable provider ids intact until richer metadata arrives", () => {
+    const presentation = resolveSubagentPresentation({
+      title: "Subagent 019d8cae-0628-7bf1-bf86-5cbc31cd582c",
+      fallbackId: "subagent:thread-1:019d8cae-0628-7bf1-bf86-5cbc31cd582c",
+    });
+
+    expect(presentation.primaryLabel).toBe("019d8cae-0628-7bf1-bf86-5cbc31cd582c");
+  });
 });
 
 describe("resolveSubagentPresentationForThread", () => {

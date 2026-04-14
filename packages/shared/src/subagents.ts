@@ -111,7 +111,11 @@ function extractSubagentIdentityFromSource(
   };
 }
 
-function pushUniqueThreadId(target: string[], seen: Set<string>, threadId: string | undefined): void {
+function pushUniqueThreadId(
+  target: string[],
+  seen: Set<string>,
+  threadId: string | undefined,
+): void {
   if (!threadId || seen.has(threadId)) {
     return;
   }
@@ -284,9 +288,11 @@ function buildSubagentAgentState(
 ): ParsedSubagentAgentState {
   return {
     threadId,
-    ...(firstStringValue(object, ["agentId", "agent_id"]) ? {
-      agentId: firstStringValue(object, ["agentId", "agent_id"]),
-    } : {}),
+    ...(firstStringValue(object, ["agentId", "agent_id"])
+      ? {
+          agentId: firstStringValue(object, ["agentId", "agent_id"]),
+        }
+      : {}),
     ...(firstStringValue(object, [
       "agentNickname",
       "agent_nickname",
@@ -420,7 +426,12 @@ export function collectSubagentProviderThreadIds(
   pushUniqueThreadId(
     orderedThreadIds,
     seen,
-    firstStringValue(item, ["newThreadId", "new_thread_id", "receiverThreadId", "receiver_thread_id"]),
+    firstStringValue(item, [
+      "newThreadId",
+      "new_thread_id",
+      "receiverThreadId",
+      "receiver_thread_id",
+    ]),
   );
 
   return orderedThreadIds;
