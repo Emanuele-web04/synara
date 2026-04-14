@@ -59,6 +59,7 @@ import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnap
 import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReactor";
 import { ProviderService } from "./provider/Services/ProviderService";
 import { ProviderDiscoveryService } from "./provider/Services/ProviderDiscoveryService";
+import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";
 import { clamp } from "effect/Number";
@@ -274,6 +275,7 @@ export type ServerCoreRuntimeServices =
   | OrchestrationReactor
   | ProviderService
   | ProviderDiscoveryService
+  | ProviderAdapterRegistry
   | ProviderHealth;
 
 export type ServerRuntimeServices =
@@ -382,6 +384,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const keybindingsManager = yield* Keybindings;
   const providerHealth = yield* ProviderHealth;
   const providerDiscoveryService = yield* ProviderDiscoveryService;
+  const providerAdapterRegistry = yield* ProviderAdapterRegistry;
   const git = yield* GitCore;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -1105,6 +1108,27 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           providers: providerStatuses,
           availableEditors,
         };
+
+      case WS_METHODS.serverTranscribeVoice: {
+        const body = stripRequestTag(request.body);
+        const adapter = yield* providerAdapterRegistry.getByProvider(body.provider);
+        if (!adapter.transcribeVoice) {
+          return yield* new RouteRequestError({
+            message: `Voice transcription is unavailable for provider '${body.provider}'.`,
+          });
+        }
+        return yield* adapter.transcribeVoice(body).pipe(
+          Effect.mapError(
+            (cause) =>
+              new RouteRequestError({
+                message:
+                  cause instanceof Error && cause.message.length > 0
+                    ? cause.message
+                    : "Voice transcription failed.",
+              }),
+          ),
+        );
+      }
 
       case WS_METHODS.serverUpsertKeybinding: {
         const body = stripRequestTag(request.body);

@@ -194,6 +194,7 @@ import {
   type TerminalContextSelection,
 } from "../lib/terminalContext";
 import { deriveLatestContextWindowSnapshot, deriveCumulativeCostUsd } from "../lib/contextWindow";
+import { formatVoiceRecordingDuration, useVoiceRecorder } from "../lib/voiceRecorder";
 import { shouldUseCompactComposerFooter } from "./composerFooterLayout";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { collectTerminalIdsFromLayout } from "../terminalPaneLayout";
@@ -216,6 +217,7 @@ import { ComposerExtrasMenu } from "./chat/ComposerExtrasMenu";
 import { ComposerPendingApprovalPanel } from "./chat/ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./chat/ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./chat/ComposerPlanFollowUpBanner";
+import { ComposerVoiceButton } from "./chat/ComposerVoiceButton";
 import { ComposerImageAttachmentChip } from "./chat/ComposerImageAttachmentChip";
 import { ActivePlanCard } from "./chat/ActivePlanCard";
 import { useChatAutoScrollController } from "./chat/useChatAutoScrollController";
@@ -506,6 +508,14 @@ export default function ChatView({
   const composerImages = composerDraft.images;
   const composerTerminalContexts = composerDraft.terminalContexts;
   const queuedComposerTurns = composerDraft.queuedTurns;
+  const {
+    isRecording: isVoiceRecording,
+    durationMs: voiceRecordingDurationMs,
+    startRecording: startVoiceRecording,
+    stopRecording: stopVoiceRecording,
+    cancelRecording: cancelVoiceRecording,
+  } = useVoiceRecorder();
+  const [isVoiceTranscribing, setIsVoiceTranscribing] = useState(false);
   const composerSendState = useMemo(
     () =>
       deriveComposerSendState({
@@ -921,6 +931,11 @@ export default function ChatView({
     : null;
   const selectedProvider: ProviderKind =
     lockedProvider ?? selectedProviderByThreadId ?? threadProvider ?? settings.defaultProvider;
+  const voiceTranscriptionRequestIdRef = useRef(0);
+  const voiceThreadIdRef = useRef(threadId);
+  const voiceProviderRef = useRef<ProviderKind>(selectedProvider);
+  voiceThreadIdRef.current = threadId;
+  voiceProviderRef.current = selectedProvider;
   const customModelsByProvider = useMemo(() => getCustomModelsByProvider(settings), [settings]);
   const { modelOptions: composerModelOptions, selectedModel } = useEffectiveComposerModelState({
     threadId,
@@ -1665,6 +1680,17 @@ export default function ChatView({
     () => providerStatuses.find((status) => status.provider === selectedProvider) ?? null,
     [selectedProvider, providerStatuses],
   );
+  const voiceRecordingDurationLabel = useMemo(
+    () => formatVoiceRecordingDuration(voiceRecordingDurationMs),
+    [voiceRecordingDurationMs],
+  );
+  const canRenderVoiceNotes =
+    selectedProvider === "codex" && activeProviderStatus?.authStatus !== "unauthenticated";
+  const canStartVoiceNotes =
+    selectedProvider === "codex" &&
+    activeProviderStatus?.authStatus !== "unauthenticated" &&
+    activeProviderStatus?.voiceTranscriptionAvailable !== false;
+  const showVoiceNotesControl = canRenderVoiceNotes || isVoiceRecording || isVoiceTranscribing;
   const activeProjectCwd = activeProject?.cwd ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const hasNativeUserMessages = useMemo(
@@ -2767,6 +2793,9 @@ export default function ChatView({
   }, [selectedProvider]);
 
   useEffect(() => {
+    voiceTranscriptionRequestIdRef.current += 1;
+    void cancelVoiceRecording();
+    setIsVoiceTranscribing(false);
     setOptimisticUserMessages((existing) => {
       for (const message of existing) {
         revokeUserMessagePreviewUrls(message);
@@ -2782,7 +2811,16 @@ export default function ChatView({
     dragDepthRef.current = 0;
     setIsDragOverComposer(false);
     setExpandedImage(null);
-  }, [threadId]);
+  }, [cancelVoiceRecording, threadId]);
+
+  useEffect(() => {
+    if (canStartVoiceNotes || !isVoiceRecording) {
+      return;
+    }
+    voiceTranscriptionRequestIdRef.current += 1;
+    void cancelVoiceRecording();
+    setIsVoiceTranscribing(false);
+  }, [canStartVoiceNotes, cancelVoiceRecording, isVoiceRecording]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3225,6 +3263,146 @@ export default function ChatView({
     setTerminalWorkspaceTab,
     surfaceMode,
     toggleTerminalVisibility,
+  ]);
+
+  // Merge a completed voice transcript into the existing draft without disturbing queued images.
+  const appendVoiceTranscriptToComposer = useCallback(
+    (transcript: string) => {
+      const trimmedTranscript = transcript.trim();
+      if (trimmedTranscript.length === 0) {
+        return;
+      }
+
+      const currentPrompt = promptRef.current;
+      const nextPrompt =
+        currentPrompt.trim().length === 0
+          ? trimmedTranscript
+          : `${currentPrompt.replace(/\s+$/, "")}\n${trimmedTranscript}`;
+      promptRef.current = nextPrompt;
+      setPrompt(nextPrompt);
+      setComposerCursor(collapseExpandedComposerCursor(nextPrompt, nextPrompt.length));
+      setComposerTrigger(detectComposerTrigger(nextPrompt, nextPrompt.length));
+      scheduleComposerFocus();
+    },
+    [scheduleComposerFocus, setPrompt],
+  );
+
+  // Start or stop the microphone recorder, then send the normalized WAV clip to the server.
+  const onComposerVoiceToggle = useCallback(async () => {
+    if (!activeProject) {
+      return;
+    }
+    if (selectedProvider !== "codex") {
+      toastManager.add({
+        type: "error",
+        title: "Voice notes currently work only with Codex.",
+      });
+      return;
+    }
+    if (activeProviderStatus?.authStatus === "unauthenticated") {
+      toastManager.add({
+        type: "error",
+        title: "Sign in to ChatGPT in Codex before using voice notes.",
+      });
+      return;
+    }
+    if (!canStartVoiceNotes) {
+      toastManager.add({
+        type: "error",
+        title: "Voice notes require a ChatGPT-authenticated Codex session.",
+      });
+      return;
+    }
+    if (pendingUserInputs.length > 0) {
+      toastManager.add({
+        type: "error",
+        title: "Answer plan questions before recording a voice note.",
+      });
+      return;
+    }
+
+    if (isVoiceRecording) {
+      const api = readNativeApi();
+      if (!api) {
+        toastManager.add({
+          type: "error",
+          title: "Voice transcription is unavailable right now.",
+        });
+        void cancelVoiceRecording();
+        return;
+      }
+
+      setIsVoiceTranscribing(true);
+      const requestId = voiceTranscriptionRequestIdRef.current + 1;
+      voiceTranscriptionRequestIdRef.current = requestId;
+      const requestThreadId = threadId;
+      const requestProvider = selectedProvider;
+      const isCurrentVoiceRequest = () =>
+        voiceTranscriptionRequestIdRef.current === requestId &&
+        voiceThreadIdRef.current === requestThreadId &&
+        voiceProviderRef.current === requestProvider;
+      try {
+        const payload = await stopVoiceRecording();
+        if (!isCurrentVoiceRequest()) {
+          return;
+        }
+        if (!payload) {
+          toastManager.add({
+            type: "warning",
+            title: "No audio was captured.",
+          });
+          return;
+        }
+        const result = await api.server.transcribeVoice({
+          provider: "codex",
+          cwd: activeProject.cwd,
+          ...(activeThread ? { threadId: activeThread.id } : {}),
+          ...payload,
+        });
+        if (!isCurrentVoiceRequest()) {
+          return;
+        }
+        appendVoiceTranscriptToComposer(result.text);
+      } catch (error) {
+        if (!isCurrentVoiceRequest()) {
+          return;
+        }
+        toastManager.add({
+          type: "error",
+          title: "Voice transcription failed",
+          description:
+            error instanceof Error ? error.message : "The voice note could not be transcribed.",
+        });
+      } finally {
+        if (isCurrentVoiceRequest()) {
+          setIsVoiceTranscribing(false);
+        }
+      }
+      return;
+    }
+
+    try {
+      await startVoiceRecording();
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Could not start recording",
+        description: error instanceof Error ? error.message : "The microphone could not be opened.",
+      });
+    }
+  }, [
+    activeProject,
+    activeProviderStatus?.authStatus,
+    activeThread,
+    appendVoiceTranscriptToComposer,
+    canStartVoiceNotes,
+    cancelVoiceRecording,
+    isVoiceRecording,
+    pendingUserInputs.length,
+    selectedProvider,
+    startVoiceRecording,
+    stopVoiceRecording,
+    threadId,
   ]);
 
   // --- Composer attachment entry points -------------------------------------
@@ -5362,6 +5540,19 @@ export default function ChatView({
                             onToggleFastMode={toggleFastMode}
                             onSetPlanMode={setPlanMode}
                           />
+
+                          {showVoiceNotesControl ? (
+                            <ComposerVoiceButton
+                              compact={isComposerFooterCompact}
+                              disabled={isComposerApprovalState || isConnecting || isSendBusy}
+                              isRecording={isVoiceRecording}
+                              isTranscribing={isVoiceTranscribing}
+                              durationLabel={voiceRecordingDurationLabel}
+                              onClick={() => {
+                                void onComposerVoiceToggle();
+                              }}
+                            />
+                          ) : null}
 
                           {/* Provider/model picker */}
                           <ProviderModelPicker

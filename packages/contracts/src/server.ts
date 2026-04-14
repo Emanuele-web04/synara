@@ -1,8 +1,10 @@
 import { Schema } from "effect";
-import { IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas";
+import { IsoDateTime, NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas";
 import { KeybindingRule, ResolvedKeybindingsConfig } from "./keybindings";
 import { EditorId } from "./editor";
 import { ProviderKind } from "./orchestration";
+
+const SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BASE64_CHARS = 14_000_000;
 
 const KeybindingsMalformedConfigIssue = Schema.Struct({
   kind: Schema.Literal("keybindings.malformed-config"),
@@ -38,6 +40,7 @@ export const ServerProviderStatus = Schema.Struct({
   status: ServerProviderStatusState,
   available: Schema.Boolean,
   authStatus: ServerProviderAuthStatus,
+  voiceTranscriptionAvailable: Schema.optional(Schema.Boolean),
   checkedAt: IsoDateTime,
   message: Schema.optional(TrimmedNonEmptyString),
 });
@@ -55,6 +58,24 @@ export const ServerConfig = Schema.Struct({
   availableEditors: Schema.Array(EditorId),
 });
 export type ServerConfig = typeof ServerConfig.Type;
+
+export const ServerVoiceTranscriptionInput = Schema.Struct({
+  provider: ProviderKind,
+  cwd: TrimmedNonEmptyString,
+  threadId: Schema.optional(ThreadId),
+  mimeType: TrimmedNonEmptyString.check(Schema.isMaxLength(100)),
+  sampleRateHz: NonNegativeInt,
+  durationMs: NonNegativeInt,
+  audioBase64: TrimmedNonEmptyString.check(
+    Schema.isMaxLength(SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BASE64_CHARS),
+  ),
+});
+export type ServerVoiceTranscriptionInput = typeof ServerVoiceTranscriptionInput.Type;
+
+export const ServerVoiceTranscriptionResult = Schema.Struct({
+  text: TrimmedNonEmptyString,
+});
+export type ServerVoiceTranscriptionResult = typeof ServerVoiceTranscriptionResult.Type;
 
 export const ServerUpsertKeybindingInput = KeybindingRule;
 export type ServerUpsertKeybindingInput = typeof ServerUpsertKeybindingInput.Type;

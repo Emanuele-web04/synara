@@ -34,6 +34,8 @@ import {
   type ProviderTurnStartResult,
   RuntimeMode,
   ProviderInteractionMode,
+  type ServerVoiceTranscriptionInput,
+  type ServerVoiceTranscriptionResult,
 } from "@t3tools/contracts";
 import { readActiveCodexProviderEnvKey } from "@t3tools/shared/codexConfig";
 import { normalizeModelSlug } from "@t3tools/shared/model";
@@ -50,6 +52,7 @@ import {
   parseCodexCliVersion,
 } from "./provider/codexCliVersion";
 import { isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
+import { transcribeVoiceWithChatGptSession } from "./voiceTranscription.ts";
 
 type PendingRequestKey = string;
 
@@ -159,6 +162,11 @@ interface CodexAccountSnapshot {
   readonly type: "apiKey" | "chatgpt" | "unknown";
   readonly planType: CodexPlanType | null;
   readonly sparkEnabled: boolean;
+}
+
+interface CodexVoiceTranscriptionAuthContext {
+  readonly authMethod: "chatgpt" | "chatgptAuthTokens";
+  readonly token: string;
 }
 
 export interface CodexAppServerSendTurnInput {
@@ -1552,6 +1560,20 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     return result;
   }
 
+  async transcribeVoice(
+    input: ServerVoiceTranscriptionInput,
+  ): Promise<ServerVoiceTranscriptionResult> {
+    return transcribeVoiceWithChatGptSession({
+      request: input,
+      resolveAuth: (refreshToken) =>
+        this.resolveVoiceTranscriptionAuth({
+          cwd: input.cwd,
+          ...(input.threadId ? { threadId: input.threadId } : {}),
+          refreshToken,
+        }),
+    });
+  }
+
   getComposerCapabilities(): ProviderComposerCapabilities {
     return {
       provider: "codex",
@@ -1612,6 +1634,32 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       return firstActive;
     }
     return this.getOrCreateDiscoverySession(process.cwd());
+  }
+
+  private async resolveVoiceTranscriptionAuth(input: {
+    readonly cwd?: string;
+    readonly threadId?: string;
+    readonly refreshToken: boolean;
+  }): Promise<CodexVoiceTranscriptionAuthContext> {
+    const context = await this.resolveContextForDiscovery(input.threadId, input.cwd);
+    const response = await this.sendRequest<Record<string, unknown>>(context, "getAuthStatus", {
+      includeToken: true,
+      refreshToken: input.refreshToken,
+    });
+    const authMethod = this.readString(response, "authMethod");
+    const token = this.readString(response, "authToken");
+
+    if (!token) {
+      throw new Error("No ChatGPT session token is available. Sign in to ChatGPT in Codex.");
+    }
+    if (authMethod !== "chatgpt" && authMethod !== "chatgptAuthTokens") {
+      throw new Error("Voice transcription requires a ChatGPT-authenticated Codex session.");
+    }
+
+    return {
+      authMethod,
+      token,
+    };
   }
 
   private async getOrCreateDiscoverySession(cwd: string): Promise<CodexSessionContext> {

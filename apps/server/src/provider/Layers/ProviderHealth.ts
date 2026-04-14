@@ -85,9 +85,44 @@ function extractAuthBoolean(value: unknown): boolean | undefined {
   return undefined;
 }
 
+function extractAuthMethod(value: unknown): string | undefined {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const nested = extractAuthMethod(entry);
+      if (nested !== undefined) return nested;
+    }
+    return undefined;
+  }
+
+  if (!value || typeof value !== "object") return undefined;
+
+  const record = value as Record<string, unknown>;
+  for (const key of ["authMethod", "auth_type", "authType"] as const) {
+    if (typeof record[key] === "string") {
+      const trimmed = record[key].trim();
+      if (trimmed.length > 0) {
+        return trimmed;
+      }
+    }
+  }
+  for (const key of ["auth", "status", "session", "account"] as const) {
+    const nested = extractAuthMethod(record[key]);
+    if (nested !== undefined) return nested;
+  }
+  return undefined;
+}
+
+function resolveVoiceTranscriptionAvailability(authMethod: string | undefined): boolean | undefined {
+  if (!authMethod) {
+    return undefined;
+  }
+  return authMethod === "chatgpt" || authMethod === "chatgptAuthTokens";
+}
+
 export function parseAuthStatusFromOutput(result: CommandResult): {
   readonly status: ServerProviderStatusState;
   readonly authStatus: ServerProviderAuthStatus;
+  readonly voiceTranscriptionAvailable?: boolean;
   readonly message?: string;
 } {
   const lowerOutput = `${result.stdout}\n${result.stderr}`.toLowerCase();
@@ -121,20 +156,40 @@ export function parseAuthStatusFromOutput(result: CommandResult): {
   const parsedAuth = (() => {
     const trimmed = result.stdout.trim();
     if (!trimmed || (!trimmed.startsWith("{") && !trimmed.startsWith("["))) {
-      return { attemptedJsonParse: false as const, auth: undefined as boolean | undefined };
+      return {
+        attemptedJsonParse: false as const,
+        auth: undefined as boolean | undefined,
+        authMethod: undefined as string | undefined,
+      };
     }
     try {
+      const parsed = JSON.parse(trimmed);
       return {
         attemptedJsonParse: true as const,
-        auth: extractAuthBoolean(JSON.parse(trimmed)),
+        auth: extractAuthBoolean(parsed),
+        authMethod: extractAuthMethod(parsed),
       };
     } catch {
-      return { attemptedJsonParse: false as const, auth: undefined as boolean | undefined };
+      return {
+        attemptedJsonParse: false as const,
+        auth: undefined as boolean | undefined,
+        authMethod: undefined as string | undefined,
+      };
     }
   })();
 
   if (parsedAuth.auth === true) {
-    return { status: "ready", authStatus: "authenticated" };
+    return {
+      status: "ready",
+      authStatus: "authenticated",
+      ...(resolveVoiceTranscriptionAvailability(parsedAuth.authMethod) !== undefined
+        ? {
+            voiceTranscriptionAvailable: resolveVoiceTranscriptionAvailability(
+              parsedAuth.authMethod,
+            ),
+          }
+        : {}),
+    };
   }
   if (parsedAuth.auth === false) {
     return {
@@ -343,6 +398,7 @@ export const checkCodexProviderStatus: Effect.Effect<
       status: "ready" as const,
       available: true,
       authStatus: "unknown" as const,
+      voiceTranscriptionAvailable: false,
       checkedAt,
       message: "Using a custom Codex model provider; OpenAI login check skipped.",
     } satisfies ServerProviderStatus;
@@ -385,6 +441,9 @@ export const checkCodexProviderStatus: Effect.Effect<
     status: parsed.status,
     available: true,
     authStatus: parsed.authStatus,
+    ...(parsed.voiceTranscriptionAvailable !== undefined
+      ? { voiceTranscriptionAvailable: parsed.voiceTranscriptionAvailable }
+      : {}),
     checkedAt,
     ...(parsed.message ? { message: parsed.message } : {}),
   } satisfies ServerProviderStatus;

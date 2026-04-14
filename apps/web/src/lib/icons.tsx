@@ -47,11 +47,13 @@ import {
   IconLockOpen,
   IconMaximize,
   IconMinimize,
+  IconMicrophone,
   IconPalette,
   IconPaperclip,
   IconPin,
   IconPinnedFilled,
   IconPlayerPlay,
+  IconPlayerStop,
   IconPlus,
   IconRefresh,
   IconRocket,
@@ -136,6 +138,7 @@ export const LockIcon = adaptIcon(IconLock);
 export const LockOpenIcon = adaptIcon(IconLockOpen);
 export const Maximize2 = adaptIcon(IconMaximize);
 export const Minimize2 = adaptIcon(IconMinimize);
+export const MicIcon = adaptIcon(IconMicrophone);
 export const PanelLeftCloseIcon = adaptIcon(IconLayoutSidebarLeftCollapse);
 export const PanelLeftIcon = adaptIcon(IconLayoutSidebarLeftExpand);
 export const PanelRightCloseIcon = adaptIcon(IconLayoutSidebarRightCollapse);
@@ -150,6 +153,7 @@ export const RotateCcwIcon = adaptIcon(IconRotate2);
 export const Rows3Icon = adaptIcon(IconLayoutDistributeHorizontal);
 export const SearchIcon = adaptIcon(IconSearch);
 export const SettingsIcon = adaptIcon(IconSettings);
+export const StopIcon = adaptIcon(IconPlayerStop);
 export const SquarePenIcon = adaptIcon(IconEdit);
 export const SquareSplitHorizontal: LucideIcon = (props) => (
   <PiSquareSplitHorizontal className={props.className} style={props.style} />
