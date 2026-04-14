@@ -145,6 +145,16 @@ describe("hasLiveChatTurn", () => {
       }),
     ).toBe(false);
   });
+
+  it("returns false for a settled turn even when the session phase is stale-running", () => {
+    expect(
+      hasLiveChatTurn({
+        phase: "running",
+        latestTurnSettled: true,
+        latestTurnStartedAt: "2026-04-13T00:00:00.000Z",
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("hasServerAcknowledgedLocalDispatch", () => {

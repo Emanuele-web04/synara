@@ -110,6 +110,11 @@ const SkillCubeIcon: LucideIcon = (props) => (
   </svg>
 );
 
+function basename(value: string): string {
+  const slash = Math.max(value.lastIndexOf("/"), value.lastIndexOf("\\"));
+  return slash >= 0 ? value.slice(slash + 1) : value;
+}
+
 interface MessagesTimelineProps {
   hasMessages: boolean;
   isWorking: boolean;
@@ -703,6 +708,31 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             showCopyButton: row.showAssistantCopyButton,
             streaming: row.message.streaming,
           });
+          const turnSummary = turnDiffSummaryByAssistantMessageId.get(row.message.id);
+          const fileDiffStatByPath = new Map(
+            (turnSummary?.files ?? []).map((file) => [
+              file.path,
+              {
+                additions: file.additions ?? 0,
+                deletions: file.deletions ?? 0,
+              },
+            ]),
+          );
+          const hasGenericInlineFileChangeEntry = inlineToolEntries.some(
+            (workEntry) => isFileChangeWorkEntry(workEntry) && (workEntry.changedFiles?.length ?? 0) === 0,
+          );
+          const visibleRenderableInlineToolEntries = visibleInlineToolEntries.filter(
+            (workEntry) =>
+              !(
+                hasGenericInlineFileChangeEntry &&
+                isFileChangeWorkEntry(workEntry) &&
+                (workEntry.changedFiles?.length ?? 0) === 0
+              ),
+          );
+          const inlineEditedFilesFromTurnSummary =
+            hasGenericInlineFileChangeEntry && (turnSummary?.files.length ?? 0) > 0
+              ? turnSummary!.files
+              : [];
           const assistantMeta = [
             formatMessageMeta(
               row.message.createdAt,
@@ -736,15 +766,19 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   isStreaming={Boolean(row.message.streaming)}
                   style={chatTypographyStyle}
                 />
-                {inlineToolEntries.length > 0 && (
+                {visibleRenderableInlineToolEntries.length > 0 && (
                   <div className="mt-2.5 border-l border-border/40 pl-2.5">
                     <div className="space-y-px">
-                      {visibleInlineToolEntries.map((workEntry) => (
+                      {visibleRenderableInlineToolEntries.map((workEntry) => (
                         <SimpleWorkEntryRow
                           key={`inline-tool-row:${row.message.id}:${workEntry.id}`}
                           workEntry={workEntry}
                           chatMetaFontSizePx={appTypographyScale.chatMetaPx}
+                          textFontSizePx={normalizedChatFontSizePx}
                           density="compact"
+                          fileDiffStatByPath={fileDiffStatByPath}
+                          turnId={turnSummary?.turnId}
+                          onOpenTurnDiff={onOpenTurnDiff}
                         />
                       ))}
                     </div>
@@ -765,8 +799,47 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       )}
                   </div>
                 )}
+                {inlineEditedFilesFromTurnSummary.length > 0 && (
+                  <div className="mt-2 space-y-0.5">
+                    {inlineEditedFilesFromTurnSummary.map((file) => (
+                      <button
+                        key={`inline-summary-edit:${row.message.id}:${file.path}`}
+                        type="button"
+                        className="group inline-flex max-w-full items-baseline gap-2.5 px-0 py-[1px] text-left transition-opacity duration-150 hover:opacity-95"
+                        title={file.path}
+                        onClick={() => onOpenTurnDiff(turnSummary!.turnId, file.path)}
+                      >
+                        <span
+                          className="font-system-ui shrink-0 text-[#7b7b84]"
+                          style={{ fontSize: `${normalizedChatFontSizePx}px` }}
+                        >
+                          Edited
+                        </span>
+                        <span
+                          className="font-system-ui max-w-[28rem] truncate group-hover:opacity-90"
+                          style={{
+                            fontSize: `${normalizedChatFontSizePx}px`,
+                            color: "var(--info-foreground)",
+                          }}
+                        >
+                          {basename(file.path)}
+                        </span>
+                        {(file.additions ?? 0) + (file.deletions ?? 0) > 0 ? (
+                          <span
+                            className="font-chat-code shrink-0 tabular-nums whitespace-nowrap"
+                            style={{ fontSize: `${normalizedChatFontSizePx}px` }}
+                          >
+                            <DiffStatLabel
+                              additions={file.additions ?? 0}
+                              deletions={file.deletions ?? 0}
+                            />
+                          </span>
+                        ) : null}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 {(() => {
-                  const turnSummary = turnDiffSummaryByAssistantMessageId.get(row.message.id);
                   if (!turnSummary) return null;
                   const checkpointFiles = turnSummary.files;
                   if (checkpointFiles.length === 0) return null;
@@ -1377,12 +1450,32 @@ function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
   return capitalizePhrase(normalizeCompactToolLabel(workEntry.toolTitle));
 }
 
+function isFileChangeWorkEntry(workEntry: TimelineWorkEntry): boolean {
+  return (
+    workEntry.requestKind === "file-change" ||
+    workEntry.itemType === "file_change" ||
+    (workEntry.changedFiles?.length ?? 0) > 0
+  );
+}
+
 const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   workEntry: TimelineWorkEntry;
   chatMetaFontSizePx: number;
+  textFontSizePx?: number;
   density?: "default" | "compact";
+  fileDiffStatByPath?: ReadonlyMap<string, { additions: number; deletions: number }>;
+  turnId?: TurnId;
+  onOpenTurnDiff?: (turnId: TurnId, filePath?: string) => void;
 }) {
-  const { workEntry, chatMetaFontSizePx, density = "default" } = props;
+  const {
+    workEntry,
+    chatMetaFontSizePx,
+    textFontSizePx = chatMetaFontSizePx,
+    density = "default",
+    fileDiffStatByPath,
+    turnId,
+    onOpenTurnDiff,
+  } = props;
   const compact = density === "compact";
   const iconConfig = workToneIcon(workEntry.tone);
   const EntryIcon = workEntryIcon(workEntry);
@@ -1392,46 +1485,103 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const hasChangedFiles = (workEntry.changedFiles?.length ?? 0) > 0;
   const previewIsChangedFiles = hasChangedFiles && !workEntry.command && !workEntry.detail;
   const showChangedFileChips = !compact && hasChangedFiles && !previewIsChangedFiles;
+  const changedFiles = workEntry.changedFiles ?? [];
+  const showEditedRows = isFileChangeWorkEntry(workEntry) && changedFiles.length > 0;
 
   return (
     <div className={cn(compact ? "py-0.5" : "rounded-lg px-1 py-1")}>
-      <div
-        className={cn(
-          "flex items-center transition-[opacity,translate] duration-200",
-          compact ? "gap-1.5" : "gap-2",
-        )}
-      >
-        <span
+      {showEditedRows ? (
+        <div className="space-y-0.5">
+          {changedFiles.map((changedFilePath) => {
+            const changedFileStat = fileDiffStatByPath?.get(changedFilePath);
+            const canOpenEditedDiff = Boolean(turnId && onOpenTurnDiff);
+            return (
+              <button
+                key={`${workEntry.id}:${changedFilePath}`}
+                type="button"
+                className={cn(
+                  "group inline-flex max-w-full items-baseline gap-2.5 text-left transition-opacity duration-150",
+                  compact
+                    ? "px-0 py-[1px] hover:opacity-95"
+                    : "rounded-md border border-border/45 bg-background/65 px-2 py-1 hover:bg-background/80",
+                  canOpenEditedDiff ? "cursor-pointer" : "cursor-default",
+                )}
+                title={changedFilePath}
+                disabled={!canOpenEditedDiff}
+                onClick={() => {
+                  if (!turnId || !onOpenTurnDiff) return;
+                  onOpenTurnDiff(turnId, changedFilePath);
+                }}
+              >
+                <span
+                  className="font-system-ui shrink-0 text-[#7b7b84]"
+                  style={{ fontSize: `${textFontSizePx}px` }}
+                >
+                  Edited
+                </span>
+                <span
+                  className="font-system-ui max-w-[28rem] truncate group-hover:opacity-90"
+                  style={{
+                    fontSize: `${textFontSizePx}px`,
+                    color: "var(--info-foreground)",
+                  }}
+                >
+                  {basename(changedFilePath)}
+                </span>
+                {changedFileStat ? (
+                  <span
+                    className="font-chat-code shrink-0 tabular-nums whitespace-nowrap"
+                    style={{ fontSize: `${textFontSizePx}px` }}
+                  >
+                    <DiffStatLabel
+                      additions={changedFileStat.additions}
+                      deletions={changedFileStat.deletions}
+                    />
+                  </span>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <div
           className={cn(
-            "flex shrink-0 items-center justify-center",
-            compact ? "size-4" : "size-5",
-            iconConfig.className,
+            "flex items-center transition-[opacity,translate] duration-200",
+            compact ? "gap-1.5" : "gap-2",
           )}
         >
-          <EntryIcon className={compact ? "size-2.5" : "size-3"} />
-        </span>
-        <div className="min-w-0 flex-1 overflow-hidden">
-          <p
+          <span
             className={cn(
-              compact ? "truncate leading-4" : "truncate leading-5",
-              workToneClass(workEntry.tone),
-              preview ? "text-muted-foreground/70" : "",
+              "flex shrink-0 items-center justify-center",
+              compact ? "size-4" : "size-5",
+              iconConfig.className,
             )}
-            style={{ fontSize: `${chatMetaFontSizePx}px` }}
-            title={displayText}
           >
-            <span className={cn("text-foreground/80", workToneClass(workEntry.tone))}>
-              {heading}
-            </span>
-            {preview && (
-              <span className={compact ? "text-muted-foreground/50" : "text-muted-foreground/55"}>
-                {" "}
-                - {preview}
+            <EntryIcon className={compact ? "size-2.5" : "size-3"} />
+          </span>
+          <div className="min-w-0 flex-1 overflow-hidden">
+            <p
+              className={cn(
+                compact ? "truncate leading-4" : "truncate leading-5",
+                workToneClass(workEntry.tone),
+                preview ? "text-muted-foreground/70" : "",
+              )}
+              style={{ fontSize: `${chatMetaFontSizePx}px` }}
+              title={displayText}
+            >
+              <span className={cn("text-foreground/80", workToneClass(workEntry.tone))}>
+                {heading}
               </span>
-            )}
-          </p>
+              {preview && (
+                <span className={compact ? "text-muted-foreground/50" : "text-muted-foreground/55"}>
+                  {" "}
+                  - {preview}
+                </span>
+              )}
+            </p>
+          </div>
         </div>
-      </div>
+      )}
       {showChangedFileChips && (
         <div className="mt-1 flex flex-wrap gap-1 pl-6">
           {workEntry.changedFiles?.slice(0, 4).map((filePath) => (

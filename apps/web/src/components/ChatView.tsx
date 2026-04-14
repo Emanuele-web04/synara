@@ -4469,8 +4469,15 @@ export default function ChatView({
   ]);
   const onEnvModeChange = useCallback(
     (mode: DraftThreadEnvMode) => {
+      const nextBranch =
+        mode === "worktree"
+          ? (activeThread?.branch ?? draftThread?.branch ?? activeRootBranch ?? null)
+          : (activeThread?.branch ?? draftThread?.branch ?? null);
       if (isLocalDraftThread) {
-        setDraftThreadContext(threadId, { envMode: mode });
+        setDraftThreadContext(threadId, {
+          envMode: mode,
+          ...(nextBranch ? { branch: nextBranch } : {}),
+        });
       }
       if (isServerThread && activeThread && !hasNativeUserMessages && !activeThread.session) {
         const api = readNativeApi();
@@ -4480,6 +4487,7 @@ export default function ChatView({
             commandId: newCommandId(),
             threadId,
             envMode: mode,
+            ...(nextBranch ? { branch: nextBranch } : {}),
             ...(mode === "local" ? { worktreePath: null } : {}),
           });
         }
@@ -4488,6 +4496,8 @@ export default function ChatView({
     },
     [
       activeThread,
+      activeRootBranch,
+      draftThread?.branch,
       hasNativeUserMessages,
       isLocalDraftThread,
       isServerThread,

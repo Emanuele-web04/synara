@@ -20,8 +20,16 @@ import { HiOutlineCheckCircle } from "react-icons/hi2";
 import { HiOutlineFolderOpen } from "react-icons/hi2";
 import { TbArrowsDiagonal, TbArrowsDiagonalMinimize2, TbCursorText } from "react-icons/tb";
 import { IoFilter } from "react-icons/io5";
-import { LuMessageSquareDashed } from "react-icons/lu";
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { LuMessageSquareDashed, LuSplit } from "react-icons/lu";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import {
   DndContext,
   type DragCancelEvent,
@@ -67,6 +75,7 @@ import { gitRemoveWorktreeMutationOptions, gitStatusQueryOptions } from "../lib/
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { readNativeApi } from "../nativeApi";
 import { useComposerDraftStore } from "../composerDraftStore";
+import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
 import { type SidebarThreadSummary, type Thread } from "../types";
 import { ClaudeAI, OpenAI } from "./Icons";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
@@ -205,6 +214,74 @@ function HandoffProviderGlyph({
       </span>
     </div>
   );
+}
+
+function WorktreeBadgeGlyph({ className }: { className?: string }) {
+  return <LuSplit aria-hidden="true" className={cn("rotate-90", className)} />;
+}
+
+function resolveWorktreeBadgeLabel(thread: Pick<Thread, "envMode" | "worktreePath">): string | null {
+  return resolveThreadEnvironmentPresentation({
+    envMode: thread.envMode,
+    worktreePath: thread.worktreePath,
+  }).worktreeBadgeLabel;
+}
+
+function ThreadRowMetaBadge({
+  tooltip,
+  children,
+}: {
+  tooltip: string | null;
+  children?: ReactNode;
+}) {
+  const content = (
+    <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+      {children ?? null}
+    </span>
+  );
+  if (!tooltip || !children) {
+    return <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center" />;
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger render={content} />
+      <TooltipPopup side="top">{tooltip}</TooltipPopup>
+    </Tooltip>
+  );
+}
+
+function resolveThreadRowMetaBadge(input: {
+  thread: Pick<Thread, "forkSourceThreadId" | "envMode" | "worktreePath" | "handoff">;
+  includeHandoffBadge: boolean;
+}): {
+  tooltip: string;
+  icon: ReactNode;
+} | null {
+  const forkBadgeLabel = input.thread.forkSourceThreadId ? "Forked thread" : null;
+  if (forkBadgeLabel) {
+    return {
+      tooltip: forkBadgeLabel,
+      icon: <GitPullRequestIcon className="size-3 text-emerald-600 dark:text-emerald-300/90" />,
+    };
+  }
+
+  const worktreeBadgeLabel = resolveWorktreeBadgeLabel(input.thread);
+  if (worktreeBadgeLabel) {
+    return {
+      tooltip: worktreeBadgeLabel,
+      icon: <WorktreeBadgeGlyph className="size-3 text-muted-foreground/55" />,
+    };
+  }
+
+  const handoffBadgeLabel = resolveThreadHandoffBadgeLabel(input.thread);
+  if (input.includeHandoffBadge && handoffBadgeLabel) {
+    return {
+      tooltip: handoffBadgeLabel,
+      icon: <FiGitBranch className="size-3 text-muted-foreground/55" />,
+    };
+  }
+
+  return null;
 }
 
 type SidebarSplitPreview = {
@@ -1963,7 +2040,10 @@ export default function Sidebar() {
     ).entryPoint;
     const isActive = !activeSplitView && routeThreadId === thread.id;
     const folderLabel = resolveThreadFolderLabel(thread.projectId);
-    const forkBadgeLabel = thread.forkSourceThreadId ? "Forked thread" : null;
+    const rightMetaBadge = resolveThreadRowMetaBadge({
+      thread,
+      includeHandoffBadge: true,
+    });
 
     return (
       <div key={thread.id} className="group/thread-row relative w-full">
@@ -2003,7 +2083,9 @@ export default function Sidebar() {
               className="size-3.5 shrink-0"
             />
           )}
-          <span className="min-w-0 flex-1 truncate">{thread.title}</span>
+          <div className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
+            <span className="min-w-0 flex-1 truncate">{thread.title}</span>
+          </div>
           <div className="ml-auto flex shrink-0 items-center gap-1.5 pr-1">
             {folderLabel ? (
               <span className="max-w-24 truncate text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/38">
@@ -2013,19 +2095,10 @@ export default function Sidebar() {
           </div>
           <div className="absolute right-2.5 top-1/2 flex -translate-y-1/2 items-center">
             <div className="relative flex shrink-0 items-center justify-end gap-1">
-              {forkBadgeLabel ? (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <span className="mr-1 inline-flex items-center text-emerald-600 dark:text-emerald-300/90">
-                        <GitPullRequestIcon className="size-3" />
-                      </span>
-                    }
-                  />
-                  <TooltipPopup side="top">{forkBadgeLabel}</TooltipPopup>
-                </Tooltip>
-              ) : null}
-              <span className="text-[length:var(--app-font-size-ui-timestamp,10px)] leading-none tabular-nums text-muted-foreground/38 transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0">
+              <ThreadRowMetaBadge tooltip={rightMetaBadge?.tooltip ?? null}>
+                {rightMetaBadge?.icon}
+              </ThreadRowMetaBadge>
+              <span className="w-[1.625rem] text-right text-[length:var(--app-font-size-ui-meta,11px)] leading-none tabular-nums text-muted-foreground/38 transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0">
                 {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
               </span>
               {renderThreadDeleteButton(thread.id, "text-muted-foreground/45")}
@@ -2064,7 +2137,10 @@ export default function Sidebar() {
     const secondaryMetaClass = isHighlighted
       ? "text-foreground/54 dark:text-foreground/64"
       : "text-muted-foreground/34";
-    const forkBadgeLabel = thread.forkSourceThreadId ? "Forked thread" : null;
+    const rightMetaBadge = resolveThreadRowMetaBadge({
+      thread,
+      includeHandoffBadge: !isDisposableThread,
+    });
     const leadingPrStatus = thread.forkSourceThreadId ? null : prStatus;
 
     return (
@@ -2229,18 +2305,6 @@ export default function Sidebar() {
                 {thread.title}
               </span>
             )}
-            {!isDisposableThread && handoffBadgeLabel ? (
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <span className="inline-flex shrink-0 items-center text-muted-foreground/55">
-                      <FiGitBranch className="size-3" />
-                    </span>
-                  }
-                />
-                <TooltipPopup side="top">{handoffBadgeLabel}</TooltipPopup>
-              </Tooltip>
-            ) : null}
           </div>
           <div className="ml-auto flex shrink-0 items-center gap-1.5 pr-1">
             {terminalCount > 1 ? (
@@ -2290,21 +2354,12 @@ export default function Sidebar() {
           </div>
           <div className="absolute right-2.5 top-1/2 flex -translate-y-1/2 items-center">
             <div className="relative flex shrink-0 items-center justify-end gap-1">
-              {forkBadgeLabel ? (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <span className="mr-1 inline-flex items-center text-emerald-600 dark:text-emerald-300/90">
-                        <GitPullRequestIcon className="size-3" />
-                      </span>
-                    }
-                  />
-                  <TooltipPopup side="top">{forkBadgeLabel}</TooltipPopup>
-                </Tooltip>
-              ) : null}
+              <ThreadRowMetaBadge tooltip={rightMetaBadge?.tooltip ?? null}>
+                {rightMetaBadge?.icon}
+              </ThreadRowMetaBadge>
               <span
                 className={cn(
-                  "text-[length:var(--app-font-size-ui-timestamp,10px)] leading-none tabular-nums transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
+                  "w-[1.625rem] text-right text-[length:var(--app-font-size-ui-meta,11px)] leading-none tabular-nums transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
                   secondaryMetaClass,
                 )}
               >
@@ -2890,9 +2945,9 @@ export default function Sidebar() {
         ? "bg-sky-500 hover:bg-sky-600"
         : shouldHighlightDesktopUpdateError(desktopUpdateState)
           ? "bg-rose-500 hover:bg-rose-600"
-          : "bg-info hover:bg-info/90";
+          : "bg-[var(--info-foreground)] hover:brightness-110";
   const desktopUpdateRowButtonClasses = cn(
-    "inline-flex h-7 shrink-0 items-center justify-center rounded-full px-2.5 text-[11px] font-medium text-white transition-colors",
+    "inline-flex h-7 shrink-0 items-center justify-center rounded-full pl-2.5 pr-[12px] text-[10px] font-medium text-white transition-colors",
     desktopUpdateButtonInteractivityClasses,
     desktopUpdateButtonClasses,
   );

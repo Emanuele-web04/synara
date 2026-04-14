@@ -162,6 +162,9 @@ export function hasLiveChatTurn(options: {
   latestTurnSettled: boolean;
   latestTurnStartedAt: string | null;
 }): boolean {
+  if (options.latestTurnStartedAt !== null) {
+    return !options.latestTurnSettled;
+  }
   return (
     options.phase === "running" ||
     (options.latestTurnStartedAt !== null && !options.latestTurnSettled)

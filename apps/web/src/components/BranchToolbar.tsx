@@ -4,11 +4,11 @@
 import type { ThreadId, RuntimeMode } from "@t3tools/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { deriveAssociatedWorktreeMetadata } from "@t3tools/shared/threadWorkspace";
+import { LuSplit } from "react-icons/lu";
 import {
   ChevronDownIcon,
   ChevronRightIcon,
   ExternalLinkIcon,
-  GitForkIcon,
   HandoffIcon,
 } from "~/lib/icons";
 import { LiaUnlockAltSolid, LiaLockSolid } from "react-icons/lia";
@@ -18,6 +18,7 @@ import { useCallback, useMemo, useState } from "react";
 import { newCommandId, cn } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { useComposerDraftStore } from "../composerDraftStore";
+import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
 import { useStore } from "../store";
 import { createProjectSelector, createThreadSelector } from "../storeSelectors";
 import {
@@ -43,6 +44,10 @@ import {
 import { openUsageProviderSnapshotQueryOptions } from "~/lib/openUsageReactQuery";
 import { RateLimitSummaryList } from "./RateLimitSummaryList";
 
+function WorktreeGlyph({ className }: { className?: string }) {
+  return <LuSplit className={cn("rotate-90", className)} />;
+}
+
 interface BranchToolbarProps {
   threadId: ThreadId;
   onEnvModeChange: (mode: EnvMode) => void;
@@ -60,6 +65,7 @@ interface BranchToolbarProps {
 
 export default function BranchToolbar({
   threadId,
+  onEnvModeChange,
   envLocked,
   runtimeMode,
   onRuntimeModeChange,
@@ -93,6 +99,10 @@ export default function BranchToolbar({
     hasServerThread,
     draftThreadEnvMode: draftThread?.envMode,
     serverThreadEnvMode: serverThread?.envMode,
+  });
+  const environmentPresentation = resolveThreadEnvironmentPresentation({
+    envMode: effectiveEnvMode,
+    worktreePath: activeWorktreePath,
   });
 
   const setThreadWorkspace = useCallback(
@@ -179,6 +189,11 @@ export default function BranchToolbar({
     hasServerThread && envLocked && !activeWorktreePath && effectiveEnvMode === "local",
   );
   const canHandoffToLocal = Boolean(hasServerThread && activeWorktreePath);
+  const canSwitchToWorktree = Boolean(
+    !envLocked && !activeWorktreePath && effectiveEnvMode === "local",
+  );
+  const canSwitchToLocal = Boolean(!envLocked && effectiveEnvMode === "worktree");
+  const showEnvPicker = effectiveEnvMode === "local" || canSwitchToLocal;
 
   const openUsageSnapshotQuery = useQuery(
     openUsageProviderSnapshotQueryOptions(effectiveEnvMode === "local" ? activeProvider : null),
@@ -210,11 +225,15 @@ export default function BranchToolbar({
   return (
     <div className="mx-auto flex w-full max-w-3xl items-center justify-between px-3 pb-3 pt-1">
       <div className="flex items-center gap-2">
-        {effectiveEnvMode === "local" ? (
+        {showEnvPicker ? (
           <Popover open={envPickerOpen} onOpenChange={setEnvPickerOpen}>
             <PopoverTrigger className="inline-flex cursor-pointer items-center gap-1 px-1.5 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-muted-foreground/70 transition-colors hover:text-foreground/80">
-              <PiLaptop className="size-3.5" />
-              Local
+              {environmentPresentation.mode === "local" ? (
+                <PiLaptop className="size-3.5" />
+              ) : (
+                <WorktreeGlyph className="size-3.5" />
+              )}
+              {environmentPresentation.shortLabel}
               <ChevronDownIcon className="size-3 opacity-60" />
             </PopoverTrigger>
             <PopoverPopup
@@ -227,21 +246,65 @@ export default function BranchToolbar({
                 <p className="px-3 pb-1 pt-1 text-[11px] font-medium text-muted-foreground">
                   Continue in
                 </p>
-                <div className="flex w-full items-center gap-2 px-3 py-1.5 text-sm">
-                  <PiLaptop className="size-4 text-muted-foreground" />
-                  <span>Local project</span>
-                  <svg
-                    className="ml-auto size-4 text-foreground"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
+                {environmentPresentation.mode === "local" ? (
+                  <div className="flex w-full items-center gap-2 px-3 py-1.5 text-sm">
+                    <PiLaptop className="size-4 text-muted-foreground" />
+                    <span>{environmentPresentation.localOptionLabel}</span>
+                    <svg
+                      className="ml-auto size-4 text-foreground"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-accent"
+                    onClick={() => {
+                      setEnvPickerOpen(false);
+                      onEnvModeChange("local");
+                    }}
                   >
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
-                </div>
+                    <PiLaptop className="size-4 text-muted-foreground" />
+                    <span>{environmentPresentation.localOptionLabel}</span>
+                  </button>
+                )}
+                {canSwitchToWorktree ? (
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-accent"
+                    onClick={() => {
+                      setEnvPickerOpen(false);
+                      onEnvModeChange("worktree");
+                    }}
+                  >
+                    <WorktreeGlyph className="size-4 text-muted-foreground" />
+                    <span>New worktree</span>
+                  </button>
+                ) : null}
+                {effectiveEnvMode === "worktree" && !canHandoffToLocal ? (
+                  <div className="flex w-full items-center gap-2 px-3 py-1.5 text-sm">
+                    <WorktreeGlyph className="size-4 text-muted-foreground" />
+                    <span>{environmentPresentation.worktreeOptionLabel}</span>
+                    <svg
+                      className="ml-auto size-4 text-foreground"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  </div>
+                ) : null}
                 {canHandoffToWorktree && onHandoffToWorktree ? (
                   <button
                     type="button"
@@ -252,8 +315,8 @@ export default function BranchToolbar({
                       onHandoffToWorktree();
                     }}
                   >
-                    <HandoffIcon className="size-4 text-muted-foreground" />
-                    <span>Hand off to worktree</span>
+                    <WorktreeGlyph className="size-4 text-muted-foreground" />
+                    <span>Hand off to new worktree</span>
                   </button>
                 ) : null}
                 {canHandoffToLocal && onHandoffToLocal ? (
@@ -344,8 +407,8 @@ export default function BranchToolbar({
           </Popover>
         ) : (
           <span className="inline-flex items-center gap-1 px-1.5 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-muted-foreground/70">
-            <GitForkIcon className="size-3" />
-            {activeWorktreePath ? "Worktree" : "New worktree"}
+            <WorktreeGlyph className="size-3.5" />
+            {environmentPresentation.shortLabel}
           </span>
         )}
 

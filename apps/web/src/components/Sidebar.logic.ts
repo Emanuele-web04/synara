@@ -6,6 +6,7 @@ import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "../appSett
 import type { ChatMessage, Project, SidebarThreadSummary, Thread } from "../types";
 import { cn } from "../lib/utils";
 import {
+  hasLiveLatestTurn,
   findLatestProposedPlan,
   hasActionableProposedPlan,
   isLatestTurnSettled,
@@ -138,7 +139,10 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  if (thread.session?.status === "running") {
+  if (
+    thread.session?.status === "running" &&
+    (thread.latestTurn === null || hasLiveLatestTurn(thread.latestTurn, thread.session))
+  ) {
     return {
       label: "Working",
       colorClass: "text-sky-600 dark:text-sky-300/80",

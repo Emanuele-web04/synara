@@ -131,7 +131,10 @@ export function formatElapsed(startIso: string, endIso: string | undefined): str
   return formatDuration(endedAt - startedAt);
 }
 
-type LatestTurnTiming = Pick<OrchestrationLatestTurn, "turnId" | "startedAt" | "completedAt">;
+type LatestTurnTiming = Pick<
+  OrchestrationLatestTurn,
+  "turnId" | "state" | "startedAt" | "completedAt"
+>;
 type SessionActivityState = Pick<ThreadSession, "orchestrationStatus" | "activeTurnId">;
 
 export function isLatestTurnSettled(
@@ -140,9 +143,22 @@ export function isLatestTurnSettled(
 ): boolean {
   if (!latestTurn?.startedAt) return false;
   if (!latestTurn.completedAt) return false;
+  if (latestTurn.state === "completed" || latestTurn.state === "error") {
+    return true;
+  }
   if (!session) return true;
   if (session.orchestrationStatus === "running") return false;
   return true;
+}
+
+export function hasLiveLatestTurn(
+  latestTurn: LatestTurnTiming | null,
+  session: SessionActivityState | null,
+): boolean {
+  if (!latestTurn?.startedAt) {
+    return false;
+  }
+  return !isLatestTurnSettled(latestTurn, session);
 }
 
 export function deriveActiveWorkStartedAt(
@@ -150,7 +166,7 @@ export function deriveActiveWorkStartedAt(
   session: SessionActivityState | null,
   sendStartedAt: string | null,
 ): string | null {
-  if (!isLatestTurnSettled(latestTurn, session)) {
+  if (hasLiveLatestTurn(latestTurn, session)) {
     return latestTurn?.startedAt ?? sendStartedAt;
   }
   return sendStartedAt;

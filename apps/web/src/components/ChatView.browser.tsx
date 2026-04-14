@@ -2163,6 +2163,44 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("offers New worktree from an empty draft thread", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-empty-worktree-test" as MessageId,
+        targetText: "empty worktree test",
+      }),
+    });
+
+    try {
+      const newThreadButton = page.getByTestId("new-thread-button");
+      await expect.element(newThreadButton).toBeInTheDocument();
+      await newThreadButton.click();
+
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a new draft thread UUID.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+
+      const envPickerTrigger = page.getByText("Local");
+      await expect.element(envPickerTrigger).toBeInTheDocument();
+      await envPickerTrigger.click();
+
+      const newWorktreeOption = page.getByText("New worktree");
+      await expect.element(newWorktreeOption).toBeInTheDocument();
+      await newWorktreeOption.click();
+
+      await expect.element(page.getByText("New worktree")).toBeInTheDocument();
+      expect(useComposerDraftStore.getState().getDraftThread(newThreadId)?.envMode).toBe(
+        "worktree",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("hydrates the provider alongside a sticky claude model", async () => {
     useComposerDraftStore.setState({
       stickyModelSelectionByProvider: {

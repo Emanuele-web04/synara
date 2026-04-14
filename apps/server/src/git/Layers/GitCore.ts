@@ -17,6 +17,7 @@ import {
   Stream,
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { randomUUID } from "node:crypto";
 import * as nodeFs from "node:fs/promises";
 import * as nodePath from "node:path";
 
@@ -41,6 +42,7 @@ const DEFAULT_BASE_BRANCH_CANDIDATES = ["main", "master"] as const;
 const EMPTY_TREE_OBJECT_ID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const WORKING_TREE_DIFF_TIMEOUT_MS = 15_000;
 const MAX_UNTRACKED_DIFF_CONCURRENCY = 4;
+const AUTO_DETACHED_WORKTREE_DIRNAME = "dpcode";
 const NON_REPOSITORY_STATUS_DETAILS = Object.freeze({
   isRepo: false,
   hasOriginRemote: false,
@@ -555,6 +557,27 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const { worktreesDir } = yield* ServerConfig;
+
+    const buildGeneratedDetachedWorktreePath = (cwd: string) =>
+      Effect.gen(function* () {
+        // Keep auto-generated detached worktrees short and opaque so the
+        // filesystem path stays stable-looking regardless of the source ref.
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          const shortId = randomUUID().replace(/-/g, "").slice(0, 4);
+          const candidateParent = path.join(worktreesDir, shortId);
+          const candidatePath = path.join(candidateParent, AUTO_DETACHED_WORKTREE_DIRNAME);
+          if (yield* fileSystem.exists(candidatePath)) {
+            continue;
+          }
+          yield* fileSystem.makeDirectory(candidateParent, { recursive: true });
+          return candidatePath;
+        }
+
+        const fallbackId = randomUUID().replace(/-/g, "");
+        const fallbackParent = path.join(worktreesDir, fallbackId);
+        yield* fileSystem.makeDirectory(fallbackParent, { recursive: true });
+        return path.join(fallbackParent, AUTO_DETACHED_WORKTREE_DIRNAME);
+      });
 
     let execute: GitCoreShape["execute"];
 
@@ -1760,10 +1783,8 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
     const createDetachedWorktree: GitCoreShape["createDetachedWorktree"] = (input) =>
       Effect.gen(function* () {
-        const sanitizedRef = input.ref.replace(/\//g, "-");
-        const repoName = path.basename(input.cwd);
         const worktreePath =
-          input.path ?? path.join(worktreesDir, repoName, `detached-${sanitizedRef}`);
+          input.path ?? (yield* buildGeneratedDetachedWorktreePath(input.cwd));
 
         yield* executeGit("GitCore.createDetachedWorktree", input.cwd, [
           "worktree",

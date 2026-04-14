@@ -4,7 +4,11 @@
 // Exports: thread env resolution + `/fork` target planning
 
 import type { ThreadEnvironmentMode } from "@t3tools/contracts";
-import { resolveThreadEnvironmentMode } from "@t3tools/shared/threadEnvironment";
+import {
+  resolveThreadEnvironmentMode,
+  resolveThreadWorkspaceState,
+  type ResolvedThreadWorkspaceState,
+} from "@t3tools/shared/threadEnvironment";
 import { deriveAssociatedWorktreeMetadata } from "@t3tools/shared/threadWorkspace";
 import type { Thread } from "../types";
 
@@ -25,6 +29,37 @@ export {
   resolveThreadEnvironmentMode,
   resolveThreadWorkspaceState,
 } from "@t3tools/shared/threadEnvironment";
+
+export interface ThreadEnvironmentPresentation {
+  mode: ThreadEnvironmentMode;
+  workspaceState: ResolvedThreadWorkspaceState;
+  shortLabel: "Local" | "Worktree";
+  localOptionLabel: "Local project";
+  worktreeOptionLabel: "Worktree";
+  worktreeBadgeLabel: "Worktree" | "Worktree pending" | null;
+}
+
+export function resolveThreadEnvironmentPresentation(input: {
+  envMode?: ThreadEnvironmentMode | null | undefined;
+  worktreePath?: string | null | undefined;
+}): ThreadEnvironmentPresentation {
+  const mode = resolveThreadEnvironmentMode(input);
+  const workspaceState = resolveThreadWorkspaceState(input);
+
+  return {
+    mode,
+    workspaceState,
+    shortLabel: mode === "worktree" ? "Worktree" : "Local",
+    localOptionLabel: "Local project",
+    worktreeOptionLabel: "Worktree",
+    worktreeBadgeLabel:
+      workspaceState === "worktree-ready"
+        ? "Worktree"
+        : workspaceState === "worktree-pending"
+          ? "Worktree pending"
+          : null,
+  };
+}
 
 // Fork planning keeps "local" attached to the current local checkout. For worktree-backed
 // threads that means reusing the existing worktree, while "worktree" always plans a new one.

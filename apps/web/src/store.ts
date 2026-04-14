@@ -798,6 +798,8 @@ function sidebarThreadSummariesEqual(
     left.title === right.title &&
     left.modelSelection === right.modelSelection &&
     left.interactionMode === right.interactionMode &&
+    left.envMode === right.envMode &&
+    left.worktreePath === right.worktreePath &&
     left.session === right.session &&
     left.createdAt === right.createdAt &&
     left.updatedAt === right.updatedAt &&
@@ -824,6 +826,8 @@ function buildSidebarThreadSummary(
     title: thread.title,
     modelSelection: thread.modelSelection,
     interactionMode: thread.interactionMode,
+    envMode: thread.envMode,
+    worktreePath: thread.worktreePath,
     session: thread.session,
     createdAt: thread.createdAt,
     updatedAt: thread.updatedAt,

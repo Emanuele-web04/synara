@@ -12,6 +12,7 @@ import type { Thread, ThreadSession } from "../types";
 import {
   derivePendingApprovals,
   derivePendingUserInputs,
+  hasLiveLatestTurn,
   isLatestTurnSettled,
 } from "../session-logic";
 
@@ -81,13 +82,13 @@ function summarizeLatestAssistantMessage(thread: Thread): string | null {
 }
 
 function hadUnsettledTurn(thread: Thread | undefined): boolean {
-  if (!thread?.latestTurn?.startedAt) {
+  if (!thread) {
     return false;
   }
-  if (!thread.latestTurn.completedAt) {
+  if (hasLiveLatestTurn(thread.latestTurn, thread.session)) {
     return true;
   }
-  return isRunningStatus(thread.session?.status);
+  return !thread.latestTurn?.completedAt && isRunningStatus(thread.session?.status);
 }
 
 // Compare consecutive snapshots and emit fresh settled completions, even if the

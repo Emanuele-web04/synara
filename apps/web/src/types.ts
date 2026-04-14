@@ -171,6 +171,8 @@ export interface SidebarThreadSummary {
   title: string;
   modelSelection: ModelSelection;
   interactionMode: ProviderInteractionMode;
+  envMode?: ThreadEnvironmentMode | undefined;
+  worktreePath: string | null;
   session: ThreadSession | null;
   createdAt: string;
   updatedAt?: string | undefined;

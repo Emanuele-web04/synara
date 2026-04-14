@@ -728,6 +728,267 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Show less");
   });
 
+  it("renders inline file-change tool calls as edited rows with diff stats", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const assistantMessageId = MessageId.makeUnsafe("message-assistant-inline-edit");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        scrollContainer={null}
+        timelineEntries={[
+          {
+            id: "entry-inline-file-change",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-inline-file-change",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "File Change",
+              tone: "tool",
+              requestKind: "file-change",
+              changedFiles: ["apps/web/src/components/chat/MessagesTimeline.test.tsx"],
+            },
+          },
+          {
+            id: "entry-assistant-inline-edit",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:29.000Z",
+            message: {
+              id: assistantMessageId,
+              role: "assistant",
+              text: "done",
+              createdAt: "2026-03-17T19:12:29.000Z",
+              completedAt: "2026-03-17T19:12:30.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={
+          new Map([
+            [
+              assistantMessageId,
+              {
+                turnId: TurnId.makeUnsafe("turn-inline-edit-1"),
+                completedAt: "2026-03-17T19:12:30.000Z",
+                assistantMessageId,
+                files: [
+                  {
+                    path: "apps/web/src/components/chat/MessagesTimeline.test.tsx",
+                    additions: 1,
+                    deletions: 1,
+                  },
+                ],
+              },
+            ],
+          ])
+        }
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="dark"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("Edited");
+    expect(markup).toContain("MessagesTimeline.test.tsx");
+    expect(markup).toContain("+1");
+    expect(markup).toContain("-1");
+    expect(markup).not.toContain(
+      "File Change - apps/web/src/components/chat/MessagesTimeline.test.tsx",
+    );
+  });
+
+  it("renders every changed file in the same inline file-change tool call", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const assistantMessageId = MessageId.makeUnsafe("message-assistant-inline-multi-edit");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        scrollContainer={null}
+        timelineEntries={[
+          {
+            id: "entry-inline-multi-file-change",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-inline-multi-file-change",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "File Change",
+              tone: "tool",
+              requestKind: "file-change",
+              changedFiles: [
+                "apps/web/src/components/chat/MessagesTimeline.test.tsx",
+                "apps/web/src/components/chat/MessagesTimeline.tsx",
+              ],
+            },
+          },
+          {
+            id: "entry-assistant-inline-multi-edit",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:29.000Z",
+            message: {
+              id: assistantMessageId,
+              role: "assistant",
+              text: "done",
+              createdAt: "2026-03-17T19:12:29.000Z",
+              completedAt: "2026-03-17T19:12:30.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={
+          new Map([
+            [
+              assistantMessageId,
+              {
+                turnId: TurnId.makeUnsafe("turn-inline-multi-edit-1"),
+                completedAt: "2026-03-17T19:12:30.000Z",
+                assistantMessageId,
+                files: [
+                  {
+                    path: "apps/web/src/components/chat/MessagesTimeline.test.tsx",
+                    additions: 1,
+                    deletions: 1,
+                  },
+                  {
+                    path: "apps/web/src/components/chat/MessagesTimeline.tsx",
+                    additions: 2,
+                    deletions: 0,
+                  },
+                ],
+              },
+            ],
+          ])
+        }
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="dark"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("MessagesTimeline.test.tsx");
+    expect(markup).toContain("MessagesTimeline.tsx");
+    expect(markup.match(/Edited/g)?.length).toBe(2);
+    expect(markup).toContain("+1");
+    expect(markup).toContain("-1");
+    expect(markup).toContain("+2");
+  });
+
+  it("renders inline edited rows from the turn summary when the file-change tool call has no filenames", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const assistantMessageId = MessageId.makeUnsafe("message-assistant-inline-summary-fallback");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        scrollContainer={null}
+        timelineEntries={[
+          {
+            id: "entry-inline-summary-fallback",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-inline-summary-fallback",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "File Change",
+              tone: "tool",
+              requestKind: "file-change",
+            },
+          },
+          {
+            id: "entry-assistant-inline-summary-fallback",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:29.000Z",
+            message: {
+              id: assistantMessageId,
+              role: "assistant",
+              text: "done",
+              createdAt: "2026-03-17T19:12:29.000Z",
+              completedAt: "2026-03-17T19:12:30.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={
+          new Map([
+            [
+              assistantMessageId,
+              {
+                turnId: TurnId.makeUnsafe("turn-inline-summary-fallback-1"),
+                completedAt: "2026-03-17T19:12:30.000Z",
+                assistantMessageId,
+                files: [
+                  {
+                    path: "apps/web/src/components/chat/ProviderHealth.ts",
+                    additions: 63,
+                    deletions: 4,
+                  },
+                  {
+                    path: "apps/web/src/components/ChatView.tsx",
+                    additions: 41,
+                    deletions: 5,
+                  },
+                ],
+              },
+            ],
+          ])
+        }
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="dark"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("Edited");
+    expect(markup).toContain("ProviderHealth.ts");
+    expect(markup).toContain("ChatView.tsx");
+    expect(markup).toContain("+63");
+    expect(markup).toContain("-4");
+    expect(markup).toContain("+41");
+    expect(markup).toContain("-5");
+    expect(markup).not.toContain(">File Change<");
+  });
+
   it("renders a collapsible changed files header with ui-font filenames", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const assistantMessageId = MessageId.makeUnsafe("message-assistant-diff");

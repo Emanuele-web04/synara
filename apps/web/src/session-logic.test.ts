@@ -11,6 +11,7 @@ import {
   deriveActiveBackgroundTasksState,
   deriveActiveWorkStartedAt,
   deriveActivePlanState,
+  hasLiveLatestTurn,
   PROVIDER_OPTIONS,
   derivePendingApprovals,
   derivePendingUserInputs,
@@ -1180,26 +1181,27 @@ describe("hasToolActivityForTurn", () => {
 describe("isLatestTurnSettled", () => {
   const latestTurn = {
     turnId: TurnId.makeUnsafe("turn-1"),
+    state: "completed",
     startedAt: "2026-02-27T21:10:00.000Z",
     completedAt: "2026-02-27T21:10:06.000Z",
   } as const;
 
-  it("returns false while the same turn is still active in a running session", () => {
+  it("returns true for a terminal turn even when the session stays stale-running", () => {
     expect(
       isLatestTurnSettled(latestTurn, {
         orchestrationStatus: "running",
         activeTurnId: TurnId.makeUnsafe("turn-1"),
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
-  it("returns false while any turn is running to avoid stale latest-turn banners", () => {
+  it("returns true for a terminal turn even when another session turn still looks active", () => {
     expect(
       isLatestTurnSettled(latestTurn, {
         orchestrationStatus: "running",
         activeTurnId: TurnId.makeUnsafe("turn-2"),
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("returns true once the session is no longer running that turn", () => {
@@ -1216,10 +1218,26 @@ describe("isLatestTurnSettled", () => {
       isLatestTurnSettled(
         {
           turnId: TurnId.makeUnsafe("turn-1"),
+          state: "completed",
           startedAt: null,
           completedAt: "2026-02-27T21:10:06.000Z",
         },
         null,
+      ),
+    ).toBe(false);
+  });
+
+  it("returns false for non-terminal interrupted placeholders while the session is running", () => {
+    expect(
+      isLatestTurnSettled(
+        {
+          ...latestTurn,
+          state: "interrupted",
+        },
+        {
+          orchestrationStatus: "running",
+          activeTurnId: TurnId.makeUnsafe("turn-1"),
+        },
       ),
     ).toBe(false);
   });
@@ -1228,6 +1246,7 @@ describe("isLatestTurnSettled", () => {
 describe("deriveActiveWorkStartedAt", () => {
   const latestTurn = {
     turnId: TurnId.makeUnsafe("turn-1"),
+    state: "completed",
     startedAt: "2026-02-27T21:10:00.000Z",
     completedAt: "2026-02-27T21:10:06.000Z",
   } as const;
@@ -1235,7 +1254,10 @@ describe("deriveActiveWorkStartedAt", () => {
   it("prefers the in-flight turn start when the latest turn is not settled", () => {
     expect(
       deriveActiveWorkStartedAt(
-        latestTurn,
+        {
+          ...latestTurn,
+          state: "interrupted",
+        },
         {
           orchestrationStatus: "running",
           activeTurnId: TurnId.makeUnsafe("turn-1"),
@@ -1263,6 +1285,7 @@ describe("deriveActiveWorkStartedAt", () => {
       deriveActiveWorkStartedAt(
         {
           turnId: TurnId.makeUnsafe("turn-1"),
+          state: "completed",
           startedAt: "2026-02-27T21:10:00.000Z",
           completedAt: "2026-02-27T21:10:06.000Z",
         },
@@ -1270,6 +1293,39 @@ describe("deriveActiveWorkStartedAt", () => {
         "2026-02-27T21:11:00.000Z",
       ),
     ).toBe("2026-02-27T21:11:00.000Z");
+  });
+});
+
+describe("hasLiveLatestTurn", () => {
+  const latestTurn = {
+    turnId: TurnId.makeUnsafe("turn-1"),
+    state: "completed",
+    startedAt: "2026-02-27T21:10:00.000Z",
+    completedAt: "2026-02-27T21:10:06.000Z",
+  } as const;
+
+  it("returns false for terminal turns even when the session is stale-running", () => {
+    expect(
+      hasLiveLatestTurn(latestTurn, {
+        orchestrationStatus: "running",
+        activeTurnId: TurnId.makeUnsafe("turn-1"),
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true for non-terminal turns that are still running", () => {
+    expect(
+      hasLiveLatestTurn(
+        {
+          ...latestTurn,
+          state: "interrupted",
+        },
+        {
+          orchestrationStatus: "running",
+          activeTurnId: TurnId.makeUnsafe("turn-1"),
+        },
+      ),
+    ).toBe(true);
   });
 });
 
