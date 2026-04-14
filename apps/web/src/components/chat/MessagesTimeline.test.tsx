@@ -340,7 +340,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("Work log (1)");
   });
 
-  it("keeps trailing work log summaries as a standalone row after the turn completes", async () => {
+  it("attaches trailing work log summaries to the last assistant reply after completion", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -394,7 +394,8 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain(">done</p>");
-    expect(markup).toContain("Work log (1)");
+    expect(markup).toContain("Work log");
+    expect(markup).not.toContain('data-timeline-row-kind="work"');
   });
 
   it("shows the first four inline tool calls and collapses the remainder", async () => {
@@ -625,6 +626,75 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Tool 3");
     expect(markup).toContain("Tool 6");
     expect(markup).toContain("+2 more tool calls");
+  });
+
+  it("attaches trailing tool rows to the last assistant reply after completion", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        scrollContainer={null}
+        timelineEntries={[
+          {
+            id: "entry-assistant-final",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:29.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-assistant-final"),
+              role: "assistant",
+              text: "done",
+              createdAt: "2026-03-17T19:12:29.000Z",
+              completedAt: "2026-03-17T19:12:30.000Z",
+              streaming: false,
+            },
+          },
+          {
+            id: "entry-trailing-tool-1",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:30.100Z",
+            entry: {
+              id: "work-trailing-tool-1",
+              createdAt: "2026-03-17T19:12:30.100Z",
+              label: "tool 1",
+              tone: "tool",
+            },
+          },
+          {
+            id: "entry-trailing-tool-2",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:30.200Z",
+            entry: {
+              id: "work-trailing-tool-2",
+              createdAt: "2026-03-17T19:12:30.200Z",
+              label: "tool 2",
+              tone: "tool",
+            },
+          },
+        ]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:31.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("Tool 1");
+    expect(markup).toContain("Tool 2");
+    expect(markup).not.toContain('data-timeline-row-kind="work"');
   });
 
   it("expands inline tool calls when the group is toggled open", async () => {
@@ -987,88 +1057,6 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("+41");
     expect(markup).toContain("-5");
     expect(markup).not.toContain(">File Change<");
-  });
-
-  it("renders collab subagent work entries as a grouped card with thread actions", async () => {
-    const { MessagesTimeline } = await import("./MessagesTimeline");
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
-        scrollContainer={null}
-        timelineEntries={[
-          {
-            id: "entry-subagents-card",
-            kind: "work",
-            createdAt: "2026-03-17T19:12:28.000Z",
-            entry: {
-              id: "work-subagents-card",
-              createdAt: "2026-03-17T19:12:28.000Z",
-              label: "Spawn agent",
-              toolTitle: "Spawn agent",
-              tone: "tool",
-              itemType: "collab_agent_tool_call",
-              subagentAction: {
-                tool: "waitAgent",
-                status: "in_progress",
-                summaryText: "Waiting on 2 agents",
-                model: "gpt-5.4-mini",
-                prompt: "Inspect the sidebar tree",
-              },
-              subagents: [
-                {
-                  threadId: "subagent:thread-1:agent-1",
-                  nickname: "Locke",
-                  role: "explorer",
-                  model: "gpt-5.4-mini",
-                  title: "Repository explorer",
-                  statusLabel: "Running",
-                  isActive: true,
-                  latestUpdate: "Finished mapping sidebar threads",
-                },
-                {
-                  threadId: "subagent:thread-1:agent-2",
-                  nickname: "Ada",
-                  role: "worker",
-                  title: "Apply code patch",
-                  statusLabel: "Idle",
-                },
-              ],
-            },
-          },
-        ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
-        turnDiffSummaryByAssistantMessageId={new Map()}
-        nowIso="2026-03-17T19:12:30.000Z"
-        expandedWorkGroups={{}}
-        onToggleWorkGroup={() => {}}
-        onOpenTurnDiff={() => {}}
-        onOpenThread={() => {}}
-        revertTurnCountByUserMessageId={new Map()}
-        onRevertUserMessage={() => {}}
-        isRevertingCheckpoint={false}
-        onImageExpand={() => {}}
-        markdownCwd={undefined}
-        resolvedTheme="dark"
-        timestampFormat="locale"
-        workspaceRoot={undefined}
-      />,
-    );
-
-    expect(markup).toContain("Waiting on 2 agents");
-    expect(markup).toContain("GPT-5.4 Mini");
-    expect(markup).toContain("Inspect the sidebar tree");
-    expect(markup).toContain("Locke");
-    expect(markup).toContain("(explorer)");
-    expect(markup).toContain("Ada");
-    expect(markup).toContain("Repository explorer");
-    expect(markup).toContain("Apply code patch");
-    expect(markup).toContain("Running");
-    expect(markup).toContain("Finished mapping sidebar threads");
-    expect(markup).toContain("Open thread");
   });
 
   it("renders a collapsible changed files header with ui-font filenames", async () => {

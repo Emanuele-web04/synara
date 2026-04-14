@@ -83,6 +83,7 @@ import {
   stripComposerTriggerText,
 } from "../composer-logic";
 import { createProjectSelector, createThreadSelector } from "../storeSelectors";
+import { shouldForceSettleLatestTurn } from "./ChatView.logic";
 import {
   canOfferForkSlashCommand,
   canOfferReviewSlashCommand,
@@ -1007,8 +1008,18 @@ export default function ChatView({
     () => deriveLatestRateLimitStatus(threadActivities),
     [threadActivities],
   );
+  const latestTurnSettledByProvider = isLatestTurnSettled(
+    activeLatestTurn,
+    activeThread?.session ?? null,
+  );
   const latestTurnSettled =
-    isLatestTurnSettled(activeLatestTurn, activeThread?.session ?? null) && !hasLiveTurnTail;
+    (latestTurnSettledByProvider ||
+      shouldForceSettleLatestTurn({
+        latestTurn: activeLatestTurn,
+        session: activeThread?.session ?? null,
+        hasLiveTurnTail,
+      })) &&
+    !hasLiveTurnTail;
   const activeProjectId = activeThread?.projectId ?? draftThread?.projectId ?? null;
   const activeProject = useStore(
     useMemo(() => createProjectSelector(activeProjectId), [activeProjectId]),

@@ -260,6 +260,20 @@ export function hasLiveChatTurn(options: {
   );
 }
 
+// Treats a turn as settled when the provider session is already idle but the
+// latest-turn snapshot has not caught up with a completedAt timestamp yet.
+export function shouldForceSettleLatestTurn(options: {
+  latestTurn: Thread["latestTurn"] | null;
+  session: Thread["session"] | null;
+  hasLiveTurnTail: boolean;
+}): boolean {
+  const { latestTurn, session, hasLiveTurnTail } = options;
+  if (!latestTurn?.startedAt || latestTurn.completedAt || hasLiveTurnTail || !session) {
+    return false;
+  }
+  return session.orchestrationStatus !== "running";
+}
+
 export function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();

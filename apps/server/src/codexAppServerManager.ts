@@ -40,10 +40,6 @@ import {
 import { readActiveCodexProviderEnvKey } from "@t3tools/shared/codexConfig";
 import { normalizeModelSlug } from "@t3tools/shared/model";
 import {
-  decodeSubagentReceiverAgents,
-  decodeSubagentReceiverThreadIds,
-} from "@t3tools/shared/subagents";
-import {
   readEnvironmentFromLoginShell,
   resolveLoginShell,
   type ShellEnvironmentReader,
@@ -102,16 +98,9 @@ interface CodexSessionContext {
   pendingUserInputs: Map<ApprovalRequestId, PendingUserInputRequest>;
   collabReceiverTurns: Map<string, TurnId>;
   collabReceiverParents: Map<string, string>;
-  collabReceiverMetadata: Map<string, CollabReceiverIdentity>;
   nextRequestId: number;
   stopping: boolean;
   discovery?: boolean;
-}
-
-interface CollabReceiverIdentity {
-  readonly agentId?: string;
-  readonly nickname?: string;
-  readonly role?: string;
 }
 
 interface CodexSkillListInput {
@@ -717,7 +706,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         pendingUserInputs: new Map(),
         collabReceiverTurns: new Map(),
         collabReceiverParents: new Map(),
-        collabReceiverMetadata: new Map(),
         nextRequestId: 1,
         stopping: false,
       };
@@ -880,7 +868,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   async sendTurn(input: CodexAppServerSendTurnInput): Promise<ProviderTurnStartResult> {
     const context = this.requireSession(input.threadId);
     context.collabReceiverTurns.clear();
-    context.collabReceiverMetadata.clear();
 
     // Normal sends never interrupt active work. The orchestration layer decides
     // when a queued follow-up is ready to become a provider turn.
@@ -1006,7 +993,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   async steerTurn(input: CodexAppServerSendTurnInput): Promise<ProviderTurnStartResult> {
     const context = this.requireSession(input.threadId);
     context.collabReceiverTurns.clear();
-    context.collabReceiverMetadata.clear();
 
     const activeTurnId = context.session.activeTurnId;
     if (context.session.status !== "running" || activeTurnId === undefined) {
@@ -1237,7 +1223,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         pendingUserInputs: new Map(),
         collabReceiverTurns: new Map(),
         collabReceiverParents: new Map(),
-        collabReceiverMetadata: new Map(),
         nextRequestId: 1,
         stopping: false,
       };
@@ -1730,7 +1715,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       pendingUserInputs: new Map(),
       collabReceiverTurns: new Map(),
       collabReceiverParents: new Map(),
-      collabReceiverMetadata: new Map(),
       nextRequestId: 1,
       stopping: false,
       discovery: true,
@@ -1902,7 +1886,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       notification.method === "item/agentMessage/delta"
         ? this.readString(notification.params, "delta")
         : undefined;
-    const payload = this.augmentChildPayloadWithSubagentMetadata(context, notification.params);
 
     this.emitEvent({
       id: EventId.makeUnsafe(randomUUID()),
@@ -1917,7 +1900,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       ...(providerThreadId ? { providerThreadId } : {}),
       ...(providerParentThreadId ? { providerParentThreadId } : {}),
       textDelta,
-      payload,
+      payload: notification.params,
     });
 
     if (notification.method === "thread/started") {
@@ -1947,7 +1930,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         return;
       }
       context.collabReceiverTurns.clear();
-      context.collabReceiverMetadata.clear();
       const turn = this.readObject(notification.params, "turn");
       const status = this.readString(turn, "status");
       const errorMessageRaw = this.readString(this.readObject(turn, "error"), "message");
@@ -1999,7 +1981,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       this.readProviderConversationId(request.params),
     );
     const providerParentThreadId = this.readChildParentProviderThreadId(context, request.params);
-    const payload = this.augmentChildPayloadWithSubagentMetadata(context, request.params);
     const requestKind = this.requestKindForMethod(request.method);
     let requestId: ApprovalRequestId | undefined;
     if (requestKind) {
@@ -2046,7 +2027,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       ...(providerParentThreadId ? { providerParentThreadId } : {}),
       requestId,
       requestKind,
-      payload,
+      payload: request.params,
     });
 
     if (requestKind) {
@@ -2325,52 +2306,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     return context.collabReceiverParents.get(providerConversationId);
   }
 
-  // Re-attaches subagent spawn metadata so later child events can still resolve real names.
-  private augmentChildPayloadWithSubagentMetadata(
-    context: CodexSessionContext,
-    params: unknown,
-  ): unknown {
-    const providerConversationId = normalizeProviderThreadId(
-      this.readProviderConversationId(params),
-    );
-    if (!providerConversationId) {
-      return params;
-    }
-
-    const identity = context.collabReceiverMetadata.get(providerConversationId);
-    if (!identity) {
-      return params;
-    }
-
-    const payload = this.readObject(params);
-    if (!payload) {
-      return params;
-    }
-
-    const source = this.readObject(payload, "source") ?? {};
-    const subAgent =
-      this.readObject(source, "subAgent") ?? this.readObject(source, "sub_agent") ?? {};
-    const threadSpawn =
-      this.readObject(subAgent, "thread_spawn") ?? this.readObject(subAgent, "threadSpawn") ?? {};
-
-    return {
-      ...payload,
-      source: {
-        ...source,
-        subAgent: {
-          ...subAgent,
-          thread_spawn: {
-            ...threadSpawn,
-            threadId: providerConversationId,
-            ...(identity.agentId ? { agentId: identity.agentId } : {}),
-            ...(identity.nickname ? { agentNickname: identity.nickname } : {}),
-            ...(identity.role ? { agentRole: identity.role } : {}),
-          },
-        },
-      },
-    };
-  }
-
   private rememberCollabReceiverTurns(
     context: CodexSessionContext,
     params: unknown,
@@ -2381,9 +2316,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
     const payload = this.readObject(params);
     const item = this.readObject(payload, "item") ?? payload;
-    if (!item) {
-      return;
-    }
     const itemType = this.readString(item, "type") ?? this.readString(item, "kind");
     if (itemType !== "collabAgentToolCall") {
       return;
@@ -2401,21 +2333,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       if (parentProviderThreadId) {
         context.collabReceiverParents.set(receiverThreadId, parentProviderThreadId);
       }
-    }
-
-    const receiverAgents = decodeSubagentReceiverAgents(
-      item,
-      decodeSubagentReceiverThreadIds(item),
-    );
-    for (const receiverAgent of receiverAgents) {
-      if (!receiverAgent.agentId && !receiverAgent.nickname && !receiverAgent.role) {
-        continue;
-      }
-      context.collabReceiverMetadata.set(receiverAgent.providerThreadId, {
-        ...(receiverAgent.agentId ? { agentId: receiverAgent.agentId } : {}),
-        ...(receiverAgent.nickname ? { nickname: receiverAgent.nickname } : {}),
-        ...(receiverAgent.role ? { role: receiverAgent.role } : {}),
-      });
     }
   }
 

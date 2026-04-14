@@ -1,4 +1,4 @@
-import { ThreadId } from "@t3tools/contracts";
+import { ThreadId, TurnId } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -8,6 +8,7 @@ import {
   hasServerAcknowledgedLocalDispatch,
   isVoiceAuthExpiredMessage,
   sanitizeVoiceErrorMessage,
+  shouldForceSettleLatestTurn,
   shouldAutoDeleteTerminalThreadOnLastClose,
   buildExpiredTerminalContextToastCopy,
   type LocalDispatchSnapshot,
@@ -225,6 +226,66 @@ describe("hasLiveChatTurn", () => {
         phase: "running",
         latestTurnSettled: true,
         latestTurnStartedAt: "2026-04-13T00:00:00.000Z",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("shouldForceSettleLatestTurn", () => {
+  const unsettledLatestTurn = {
+    turnId: TurnId.makeUnsafe("turn-1"),
+    state: "running",
+    requestedAt: "2026-04-13T00:00:00.000Z",
+    startedAt: "2026-04-13T00:00:00.000Z",
+    completedAt: null,
+    assistantMessageId: null,
+  } as const;
+
+  it("treats a latest turn as settled when the session is already idle", () => {
+    expect(
+      shouldForceSettleLatestTurn({
+        latestTurn: unsettledLatestTurn,
+        session: {
+          provider: "codex",
+          status: "running",
+          orchestrationStatus: "ready",
+          createdAt: "2026-04-13T00:00:00.000Z",
+          updatedAt: "2026-04-13T00:00:05.000Z",
+        },
+        hasLiveTurnTail: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not settle while visible tail work is still active", () => {
+    expect(
+      shouldForceSettleLatestTurn({
+        latestTurn: unsettledLatestTurn,
+        session: {
+          provider: "codex",
+          status: "running",
+          orchestrationStatus: "ready",
+          createdAt: "2026-04-13T00:00:00.000Z",
+          updatedAt: "2026-04-13T00:00:05.000Z",
+        },
+        hasLiveTurnTail: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not settle while the provider still reports the turn as running", () => {
+    expect(
+      shouldForceSettleLatestTurn({
+        latestTurn: unsettledLatestTurn,
+        session: {
+          provider: "codex",
+          status: "running",
+          orchestrationStatus: "running",
+          createdAt: "2026-04-13T00:00:00.000Z",
+          updatedAt: "2026-04-13T00:00:05.000Z",
+          activeTurnId: TurnId.makeUnsafe("turn-1"),
+        },
+        hasLiveTurnTail: false,
       }),
     ).toBe(false);
   });

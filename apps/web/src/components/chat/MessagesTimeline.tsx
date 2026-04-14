@@ -85,6 +85,7 @@ import {
   normalizeSubagentStatusKind,
   resolveSubagentPresentation,
 } from "../../lib/subagentPresentation";
+import { GrRobot } from "react-icons/gr";
 
 const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
 const MAX_VISIBLE_INLINE_TOOL_ENTRIES = 4;
@@ -114,6 +115,10 @@ const SkillCubeIcon: LucideIcon = (props) => (
       strokeLinejoin="round"
     />
   </svg>
+);
+
+const AgentTaskIcon: LucideIcon = (props) => (
+  <GrRobot className={props.className} style={props.style} />
 );
 
 function basename(value: string): string {
@@ -326,7 +331,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       });
     }
 
-    flushPendingWorkGroup({ attachToPreviousAssistant: activeTurnInProgress });
+    // Keep any trailing work summary visually attached to the last answer so a
+    // completed chat does not end with a detached tool-log footer.
+    flushPendingWorkGroup();
 
     if (isWorking) {
       nextRows.push({
@@ -586,6 +593,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     workEntry={workEntry}
                     chatMetaFontSizePx={appTypographyScale.chatMetaPx}
                     textFontSizePx={appTypographyScale.uiSmPx}
+                    density={prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"}
                     {...(onOpenThread ? { onOpenThread } : {})}
                   />
                 ))}
@@ -1510,11 +1518,18 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
     case "mcp_tool_call":
       return SkillCubeIcon;
     case "dynamic_tool_call":
-    case "collab_agent_tool_call":
       return HammerIcon;
+    case "collab_agent_tool_call":
+      return AgentTaskIcon;
   }
 
   return workToneIcon(workEntry.tone).icon;
+}
+
+// Keep command and agent-task rows visually compact so their icon can trail the label.
+function prefersCompactWorkEntryRow(workEntry: TimelineWorkEntry): boolean {
+  const EntryIcon = workEntryIcon(workEntry);
+  return EntryIcon === TerminalIcon || EntryIcon === HammerIcon || EntryIcon === AgentTaskIcon;
 }
 
 function capitalizePhrase(value: string): string {
@@ -1624,8 +1639,9 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   } = props;
   const compact = density === "compact";
   const EntryIcon = workEntryIcon(workEntry);
-  const isTerminalOrHammer = EntryIcon === TerminalIcon || EntryIcon === HammerIcon;
-  const showIconRight = compact && isTerminalOrHammer;
+  const usesTrailingCompactIcon =
+    EntryIcon === TerminalIcon || EntryIcon === HammerIcon || EntryIcon === AgentTaskIcon;
+  const showIconRight = compact && usesTrailingCompactIcon;
   const showIconLeft = !compact;
   const heading = toolWorkEntryHeading(workEntry);
   const preview = workEntryPreview(workEntry);

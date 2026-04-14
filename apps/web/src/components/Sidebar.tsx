@@ -17,10 +17,9 @@ import {
   TriangleAlertIcon,
 } from "~/lib/icons";
 import { autoAnimate } from "@formkit/auto-animate";
-import { FiPlus } from "react-icons/fi";
+import { FiGitBranch, FiPlus } from "react-icons/fi";
 import { HiOutlineCheckCircle } from "react-icons/hi2";
 import { HiOutlineFolderOpen } from "react-icons/hi2";
-import { PiArrowBendDownRight } from "react-icons/pi";
 import { TbArrowsDiagonal, TbArrowsDiagonalMinimize2, TbCursorText } from "react-icons/tb";
 import { IoFilter } from "react-icons/io5";
 import { LuMessageSquareDashed, LuSplit } from "react-icons/lu";
@@ -307,7 +306,7 @@ function resolveThreadRowMetaBadge(input: {
   if (input.includeHandoffBadge && handoffBadgeLabel) {
     return {
       tooltip: handoffBadgeLabel,
-      icon: <PiArrowBendDownRight className="size-3 text-muted-foreground/55" />,
+      icon: <FiGitBranch className="size-3 text-muted-foreground/55" />,
     };
   }
 
@@ -843,10 +842,15 @@ export default function Sidebar() {
       }),
     [sidebarThreadSummaryById, threads],
   );
+  // Keep subagent threads addressable in state, but hide them from the main sidebar lists.
+  const sidebarDisplayThreads = useMemo(
+    () => sidebarThreads.filter((thread) => !thread.parentThreadId),
+    [sidebarThreads],
+  );
   const pinnedThreadIdSet = useMemo(() => new Set(pinnedThreadIds), [pinnedThreadIds]);
   const pinnedThreads = useMemo(
-    () => getPinnedThreadsForSidebar(sidebarThreads, pinnedThreadIds),
-    [pinnedThreadIds, sidebarThreads],
+    () => getPinnedThreadsForSidebar(sidebarDisplayThreads, pinnedThreadIds),
+    [pinnedThreadIds, sidebarDisplayThreads],
   );
   const projectCwdById = useMemo(
     () => new Map(projects.map((project) => [project.id, project.cwd] as const)),
@@ -2312,7 +2316,7 @@ export default function Sidebar() {
     for (const project of sortedProjects) {
       const projectThreads = sortThreadsForSidebar(
         getUnpinnedThreadsForSidebar(
-          sidebarThreads.filter((thread) => thread.projectId === project.id),
+          sidebarDisplayThreads.filter((thread) => thread.projectId === project.id),
           pinnedThreadIds,
         ),
         appSettings.sidebarThreadSortOrder,
@@ -2378,10 +2382,10 @@ export default function Sidebar() {
     pinnedThreadIdSet,
     pinnedThreadIds,
     pinnedThreads,
+    sidebarDisplayThreads,
     splitViewBySourceThreadId,
     splitViews,
     sortedProjects,
-    sidebarThreads,
   ]);
   const isManualProjectSorting = appSettings.sidebarProjectSortOrder === "manual";
 
@@ -2906,7 +2910,7 @@ export default function Sidebar() {
   ) {
     const isRenamingProject = renamingProjectId === project.id;
     const allProjectThreads = sortThreadsForSidebar(
-      sidebarThreads.filter((thread) => thread.projectId === project.id),
+      sidebarDisplayThreads.filter((thread) => thread.projectId === project.id),
       appSettings.sidebarThreadSortOrder,
     );
     const projectThreads = getUnpinnedThreadsForSidebar(allProjectThreads, pinnedThreadIds);

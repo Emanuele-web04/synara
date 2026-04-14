@@ -499,8 +499,8 @@ export function deriveActiveBackgroundTasksState(
   return activeCount > 0 ? { activeCount } : null;
 }
 
-// Keeps the UI "working" while the provider streams late assistant/tool/task events
-// for the latest turn after an optimistic turn-completed lifecycle update lands.
+// Keeps the UI "working" while the provider still has visible assistant text or
+// background-task updates to finish for the latest turn.
 export function hasLiveTurnTailWork(input: {
   latestTurn: Pick<OrchestrationLatestTurn, "turnId"> | null;
   messages: ReadonlyArray<Pick<ChatMessage, "role" | "streaming" | "turnId">>;
@@ -523,65 +523,12 @@ export function hasLiveTurnTailWork(input: {
     return true;
   }
 
-  return deriveActiveToolLifecycleCount(input.activities, latestTurnId) > 0;
+  return false;
 }
 
-function deriveActiveToolLifecycleCount(
-  activities: ReadonlyArray<OrchestrationThreadActivity>,
-  latestTurnId: TurnId,
-): number {
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
-  const activeToolKeys = new Set<string>();
-
-  for (const activity of ordered) {
-    if (activity.turnId !== latestTurnId) {
-      continue;
-    }
-    if (
-      activity.kind !== "tool.started" &&
-      activity.kind !== "tool.updated" &&
-      activity.kind !== "tool.completed"
-    ) {
-      continue;
-    }
-
-    const toolKey = deriveToolLifecycleActivityKey(activity);
-    if (!toolKey) {
-      continue;
-    }
-
-    if (activity.kind === "tool.completed") {
-      activeToolKeys.delete(toolKey);
-      continue;
-    }
-
-    activeToolKeys.add(toolKey);
-  }
-
-  return activeToolKeys.size;
-}
-
-function deriveToolLifecycleActivityKey(activity: OrchestrationThreadActivity): string | null {
+function isCollabAgentToolActivity(activity: OrchestrationThreadActivity): boolean {
   const payload = asRecord(activity.payload);
-  const data = asRecord(payload?.data);
-  const item = asRecord(data?.item);
-  const directItemId =
-    asTrimmedString(item?.id) ??
-    asTrimmedString(data?.itemId) ??
-    asTrimmedString(data?.id) ??
-    asTrimmedString(payload?.toolUseId) ??
-    asTrimmedString(payload?.requestId);
-  if (directItemId) {
-    return directItemId;
-  }
-
-  const itemType = asTrimmedString(payload?.itemType) ?? "tool";
-  const summary = activity.summary.trim();
-  const detail = asTrimmedString(payload?.detail) ?? "";
-  const command = extractToolCommand(payload) ?? "";
-  const toolName = extractToolName(payload) ?? "";
-  const changedFiles = extractChangedFiles(payload).join("|");
-  return [itemType, summary, detail, command, toolName, changedFiles].join("\u001f");
+  return asTrimmedString(payload?.itemType) === "collab_agent_tool_call";
 }
 
 export function findLatestProposedPlan(
@@ -652,6 +599,7 @@ export function deriveWorkLogEntries(
   const entries = ordered
     .filter((activity) => (latestTurnId ? activity.turnId === latestTurnId : true))
     .filter((activity) => activity.kind !== "tool.started")
+    .filter((activity) => !isCollabAgentToolActivity(activity))
     .filter((activity) => activity.kind !== "task.started" && activity.kind !== "task.completed")
     .filter((activity) => activity.kind !== "context-window.updated")
     .filter((activity) => activity.summary !== "Checkpoint captured")

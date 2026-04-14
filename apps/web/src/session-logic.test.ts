@@ -1067,7 +1067,7 @@ describe("deriveWorkLogEntries", () => {
     expect(entries[0]?.id).toBe("a-complete-same-timestamp");
   });
 
-  it("preserves subagent metadata when collab tool lifecycle rows collapse", () => {
+  it("omits collab subagent tool lifecycle rows from the chat work log", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
         id: "collab-update",
@@ -1112,111 +1112,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const [entry] = deriveWorkLogEntries(activities, undefined);
-
-    expect(entry).toMatchObject({
-      id: "collab-complete",
-      itemType: "collab_agent_tool_call",
-      toolTitle: "Spawn agent",
-      subagentAction: {
-        tool: "spawnAgent",
-        status: "in_progress",
-        summaryText: "Spawning 2 agents",
-      },
-      subagents: [
-        {
-          threadId: "subagent:thread-1:agent-1",
-          nickname: "Locke",
-          role: "explorer",
-        },
-        {
-          threadId: "subagent:thread-1:agent-2",
-          nickname: "Ada",
-          role: "worker",
-        },
-      ],
-    });
-  });
-
-  it("derives wait-agent summaries from collab event types", () => {
-    const [entry] = deriveWorkLogEntries(
-      [
-        makeActivity({
-          id: "collab-wait",
-          createdAt: "2026-02-23T00:00:03.000Z",
-          kind: "tool.updated",
-          summary: "Waiting on subagent",
-          payload: {
-            itemType: "collab_agent_tool_call",
-            data: {
-              item: {
-                type: "collabWaiting",
-                receiverThreadIds: ["subagent:thread-1:agent-1"],
-                requestedModel: "gpt-5.4-mini",
-                prompt: "Inspect the sidebar tree",
-              },
-            },
-          },
-        }),
-      ],
-      undefined,
-    );
-
-    expect(entry).toMatchObject({
-      subagentAction: {
-        tool: "waitAgent",
-        status: "in_progress",
-        summaryText: "Waiting on 1 agent",
-        model: "gpt-5.4-mini",
-        prompt: "Inspect the sidebar tree",
-      },
-    });
-  });
-
-  it("hydrates subagent rows from collab agentStates payloads", () => {
-    const [entry] = deriveWorkLogEntries(
-      [
-        makeActivity({
-          id: "collab-statuses",
-          createdAt: "2026-02-23T00:00:04.000Z",
-          kind: "tool.updated",
-          summary: "Agent activity",
-          payload: {
-            itemType: "collab_agent_tool_call",
-            data: {
-              item: {
-                type: "collabAgentInteraction",
-                agentStates: {
-                  "subagent:thread-1:agent-1": {
-                    status: "completed",
-                    summary: "Sidebar mapping done",
-                    agentNickname: "Locke",
-                    agentRole: "explorer",
-                  },
-                },
-              },
-            },
-          },
-        }),
-      ],
-      undefined,
-    );
-
-    expect(entry).toMatchObject({
-      subagentAction: {
-        tool: "sendInput",
-        summaryText: "Updating agent",
-      },
-      subagents: [
-        {
-          threadId: "subagent:thread-1:agent-1",
-          nickname: "Locke",
-          role: "explorer",
-          rawStatus: "completed",
-          latestUpdate: "Sidebar mapping done",
-        },
-      ],
-    });
+    expect(deriveWorkLogEntries(activities, undefined)).toEqual([]);
   });
 });
 
@@ -1503,24 +1399,21 @@ describe("hasLiveTurnTailWork", () => {
     ).toBe(true);
   });
 
-  it("keeps the turn live while tool lifecycle activity is still open", () => {
+  it("keeps the turn live while a background task is still open", () => {
     expect(
       hasLiveTurnTailWork({
         latestTurn,
         messages: [],
         activities: [
           makeActivity({
-            id: "tool-started-1",
-            kind: "tool.started",
-            summary: "Run shell command started",
+            id: "task-started-1",
+            kind: "task.started",
+            summary: "Repo scan started",
             turnId: "turn-1",
             payload: {
-              itemType: "command_execution",
-              data: {
-                item: {
-                  id: "tool-1",
-                },
-              },
+              taskId: "task-1",
+              taskType: "index",
+              title: "Repo scan",
             },
           }),
         ],
@@ -1528,7 +1421,7 @@ describe("hasLiveTurnTailWork", () => {
     ).toBe(true);
   });
 
-  it("treats the tail as settled once tool lifecycle activity completes", () => {
+  it("ignores tool lifecycle bookkeeping once the visible answer is done", () => {
     expect(
       hasLiveTurnTailWork({
         latestTurn,
