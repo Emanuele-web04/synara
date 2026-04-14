@@ -47,6 +47,7 @@ interface FakeGitTextGeneration {
     branch: string | null;
     stagedSummary: string;
     stagedPatch: string;
+    codexHomePath?: string;
     includeBranch?: boolean;
   }) => Effect.Effect<
     { subject: string; body: string; branch?: string | undefined },
@@ -59,10 +60,12 @@ interface FakeGitTextGeneration {
     commitSummary: string;
     diffSummary: string;
     diffPatch: string;
+    codexHomePath?: string;
   }) => Effect.Effect<{ title: string; body: string }, TextGenerationError>;
   generateDiffSummary: (input: {
     cwd: string;
     patch: string;
+    codexHomePath?: string;
   }) => Effect.Effect<{ summary: string }, TextGenerationError>;
   generateBranchName: (input: {
     cwd: string;
@@ -808,6 +811,39 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
+  it.effect("falls back to a heuristic commit message when text generation fails", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      fs.writeFileSync(path.join(repoDir, "README.md"), "hello\nfallback\n");
+
+      const { manager } = yield* makeManager({
+        textGeneration: {
+          generateCommitMessage: () =>
+            Effect.fail(
+              new TextGenerationError({
+                operation: "generateCommitMessage",
+                detail: "Codex CLI command failed: skills loader failed",
+              }),
+            ),
+        },
+      });
+
+      const result = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "commit",
+      });
+
+      expect(result.commit.status).toBe("created");
+      expect(result.commit.subject).toBe("Update README.md");
+      expect(
+        yield* runGit(repoDir, ["log", "-1", "--pretty=%s"]).pipe(
+          Effect.map((gitResult) => gitResult.stdout.trim()),
+        ),
+      ).toBe("Update README.md");
+    }),
+  );
+
   it.effect("uses custom commit message when provided", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
@@ -923,6 +959,46 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       );
       expect(mergeBase).toBe(mainSha);
       expect(generatedCount).toBe(1);
+    }),
+  );
+
+  it.effect("falls back to a derived feature branch when text generation fails", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
+      fs.writeFileSync(path.join(repoDir, "README.md"), "hello\nfeature-fallback\n");
+
+      const { manager } = yield* makeManager({
+        textGeneration: {
+          generateCommitMessage: () =>
+            Effect.fail(
+              new TextGenerationError({
+                operation: "generateCommitMessage",
+                detail: "Codex CLI command failed: skills loader failed",
+              }),
+            ),
+        },
+      });
+
+      const result = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "commit_push",
+        featureBranch: true,
+      });
+
+      expect(result.branch.status).toBe("created");
+      expect(result.branch.name).toBe("feature/update-readme-md");
+      expect(result.commit.status).toBe("created");
+      expect(result.commit.subject).toBe("Update README.md");
+      expect(result.push.status).toBe("pushed");
+      expect(
+        yield* runGit(repoDir, ["rev-parse", "--abbrev-ref", "HEAD"]).pipe(
+          Effect.map((gitResult) => gitResult.stdout.trim()),
+        ),
+      ).toBe("feature/update-readme-md");
     }),
   );
 

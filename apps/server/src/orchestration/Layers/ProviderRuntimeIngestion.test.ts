@@ -2277,6 +2277,124 @@ describe("ProviderRuntimeIngestion", () => {
     });
   });
 
+  it("creates and routes subagent runtime events into child threads", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "item.updated",
+      eventId: asEventId("evt-collab-updated"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-parent"),
+      itemId: asItemId("item-collab"),
+      payload: {
+        itemType: "collab_agent_tool_call",
+        title: "Task",
+        data: {
+          item: {
+            type: "collabAgentToolCall",
+            receiverThreadIds: ["child-provider-1"],
+            receiverAgents: [
+              {
+                threadId: "child-provider-1",
+                agentNickname: "Locke",
+                agentRole: "explorer",
+                agentId: "agent-1",
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-child-turn-started"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-child"),
+      parentTurnId: asTurnId("turn-parent"),
+      providerRefs: {
+        providerThreadId: "child-provider-1",
+        providerParentThreadId: "parent-provider-1",
+        providerTurnId: "turn-child",
+        parentProviderTurnId: "turn-parent",
+      },
+      payload: {},
+    });
+
+    const childThread = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.parentThreadId === "thread-1" &&
+        entry.subagentNickname === "Locke" &&
+        entry.subagentRole === "explorer" &&
+        entry.session?.status === "running" &&
+        entry.session?.activeTurnId === "turn-child",
+      2000,
+      asThreadId("subagent:thread-1:child-provider-1"),
+    );
+
+    expect(childThread.title).toBe("Locke [explorer]");
+
+    const parentThread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) =>
+          activity.id === "evt-collab-updated" && activity.kind === "tool.updated",
+      ),
+    );
+    expect(
+      parentThread.activities.some((activity) => activity.id === "evt-child-turn-started"),
+    ).toBe(false);
+  });
+
+  it("materializes subagent child threads even when the collab payload only exposes receiverAgents", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "item.updated",
+      eventId: asEventId("evt-collab-receiver-agents"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-parent"),
+      itemId: asItemId("item-collab"),
+      payload: {
+        itemType: "collab_agent_tool_call",
+        title: "Task",
+        data: {
+          item: {
+            type: "collabAgentToolCall",
+            receiverAgents: [
+              {
+                threadId: "child-provider-2",
+                agentNickname: "Harper",
+                agentRole: "reviewer",
+                requestedModel: "gpt-5.4-mini",
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    const childThread = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.id === "subagent:thread-1:child-provider-2" &&
+        entry.subagentNickname === "Harper" &&
+        entry.subagentRole === "reviewer",
+      2000,
+      asThreadId("subagent:thread-1:child-provider-2"),
+    );
+
+    expect(childThread.title).toBe("Harper [reviewer]");
+  });
+
   it("continues processing runtime events after a single event handler failure", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

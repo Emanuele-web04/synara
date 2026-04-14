@@ -159,6 +159,10 @@ export interface Thread extends ThreadWorkspaceState {
   updatedAt?: string | undefined;
   latestTurn: OrchestrationLatestTurn | null;
   lastVisitedAt?: string | undefined;
+  parentThreadId?: ThreadId | null;
+  subagentAgentId?: string | null;
+  subagentNickname?: string | null;
+  subagentRole?: string | null;
   forkSourceThreadId?: ThreadId | null;
   handoff?: ThreadHandoff | null;
   turnDiffSummaries: TurnDiffSummary[];
@@ -178,10 +182,15 @@ export interface SidebarThreadSummary {
   updatedAt?: string | undefined;
   latestTurn: OrchestrationLatestTurn | null;
   lastVisitedAt?: string | undefined;
+  parentThreadId?: ThreadId | null;
+  subagentAgentId?: string | null;
+  subagentNickname?: string | null;
+  subagentRole?: string | null;
   latestUserMessageAt: string | null;
   hasPendingApprovals: boolean;
   hasPendingUserInput: boolean;
   hasActionableProposedPlan: boolean;
+  hasLiveTailWork?: boolean;
   forkSourceThreadId?: ThreadId | null;
   handoff?: ThreadHandoff | null;
 }

@@ -26,7 +26,7 @@ export default function TerminalIdentityIcon({ iconKey, className }: TerminalIde
         className={cn(
           "size-full",
           iconKey === "claude"
-            ? "text-[#d97757]"
+            ? "text-foreground"
             : iconKey === "openai"
               ? "text-foreground/80"
               : "",

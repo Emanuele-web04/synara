@@ -20,7 +20,8 @@ import {
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   type ResolvedKeybindingsConfig,
   type ServerProviderStatus,
-  type ThreadId,
+  ThreadId,
+  type ThreadId as ThreadIdType,
   type TurnId,
   type EditorId,
   type KeybindingCommand,
@@ -69,6 +70,10 @@ import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuer
 import { isElectron } from "../env";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
 import {
+  humanizeSubagentStatus,
+  resolveSubagentPresentationForThread,
+} from "../lib/subagentPresentation";
+import {
   clampCollapsedComposerCursor,
   type ComposerTrigger,
   collapseExpandedComposerCursor,
@@ -96,9 +101,11 @@ import {
   findLatestProposedPlan,
   deriveWorkLogEntries,
   hasActionableProposedPlan,
+  hasLiveTurnTailWork,
   hasToolActivityForTurn,
   isLatestTurnSettled,
   formatElapsed,
+  type WorkLogEntry,
 } from "../session-logic";
 import {
   buildPendingUserInputAnswers,
@@ -121,6 +128,7 @@ import {
   DEFAULT_THREAD_TERMINAL_ID,
   MAX_TERMINALS_PER_GROUP,
   type ChatMessage,
+  type Thread,
   type TurnDiffSummary,
 } from "../types";
 import { useTheme } from "../hooks/useTheme";
@@ -140,7 +148,6 @@ import {
   ChevronRightIcon,
   EllipsisIcon,
   Trash2,
-  Undo2Icon,
   XIcon,
 } from "~/lib/icons";
 import { Button } from "./ui/button";
@@ -267,6 +274,7 @@ import { buildNextProviderOptions } from "../providerModelOptions";
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
+const EMPTY_MESSAGES: ChatMessage[] = [];
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
 const EMPTY_PROVIDER_NATIVE_COMMANDS: ProviderNativeCommandDescriptor[] = [];
@@ -472,6 +480,192 @@ const terminalContextIdListsEqual = (
 ): boolean =>
   contexts.length === ids.length && contexts.every((context, index) => context.id === ids[index]);
 
+interface ThreadBreadcrumb {
+  threadId: ThreadIdType;
+  title: string;
+}
+
+function buildThreadBreadcrumbs(
+  threads: ReadonlyArray<Thread>,
+  thread: Pick<Thread, "id" | "parentThreadId"> | null | undefined,
+): ThreadBreadcrumb[] {
+  if (!thread?.parentThreadId) {
+    return [];
+  }
+
+  const threadById = new Map(threads.map((entry) => [entry.id, entry] as const));
+  const breadcrumbs: ThreadBreadcrumb[] = [];
+  const visited = new Set<ThreadIdType>();
+  let currentParentId: ThreadIdType | null = thread.parentThreadId ?? null;
+
+  while (currentParentId && !visited.has(currentParentId)) {
+    visited.add(currentParentId);
+    const parentThread = threadById.get(currentParentId);
+    if (!parentThread) {
+      break;
+    }
+    breadcrumbs.unshift({
+      threadId: parentThread.id,
+      title: parentThread.parentThreadId
+        ? resolveSubagentPresentationForThread({ thread: parentThread, threads }).fullLabel
+        : parentThread.title,
+    });
+    currentParentId = parentThread.parentThreadId ?? null;
+  }
+
+  return breadcrumbs;
+}
+
+function deriveSubagentStatus(thread: Thread | undefined): {
+  isActive: boolean;
+  label: string | undefined;
+} {
+  if (!thread) {
+    return {
+      isActive: false,
+      label: undefined,
+    };
+  }
+
+  if (thread.error || thread.session?.status === "error") {
+    return {
+      isActive: false,
+      label: "Error",
+    };
+  }
+  if (thread.session?.status === "connecting") {
+    return {
+      isActive: true,
+      label: "Connecting",
+    };
+  }
+  if (
+    thread.session?.status === "running" ||
+    hasLiveTurnTailWork({
+      latestTurn: thread.latestTurn,
+      messages: thread.messages,
+      activities: thread.activities,
+    })
+  ) {
+    return {
+      isActive: true,
+      label: "Running",
+    };
+  }
+  if (thread.session?.status === "closed") {
+    return {
+      isActive: false,
+      label: "Closed",
+    };
+  }
+
+  return {
+    isActive: false,
+    label: thread.session ? "Idle" : undefined,
+  };
+}
+
+function humanizeSubagentRawStatus(rawStatus: string | undefined): string | undefined {
+  return humanizeSubagentStatus(rawStatus);
+}
+
+function localSubagentThreadId(parentThreadId: ThreadIdType, providerThreadId: string): ThreadIdType {
+  return ThreadId.makeUnsafe(`subagent:${parentThreadId}:${providerThreadId}`);
+}
+
+function resolveTimelineSubagentThread(input: {
+  subagent: NonNullable<WorkLogEntry["subagents"]>[number];
+  parentThreadId: ThreadIdType | null;
+  threadById: ReadonlyMap<ThreadIdType, Thread>;
+  threads: ReadonlyArray<Thread>;
+}): Thread | undefined {
+  const directThreadId = input.subagent.resolvedThreadId ?? input.subagent.threadId;
+  if (directThreadId) {
+    const directMatch = input.threadById.get(ThreadId.makeUnsafe(directThreadId));
+    if (directMatch) {
+      return directMatch;
+    }
+  }
+
+  if (input.parentThreadId) {
+    const providerThreadId = input.subagent.providerThreadId ?? input.subagent.threadId;
+    const derivedLocalThreadId = localSubagentThreadId(input.parentThreadId, providerThreadId);
+    const derivedLocalMatch = input.threadById.get(derivedLocalThreadId);
+    if (derivedLocalMatch) {
+      return derivedLocalMatch;
+    }
+
+    if (input.subagent.agentId) {
+      const matchedByAgent = input.threads.find(
+        (thread) =>
+          thread.parentThreadId === input.parentThreadId &&
+          thread.subagentAgentId === input.subagent.agentId,
+      );
+      if (matchedByAgent) {
+        return matchedByAgent;
+      }
+    }
+  }
+
+  if (input.subagent.agentId) {
+    return input.threads.find((thread) => thread.subagentAgentId === input.subagent.agentId);
+  }
+
+  return undefined;
+}
+
+function enrichSubagentWorkEntries(
+  workEntries: ReadonlyArray<WorkLogEntry>,
+  threads: ReadonlyArray<Thread>,
+  parentThreadId: ThreadIdType | null,
+): WorkLogEntry[] {
+  if (workEntries.length === 0) {
+    return [];
+  }
+
+  const threadById = new Map(threads.map((thread) => [thread.id, thread] as const));
+
+  return workEntries.map((entry) => {
+    if ((entry.subagents?.length ?? 0) === 0) {
+      return entry;
+    }
+
+    const subagents = entry.subagents!.map((subagent) => {
+      const matchedThread = resolveTimelineSubagentThread({
+        subagent,
+        parentThreadId,
+        threadById,
+        threads,
+      });
+      const status = deriveSubagentStatus(matchedThread);
+      const fallbackStatusLabel = humanizeSubagentRawStatus(subagent.rawStatus);
+      const matchedPresentation =
+        matchedThread !== undefined
+          ? resolveSubagentPresentationForThread({ thread: matchedThread, threads })
+          : null;
+      const nextSubagent = Object.assign({}, subagent);
+      if (matchedThread) {
+        nextSubagent.resolvedThreadId = matchedThread.id;
+      }
+      if (matchedPresentation) {
+        nextSubagent.title = matchedPresentation.fullLabel;
+      }
+      if (status.label ?? fallbackStatusLabel) {
+        nextSubagent.statusLabel = status.label ?? fallbackStatusLabel;
+      }
+      if (status.isActive || fallbackStatusLabel === "Running") {
+        nextSubagent.isActive = true;
+      }
+      return nextSubagent;
+    });
+
+    return {
+      ...entry,
+      subagents,
+    };
+  });
+}
+
 interface ChatViewProps {
   threadId: ThreadId;
   paneScopeId?: string;
@@ -592,6 +786,7 @@ export default function ChatView({
   const draftThread = useComposerDraftStore(
     (store) => store.draftThreadsByThreadId[threadId] ?? null,
   );
+  const allThreads = useStore((store) => store.threads);
   const serverThread = useStore(useMemo(() => createThreadSelector(threadId), [threadId]));
   const fallbackDraftProjectId = draftThread?.projectId ?? null;
   const fallbackDraftProject = useStore(
@@ -791,22 +986,33 @@ export default function ChatView({
   const resolvedBrowserOpen = panelState ? panelState.panel === "browser" : browserOpen;
   const activeThreadId = activeThread?.id ?? null;
   const activeLatestTurn = activeThread?.latestTurn ?? null;
+  const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
+  const hasLiveTurnTail = hasLiveTurnTailWork({
+    latestTurn: activeLatestTurn,
+    messages: activeThread?.messages ?? EMPTY_MESSAGES,
+    activities: threadActivities,
+  });
   const activeContextWindow = useMemo(
-    () => deriveLatestContextWindowSnapshot(activeThread?.activities ?? []),
-    [activeThread?.activities],
+    () => deriveLatestContextWindowSnapshot(threadActivities),
+    [threadActivities],
   );
   const activeCumulativeCostUsd = useMemo(
-    () => deriveCumulativeCostUsd(activeThread?.activities ?? []),
-    [activeThread?.activities],
+    () => deriveCumulativeCostUsd(threadActivities),
+    [threadActivities],
   );
   const activeRateLimitStatus = useMemo(
-    () => deriveLatestRateLimitStatus(activeThread?.activities ?? []),
-    [activeThread?.activities],
+    () => deriveLatestRateLimitStatus(threadActivities),
+    [threadActivities],
   );
-  const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread?.session ?? null);
+  const latestTurnSettled =
+    isLatestTurnSettled(activeLatestTurn, activeThread?.session ?? null) && !hasLiveTurnTail;
   const activeProjectId = activeThread?.projectId ?? draftThread?.projectId ?? null;
   const activeProject = useStore(
     useMemo(() => createProjectSelector(activeProjectId), [activeProjectId]),
+  );
+  const threadBreadcrumbs = useMemo(
+    () => buildThreadBreadcrumbs(allThreads, activeThread),
+    [activeThread, allThreads],
   );
   const resolvedThreadEnvMode = isServerThread
     ? (activeThread?.envMode ?? null)
@@ -1013,10 +1219,14 @@ export default function ChatView({
     [lockedProvider, modelOptionsByProvider],
   );
   const phase = derivePhase(activeThread?.session ?? null);
-  const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   const workLogEntries = useMemo(
-    () => deriveWorkLogEntries(threadActivities, activeLatestTurn?.turnId ?? undefined),
-    [activeLatestTurn?.turnId, threadActivities],
+    () =>
+      enrichSubagentWorkEntries(
+        deriveWorkLogEntries(threadActivities, activeLatestTurn?.turnId ?? undefined),
+        allThreads,
+        activeThread?.id ?? null,
+      ),
+    [activeLatestTurn?.turnId, activeThread?.id, allThreads, threadActivities],
   );
   const latestTurnHasToolActivity = useMemo(
     () => hasToolActivityForTurn(threadActivities, activeLatestTurn?.turnId),
@@ -1186,11 +1396,13 @@ export default function ChatView({
   const isPreparingWorktree = localDispatch?.preparingWorktree ?? false;
   const isWorking = hasLiveTurn || isSendBusy || isConnecting || isRevertingCheckpoint;
   const nowIso = new Date(nowTick).toISOString();
-  const activeWorkStartedAt = deriveActiveWorkStartedAt(
-    activeLatestTurn,
-    activeThread?.session ?? null,
-    localDispatch?.startedAt ?? null,
-  );
+  const activeWorkStartedAt = hasLiveTurnTail
+    ? (activeLatestTurn?.startedAt ?? localDispatch?.startedAt ?? null)
+    : deriveActiveWorkStartedAt(
+        activeLatestTurn,
+        activeThread?.session ?? null,
+        localDispatch?.startedAt ?? null,
+      );
   const isComposerApprovalState = activePendingApproval !== null;
   const composerFooterHasWideActions = showPlanFollowUpPrompt || activePendingProgress !== null;
   const handoffDisabled = !(
@@ -5249,6 +5461,16 @@ export default function ChatView({
     },
     [navigate, onOpenTurnDiffPanel, threadId],
   );
+  const onNavigateToThread = useCallback(
+    (nextThreadId: ThreadId) => {
+      void navigate({
+        to: "/$threadId",
+        params: { threadId: nextThreadId },
+        search: (previous) => stripDiffSearchParams(previous),
+      });
+    },
+    [navigate],
+  );
   const onRevertUserMessage = useCallback(
     (messageId: MessageId) => {
       const targetTurnCount = revertTurnCountByUserMessageId.get(messageId);
@@ -5308,8 +5530,16 @@ export default function ChatView({
       >
         <ChatHeader
           activeThreadId={activeThread.id}
-          activeThreadTitle={activeThread.title}
+          activeThreadTitle={
+            activeThread.parentThreadId
+              ? resolveSubagentPresentationForThread({
+                  thread: activeThread,
+                  threads: allThreads,
+                }).fullLabel
+              : activeThread.title
+          }
           activeProjectName={activeProject?.name}
+          threadBreadcrumbs={threadBreadcrumbs}
           hideHandoffControls={terminalWorkspaceTerminalTabActive}
           isGitRepo={isGitRepo}
           openInCwd={threadWorkspaceCwd}
@@ -5359,6 +5589,7 @@ export default function ChatView({
           onToggleDiff={onToggleDiff}
           onToggleBrowser={onToggleBrowser}
           onCreateHandoff={onCreateHandoffThread}
+          onNavigateToThread={onNavigateToThread}
         />
       </header>
 
@@ -5404,6 +5635,7 @@ export default function ChatView({
               expandedWorkGroups={expandedWorkGroups}
               onToggleWorkGroup={onToggleWorkGroup}
               onOpenTurnDiff={onOpenTurnDiff}
+              onOpenThread={onNavigateToThread}
               revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
               onRevertUserMessage={onRevertUserMessage}
               isRevertingCheckpoint={isRevertingCheckpoint}
@@ -5469,7 +5701,7 @@ export default function ChatView({
                             className="inline-flex items-center gap-1 rounded-lg bg-muted/80 px-2 py-0.5 text-[11px] font-medium text-foreground transition-colors hover:bg-muted"
                             onClick={() => void onSteerQueuedComposerTurn(queuedTurn)}
                           >
-                            <Undo2Icon className="size-3" />
+                            <PiArrowBendDownRight className="size-3" />
                             <span>Steer</span>
                           </button>
                           <button

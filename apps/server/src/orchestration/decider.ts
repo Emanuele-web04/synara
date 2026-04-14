@@ -190,6 +190,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             associatedWorktreeBranch: command.associatedWorktreeBranch ?? null,
             associatedWorktreeRef: command.associatedWorktreeRef ?? null,
           }),
+          parentThreadId: command.parentThreadId,
+          subagentAgentId: command.subagentAgentId,
+          subagentNickname: command.subagentNickname,
+          subagentRole: command.subagentRole,
           forkSourceThreadId: null,
           handoff: null,
           createdAt: command.createdAt,
@@ -258,6 +262,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             associatedWorktreeBranch: command.associatedWorktreeBranch ?? null,
             associatedWorktreeRef: command.associatedWorktreeRef ?? null,
           }),
+          parentThreadId: null,
+          subagentAgentId: null,
+          subagentNickname: null,
+          subagentRole: null,
           forkSourceThreadId: null,
           handoff: {
             sourceThreadId: command.sourceThreadId,
@@ -350,6 +358,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             associatedWorktreeBranch: command.associatedWorktreeBranch ?? null,
             associatedWorktreeRef: command.associatedWorktreeRef ?? null,
           }),
+          parentThreadId: null,
+          subagentAgentId: null,
+          subagentNickname: null,
+          subagentRole: null,
           forkSourceThreadId: command.sourceThreadId,
           handoff: null,
           createdAt: command.createdAt,
@@ -436,6 +448,16 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             associatedWorktreeBranch: command.associatedWorktreeBranch ?? null,
             associatedWorktreeRef: command.associatedWorktreeRef ?? null,
           }),
+          ...(command.parentThreadId !== undefined
+            ? { parentThreadId: command.parentThreadId }
+            : {}),
+          ...(command.subagentAgentId !== undefined
+            ? { subagentAgentId: command.subagentAgentId }
+            : {}),
+          ...(command.subagentNickname !== undefined
+            ? { subagentNickname: command.subagentNickname }
+            : {}),
+          ...(command.subagentRole !== undefined ? { subagentRole: command.subagentRole } : {}),
           ...(command.handoff !== undefined ? { handoff: command.handoff } : {}),
           updatedAt: occurredAt,
         },

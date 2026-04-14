@@ -26,6 +26,7 @@ import {
   derivePendingUserInputs,
   findLatestProposedPlan,
   hasActionableProposedPlan,
+  hasLiveTurnTailWork,
 } from "./session-logic";
 
 // ── State ────────────────────────────────────────────────────────────
@@ -628,6 +629,10 @@ function normalizeThreadFromReadModel(
     previous.updatedAt === incoming.updatedAt &&
     previous.latestTurn === latestTurn &&
     previous.lastVisitedAt === lastVisitedAt &&
+    (previous.parentThreadId ?? null) === (incoming.parentThreadId ?? null) &&
+    (previous.subagentAgentId ?? null) === (incoming.subagentAgentId ?? null) &&
+    (previous.subagentNickname ?? null) === (incoming.subagentNickname ?? null) &&
+    (previous.subagentRole ?? null) === (incoming.subagentRole ?? null) &&
     previous.envMode === (incoming.envMode ?? "local") &&
     previous.branch === incoming.branch &&
     previous.worktreePath === incoming.worktreePath &&
@@ -658,6 +663,10 @@ function normalizeThreadFromReadModel(
     updatedAt: incoming.updatedAt,
     latestTurn,
     lastVisitedAt,
+    parentThreadId: incoming.parentThreadId ?? null,
+    subagentAgentId: incoming.subagentAgentId ?? null,
+    subagentNickname: incoming.subagentNickname ?? null,
+    subagentRole: incoming.subagentRole ?? null,
     envMode: incoming.envMode ?? "local",
     branch: incoming.branch,
     worktreePath: incoming.worktreePath,
@@ -805,10 +814,15 @@ function sidebarThreadSummariesEqual(
     left.updatedAt === right.updatedAt &&
     left.latestTurn === right.latestTurn &&
     left.lastVisitedAt === right.lastVisitedAt &&
+    (left.parentThreadId ?? null) === (right.parentThreadId ?? null) &&
+    (left.subagentAgentId ?? null) === (right.subagentAgentId ?? null) &&
+    (left.subagentNickname ?? null) === (right.subagentNickname ?? null) &&
+    (left.subagentRole ?? null) === (right.subagentRole ?? null) &&
     left.latestUserMessageAt === right.latestUserMessageAt &&
     left.hasPendingApprovals === right.hasPendingApprovals &&
     left.hasPendingUserInput === right.hasPendingUserInput &&
     left.hasActionableProposedPlan === right.hasActionableProposedPlan &&
+    left.hasLiveTailWork === right.hasLiveTailWork &&
     (left.forkSourceThreadId ?? null) === (right.forkSourceThreadId ?? null) &&
     (left.handoff ?? null) === (right.handoff ?? null)
   );
@@ -833,12 +847,21 @@ function buildSidebarThreadSummary(
     updatedAt: thread.updatedAt,
     latestTurn: thread.latestTurn,
     lastVisitedAt: thread.lastVisitedAt,
+    parentThreadId: thread.parentThreadId ?? null,
+    subagentAgentId: thread.subagentAgentId ?? null,
+    subagentNickname: thread.subagentNickname ?? null,
+    subagentRole: thread.subagentRole ?? null,
     latestUserMessageAt: getLatestUserMessageAt(thread.messages),
     hasPendingApprovals: derivePendingApprovals(thread.activities).length > 0,
     hasPendingUserInput: derivePendingUserInputs(thread.activities).length > 0,
     hasActionableProposedPlan: hasActionableProposedPlan(
       findLatestProposedPlan(thread.proposedPlans, thread.latestTurn?.turnId ?? null),
     ),
+    hasLiveTailWork: hasLiveTurnTailWork({
+      latestTurn: thread.latestTurn,
+      messages: thread.messages,
+      activities: thread.activities,
+    }),
     forkSourceThreadId: thread.forkSourceThreadId ?? null,
     handoff: thread.handoff ?? null,
   };

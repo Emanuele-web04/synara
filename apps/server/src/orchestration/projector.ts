@@ -272,6 +272,10 @@ export function projectEvent(
             associatedWorktreePath: payload.associatedWorktreePath,
             associatedWorktreeBranch: payload.associatedWorktreeBranch,
             associatedWorktreeRef: payload.associatedWorktreeRef,
+            parentThreadId: payload.parentThreadId,
+            subagentAgentId: payload.subagentAgentId,
+            subagentNickname: payload.subagentNickname,
+            subagentRole: payload.subagentRole,
             forkSourceThreadId: payload.forkSourceThreadId,
             latestTurn: null,
             createdAt: payload.createdAt,
@@ -356,6 +360,16 @@ export function projectEvent(
             ...(payload.associatedWorktreeRef !== undefined
               ? { associatedWorktreeRef: payload.associatedWorktreeRef }
               : {}),
+            ...(payload.parentThreadId !== undefined
+              ? { parentThreadId: payload.parentThreadId }
+              : {}),
+            ...(payload.subagentAgentId !== undefined
+              ? { subagentAgentId: payload.subagentAgentId }
+              : {}),
+            ...(payload.subagentNickname !== undefined
+              ? { subagentNickname: payload.subagentNickname }
+              : {}),
+            ...(payload.subagentRole !== undefined ? { subagentRole: payload.subagentRole } : {}),
             ...(payload.handoff !== undefined ? { handoff: payload.handoff } : {}),
             updatedAt: payload.updatedAt,
           }),

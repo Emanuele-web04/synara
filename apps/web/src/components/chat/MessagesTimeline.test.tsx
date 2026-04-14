@@ -989,6 +989,88 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain(">File Change<");
   });
 
+  it("renders collab subagent work entries as a grouped card with thread actions", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        scrollContainer={null}
+        timelineEntries={[
+          {
+            id: "entry-subagents-card",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-subagents-card",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "Spawn agent",
+              toolTitle: "Spawn agent",
+              tone: "tool",
+              itemType: "collab_agent_tool_call",
+              subagentAction: {
+                tool: "waitAgent",
+                status: "in_progress",
+                summaryText: "Waiting on 2 agents",
+                model: "gpt-5.4-mini",
+                prompt: "Inspect the sidebar tree",
+              },
+              subagents: [
+                {
+                  threadId: "subagent:thread-1:agent-1",
+                  nickname: "Locke",
+                  role: "explorer",
+                  model: "gpt-5.4-mini",
+                  title: "Repository explorer",
+                  statusLabel: "Running",
+                  isActive: true,
+                  latestUpdate: "Finished mapping sidebar threads",
+                },
+                {
+                  threadId: "subagent:thread-1:agent-2",
+                  nickname: "Ada",
+                  role: "worker",
+                  title: "Apply code patch",
+                  statusLabel: "Idle",
+                },
+              ],
+            },
+          },
+        ]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        onOpenThread={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="dark"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("Waiting on 2 agents");
+    expect(markup).toContain("GPT-5.4 Mini");
+    expect(markup).toContain("Inspect the sidebar tree");
+    expect(markup).toContain("Locke");
+    expect(markup).toContain("(explorer)");
+    expect(markup).toContain("Ada");
+    expect(markup).toContain("Repository explorer");
+    expect(markup).toContain("Apply code patch");
+    expect(markup).toContain("Running");
+    expect(markup).toContain("Finished mapping sidebar threads");
+    expect(markup).toContain("Open thread");
+  });
+
   it("renders a collapsible changed files header with ui-font filenames", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const assistantMessageId = MessageId.makeUnsafe("message-assistant-diff");

@@ -12,6 +12,7 @@ import {
   deriveActiveWorkStartedAt,
   deriveActivePlanState,
   hasLiveLatestTurn,
+  hasLiveTurnTailWork,
   PROVIDER_OPTIONS,
   derivePendingApprovals,
   derivePendingUserInputs,
@@ -1065,6 +1066,158 @@ describe("deriveWorkLogEntries", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]?.id).toBe("a-complete-same-timestamp");
   });
+
+  it("preserves subagent metadata when collab tool lifecycle rows collapse", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "collab-update",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.updated",
+        summary: "Spawn subagents",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          title: "Spawn agent",
+          data: {
+            item: {
+              receiverAgents: [
+                {
+                  threadId: "subagent:thread-1:agent-1",
+                  agentNickname: "Locke",
+                  agentRole: "explorer",
+                },
+                {
+                  threadId: "subagent:thread-1:agent-2",
+                  agentNickname: "Ada",
+                  agentRole: "worker",
+                },
+              ],
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "collab-complete",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.completed",
+        summary: "Spawn subagents",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          title: "Spawn agent",
+          data: {
+            item: {
+              receiverThreadIds: ["subagent:thread-1:agent-1", "subagent:thread-1:agent-2"],
+            },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+
+    expect(entry).toMatchObject({
+      id: "collab-complete",
+      itemType: "collab_agent_tool_call",
+      toolTitle: "Spawn agent",
+      subagentAction: {
+        tool: "spawnAgent",
+        status: "in_progress",
+        summaryText: "Spawning 2 agents",
+      },
+      subagents: [
+        {
+          threadId: "subagent:thread-1:agent-1",
+          nickname: "Locke",
+          role: "explorer",
+        },
+        {
+          threadId: "subagent:thread-1:agent-2",
+          nickname: "Ada",
+          role: "worker",
+        },
+      ],
+    });
+  });
+
+  it("derives wait-agent summaries from collab event types", () => {
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "collab-wait",
+          createdAt: "2026-02-23T00:00:03.000Z",
+          kind: "tool.updated",
+          summary: "Waiting on subagent",
+          payload: {
+            itemType: "collab_agent_tool_call",
+            data: {
+              item: {
+                type: "collabWaiting",
+                receiverThreadIds: ["subagent:thread-1:agent-1"],
+                requestedModel: "gpt-5.4-mini",
+                prompt: "Inspect the sidebar tree",
+              },
+            },
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entry).toMatchObject({
+      subagentAction: {
+        tool: "waitAgent",
+        status: "in_progress",
+        summaryText: "Waiting on 1 agent",
+        model: "gpt-5.4-mini",
+        prompt: "Inspect the sidebar tree",
+      },
+    });
+  });
+
+  it("hydrates subagent rows from collab agentStates payloads", () => {
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "collab-statuses",
+          createdAt: "2026-02-23T00:00:04.000Z",
+          kind: "tool.updated",
+          summary: "Agent activity",
+          payload: {
+            itemType: "collab_agent_tool_call",
+            data: {
+              item: {
+                type: "collabAgentInteraction",
+                agentStates: {
+                  "subagent:thread-1:agent-1": {
+                    status: "completed",
+                    summary: "Sidebar mapping done",
+                    agentNickname: "Locke",
+                    agentRole: "explorer",
+                  },
+                },
+              },
+            },
+          },
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entry).toMatchObject({
+      subagentAction: {
+        tool: "sendInput",
+        summaryText: "Updating agent",
+      },
+      subagents: [
+        {
+          threadId: "subagent:thread-1:agent-1",
+          nickname: "Locke",
+          role: "explorer",
+          rawStatus: "completed",
+          latestUpdate: "Sidebar mapping done",
+        },
+      ],
+    });
+  });
 });
 
 describe("deriveTimelineEntries", () => {
@@ -1326,6 +1479,92 @@ describe("hasLiveLatestTurn", () => {
         },
       ),
     ).toBe(true);
+  });
+});
+
+describe("hasLiveTurnTailWork", () => {
+  const latestTurn = {
+    turnId: TurnId.makeUnsafe("turn-1"),
+  } as const;
+
+  it("keeps the turn live while assistant text is still streaming", () => {
+    expect(
+      hasLiveTurnTailWork({
+        latestTurn,
+        messages: [
+          {
+            role: "assistant",
+            streaming: true,
+            turnId: TurnId.makeUnsafe("turn-1"),
+          },
+        ],
+        activities: [],
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps the turn live while tool lifecycle activity is still open", () => {
+    expect(
+      hasLiveTurnTailWork({
+        latestTurn,
+        messages: [],
+        activities: [
+          makeActivity({
+            id: "tool-started-1",
+            kind: "tool.started",
+            summary: "Run shell command started",
+            turnId: "turn-1",
+            payload: {
+              itemType: "command_execution",
+              data: {
+                item: {
+                  id: "tool-1",
+                },
+              },
+            },
+          }),
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("treats the tail as settled once tool lifecycle activity completes", () => {
+    expect(
+      hasLiveTurnTailWork({
+        latestTurn,
+        messages: [],
+        activities: [
+          makeActivity({
+            id: "tool-started-1",
+            kind: "tool.started",
+            summary: "Run shell command started",
+            turnId: "turn-1",
+            payload: {
+              itemType: "command_execution",
+              data: {
+                item: {
+                  id: "tool-1",
+                },
+              },
+            },
+          }),
+          makeActivity({
+            id: "tool-completed-1",
+            kind: "tool.completed",
+            summary: "Run shell command",
+            turnId: "turn-1",
+            payload: {
+              itemType: "command_execution",
+              data: {
+                item: {
+                  id: "tool-1",
+                },
+              },
+            },
+          }),
+        ],
+      }),
+    ).toBe(false);
   });
 });
 

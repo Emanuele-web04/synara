@@ -41,6 +41,10 @@ interface ChatHeaderProps {
   activeThreadId: ThreadId;
   activeThreadTitle: string;
   activeProjectName: string | undefined;
+  threadBreadcrumbs: ReadonlyArray<{
+    threadId: ThreadId;
+    title: string;
+  }>;
   hideHandoffControls?: boolean;
   isGitRepo: boolean;
   openInCwd: string | null;
@@ -77,12 +81,14 @@ interface ChatHeaderProps {
   onToggleDiff: () => void;
   onToggleBrowser: () => void;
   onCreateHandoff: () => void;
+  onNavigateToThread: (threadId: ThreadId) => void;
 }
 
 export const ChatHeader = memo(function ChatHeader({
   activeThreadId,
   activeThreadTitle,
   activeProjectName,
+  threadBreadcrumbs,
   hideHandoffControls = false,
   isGitRepo,
   openInCwd,
@@ -114,6 +120,7 @@ export const ChatHeader = memo(function ChatHeader({
   onToggleDiff,
   onToggleBrowser,
   onCreateHandoff,
+  onNavigateToThread,
 }: ChatHeaderProps) {
   const { isMobile, state } = useSidebar();
   const headerRef = useRef<HTMLDivElement>(null);
@@ -142,7 +149,7 @@ export const ChatHeader = memo(function ChatHeader({
 
   const renderProviderIcon = (provider: ProviderKind | null, className: string) => {
     if (provider === "claudeAgent") {
-      return <ClaudeAI className={cn("text-[#d97757]", className)} />;
+      return <ClaudeAI className={cn("text-foreground", className)} />;
     }
     if (provider === "codex") {
       return <OpenAI className={cn("text-muted-foreground/75", className)} />;
@@ -160,33 +167,56 @@ export const ChatHeader = memo(function ChatHeader({
       >
         <SidebarHeaderTrigger className="size-7 shrink-0" />
         <div className="flex min-w-0 flex-1 items-center gap-2">
-          <h2
-            className="max-w-[clamp(16rem,50vw,40rem)] truncate text-sm font-medium text-foreground"
-            title={activeThreadTitle}
-          >
-            {activeThreadTitle}
-          </h2>
-          {!hideHandoffControls && handoffBadgeLabel ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Badge
-                    variant="outline"
-                    className="hidden !h-6 shrink-0 items-center justify-center gap-1 rounded-md px-1.5 text-[10px] sm:inline-flex"
-                  >
-                    <span className="inline-flex size-4 shrink-0 items-center justify-center">
-                      {renderProviderIcon(handoffBadgeSourceProvider, "size-3")}
-                    </span>
-                    <ArrowRightIcon className="size-2.5 shrink-0 opacity-45" />
-                    <span className="inline-flex size-4 shrink-0 items-center justify-center">
-                      {renderProviderIcon(handoffBadgeTargetProvider, "size-3")}
-                    </span>
-                  </Badge>
-                }
-              />
-              <TooltipPopup side="bottom">{handoffBadgeLabel}</TooltipPopup>
-            </Tooltip>
-          ) : null}
+          <div className="flex min-w-0 flex-1 flex-col">
+            {threadBreadcrumbs.length > 0 ? (
+              <div className="flex min-w-0 items-center gap-1 overflow-hidden text-[11px] text-muted-foreground/55">
+                {threadBreadcrumbs.map((breadcrumb, index) => (
+                  <React.Fragment key={breadcrumb.threadId}>
+                    {index > 0 ? (
+                      <span className="shrink-0 text-muted-foreground/35">/</span>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="min-w-0 truncate transition-colors hover:text-foreground/80"
+                      title={breadcrumb.title}
+                      onClick={() => onNavigateToThread(breadcrumb.threadId)}
+                    >
+                      {breadcrumb.title}
+                    </button>
+                  </React.Fragment>
+                ))}
+              </div>
+            ) : null}
+            <div className="flex min-w-0 items-center gap-2">
+              <h2
+                className="max-w-[clamp(16rem,50vw,40rem)] truncate text-sm font-medium text-foreground"
+                title={activeThreadTitle}
+              >
+                {activeThreadTitle}
+              </h2>
+              {!hideHandoffControls && handoffBadgeLabel ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Badge
+                        variant="outline"
+                        className="hidden !h-6 shrink-0 items-center justify-center gap-1 rounded-md px-1.5 text-[10px] sm:inline-flex"
+                      >
+                        <span className="inline-flex size-4 shrink-0 items-center justify-center">
+                          {renderProviderIcon(handoffBadgeSourceProvider, "size-3")}
+                        </span>
+                        <ArrowRightIcon className="size-2.5 shrink-0 opacity-45" />
+                        <span className="inline-flex size-4 shrink-0 items-center justify-center">
+                          {renderProviderIcon(handoffBadgeTargetProvider, "size-3")}
+                        </span>
+                      </Badge>
+                    }
+                  />
+                  <TooltipPopup side="bottom">{handoffBadgeLabel}</TooltipPopup>
+                </Tooltip>
+              ) : null}
+            </div>
+          </div>
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-2 [-webkit-app-region:no-drag]">

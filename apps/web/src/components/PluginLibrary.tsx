@@ -26,6 +26,7 @@ import {
   SiStripe,
   SiVercel,
 } from "react-icons/si";
+import { ClaudeAI } from "./Icons";
 import { useStore } from "~/store";
 import {
   buildPluginSearchBlob,
@@ -44,7 +45,6 @@ import {
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { useFocusedChatContext } from "~/focusedChatContext";
 import {
-  BotIcon,
   CheckIcon,
   CircleAlertIcon,
   HammerIcon,
@@ -76,7 +76,7 @@ type PluginBrandArtwork = {
 
 const PROVIDER_ICON: Record<ProviderKind, React.FC<React.SVGProps<SVGSVGElement>>> = {
   codex: HammerIcon,
-  claudeAgent: BotIcon,
+  claudeAgent: ClaudeAI,
 };
 const KNOWN_PLUGIN_BRANDS: Record<string, PluginBrandArtwork> = {
   canva: { icon: SiCanva, color: "#00C4CC" },

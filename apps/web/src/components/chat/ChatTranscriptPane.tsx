@@ -3,7 +3,7 @@
 // Layer: Chat transcript shell
 // Depends on: MessagesTimeline and the chat auto-scroll controller contract.
 
-import { type MessageId, type TurnId } from "@t3tools/contracts";
+import { type MessageId, type ThreadId, type TurnId } from "@t3tools/contracts";
 import {
   memo,
   type ComponentProps,
@@ -46,6 +46,7 @@ interface ChatTranscriptPaneProps {
   onMessagesTouchStart: TouchEventHandler<HTMLDivElement>;
   onMessagesWheel: WheelEventHandler<HTMLDivElement>;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
+  onOpenThread: (threadId: ThreadId) => void;
   onRevertUserMessage: (messageId: MessageId) => void;
   onScrollToBottom: () => void;
   onTimelineHeightChange: () => void;
@@ -88,6 +89,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   onMessagesTouchStart,
   onMessagesWheel,
   onOpenTurnDiff,
+  onOpenThread,
   onRevertUserMessage,
   onScrollToBottom,
   onTimelineHeightChange,
@@ -141,6 +143,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
             expandedWorkGroups={expandedWorkGroups}
             onToggleWorkGroup={onToggleWorkGroup}
             onOpenTurnDiff={onOpenTurnDiff}
+            onOpenThread={onOpenThread}
             revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
             onRevertUserMessage={onRevertUserMessage}
             isRevertingCheckpoint={isRevertingCheckpoint}

@@ -17,6 +17,7 @@ export interface CommitMessageGenerationInput {
   branch: string | null;
   stagedSummary: string;
   stagedPatch: string;
+  codexHomePath?: string;
   /** When true, the model also returns a semantic branch name for the change. */
   includeBranch?: boolean;
   /** Model to use for generation. Defaults to gpt-5.4-mini if not specified. */
@@ -37,6 +38,7 @@ export interface PrContentGenerationInput {
   commitSummary: string;
   diffSummary: string;
   diffPatch: string;
+  codexHomePath?: string;
   /** Model to use for generation. Defaults to gpt-5.4-mini if not specified. */
   model?: string;
 }
@@ -49,6 +51,7 @@ export interface PrContentGenerationResult {
 export interface DiffSummaryGenerationInput {
   cwd: string;
   patch: string;
+  codexHomePath?: string;
   /** Model to use for generation. Defaults to gpt-5.4-mini if not specified. */
   model?: string;
 }

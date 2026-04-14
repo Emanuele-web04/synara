@@ -232,6 +232,31 @@ const make = Effect.gen(function* () {
     return readModel.threads.find((entry) => entry.id === threadId);
   });
 
+  const resolveProviderSessionThread = Effect.fnUntraced(function* (threadId: ThreadId) {
+    const thread = yield* resolveThread(threadId);
+    if (!thread) {
+      return null;
+    }
+    if (!thread.parentThreadId) {
+      return thread;
+    }
+    const parentThread = yield* resolveThread(thread.parentThreadId);
+    return parentThread ?? thread;
+  });
+
+  const resolveSubagentProviderThreadId = (
+    threadId: ThreadId,
+    parentThreadId: ThreadId | null | undefined,
+  ): string | undefined => {
+    if (!parentThreadId) {
+      return undefined;
+    }
+
+    const prefix = `subagent:${parentThreadId}:`;
+    const rawThreadId = threadId as string;
+    return rawThreadId.startsWith(prefix) ? rawThreadId.slice(prefix.length) : undefined;
+  };
+
   const enqueueQueuedTurnStart = (
     payload: Extract<ProviderIntentEvent, { type: "thread.turn-queued" }>["payload"],
   ) =>
@@ -821,10 +846,11 @@ const make = Effect.gen(function* () {
     event: Extract<ProviderIntentEvent, { type: "thread.turn-interrupt-requested" }>,
   ) {
     const thread = yield* resolveThread(event.payload.threadId);
-    if (!thread) {
+    const providerThread = yield* resolveProviderSessionThread(event.payload.threadId);
+    if (!thread || !providerThread) {
       return;
     }
-    const hasSession = thread.session && thread.session.status !== "stopped";
+    const hasSession = providerThread.session && providerThread.session.status !== "stopped";
     if (!hasSession) {
       return yield* appendProviderFailureActivity({
         threadId: event.payload.threadId,
@@ -837,17 +863,24 @@ const make = Effect.gen(function* () {
     }
 
     // Orchestration turn ids are not provider turn ids, so interrupt by session.
-    yield* providerService.interruptTurn({ threadId: event.payload.threadId });
+    const providerThreadId = resolveSubagentProviderThreadId(thread.id, thread.parentThreadId);
+    const turnId = event.payload.turnId ?? thread.session?.activeTurnId ?? undefined;
+    yield* providerService.interruptTurn({
+      threadId: providerThread.id,
+      ...(turnId ? { turnId } : {}),
+      ...(providerThreadId ? { providerThreadId } : {}),
+    });
   });
 
   const processApprovalResponseRequested = Effect.fnUntraced(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.approval-response-requested" }>,
   ) {
     const thread = yield* resolveThread(event.payload.threadId);
-    if (!thread) {
+    const providerThread = yield* resolveProviderSessionThread(event.payload.threadId);
+    if (!thread || !providerThread) {
       return;
     }
-    const hasSession = thread.session && thread.session.status !== "stopped";
+    const hasSession = providerThread.session && providerThread.session.status !== "stopped";
     if (!hasSession) {
       return yield* appendProviderFailureActivity({
         threadId: event.payload.threadId,
@@ -862,7 +895,7 @@ const make = Effect.gen(function* () {
 
     yield* providerService
       .respondToRequest({
-        threadId: event.payload.threadId,
+        threadId: providerThread.id,
         requestId: event.payload.requestId,
         decision: event.payload.decision,
       })
@@ -891,10 +924,11 @@ const make = Effect.gen(function* () {
     event: Extract<ProviderIntentEvent, { type: "thread.user-input-response-requested" }>,
   ) {
     const thread = yield* resolveThread(event.payload.threadId);
-    if (!thread) {
+    const providerThread = yield* resolveProviderSessionThread(event.payload.threadId);
+    if (!thread || !providerThread) {
       return;
     }
-    const hasSession = thread.session && thread.session.status !== "stopped";
+    const hasSession = providerThread.session && providerThread.session.status !== "stopped";
     if (!hasSession) {
       return yield* appendProviderFailureActivity({
         threadId: event.payload.threadId,
@@ -909,7 +943,7 @@ const make = Effect.gen(function* () {
 
     yield* providerService
       .respondToUserInput({
-        threadId: event.payload.threadId,
+        threadId: providerThread.id,
         requestId: event.payload.requestId,
         answers: event.payload.answers,
       })

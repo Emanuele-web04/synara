@@ -40,6 +40,7 @@ function createSendTurnHarness() {
       sparkEnabled: true,
     },
     collabReceiverTurns: new Map(),
+    collabReceiverParents: new Map(),
   };
 
   const requireSession = vi
@@ -79,6 +80,7 @@ function createThreadControlHarness() {
       updatedAt: "2026-02-10T00:00:00.000Z",
     },
     collabReceiverTurns: new Map(),
+    collabReceiverParents: new Map(),
   };
 
   const requireSession = vi
@@ -122,6 +124,7 @@ function createPendingUserInputHarness() {
       ],
     ]),
     collabReceiverTurns: new Map(),
+    collabReceiverParents: new Map(),
   };
 
   const requireSession = vi
@@ -163,6 +166,7 @@ function createCollabNotificationHarness() {
     pendingApprovals: new Map(),
     pendingUserInputs: new Map(),
     collabReceiverTurns: new Map<string, string>(),
+    collabReceiverParents: new Map<string, string>(),
     nextRequestId: 1,
     stopping: false,
   };
@@ -902,6 +906,7 @@ describe("CodexAppServerManager discovery", () => {
       pendingApprovals: new Map(),
       pendingUserInputs: new Map(),
       collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
       nextRequestId: 1,
       stopping: false,
     };
@@ -931,6 +936,7 @@ describe("CodexAppServerManager discovery", () => {
       pendingApprovals: new Map(),
       pendingUserInputs: new Map(),
       collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
       nextRequestId: 1,
       stopping: false,
       discovery: true,
@@ -993,6 +999,7 @@ describe("CodexAppServerManager discovery", () => {
         sparkEnabled: true,
       },
       collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
     };
 
     const resolveContextForDiscovery = vi
@@ -1090,6 +1097,7 @@ describe("CodexAppServerManager discovery", () => {
         sparkEnabled: true,
       },
       collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
     };
 
     vi.spyOn(
@@ -1156,6 +1164,7 @@ describe("CodexAppServerManager discovery", () => {
         sparkEnabled: true,
       },
       collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
     };
 
     const resolveContextForDiscovery = vi
@@ -1291,6 +1300,7 @@ describe("CodexAppServerManager discovery", () => {
         sparkEnabled: true,
       },
       collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
     };
 
     const resolveContextForDiscovery = vi
@@ -1641,6 +1651,7 @@ describe("respondToUserInput", () => {
       pendingApprovals: new Map(),
       pendingUserInputs: new Map(),
       collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
     };
     type ApprovalRequestContext = {
       session: typeof context.session;
@@ -1669,7 +1680,7 @@ describe("respondToUserInput", () => {
 });
 
 describe("collab child conversation routing", () => {
-  it("rewrites child notification turn ids onto the parent turn", () => {
+  it("preserves child notification turn ids and annotates the parent turn", () => {
     const { manager, context, emitEvent } = createCollabNotificationHarness();
 
     (
@@ -1706,13 +1717,16 @@ describe("collab child conversation routing", () => {
     expect(emitEvent).toHaveBeenLastCalledWith(
       expect.objectContaining({
         method: "item/agentMessage/delta",
-        turnId: "turn_parent",
+        turnId: "turn_child_1",
+        parentTurnId: "turn_parent",
         itemId: "msg_child_1",
+        providerThreadId: "child_provider_1",
+        providerParentThreadId: "provider_parent",
       }),
     );
   });
 
-  it("suppresses child lifecycle notifications so they cannot replace the parent turn", () => {
+  it("emits child lifecycle notifications without mutating the parent session state", () => {
     const { manager, context, emitEvent, updateSession } = createCollabNotificationHarness();
 
     (
@@ -1758,11 +1772,30 @@ describe("collab child conversation routing", () => {
       },
     });
 
-    expect(emitEvent).not.toHaveBeenCalled();
+    expect(emitEvent).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        method: "turn/started",
+        turnId: "turn_child_1",
+        parentTurnId: "turn_parent",
+        providerThreadId: "child_provider_1",
+        providerParentThreadId: "provider_parent",
+      }),
+    );
+    expect(emitEvent).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "turn/completed",
+        turnId: "turn_child_1",
+        parentTurnId: "turn_parent",
+        providerThreadId: "child_provider_1",
+        providerParentThreadId: "provider_parent",
+      }),
+    );
     expect(updateSession).not.toHaveBeenCalled();
   });
 
-  it("rewrites child approval requests onto the parent turn", () => {
+  it("preserves child approval requests and annotates the parent turn", () => {
     const { manager, context, emitEvent } = createCollabNotificationHarness();
 
     (
@@ -1800,15 +1833,18 @@ describe("collab child conversation routing", () => {
 
     expect(Array.from(context.pendingApprovals.values())[0]).toEqual(
       expect.objectContaining({
-        turnId: "turn_parent",
+        turnId: "turn_child_1",
         itemId: "call_child_1",
       }),
     );
     expect(emitEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "item/commandExecution/requestApproval",
-        turnId: "turn_parent",
+        turnId: "turn_child_1",
+        parentTurnId: "turn_parent",
         itemId: "call_child_1",
+        providerThreadId: "child_provider_1",
+        providerParentThreadId: "provider_parent",
       }),
     );
   });

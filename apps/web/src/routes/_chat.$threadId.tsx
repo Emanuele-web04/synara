@@ -477,7 +477,7 @@ function SplitPaneEmptyState(props: {
 
 function PickerProviderGlyph(props: { provider: "codex" | "claudeAgent"; className?: string }) {
   if (props.provider === "claudeAgent") {
-    return <ClaudeAI aria-hidden="true" className={cn("text-[#d97757]", props.className)} />;
+    return <ClaudeAI aria-hidden="true" className={cn("text-foreground", props.className)} />;
   }
 
   return <OpenAI aria-hidden="true" className={cn("text-muted-foreground/60", props.className)} />;

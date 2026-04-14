@@ -4,6 +4,8 @@
 
 import {
   ArrowLeftIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
   FolderIcon,
   GitPullRequestIcon,
   type LucideIcon,
@@ -15,9 +17,10 @@ import {
   TriangleAlertIcon,
 } from "~/lib/icons";
 import { autoAnimate } from "@formkit/auto-animate";
-import { FiGitBranch, FiPlus } from "react-icons/fi";
+import { FiPlus } from "react-icons/fi";
 import { HiOutlineCheckCircle } from "react-icons/hi2";
 import { HiOutlineFolderOpen } from "react-icons/hi2";
+import { PiArrowBendDownRight } from "react-icons/pi";
 import { TbArrowsDiagonal, TbArrowsDiagonalMinimize2, TbCursorText } from "react-icons/tb";
 import { IoFilter } from "react-icons/io5";
 import { LuMessageSquareDashed, LuSplit } from "react-icons/lu";
@@ -48,6 +51,7 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   DEFAULT_MODEL_BY_PROVIDER,
   type DesktopUpdateState,
+  type OrchestrationReadModel,
   PROVIDER_DISPLAY_NAMES,
   ProjectId,
   ThreadId,
@@ -55,7 +59,6 @@ import {
   type ResolvedKeybindingsConfig,
 } from "@t3tools/contracts";
 import { resolveThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
-import { workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -80,6 +83,7 @@ import { type SidebarThreadSummary, type Thread } from "../types";
 import { ClaudeAI, OpenAI } from "./Icons";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
+import { RenameThreadDialog } from "./RenameThreadDialog";
 import { SidebarSearchPalette } from "./SidebarSearchPalette";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useThreadHandoff } from "../hooks/useThreadHandoff";
@@ -121,18 +125,25 @@ import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "
 import { isNonEmpty as isNonEmptyString } from "effect/String";
 import {
   describeAddProjectError,
+  buildProjectThreadTree,
+  extractDuplicateProjectCreateProjectId,
+  findWorkspaceRootMatch,
   getFallbackThreadIdAfterDelete,
   getPinnedThreadsForSidebar,
   getNextVisibleSidebarThreadId,
+  getVisibleSidebarEntriesForPreview,
   getUnpinnedThreadsForSidebar,
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadEnvMode,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
+  isDuplicateProjectCreateError,
+  shouldPrunePinnedThreads,
   shouldClearThreadSelectionOnMouseDown,
   sortProjectsForSidebar,
   sortThreadsForSidebar,
 } from "./Sidebar.logic";
+import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { cn } from "~/lib/utils";
 import {
@@ -181,12 +192,24 @@ const SIDEBAR_LIST_ANIMATION_OPTIONS = {
   duration: 180,
   easing: "ease-out",
 } as const;
+const ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS = 6;
+const ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS = 50;
+const ADD_PROJECT_CREATE_SYNC_ERROR =
+  "Project was created, but it has not appeared in the sidebar yet. Try again in a moment.";
+const ADD_PROJECT_EXISTING_SYNC_ERROR =
+  "This folder is already linked, but the existing project has not synced into the sidebar yet. Try again in a moment.";
 
 const PROJECT_CONTEXT_MENU_FOLDER_ICON = renderToStaticMarkup(<HiOutlineFolderOpen />);
 const PROJECT_CONTEXT_MENU_EDIT_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4Z"/></svg>';
 const PROJECT_CONTEXT_MENU_REMOVE_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
 
 function ProviderGlyph({
   provider,
@@ -196,7 +219,7 @@ function ProviderGlyph({
   className?: string;
 }) {
   if (provider === "claudeAgent") {
-    return <ClaudeAI aria-hidden="true" className={cn("text-[#d97757]", className)} />;
+    return <ClaudeAI aria-hidden="true" className={cn("text-foreground", className)} />;
   }
   return <OpenAI aria-hidden="true" className={cn("text-muted-foreground/60", className)} />;
 }
@@ -283,7 +306,7 @@ function resolveThreadRowMetaBadge(input: {
   if (input.includeHandoffBadge && handoffBadgeLabel) {
     return {
       tooltip: handoffBadgeLabel,
-      icon: <FiGitBranch className="size-3 text-muted-foreground/55" />,
+      icon: <PiArrowBendDownRight className="size-3 text-muted-foreground/55" />,
     };
   }
 
@@ -300,13 +323,63 @@ type SidebarProjectEntry =
   | {
       kind: "thread";
       rowId: ThreadId;
+      rootRowId: ThreadId;
       thread: SidebarThreadSummary;
+      depth: number;
+      childCount: number;
+      isExpanded: boolean;
     }
   | {
       kind: "split";
       rowId: ThreadId;
+      rootRowId: ThreadId;
       splitView: SplitView;
     };
+
+function renderSubagentLabel(input: {
+  threadId: string;
+  parentThreadId?: string | null | undefined;
+  agentId?: string | null | undefined;
+  nickname?: string | null | undefined;
+  role?: string | null | undefined;
+  title?: string | null | undefined;
+  threads?: ReadonlyArray<Thread> | undefined;
+  titleClassName?: string;
+  roleClassName?: string;
+}) {
+  const presentation = resolveSubagentPresentationForThread({
+    thread: {
+      id: input.threadId,
+      parentThreadId: input.parentThreadId,
+      subagentAgentId: input.agentId,
+      subagentNickname: input.nickname,
+      subagentRole: input.role,
+      title: input.title,
+    },
+    threads: input.threads,
+  });
+  const supportingLabel =
+    presentation.role ??
+    (presentation.nickname && presentation.title && presentation.title !== presentation.nickname
+      ? presentation.title
+      : null);
+
+  return (
+    <span className="min-w-0 truncate">
+      <span
+        className={cn("font-medium", input.titleClassName)}
+        style={{ color: presentation.accentColor }}
+      >
+        {presentation.nickname ?? presentation.primaryLabel}
+      </span>
+      {supportingLabel ? (
+        <span className={cn("ml-1 text-muted-foreground/48", input.roleClassName)}>
+          {presentation.role ? `(${presentation.role})` : supportingLabel}
+        </span>
+      ) : null}
+    </span>
+  );
+}
 
 function resolveSplitPreviewTitle(input: {
   thread: Thread | null;
@@ -642,10 +715,12 @@ function SortableWorkspaceItem({
 export default function Sidebar() {
   const projects = useStore((store) => store.projects);
   const threads = useStore((store) => store.threads);
+  const threadsHydrated = useStore((store) => store.threadsHydrated);
   const sidebarThreadSummaryById = useStore((store) => store.sidebarThreadSummaryById);
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
   const markThreadUnread = useStore((store) => store.markThreadUnread);
   const toggleProject = useStore((store) => store.toggleProject);
+  const setProjectExpanded = useStore((store) => store.setProjectExpanded);
   const setAllProjectsExpanded = useStore((store) => store.setAllProjectsExpanded);
   const collapseProjectsExcept = useStore((store) => store.collapseProjectsExcept);
   const reorderProjects = useStore((store) => store.reorderProjects);
@@ -719,11 +794,16 @@ export default function Sidebar() {
   const addProjectInputRef = useRef<HTMLInputElement | null>(null);
   const [renamingThreadId, setRenamingThreadId] = useState<ThreadId | null>(null);
   const [renamingTitle, setRenamingTitle] = useState("");
+  const [renameDialogThreadId, setRenameDialogThreadId] = useState<ThreadId | null>(null);
   const [renamingProjectId, setRenamingProjectId] = useState<ProjectId | null>(null);
   const [renamingProjectName, setRenamingProjectName] = useState("");
   const [expandedThreadListsByProject, setExpandedThreadListsByProject] = useState<
     ReadonlySet<ProjectId>
   >(() => new Set());
+  const [expandedSubagentParentIds, setExpandedSubagentParentIds] = useState<ReadonlySet<ThreadId>>(
+    () => new Set(),
+  );
+  const autoRevealedSubagentThreadIdRef = useRef<ThreadId | null>(null);
   const renamingCommittedRef = useRef(false);
   const renamingInputRef = useRef<HTMLInputElement | null>(null);
   const renamingProjectCommittedRef = useRef(false);
@@ -883,23 +963,227 @@ export default function Sidebar() {
     [appSettings.sidebarThreadSortOrder, navigate, sidebarThreads],
   );
 
-  const openOrCreateProjectThread = useCallback(
-    async (projectId: ProjectId) => {
+  const openExistingProjectLocally = useCallback(
+    (projectId: ProjectId) => {
       const hasProjectThread = sidebarThreads.some((thread) => thread.projectId === projectId);
       if (hasProjectThread) {
         focusMostRecentThreadForProject(projectId);
         return;
       }
+
+      setProjectExpanded(projectId, true);
+    },
+    [focusMostRecentThreadForProject, setProjectExpanded, sidebarThreads],
+  );
+
+  const openOrCreateProjectThreadFromSnapshot = useCallback(
+    async (projectId: ProjectId, snapshot: OrchestrationReadModel) => {
+      const latestThread = sortThreadsForSidebar(
+        snapshot.threads
+          .filter(
+            (thread) =>
+              thread.projectId === projectId &&
+              thread.deletedAt === null &&
+              (thread.archivedAt ?? null) === null,
+          )
+          .map((thread) => ({
+            id: thread.id,
+            createdAt: thread.createdAt,
+            updatedAt: thread.updatedAt,
+            messages: thread.messages,
+          })),
+        appSettings.sidebarThreadSortOrder,
+      )[0];
+      if (latestThread) {
+        await navigate({
+          to: "/$threadId",
+          params: { threadId: latestThread.id },
+        });
+        return;
+      }
+
       await handleNewThread(projectId, {
         envMode: appSettings.defaultThreadEnvMode,
       }).catch(() => undefined);
     },
     [
       appSettings.defaultThreadEnvMode,
-      focusMostRecentThreadForProject,
+      appSettings.sidebarThreadSortOrder,
       handleNewThread,
-      sidebarThreads,
+      navigate,
     ],
+  );
+
+  const openExistingProjectFromSnapshot = useCallback(
+    async (projectId: ProjectId, snapshot: OrchestrationReadModel): Promise<boolean> => {
+      const existingProject =
+        snapshot.projects.find(
+          (candidate) => candidate.id === projectId && candidate.deletedAt === null,
+        ) ?? null;
+      if (!existingProject) {
+        return false;
+      }
+
+      const latestThread = sortThreadsForSidebar(
+        snapshot.threads
+          .filter(
+            (thread) =>
+              thread.projectId === projectId &&
+              thread.deletedAt === null &&
+              (thread.archivedAt ?? null) === null,
+          )
+          .map((thread) => ({
+            id: thread.id,
+            createdAt: thread.createdAt,
+            updatedAt: thread.updatedAt,
+            messages: thread.messages,
+          })),
+        appSettings.sidebarThreadSortOrder,
+      )[0];
+      if (latestThread) {
+        await navigate({
+          to: "/$threadId",
+          params: { threadId: latestThread.id },
+        });
+        return true;
+      }
+
+      setProjectExpanded(projectId, true);
+      return true;
+    },
+    [appSettings.sidebarThreadSortOrder, navigate, setProjectExpanded],
+  );
+
+  // Poll the server read model briefly after project.create so we only recover from fresh state.
+  const waitForProjectInSnapshot = useCallback(
+    async (
+      api: NonNullable<ReturnType<typeof readNativeApi>>,
+      projectId: ProjectId,
+    ): Promise<{
+      project: OrchestrationReadModel["projects"][number] | null;
+      snapshot: OrchestrationReadModel | null;
+    }> => {
+      let latestSnapshot: OrchestrationReadModel | null = null;
+
+      for (let attempt = 1; attempt <= ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS; attempt += 1) {
+        const snapshot = await api.orchestration.getSnapshot().catch(() => null);
+        if (snapshot) {
+          latestSnapshot = snapshot;
+          const project =
+            snapshot.projects.find(
+              (candidate) => candidate.id === projectId && candidate.deletedAt === null,
+            ) ?? null;
+          if (project) {
+            return { project, snapshot };
+          }
+        }
+
+        if (attempt < ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS) {
+          await wait(ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS * attempt);
+        }
+      }
+
+      return {
+        project: null,
+        snapshot: latestSnapshot,
+      };
+    },
+    [],
+  );
+
+  const waitForProjectWorkspaceRootInSnapshot = useCallback(
+    async (
+      api: NonNullable<ReturnType<typeof readNativeApi>>,
+      workspaceRoot: string,
+    ): Promise<{
+      project: OrchestrationReadModel["projects"][number] | null;
+      snapshot: OrchestrationReadModel | null;
+    }> => {
+      let latestSnapshot: OrchestrationReadModel | null = null;
+
+      for (let attempt = 1; attempt <= ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS; attempt += 1) {
+        const snapshot = await api.orchestration.getSnapshot().catch(() => null);
+        if (snapshot) {
+          latestSnapshot = snapshot;
+          const project =
+            snapshot.projects.find(
+              (candidate) =>
+                candidate.deletedAt === null &&
+                findWorkspaceRootMatch([candidate], workspaceRoot, (item) => item.workspaceRoot) !==
+                  undefined,
+            ) ?? null;
+          if (project) {
+            return { project, snapshot };
+          }
+        }
+
+        if (attempt < ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS) {
+          await wait(ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS * attempt);
+        }
+      }
+
+      return {
+        project: null,
+        snapshot: latestSnapshot,
+      };
+    },
+    [],
+  );
+
+  // Keep add-project recovery on the same fresh-snapshot path for create, duplicate, and existing-project flows.
+  const recoverProjectThreadFromServer = useCallback(
+    async (
+      api: NonNullable<ReturnType<typeof readNativeApi>>,
+      projectId: ProjectId,
+    ): Promise<boolean> => {
+      const { project, snapshot } = await waitForProjectInSnapshot(api, projectId);
+      if (snapshot) {
+        syncServerReadModel(snapshot);
+      }
+      if (!project || !snapshot) {
+        return false;
+      }
+
+      await openOrCreateProjectThreadFromSnapshot(project.id, snapshot);
+      return true;
+    },
+    [openOrCreateProjectThreadFromSnapshot, syncServerReadModel, waitForProjectInSnapshot],
+  );
+
+  const recoverExistingProjectFromServer = useCallback(
+    async (
+      api: NonNullable<ReturnType<typeof readNativeApi>>,
+      projectId: ProjectId,
+    ): Promise<boolean> => {
+      const { project, snapshot } = await waitForProjectInSnapshot(api, projectId);
+      if (snapshot) {
+        syncServerReadModel(snapshot);
+      }
+      if (!project || !snapshot) {
+        return false;
+      }
+
+      return openExistingProjectFromSnapshot(project.id, snapshot);
+    },
+    [openExistingProjectFromSnapshot, syncServerReadModel, waitForProjectInSnapshot],
+  );
+
+  const recoverExistingProjectByWorkspaceRootFromServer = useCallback(
+    async (
+      api: NonNullable<ReturnType<typeof readNativeApi>>,
+      workspaceRoot: string,
+    ): Promise<boolean> => {
+      const { project, snapshot } = await waitForProjectWorkspaceRootInSnapshot(api, workspaceRoot);
+      if (snapshot) {
+        syncServerReadModel(snapshot);
+      }
+      if (!project || !snapshot) {
+        return false;
+      }
+
+      return openExistingProjectFromSnapshot(project.id, snapshot);
+    },
+    [openExistingProjectFromSnapshot, syncServerReadModel, waitForProjectWorkspaceRootInSnapshot],
   );
 
   const handleOpenProjectFromSearch = useCallback(
@@ -1031,10 +1315,10 @@ export default function Sidebar() {
         setAddingProject(false);
       };
 
-      const existing = projects.find((project) => workspaceRootsEqual(project.cwd, cwd));
+      const existing = findWorkspaceRootMatch(projects, cwd, (project) => project.cwd);
       if (existing) {
         finishAddingProject();
-        void openOrCreateProjectThread(existing.id);
+        openExistingProjectLocally(existing.id);
         return;
       }
 
@@ -1054,22 +1338,44 @@ export default function Sidebar() {
           },
           createdAt,
         });
-        finishAddingProject();
-        void openOrCreateProjectThread(projectId);
+        const recovered = await recoverProjectThreadFromServer(api, projectId);
+        if (recovered) {
+          finishAddingProject();
+          return;
+        }
+        setIsAddingProject(false);
+        setAddProjectError(ADD_PROJECT_CREATE_SYNC_ERROR);
         return;
       } catch (error) {
         const description =
           error instanceof Error ? error.message : "An error occurred while adding the project.";
-        const refreshedSnapshot = await api.orchestration.getSnapshot().catch(() => null);
-        if (refreshedSnapshot) {
-          syncServerReadModel(refreshedSnapshot);
+        if (isDuplicateProjectCreateError(description)) {
+          const duplicateProjectId = extractDuplicateProjectCreateProjectId(description);
+          const recovered = duplicateProjectId
+            ? await recoverExistingProjectFromServer(api, ProjectId.makeUnsafe(duplicateProjectId))
+            : await recoverExistingProjectByWorkspaceRootFromServer(api, cwd);
+          if (recovered) {
+            finishAddingProject();
+            return;
+          }
+
+          setIsAddingProject(false);
+          setAddProjectError(ADD_PROJECT_EXISTING_SYNC_ERROR);
+          return;
         }
         setIsAddingProject(false);
         setAddProjectError(description);
         return;
       }
     },
-    [isAddingProject, openOrCreateProjectThread, projects, syncServerReadModel],
+    [
+      isAddingProject,
+      openExistingProjectLocally,
+      projects,
+      recoverExistingProjectFromServer,
+      recoverExistingProjectByWorkspaceRootFromServer,
+      recoverProjectThreadFromServer,
+    ],
   );
 
   const handleAddProject = () => {
@@ -1695,29 +2001,6 @@ export default function Sidebar() {
     ],
   );
 
-  const handleThreadClick = useCallback(
-    (event: MouseEvent, threadId: ThreadId, orderedProjectThreadIds: readonly ThreadId[]) => {
-      const isMac = isMacPlatform(navigator.platform);
-      const isModClick = isMac ? event.metaKey : event.ctrlKey;
-      const isShiftClick = event.shiftKey;
-
-      if (isModClick) {
-        event.preventDefault();
-        toggleThreadSelection(threadId);
-        return;
-      }
-
-      if (isShiftClick) {
-        event.preventDefault();
-        rangeSelectTo(threadId, orderedProjectThreadIds);
-        return;
-      }
-
-      activateThread(threadId);
-    },
-    [activateThread, rangeSelectTo, toggleThreadSelection],
-  );
-
   const handleProjectContextMenu = useCallback(
     async (projectId: ProjectId, position: { x: number; y: number }) => {
       const api = readNativeApi();
@@ -1926,8 +2209,100 @@ export default function Sidebar() {
   );
 
   useEffect(() => {
+    if (!shouldPrunePinnedThreads({ threadsHydrated })) {
+      return;
+    }
     prunePinnedThreads(sidebarThreads.map((thread) => thread.id));
-  }, [prunePinnedThreads, sidebarThreads]);
+  }, [prunePinnedThreads, sidebarThreads, threadsHydrated]);
+
+  useEffect(() => {
+    if (!activeSidebarThreadId) {
+      autoRevealedSubagentThreadIdRef.current = null;
+      return;
+    }
+    if (autoRevealedSubagentThreadIdRef.current === activeSidebarThreadId) {
+      return;
+    }
+
+    const forcedExpandedParentIds = new Set<ThreadId>();
+    let currentThreadId: ThreadId | null =
+      threadById.get(activeSidebarThreadId)?.parentThreadId ??
+      sidebarThreadSummaryById[activeSidebarThreadId]?.parentThreadId ??
+      null;
+
+    while (currentThreadId) {
+      forcedExpandedParentIds.add(currentThreadId);
+      currentThreadId =
+        threadById.get(currentThreadId)?.parentThreadId ??
+        sidebarThreadSummaryById[currentThreadId]?.parentThreadId ??
+        null;
+    }
+
+    autoRevealedSubagentThreadIdRef.current = activeSidebarThreadId;
+
+    if (forcedExpandedParentIds.size === 0) {
+      return;
+    }
+
+    setExpandedSubagentParentIds((previous) => {
+      const next = new Set(previous);
+      let changed = false;
+      for (const parentThreadId of forcedExpandedParentIds) {
+        if (next.has(parentThreadId)) continue;
+        next.add(parentThreadId);
+        changed = true;
+      }
+      return changed ? next : previous;
+    });
+  }, [activeSidebarThreadId, sidebarThreadSummaryById, threadById]);
+
+  const toggleSubagentParent = useCallback((threadId: ThreadId) => {
+    setExpandedSubagentParentIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(threadId)) {
+        next.delete(threadId);
+      } else {
+        next.add(threadId);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleThreadClick = useCallback(
+    (
+      event: MouseEvent,
+      threadId: ThreadId,
+      orderedProjectThreadIds: readonly ThreadId[],
+      options?: {
+        isActive?: boolean;
+        canToggleSubagents?: boolean;
+      },
+    ) => {
+      const isMac = isMacPlatform(navigator.platform);
+      const isModClick = isMac ? event.metaKey : event.ctrlKey;
+      const isShiftClick = event.shiftKey;
+
+      if (isModClick) {
+        event.preventDefault();
+        toggleThreadSelection(threadId);
+        return;
+      }
+
+      if (isShiftClick) {
+        event.preventDefault();
+        rangeSelectTo(threadId, orderedProjectThreadIds);
+        return;
+      }
+
+      if (options?.isActive && options.canToggleSubagents) {
+        toggleSubagentParent(threadId);
+        return;
+      }
+
+      activateThread(threadId);
+    },
+    [activateThread, rangeSelectTo, toggleSubagentParent, toggleThreadSelection],
+  );
 
   const visibleSidebarThreadIds = useMemo(() => {
     const visibleThreadIds = pinnedThreads.map((thread) => thread.id);
@@ -1940,6 +2315,10 @@ export default function Sidebar() {
         ),
         appSettings.sidebarThreadSortOrder,
       );
+      const projectThreadTree = buildProjectThreadTree({
+        threads: projectThreads,
+        expandedParentThreadIds: expandedSubagentParentIds,
+      });
       const projectSplitViews = splitViews.filter(
         (splitView) =>
           splitView.ownerProjectId === project.id &&
@@ -1948,53 +2327,51 @@ export default function Sidebar() {
       const replacedThreadIds = new Set(
         projectSplitViews.map((splitView) => splitView.sourceThreadId),
       );
-      const orderedEntryIds = projectThreads.map(
-        (thread) => splitViewBySourceThreadId.get(thread.id)?.sourceThreadId ?? thread.id,
-      );
+      const orderedEntries = projectThreadTree.map((row) => ({
+        rowId: splitViewBySourceThreadId.get(row.thread.id)?.sourceThreadId ?? row.thread.id,
+        rootRowId: row.rootThreadId,
+      }));
       for (const splitView of projectSplitViews) {
         if (
           replacedThreadIds.has(splitView.sourceThreadId) &&
-          orderedEntryIds.includes(splitView.sourceThreadId)
+          orderedEntries.some((entry) => entry.rowId === splitView.sourceThreadId)
         ) {
           continue;
         }
-        if (!orderedEntryIds.includes(splitView.sourceThreadId)) {
-          orderedEntryIds.push(splitView.sourceThreadId);
+        if (!orderedEntries.some((entry) => entry.rowId === splitView.sourceThreadId)) {
+          orderedEntries.push({
+            rowId: splitView.sourceThreadId,
+            rootRowId: splitView.sourceThreadId,
+          });
         }
       }
 
-      const hasHiddenEntries = orderedEntryIds.length > THREAD_PREVIEW_LIMIT;
-      if (!hasHiddenEntries || expandedThreadListsByProject.has(project.id)) {
-        visibleThreadIds.push(...orderedEntryIds);
-        continue;
-      }
-
-      const previewIds = orderedEntryIds.slice(0, THREAD_PREVIEW_LIMIT);
-      if (!activeSidebarThreadId || previewIds.includes(activeSidebarThreadId)) {
-        visibleThreadIds.push(...previewIds);
-        continue;
-      }
-
-      const activeEntryId = orderedEntryIds.includes(activeSidebarThreadId)
-        ? activeSidebarThreadId
-        : null;
-      if (!activeEntryId) {
-        visibleThreadIds.push(...previewIds);
-        continue;
-      }
-
-      const includedIds = new Set([...previewIds, activeEntryId]);
-      for (const entryId of orderedEntryIds) {
-        if (includedIds.has(entryId)) {
-          visibleThreadIds.push(entryId);
+      const { visibleEntries } = getVisibleSidebarEntriesForPreview({
+        entries: orderedEntries,
+        activeEntryId: activeSidebarThreadId ?? undefined,
+        isExpanded: expandedThreadListsByProject.has(project.id),
+        previewLimit: THREAD_PREVIEW_LIMIT,
+      });
+      const activeEntryId =
+        activeSidebarThreadId &&
+        orderedEntries.some((entry) => entry.rowId === activeSidebarThreadId)
+          ? activeSidebarThreadId
+          : null;
+      if (!project.expanded) {
+        if (activeEntryId) {
+          visibleThreadIds.push(activeEntryId);
         }
+        continue;
       }
+
+      visibleThreadIds.push(...visibleEntries.map((entry) => entry.rowId));
     }
 
     return visibleThreadIds;
   }, [
     activeSidebarThreadId,
     appSettings.sidebarThreadSortOrder,
+    expandedSubagentParentIds,
     expandedThreadListsByProject,
     pinnedThreadIdSet,
     pinnedThreadIds,
@@ -2006,21 +2383,30 @@ export default function Sidebar() {
   ]);
   const isManualProjectSorting = appSettings.sidebarProjectSortOrder === "manual";
 
-  function resolveThreadFolderLabel(projectId: ProjectId): string | null {
+  // Pinned rows should show the user-facing project label, not the raw folder basename.
+  function resolvePinnedThreadProjectLabel(projectId: ProjectId): string | null {
     const project = projectById.get(projectId);
     if (!project) return null;
-    return project.folderName ?? project.name ?? null;
+    return project.name ?? project.folderName ?? null;
   }
 
   // Keep hover actions in the same trailing slot used by the timestamp they replace.
-  function renderThreadDeleteButton(threadId: ThreadId, toneClassName: string) {
+  function renderThreadDeleteButton(
+    threadId: ThreadId,
+    toneClassName: string,
+    options?: {
+      compact?: boolean;
+    },
+  ) {
+    const compact = options?.compact === true;
     return (
       <button
         type="button"
         aria-label="Delete thread"
         title="Delete thread"
         className={cn(
-          "sidebar-icon-button pointer-events-none absolute inset-y-0 right-0 my-auto inline-flex size-5 justify-center opacity-0 transition-opacity hover:text-foreground/82",
+          "sidebar-icon-button pointer-events-none absolute inset-y-0 right-0 my-auto inline-flex justify-center opacity-0 transition-[opacity,color] hover:text-foreground/82",
+          compact ? "size-[18px]" : "size-5",
           "group-hover/thread-row:pointer-events-auto group-hover/thread-row:opacity-100 group-focus-within/thread-row:pointer-events-auto group-focus-within/thread-row:opacity-100",
           toneClassName,
         )}
@@ -2034,7 +2420,7 @@ export default function Sidebar() {
           void confirmAndDeleteThread(threadId);
         }}
       >
-        <Trash2 className="size-3 shrink-0" />
+        <Trash2 className={cn("shrink-0", compact ? "size-[11px]" : "size-3")} />
       </button>
     );
   }
@@ -2045,11 +2431,15 @@ export default function Sidebar() {
       thread.id,
     ).entryPoint;
     const isActive = !activeSplitView && routeThreadId === thread.id;
-    const folderLabel = resolveThreadFolderLabel(thread.projectId);
+    const projectLabel = resolvePinnedThreadProjectLabel(thread.projectId);
     const rightMetaBadge = resolveThreadRowMetaBadge({
       thread,
       includeHandoffBadge: true,
     });
+    const isSubagentThread = Boolean(thread.parentThreadId);
+    const pinnedTimestampClassName = isSubagentThread
+      ? "w-[1.2rem] text-right text-[10px] leading-none tabular-nums text-muted-foreground/26 transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0"
+      : "w-[1.625rem] text-right text-[length:var(--app-font-size-ui-meta,11px)] leading-none tabular-nums text-muted-foreground/38 transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0";
 
     return (
       <div key={thread.id} className="group/thread-row relative w-full">
@@ -2090,24 +2480,43 @@ export default function Sidebar() {
             />
           )}
           <div className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
-            <span className="min-w-0 flex-1 truncate">{thread.title}</span>
+            <span className="min-w-0 flex-1 truncate">
+              {isSubagentThread
+                ? renderSubagentLabel({
+                    threadId: thread.id,
+                    parentThreadId: thread.parentThreadId,
+                    agentId: thread.subagentAgentId,
+                    nickname: thread.subagentNickname,
+                    role: thread.subagentRole,
+                    title: thread.title,
+                    threads,
+                  })
+                : thread.title}
+            </span>
           </div>
           <div className="ml-auto flex shrink-0 items-center gap-1.5 pr-1">
-            {folderLabel ? (
+            {projectLabel ? (
               <span className="max-w-24 truncate text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/38">
-                {folderLabel}
+                {projectLabel}
               </span>
             ) : null}
           </div>
-          <div className="absolute right-2.5 top-1/2 flex -translate-y-1/2 items-center">
+          <div
+            className={cn(
+              "absolute top-1/2 flex -translate-y-1/2 items-center",
+              isSubagentThread ? "right-2" : "right-2.5",
+            )}
+          >
             <div className="relative flex shrink-0 items-center justify-end gap-1">
               <ThreadRowMetaBadge tooltip={rightMetaBadge?.tooltip ?? null}>
                 {rightMetaBadge?.icon}
               </ThreadRowMetaBadge>
-              <span className="w-[1.625rem] text-right text-[length:var(--app-font-size-ui-meta,11px)] leading-none tabular-nums text-muted-foreground/38 transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0">
+              <span className={pinnedTimestampClassName}>
                 {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
               </span>
-              {renderThreadDeleteButton(thread.id, "text-muted-foreground/45")}
+              {renderThreadDeleteButton(thread.id, "text-muted-foreground/42", {
+                compact: isSubagentThread,
+              })}
             </div>
           </div>
         </button>
@@ -2118,6 +2527,9 @@ export default function Sidebar() {
   function renderThreadRow(
     thread: SidebarThreadSummary,
     orderedProjectThreadIds: readonly ThreadId[],
+    depth = 0,
+    childCount = 0,
+    isExpanded = false,
   ) {
     const threadTerminalState = selectThreadTerminalState(terminalStateByThreadId, thread.id);
     const threadEntryPoint = threadTerminalState.entryPoint;
@@ -2147,7 +2559,37 @@ export default function Sidebar() {
       thread,
       includeHandoffBadge: !isDisposableThread,
     });
-    const leadingPrStatus = thread.forkSourceThreadId ? null : prStatus;
+    const isSubagentThread = Boolean(thread.parentThreadId);
+    const leadingPrStatus = isSubagentThread || thread.forkSourceThreadId ? null : prStatus;
+    const subagentPresentation = isSubagentThread
+      ? resolveSubagentPresentationForThread({
+          thread: {
+            id: thread.id,
+            parentThreadId: thread.parentThreadId,
+            subagentAgentId: thread.subagentAgentId,
+            subagentNickname: thread.subagentNickname,
+            subagentRole: thread.subagentRole,
+            title: thread.title,
+          },
+          threads,
+        })
+      : null;
+    const canToggleSubagents = childCount > 0;
+    const subagentIndentPx = Math.max(0, Math.min(depth - 1, 3) * 10);
+    const showCompactMeta = !isSubagentThread;
+    const childCountLabel = `${childCount} subagent${childCount === 1 ? "" : "s"}`;
+    const trailingTimestampClassName = isSubagentThread
+      ? cn(
+          "w-[1.2rem] text-right text-[10px] leading-none tabular-nums tracking-[-0.01em] transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
+          isHighlighted ? "text-foreground/38 dark:text-foreground/46" : "text-muted-foreground/24",
+        )
+      : cn(
+          "w-[1.625rem] text-right text-[length:var(--app-font-size-ui-meta,11px)] leading-none tabular-nums transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
+          secondaryMetaClass,
+        );
+    const toggleButtonClassName = isHighlighted
+      ? "border-foreground/10 bg-background/75 text-foreground/58 hover:bg-background/88 hover:text-foreground/80"
+      : "border-border/45 bg-background/58 text-muted-foreground/56 hover:border-border/75 hover:bg-background/78 hover:text-foreground/76";
 
     return (
       <SidebarMenuSubItem key={thread.id} className="group/thread-row w-full" data-thread-item>
@@ -2205,11 +2647,24 @@ export default function Sidebar() {
           data-thread-entry-point={threadEntryPoint}
           size="sm"
           isActive={isActive}
-          className={resolveThreadRowClassName({
-            isActive,
-            isSelected,
-          })}
-          onClick={(event) => handleThreadClick(event, thread.id, orderedProjectThreadIds)}
+          className={cn(
+            resolveThreadRowClassName({
+              isActive,
+              isSelected,
+            }),
+            isSubagentThread ? "h-7 pr-7.5" : undefined,
+          )}
+          onClick={(event) =>
+            handleThreadClick(event, thread.id, orderedProjectThreadIds, {
+              isActive,
+              canToggleSubagents,
+            })
+          }
+          onDoubleClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setRenameDialogThreadId(thread.id);
+          }}
           onKeyDown={(event) => {
             if (event.key !== "Enter" && event.key !== " ") return;
             event.preventDefault();
@@ -2233,7 +2688,20 @@ export default function Sidebar() {
             }
           }}
         >
-          {threadEntryPoint === "terminal" ? (
+          {isSubagentThread ? (
+            <span
+              aria-hidden="true"
+              className="relative inline-flex h-3.5 w-[18px] shrink-0 items-center"
+              style={{ marginLeft: `${subagentIndentPx}px` }}
+            >
+              <span className="absolute left-1.5 top-0 bottom-0 w-px rounded-full bg-border/35" />
+              <span className="absolute left-1.5 top-1/2 h-px w-2.5 -translate-y-1/2 bg-border/35" />
+              <span
+                className="absolute left-1.5 top-1/2 size-[5px] -translate-x-1/2 -translate-y-1/2 rounded-full"
+                style={{ backgroundColor: subagentPresentation?.accentColor }}
+              />
+            </span>
+          ) : threadEntryPoint === "terminal" ? (
             <TerminalIcon aria-hidden="true" className="size-3.5 shrink-0 text-teal-600/85" />
           ) : handoffBadgeLabel && thread.handoff ? (
             <Tooltip>
@@ -2255,7 +2723,12 @@ export default function Sidebar() {
               className="size-3.5 shrink-0"
             />
           )}
-          <div className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
+          <div
+            className={cn(
+              "flex min-w-0 flex-1 items-center text-left",
+              isSubagentThread ? "gap-[5px]" : "gap-1.5",
+            )}
+          >
             {leadingPrStatus && (
               <Tooltip>
                 <TooltipTrigger
@@ -2307,13 +2780,55 @@ export default function Sidebar() {
                 onClick={(e) => e.stopPropagation()}
               />
             ) : (
-              <span className="min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)] leading-5 text-foreground/86">
-                {thread.title}
+              <span
+                className={cn(
+                  "min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)] text-foreground/86",
+                  isSubagentThread ? "leading-[18px] text-foreground/80" : "leading-5",
+                )}
+              >
+                {isSubagentThread
+                  ? renderSubagentLabel({
+                      threadId: thread.id,
+                      parentThreadId: thread.parentThreadId,
+                      agentId: thread.subagentAgentId,
+                      nickname: thread.subagentNickname,
+                      role: thread.subagentRole,
+                      title: thread.title,
+                      threads,
+                      roleClassName: "text-muted-foreground/42",
+                    })
+                  : thread.title}
               </span>
             )}
           </div>
           <div className="ml-auto flex shrink-0 items-center gap-1.5 pr-1">
-            {terminalCount > 1 ? (
+            {canToggleSubagents ? (
+              <button
+                type="button"
+                data-thread-selection-safe
+                aria-label={`${isExpanded ? "Collapse" : "Expand"} ${childCountLabel}`}
+                title={childCountLabel}
+                className={cn(
+                  "inline-flex h-5 min-w-5 items-center justify-center gap-0.5 rounded-full border px-[5px] transition-colors",
+                  toggleButtonClassName,
+                )}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  toggleSubagentParent(thread.id);
+                }}
+              >
+                <span className="text-[9px] font-medium leading-none tabular-nums">
+                  {childCount}
+                </span>
+                {isExpanded ? (
+                  <ChevronDownIcon className="size-3" />
+                ) : (
+                  <ChevronRightIcon className="size-3" />
+                )}
+              </button>
+            ) : null}
+            {showCompactMeta && terminalCount > 1 ? (
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -2335,7 +2850,7 @@ export default function Sidebar() {
                   {terminalCount} terminal{terminalCount === 1 ? "" : "s"} open
                 </TooltipPopup>
               </Tooltip>
-            ) : terminalStatus ? (
+            ) : showCompactMeta && terminalStatus ? (
               <span
                 role="img"
                 aria-label={terminalStatus.label}
@@ -2345,7 +2860,7 @@ export default function Sidebar() {
                 <TerminalIcon className={`size-3 ${terminalStatus.pulse ? "animate-pulse" : ""}`} />
               </span>
             ) : null}
-            {isDisposableThread ? (
+            {showCompactMeta && isDisposableThread ? (
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -2358,20 +2873,24 @@ export default function Sidebar() {
               </Tooltip>
             ) : null}
           </div>
-          <div className="absolute right-2.5 top-1/2 flex -translate-y-1/2 items-center">
+          <div
+            className={cn(
+              "absolute top-1/2 flex -translate-y-1/2 items-center",
+              isSubagentThread ? "right-2" : "right-2.5",
+            )}
+          >
             <div className="relative flex shrink-0 items-center justify-end gap-1">
-              <ThreadRowMetaBadge tooltip={rightMetaBadge?.tooltip ?? null}>
-                {rightMetaBadge?.icon}
-              </ThreadRowMetaBadge>
-              <span
-                className={cn(
-                  "w-[1.625rem] text-right text-[length:var(--app-font-size-ui-meta,11px)] leading-none tabular-nums transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
-                  secondaryMetaClass,
-                )}
-              >
+              {showCompactMeta ? (
+                <ThreadRowMetaBadge tooltip={rightMetaBadge?.tooltip ?? null}>
+                  {rightMetaBadge?.icon}
+                </ThreadRowMetaBadge>
+              ) : null}
+              <span className={trailingTimestampClassName}>
                 {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
               </span>
-              {renderThreadDeleteButton(thread.id, secondaryMetaClass)}
+              {renderThreadDeleteButton(thread.id, secondaryMetaClass, {
+                compact: isSubagentThread,
+              })}
             </div>
           </div>
         </SidebarMenuSubButton>
@@ -2389,6 +2908,11 @@ export default function Sidebar() {
       appSettings.sidebarThreadSortOrder,
     );
     const projectThreads = getUnpinnedThreadsForSidebar(allProjectThreads, pinnedThreadIds);
+    const activeThreadId = activeSidebarThreadId ?? undefined;
+    const projectThreadTree = buildProjectThreadTree({
+      threads: projectThreads,
+      expandedParentThreadIds: expandedSubagentParentIds,
+    });
     const projectSplitViews = splitViews.filter(
       (splitView) =>
         splitView.ownerProjectId === project.id && !pinnedThreadIdSet.has(splitView.sourceThreadId),
@@ -2402,51 +2926,52 @@ export default function Sidebar() {
         }),
       ),
     );
-    const activeThreadId = activeSidebarThreadId ?? undefined;
     const isThreadListExpanded = expandedThreadListsByProject.has(project.id);
     const replacedThreadIds = new Set(
       projectSplitViews.map((splitView) => splitView.sourceThreadId),
     );
-    const orderedEntries: SidebarProjectEntry[] = projectThreads.map((thread) => {
-      const splitView = splitViewBySourceThreadId.get(thread.id);
-      if (!splitView) {
+    const orderedEntries: SidebarProjectEntry[] = projectThreadTree.map(
+      ({ thread, depth, rootThreadId, childCount, isExpanded }) => {
+        const splitView = splitViewBySourceThreadId.get(thread.id);
+        if (!splitView) {
+          return {
+            kind: "thread",
+            rowId: thread.id,
+            rootRowId: rootThreadId,
+            thread,
+            depth,
+            childCount,
+            isExpanded,
+          };
+        }
         return {
-          kind: "thread",
-          rowId: thread.id,
-          thread,
+          kind: "split",
+          rowId: splitView.sourceThreadId,
+          rootRowId: rootThreadId,
+          splitView,
         };
-      }
-      return {
-        kind: "split",
-        rowId: splitView.sourceThreadId,
-        splitView,
-      };
-    });
+      },
+    );
     for (const splitView of projectSplitViews) {
       if (replacedThreadIds.has(splitView.sourceThreadId)) continue;
       orderedEntries.push({
         kind: "split",
         rowId: splitView.sourceThreadId,
+        rootRowId: splitView.sourceThreadId,
         splitView,
       });
     }
-    const hasHiddenThreads = orderedEntries.length > THREAD_PREVIEW_LIMIT;
-    const previewEntries = orderedEntries.slice(0, THREAD_PREVIEW_LIMIT);
     const activeEntry =
       activeThreadId === undefined
         ? null
         : (orderedEntries.find((entry) => entry.rowId === activeThreadId) ?? null);
-    const renderedEntries =
-      !hasHiddenThreads || isThreadListExpanded
-        ? orderedEntries
-        : activeEntry && !previewEntries.some((entry) => entry.rowId === activeEntry.rowId)
-          ? orderedEntries.filter((entry) =>
-              new Set([
-                ...previewEntries.map((candidate) => candidate.rowId),
-                activeEntry.rowId,
-              ]).has(entry.rowId),
-            )
-          : previewEntries;
+    const { hasHiddenEntries: hasHiddenThreads, visibleEntries: renderedEntries } =
+      getVisibleSidebarEntriesForPreview({
+        entries: orderedEntries,
+        activeEntryId: activeEntry?.rowId,
+        isExpanded: isThreadListExpanded,
+        previewLimit: THREAD_PREVIEW_LIMIT,
+      });
     const pinnedCollapsedEntry = !project.expanded && activeEntry ? activeEntry : null;
     const visibleEntries = pinnedCollapsedEntry ? [pinnedCollapsedEntry] : renderedEntries;
     const orderedProjectThreadIds = projectThreads.map((thread) => thread.id);
@@ -2732,7 +3257,13 @@ export default function Sidebar() {
             >
               {visibleEntries.map((entry) =>
                 entry.kind === "thread"
-                  ? renderThreadRow(entry.thread, orderedProjectThreadIds)
+                  ? renderThreadRow(
+                      entry.thread,
+                      orderedProjectThreadIds,
+                      entry.depth,
+                      entry.childCount,
+                      entry.isExpanded,
+                    )
                   : renderSplitRow(entry.splitView),
               )}
 
@@ -3685,6 +4216,20 @@ export default function Sidebar() {
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>
+
+      <RenameThreadDialog
+        open={renameDialogThreadId !== null}
+        currentTitle={threads.find((t) => t.id === renameDialogThreadId)?.title ?? ""}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setRenameDialogThreadId(null);
+        }}
+        onSave={(newTitle) => {
+          if (renameDialogThreadId === null) return;
+          const target = threads.find((t) => t.id === renameDialogThreadId);
+          if (!target) return;
+          void commitRename(target.id, newTitle, target.title);
+        }}
+      />
 
       <SidebarSearchPalette
         open={searchPaletteOpen}

@@ -421,6 +421,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             associatedWorktreePath: event.payload.associatedWorktreePath ?? null,
             associatedWorktreeBranch: event.payload.associatedWorktreeBranch ?? null,
             associatedWorktreeRef: event.payload.associatedWorktreeRef ?? null,
+            parentThreadId: event.payload.parentThreadId ?? null,
+            subagentAgentId: event.payload.subagentAgentId ?? null,
+            subagentNickname: event.payload.subagentNickname ?? null,
+            subagentRole: event.payload.subagentRole ?? null,
             forkSourceThreadId: event.payload.forkSourceThreadId,
             latestTurnId: null,
             handoff: event.payload.handoff,
@@ -457,6 +461,18 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               : {}),
             ...(event.payload.associatedWorktreeRef !== undefined
               ? { associatedWorktreeRef: event.payload.associatedWorktreeRef }
+              : {}),
+            ...(event.payload.parentThreadId !== undefined
+              ? { parentThreadId: event.payload.parentThreadId }
+              : {}),
+            ...(event.payload.subagentAgentId !== undefined
+              ? { subagentAgentId: event.payload.subagentAgentId }
+              : {}),
+            ...(event.payload.subagentNickname !== undefined
+              ? { subagentNickname: event.payload.subagentNickname }
+              : {}),
+            ...(event.payload.subagentRole !== undefined
+              ? { subagentRole: event.payload.subagentRole }
               : {}),
             ...(event.payload.handoff !== undefined ? { handoff: event.payload.handoff } : {}),
             updatedAt: event.payload.updatedAt,

@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildProjectThreadTree,
   describeAddProjectError,
+  extractDuplicateProjectCreateProjectId,
+  findWorkspaceRootMatch,
   getFallbackThreadIdAfterDelete,
+  getVisibleSidebarEntriesForPreview,
   getPinnedThreadsForSidebar,
   getNextVisibleSidebarThreadId,
   getRenderedThreadsForSidebarProject,
@@ -16,6 +20,7 @@ import {
   resolveSidebarNewThreadEnvMode,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
+  shouldPrunePinnedThreads,
   shouldClearThreadSelectionOnMouseDown,
   sortProjectsForSidebar,
   sortThreadsForSidebar,
@@ -104,6 +109,19 @@ describe("resolveSidebarNewThreadEnvMode", () => {
 });
 
 describe("add-project error helpers", () => {
+  it("finds an existing project by workspace root", () => {
+    expect(
+      findWorkspaceRootMatch(
+        [
+          { id: "project-1", cwd: "/Users/tester/Code/one" },
+          { id: "project-2", cwd: "/Users/tester/Code/two" },
+        ],
+        "/Users/tester/Code/two/",
+        (project) => project.cwd,
+      )?.id,
+    ).toBe("project-2");
+  });
+
   it("detects duplicate project.create errors", () => {
     expect(
       isDuplicateProjectCreateError(
@@ -112,10 +130,26 @@ describe("add-project error helpers", () => {
     ).toBe(true);
   });
 
+  it("extracts the existing project id from duplicate project.create errors", () => {
+    expect(
+      extractDuplicateProjectCreateProjectId(
+        "Orchestration command invariant failed (project.create): Project 'project-123' already uses workspace root '/Users/tester/Code/one'.",
+      ),
+    ).toBe("project-123");
+  });
+
   it("does not classify unrelated errors as duplicate project.create failures", () => {
     expect(
       isDuplicateProjectCreateError("Project directory does not exist: C:\\Labs\\influenzo"),
     ).toBe(false);
+  });
+
+  it("returns null when extracting from unrelated add-project errors", () => {
+    expect(
+      extractDuplicateProjectCreateProjectId(
+        "Project directory does not exist: C:\\Labs\\influenzo",
+      ),
+    ).toBeNull();
   });
 
   it("adds a readable explanation for duplicate workspace-root errors", () => {
@@ -173,6 +207,11 @@ describe("pin helpers", () => {
       getUnpinnedThreadsForSidebar(threads, ["thread-2" as ThreadId, "thread-3" as ThreadId]),
     ).toEqual([threads[0]]);
   });
+
+  it("waits for thread hydration before pruning persisted pins", () => {
+    expect(shouldPrunePinnedThreads({ threadsHydrated: false })).toBe(false);
+    expect(shouldPrunePinnedThreads({ threadsHydrated: true })).toBe(true);
+  });
 });
 
 describe("resolveThreadStatusPill", () => {
@@ -181,6 +220,7 @@ describe("resolveThreadStatusPill", () => {
     latestTurn: null,
     lastVisitedAt: undefined,
     proposedPlans: [],
+    hasLiveTailWork: false,
     session: {
       provider: "codex" as const,
       status: "running" as const,
@@ -214,6 +254,24 @@ describe("resolveThreadStatusPill", () => {
     expect(
       resolveThreadStatusPill({
         thread: baseThread,
+        hasPendingApprovals: false,
+        hasPendingUserInput: false,
+      }),
+    ).toMatchObject({ label: "Working", pulse: true });
+  });
+
+  it("keeps showing working when late turn activity arrives after the session looks ready", () => {
+    expect(
+      resolveThreadStatusPill({
+        thread: {
+          ...baseThread,
+          hasLiveTailWork: true,
+          session: {
+            ...baseThread.session,
+            status: "ready",
+            orchestrationStatus: "ready",
+          },
+        },
         hasPendingApprovals: false,
         hasPendingUserInput: false,
       }),
@@ -446,6 +504,95 @@ describe("getRenderedThreadsForSidebarProject", () => {
   });
 });
 
+describe("buildProjectThreadTree", () => {
+  it("keeps child threads hidden until their parent is expanded", () => {
+    const rows = buildProjectThreadTree({
+      threads: [
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-parent"),
+          createdAt: "2026-03-09T10:02:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-child"),
+          parentThreadId: ThreadId.makeUnsafe("thread-parent"),
+          createdAt: "2026-03-09T10:01:00.000Z",
+        }),
+      ],
+    });
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        thread: expect.objectContaining({ id: ThreadId.makeUnsafe("thread-parent") }),
+        depth: 0,
+        childCount: 1,
+        isExpanded: false,
+      }),
+    ]);
+  });
+
+  it("auto-reveals the selected child thread by expanding its ancestors", () => {
+    const rows = buildProjectThreadTree({
+      threads: [
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-parent"),
+          createdAt: "2026-03-09T10:03:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-child"),
+          parentThreadId: ThreadId.makeUnsafe("thread-parent"),
+          createdAt: "2026-03-09T10:02:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-grandchild"),
+          parentThreadId: ThreadId.makeUnsafe("thread-child"),
+          createdAt: "2026-03-09T10:01:00.000Z",
+        }),
+      ],
+      forceVisibleThreadId: ThreadId.makeUnsafe("thread-grandchild"),
+    });
+
+    expect(rows.map((row) => [row.thread.id, row.depth, row.isExpanded])).toEqual([
+      [ThreadId.makeUnsafe("thread-parent"), 0, true],
+      [ThreadId.makeUnsafe("thread-child"), 1, true],
+      [ThreadId.makeUnsafe("thread-grandchild"), 2, false],
+    ]);
+  });
+});
+
+describe("getVisibleSidebarEntriesForPreview", () => {
+  it("caps project preview by root rows, not flattened child rows", () => {
+    const visibleEntries = getVisibleSidebarEntriesForPreview({
+      entries: [
+        {
+          rowId: ThreadId.makeUnsafe("thread-parent"),
+          rootRowId: ThreadId.makeUnsafe("thread-parent"),
+        },
+        {
+          rowId: ThreadId.makeUnsafe("thread-child"),
+          rootRowId: ThreadId.makeUnsafe("thread-parent"),
+        },
+        {
+          rowId: ThreadId.makeUnsafe("thread-second-root"),
+          rootRowId: ThreadId.makeUnsafe("thread-second-root"),
+        },
+        {
+          rowId: ThreadId.makeUnsafe("thread-third-root"),
+          rootRowId: ThreadId.makeUnsafe("thread-third-root"),
+        },
+      ],
+      activeEntryId: undefined,
+      isExpanded: false,
+      previewLimit: 2,
+    }).visibleEntries;
+
+    expect(visibleEntries.map((entry) => entry.rowId)).toEqual([
+      ThreadId.makeUnsafe("thread-parent"),
+      ThreadId.makeUnsafe("thread-child"),
+      ThreadId.makeUnsafe("thread-second-root"),
+    ]);
+  });
+});
+
 describe("getVisibleSidebarThreadIds", () => {
   it("flattens only the sidebar-visible threads in render order", () => {
     const projects = [
@@ -461,6 +608,7 @@ describe("getVisibleSidebarThreadIds", () => {
       makeThread({
         id: ThreadId.makeUnsafe("thread-2"),
         projectId: ProjectId.makeUnsafe("project-1"),
+        parentThreadId: ThreadId.makeUnsafe("thread-1"),
         createdAt: "2026-03-09T10:02:00.000Z",
       }),
       makeThread({
@@ -491,9 +639,77 @@ describe("getVisibleSidebarThreadIds", () => {
 
     expect(visibleThreadIds).toEqual([
       ThreadId.makeUnsafe("thread-3"),
-      ThreadId.makeUnsafe("thread-2"),
       ThreadId.makeUnsafe("thread-1"),
       ThreadId.makeUnsafe("thread-4"),
+    ]);
+  });
+
+  it("reveals selected subagent children even when only the parent is expanded implicitly", () => {
+    const visibleThreadIds = getVisibleSidebarThreadIds({
+      projects: [makeProject({ id: ProjectId.makeUnsafe("project-1"), expanded: true })],
+      threads: [
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-parent"),
+          projectId: ProjectId.makeUnsafe("project-1"),
+          createdAt: "2026-03-09T10:03:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-child"),
+          projectId: ProjectId.makeUnsafe("project-1"),
+          parentThreadId: ThreadId.makeUnsafe("thread-parent"),
+          createdAt: "2026-03-09T10:02:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-other"),
+          projectId: ProjectId.makeUnsafe("project-1"),
+          createdAt: "2026-03-09T10:01:00.000Z",
+        }),
+      ],
+      activeThreadId: ThreadId.makeUnsafe("thread-child"),
+      expandedThreadListsByProject: new Set<ProjectId>([ProjectId.makeUnsafe("project-1")]),
+      expandedSubagentParentIds: new Set<ThreadId>([ThreadId.makeUnsafe("thread-parent")]),
+      previewLimit: 6,
+      threadSortOrder: "created_at",
+    });
+
+    expect(visibleThreadIds).toEqual([
+      ThreadId.makeUnsafe("thread-parent"),
+      ThreadId.makeUnsafe("thread-child"),
+      ThreadId.makeUnsafe("thread-other"),
+    ]);
+  });
+
+  it("respects manual subagent collapse even when a child thread is active", () => {
+    const visibleThreadIds = getVisibleSidebarThreadIds({
+      projects: [makeProject({ id: ProjectId.makeUnsafe("project-1"), expanded: true })],
+      threads: [
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-parent"),
+          projectId: ProjectId.makeUnsafe("project-1"),
+          createdAt: "2026-03-09T10:03:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-child"),
+          projectId: ProjectId.makeUnsafe("project-1"),
+          parentThreadId: ThreadId.makeUnsafe("thread-parent"),
+          createdAt: "2026-03-09T10:02:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-other"),
+          projectId: ProjectId.makeUnsafe("project-1"),
+          createdAt: "2026-03-09T10:01:00.000Z",
+        }),
+      ],
+      activeThreadId: ThreadId.makeUnsafe("thread-child"),
+      expandedThreadListsByProject: new Set<ProjectId>([ProjectId.makeUnsafe("project-1")]),
+      expandedSubagentParentIds: new Set<ThreadId>(),
+      previewLimit: 6,
+      threadSortOrder: "created_at",
+    });
+
+    expect(visibleThreadIds).toEqual([
+      ThreadId.makeUnsafe("thread-parent"),
+      ThreadId.makeUnsafe("thread-other"),
     ]);
   });
 });
