@@ -5,12 +5,7 @@ import type { ThreadId, RuntimeMode } from "@t3tools/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { deriveAssociatedWorktreeMetadata } from "@t3tools/shared/threadWorkspace";
 import { LuSplit } from "react-icons/lu";
-import {
-  ChevronDownIcon,
-  ChevronRightIcon,
-  ExternalLinkIcon,
-  HandoffIcon,
-} from "~/lib/icons";
+import { ChevronDownIcon, ChevronRightIcon, ExternalLinkIcon, HandoffIcon } from "~/lib/icons";
 import { LiaUnlockAltSolid, LiaLockSolid } from "react-icons/lia";
 import { PiLaptop } from "react-icons/pi";
 import { useCallback, useMemo, useState } from "react";

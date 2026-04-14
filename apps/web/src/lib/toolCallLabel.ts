@@ -19,8 +19,16 @@ export function deriveReadableToolTitle(input: ReadableToolTitleInput): string |
   const commandLabel = input.command ? humanizeCommandToolLabel(input.command) : null;
   const commandLike = input.itemType === "command_execution" || input.requestKind === "command";
 
+  // Derive a verbal label from requestKind when the title is generic
+  const requestKindLabel = humanizeRequestKind(input.requestKind, input.itemType);
+
   if (normalizedTitle.length > 0 && !isGenericToolTitle(normalizedTitle)) {
     return normalizedTitle;
+  }
+
+  // Use verbal requestKind label before falling back to raw descriptors
+  if (requestKindLabel) {
+    return requestKindLabel;
   }
 
   if (commandLike && commandLabel) {
@@ -41,6 +49,19 @@ export function deriveReadableToolTitle(input: ReadableToolTitleInput): string |
   if (normalizedFallback.length > 0) {
     return normalizedFallback;
   }
+  return null;
+}
+
+function humanizeRequestKind(
+  requestKind: ReadableToolTitleInput["requestKind"],
+  itemType: ReadableToolTitleInput["itemType"],
+): string | null {
+  if (requestKind === "file-read") return "Read";
+  if (requestKind === "file-change" || itemType === "file_change") return "Edited";
+  // Don't handle command types here — let humanizeCommandToolLabel produce more specific labels
+  if (itemType === "web_search") return "Searched the web";
+  if (itemType === "image_view") return "Viewed image";
+  if (itemType === "collab_agent_tool_call") return "Agent task";
   return null;
 }
 

@@ -577,6 +577,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     key={`work-row:${workEntry.id}`}
                     workEntry={workEntry}
                     chatMetaFontSizePx={appTypographyScale.chatMetaPx}
+                    textFontSizePx={appTypographyScale.uiSmPx}
                   />
                 ))}
               </div>
@@ -719,7 +720,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             ]),
           );
           const hasGenericInlineFileChangeEntry = inlineToolEntries.some(
-            (workEntry) => isFileChangeWorkEntry(workEntry) && (workEntry.changedFiles?.length ?? 0) === 0,
+            (workEntry) =>
+              isFileChangeWorkEntry(workEntry) && (workEntry.changedFiles?.length ?? 0) === 0,
           );
           const visibleRenderableInlineToolEntries = visibleInlineToolEntries.filter(
             (workEntry) =>
@@ -777,8 +779,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           textFontSizePx={normalizedChatFontSizePx}
                           density="compact"
                           fileDiffStatByPath={fileDiffStatByPath}
-                          turnId={turnSummary?.turnId}
                           onOpenTurnDiff={onOpenTurnDiff}
+                          {...(turnSummary?.turnId ? { turnId: turnSummary.turnId } : {})}
                         />
                       ))}
                     </div>
@@ -1369,45 +1371,98 @@ function workToneIcon(tone: TimelineWorkEntry["tone"]): {
   if (tone === "error") {
     return {
       icon: CircleAlertIcon,
-      className: "text-foreground/92",
+      className: "text-muted-foreground/50",
     };
   }
   if (tone === "thinking") {
     return {
       icon: BotIcon,
-      className: "text-foreground/92",
+      className: "text-muted-foreground/40",
     };
   }
   if (tone === "info") {
     return {
       icon: CheckIcon,
-      className: "text-foreground/92",
+      className: "text-muted-foreground/50",
     };
   }
   return {
     icon: ZapIcon,
-    className: "text-foreground/92",
+    className: "text-muted-foreground/45",
   };
 }
 
 function workToneClass(tone: "thinking" | "tool" | "info" | "error"): string {
-  if (tone === "error") return "text-rose-300/50 dark:text-rose-300/50";
-  if (tone === "tool") return "text-muted-foreground/70";
-  if (tone === "thinking") return "text-muted-foreground/50";
-  return "text-muted-foreground/40";
+  if (tone === "error") return "text-rose-400/70 dark:text-rose-300/70";
+  if (tone === "tool") return "text-muted-foreground/80";
+  if (tone === "thinking") return "text-muted-foreground/60";
+  return "text-muted-foreground/55";
+}
+
+/**
+ * Try to extract a clean file path from a detail string that may contain JSON.
+ * Handles patterns like:
+ *   Read {"file_path":"/Users/foo/bar.ts","offset":10}
+ *   {"file_path":"/path/to/file.ts"}
+ */
+function extractFilePathFromDetail(detail: string): string | null {
+  // Try to find a JSON-like object in the detail
+  const jsonStart = detail.indexOf("{");
+  if (jsonStart < 0) return null;
+  const jsonEnd = detail.lastIndexOf("}");
+  if (jsonEnd <= jsonStart) return null;
+  try {
+    const parsed = JSON.parse(detail.slice(jsonStart, jsonEnd + 1));
+    const filePath = parsed.file_path ?? parsed.filePath ?? parsed.path ?? parsed.filename ?? null;
+    if (typeof filePath === "string" && filePath.trim().length > 0) {
+      return filePath.trim();
+    }
+  } catch {
+    // Not valid JSON — try regex fallback
+    const match = /"(?:file_path|filePath|path|filename)"\s*:\s*"([^"]+)"/i.exec(detail);
+    if (match?.[1]) return match[1];
+  }
+  return null;
 }
 
 function workEntryPreview(
-  workEntry: Pick<TimelineWorkEntry, "detail" | "command" | "changedFiles">,
-) {
+  workEntry: Pick<
+    TimelineWorkEntry,
+    "detail" | "command" | "changedFiles" | "requestKind" | "itemType"
+  >,
+): string | null {
+  const isFileRelated =
+    workEntry.requestKind === "file-read" ||
+    workEntry.requestKind === "file-change" ||
+    workEntry.itemType === "file_change";
+
+  // Prefer clean basenames from changedFiles
+  if (workEntry.changedFiles && workEntry.changedFiles.length > 0) {
+    const names = workEntry.changedFiles.map((p) => basename(p));
+    if (names.length === 1) return names[0]!;
+    return `${names.length} files`;
+  }
+
+  // For commands, show the command itself
   if (workEntry.command) return workEntry.command;
-  if (workEntry.detail) return workEntry.detail;
-  if ((workEntry.changedFiles?.length ?? 0) === 0) return null;
-  const [firstPath] = workEntry.changedFiles ?? [];
-  if (!firstPath) return null;
-  return workEntry.changedFiles!.length === 1
-    ? firstPath
-    : `${firstPath} +${workEntry.changedFiles!.length - 1} more`;
+
+  // For detail, try to extract a clean file path first
+  if (workEntry.detail) {
+    const filePath = extractFilePathFromDetail(workEntry.detail);
+    if (filePath) return basename(filePath);
+
+    // For file-related entries, the heading alone is enough — don't show raw JSON
+    if (isFileRelated) return null;
+
+    // For other entries, if the detail looks like raw JSON, skip it
+    const trimmedDetail = workEntry.detail.trim();
+    if (trimmedDetail.startsWith("{") || trimmedDetail.startsWith("[")) return null;
+
+    // Clean, non-JSON detail — show it
+    return trimmedDetail;
+  }
+
+  return null;
 }
 
 function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
@@ -1481,12 +1536,13 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const EntryIcon = workEntryIcon(workEntry);
   const heading = toolWorkEntryHeading(workEntry);
   const preview = workEntryPreview(workEntry);
-  const displayText = preview ? `${heading} - ${preview}` : heading;
+  const displayText = preview ? `${heading} ${preview}` : heading;
   const hasChangedFiles = (workEntry.changedFiles?.length ?? 0) > 0;
-  const previewIsChangedFiles = hasChangedFiles && !workEntry.command && !workEntry.detail;
-  const showChangedFileChips = !compact && hasChangedFiles && !previewIsChangedFiles;
   const changedFiles = workEntry.changedFiles ?? [];
   const showEditedRows = isFileChangeWorkEntry(workEntry) && changedFiles.length > 0;
+
+  // Use the text font size (matching the UI settings) for tool call rows
+  const rowFontSizePx = textFontSizePx;
 
   return (
     <div className={cn(compact ? "py-0.5" : "rounded-lg px-1 py-1")}>
@@ -1514,15 +1570,15 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                 }}
               >
                 <span
-                  className="font-system-ui shrink-0 text-[#7b7b84]"
-                  style={{ fontSize: `${textFontSizePx}px` }}
+                  className="font-system-ui shrink-0 text-muted-foreground/60"
+                  style={{ fontSize: `${rowFontSizePx}px` }}
                 >
                   Edited
                 </span>
                 <span
                   className="font-system-ui max-w-[28rem] truncate group-hover:opacity-90"
                   style={{
-                    fontSize: `${textFontSizePx}px`,
+                    fontSize: `${rowFontSizePx}px`,
                     color: "var(--info-foreground)",
                   }}
                 >
@@ -1531,7 +1587,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                 {changedFileStat ? (
                   <span
                     className="font-chat-code shrink-0 tabular-nums whitespace-nowrap"
-                    style={{ fontSize: `${textFontSizePx}px` }}
+                    style={{ fontSize: `${rowFontSizePx}px` }}
                   >
                     <DiffStatLabel
                       additions={changedFileStat.additions}
@@ -1552,9 +1608,8 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
         >
           <span
             className={cn(
-              "flex shrink-0 items-center justify-center",
+              "flex shrink-0 items-center justify-center text-muted-foreground/40",
               compact ? "size-4" : "size-5",
-              iconConfig.className,
             )}
           >
             <EntryIcon className={compact ? "size-2.5" : "size-3"} />
@@ -1562,46 +1617,16 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
           <div className="min-w-0 flex-1 overflow-hidden">
             <p
               className={cn(
-                compact ? "truncate leading-4" : "truncate leading-5",
-                workToneClass(workEntry.tone),
-                preview ? "text-muted-foreground/70" : "",
+                compact ? "truncate leading-5" : "truncate leading-6",
+                "text-muted-foreground/50",
               )}
-              style={{ fontSize: `${chatMetaFontSizePx}px` }}
+              style={{ fontSize: `${rowFontSizePx}px` }}
               title={displayText}
             >
-              <span className={cn("text-foreground/80", workToneClass(workEntry.tone))}>
-                {heading}
-              </span>
-              {preview && (
-                <span className={compact ? "text-muted-foreground/50" : "text-muted-foreground/55"}>
-                  {" "}
-                  - {preview}
-                </span>
-              )}
+              <span className="text-muted-foreground/50">{heading}</span>
+              {preview && <span className="text-muted-foreground/25"> {preview}</span>}
             </p>
           </div>
-        </div>
-      )}
-      {showChangedFileChips && (
-        <div className="mt-1 flex flex-wrap gap-1 pl-6">
-          {workEntry.changedFiles?.slice(0, 4).map((filePath) => (
-            <span
-              key={`${workEntry.id}:${filePath}`}
-              className="font-chat-code rounded-md border border-border/55 bg-background/75 px-1.5 py-0.5 text-muted-foreground/75"
-              style={{ fontSize: `${chatMetaFontSizePx}px` }}
-              title={filePath}
-            >
-              {filePath}
-            </span>
-          ))}
-          {(workEntry.changedFiles?.length ?? 0) > 4 && (
-            <span
-              className="px-1 text-muted-foreground/55"
-              style={{ fontSize: `${chatMetaFontSizePx}px` }}
-            >
-              +{(workEntry.changedFiles?.length ?? 0) - 4}
-            </span>
-          )}
         </div>
       )}
     </div>

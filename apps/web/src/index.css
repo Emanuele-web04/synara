@@ -57,6 +57,27 @@
   .sidebar-icon-button {
     @apply items-center justify-center rounded-sm p-0.5 text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground/82 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring;
   }
+
+  /* Animate terminal run state in CSS so many open terminals don't schedule JS timers. */
+  .terminal-running-indicator__dot {
+    animation: terminal-running-indicator-pulse 640ms ease-in-out infinite;
+    opacity: 0.24;
+    transform: scale(0.7);
+    will-change: opacity, transform;
+  }
+}
+
+@keyframes terminal-running-indicator-pulse {
+  0%,
+  100% {
+    opacity: 0.24;
+    transform: scale(0.7);
+  }
+
+  35% {
+    opacity: 0.92;
+    transform: scale(1);
+  }
 }
 
 /* Suppress all transitions during theme changes */

@@ -58,9 +58,20 @@ export interface CodexAdapterLiveOptions {
 
 function toMessage(cause: unknown, fallback: string): string {
   if (cause instanceof Error && cause.message.length > 0) {
-    return cause.message;
+    return sanitizeUserFacingErrorMessage(cause.message, fallback);
   }
   return fallback;
+}
+
+function sanitizeUserFacingErrorMessage(message: string, fallback: string): string {
+  const normalized = message.trim();
+  if (normalized.length === 0) {
+    return fallback;
+  }
+
+  const firstLine = normalized.split("\n")[0]?.trim() ?? "";
+  const withoutInlineStack = firstLine.replace(/\s+at file:\/\/.*$/s, "").trim();
+  return withoutInlineStack.length > 0 ? withoutInlineStack : fallback;
 }
 
 function toSessionError(

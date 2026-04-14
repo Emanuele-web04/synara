@@ -14,7 +14,9 @@ import {
   nativeImage,
   nativeTheme,
   protocol,
+  session,
   shell,
+  systemPreferences,
 } from "electron";
 import type { MenuItemConstructorOptions } from "electron";
 import * as Effect from "effect/Effect";
@@ -38,6 +40,7 @@ import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness"
 import { showDesktopConfirmDialog } from "./confirmDialog";
 import { syncShellEnvironment } from "./syncShellEnvironment";
 import { getAutoUpdateDisabledReason, shouldBroadcastDownloadProgress } from "./updateState";
+import { registerDesktopVoiceTranscriptionHandler } from "./voiceTranscription";
 import {
   createInitialDesktopUpdateState,
   reduceDesktopUpdateStateOnCheckFailure,
@@ -1419,6 +1422,7 @@ function registerIpcHandlers(): void {
         ...(typeof input?.threadId === "string" ? { threadId: input.threadId } : {}),
       }),
   );
+  registerDesktopVoiceTranscriptionHandler();
 
   ipcMain.removeHandler(BROWSER_OPEN_CHANNEL);
   ipcMain.handle(BROWSER_OPEN_CHANNEL, async (_event, input: BrowserOpenInput) =>
@@ -1593,6 +1597,49 @@ function createWindow(): BrowserWindow {
   return window;
 }
 
+function configureMediaPermissions(): void {
+  const defaultSession = session.defaultSession;
+  if (!defaultSession) {
+    return;
+  }
+
+  defaultSession.setPermissionCheckHandler((_webContents, permission) => {
+    if (permission === "media") {
+      return process.platform === "darwin"
+        ? systemPreferences.getMediaAccessStatus("microphone") === "granted"
+        : false;
+    }
+    return false;
+  });
+
+  defaultSession.setPermissionRequestHandler((_webContents, permission, callback, details) => {
+    if (permission !== "media") {
+      callback(false);
+      return;
+    }
+
+    const requestedMediaTypes =
+      "mediaTypes" in details && Array.isArray(details.mediaTypes) ? details.mediaTypes : [];
+    if (!requestedMediaTypes.includes("audio")) {
+      callback(false);
+      return;
+    }
+
+    if (process.platform === "darwin") {
+      const status = systemPreferences.getMediaAccessStatus("microphone");
+      if (status === "granted") {
+        callback(true);
+        return;
+      }
+
+      void systemPreferences.askForMediaAccess("microphone").then(callback, () => callback(false));
+      return;
+    }
+
+    callback(true);
+  });
+}
+
 // Override Electron's userData path before the `ready` event so that
 // Chromium session data uses a filesystem-friendly directory name.
 // Must be called synchronously at the top level — before `app.whenReady()`.
@@ -1659,6 +1706,7 @@ app
   .then(() => {
     writeDesktopLogHeader("app ready");
     configureAppIdentity();
+    configureMediaPermissions();
     configureApplicationMenu();
     registerDesktopProtocol();
     configureAutoUpdater();

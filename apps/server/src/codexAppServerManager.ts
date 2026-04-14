@@ -1641,7 +1641,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     readonly threadId?: string;
     readonly refreshToken: boolean;
   }): Promise<CodexVoiceTranscriptionAuthContext> {
-    const context = await this.resolveContextForDiscovery(input.threadId, input.cwd);
+    // Voice transcription should always resolve auth from a fresh discovery context
+    // instead of reusing a possibly stale thread-bound session token.
+    const context = await this.getOrCreateDiscoverySession(input.cwd?.trim() || process.cwd());
     const response = await this.sendRequest<Record<string, unknown>>(context, "getAuthStatus", {
       includeToken: true,
       refreshToken: input.refreshToken,

@@ -38,7 +38,7 @@ export async function transcribeVoiceWithChatGptSession(input: {
     audioBuffer,
     mimeType: input.request.mimeType,
     token: auth.token,
-    transcriptionUrl: auth.transcriptionUrl,
+    ...(auth.transcriptionUrl ? { transcriptionUrl: auth.transcriptionUrl } : {}),
   });
 
   if (response.status === 401 || response.status === 403) {
@@ -48,7 +48,7 @@ export async function transcribeVoiceWithChatGptSession(input: {
       audioBuffer,
       mimeType: input.request.mimeType,
       token: auth.token,
-      transcriptionUrl: auth.transcriptionUrl,
+      ...(auth.transcriptionUrl ? { transcriptionUrl: auth.transcriptionUrl } : {}),
     });
   }
 

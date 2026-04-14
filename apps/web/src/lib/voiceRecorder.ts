@@ -27,6 +27,8 @@ interface RecorderRuntime {
   sampleRateHz: number;
 }
 
+const MAX_WAVEFORM_SAMPLES = 160;
+
 export function formatVoiceRecordingDuration(durationMs: number): string {
   const totalSeconds = Math.max(0, Math.floor(durationMs / 1_000));
   const minutes = Math.floor(totalSeconds / 60);
@@ -37,8 +39,11 @@ export function formatVoiceRecordingDuration(durationMs: number): string {
 export function useVoiceRecorder() {
   const runtimeRef = useRef<RecorderRuntime | null>(null);
   const timerRef = useRef<number | null>(null);
+  const waveformLevelsRef = useRef<number[]>([]);
+  const waveformLastEmitAtRef = useRef(0);
   const [isRecording, setIsRecording] = useState(false);
   const [durationMs, setDurationMs] = useState(0);
+  const [waveformLevels, setWaveformLevels] = useState<number[]>([]);
 
   const clearTimer = useCallback(() => {
     if (timerRef.current !== null) {
@@ -137,6 +142,21 @@ export function useVoiceRecorder() {
         }
 
         runtime.chunks.push(monoSamples);
+
+        const rmsLevel = Math.min(
+          1,
+          Math.sqrt(
+            monoSamples.reduce((sum, sample) => sum + sample * sample, 0) /
+              Math.max(1, monoSamples.length),
+          ) * 3.2,
+        );
+        const now = performance.now();
+        if (now - waveformLastEmitAtRef.current >= 45) {
+          waveformLastEmitAtRef.current = now;
+          const nextLevels = [...waveformLevelsRef.current, rmsLevel].slice(-MAX_WAVEFORM_SAMPLES);
+          waveformLevelsRef.current = nextLevels;
+          setWaveformLevels(nextLevels);
+        }
       };
 
       sourceNode.connect(processorNode);
@@ -144,6 +164,9 @@ export function useVoiceRecorder() {
       silentGainNode.connect(audioContext.destination);
 
       runtimeRef.current = runtime;
+      waveformLevelsRef.current = [];
+      waveformLastEmitAtRef.current = 0;
+      setWaveformLevels([]);
       setDurationMs(0);
       setIsRecording(true);
       timerRef.current = window.setInterval(() => {
@@ -186,7 +209,7 @@ export function useVoiceRecorder() {
     const wavBytes = encodeMono16BitWav(resampledSamples, TARGET_SAMPLE_RATE);
     const audioBase64 = await blobToBase64(new Blob([wavBytes], { type: "audio/wav" }));
 
-    return {
+    const payload: VoiceRecordingPayload = {
       audioBase64,
       mimeType: "audio/wav",
       sampleRateHz: TARGET_SAMPLE_RATE,
@@ -195,10 +218,14 @@ export function useVoiceRecorder() {
         Math.round((resampledSamples.length / TARGET_SAMPLE_RATE) * 1_000) || recorded.durationMs,
       ),
     };
+    return payload;
   }, [teardownRuntime]);
 
   const cancelRecording = useCallback(async () => {
     await teardownRuntime();
+    waveformLevelsRef.current = [];
+    waveformLastEmitAtRef.current = 0;
+    setWaveformLevels([]);
   }, [teardownRuntime]);
 
   useEffect(
@@ -211,6 +238,7 @@ export function useVoiceRecorder() {
   return {
     isRecording,
     durationMs,
+    waveformLevels,
     startRecording,
     stopRecording,
     cancelRecording,

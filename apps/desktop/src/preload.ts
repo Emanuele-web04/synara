@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { DesktopBridge } from "@t3tools/contracts";
+import { SERVER_TRANSCRIBE_VOICE_CHANNEL } from "./voiceTranscription";
 
 const PICK_FOLDER_CHANNEL = "desktop:pick-folder";
 const CONFIRM_CHANNEL = "desktop:confirm";
@@ -71,6 +72,9 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   notifications: {
     isSupported: () => ipcRenderer.invoke(NOTIFICATIONS_IS_SUPPORTED_CHANNEL),
     show: (input) => ipcRenderer.invoke(NOTIFICATIONS_SHOW_CHANNEL, input),
+  },
+  server: {
+    transcribeVoice: (input) => ipcRenderer.invoke(SERVER_TRANSCRIBE_VOICE_CHANNEL, input),
   },
   browser: {
     open: (input) => ipcRenderer.invoke(BROWSER_OPEN_CHANNEL, input),

@@ -357,9 +357,9 @@ export class DesktopBrowserManager {
 
     if (this.activeThreadId === input.threadId) {
       this.resumeThread(input.threadId);
-      this.ensureLiveRuntime(input.threadId, tab.id);
-      void this.loadTab(input.threadId, tab.id, { force: true });
       if (state.activeTabId === tab.id && this.activeBounds) {
+        this.ensureLiveRuntime(input.threadId, tab.id);
+        void this.loadTab(input.threadId, tab.id, { force: true });
         this.attachActiveTab(input.threadId, this.activeBounds);
       }
     } else {
@@ -460,8 +460,14 @@ export class DesktopBrowserManager {
     }
 
     this.clearSuspendTimer(threadId);
+    const activeTab = this.getActiveTab(state);
 
+    // Only resume the visible tab. Waking every tab can fan out into several
+    // Chromium renderer processes and background page activity at once.
     for (const tab of state.tabs) {
+      if (tab.id !== activeTab?.id) {
+        continue;
+      }
       const runtime = this.ensureLiveRuntime(threadId, tab.id);
       if (tab.status === "suspended") {
         void this.loadTab(threadId, tab.id, { force: true, runtime });

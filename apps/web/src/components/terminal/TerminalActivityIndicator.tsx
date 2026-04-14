@@ -3,7 +3,6 @@
 // Layer: Terminal presentation primitive
 
 import type { TerminalVisualState } from "@t3tools/shared/terminalThreads";
-import { useEffect, useState } from "react";
 
 import { cn } from "~/lib/utils";
 
@@ -12,29 +11,12 @@ interface TerminalActivityIndicatorProps {
   state?: Exclude<TerminalVisualState, "idle">;
 }
 
-// Braille dot frames for a 2x3 perimeter snake.
-// Default state shows 4 lit dots; corner transitions drop to 3.
-const BRAILLE_SNAKE_FRAMES = ["⠙", "⠹", "⠸", "⠼", "⠴", "⠶", "⠦", "⠧", "⠇", "⠏", "⠋", "⠛"] as const;
-const BRAILLE_SNAKE_INTERVAL_MS = 90;
+const RUNNING_INDICATOR_OFFSETS_MS = [0, 160, 320, 480] as const;
 
 export default function TerminalActivityIndicator({
   className,
   state = "running",
 }: TerminalActivityIndicatorProps) {
-  const [frameIndex, setFrameIndex] = useState(0);
-
-  useEffect(() => {
-    if (state !== "running") {
-      return;
-    }
-    const timer = window.setInterval(() => {
-      setFrameIndex((current) => (current + 1) % BRAILLE_SNAKE_FRAMES.length);
-    }, BRAILLE_SNAKE_INTERVAL_MS);
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [state]);
-
   if (state === "attention" || state === "review") {
     return (
       <span
@@ -54,11 +36,18 @@ export default function TerminalActivityIndicator({
     <span
       aria-hidden="true"
       className={cn(
-        "inline-flex shrink-0 items-center justify-center font-mono text-[8px] leading-none text-current antialiased",
+        "inline-grid h-2.5 w-2.5 shrink-0 grid-cols-2 grid-rows-2 gap-px text-current",
         className,
       )}
     >
-      {BRAILLE_SNAKE_FRAMES[frameIndex]}
+      {RUNNING_INDICATOR_OFFSETS_MS.map((delayMs) => (
+        <span
+          // CSS animation keeps busy terminal indicators out of React's render loop.
+          key={delayMs}
+          className="terminal-running-indicator__dot block size-1 rounded-full bg-current"
+          style={{ animationDelay: `${delayMs}ms` }}
+        />
+      ))}
     </span>
   );
 }

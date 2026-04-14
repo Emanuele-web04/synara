@@ -220,7 +220,9 @@ function WorktreeBadgeGlyph({ className }: { className?: string }) {
   return <LuSplit aria-hidden="true" className={cn("rotate-90", className)} />;
 }
 
-function resolveWorktreeBadgeLabel(thread: Pick<Thread, "envMode" | "worktreePath">): string | null {
+function resolveWorktreeBadgeLabel(
+  thread: Pick<Thread, "envMode" | "worktreePath">,
+): string | null {
   return resolveThreadEnvironmentPresentation({
     envMode: thread.envMode,
     worktreePath: thread.worktreePath,

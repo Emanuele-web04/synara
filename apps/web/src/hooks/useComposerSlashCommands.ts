@@ -242,11 +242,11 @@ export function useComposerSlashCommands(input: {
   const runCodexReviewStart = useCallback(
     async (target: "changes" | "base-branch") => {
       const api = readNativeApi();
-      if (!api || !isServerThread || !activeThread || !activeProject) {
+      if (!api || !activeThread || !activeProject) {
         toastManager.add({
           type: "warning",
           title: "Review is unavailable",
-          description: "Only existing server-backed threads can start a native review right now.",
+          description: "Open a project thread before starting a native review.",
         });
         return false;
       }
@@ -336,7 +336,6 @@ export function useComposerSlashCommands(input: {
       activeProject,
       activeRootBranch,
       activeThread,
-      isServerThread,
       navigateToThread,
       runtimeMode,
       selectedModelSelection,

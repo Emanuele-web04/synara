@@ -2,7 +2,12 @@ import { ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
+  appendVoiceTranscriptToPrompt,
+  deriveComposerVoiceState,
+  describeVoiceRecordingStartError,
   hasServerAcknowledgedLocalDispatch,
+  isVoiceAuthExpiredMessage,
+  sanitizeVoiceErrorMessage,
   shouldAutoDeleteTerminalThreadOnLastClose,
   buildExpiredTerminalContextToastCopy,
   type LocalDispatchSnapshot,
@@ -10,6 +15,66 @@ import {
   hasLiveChatTurn,
   shouldRenderTerminalWorkspace,
 } from "./ChatView.logic";
+
+describe("voice helpers", () => {
+  it("appends a transcript to the existing prompt without disturbing spacing", () => {
+    expect(appendVoiceTranscriptToPrompt("Hello there   ", "  next line  ")).toBe(
+      "Hello there\nnext line",
+    );
+  });
+
+  it("returns null when the transcript is empty", () => {
+    expect(appendVoiceTranscriptToPrompt("Hello", "   ")).toBeNull();
+  });
+
+  it("sanitizes inline stack traces from voice errors", () => {
+    expect(
+      sanitizeVoiceErrorMessage(
+        "Your ChatGPT login has expired. Sign in again. at file:///Users/test/app.mjs:12:3",
+      ),
+    ).toBe("Your ChatGPT login has expired. Sign in again.");
+  });
+
+  it("detects auth-expired copy in sanitized voice errors", () => {
+    expect(isVoiceAuthExpiredMessage("Sign in again to ChatGPT")).toBe(true);
+    expect(isVoiceAuthExpiredMessage("The microphone could not be opened.")).toBe(false);
+  });
+
+  it("maps microphone permission errors to clearer copy", () => {
+    const error = new Error("Permission denied");
+    error.name = "NotAllowedError";
+
+    expect(describeVoiceRecordingStartError(error)).toContain("Microphone access was denied");
+  });
+
+  it("derives voice-note availability from provider auth and runtime state", () => {
+    expect(
+      deriveComposerVoiceState({
+        authStatus: "authenticated",
+        voiceTranscriptionAvailable: true,
+        isRecording: false,
+        isTranscribing: false,
+      }),
+    ).toEqual({
+      canRenderVoiceNotes: true,
+      canStartVoiceNotes: true,
+      showVoiceNotesControl: true,
+    });
+
+    expect(
+      deriveComposerVoiceState({
+        authStatus: "unauthenticated",
+        voiceTranscriptionAvailable: true,
+        isRecording: true,
+        isTranscribing: false,
+      }),
+    ).toEqual({
+      canRenderVoiceNotes: false,
+      canStartVoiceNotes: false,
+      showVoiceNotesControl: true,
+    });
+  });
+});
 
 describe("deriveComposerSendState", () => {
   it("treats expired terminal pills as non-sendable content", () => {

@@ -218,6 +218,7 @@ import { ComposerPendingApprovalPanel } from "./chat/ComposerPendingApprovalPane
 import { ComposerPendingUserInputPanel } from "./chat/ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./chat/ComposerPlanFollowUpBanner";
 import { ComposerVoiceButton } from "./chat/ComposerVoiceButton";
+import { ComposerVoiceRecorderBar } from "./chat/ComposerVoiceRecorderBar";
 import { ComposerImageAttachmentChip } from "./chat/ComposerImageAttachmentChip";
 import { ActivePlanCard } from "./chat/ActivePlanCard";
 import { useChatAutoScrollController } from "./chat/useChatAutoScrollController";
@@ -230,6 +231,10 @@ import { ProviderHealthBanner } from "./chat/ProviderHealthBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
 import { RateLimitBanner, deriveLatestRateLimitStatus } from "./chat/RateLimitBanner";
 import {
+  appendVoiceTranscriptToPrompt,
+  describeVoiceRecordingStartError,
+  isVoiceAuthExpiredMessage,
+  sanitizeVoiceErrorMessage,
   shouldAutoDeleteTerminalThreadOnLastClose,
   buildExpiredTerminalContextToastCopy,
   buildLocalDraftThread,
@@ -320,6 +325,18 @@ function buildQueuedComposerPreviewText(input: {
 const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
 const SCRIPT_TERMINAL_COLS = 120;
 const SCRIPT_TERMINAL_ROWS = 30;
+const VOICE_RECORDER_ACTION_ARM_DELAY_MS = 250;
+
+function warnVoiceGuard(event: string, details?: Record<string, unknown>) {
+  if (!import.meta.env.DEV) {
+    return;
+  }
+  if (details) {
+    console.warn(`[voice] ${event}`, details);
+    return;
+  }
+  console.warn(`[voice] ${event}`);
+}
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -511,6 +528,7 @@ export default function ChatView({
   const {
     isRecording: isVoiceRecording,
     durationMs: voiceRecordingDurationMs,
+    waveformLevels: voiceWaveformLevels,
     startRecording: startVoiceRecording,
     stopRecording: stopVoiceRecording,
     cancelRecording: cancelVoiceRecording,
@@ -934,6 +952,7 @@ export default function ChatView({
   const voiceTranscriptionRequestIdRef = useRef(0);
   const voiceThreadIdRef = useRef(threadId);
   const voiceProviderRef = useRef<ProviderKind>(selectedProvider);
+  const voiceRecordingStartedAtRef = useRef<number | null>(null);
   voiceThreadIdRef.current = threadId;
   voiceProviderRef.current = selectedProvider;
   const customModelsByProvider = useMemo(() => getCustomModelsByProvider(settings), [settings]);
@@ -1680,16 +1699,21 @@ export default function ChatView({
     () => providerStatuses.find((status) => status.provider === selectedProvider) ?? null,
     [selectedProvider, providerStatuses],
   );
+  const voiceProviderStatus = useMemo(
+    () => providerStatuses.find((status) => status.provider === "codex") ?? null,
+    [providerStatuses],
+  );
+  const refreshVoiceStatus = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: serverQueryKeys.config() });
+  }, [queryClient]);
   const voiceRecordingDurationLabel = useMemo(
     () => formatVoiceRecordingDuration(voiceRecordingDurationMs),
     [voiceRecordingDurationMs],
   );
-  const canRenderVoiceNotes =
-    selectedProvider === "codex" && activeProviderStatus?.authStatus !== "unauthenticated";
+  const canRenderVoiceNotes = voiceProviderStatus?.authStatus !== "unauthenticated";
   const canStartVoiceNotes =
-    selectedProvider === "codex" &&
-    activeProviderStatus?.authStatus !== "unauthenticated" &&
-    activeProviderStatus?.voiceTranscriptionAvailable !== false;
+    voiceProviderStatus?.authStatus !== "unauthenticated" &&
+    voiceProviderStatus?.voiceTranscriptionAvailable !== false;
   const showVoiceNotesControl = canRenderVoiceNotes || isVoiceRecording || isVoiceTranscribing;
   const activeProjectCwd = activeProject?.cwd ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
@@ -1839,6 +1863,21 @@ export default function ChatView({
       focusComposer();
     });
   }, [focusComposer]);
+  const appendVoiceTranscriptToComposer = useCallback(
+    (transcript: string) => {
+      const nextPrompt = appendVoiceTranscriptToPrompt(promptRef.current, transcript);
+      if (!nextPrompt) {
+        return;
+      }
+
+      promptRef.current = nextPrompt;
+      setPrompt(nextPrompt);
+      setComposerCursor(collapseExpandedComposerCursor(nextPrompt, nextPrompt.length));
+      setComposerTrigger(detectComposerTrigger(nextPrompt, nextPrompt.length));
+      scheduleComposerFocus();
+    },
+    [scheduleComposerFocus, setPrompt],
+  );
   const addTerminalContextToDraft = useCallback(
     (selection: TerminalContextSelection) => {
       if (!activeThread) {
@@ -2794,6 +2833,7 @@ export default function ChatView({
 
   useEffect(() => {
     voiceTranscriptionRequestIdRef.current += 1;
+    voiceRecordingStartedAtRef.current = null;
     void cancelVoiceRecording();
     setIsVoiceTranscribing(false);
     setOptimisticUserMessages((existing) => {
@@ -2817,10 +2857,22 @@ export default function ChatView({
     if (canStartVoiceNotes || !isVoiceRecording) {
       return;
     }
+    warnVoiceGuard("cancelled active voice recording because voice became unavailable", {
+      authStatus: voiceProviderStatus?.authStatus ?? null,
+      voiceTranscriptionAvailable: voiceProviderStatus?.voiceTranscriptionAvailable ?? null,
+      isVoiceRecording,
+    });
     voiceTranscriptionRequestIdRef.current += 1;
+    voiceRecordingStartedAtRef.current = null;
     void cancelVoiceRecording();
     setIsVoiceTranscribing(false);
-  }, [canStartVoiceNotes, cancelVoiceRecording, isVoiceRecording]);
+  }, [
+    canStartVoiceNotes,
+    cancelVoiceRecording,
+    isVoiceRecording,
+    voiceProviderStatus?.authStatus,
+    voiceProviderStatus?.voiceTranscriptionAvailable,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3265,41 +3317,11 @@ export default function ChatView({
     toggleTerminalVisibility,
   ]);
 
-  // Merge a completed voice transcript into the existing draft without disturbing queued images.
-  const appendVoiceTranscriptToComposer = useCallback(
-    (transcript: string) => {
-      const trimmedTranscript = transcript.trim();
-      if (trimmedTranscript.length === 0) {
-        return;
-      }
-
-      const currentPrompt = promptRef.current;
-      const nextPrompt =
-        currentPrompt.trim().length === 0
-          ? trimmedTranscript
-          : `${currentPrompt.replace(/\s+$/, "")}\n${trimmedTranscript}`;
-      promptRef.current = nextPrompt;
-      setPrompt(nextPrompt);
-      setComposerCursor(collapseExpandedComposerCursor(nextPrompt, nextPrompt.length));
-      setComposerTrigger(detectComposerTrigger(nextPrompt, nextPrompt.length));
-      scheduleComposerFocus();
-    },
-    [scheduleComposerFocus, setPrompt],
-  );
-
-  // Start or stop the microphone recorder, then send the normalized WAV clip to the server.
-  const onComposerVoiceToggle = useCallback(async () => {
+  const startComposerVoiceRecording = useCallback(async () => {
     if (!activeProject) {
       return;
     }
-    if (selectedProvider !== "codex") {
-      toastManager.add({
-        type: "error",
-        title: "Voice notes currently work only with Codex.",
-      });
-      return;
-    }
-    if (activeProviderStatus?.authStatus === "unauthenticated") {
+    if (voiceProviderStatus?.authStatus === "unauthenticated") {
       toastManager.add({
         type: "error",
         title: "Sign in to ChatGPT in Codex before using voice notes.",
@@ -3321,88 +3343,167 @@ export default function ChatView({
       return;
     }
 
-    if (isVoiceRecording) {
-      const api = readNativeApi();
-      if (!api) {
-        toastManager.add({
-          type: "error",
-          title: "Voice transcription is unavailable right now.",
-        });
-        void cancelVoiceRecording();
-        return;
-      }
-
-      setIsVoiceTranscribing(true);
-      const requestId = voiceTranscriptionRequestIdRef.current + 1;
-      voiceTranscriptionRequestIdRef.current = requestId;
-      const requestThreadId = threadId;
-      const requestProvider = selectedProvider;
-      const isCurrentVoiceRequest = () =>
-        voiceTranscriptionRequestIdRef.current === requestId &&
-        voiceThreadIdRef.current === requestThreadId &&
-        voiceProviderRef.current === requestProvider;
-      try {
-        const payload = await stopVoiceRecording();
-        if (!isCurrentVoiceRequest()) {
-          return;
-        }
-        if (!payload) {
-          toastManager.add({
-            type: "warning",
-            title: "No audio was captured.",
-          });
-          return;
-        }
-        const result = await api.server.transcribeVoice({
-          provider: "codex",
-          cwd: activeProject.cwd,
-          ...(activeThread ? { threadId: activeThread.id } : {}),
-          ...payload,
-        });
-        if (!isCurrentVoiceRequest()) {
-          return;
-        }
-        appendVoiceTranscriptToComposer(result.text);
-      } catch (error) {
-        if (!isCurrentVoiceRequest()) {
-          return;
-        }
-        toastManager.add({
-          type: "error",
-          title: "Voice transcription failed",
-          description:
-            error instanceof Error ? error.message : "The voice note could not be transcribed.",
-        });
-      } finally {
-        if (isCurrentVoiceRequest()) {
-          setIsVoiceTranscribing(false);
-        }
-      }
-      return;
-    }
-
     try {
       await startVoiceRecording();
+      voiceRecordingStartedAtRef.current = performance.now();
     } catch (error) {
       toastManager.add({
         type: "error",
         title: "Could not start recording",
-        description: error instanceof Error ? error.message : "The microphone could not be opened.",
+        description: describeVoiceRecordingStartError(error),
       });
     }
   }, [
     activeProject,
-    activeProviderStatus?.authStatus,
+    canStartVoiceNotes,
+    pendingUserInputs.length,
+    startVoiceRecording,
+    voiceProviderStatus?.authStatus,
+  ]);
+
+  const submitComposerVoiceRecording = useCallback(async () => {
+    if (!activeProject || !isVoiceRecording) {
+      return;
+    }
+    const recordedForMs =
+      voiceRecordingStartedAtRef.current === null
+        ? null
+        : Math.round(performance.now() - voiceRecordingStartedAtRef.current);
+    if (
+      recordedForMs !== null &&
+      recordedForMs >= 0 &&
+      recordedForMs < VOICE_RECORDER_ACTION_ARM_DELAY_MS
+    ) {
+      warnVoiceGuard("ignored recorder action immediately after start", {
+        recordedForMs,
+      });
+      return;
+    }
+
+    const api = readNativeApi();
+    if (!api) {
+      toastManager.add({
+        type: "error",
+        title: "Voice transcription is unavailable right now.",
+      });
+      void cancelVoiceRecording();
+      return;
+    }
+
+    setIsVoiceTranscribing(true);
+    const requestId = voiceTranscriptionRequestIdRef.current + 1;
+    voiceTranscriptionRequestIdRef.current = requestId;
+    const requestThreadId = threadId;
+    const requestProvider = selectedProvider;
+    const isCurrentVoiceRequest = () =>
+      voiceTranscriptionRequestIdRef.current === requestId &&
+      voiceThreadIdRef.current === requestThreadId &&
+      voiceProviderRef.current === requestProvider;
+
+    try {
+      const payload = await stopVoiceRecording();
+      if (!isCurrentVoiceRequest()) {
+        return;
+      }
+      if (!payload) {
+        toastManager.add({
+          type: "warning",
+          title: "No audio was captured.",
+        });
+        return;
+      }
+      const result = await api.server.transcribeVoice({
+        provider: "codex",
+        cwd: activeProject.cwd,
+        ...(activeThread ? { threadId: activeThread.id } : {}),
+        ...payload,
+      });
+      if (!isCurrentVoiceRequest()) {
+        return;
+      }
+      appendVoiceTranscriptToComposer(result.text);
+    } catch (error) {
+      if (!isCurrentVoiceRequest()) {
+        return;
+      }
+      const description =
+        error instanceof Error
+          ? sanitizeVoiceErrorMessage(error.message)
+          : "The voice note could not be transcribed.";
+      const authExpired = isVoiceAuthExpiredMessage(description);
+      if (authExpired) {
+        refreshVoiceStatus();
+      }
+      toastManager.add({
+        type: "error",
+        title: authExpired ? "Sign in to ChatGPT again" : "Voice transcription failed",
+        description: authExpired
+          ? "Voice transcription uses your ChatGPT session in Codex. That session was rejected, so sign in again there and retry."
+          : description,
+        ...(authExpired
+          ? {
+              actionProps: {
+                children: "Refresh status",
+                onClick: refreshVoiceStatus,
+              },
+            }
+          : {}),
+      });
+    } finally {
+      if (isCurrentVoiceRequest()) {
+        voiceRecordingStartedAtRef.current = null;
+        setIsVoiceTranscribing(false);
+      }
+    }
+  }, [
+    activeProject,
     activeThread,
     appendVoiceTranscriptToComposer,
-    canStartVoiceNotes,
     cancelVoiceRecording,
     isVoiceRecording,
-    pendingUserInputs.length,
+    refreshVoiceStatus,
     selectedProvider,
-    startVoiceRecording,
     stopVoiceRecording,
     threadId,
+  ]);
+
+  const cancelComposerVoiceRecording = useCallback(() => {
+    const recordedForMs =
+      voiceRecordingStartedAtRef.current === null
+        ? null
+        : Math.round(performance.now() - voiceRecordingStartedAtRef.current);
+    if (
+      recordedForMs !== null &&
+      recordedForMs >= 0 &&
+      recordedForMs < VOICE_RECORDER_ACTION_ARM_DELAY_MS
+    ) {
+      warnVoiceGuard("ignored recorder action immediately after start", {
+        recordedForMs,
+      });
+      return;
+    }
+    voiceTranscriptionRequestIdRef.current += 1;
+    voiceRecordingStartedAtRef.current = null;
+    setIsVoiceTranscribing(false);
+    void cancelVoiceRecording();
+  }, [cancelVoiceRecording]);
+
+  // Preserve the original "single mic button" contract:
+  // first click starts recording, the next click submits/transcribes.
+  const toggleComposerVoiceRecording = useCallback(() => {
+    if (isVoiceTranscribing) {
+      return;
+    }
+    if (isVoiceRecording) {
+      void submitComposerVoiceRecording();
+      return;
+    }
+    void startComposerVoiceRecording();
+  }, [
+    isVoiceRecording,
+    isVoiceTranscribing,
+    startComposerVoiceRecording,
+    submitComposerVoiceRecording,
   ]);
 
   // --- Composer attachment entry points -------------------------------------
@@ -3655,7 +3756,14 @@ export default function ChatView({
   ): Promise<boolean> => {
     e?.preventDefault();
     const api = readNativeApi();
-    if (!api || !activeThread || isSendBusy || isConnecting || sendInFlightRef.current) {
+    if (
+      !api ||
+      !activeThread ||
+      isSendBusy ||
+      isConnecting ||
+      isVoiceTranscribing ||
+      sendInFlightRef.current
+    ) {
       return false;
     }
     if (activePendingProgress) {
@@ -5536,10 +5644,12 @@ export default function ChatView({
                       >
                         <div
                           className={cn(
-                            "flex min-w-0 flex-1 items-center",
-                            isComposerFooterCompact
-                              ? "gap-1 overflow-hidden"
-                              : "gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:min-w-max sm:overflow-visible",
+                            "flex items-center",
+                            isVoiceRecording || isVoiceTranscribing
+                              ? "min-w-0 shrink-0 gap-1"
+                              : isComposerFooterCompact
+                                ? "min-w-0 flex-1 gap-1 overflow-hidden"
+                                : "min-w-0 flex-1 gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:min-w-max sm:overflow-visible",
                           )}
                         >
                           <ComposerExtrasMenu
@@ -5551,63 +5661,54 @@ export default function ChatView({
                             onSetPlanMode={setPlanMode}
                           />
 
-                          {showVoiceNotesControl ? (
-                            <ComposerVoiceButton
-                              compact={isComposerFooterCompact}
-                              disabled={isComposerApprovalState || isConnecting || isSendBusy}
-                              isRecording={isVoiceRecording}
-                              isTranscribing={isVoiceTranscribing}
-                              durationLabel={voiceRecordingDurationLabel}
-                              onClick={() => {
-                                void onComposerVoiceToggle();
-                              }}
-                            />
-                          ) : null}
-
-                          {/* Provider/model picker */}
-                          <ProviderModelPicker
-                            compact={isComposerFooterCompact}
-                            provider={selectedProvider}
-                            model={selectedModelForPickerWithCustomFallback}
-                            lockedProvider={lockedProvider}
-                            providers={providerStatuses}
-                            modelOptionsByProvider={modelOptionsByProvider}
-                            {...(composerProviderState.modelPickerIconClassName
-                              ? {
-                                  activeProviderIconClassName:
-                                    composerProviderState.modelPickerIconClassName,
-                                }
-                              : {})}
-                            onProviderModelChange={onProviderModelSelect}
-                          />
-
-                          {providerTraitsPicker ? (
+                          {!isVoiceRecording && !isVoiceTranscribing ? (
                             <>
-                              <Separator
-                                orientation="vertical"
-                                className="mx-0.5 hidden h-4 sm:block"
+                              {/* Provider/model picker */}
+                              <ProviderModelPicker
+                                compact={isComposerFooterCompact}
+                                provider={selectedProvider}
+                                model={selectedModelForPickerWithCustomFallback}
+                                lockedProvider={lockedProvider}
+                                providers={providerStatuses}
+                                modelOptionsByProvider={modelOptionsByProvider}
+                                {...(composerProviderState.modelPickerIconClassName
+                                  ? {
+                                      activeProviderIconClassName:
+                                        composerProviderState.modelPickerIconClassName,
+                                    }
+                                  : {})}
+                                onProviderModelChange={onProviderModelSelect}
                               />
-                              {providerTraitsPicker}
-                            </>
-                          ) : null}
 
-                          {interactionMode === "plan" ? (
-                            <>
-                              <Separator
-                                orientation="vertical"
-                                className="mx-0.5 hidden h-4 sm:block"
-                              />
-                              <Button
-                                variant="ghost"
-                                className="shrink-0 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-blue-400 hover:text-blue-300 sm:px-3"
-                                size="sm"
-                                type="button"
-                                onClick={toggleInteractionMode}
-                                title="Plan mode — click to return to normal chat mode"
-                              >
-                                <GoTasklist className="size-3.5" />
-                                <span className="sr-only sm:not-sr-only">Plan</span>
-                              </Button>
+                              {providerTraitsPicker ? (
+                                <>
+                                  <Separator
+                                    orientation="vertical"
+                                    className="mx-0.5 hidden h-4 sm:block"
+                                  />
+                                  {providerTraitsPicker}
+                                </>
+                              ) : null}
+
+                              {interactionMode === "plan" ? (
+                                <>
+                                  <Separator
+                                    orientation="vertical"
+                                    className="mx-0.5 hidden h-4 sm:block"
+                                  />
+                                  <Button
+                                    variant="ghost"
+                                    className="shrink-0 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-blue-400 hover:text-blue-300 sm:px-3"
+                                    size="sm"
+                                    type="button"
+                                    onClick={toggleInteractionMode}
+                                    title="Plan mode — click to return to normal chat mode"
+                                  >
+                                    <GoTasklist className="size-3.5" />
+                                    <span className="sr-only sm:not-sr-only">Plan</span>
+                                  </Button>
+                                </>
+                              ) : null}
                             </>
                           ) : null}
                         </div>
@@ -5615,12 +5716,34 @@ export default function ChatView({
                         {/* Right side: send / stop button */}
                         <div
                           data-chat-composer-actions="right"
-                          className="flex shrink-0 items-center gap-2"
+                          className={cn(
+                            "flex items-center gap-2",
+                            isVoiceRecording || isVoiceTranscribing ? "min-w-0 flex-1" : "shrink-0",
+                          )}
                         >
                           {isPreparingWorktree ? (
                             <span className="text-muted-foreground/70 text-xs">
                               Preparing worktree...
                             </span>
+                          ) : null}
+                          {showVoiceNotesControl && (isVoiceRecording || isVoiceTranscribing) ? (
+                            <ComposerVoiceRecorderBar
+                              disabled={isComposerApprovalState || isConnecting || isSendBusy}
+                              isRecording={isVoiceRecording}
+                              isTranscribing={isVoiceTranscribing}
+                              durationLabel={voiceRecordingDurationLabel}
+                              waveformLevels={voiceWaveformLevels}
+                              onCancel={() => {
+                                if (isVoiceRecording) {
+                                  void submitComposerVoiceRecording();
+                                  return;
+                                }
+                                cancelComposerVoiceRecording();
+                              }}
+                              onSubmit={() => {
+                                void submitComposerVoiceRecording();
+                              }}
+                            />
                           ) : null}
                           {activePendingProgress ? (
                             <div className="flex items-center gap-2">
@@ -5666,7 +5789,9 @@ export default function ChatView({
                                 className="block size-2 rounded-[2px] bg-current"
                               />
                             </button>
-                          ) : pendingUserInputs.length === 0 ? (
+                          ) : pendingUserInputs.length === 0 &&
+                            !isVoiceRecording &&
+                            !isVoiceTranscribing ? (
                             showPlanFollowUpPrompt ? (
                               prompt.trim().length > 0 ? (
                                 <Button
@@ -5713,61 +5838,75 @@ export default function ChatView({
                                 </div>
                               )
                             ) : (
-                              <button
-                                type="submit"
-                                className="flex h-8 w-8 items-center justify-center rounded-full bg-foreground text-background transition-all duration-150 hover:scale-105 disabled:opacity-20 disabled:hover:scale-100 sm:h-7 sm:w-7"
-                                disabled={
-                                  isSendBusy ||
-                                  isConnecting ||
-                                  !composerSendState.hasSendableContent
-                                }
-                                aria-label={
-                                  isConnecting
-                                    ? "Connecting"
-                                    : isPreparingWorktree
-                                      ? "Preparing worktree"
-                                      : isSendBusy
-                                        ? "Sending"
-                                        : "Send message"
-                                }
-                              >
-                                {isConnecting || isSendBusy ? (
-                                  <svg
-                                    width="14"
-                                    height="14"
-                                    viewBox="0 0 14 14"
-                                    fill="none"
-                                    className="animate-spin"
-                                    aria-hidden="true"
-                                  >
-                                    <circle
-                                      cx="7"
-                                      cy="7"
-                                      r="5.5"
-                                      stroke="currentColor"
-                                      strokeWidth="1.5"
-                                      strokeLinecap="round"
-                                      strokeDasharray="20 12"
-                                    />
-                                  </svg>
-                                ) : (
-                                  <svg
-                                    width="14"
-                                    height="14"
-                                    viewBox="0 0 14 14"
-                                    fill="none"
-                                    aria-hidden="true"
-                                  >
-                                    <path
-                                      d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5"
-                                      stroke="currentColor"
-                                      strokeWidth="1.8"
-                                      strokeLinecap="round"
-                                      strokeLinejoin="round"
-                                    />
-                                  </svg>
-                                )}
-                              </button>
+                              <>
+                                {showVoiceNotesControl ? (
+                                  <ComposerVoiceButton
+                                    disabled={isComposerApprovalState || isConnecting || isSendBusy}
+                                    isRecording={isVoiceRecording}
+                                    isTranscribing={isVoiceTranscribing}
+                                    durationLabel={voiceRecordingDurationLabel}
+                                    onClick={toggleComposerVoiceRecording}
+                                  />
+                                ) : null}
+                                <button
+                                  type="submit"
+                                  className="flex h-8 w-8 items-center justify-center rounded-full bg-foreground text-background transition-all duration-150 hover:scale-105 disabled:opacity-20 disabled:hover:scale-100 sm:h-9 sm:w-9"
+                                  disabled={
+                                    isSendBusy ||
+                                    isConnecting ||
+                                    isVoiceTranscribing ||
+                                    !composerSendState.hasSendableContent
+                                  }
+                                  aria-label={
+                                    isConnecting
+                                      ? "Connecting"
+                                      : isVoiceTranscribing
+                                        ? "Transcribing voice note"
+                                        : isPreparingWorktree
+                                          ? "Preparing worktree"
+                                          : isSendBusy
+                                            ? "Sending"
+                                            : "Send message"
+                                  }
+                                >
+                                  {isConnecting || isSendBusy ? (
+                                    <svg
+                                      width="14"
+                                      height="14"
+                                      viewBox="0 0 14 14"
+                                      fill="none"
+                                      className="animate-spin"
+                                      aria-hidden="true"
+                                    >
+                                      <circle
+                                        cx="7"
+                                        cy="7"
+                                        r="5.5"
+                                        stroke="currentColor"
+                                        strokeWidth="1.5"
+                                        strokeLinecap="round"
+                                        strokeDasharray="20 12"
+                                      />
+                                    </svg>
+                                  ) : (
+                                    <svg
+                                      width="14"
+                                      height="14"
+                                      viewBox="0 0 14 14"
+                                      fill="none"
+                                      aria-hidden="true"
+                                    >
+                                      <path
+                                        d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5"
+                                        stroke="currentColor"
+                                        strokeWidth="1.8"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                      />
+                                    </svg>
+                                  )}
+                                </button>
+                              </>
                             )
                           ) : null}
                         </div>

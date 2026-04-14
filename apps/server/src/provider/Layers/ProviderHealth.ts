@@ -112,7 +112,9 @@ function extractAuthMethod(value: unknown): string | undefined {
   return undefined;
 }
 
-function resolveVoiceTranscriptionAvailability(authMethod: string | undefined): boolean | undefined {
+function resolveVoiceTranscriptionAvailability(
+  authMethod: string | undefined,
+): boolean | undefined {
   if (!authMethod) {
     return undefined;
   }
@@ -179,16 +181,13 @@ export function parseAuthStatusFromOutput(result: CommandResult): {
   })();
 
   if (parsedAuth.auth === true) {
+    const voiceTranscriptionAvailable = resolveVoiceTranscriptionAvailability(
+      parsedAuth.authMethod,
+    );
     return {
       status: "ready",
       authStatus: "authenticated",
-      ...(resolveVoiceTranscriptionAvailability(parsedAuth.authMethod) !== undefined
-        ? {
-            voiceTranscriptionAvailable: resolveVoiceTranscriptionAvailability(
-              parsedAuth.authMethod,
-            ),
-          }
-        : {}),
+      ...(voiceTranscriptionAvailable !== undefined ? { voiceTranscriptionAvailable } : {}),
     };
   }
   if (parsedAuth.auth === false) {
@@ -398,7 +397,6 @@ export const checkCodexProviderStatus: Effect.Effect<
       status: "ready" as const,
       available: true,
       authStatus: "unknown" as const,
-      voiceTranscriptionAvailable: false,
       checkedAt,
       message: "Using a custom Codex model provider; OpenAI login check skipped.",
     } satisfies ServerProviderStatus;

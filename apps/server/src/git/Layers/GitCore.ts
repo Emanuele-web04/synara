@@ -1783,8 +1783,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
     const createDetachedWorktree: GitCoreShape["createDetachedWorktree"] = (input) =>
       Effect.gen(function* () {
-        const worktreePath =
-          input.path ?? (yield* buildGeneratedDetachedWorktreePath(input.cwd));
+        const worktreePath = input.path ?? (yield* buildGeneratedDetachedWorktreePath(input.cwd));
 
         yield* executeGit("GitCore.createDetachedWorktree", input.cwd, [
           "worktree",

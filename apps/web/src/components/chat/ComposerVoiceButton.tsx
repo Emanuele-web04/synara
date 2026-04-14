@@ -4,13 +4,12 @@
 // Depends on: shared button styling and caller-owned voice recording state callbacks.
 
 import { memo } from "react";
+import { IoMicOutline } from "react-icons/io5";
 
-import { Loader2Icon, MicIcon, StopIcon } from "~/lib/icons";
+import { Loader2Icon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
-import { Button } from "../ui/button";
 
 export const ComposerVoiceButton = memo(function ComposerVoiceButton(props: {
-  compact: boolean;
   disabled?: boolean;
   isRecording: boolean;
   isTranscribing: boolean;
@@ -24,12 +23,10 @@ export const ComposerVoiceButton = memo(function ComposerVoiceButton(props: {
       : "Record voice note";
 
   return (
-    <Button
-      size="sm"
-      variant="ghost"
+    <button
+      type="button"
       className={cn(
-        "shrink-0 px-2 text-muted-foreground/70 hover:text-foreground/80",
-        props.isRecording && "text-red-500 hover:text-red-500",
+        "flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-zinc-500 transition-colors duration-150 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-45 dark:text-zinc-400 dark:hover:text-zinc-100 sm:h-8 sm:w-8",
       )}
       disabled={props.disabled || props.isTranscribing}
       aria-label={label}
@@ -38,20 +35,9 @@ export const ComposerVoiceButton = memo(function ComposerVoiceButton(props: {
     >
       {props.isTranscribing ? (
         <Loader2Icon aria-hidden="true" className="size-4 animate-spin" />
-      ) : props.isRecording ? (
-        <StopIcon aria-hidden="true" className="size-4" />
       ) : (
-        <MicIcon aria-hidden="true" className="size-4" />
+        <IoMicOutline aria-hidden="true" className="size-[18px]" />
       )}
-      {!props.compact && (
-        <span className="ml-1.5 text-xs font-medium">
-          {props.isTranscribing
-            ? "Transcribing"
-            : props.isRecording
-              ? props.durationLabel
-              : "Voice"}
-        </span>
-      )}
-    </Button>
+    </button>
   );
 });

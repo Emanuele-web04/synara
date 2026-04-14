@@ -50,6 +50,27 @@ function cleanupStaleDevApps() {
   spawnSync("pkill", ["-f", "--", `--t3code-dev-root=${desktopDir}`], { stdio: "ignore" });
 }
 
+function warnIfAlphaAppRunning() {
+  if (process.platform === "win32") {
+    return;
+  }
+
+  const result = spawnSync(
+    "pgrep",
+    ["-fal", "/Applications/DP Code \\(Alpha\\)\\.app/Contents/MacOS/DP Code \\(Alpha\\)"],
+    { encoding: "utf8" },
+  );
+  const output = typeof result.stdout === "string" ? result.stdout.trim() : "";
+  if (!output) {
+    return;
+  }
+
+  console.error(
+    "[desktop-dev] DP Code (Alpha) is still running. Close it before testing voice in DP Code (Dev), or you may be looking at the wrong app/runtime.",
+  );
+  console.error(output);
+}
+
 function startApp() {
   if (shuttingDown || currentApp !== null) {
     return;
@@ -203,6 +224,7 @@ async function shutdown(exitCode) {
 
 startWatchers();
 cleanupStaleDevApps();
+warnIfAlphaAppRunning();
 startApp();
 
 process.once("SIGINT", () => {

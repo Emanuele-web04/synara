@@ -213,6 +213,11 @@ export interface DesktopBridge {
     isSupported: () => Promise<boolean>;
     show: (input: DesktopNotificationInput) => Promise<boolean>;
   };
+  server?: {
+    transcribeVoice: (
+      input: ServerVoiceTranscriptionInput,
+    ) => Promise<ServerVoiceTranscriptionResult>;
+  };
   browser: {
     open: (input: BrowserOpenInput) => Promise<ThreadBrowserState>;
     close: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;

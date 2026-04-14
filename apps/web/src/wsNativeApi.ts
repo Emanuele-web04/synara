@@ -295,7 +295,12 @@ export function createWsNativeApi(): NativeApi {
     },
     server: {
       getConfig: () => transport.request(WS_METHODS.serverGetConfig),
-      transcribeVoice: (input) => transport.request(WS_METHODS.serverTranscribeVoice, input),
+      transcribeVoice: (input) => {
+        if (window.desktopBridge?.server?.transcribeVoice) {
+          return window.desktopBridge.server.transcribeVoice(input);
+        }
+        return transport.request(WS_METHODS.serverTranscribeVoice, input);
+      },
       upsertKeybinding: (input) => transport.request(WS_METHODS.serverUpsertKeybinding, input),
     },
     provider: {
