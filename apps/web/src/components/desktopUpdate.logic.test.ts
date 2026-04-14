@@ -4,6 +4,8 @@ import type { DesktopUpdateActionResult, DesktopUpdateState } from "@t3tools/con
 import {
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
+  getDesktopUpdateButtonLabel,
+  getDesktopUpdateButtonPresentation,
   getDesktopUpdateButtonTooltip,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
@@ -98,6 +100,9 @@ describe("desktop update button state", () => {
     expect(shouldShowDesktopUpdateButton(state)).toBe(true);
     expect(isDesktopUpdateButtonDisabled(state)).toBe(true);
     expect(getDesktopUpdateButtonTooltip(state)).toContain("42%");
+    expect(getDesktopUpdateButtonLabel(state)).toBe("Downloading...");
+    expect(getDesktopUpdateButtonPresentation(state).detail).toBe("Progress 42%");
+    expect(getDesktopUpdateButtonPresentation(state).progressPercent).toBe(42);
   });
 
   it("disables the button while a check is in flight", () => {
@@ -106,9 +111,49 @@ describe("desktop update button state", () => {
       status: "checking",
     };
 
+    expect(shouldShowDesktopUpdateButton(state)).toBe(true);
     expect(resolveDesktopUpdateButtonAction(state)).toBe("check");
     expect(isDesktopUpdateButtonDisabled(state)).toBe(true);
     expect(getDesktopUpdateButtonTooltip(state)).toContain("Checking for updates");
+    expect(getDesktopUpdateButtonLabel(state)).toBe("Checking...");
+  });
+
+  it("shows retry labels for actionable update errors", () => {
+    expect(
+      getDesktopUpdateButtonLabel({
+        ...baseState,
+        status: "error",
+        availableVersion: "1.1.0",
+        errorContext: "download",
+        canRetry: true,
+      }),
+    ).toBe("Download failed");
+
+    expect(
+      getDesktopUpdateButtonLabel({
+        ...baseState,
+        status: "error",
+        downloadedVersion: "1.1.0",
+        availableVersion: "1.1.0",
+        errorContext: "install",
+        canRetry: true,
+      }),
+    ).toBe("Install failed");
+  });
+
+  it("shows explicit updating state when install is in progress", () => {
+    const installingState: DesktopUpdateState = {
+      ...baseState,
+      status: "downloaded",
+      downloadedVersion: "1.1.0",
+      availableVersion: "1.1.0",
+    };
+    const presentation = getDesktopUpdateButtonPresentation(installingState, { installing: true });
+    expect(presentation.label).toBe("Updating...");
+    expect(presentation.detail).toBe("Applying update");
+    expect(getDesktopUpdateButtonTooltip(installingState, { installing: true })).toBe(
+      "Applying update...",
+    );
   });
 });
 

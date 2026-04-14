@@ -35,6 +35,7 @@ export function shouldShowDesktopUpdateButton(state: DesktopUpdateState | null):
   // Only show the button when there's actually something to do:
   // a new version to download, a downloaded update to install, or a retryable error
   return (
+    state.status === "checking" ||
     state.status === "available" ||
     state.status === "downloading" ||
     state.status === "downloaded" ||
@@ -48,6 +49,104 @@ export function shouldShowArm64IntelBuildWarning(state: DesktopUpdateState | nul
 
 export function isDesktopUpdateButtonDisabled(state: DesktopUpdateState | null): boolean {
   return state?.status === "downloading" || state?.status === "checking";
+}
+
+function formatDesktopUpdateDownloadPercent(percent: number | null): string | null {
+  if (typeof percent !== "number" || !Number.isFinite(percent)) {
+    return null;
+  }
+  const normalized = Math.max(0, Math.min(100, Math.floor(percent)));
+  return `${normalized}%`;
+}
+
+export interface DesktopUpdateButtonPresentation {
+  label: string;
+  detail: string | null;
+  progressPercent: number | null;
+}
+
+export function getDesktopUpdateButtonPresentation(
+  state: DesktopUpdateState | null,
+  options?: { installing?: boolean },
+): DesktopUpdateButtonPresentation {
+  if (options?.installing) {
+    return {
+      label: "Updating...",
+      detail: "Applying update",
+      progressPercent: null,
+    };
+  }
+
+  if (!state) {
+    return {
+      label: "Update",
+      detail: null,
+      progressPercent: null,
+    };
+  }
+
+  if (state.status === "checking") {
+    return {
+      label: "Checking...",
+      detail: "Looking for updates",
+      progressPercent: null,
+    };
+  }
+
+  if (state.status === "downloading") {
+    const percentText = formatDesktopUpdateDownloadPercent(state.downloadPercent);
+    return {
+      label: "Downloading...",
+      detail: percentText ? `Progress ${percentText}` : "Preparing download",
+      progressPercent: percentText ? Number.parseInt(percentText, 10) : null,
+    };
+  }
+
+  const action = resolveDesktopUpdateButtonAction(state);
+  if (action === "download") {
+    if (state.status === "error" && state.errorContext === "download") {
+      return {
+        label: "Download failed",
+        detail: "Click to retry",
+        progressPercent: null,
+      };
+    }
+    return {
+      label: "Update available",
+      detail: state.availableVersion ? `Version ${state.availableVersion}` : "Ready to download",
+      progressPercent: null,
+    };
+  }
+  if (action === "install") {
+    if (state.status === "error" && state.errorContext === "install") {
+      return {
+        label: "Install failed",
+        detail: "Click to retry",
+        progressPercent: null,
+      };
+    }
+    return {
+      label: "Ready to update",
+      detail: "Restart to install",
+      progressPercent: null,
+    };
+  }
+  if (action === "check") {
+    return {
+      label: "Check updates",
+      detail: null,
+      progressPercent: null,
+    };
+  }
+  return {
+    label: "Update",
+    detail: null,
+    progressPercent: null,
+  };
+}
+
+export function getDesktopUpdateButtonLabel(state: DesktopUpdateState | null): string {
+  return getDesktopUpdateButtonPresentation(state).label;
 }
 
 export function getArm64IntelBuildWarningDescription(state: DesktopUpdateState): string {
@@ -65,7 +164,13 @@ export function getArm64IntelBuildWarningDescription(state: DesktopUpdateState):
   return "This Mac has Apple Silicon, but DP Code is still running the Intel build under Rosetta. The next app update will replace it with the native Apple Silicon build.";
 }
 
-export function getDesktopUpdateButtonTooltip(state: DesktopUpdateState): string {
+export function getDesktopUpdateButtonTooltip(
+  state: DesktopUpdateState,
+  options?: { installing?: boolean },
+): string {
+  if (options?.installing) {
+    return "Applying update...";
+  }
   if (state.status === "idle") {
     return "Check for updates";
   }
