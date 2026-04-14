@@ -27,6 +27,7 @@ export interface NewThreadOptions {
   envMode?: DraftThreadEnvMode;
   entryPoint?: ThreadPrimarySurface;
   temporary?: boolean;
+  provider?: ProviderKind;
 }
 
 interface ActiveThreadSnapshot {

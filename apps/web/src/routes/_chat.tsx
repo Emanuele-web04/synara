@@ -105,6 +105,25 @@ function ChatRouteGlobalShortcuts() {
         return;
       }
 
+      if (command === "chat.newClaude" || command === "chat.newCodex") {
+        const projectId = activeProjectId ?? projects[0]?.id;
+        if (!projectId) return;
+        event.preventDefault();
+        event.stopPropagation();
+        void handleNewThread(projectId, {
+          provider: command === "chat.newClaude" ? "claudeAgent" : "codex",
+          branch: activeThread?.branch ?? activeDraftThread?.branch ?? null,
+          worktreePath: activeThread?.worktreePath ?? activeDraftThread?.worktreePath ?? null,
+          envMode:
+            activeDraftThread?.envMode ??
+            resolveThreadEnvironmentMode({
+              envMode: activeThread?.envMode,
+              worktreePath: activeThread?.worktreePath ?? null,
+            }),
+        });
+        return;
+      }
+
       if (command !== "chat.new") return;
       const projectId = activeProjectId ?? projects[0]?.id;
       if (!projectId) return;

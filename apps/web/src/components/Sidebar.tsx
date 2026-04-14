@@ -2571,7 +2571,7 @@ export default function Sidebar() {
                     />
                   }
                   showOnHover
-                  className="sidebar-icon-button top-1 right-7 size-5 p-0"
+                  className="sidebar-icon-button top-1 right-[1.875rem] size-5 p-0"
                   onClick={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
@@ -2604,7 +2604,7 @@ export default function Sidebar() {
                     />
                   }
                   showOnHover
-                  className="sidebar-icon-button top-1 right-[3.25rem] size-5 p-0"
+                  className="sidebar-icon-button top-1 right-[3.375rem] size-5 p-0"
                   onClick={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
@@ -2634,7 +2634,7 @@ export default function Sidebar() {
                     />
                   }
                   showOnHover
-                  className="sidebar-icon-button top-1 right-1 size-5 p-0"
+                  className="sidebar-icon-button top-1 right-1.5 size-5 p-0"
                   onClick={(event) => {
                     event.preventDefault();
                     event.stopPropagation();

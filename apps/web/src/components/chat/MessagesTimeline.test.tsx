@@ -340,7 +340,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("Work log (1)");
   });
 
-  it("folds trailing work log summaries into the previous assistant footer", async () => {
+  it("keeps trailing work log summaries as a standalone row after the turn completes", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -393,8 +393,8 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Turn • Work log");
-    expect(markup).not.toContain("Work log (1)");
+    expect(markup).toContain(">done</p>");
+    expect(markup).toContain("Work log (1)");
   });
 
   it("shows the first four inline tool calls and collapses the remainder", async () => {

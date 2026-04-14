@@ -28,77 +28,65 @@ interface ShortcutMatchOptions {
   context?: Partial<ShortcutMatchContext>;
 }
 
-const WORKSPACE_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
+function commandShortcut(
+  key: string,
+  overrides: Partial<Omit<KeybindingShortcut, "key">> = {},
+): KeybindingShortcut {
+  return {
+    key,
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    modKey: true,
+    ...overrides,
+  };
+}
+
+function whenIdentifier(name: string): KeybindingWhenNode {
+  return { type: "identifier", name };
+}
+
+function whenNot(node: KeybindingWhenNode): KeybindingWhenNode {
+  return { type: "not", node };
+}
+
+const whenNotTerminalFocus = whenNot(whenIdentifier("terminalFocus"));
+
+export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
+  {
+    command: "chat.newClaude",
+    shortcut: commandShortcut("c", { altKey: true }),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
+    command: "chat.newCodex",
+    shortcut: commandShortcut("x", { altKey: true }),
+    whenAst: whenNotTerminalFocus,
+  },
   {
     command: "chat.split",
-    shortcut: {
-      key: "\\",
-      metaKey: false,
-      ctrlKey: false,
-      shiftKey: false,
-      altKey: false,
-      modKey: true,
-    },
-    whenAst: {
-      type: "not",
-      node: { type: "identifier", name: "terminalFocus" },
-    },
+    shortcut: commandShortcut("\\"),
+    whenAst: whenNotTerminalFocus,
   },
   {
     command: "terminal.workspace.newFullWidth",
-    shortcut: {
-      key: "j",
-      metaKey: false,
-      ctrlKey: false,
-      shiftKey: true,
-      altKey: false,
-      modKey: true,
-    },
+    shortcut: commandShortcut("j", { shiftKey: true }),
   },
   {
     command: "terminal.workspace.closeActive",
-    shortcut: {
-      key: "w",
-      metaKey: false,
-      ctrlKey: false,
-      shiftKey: false,
-      altKey: false,
-      modKey: true,
-    },
-    whenAst: {
-      type: "identifier",
-      name: "terminalWorkspaceOpen",
-    },
+    shortcut: commandShortcut("w"),
+    whenAst: whenIdentifier("terminalWorkspaceOpen"),
   },
   {
     command: "terminal.workspace.terminal",
-    shortcut: {
-      key: "1",
-      metaKey: false,
-      ctrlKey: false,
-      shiftKey: false,
-      altKey: false,
-      modKey: true,
-    },
-    whenAst: {
-      type: "identifier",
-      name: "terminalWorkspaceOpen",
-    },
+    shortcut: commandShortcut("1"),
+    whenAst: whenIdentifier("terminalWorkspaceOpen"),
   },
   {
     command: "terminal.workspace.chat",
-    shortcut: {
-      key: "2",
-      metaKey: false,
-      ctrlKey: false,
-      shiftKey: false,
-      altKey: false,
-      modKey: true,
-    },
-    whenAst: {
-      type: "identifier",
-      name: "terminalWorkspaceOpen",
-    },
+    shortcut: commandShortcut("2"),
+    whenAst: whenIdentifier("terminalWorkspaceOpen"),
   },
 ];
 
@@ -119,6 +107,32 @@ const EVENT_CODE_KEY_ALIASES: Readonly<Record<string, readonly string[]>> = {
   Digit7: ["7"],
   Digit8: ["8"],
   Digit9: ["9"],
+  KeyA: ["a"],
+  KeyB: ["b"],
+  KeyC: ["c"],
+  KeyD: ["d"],
+  KeyE: ["e"],
+  KeyF: ["f"],
+  KeyG: ["g"],
+  KeyH: ["h"],
+  KeyI: ["i"],
+  KeyJ: ["j"],
+  KeyK: ["k"],
+  KeyL: ["l"],
+  KeyM: ["m"],
+  KeyN: ["n"],
+  KeyO: ["o"],
+  KeyP: ["p"],
+  KeyQ: ["q"],
+  KeyR: ["r"],
+  KeyS: ["s"],
+  KeyT: ["t"],
+  KeyU: ["u"],
+  KeyV: ["v"],
+  KeyW: ["w"],
+  KeyX: ["x"],
+  KeyY: ["y"],
+  KeyZ: ["z"],
 };
 
 function normalizeEventKey(key: string): string {
@@ -232,7 +246,7 @@ function getFallbackBindings(
   keybindings: ResolvedKeybindingsConfig,
 ): ReadonlyArray<ResolvedKeybindingRule> {
   const configuredCommands = new Set(keybindings.map((binding) => binding.command));
-  return WORKSPACE_SHORTCUT_FALLBACKS.filter((binding) => !configuredCommands.has(binding.command));
+  return DEFAULT_SHORTCUT_FALLBACKS.filter((binding) => !configuredCommands.has(binding.command));
 }
 
 export function resolveShortcutCommand(
@@ -375,6 +389,22 @@ export function isChatNewLocalShortcut(
   options?: ShortcutMatchOptions,
 ): boolean {
   return matchesCommandShortcut(event, keybindings, "chat.newLocal", options);
+}
+
+export function isChatNewClaudeShortcut(
+  event: ShortcutEventLike,
+  keybindings: ResolvedKeybindingsConfig,
+  options?: ShortcutMatchOptions,
+): boolean {
+  return matchesCommandShortcut(event, keybindings, "chat.newClaude", options);
+}
+
+export function isChatNewCodexShortcut(
+  event: ShortcutEventLike,
+  keybindings: ResolvedKeybindingsConfig,
+  options?: ShortcutMatchOptions,
+): boolean {
+  return matchesCommandShortcut(event, keybindings, "chat.newCodex", options);
 }
 
 export function isOpenFavoriteEditorShortcut(

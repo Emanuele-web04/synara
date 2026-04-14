@@ -236,9 +236,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       return true;
     };
 
-    const flushPendingWorkGroup = () => {
+    const flushPendingWorkGroup = (options?: { attachToPreviousAssistant?: boolean }) => {
       if (!pendingWorkGroup) return;
-      if (!appendWorkEntriesToPreviousAssistant(pendingWorkGroup.groupedEntries)) {
+      const shouldAttachToPreviousAssistant = options?.attachToPreviousAssistant ?? true;
+      if (
+        !shouldAttachToPreviousAssistant ||
+        !appendWorkEntriesToPreviousAssistant(pendingWorkGroup.groupedEntries)
+      ) {
         nextRows.push(pendingWorkGroup);
       }
       pendingWorkGroup = null;
@@ -309,7 +313,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       });
     }
 
-    flushPendingWorkGroup();
+    flushPendingWorkGroup({ attachToPreviousAssistant: activeTurnInProgress });
 
     if (isWorking) {
       nextRows.push({
@@ -320,7 +324,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     }
 
     return nextRows;
-  }, [timelineEntries, completionDividerBeforeEntryId, isWorking, activeTurnStartedAt]);
+  }, [
+    timelineEntries,
+    completionDividerBeforeEntryId,
+    isWorking,
+    activeTurnInProgress,
+    activeTurnStartedAt,
+  ]);
 
   const firstUnvirtualizedRowIndex = useMemo(() => {
     const firstTailRowIndex = Math.max(rows.length - ALWAYS_UNVIRTUALIZED_TAIL_ROWS, 0);

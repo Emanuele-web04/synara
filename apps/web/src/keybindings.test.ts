@@ -151,6 +151,16 @@ const DEFAULT_BINDINGS = compile([
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
   {
+    shortcut: modShortcut("c", { altKey: true }),
+    command: "chat.newClaude",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
+  {
+    shortcut: modShortcut("x", { altKey: true }),
+    command: "chat.newCodex",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
+  {
     shortcut: modShortcut("]", { shiftKey: true }),
     command: "chat.visible.next",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
@@ -515,6 +525,45 @@ describe("chat/editor shortcuts", () => {
     );
   });
 
+  it("resolves provider-specific new chat shortcuts", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "c", metaKey: true, altKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "chat.newClaude",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "x", metaKey: true, altKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "chat.newCodex",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ code: "KeyC", key: "ç", metaKey: true, altKey: true }),
+        DEFAULT_BINDINGS,
+        {
+          platform: "MacIntel",
+          context: { terminalFocus: false },
+        },
+      ),
+      "chat.newClaude",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ code: "KeyX", key: "≈", metaKey: true, altKey: true }),
+        DEFAULT_BINDINGS,
+        {
+          platform: "MacIntel",
+          context: { terminalFocus: false },
+        },
+      ),
+      "chat.newCodex",
+    );
+  });
+
   it("resolves visible chat cycle shortcuts", () => {
     assert.strictEqual(
       resolveShortcutCommand(event({ key: "]", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
@@ -707,6 +756,49 @@ describe("resolveShortcutCommand", () => {
         platform: "Linux",
       }),
       "script.setup.run",
+    );
+  });
+
+  it("falls back to provider-specific new chat defaults when runtime config is missing them", () => {
+    const legacyBindings = DEFAULT_BINDINGS.filter(
+      (binding) => binding.command !== "chat.newClaude" && binding.command !== "chat.newCodex",
+    );
+
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "c", metaKey: true, altKey: true }), legacyBindings, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "chat.newClaude",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "x", metaKey: true, altKey: true }), legacyBindings, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "chat.newCodex",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ code: "KeyC", key: "ç", metaKey: true, altKey: true }),
+        legacyBindings,
+        {
+          platform: "MacIntel",
+          context: { terminalFocus: false },
+        },
+      ),
+      "chat.newClaude",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ code: "KeyX", key: "≈", metaKey: true, altKey: true }),
+        legacyBindings,
+        {
+          platform: "MacIntel",
+          context: { terminalFocus: false },
+        },
+      ),
+      "chat.newCodex",
     );
   });
 });

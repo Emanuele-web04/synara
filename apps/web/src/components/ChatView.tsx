@@ -5159,7 +5159,7 @@ export default function ChatView({
                       <div
                         key={queuedTurn.id}
                         data-testid="queued-follow-up-row"
-                        className="flex items-center gap-2 rounded-t-xl border border-b-0 border-border/60 bg-card px-2.5 py-2 text-[12px]"
+                        className="flex items-center gap-2 rounded-t-2xl border border-b-0 border-border/60 bg-card px-2.5 py-2 text-[12px]"
                       >
                         <div className="flex min-w-0 flex-1 items-center gap-1.5">
                           <PiArrowBendDownRight className="size-3 shrink-0 text-muted-foreground/70" />
@@ -5212,7 +5212,7 @@ export default function ChatView({
                 ) : null}
                 <div
                   className={cn(
-                    "group rounded-2xl p-px transition-colors duration-200",
+                    "group rounded-3xl p-px transition-colors duration-200",
                     composerProviderState.composerFrameClassName,
                   )}
                   onDragEnter={onComposerDragEnter}
@@ -5222,20 +5222,20 @@ export default function ChatView({
                 >
                   <div
                     className={cn(
-                      "rounded-xl border bg-card transition-colors duration-200 focus-within:border-neutral-500/15",
+                      "rounded-2xl border bg-card transition-colors duration-200 focus-within:border-neutral-500/15",
                       isDragOverComposer ? "border-primary/50 bg-accent/20" : "border-border/80",
                       composerProviderState.composerSurfaceClassName,
                     )}
                   >
                     {activePendingApproval ? (
-                      <div className="rounded-t-[19px] border-b border-border/65 bg-muted/20">
+                      <div className="rounded-t-[23px] border-b border-border/65 bg-muted/20">
                         <ComposerPendingApprovalPanel
                           approval={activePendingApproval}
                           pendingCount={pendingApprovals.length}
                         />
                       </div>
                     ) : pendingUserInputs.length > 0 ? (
-                      <div className="rounded-t-[19px] border-b border-border/65 bg-muted/20">
+                      <div className="rounded-t-[23px] border-b border-border/65 bg-muted/20">
                         <ComposerPendingUserInputPanel
                           pendingUserInputs={pendingUserInputs}
                           respondingRequestIds={respondingRequestIds}
@@ -5246,7 +5246,7 @@ export default function ChatView({
                         />
                       </div>
                     ) : showPlanFollowUpPrompt && activeProposedPlan ? (
-                      <div className="rounded-t-[19px] border-b border-border/65 bg-muted/20">
+                      <div className="rounded-t-[23px] border-b border-border/65 bg-muted/20">
                         <ComposerPlanFollowUpBanner
                           key={activeProposedPlan.id}
                           planTitle={proposedPlanTitle(activeProposedPlan.planMarkdown) ?? null}
