@@ -5,9 +5,11 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "@t3tools/contracts";
 import { sanitizeGeneratedThreadTitle } from "@t3tools/shared/chatThreads";
+import { resolveCodexHome } from "@t3tools/shared/codexConfig";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
+import { buildCodexProcessEnv } from "../../codexAppServerManager.ts";
 import { ServerConfig } from "../../config.ts";
 import { TextGenerationError } from "../Errors.ts";
 import {
@@ -113,6 +115,39 @@ function sanitizeDiffSummary(raw: string): string {
   ].join("\n");
 }
 
+function sanitizeCodexConfigForTextGeneration(content: string): string {
+  const lines = content.split(/\r?\n/g);
+  const sanitized: string[] = [];
+  let skippingSkillsConfig = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    if (trimmed.startsWith("[[")) {
+      if (trimmed === "[[skills.config]]") {
+        skippingSkillsConfig = true;
+        continue;
+      }
+
+      skippingSkillsConfig = false;
+      sanitized.push(line);
+      continue;
+    }
+
+    if (trimmed.startsWith("[")) {
+      skippingSkillsConfig = false;
+      sanitized.push(line);
+      continue;
+    }
+
+    if (!skippingSkillsConfig) {
+      sanitized.push(line);
+    }
+  }
+
+  return sanitized.join("\n").trimEnd();
+}
+
 const makeCodexTextGeneration = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -165,6 +200,78 @@ const makeCodexTextGeneration = Effect.gen(function* () {
   const safeUnlink = (filePath: string): Effect.Effect<void, never> =>
     fileSystem.remove(filePath).pipe(Effect.catch(() => Effect.void));
 
+  const safeRemoveDirectory = (directoryPath: string): Effect.Effect<void, never> =>
+    fileSystem.remove(directoryPath, { recursive: true }).pipe(Effect.catch(() => Effect.void));
+
+  const prepareIsolatedCodexHome = (
+    operation:
+      | "generateCommitMessage"
+      | "generatePrContent"
+      | "generateDiffSummary"
+      | "generateBranchName"
+      | "generateThreadTitle",
+    sourceHomePath?: string,
+  ): Effect.Effect<{ readonly homePath: string }, TextGenerationError> =>
+    Effect.gen(function* () {
+      const sourceCodexHome = sourceHomePath?.trim() || resolveCodexHome(process.env);
+      const isolatedHomePath = path.join(
+        tempDir,
+        `t3code-codex-home-${process.pid}-${randomUUID()}`,
+      );
+
+      yield* fileSystem.makeDirectory(isolatedHomePath, { recursive: true }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new TextGenerationError({
+              operation,
+              detail: `Failed to create isolated Codex home at ${isolatedHomePath}.`,
+              cause,
+            }),
+        ),
+      );
+
+      const sourceConfig = yield* fileSystem
+        .readFileString(path.join(sourceCodexHome, "config.toml"))
+        .pipe(Effect.catch(() => Effect.succeed(null)));
+      if (sourceConfig !== null) {
+        yield* fileSystem
+          .writeFileString(
+            path.join(isolatedHomePath, "config.toml"),
+            sanitizeCodexConfigForTextGeneration(sourceConfig),
+          )
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new TextGenerationError({
+                  operation,
+                  detail: "Failed to copy Codex config for isolated text generation.",
+                  cause,
+                }),
+            ),
+          );
+      }
+
+      const sourceAuth = yield* fileSystem
+        .readFileString(path.join(sourceCodexHome, "auth.json"))
+        .pipe(Effect.catch(() => Effect.succeed(null)));
+      if (sourceAuth !== null) {
+        yield* fileSystem
+          .writeFileString(path.join(isolatedHomePath, "auth.json"), sourceAuth)
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new TextGenerationError({
+                  operation,
+                  detail: "Failed to copy Codex auth for isolated text generation.",
+                  cause,
+                }),
+            ),
+          );
+      }
+
+      return { homePath: isolatedHomePath };
+    });
+
   const materializeImageAttachments = (
     _operation:
       | "generateCommitMessage"
@@ -210,6 +317,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     outputSchemaJson,
     imagePaths = [],
     cleanupPaths = [],
+    codexHomePath,
     model,
   }: {
     operation:
@@ -223,6 +331,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     outputSchemaJson: S;
     imagePaths?: ReadonlyArray<string>;
     cleanupPaths?: ReadonlyArray<string>;
+    codexHomePath?: string;
     model?: string;
   }): Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]> =>
     Effect.gen(function* () {
@@ -232,6 +341,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
         JSON.stringify(toCodexOutputJsonSchema(outputSchemaJson)),
       );
       const outputPath = yield* writeTempFile(operation, "codex-output", "");
+      const isolatedCodexHome = yield* prepareIsolatedCodexHome(operation, codexHomePath);
 
       const runCodexCommand = Effect.gen(function* () {
         const command = ChildProcess.make(
@@ -254,6 +364,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
           ],
           {
             cwd,
+            env: buildCodexProcessEnv({ homePath: isolatedCodexHome.homePath }),
             shell: process.platform === "win32",
             stdin: {
               stream: Stream.make(new TextEncoder().encode(prompt)),
@@ -298,7 +409,12 @@ const makeCodexTextGeneration = Effect.gen(function* () {
       });
 
       const cleanup = Effect.all(
-        [schemaPath, outputPath, ...cleanupPaths].map((filePath) => safeUnlink(filePath)),
+        [
+          safeUnlink(schemaPath),
+          safeUnlink(outputPath),
+          safeRemoveDirectory(isolatedCodexHome.homePath),
+          ...cleanupPaths.map((filePath) => safeUnlink(filePath)),
+        ],
         {
           concurrency: "unbounded",
         },
@@ -383,6 +499,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
       cwd: input.cwd,
       prompt,
       outputSchemaJson,
+      ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
       ...(input.model ? { model: input.model } : {}),
     }).pipe(
       Effect.map(
@@ -429,6 +546,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
         title: Schema.String,
         body: Schema.String,
       }),
+      ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
       ...(input.model ? { model: input.model } : {}),
     }).pipe(
       Effect.map(
@@ -464,6 +582,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
       outputSchemaJson: Schema.Struct({
         summary: Schema.String,
       }),
+      ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
       ...(input.model ? { model: input.model } : {}),
     }).pipe(
       Effect.map(

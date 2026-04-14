@@ -21,7 +21,6 @@ import { useTerminalStateStore } from "../terminalStateStore";
 
 export function useHandleNewThread() {
   const projects = useStore((store) => store.projects);
-  const threads = useStore((store) => store.threads);
   const { settings } = useAppSettings();
   const navigate = useNavigate();
   const { activeDraftThread, activeProjectId, activeThread, focusedThreadId, routeThreadId } =
@@ -78,8 +77,10 @@ export function useHandleNewThread() {
         projectId,
         routeThreadId: focusedThreadId,
       });
+      // Read from the store at call time so post-sync sidebar flows can use the latest project defaults.
       const projectDefaultModelSelection =
-        projects.find((project) => project.id === projectId)?.defaultModelSelection ?? null;
+        useStore.getState().projects.find((project) => project.id === projectId)
+          ?.defaultModelSelection ?? null;
       const activeThreadSnapshot = createActiveThreadSnapshot(activeThread, projectId);
       const activeDraftThreadSnapshot = createActiveDraftThreadSnapshot(
         activeDraftThread,
@@ -106,7 +107,7 @@ export function useHandleNewThread() {
         threadId: ThreadId,
         creationState: ReturnType<typeof resolveCreationState>,
       ): Promise<void> => {
-        if (threads.some((thread) => thread.id === threadId)) {
+        if (useStore.getState().threads.some((thread) => thread.id === threadId)) {
           return;
         }
         const api = readNativeApi();
@@ -223,11 +224,9 @@ export function useHandleNewThread() {
       navigate,
       openChatThreadPage,
       openTerminalThreadPage,
-      projects,
       focusedThreadId,
       markTemporaryThread,
       settings.defaultProvider,
-      threads,
     ],
   );
 

@@ -6,6 +6,7 @@ import {
   GitPreparePullRequestThreadInput,
   GitRunStackedActionInput,
   GitResolvePullRequestResult,
+  GitSummarizeDiffInput,
 } from "./git";
 
 const decodeCreateWorktreeInput = Schema.decodeUnknownSync(GitCreateWorktreeInput);
@@ -13,6 +14,7 @@ const decodePreparePullRequestThreadInput = Schema.decodeUnknownSync(
   GitPreparePullRequestThreadInput,
 );
 const decodeRunStackedActionInput = Schema.decodeUnknownSync(GitRunStackedActionInput);
+const decodeSummarizeDiffInput = Schema.decodeUnknownSync(GitSummarizeDiffInput);
 const decodeResolvePullRequestResult = Schema.decodeUnknownSync(GitResolvePullRequestResult);
 
 describe("GitCreateWorktreeInput", () => {
@@ -69,5 +71,28 @@ describe("GitRunStackedActionInput", () => {
 
     expect(parsed.actionId).toBe("action-1");
     expect(parsed.action).toBe("commit");
+  });
+
+  it("accepts an optional codexHomePath for git text generation", () => {
+    const parsed = decodeRunStackedActionInput({
+      actionId: "action-2",
+      cwd: "/repo",
+      action: "commit_push",
+      codexHomePath: "/tmp/custom-codex-home",
+    });
+
+    expect(parsed.codexHomePath).toBe("/tmp/custom-codex-home");
+  });
+});
+
+describe("GitSummarizeDiffInput", () => {
+  it("accepts an optional codexHomePath for diff summaries", () => {
+    const parsed = decodeSummarizeDiffInput({
+      cwd: "/repo",
+      patch: "diff --git a/a b/a",
+      codexHomePath: "/tmp/custom-codex-home",
+    });
+
+    expect(parsed.codexHomePath).toBe("/tmp/custom-codex-home");
   });
 });

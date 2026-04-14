@@ -70,7 +70,7 @@ function providerIconClassName(
   provider: ProviderKind | ProviderPickerKind,
   fallbackClassName: string,
 ): string {
-  return provider === "claudeAgent" ? "text-[#d97757]" : fallbackClassName;
+  return provider === "claudeAgent" ? "text-foreground" : fallbackClassName;
 }
 
 export const ProviderModelPicker = memo(function ProviderModelPicker(props: {

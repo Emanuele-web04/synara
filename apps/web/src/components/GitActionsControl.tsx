@@ -316,6 +316,7 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
     gitRunStackedActionMutationOptions({
       cwd: gitCwd,
       queryClient,
+      codexHomePath: settings.codexHomePath || null,
       model: settings.textGenerationModel ?? null,
     }),
   );

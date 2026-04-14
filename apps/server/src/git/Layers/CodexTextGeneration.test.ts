@@ -61,6 +61,26 @@ function makeFakeCodexBinary(dir: string) {
         "    exit 4",
         "  fi",
         "fi",
+        'if [ "$T3_FAKE_CODEX_REQUIRE_CODEX_HOME" = "1" ] && [ -z "$CODEX_HOME" ]; then',
+        '  printf "%s\\n" "missing CODEX_HOME" >&2',
+        "  exit 5",
+        "fi",
+        'if [ "$T3_FAKE_CODEX_REQUIRE_AUTH_JSON" = "1" ] && [ ! -f "$CODEX_HOME/auth.json" ]; then',
+        '  printf "%s\\n" "missing auth.json in CODEX_HOME" >&2',
+        "  exit 6",
+        "fi",
+        'if [ -n "$T3_FAKE_CODEX_CODEX_HOME_CONFIG_MUST_CONTAIN" ]; then',
+        '  grep -F -- "$T3_FAKE_CODEX_CODEX_HOME_CONFIG_MUST_CONTAIN" "$CODEX_HOME/config.toml" >/dev/null || {',
+        '    printf "%s\\n" "CODEX_HOME config missing expected content" >&2',
+        "    exit 7",
+        "  }",
+        "fi",
+        'if [ -n "$T3_FAKE_CODEX_CODEX_HOME_CONFIG_MUST_NOT_CONTAIN" ]; then',
+        '  if grep -F -- "$T3_FAKE_CODEX_CODEX_HOME_CONFIG_MUST_NOT_CONTAIN" "$CODEX_HOME/config.toml" >/dev/null; then',
+        '    printf "%s\\n" "CODEX_HOME config contained forbidden content" >&2',
+        "    exit 8",
+        "  fi",
+        "fi",
         'if [ -n "$T3_FAKE_CODEX_STDERR" ]; then',
         '  printf "%s\\n" "$T3_FAKE_CODEX_STDERR" >&2',
         "fi",
@@ -84,6 +104,10 @@ function withFakeCodexEnv<A, E, R>(
     requireImage?: boolean;
     stdinMustContain?: string;
     stdinMustNotContain?: string;
+    requireCodexHome?: boolean;
+    requireAuthJson?: boolean;
+    codexHomeConfigMustContain?: string;
+    codexHomeConfigMustNotContain?: string;
   },
   effect: Effect.Effect<A, E, R>,
 ) {
@@ -99,6 +123,12 @@ function withFakeCodexEnv<A, E, R>(
       const previousRequireImage = process.env.T3_FAKE_CODEX_REQUIRE_IMAGE;
       const previousStdinMustContain = process.env.T3_FAKE_CODEX_STDIN_MUST_CONTAIN;
       const previousStdinMustNotContain = process.env.T3_FAKE_CODEX_STDIN_MUST_NOT_CONTAIN;
+      const previousRequireCodexHome = process.env.T3_FAKE_CODEX_REQUIRE_CODEX_HOME;
+      const previousRequireAuthJson = process.env.T3_FAKE_CODEX_REQUIRE_AUTH_JSON;
+      const previousCodexHomeConfigMustContain =
+        process.env.T3_FAKE_CODEX_CODEX_HOME_CONFIG_MUST_CONTAIN;
+      const previousCodexHomeConfigMustNotContain =
+        process.env.T3_FAKE_CODEX_CODEX_HOME_CONFIG_MUST_NOT_CONTAIN;
 
       yield* Effect.sync(() => {
         process.env.PATH = `${binDir}:${previousPath ?? ""}`;
@@ -133,6 +163,32 @@ function withFakeCodexEnv<A, E, R>(
         } else {
           delete process.env.T3_FAKE_CODEX_STDIN_MUST_NOT_CONTAIN;
         }
+
+        if (input.requireCodexHome) {
+          process.env.T3_FAKE_CODEX_REQUIRE_CODEX_HOME = "1";
+        } else {
+          delete process.env.T3_FAKE_CODEX_REQUIRE_CODEX_HOME;
+        }
+
+        if (input.requireAuthJson) {
+          process.env.T3_FAKE_CODEX_REQUIRE_AUTH_JSON = "1";
+        } else {
+          delete process.env.T3_FAKE_CODEX_REQUIRE_AUTH_JSON;
+        }
+
+        if (input.codexHomeConfigMustContain !== undefined) {
+          process.env.T3_FAKE_CODEX_CODEX_HOME_CONFIG_MUST_CONTAIN =
+            input.codexHomeConfigMustContain;
+        } else {
+          delete process.env.T3_FAKE_CODEX_CODEX_HOME_CONFIG_MUST_CONTAIN;
+        }
+
+        if (input.codexHomeConfigMustNotContain !== undefined) {
+          process.env.T3_FAKE_CODEX_CODEX_HOME_CONFIG_MUST_NOT_CONTAIN =
+            input.codexHomeConfigMustNotContain;
+        } else {
+          delete process.env.T3_FAKE_CODEX_CODEX_HOME_CONFIG_MUST_NOT_CONTAIN;
+        }
       });
 
       return {
@@ -143,6 +199,10 @@ function withFakeCodexEnv<A, E, R>(
         previousRequireImage,
         previousStdinMustContain,
         previousStdinMustNotContain,
+        previousRequireCodexHome,
+        previousRequireAuthJson,
+        previousCodexHomeConfigMustContain,
+        previousCodexHomeConfigMustNotContain,
       };
     }),
     () => effect,
@@ -184,6 +244,32 @@ function withFakeCodexEnv<A, E, R>(
           delete process.env.T3_FAKE_CODEX_STDIN_MUST_NOT_CONTAIN;
         } else {
           process.env.T3_FAKE_CODEX_STDIN_MUST_NOT_CONTAIN = previous.previousStdinMustNotContain;
+        }
+
+        if (previous.previousRequireCodexHome === undefined) {
+          delete process.env.T3_FAKE_CODEX_REQUIRE_CODEX_HOME;
+        } else {
+          process.env.T3_FAKE_CODEX_REQUIRE_CODEX_HOME = previous.previousRequireCodexHome;
+        }
+
+        if (previous.previousRequireAuthJson === undefined) {
+          delete process.env.T3_FAKE_CODEX_REQUIRE_AUTH_JSON;
+        } else {
+          process.env.T3_FAKE_CODEX_REQUIRE_AUTH_JSON = previous.previousRequireAuthJson;
+        }
+
+        if (previous.previousCodexHomeConfigMustContain === undefined) {
+          delete process.env.T3_FAKE_CODEX_CODEX_HOME_CONFIG_MUST_CONTAIN;
+        } else {
+          process.env.T3_FAKE_CODEX_CODEX_HOME_CONFIG_MUST_CONTAIN =
+            previous.previousCodexHomeConfigMustContain;
+        }
+
+        if (previous.previousCodexHomeConfigMustNotContain === undefined) {
+          delete process.env.T3_FAKE_CODEX_CODEX_HOME_CONFIG_MUST_NOT_CONTAIN;
+        } else {
+          process.env.T3_FAKE_CODEX_CODEX_HOME_CONFIG_MUST_NOT_CONTAIN =
+            previous.previousCodexHomeConfigMustNotContain;
         }
       }),
   );
@@ -532,6 +618,89 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
           expect(result.left).toBeInstanceOf(TextGenerationError);
           expect(result.left.message).toContain("Codex CLI command failed: codex execution failed");
         }
+      }),
+    ),
+  );
+
+  it.effect("uses the provided codexHomePath and strips local skills config", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({
+          subject: "Add important change",
+          body: "",
+        }),
+        requireCodexHome: true,
+        requireAuthJson: true,
+        codexHomeConfigMustContain: 'model_provider = "azure"',
+        codexHomeConfigMustNotContain: "[[skills.config]]",
+      },
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const wrongCodexHome = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-wrong-codex-" });
+        const customCodexHome = yield* fs.makeTempDirectoryScoped({
+          prefix: "t3code-custom-codex-",
+        });
+        const previousCodexHome = process.env.CODEX_HOME;
+        const previousAzureApiKey = process.env.AZURE_OPENAI_API_KEY;
+
+        yield* fs.writeFileString(
+          path.join(customCodexHome, "config.toml"),
+          [
+            'model_provider = "azure"',
+            "",
+            "[model_providers.azure]",
+            'env_key = "AZURE_OPENAI_API_KEY"',
+            "",
+            "[[skills.config]]",
+            'path = "/broken/skill/SKILL.md"',
+            "enabled = true",
+            "",
+            "[features]",
+            "fast_mode = true",
+            "",
+          ].join("\n"),
+        );
+        yield* fs.writeFileString(
+          path.join(customCodexHome, "auth.json"),
+          '{"access_token":"test"}',
+        );
+        yield* fs.writeFileString(path.join(wrongCodexHome, "config.toml"), 'model = "gpt-5.4"');
+
+        yield* Effect.sync(() => {
+          process.env.CODEX_HOME = wrongCodexHome;
+          process.env.AZURE_OPENAI_API_KEY = "test-key";
+        });
+
+        const textGeneration = yield* TextGeneration;
+
+        const generated = yield* textGeneration
+          .generateCommitMessage({
+            cwd: process.cwd(),
+            branch: "feature/codex-effect",
+            stagedSummary: "M README.md",
+            stagedPatch: "diff --git a/README.md b/README.md",
+            codexHomePath: customCodexHome,
+          })
+          .pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                if (previousCodexHome === undefined) {
+                  delete process.env.CODEX_HOME;
+                } else {
+                  process.env.CODEX_HOME = previousCodexHome;
+                }
+
+                if (previousAzureApiKey === undefined) {
+                  delete process.env.AZURE_OPENAI_API_KEY;
+                } else {
+                  process.env.AZURE_OPENAI_API_KEY = previousAzureApiKey;
+                }
+              }),
+            ),
+          );
+
+        expect(generated.subject).toBe("Add important change");
       }),
     ),
   );

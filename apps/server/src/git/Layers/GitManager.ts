@@ -349,6 +349,75 @@ function sanitizeCommitMessage(generated: {
   };
 }
 
+function summarizePathForCommitSubject(filePath: string): string {
+  const trimmed = filePath.trim();
+  if (trimmed.length === 0) {
+    return "project files";
+  }
+
+  const segments = trimmed.split("/").filter((segment) => segment.length > 0);
+  return segments.at(-1) ?? trimmed;
+}
+
+function deriveFallbackCommitSubject(stagedSummary: string): string {
+  const lines = stagedSummary
+    .split(/\r?\n/g)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  if (lines.length === 0) {
+    return "Update project files";
+  }
+
+  const firstEntry = lines[0]?.split("\t") ?? [];
+  const rawStatus = firstEntry[0]?.trim().toUpperCase() ?? "";
+  const firstPath = firstEntry.at(-1)?.trim() ?? "";
+  const fileLabel = summarizePathForCommitSubject(firstPath);
+
+  if (lines.length === 1) {
+    if (rawStatus.startsWith("A")) {
+      return `Add ${fileLabel}`;
+    }
+    if (rawStatus.startsWith("D")) {
+      return `Remove ${fileLabel}`;
+    }
+    if (rawStatus.startsWith("R")) {
+      return `Rename ${fileLabel}`;
+    }
+    return `Update ${fileLabel}`;
+  }
+
+  const uniqueTopLevelDirs = Array.from(
+    new Set(
+      lines
+        .map((line) => {
+          const entry = line.split("\t");
+          const filePath = entry.at(-1)?.trim() ?? "";
+          return filePath.split("/")[0]?.trim() ?? "";
+        })
+        .filter((segment) => segment.length > 0),
+    ),
+  );
+
+  if (uniqueTopLevelDirs.length === 1) {
+    return `Update ${uniqueTopLevelDirs[0]} files`;
+  }
+
+  return "Update project files";
+}
+
+function createFallbackCommitSuggestion(input: {
+  stagedSummary: string;
+  includeBranch?: boolean;
+}): CommitAndBranchSuggestion {
+  const subject = deriveFallbackCommitSubject(input.stagedSummary);
+  return {
+    subject,
+    body: "",
+    ...(input.includeBranch ? { branch: sanitizeFeatureBranchName(subject) } : {}),
+    commitMessage: formatCommitMessage(subject, ""),
+  };
+}
+
 function sanitizeProgressText(value: string): string | null {
   const trimmed = value.trim();
   if (trimmed.length === 0) {
@@ -1022,6 +1091,7 @@ export const makeGitManager = Effect.gen(function* () {
     cwd: string;
     branch: string | null;
     commitMessage?: string;
+    codexHomePath?: string;
     /** When true, also produce a semantic feature branch name. */
     includeBranch?: boolean;
     filePaths?: readonly string[];
@@ -1051,10 +1121,25 @@ export const makeGitManager = Effect.gen(function* () {
           branch: input.branch,
           stagedSummary: limitContext(context.stagedSummary, 8_000),
           stagedPatch: limitContext(context.stagedPatch, 50_000),
+          ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
           ...(input.includeBranch ? { includeBranch: true } : {}),
           ...(input.model ? { model: input.model } : {}),
         })
-        .pipe(Effect.map((result) => sanitizeCommitMessage(result)));
+        .pipe(
+          Effect.map((result) => sanitizeCommitMessage(result)),
+          Effect.catchTag("TextGenerationError", (error) =>
+            Effect.logWarning(
+              `GitManager.resolveCommitAndBranchSuggestion: falling back to heuristic commit message in ${input.cwd}: ${error.message}`,
+            ).pipe(
+              Effect.as(
+                createFallbackCommitSuggestion({
+                  stagedSummary: context.stagedSummary,
+                  ...(input.includeBranch ? { includeBranch: true } : {}),
+                }),
+              ),
+            ),
+          ),
+        );
 
       return {
         subject: generated.subject,
@@ -1071,6 +1156,7 @@ export const makeGitManager = Effect.gen(function* () {
     commitMessage?: string,
     preResolvedSuggestion?: CommitAndBranchSuggestion,
     filePaths?: readonly string[],
+    codexHomePath?: string,
     model?: string,
     progressReporter?: GitActionProgressReporter,
     actionId?: string,
@@ -1101,6 +1187,7 @@ export const makeGitManager = Effect.gen(function* () {
           branch,
           ...(commitMessage ? { commitMessage } : {}),
           ...(filePaths ? { filePaths } : {}),
+          ...(codexHomePath ? { codexHomePath } : {}),
           ...(model ? { model } : {}),
         });
       }
@@ -1178,7 +1265,12 @@ export const makeGitManager = Effect.gen(function* () {
       };
     });
 
-  const runPrStep = (cwd: string, fallbackBranch: string | null, model?: string) =>
+  const runPrStep = (
+    cwd: string,
+    fallbackBranch: string | null,
+    codexHomePath?: string,
+    model?: string,
+  ) =>
     Effect.gen(function* () {
       const details = yield* gitCore.statusDetails(cwd);
       const branch = details.branch ?? fallbackBranch;
@@ -1228,6 +1320,7 @@ export const makeGitManager = Effect.gen(function* () {
         commitSummary: limitContext(rangeContext.commitSummary, 20_000),
         diffSummary: limitContext(rangeContext.diffSummary, 20_000),
         diffPatch: limitContext(rangeContext.diffPatch, 60_000),
+        ...(codexHomePath ? { codexHomePath } : {}),
         ...(model ? { model } : {}),
       });
 
@@ -1310,6 +1403,7 @@ export const makeGitManager = Effect.gen(function* () {
     const generated = yield* textGeneration.generateDiffSummary({
       cwd: input.cwd,
       patch,
+      ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
       ...(input.textGenerationModel ? { model: input.textGenerationModel } : {}),
     });
 
@@ -2215,6 +2309,7 @@ The local stash entry was kept for recovery.`,
     branch: string | null,
     commitMessage?: string,
     filePaths?: readonly string[],
+    codexHomePath?: string,
     model?: string,
     options?: FeatureBranchStepOptions,
   ) =>
@@ -2224,6 +2319,7 @@ The local stash entry was kept for recovery.`,
         branch,
         ...(commitMessage ? { commitMessage } : {}),
         ...(filePaths ? { filePaths } : {}),
+        ...(codexHomePath ? { codexHomePath } : {}),
         includeBranch: true,
         ...(model ? { model } : {}),
       });
@@ -2412,6 +2508,7 @@ The local stash entry was kept for recovery.`,
             initialStatus.branch,
             input.commitMessage,
             input.filePaths,
+            input.codexHomePath,
             input.textGenerationModel,
             {
               allowCommittedHead: !wantsCommit,
@@ -2437,6 +2534,7 @@ The local stash entry was kept for recovery.`,
                 commitMessageForStep,
                 preResolvedCommitSuggestion,
                 input.filePaths,
+                input.codexHomePath,
                 input.textGenerationModel,
                 options?.progressReporter,
                 progress.actionId,
@@ -2472,7 +2570,12 @@ The local stash entry was kept for recovery.`,
                 Effect.flatMap(() =>
                   Effect.gen(function* () {
                     currentPhase = "pr";
-                    return yield* runPrStep(input.cwd, currentBranch, input.textGenerationModel);
+                    return yield* runPrStep(
+                      input.cwd,
+                      currentBranch,
+                      input.codexHomePath,
+                      input.textGenerationModel,
+                    );
                   }),
                 ),
               )

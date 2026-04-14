@@ -15,8 +15,12 @@ export const gitQueryKeys = {
   status: (cwd: string | null) => ["git", "status", cwd] as const,
   branches: (cwd: string | null) => ["git", "branches", cwd] as const,
   workingTreeDiff: (cwd: string | null) => ["git", "working-tree-diff", cwd] as const,
-  diffSummary: (cacheScope: string | null, model: string | null, patchKey: string | null) =>
-    ["git", "diff-summary", cacheScope, model, patchKey] as const,
+  diffSummary: (
+    cacheScope: string | null,
+    model: string | null,
+    codexHomePath: string | null,
+    patchKey: string | null,
+  ) => ["git", "diff-summary", cacheScope, model, codexHomePath, patchKey] as const,
 };
 
 export const gitMutationKeys = {
@@ -112,6 +116,7 @@ export function gitSummarizeDiffQueryOptions(input: {
   cacheScope?: string | null;
   patch: string | null;
   model?: string | null;
+  codexHomePath?: string | null;
   enabled?: boolean;
 }) {
   // Cache summaries by patch hash so reopening the same diff does not regenerate it.
@@ -125,6 +130,7 @@ export function gitSummarizeDiffQueryOptions(input: {
     queryKey: gitQueryKeys.diffSummary(
       input.cacheScope ?? input.cwd,
       input.model ?? null,
+      input.codexHomePath ?? null,
       patchKey,
     ),
     queryFn: async () => {
@@ -135,6 +141,7 @@ export function gitSummarizeDiffQueryOptions(input: {
       return api.git.summarizeDiff({
         cwd: input.cwd,
         patch: normalizedPatch,
+        ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
         ...(input.model ? { textGenerationModel: input.model } : {}),
       });
     },
@@ -186,6 +193,7 @@ export function gitRunStackedActionMutationOptions(input: {
   cwd: string | null;
   queryClient: QueryClient;
   model?: string | null;
+  codexHomePath?: string | null;
 }) {
   return mutationOptions({
     mutationKey: gitMutationKeys.runStackedAction(input.cwd),
@@ -211,6 +219,7 @@ export function gitRunStackedActionMutationOptions(input: {
         ...(commitMessage ? { commitMessage } : {}),
         ...(featureBranch ? { featureBranch } : {}),
         ...(filePaths ? { filePaths } : {}),
+        ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
         ...(input.model ? { textGenerationModel: input.model } : {}),
       });
     },

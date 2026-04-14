@@ -722,7 +722,7 @@ function SettingsRouteView() {
                   <SelectValue>
                     <span className="flex items-center gap-2">
                       {settings.defaultProvider === "claudeAgent" ? (
-                        <ClaudeAI className="size-3.5 text-[#d97757]" />
+                        <ClaudeAI className="size-3.5 text-foreground" />
                       ) : (
                         <OpenAI className="size-3.5" />
                       )}
@@ -739,7 +739,7 @@ function SettingsRouteView() {
                   </SelectItem>
                   <SelectItem hideIndicator value="claudeAgent">
                     <span className="flex items-center gap-2">
-                      <ClaudeAI className="size-3.5 text-[#d97757]" />
+                      <ClaudeAI className="size-3.5 text-foreground" />
                       Claude
                     </span>
                   </SelectItem>

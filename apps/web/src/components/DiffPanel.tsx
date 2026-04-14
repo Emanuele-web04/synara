@@ -424,10 +424,17 @@ export default function DiffPanel({
         cwd: activeCwd ?? null,
         cacheScope: diffSummaryCacheScope,
         patch: normalizedWorkingTreePatch,
+        codexHomePath: settings.codexHomePath || null,
         model: settings.textGenerationModel ?? null,
         enabled: true,
       }),
-    [activeCwd, diffSummaryCacheScope, normalizedWorkingTreePatch, settings.textGenerationModel],
+    [
+      activeCwd,
+      diffSummaryCacheScope,
+      normalizedWorkingTreePatch,
+      settings.codexHomePath,
+      settings.textGenerationModel,
+    ],
   );
   const diffSummaryQueryOptions = useMemo(
     () =>
@@ -435,6 +442,7 @@ export default function DiffPanel({
         cwd: activeCwd ?? null,
         cacheScope: diffSummaryCacheScope,
         patch: normalizedWorkingTreePatch,
+        codexHomePath: settings.codexHomePath || null,
         model: settings.textGenerationModel ?? null,
         enabled: surfaceMode === "summary",
       }),
@@ -442,6 +450,7 @@ export default function DiffPanel({
       activeCwd,
       diffSummaryCacheScope,
       normalizedWorkingTreePatch,
+      settings.codexHomePath,
       settings.textGenerationModel,
       surfaceMode,
     ],
