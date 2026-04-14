@@ -23,6 +23,7 @@ import { ProviderAdapterRegistryLive } from "./provider/Layers/ProviderAdapterRe
 import { makeProviderServiceLive } from "./provider/Layers/ProviderService";
 import { ProviderDiscoveryServiceLive } from "./provider/Layers/ProviderDiscoveryService";
 import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionDirectory";
+import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
 import { ProviderDiscoveryService } from "./provider/Services/ProviderDiscoveryService";
 import { ProviderService } from "./provider/Services/ProviderService";
 import { makeEventNdjsonLogger } from "./provider/Layers/EventNdjsonLogger";
@@ -54,7 +55,7 @@ const makeRuntimePtyAdapterLayer = () =>
   }).pipe(Layer.unwrap);
 
 export function makeServerProviderLayer(): Layer.Layer<
-  ProviderService | ProviderDiscoveryService,
+  ProviderService | ProviderDiscoveryService | ProviderAdapterRegistry,
   ProviderUnsupportedError,
   SqlClient.SqlClient | ServerConfig | FileSystem.FileSystem | AnalyticsService
 > {
@@ -86,7 +87,7 @@ export function makeServerProviderLayer(): Layer.Layer<
     const providerDiscoveryLayer = ProviderDiscoveryServiceLive.pipe(
       Layer.provide(adapterRegistryLayer),
     );
-    return Layer.mergeAll(providerServiceLayer, providerDiscoveryLayer);
+    return Layer.mergeAll(providerServiceLayer, providerDiscoveryLayer, adapterRegistryLayer);
   }).pipe(Layer.unwrap);
 }
 

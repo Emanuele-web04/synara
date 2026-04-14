@@ -16,6 +16,7 @@ import {
   type ProviderReadPluginResult,
   type ProviderListSkillsResult,
   type ProviderRuntimeEvent,
+  type ServerVoiceTranscriptionResult,
   type ThreadTokenUsageSnapshot,
   type ProviderUserInputAnswers,
   RuntimeItemId,
@@ -1694,6 +1695,18 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           }),
       }).pipe(Effect.map((result) => result satisfies ProviderListModelsResult));
 
+    const transcribeVoice: NonNullable<CodexAdapterShape["transcribeVoice"]> = (input) =>
+      Effect.tryPromise({
+        try: () => manager.transcribeVoice(input),
+        catch: (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "voice/transcribe",
+            detail: toMessage(cause, "voice/transcribe failed"),
+            cause,
+          }),
+      }).pipe(Effect.map((result) => result satisfies ServerVoiceTranscriptionResult));
+
     const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
 
     yield* Effect.acquireRelease(
@@ -1765,6 +1778,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       listPlugins,
       readPlugin,
       listModels,
+      transcribeVoice,
       streamEvents: Stream.fromQueue(runtimeEventQueue),
     } satisfies CodexAdapterShape;
   });
