@@ -861,6 +861,7 @@ function buildSidebarThreadSummary(
       latestTurn: thread.latestTurn,
       messages: thread.messages,
       activities: thread.activities,
+      session: thread.session,
     }),
     forkSourceThreadId: thread.forkSourceThreadId ?? null,
     handoff: thread.handoff ?? null,

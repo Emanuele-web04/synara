@@ -182,31 +182,50 @@ function ChatRouteGlobalShortcuts() {
   return null;
 }
 
+const SIDEBAR_GAP_CLASS = {
+  left: "overflow-hidden after:absolute after:inset-y-0 after:right-0 after:w-px after:bg-black/[0.03] dark:after:bg-white/[0.015] before:absolute before:inset-0 before:bg-[radial-gradient(90%_75%_at_0%_0%,rgba(255,255,255,0.06),transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.025),rgba(255,255,255,0.008))] dark:before:bg-[radial-gradient(90%_75%_at_0%_0%,rgba(255,255,255,0.04),transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.018),rgba(255,255,255,0.006))]",
+  right:
+    "overflow-hidden after:absolute after:inset-y-0 after:left-0 after:w-px after:bg-black/[0.03] dark:after:bg-white/[0.015] before:absolute before:inset-0 before:bg-[radial-gradient(90%_75%_at_100%_0%,rgba(255,255,255,0.06),transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.025),rgba(255,255,255,0.008))] dark:before:bg-[radial-gradient(90%_75%_at_100%_0%,rgba(255,255,255,0.04),transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.018),rgba(255,255,255,0.006))]",
+} as const;
+
+const SIDEBAR_INNER_CLASS = {
+  left: "border-r border-border bg-background/70 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] backdrop-blur-lg backdrop-saturate-150 dark:border-white/[0.06] dark:bg-background/70 dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]",
+  right:
+    "border-l border-border bg-background/70 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] backdrop-blur-lg backdrop-saturate-150 dark:border-white/[0.06] dark:bg-background/70 dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]",
+} as const;
+
 function ChatRouteLayout() {
   useChatCodeFont();
   useUIFont();
+  const { settings } = useAppSettings();
+  const side = settings.sidebarSide;
+
+  const sidebarElement = (
+    <Sidebar
+      side={side}
+      collapsible="offcanvas"
+      className="text-foreground"
+      gapClassName={SIDEBAR_GAP_CLASS[side]}
+      innerClassName={SIDEBAR_INNER_CLASS[side]}
+      transparentSurface
+      resizable={{
+        minWidth: THREAD_SIDEBAR_MIN_WIDTH,
+        shouldAcceptWidth: ({ nextWidth, wrapper }) =>
+          wrapper.clientWidth - nextWidth >= THREAD_MAIN_CONTENT_MIN_WIDTH,
+        storageKey: THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
+      }}
+    >
+      <ThreadSidebar />
+      <SidebarRail />
+    </Sidebar>
+  );
 
   return (
     <SidebarProvider defaultOpen>
       <ChatRouteGlobalShortcuts />
-      <Sidebar
-        side="left"
-        collapsible="offcanvas"
-        className="text-foreground"
-        gapClassName="overflow-hidden after:absolute after:inset-y-0 after:right-0 after:w-px after:bg-black/[0.03] dark:after:bg-white/[0.015] before:absolute before:inset-0 before:bg-[radial-gradient(90%_75%_at_0%_0%,rgba(255,255,255,0.06),transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.025),rgba(255,255,255,0.008))] dark:before:bg-[radial-gradient(90%_75%_at_0%_0%,rgba(255,255,255,0.04),transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.018),rgba(255,255,255,0.006))]"
-        innerClassName="border-r border-border bg-background/70 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] backdrop-blur-lg backdrop-saturate-150 dark:border-white/[0.06] dark:bg-background/70 dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]"
-        transparentSurface
-        resizable={{
-          minWidth: THREAD_SIDEBAR_MIN_WIDTH,
-          shouldAcceptWidth: ({ nextWidth, wrapper }) =>
-            wrapper.clientWidth - nextWidth >= THREAD_MAIN_CONTENT_MIN_WIDTH,
-          storageKey: THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
-        }}
-      >
-        <ThreadSidebar />
-        <SidebarRail />
-      </Sidebar>
+      {side === "left" ? sidebarElement : null}
       <Outlet />
+      {side === "right" ? sidebarElement : null}
     </SidebarProvider>
   );
 }

@@ -505,6 +505,7 @@ export function hasLiveTurnTailWork(input: {
   latestTurn: Pick<OrchestrationLatestTurn, "turnId"> | null;
   messages: ReadonlyArray<Pick<ChatMessage, "role" | "streaming" | "turnId">>;
   activities: ReadonlyArray<OrchestrationThreadActivity>;
+  session?: Pick<ThreadSession, "orchestrationStatus"> | null;
 }): boolean {
   const latestTurnId = input.latestTurn?.turnId;
   if (!latestTurnId) {
@@ -517,6 +518,13 @@ export function hasLiveTurnTailWork(input: {
   );
   if (hasStreamingAssistantText) {
     return true;
+  }
+
+  // Some providers can leave task lifecycle bookkeeping behind after the turn
+  // has already closed. Once the session is no longer running, those stale
+  // task rows should not keep the whole chat in a live state.
+  if (input.session?.orchestrationStatus !== "running") {
+    return false;
   }
 
   if (deriveActiveBackgroundTasksState(input.activities, latestTurnId) !== null) {

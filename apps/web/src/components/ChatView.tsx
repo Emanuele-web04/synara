@@ -546,6 +546,7 @@ function deriveSubagentStatus(thread: Thread | undefined): {
       latestTurn: thread.latestTurn,
       messages: thread.messages,
       activities: thread.activities,
+      session: thread.session,
     })
   ) {
     return {
@@ -995,6 +996,7 @@ export default function ChatView({
     latestTurn: activeLatestTurn,
     messages: activeThread?.messages ?? EMPTY_MESSAGES,
     activities: threadActivities,
+    session: activeThread?.session ?? null,
   });
   const activeContextWindow = useMemo(
     () => deriveLatestContextWindowSnapshot(threadActivities),
@@ -5519,7 +5521,12 @@ export default function ChatView({
           </header>
         )}
         {isElectron && (
-          <div className="drag-region flex h-[52px] shrink-0 items-center border-b border-border px-5">
+          <div
+            className={cn(
+              "drag-region flex h-[52px] shrink-0 items-center border-b border-border px-5",
+              settings.sidebarSide === "right" && "pl-[90px]",
+            )}
+          >
             <SidebarHeaderTrigger className="size-7 shrink-0" />
             <span className="text-xs text-muted-foreground/50">No active thread</span>
           </div>
@@ -5540,6 +5547,7 @@ export default function ChatView({
         className={cn(
           "border-b border-border px-3 sm:px-5",
           isElectron ? "drag-region flex h-[52px] items-center" : "py-2 sm:py-3",
+          isElectron && settings.sidebarSide === "right" && "pl-[90px] sm:pl-[90px]",
         )}
       >
         <ChatHeader

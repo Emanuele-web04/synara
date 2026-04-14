@@ -580,7 +580,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               ? groupedEntries.slice(-MAX_VISIBLE_WORK_LOG_ENTRIES)
               : groupedEntries;
           const hiddenCount = groupedEntries.length - visibleEntries.length;
-          const onlyToolEntries = groupedEntries.every((entry) => entry.tone === "tool");
           const showOverflowToggle = hasOverflow;
 
           return (
@@ -598,11 +597,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 ))}
               </div>
               {showOverflowToggle && (
-                <div className="mt-1.5 flex items-center justify-end gap-2 px-0.5">
+                <div className="mt-1.5 flex items-center justify-start gap-2 px-0.5">
                   <button
                     type="button"
-                    className="font-chat-code text-muted-foreground/55 transition-colors duration-150 hover:text-foreground/75"
-                    style={{ fontSize: `${appTypographyScale.chatTinyPx}px` }}
+                    className="font-system-ui text-muted-foreground/55 transition-colors duration-150 hover:text-foreground/75"
+                    style={{ fontSize: `${appTypographyScale.uiSmPx}px` }}
                     onClick={() => onToggleWorkGroup(groupId)}
                   >
                     {isExpanded ? "Show less" : `Show ${hiddenCount} more`}

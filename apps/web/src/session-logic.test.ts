@@ -1417,6 +1417,7 @@ describe("hasLiveTurnTailWork", () => {
           },
         ],
         activities: [],
+        session: { orchestrationStatus: "ready" },
       }),
     ).toBe(true);
   });
@@ -1439,6 +1440,7 @@ describe("hasLiveTurnTailWork", () => {
             },
           }),
         ],
+        session: { orchestrationStatus: "running" },
       }),
     ).toBe(true);
   });
@@ -1478,6 +1480,41 @@ describe("hasLiveTurnTailWork", () => {
             },
           }),
         ],
+        session: { orchestrationStatus: "running" },
+      }),
+    ).toBe(false);
+  });
+
+  it("ignores stale background tasks once the provider session is idle", () => {
+    expect(
+      hasLiveTurnTailWork({
+        latestTurn,
+        messages: [],
+        activities: [
+          makeActivity({
+            id: "task-started-1",
+            kind: "task.started",
+            summary: "Repo scan started",
+            turnId: "turn-1",
+            payload: {
+              taskId: "task-1",
+              taskType: "index",
+              title: "Repo scan",
+            },
+          }),
+          makeActivity({
+            id: "task-progress-1",
+            kind: "task.progress",
+            summary: "Repo scan in progress",
+            turnId: "turn-1",
+            payload: {
+              taskId: "task-1",
+              taskType: "index",
+              summary: "Scanning files",
+            },
+          }),
+        ],
+        session: { orchestrationStatus: "ready" },
       }),
     ).toBe(false);
   });

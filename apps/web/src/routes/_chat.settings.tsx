@@ -83,6 +83,11 @@ const TIMESTAMP_FORMAT_LABELS = {
   "24-hour": "24-hour",
 } as const;
 
+const SIDEBAR_SIDE_LABELS = {
+  left: "Left",
+  right: "Right",
+} as const;
+
 const SIDEBAR_PROJECT_SORT_ORDER_LABELS = {
   updated_at: "Recently active",
   created_at: "Recently added",
@@ -352,6 +357,7 @@ function SettingsRouteView() {
     ...(theme !== "system" ? ["Theme"] : []),
     ...(settings.defaultProvider !== defaults.defaultProvider ? ["Default provider"] : []),
     ...(settings.defaultThreadEnvMode !== defaults.defaultThreadEnvMode ? ["New thread mode"] : []),
+    ...(settings.sidebarSide !== defaults.sidebarSide ? ["Sidebar position"] : []),
     ...(settings.sidebarProjectSortOrder !== defaults.sidebarProjectSortOrder
       ? ["Project sort order"]
       : []),
@@ -794,6 +800,46 @@ function SettingsRouteView() {
 
       <SettingsSection title="Sidebar organization">
         <div className="space-y-2">
+          <SettingsRow
+            title="Position"
+            description="Choose which side of the screen the sidebar appears on."
+            resetAction={
+              settings.sidebarSide !== defaults.sidebarSide ? (
+                <SettingResetButton
+                  label="sidebar position"
+                  onClick={() =>
+                    updateSettings({
+                      sidebarSide: defaults.sidebarSide,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Select
+                value={settings.sidebarSide}
+                onValueChange={(value) => {
+                  if (value !== "left" && value !== "right") {
+                    return;
+                  }
+                  updateSettings({ sidebarSide: value });
+                }}
+              >
+                <SelectTrigger className="w-full sm:w-44" aria-label="Sidebar position">
+                  <SelectValue>{SIDEBAR_SIDE_LABELS[settings.sidebarSide]}</SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  <SelectItem hideIndicator value="left">
+                    {SIDEBAR_SIDE_LABELS.left}
+                  </SelectItem>
+                  <SelectItem hideIndicator value="right">
+                    {SIDEBAR_SIDE_LABELS.right}
+                  </SelectItem>
+                </SelectPopup>
+              </Select>
+            }
+          />
+
           <SettingsRow
             title="Project order"
             description="Controls how projects are arranged in the main sidebar."
@@ -1788,7 +1834,12 @@ function SettingsRouteView() {
       <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
         {/* Header */}
         {isElectron ? (
-          <div className="drag-region flex h-[52px] shrink-0 items-center border-b border-border/70 px-5">
+          <div
+            className={cn(
+              "drag-region flex h-[52px] shrink-0 items-center border-b border-border/70 px-5",
+              settings.sidebarSide === "right" && "pl-[90px]",
+            )}
+          >
             <SidebarHeaderTrigger className="size-7 shrink-0" />
             <span className="text-xs font-medium tracking-wide text-muted-foreground/70">
               Settings

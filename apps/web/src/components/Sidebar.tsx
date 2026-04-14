@@ -3698,7 +3698,7 @@ export default function Sidebar() {
   }, [allProjectsExpanded, collapseProjectsExcept, focusedProjectId, setAllProjectsExpanded]);
 
   const wordmark = (
-    <div className="flex items-center gap-1.5">
+    <div className="flex w-full items-center gap-1.5">
       <SidebarTrigger className="shrink-0 md:hidden" />
       <Tooltip>
         <TooltipTrigger
@@ -3710,10 +3710,6 @@ export default function Sidebar() {
                   Code
                 </span>
               </div>
-              <SidebarTrigger
-                className="hidden size-7 shrink-0 text-muted-foreground/75 hover:text-foreground md:inline-flex"
-                aria-label="Toggle thread sidebar"
-              />
             </div>
           }
         />
@@ -3721,6 +3717,10 @@ export default function Sidebar() {
           Version {APP_VERSION}
         </TooltipPopup>
       </Tooltip>
+      <SidebarTrigger
+        className="hidden size-7 shrink-0 text-muted-foreground/75 hover:text-foreground md:inline-flex ml-auto"
+        aria-label="Toggle thread sidebar"
+      />
     </div>
   );
 
@@ -3728,7 +3728,12 @@ export default function Sidebar() {
     <>
       {isElectron ? (
         <>
-          <SidebarHeader className="drag-region h-[48px] flex-row items-center gap-2 px-4 py-0 pl-[90px] font-system-ui">
+          <SidebarHeader
+            className={cn(
+              "drag-region h-[48px] flex-row items-center gap-2 px-4 py-0 font-system-ui",
+              appSettings.sidebarSide === "left" && "pl-[90px]",
+            )}
+          >
             {wordmark}
           </SidebarHeader>
         </>

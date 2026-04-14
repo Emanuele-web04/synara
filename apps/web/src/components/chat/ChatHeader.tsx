@@ -267,8 +267,9 @@ export const ChatHeader = memo(function ChatHeader({
           />
         ) : null}
 
-        {/* Panel toggles menu — editor, terminal, split chat. */}
-        {!isDisposableThread && (terminalAvailable || activeProjectName || chatLayoutAction) ? (
+        {/* Panel toggles menu — editor, terminal, browser, split chat. */}
+        {!isDisposableThread &&
+        (terminalAvailable || activeProjectName || chatLayoutAction || isElectron) ? (
           <Menu modal={false}>
             <MenuTrigger
               render={
@@ -312,6 +313,17 @@ export const ChatHeader = memo(function ChatHeader({
                   </span>
                 )}
               </MenuItem>
+              {isElectron ? (
+                <MenuItem onClick={onToggleBrowser}>
+                  <GlobeIcon className="size-3.5 shrink-0" />
+                  <span>{browserOpen ? "Hide browser" : "Show browser"}</span>
+                  {browserToggleShortcutLabel && (
+                    <span className="ml-auto text-[11px] opacity-60">
+                      {browserToggleShortcutLabel}
+                    </span>
+                  )}
+                </MenuItem>
+              ) : null}
               {chatLayoutAction ? (
                 <MenuItem onClick={chatLayoutAction.onClick}>
                   {chatLayoutAction.kind === "split" ? (
@@ -342,29 +354,6 @@ export const ChatHeader = memo(function ChatHeader({
 
         {!isDisposableThread && activeProjectName ? (
           <GitActionsControl gitCwd={gitCwd} activeThreadId={activeThreadId} />
-        ) : null}
-        {isElectron ? (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Toggle
-                  className="shrink-0"
-                  pressed={browserOpen}
-                  onPressedChange={onToggleBrowser}
-                  aria-label="Toggle browser panel"
-                  variant="outline"
-                  size="xs"
-                >
-                  <GlobeIcon className="size-3" />
-                </Toggle>
-              }
-            />
-            <TooltipPopup side="bottom">
-              {browserToggleShortcutLabel
-                ? `Toggle in-app browser (${browserToggleShortcutLabel})`
-                : "Toggle in-app browser"}
-            </TooltipPopup>
-          </Tooltip>
         ) : null}
         <Tooltip>
           <TooltipTrigger
