@@ -280,7 +280,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Context compacted");
-    expect(markup).toContain("Work log");
+    expect(markup).not.toContain("Work log");
   });
 
   it("folds work log summaries into the next assistant message footer", async () => {
@@ -336,8 +336,8 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Turn • Work log");
-    expect(markup).not.toContain("Work log (1)");
+    expect(markup).toContain("8:12 PM • 1.0s");
+    expect(markup).not.toContain("Work log");
   });
 
   it("attaches trailing work log summaries to the last assistant reply after completion", async () => {
@@ -394,7 +394,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain(">done</p>");
-    expect(markup).toContain("Work log");
+    expect(markup).not.toContain("Work log");
     expect(markup).not.toContain('data-timeline-row-kind="work"');
   });
 
@@ -510,7 +510,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Tool 4");
     expect(markup).toContain("+2 more tool calls");
     expect(markup).not.toContain("Tool 5");
-    expect(markup).not.toContain("Tool calls (6)");
+    expect(markup).not.toContain("Tool calls");
   });
 
   it("keeps the latest inline tool calls visible while the turn is still active", async () => {

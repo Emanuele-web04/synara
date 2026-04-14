@@ -689,6 +689,28 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["tool-complete"]);
   });
 
+  it("omits passive rate-limit refresh entries from the chat work log", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "rate-limits-updated",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "account.rate-limits.updated",
+        summary: "Rate limits updated",
+        tone: "info",
+      }),
+      makeActivity({
+        id: "tool-complete",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        summary: "Ran command",
+        tone: "tool",
+        kind: "tool.completed",
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries.map((entry) => entry.id)).toEqual(["tool-complete"]);
+  });
+
   it("omits ExitPlanMode lifecycle entries once the plan card is shown", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

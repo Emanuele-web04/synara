@@ -178,7 +178,7 @@ import { useFocusedChatContext } from "../focusedChatContext";
 import { showContextMenuFallback } from "../contextMenuFallback";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
-const THREAD_PREVIEW_LIMIT = 6;
+const THREAD_PREVIEW_LIMIT = 5;
 const SIDEBAR_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
   updated_at: "Last user message",
   created_at: "Created at",

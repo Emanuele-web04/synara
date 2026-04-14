@@ -581,8 +581,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               : groupedEntries;
           const hiddenCount = groupedEntries.length - visibleEntries.length;
           const onlyToolEntries = groupedEntries.every((entry) => entry.tone === "tool");
-          const showHeader = hasOverflow || !onlyToolEntries;
-          const groupLabel = onlyToolEntries ? "Tool calls" : "Work log";
+          const showOverflowToggle = hasOverflow;
 
           return (
             <div>
@@ -598,24 +597,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   />
                 ))}
               </div>
-              {showHeader && (
-                <div className="mt-1.5 flex items-center justify-between gap-2 px-0.5">
-                  <p
-                    className="font-chat-code text-muted-foreground/55"
+              {showOverflowToggle && (
+                <div className="mt-1.5 flex items-center justify-end gap-2 px-0.5">
+                  <button
+                    type="button"
+                    className="font-chat-code text-muted-foreground/55 transition-colors duration-150 hover:text-foreground/75"
                     style={{ fontSize: `${appTypographyScale.chatTinyPx}px` }}
+                    onClick={() => onToggleWorkGroup(groupId)}
                   >
-                    {groupLabel} ({groupedEntries.length})
-                  </p>
-                  {hasOverflow && (
-                    <button
-                      type="button"
-                      className="font-chat-code text-muted-foreground/55 transition-colors duration-150 hover:text-foreground/75"
-                      style={{ fontSize: `${appTypographyScale.chatTinyPx}px` }}
-                      onClick={() => onToggleWorkGroup(groupId)}
-                    >
-                      {isExpanded ? "Show less" : `Show ${hiddenCount} more`}
-                    </button>
-                  )}
+                    {isExpanded ? "Show less" : `Show ${hiddenCount} more`}
+                  </button>
                 </div>
               )}
             </div>
@@ -1140,18 +1131,8 @@ function formatMessageMeta(
   return `${formatShortTimestamp(createdAt, timestampFormat)} • ${duration}`;
 }
 
-function formatInlineWorkSummary(groupedEntries: TimelineWorkEntry[]): string | null {
-  if (groupedEntries.length === 0) return null;
-
-  const onlyToolEntries = groupedEntries.every((entry) => entry.tone === "tool");
-  const groupLabel = onlyToolEntries ? "Tool calls" : "Work log";
-  if (groupedEntries.length === 1) {
-    const firstEntry = groupedEntries[0];
-    if (!firstEntry) return null;
-    return `${toolWorkEntryHeading(firstEntry)} • ${groupLabel}`;
-  }
-
-  return `${groupLabel} (${groupedEntries.length})`;
+function formatInlineWorkSummary(_groupedEntries: TimelineWorkEntry[]): string | null {
+  return null;
 }
 
 function hasOnlyToolToneEntries<T extends { tone: TimelineWorkEntry["tone"] }>(
