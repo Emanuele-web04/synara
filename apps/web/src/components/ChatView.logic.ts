@@ -102,8 +102,14 @@ export function sanitizeVoiceErrorMessage(message: string): string {
 
   const firstLine = normalized.split("\n")[0]?.trim() ?? normalized;
   const withoutInlineStack = firstLine.replace(/\s+at file:\/\/.*$/s, "").trim();
-  return withoutInlineStack.length > 0
-    ? withoutInlineStack
+  const withoutRemoteMethodPrefix = withoutInlineStack.replace(
+    /^Error invoking remote method ['"][^'"]+['"]:\s*/i,
+    "",
+  );
+  const withoutRepeatedErrorPrefix = withoutRemoteMethodPrefix.replace(/^(Error:\s*)+/i, "").trim();
+
+  return withoutRepeatedErrorPrefix.length > 0
+    ? withoutRepeatedErrorPrefix
     : "The voice note could not be transcribed.";
 }
 

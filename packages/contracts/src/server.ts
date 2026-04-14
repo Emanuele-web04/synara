@@ -51,6 +51,7 @@ const ServerProviderStatuses = Schema.Array(ServerProviderStatus);
 export const ServerConfig = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   homeDir: Schema.optional(TrimmedNonEmptyString),
+  worktreesDir: TrimmedNonEmptyString,
   keybindingsConfigPath: TrimmedNonEmptyString,
   keybindings: ResolvedKeybindingsConfig,
   issues: ServerConfigIssues,
@@ -58,6 +59,17 @@ export const ServerConfig = Schema.Struct({
   availableEditors: Schema.Array(EditorId),
 });
 export type ServerConfig = typeof ServerConfig.Type;
+
+export const ServerManagedWorktree = Schema.Struct({
+  path: TrimmedNonEmptyString,
+  workspaceRoot: TrimmedNonEmptyString,
+});
+export type ServerManagedWorktree = typeof ServerManagedWorktree.Type;
+
+export const ServerListWorktreesResult = Schema.Struct({
+  worktrees: Schema.Array(ServerManagedWorktree),
+});
+export type ServerListWorktreesResult = typeof ServerListWorktreesResult.Type;
 
 export const ServerVoiceTranscriptionInput = Schema.Struct({
   provider: ProviderKind,

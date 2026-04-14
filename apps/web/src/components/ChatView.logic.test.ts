@@ -35,6 +35,14 @@ describe("voice helpers", () => {
     ).toBe("Your ChatGPT login has expired. Sign in again.");
   });
 
+  it("strips desktop bridge wrappers from voice errors", () => {
+    expect(
+      sanitizeVoiceErrorMessage(
+        "Error invoking remote method 'desktop:server-transcribe-voice': Error: The transcription response did not include any text.",
+      ),
+    ).toBe("The transcription response did not include any text.");
+  });
+
   it("detects auth-expired copy in sanitized voice errors", () => {
     expect(isVoiceAuthExpiredMessage("Sign in again to ChatGPT")).toBe(true);
     expect(isVoiceAuthExpiredMessage("The microphone could not be opened.")).toBe(false);

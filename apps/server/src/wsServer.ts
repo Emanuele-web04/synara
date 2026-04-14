@@ -118,6 +118,30 @@ const isServerNotRunningError = (error: Error): boolean => {
   );
 };
 
+const parseManagedWorktreeWorkspaceRoot = (input: {
+  gitPointerFileContents: string;
+  path: Path.Path;
+  worktreePath: string;
+}): string | null => {
+  const firstLine = input.gitPointerFileContents.split(/\r?\n/, 1)[0]?.trim() ?? "";
+  if (!firstLine.toLowerCase().startsWith("gitdir:")) {
+    return null;
+  }
+  const gitdirValue = firstLine.slice("gitdir:".length).trim();
+  if (!gitdirValue) {
+    return null;
+  }
+  const resolvedGitdir = input.path.isAbsolute(gitdirValue)
+    ? input.path.normalize(gitdirValue)
+    : input.path.resolve(input.worktreePath, gitdirValue);
+  const marker = `${input.path.sep}.git${input.path.sep}worktrees${input.path.sep}`;
+  const markerIndex = resolvedGitdir.lastIndexOf(marker);
+  if (markerIndex < 0) {
+    return null;
+  }
+  return resolvedGitdir.slice(0, markerIndex);
+};
+
 function rejectUpgrade(socket: Duplex, statusCode: number, message: string): void {
   socket.end(
     `HTTP/1.1 ${statusCode} ${statusCode === 401 ? "Unauthorized" : "Bad Request"}\r\n` +

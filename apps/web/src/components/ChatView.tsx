@@ -3436,7 +3436,7 @@ export default function ChatView({
       }
       toastManager.add({
         type: "error",
-        title: authExpired ? "Sign in to ChatGPT again" : "Voice transcription failed",
+        title: authExpired ? "Sign in to ChatGPT again" : "Couldn't transcribe voice note",
         description: authExpired
           ? "Voice transcription uses your ChatGPT session in Codex. That session was rejected, so sign in again there and retry."
           : description,
@@ -5717,7 +5717,8 @@ export default function ChatView({
                         <div
                           data-chat-composer-actions="right"
                           className={cn(
-                            "flex items-center gap-2",
+                            "flex gap-2",
+                            isVoiceRecording || isVoiceTranscribing ? "items-center" : "items-end",
                             isVoiceRecording || isVoiceTranscribing ? "min-w-0 flex-1" : "shrink-0",
                           )}
                         >
@@ -5779,7 +5780,7 @@ export default function ChatView({
                           ) : hasLiveTurn ? (
                             <button
                               type="button"
-                              className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full bg-foreground text-background transition-all duration-150 hover:scale-105 sm:h-7 sm:w-7"
+                              className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-full bg-foreground text-background transition-all duration-150 hover:scale-105 sm:h-[26px] sm:w-[26px]"
                               onClick={() => void onInterrupt()}
                               aria-label="Stop generation"
                               title="Stop the current response. On Mac, press Ctrl+C to interrupt."
@@ -5850,7 +5851,7 @@ export default function ChatView({
                                 ) : null}
                                 <button
                                   type="submit"
-                                  className="flex h-8 w-8 items-center justify-center rounded-full bg-foreground text-background transition-all duration-150 hover:scale-105 disabled:opacity-20 disabled:hover:scale-100 sm:h-9 sm:w-9"
+                                  className="flex h-7 w-7 items-center justify-center rounded-full bg-foreground text-background transition-all duration-150 hover:scale-105 disabled:opacity-20 disabled:hover:scale-100 sm:h-8 sm:w-8"
                                   disabled={
                                     isSendBusy ||
                                     isConnecting ||

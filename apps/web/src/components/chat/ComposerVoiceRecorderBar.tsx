@@ -97,29 +97,29 @@ export const ComposerVoiceRecorderBar = memo(function ComposerVoiceRecorderBar(
 
       <button
         type="button"
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-zinc-200/80 text-zinc-700 transition-colors hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white/10 dark:text-zinc-100 dark:hover:bg-white/15 sm:h-8 sm:w-8"
+        className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full bg-zinc-200/80 text-zinc-700 transition-colors hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white/10 dark:text-zinc-100 dark:hover:bg-white/15 sm:h-7 sm:w-7"
         aria-label={props.isTranscribing ? "Transcribing voice note" : "Cancel voice note"}
         disabled={props.disabled || props.isTranscribing}
         onClick={props.onCancel}
       >
         {props.isTranscribing ? (
-          <Loader2Icon aria-hidden="true" className="size-3.5 animate-spin" />
+          <Loader2Icon aria-hidden="true" className="size-3 animate-spin" />
         ) : (
-          <IoStopSharp aria-hidden="true" className="size-[12px]" />
+          <IoStopSharp aria-hidden="true" className="size-[11px]" />
         )}
       </button>
 
       <button
         type="button"
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-foreground text-background transition-transform duration-150 hover:scale-105 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100 sm:h-8 sm:w-8"
+        className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full bg-foreground text-background transition-transform duration-150 hover:scale-105 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100 sm:h-7 sm:w-7"
         aria-label={props.isTranscribing ? "Transcribing voice note" : "Send voice note"}
         disabled={props.disabled || props.isTranscribing}
         onClick={props.onSubmit}
       >
         {props.isTranscribing ? (
-          <Loader2Icon aria-hidden="true" className="size-3.5 animate-spin" />
+          <Loader2Icon aria-hidden="true" className="size-3 animate-spin" />
         ) : (
-          <FiArrowUp aria-hidden="true" className="size-[14px]" strokeWidth={2.25} />
+          <FiArrowUp aria-hidden="true" className="size-[13px]" strokeWidth={2.25} />
         )}
       </button>
     </div>

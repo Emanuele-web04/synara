@@ -4,10 +4,9 @@
 // Depends on: shared button styling and caller-owned voice recording state callbacks.
 
 import { memo } from "react";
-import { IoMicOutline } from "react-icons/io5";
 
-import { Loader2Icon } from "~/lib/icons";
-import { cn } from "~/lib/utils";
+import { Loader2Icon, MicIcon } from "~/lib/icons";
+import { Button } from "../ui/button";
 
 export const ComposerVoiceButton = memo(function ComposerVoiceButton(props: {
   disabled?: boolean;
@@ -23,11 +22,10 @@ export const ComposerVoiceButton = memo(function ComposerVoiceButton(props: {
       : "Record voice note";
 
   return (
-    <button
-      type="button"
-      className={cn(
-        "flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-zinc-500 transition-colors duration-150 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-45 dark:text-zinc-400 dark:hover:text-zinc-100 sm:h-8 sm:w-8",
-      )}
+    <Button
+      size="icon-sm"
+      variant="ghost"
+      className="shrink-0 rounded-md text-muted-foreground/70 hover:text-foreground/80"
       disabled={props.disabled || props.isTranscribing}
       aria-label={label}
       title={label}
@@ -36,8 +34,8 @@ export const ComposerVoiceButton = memo(function ComposerVoiceButton(props: {
       {props.isTranscribing ? (
         <Loader2Icon aria-hidden="true" className="size-4 animate-spin" />
       ) : (
-        <IoMicOutline aria-hidden="true" className="size-[18px]" />
+        <MicIcon aria-hidden="true" className="size-4" />
       )}
-    </button>
+    </Button>
   );
 });
