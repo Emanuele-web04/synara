@@ -235,7 +235,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Check Code");
-    expect(markup).toContain("bg-blue-600/8");
+    expect(markup).toContain("bg-[var(--info-foreground)]/10");
     expect(markup).not.toContain("$check-code</div>");
   });
 
