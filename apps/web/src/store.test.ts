@@ -1,7 +1,19 @@
-import { ProjectId, ThreadId, TurnId, type OrchestrationReadModel } from "@t3tools/contracts";
+import {
+  CheckpointRef,
+  EventId,
+  MessageId,
+  OrchestrationProposedPlanId,
+  ProjectId,
+  ThreadId,
+  TurnId,
+  type OrchestrationEvent,
+  type OrchestrationReadModel,
+  type OrchestrationThreadActivity,
+} from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  applyOrchestrationEvents,
   collapseProjectsExcept,
   markThreadUnread,
   renameProjectLocally,
@@ -33,12 +45,60 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     error: null,
     createdAt: "2026-02-13T00:00:00.000Z",
     latestTurn: null,
+    latestUserMessageAt: null,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    hasActionableProposedPlan: false,
     envMode: "local",
     branch: null,
     worktreePath: null,
     forkSourceThreadId: null,
     handoff: null,
     ...overrides,
+  };
+}
+
+function makeDomainEvent<TType extends OrchestrationEvent["type"]>(
+  type: TType,
+  payload: Extract<OrchestrationEvent, { type: TType }>["payload"],
+  overrides: Partial<Omit<Extract<OrchestrationEvent, { type: TType }>, "type" | "payload">> = {},
+): Extract<OrchestrationEvent, { type: TType }> {
+  const aggregateId = "threadId" in payload ? payload.threadId : ProjectId.makeUnsafe("project-1");
+  return {
+    type,
+    payload,
+    sequence: overrides.sequence ?? 1,
+    eventId: overrides.eventId ?? EventId.makeUnsafe(`event-${crypto.randomUUID()}`),
+    aggregateKind: overrides.aggregateKind ?? "thread",
+    aggregateId,
+    occurredAt: overrides.occurredAt ?? "2026-02-27T00:00:00.000Z",
+    commandId: overrides.commandId ?? null,
+    causationEventId: overrides.causationEventId ?? null,
+    correlationId: overrides.correlationId ?? null,
+    metadata: overrides.metadata ?? {},
+    ...overrides,
+  } as Extract<OrchestrationEvent, { type: TType }>;
+}
+
+function makeActivity(overrides: {
+  id?: string;
+  createdAt?: string;
+  kind?: string;
+  summary?: string;
+  tone?: OrchestrationThreadActivity["tone"];
+  payload?: Record<string, unknown>;
+  turnId?: string;
+  sequence?: number;
+}): OrchestrationThreadActivity {
+  return {
+    id: EventId.makeUnsafe(overrides.id ?? crypto.randomUUID()),
+    createdAt: overrides.createdAt ?? "2026-02-23T00:00:00.000Z",
+    kind: overrides.kind ?? "tool.started",
+    summary: overrides.summary ?? "Tool call",
+    tone: overrides.tone ?? "tool",
+    payload: overrides.payload ?? {},
+    turnId: overrides.turnId ? TurnId.makeUnsafe(overrides.turnId) : null,
+    ...(overrides.sequence !== undefined ? { sequence: overrides.sequence } : {}),
   };
 }
 
@@ -270,6 +330,267 @@ describe("store pure functions", () => {
     );
   });
 
+  it("updates latest turn and thread error immediately from session-set events", () => {
+    const initialState = makeState(
+      makeThread({
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("turn-running"),
+          state: "running",
+          requestedAt: "2026-02-27T00:01:00.000Z",
+          startedAt: "2026-02-27T00:01:05.000Z",
+          completedAt: null,
+          assistantMessageId: null,
+        },
+      }),
+    );
+
+    const next = applyOrchestrationEvents(initialState, [
+      makeDomainEvent("thread.session-set", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "error",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: null,
+          lastError: "provider crashed",
+          updatedAt: "2026-02-27T00:02:00.000Z",
+        },
+      }),
+    ]);
+
+    expect(next.threads[0]?.error).toBe("provider crashed");
+    expect(next.threads[0]?.latestTurn).toMatchObject({
+      turnId: TurnId.makeUnsafe("turn-running"),
+      state: "error",
+      completedAt: "2026-02-27T00:02:00.000Z",
+    });
+  });
+
+  it("settles a running latest turn immediately when session stop is requested", () => {
+    const initialState = makeState(
+      makeThread({
+        session: {
+          provider: "codex",
+          status: "running",
+          orchestrationStatus: "running",
+          activeTurnId: TurnId.makeUnsafe("turn-running"),
+          createdAt: "2026-02-27T00:01:00.000Z",
+          updatedAt: "2026-02-27T00:01:00.000Z",
+        },
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("turn-running"),
+          state: "running",
+          requestedAt: "2026-02-27T00:01:00.000Z",
+          startedAt: "2026-02-27T00:01:05.000Z",
+          completedAt: null,
+          assistantMessageId: MessageId.makeUnsafe("assistant-running"),
+        },
+      }),
+    );
+
+    const next = applyOrchestrationEvents(initialState, [
+      makeDomainEvent("thread.session-stop-requested", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        createdAt: "2026-02-27T00:02:00.000Z",
+      }),
+    ]);
+
+    expect(next.threads[0]?.session).toMatchObject({
+      status: "closed",
+      orchestrationStatus: "stopped",
+      activeTurnId: undefined,
+      updatedAt: "2026-02-27T00:02:00.000Z",
+    });
+    expect(next.threads[0]?.latestTurn).toMatchObject({
+      turnId: TurnId.makeUnsafe("turn-running"),
+      state: "interrupted",
+      requestedAt: "2026-02-27T00:01:00.000Z",
+      startedAt: "2026-02-27T00:01:05.000Z",
+      completedAt: "2026-02-27T00:02:00.000Z",
+      assistantMessageId: MessageId.makeUnsafe("assistant-running"),
+    });
+  });
+
+  it("keeps pending proposed-plan linkage across live turn updates", () => {
+    const sourceProposedPlan = {
+      threadId: ThreadId.makeUnsafe("thread-source"),
+      planId: OrchestrationProposedPlanId.makeUnsafe("plan-source"),
+    };
+    const next = applyOrchestrationEvents(makeState(makeThread()), [
+      makeDomainEvent("thread.turn-start-requested", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: MessageId.makeUnsafe("user-message"),
+        runtimeMode: "full-access",
+        interactionMode: DEFAULT_INTERACTION_MODE,
+        dispatchMode: "queue",
+        createdAt: "2026-02-27T00:01:00.000Z",
+        sourceProposedPlan,
+      }),
+      makeDomainEvent("thread.message-sent", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: MessageId.makeUnsafe("assistant-message"),
+        role: "assistant",
+        text: "Done",
+        turnId: TurnId.makeUnsafe("turn-1"),
+        streaming: false,
+        createdAt: "2026-02-27T00:01:05.000Z",
+        updatedAt: "2026-02-27T00:01:06.000Z",
+        attachments: [],
+        source: "native",
+      }),
+    ]);
+
+    expect(next.threads[0]?.pendingSourceProposedPlan).toEqual(sourceProposedPlan);
+    expect(next.threads[0]?.latestTurn?.sourceProposedPlan).toEqual(sourceProposedPlan);
+  });
+
+  it("updates turn diffs and latest turn immediately from live events", () => {
+    const initialState = makeState(
+      makeThread({
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("turn-1"),
+          state: "running",
+          requestedAt: "2026-02-27T00:01:00.000Z",
+          startedAt: "2026-02-27T00:01:05.000Z",
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        pendingSourceProposedPlan: {
+          threadId: ThreadId.makeUnsafe("thread-source"),
+          planId: OrchestrationProposedPlanId.makeUnsafe("plan-source"),
+        },
+      }),
+    );
+
+    const next = applyOrchestrationEvents(initialState, [
+      makeDomainEvent("thread.turn-diff-completed", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        turnId: TurnId.makeUnsafe("turn-1"),
+        completedAt: "2026-02-27T00:02:00.000Z",
+        status: "ready",
+        files: [{ path: "src/app.ts", kind: "modified", additions: 1, deletions: 0 }],
+        checkpointRef: CheckpointRef.makeUnsafe("checkpoint-1"),
+        assistantMessageId: MessageId.makeUnsafe("assistant-message"),
+        checkpointTurnCount: 1,
+      }),
+    ]);
+
+    expect(next.threads[0]?.turnDiffSummaries).toHaveLength(1);
+    expect(next.threads[0]?.latestTurn).toMatchObject({
+      turnId: TurnId.makeUnsafe("turn-1"),
+      state: "completed",
+      completedAt: "2026-02-27T00:02:00.000Z",
+      assistantMessageId: MessageId.makeUnsafe("assistant-message"),
+    });
+  });
+
+  it("cleans thread state on revert and clears pending proposed plans", () => {
+    const initialState = makeState(
+      makeThread({
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("turn-2"),
+          state: "completed",
+          requestedAt: "2026-02-27T00:01:00.000Z",
+          startedAt: "2026-02-27T00:01:05.000Z",
+          completedAt: "2026-02-27T00:03:00.000Z",
+          assistantMessageId: MessageId.makeUnsafe("assistant-2"),
+        },
+        pendingSourceProposedPlan: {
+          threadId: ThreadId.makeUnsafe("thread-source"),
+          planId: OrchestrationProposedPlanId.makeUnsafe("plan-source"),
+        },
+        messages: [
+          {
+            id: MessageId.makeUnsafe("user-1"),
+            role: "user",
+            text: "one",
+            turnId: TurnId.makeUnsafe("turn-1"),
+            createdAt: "2026-02-27T00:00:00.000Z",
+            streaming: false,
+          },
+          {
+            id: MessageId.makeUnsafe("assistant-1"),
+            role: "assistant",
+            text: "reply",
+            turnId: TurnId.makeUnsafe("turn-1"),
+            createdAt: "2026-02-27T00:00:10.000Z",
+            completedAt: "2026-02-27T00:00:10.000Z",
+            streaming: false,
+          },
+          {
+            id: MessageId.makeUnsafe("user-2"),
+            role: "user",
+            text: "two",
+            turnId: TurnId.makeUnsafe("turn-2"),
+            createdAt: "2026-02-27T00:01:00.000Z",
+            streaming: false,
+          },
+        ],
+        proposedPlans: [
+          {
+            id: OrchestrationProposedPlanId.makeUnsafe("plan-1"),
+            turnId: TurnId.makeUnsafe("turn-1"),
+            planMarkdown: "keep",
+            implementedAt: null,
+            implementationThreadId: null,
+            createdAt: "2026-02-27T00:00:05.000Z",
+            updatedAt: "2026-02-27T00:00:05.000Z",
+          },
+          {
+            id: OrchestrationProposedPlanId.makeUnsafe("plan-2"),
+            turnId: TurnId.makeUnsafe("turn-2"),
+            planMarkdown: "drop",
+            implementedAt: null,
+            implementationThreadId: null,
+            createdAt: "2026-02-27T00:01:05.000Z",
+            updatedAt: "2026-02-27T00:01:05.000Z",
+          },
+        ],
+        activities: [
+          makeActivity({ id: "activity-1", turnId: "turn-1" }),
+          makeActivity({ id: "activity-2", turnId: "turn-2" }),
+        ],
+        turnDiffSummaries: [
+          {
+            turnId: TurnId.makeUnsafe("turn-1"),
+            completedAt: "2026-02-27T00:00:15.000Z",
+            status: "ready",
+            files: [],
+            checkpointTurnCount: 1,
+          },
+          {
+            turnId: TurnId.makeUnsafe("turn-2"),
+            completedAt: "2026-02-27T00:03:00.000Z",
+            status: "ready",
+            files: [],
+            checkpointTurnCount: 2,
+          },
+        ],
+      }),
+    );
+
+    const next = applyOrchestrationEvents(initialState, [
+      makeDomainEvent("thread.reverted", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        turnCount: 1,
+      }),
+    ]);
+
+    expect(next.threads[0]?.pendingSourceProposedPlan).toBeUndefined();
+    expect(next.threads[0]?.messages.map((message) => message.id)).toEqual([
+      MessageId.makeUnsafe("user-1"),
+      MessageId.makeUnsafe("assistant-1"),
+    ]);
+    expect(next.threads[0]?.proposedPlans.map((plan) => plan.id)).toEqual([
+      OrchestrationProposedPlanId.makeUnsafe("plan-1"),
+    ]);
+    expect(next.threads[0]?.activities.map((activity) => activity.id)).toEqual([
+      EventId.makeUnsafe("activity-1"),
+    ]);
+    expect(next.threads[0]?.latestTurn?.turnId).toBe(TurnId.makeUnsafe("turn-1"));
+  });
+
   it("reorderProjects moves a project to a target index", () => {
     const project1 = ProjectId.makeUnsafe("project-1");
     const project2 = ProjectId.makeUnsafe("project-2");
@@ -439,6 +760,39 @@ describe("store read model sync", () => {
 
     expect(next.threads[0]?.error).toBeNull();
     expect(next.threads[0]?.session?.lastError).toBeUndefined();
+  });
+
+  it("reconciles snapshot state even when thread updatedAt matches a prior live event", () => {
+    const sourceProposedPlan = {
+      threadId: ThreadId.makeUnsafe("thread-source"),
+      planId: OrchestrationProposedPlanId.makeUnsafe("plan-source"),
+    };
+    const liveState = applyOrchestrationEvents(makeState(makeThread()), [
+      makeDomainEvent("thread.turn-start-requested", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: MessageId.makeUnsafe("user-message"),
+        runtimeMode: "full-access",
+        interactionMode: DEFAULT_INTERACTION_MODE,
+        dispatchMode: "queue",
+        createdAt: "2026-02-27T00:05:00.000Z",
+        sourceProposedPlan,
+      }),
+    ]);
+
+    const next = syncServerReadModel(
+      liveState,
+      makeReadModel(
+        makeReadModelThread({
+          updatedAt: "2026-02-27T00:05:00.000Z",
+          latestTurn: null,
+          session: null,
+        }),
+      ),
+    );
+
+    expect(next.threads[0]?.updatedAt).toBe("2026-02-27T00:05:00.000Z");
+    expect(next.threads[0]?.latestTurn).toBeNull();
+    expect(next.threads[0]?.pendingSourceProposedPlan).toBeUndefined();
   });
 
   it("preserves claude model slugs without an active session", () => {
@@ -700,27 +1054,8 @@ describe("store read model sync", () => {
     }
   });
 
-  it("reuses unchanged thread objects when the read model timestamp is unchanged", () => {
-    const thread = makeThread({
-      updatedAt: "2026-02-28T00:00:00.000Z",
-      lastVisitedAt: "2026-02-28T00:00:01.000Z",
-    });
-    const state: AppState = {
-      projects: [
-        makeProject({
-          defaultModelSelection: {
-            provider: "codex",
-            model: "gpt-5-codex",
-          },
-          updatedAt: "2026-02-27T00:00:00.000Z",
-        }),
-      ],
-      threads: [thread],
-      sidebarThreadSummaryById: {},
-      threadsHydrated: true,
-    };
-
-    const next = syncServerReadModel(state, {
+  it("reuses normalized thread objects when the incoming snapshot is unchanged", () => {
+    const readModel = {
       snapshotSequence: 1,
       updatedAt: "2026-02-28T00:00:00.000Z",
       projects: [
@@ -738,11 +1073,15 @@ describe("store read model sync", () => {
             provider: "codex",
             model: "gpt-5-codex",
           },
-          createdAt: thread.createdAt,
-          updatedAt: thread.updatedAt ?? "2026-02-28T00:00:00.000Z",
+          createdAt: "2026-02-13T00:00:00.000Z",
+          updatedAt: "2026-02-28T00:00:00.000Z",
         }),
       ],
-    });
+    } satisfies OrchestrationReadModel;
+
+    const hydratedState = syncServerReadModel(makeState(makeThread()), readModel);
+    const thread = hydratedState.threads[0];
+    const next = syncServerReadModel(hydratedState, readModel);
 
     expect(next.threads[0]).toBe(thread);
   });

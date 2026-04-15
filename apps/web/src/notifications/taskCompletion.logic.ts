@@ -13,7 +13,6 @@ import {
   derivePendingApprovals,
   derivePendingUserInputs,
   hasLiveLatestTurn,
-  isLatestTurnSettled,
 } from "../session-logic";
 
 export interface CompletedThreadCandidate {
@@ -91,6 +90,16 @@ function hadUnsettledTurn(thread: Thread | undefined): boolean {
   return !thread.latestTurn?.completedAt && isRunningStatus(thread.session?.status);
 }
 
+function isCompletionNotificationSettled(thread: Thread | undefined): boolean {
+  if (!thread?.latestTurn?.startedAt || !thread.latestTurn.completedAt) {
+    return false;
+  }
+  if (!thread.session) {
+    return true;
+  }
+  return thread.session.orchestrationStatus !== "running";
+}
+
 // Compare consecutive snapshots and emit fresh settled completions, even if the
 // session snapshot skips directly to ready before the toast logic observes it.
 export function collectCompletedThreadCandidates(
@@ -107,16 +116,22 @@ export function collectCompletedThreadCandidates(
     }
 
     const completedAt = thread.latestTurn?.completedAt;
-    if (!completedAt || completedAt === previousThread.latestTurn?.completedAt) {
+    if (!completedAt) {
       continue;
     }
-    if (!isLatestTurnSettled(thread.latestTurn, thread.session)) {
+    if (!isCompletionNotificationSettled(thread)) {
       continue;
     }
     if (!previousThread.session && !previousThread.latestTurn?.completedAt) {
       continue;
     }
     if (!hadUnsettledTurn(previousThread) && !previousThread.latestTurn?.completedAt) {
+      continue;
+    }
+    if (
+      previousThread.latestTurn?.turnId === thread.latestTurn?.turnId &&
+      isCompletionNotificationSettled(previousThread)
+    ) {
       continue;
     }
 
