@@ -597,7 +597,7 @@ function SidebarPrimaryAction({
         <span className="inline-flex size-5 shrink-0 items-center justify-center text-muted-foreground/72">
           <Icon className="size-[15px]" />
         </span>
-        <span className="truncate opacity-80">{label}</span>
+        <span className="truncate">{label}</span>
         {shortcutLabel ? (
           <ShortcutKbd
             shortcutLabel={shortcutLabel}
@@ -2496,7 +2496,7 @@ export default function Sidebar() {
           ) : (
             <ProviderGlyph
               provider={thread.modelSelection.provider}
-              className="size-3.5 shrink-0 opacity-80"
+              className="size-3.5 shrink-0"
             />
           )}
           <div className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
@@ -2504,7 +2504,7 @@ export default function Sidebar() {
               <TooltipTrigger
                 render={
                   <span
-                    className="min-w-0 flex-1 truncate opacity-80"
+                    className="min-w-0 flex-1 truncate"
                     data-testid={`thread-title-${thread.id}`}
                   >
                     {isSubagentThread
@@ -2752,7 +2752,7 @@ export default function Sidebar() {
           ) : (
             <ProviderGlyph
               provider={thread.modelSelection.provider}
-              className="size-3.5 shrink-0 opacity-80"
+              className="size-3.5 shrink-0"
             />
           )}
           <div
@@ -2814,7 +2814,7 @@ export default function Sidebar() {
             ) : (
               <span
                 className={cn(
-                  "min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)] text-foreground/86 opacity-80",
+                  "min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)] text-foreground/86",
                   isSubagentThread ? "leading-[18px] text-foreground/80" : "leading-5",
                 )}
               >
@@ -3847,8 +3847,8 @@ export default function Sidebar() {
                                 });
                               }}
                             >
-                              <Icon className="size-3.5 shrink-0 opacity-80" />
-                              <span className="truncate text-[length:var(--app-font-size-ui,12px)] leading-5 opacity-80">
+                              <Icon className="size-3.5 shrink-0" />
+                              <span className="truncate text-[length:var(--app-font-size-ui,12px)] leading-5">
                                 {item.label}
                               </span>
                             </SidebarMenuSubButton>
