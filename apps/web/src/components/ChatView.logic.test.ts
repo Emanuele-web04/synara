@@ -302,6 +302,16 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
     sessionOrchestrationStatus: "ready",
     sessionUpdatedAt: "2026-04-13T00:00:00.000Z",
   };
+  const firstTurnLocalDispatch: LocalDispatchSnapshot = {
+    startedAt: "2026-04-13T00:00:00.000Z",
+    preparingWorktree: false,
+    latestTurnTurnId: null,
+    latestTurnRequestedAt: null,
+    latestTurnStartedAt: null,
+    latestTurnCompletedAt: null,
+    sessionOrchestrationStatus: null,
+    sessionUpdatedAt: null,
+  };
 
   it("stays pending until the server-side thread/session snapshot changes", () => {
     expect(
@@ -347,6 +357,40 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
         hasPendingApproval: false,
         hasPendingUserInput: false,
         threadError: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps the first-turn optimistic timer alive through a null-to-ready session bootstrap", () => {
+    expect(
+      hasServerAcknowledgedLocalDispatch({
+        localDispatch: firstTurnLocalDispatch,
+        phase: "ready",
+        latestTurn: null,
+        session: {
+          provider: "claudeAgent",
+          status: "ready",
+          orchestrationStatus: "ready",
+          createdAt: "2026-04-13T00:00:00.000Z",
+          updatedAt: "2026-04-13T00:00:01.000Z",
+        },
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("still acknowledges non-ready session transitions without a latest turn snapshot", () => {
+    expect(
+      hasServerAcknowledgedLocalDispatch({
+        localDispatch: firstTurnLocalDispatch,
+        phase: "disconnected",
+        latestTurn: null,
+        session: null,
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: "provider failed",
       }),
     ).toBe(true);
   });

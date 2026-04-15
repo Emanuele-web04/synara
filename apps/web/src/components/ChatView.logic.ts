@@ -235,15 +235,31 @@ export function hasServerAcknowledgedLocalDispatch(input: {
 
   const latestTurn = input.latestTurn ?? null;
   const session = input.session ?? null;
-
-  return (
+  const nextSessionOrchestrationStatus = session?.orchestrationStatus ?? null;
+  const latestTurnChanged =
     input.localDispatch.latestTurnTurnId !== (latestTurn?.turnId ?? null) ||
     input.localDispatch.latestTurnRequestedAt !== (latestTurn?.requestedAt ?? null) ||
     input.localDispatch.latestTurnStartedAt !== (latestTurn?.startedAt ?? null) ||
-    input.localDispatch.latestTurnCompletedAt !== (latestTurn?.completedAt ?? null) ||
-    input.localDispatch.sessionOrchestrationStatus !== (session?.orchestrationStatus ?? null) ||
-    input.localDispatch.sessionUpdatedAt !== (session?.updatedAt ?? null)
-  );
+    input.localDispatch.latestTurnCompletedAt !== (latestTurn?.completedAt ?? null);
+
+  if (latestTurnChanged) {
+    return true;
+  }
+
+  if (input.localDispatch.sessionOrchestrationStatus !== nextSessionOrchestrationStatus) {
+    // Keep the optimistic timer alive through the first-turn Claude bootstrap:
+    // a fresh thread often transitions null -> ready before the provider emits
+    // the real running/latest-turn snapshot.
+    if (
+      input.localDispatch.sessionOrchestrationStatus === null &&
+      nextSessionOrchestrationStatus === "ready"
+    ) {
+      return false;
+    }
+    return true;
+  }
+
+  return false;
 }
 
 export function hasLiveChatTurn(options: {

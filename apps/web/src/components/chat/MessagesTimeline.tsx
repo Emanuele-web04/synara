@@ -994,18 +994,21 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       {row.kind === "working" && (
         <div className="py-0.5 pl-1.5">
           <div
-            className="flex items-center gap-2 pt-1 text-muted-foreground/70"
-            style={{ fontSize: `${appTypographyScale.chatMetaPx}px` }}
+            className="flex items-center gap-1 pt-1 text-muted-foreground/70"
+            style={{ fontSize: `${appTypographyScale.chatPx}px`, fontFamily: "var(--font-ui-family)" }}
           >
+            <span>
+              Working for
+            </span>
+            <span>
+              {row.createdAt
+                ? formatWorkingTimer(row.createdAt, nowIso) ?? "0s"
+                : "00:00"}
+            </span>
             <span className="inline-flex items-center gap-[3px]">
               <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse" />
               <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse [animation-delay:200ms]" />
               <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse [animation-delay:400ms]" />
-            </span>
-            <span>
-              {row.createdAt
-                ? `Working for ${formatWorkingTimer(row.createdAt, nowIso) ?? "0s"}`
-                : "Working..."}
             </span>
           </div>
         </div>
