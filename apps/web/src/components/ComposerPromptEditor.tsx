@@ -6,7 +6,6 @@ import { HistoryPlugin } from "@lexical/react/LexicalHistoryPlugin";
 import { OnChangePlugin } from "@lexical/react/LexicalOnChangePlugin";
 import { PlainTextPlugin } from "@lexical/react/LexicalPlainTextPlugin";
 import {
-  $applyNodeReplacement,
   $createRangeSelection,
   $getSelection,
   $setSelection,
@@ -26,16 +25,9 @@ import {
   COMMAND_PRIORITY_HIGH,
   KEY_BACKSPACE_COMMAND,
   $getRoot,
-  DecoratorNode,
   type ElementNode,
   type LexicalNode,
-  type SerializedLexicalNode,
-  TextNode,
-  type EditorConfig,
   type EditorState,
-  type NodeKey,
-  type SerializedTextNode,
-  type Spread,
 } from "lexical";
 import {
   createContext,
@@ -48,7 +40,6 @@ import {
   useMemo,
   useRef,
   type ClipboardEventHandler,
-  type ReactElement,
   type Ref,
 } from "react";
 
@@ -64,46 +55,21 @@ import {
   type TerminalContextDraft,
 } from "~/lib/terminalContext";
 import { cn } from "~/lib/utils";
-import { basenameOfPath, getVscodeIconUrlForEntry, inferEntryKindFromPath } from "~/vscode-icons";
 import {
-  COMPOSER_INLINE_CHIP_CLASS_NAME,
-  COMPOSER_INLINE_CHIP_ICON_CLASS_NAME,
-  COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME,
-  COMPOSER_INLINE_SKILL_CHIP_ICON_SVG,
-  COMPOSER_INLINE_SKILL_CHIP_CLASS_NAME,
-  COMPOSER_INLINE_SKILL_CHIP_ICON_CLASS_NAME,
-  formatComposerSkillChipLabel,
-} from "./composerInlineChip";
-import { ComposerPendingTerminalContextChip } from "./chat/ComposerPendingTerminalContexts";
+  ComposerMentionNode,
+  ComposerSkillNode,
+  ComposerAgentMentionNode,
+  ComposerTerminalContextNode,
+  $createComposerMentionNode,
+  $createComposerSkillNode,
+  $createComposerAgentMentionNode,
+  $createComposerTerminalContextNode,
+  isComposerInlineTokenNode,
+  COMPOSER_NODE_CLASSES,
+  type ComposerInlineTokenNode,
+} from "./composer-nodes";
 
 const COMPOSER_EDITOR_HMR_KEY = `composer-editor-${Math.random().toString(36).slice(2)}`;
-
-type SerializedComposerMentionNode = Spread<
-  {
-    path: string;
-    type: "composer-mention";
-    version: 1;
-  },
-  SerializedTextNode
->;
-
-type SerializedComposerSkillNode = Spread<
-  {
-    skillName: string;
-    type: "composer-skill";
-    version: 1;
-  },
-  SerializedTextNode
->;
-
-type SerializedComposerTerminalContextNode = Spread<
-  {
-    context: TerminalContextDraft;
-    type: "composer-terminal-context";
-    version: 1;
-  },
-  SerializedLexicalNode
->;
 
 const ComposerTerminalContextActionsContext = createContext<{
   onRemoveTerminalContext: (contextId: string) => void;
@@ -111,268 +77,7 @@ const ComposerTerminalContextActionsContext = createContext<{
   onRemoveTerminalContext: () => {},
 });
 
-class ComposerMentionNode extends TextNode {
-  __path: string;
-
-  static override getType(): string {
-    return "composer-mention";
-  }
-
-  static override clone(node: ComposerMentionNode): ComposerMentionNode {
-    return new ComposerMentionNode(node.__path, node.__key);
-  }
-
-  static override importJSON(serializedNode: SerializedComposerMentionNode): ComposerMentionNode {
-    return $createComposerMentionNode(serializedNode.path);
-  }
-
-  constructor(path: string, key?: NodeKey) {
-    const normalizedPath = path.startsWith("@") ? path.slice(1) : path;
-    super(`@${normalizedPath}`, key);
-    this.__path = normalizedPath;
-  }
-
-  override exportJSON(): SerializedComposerMentionNode {
-    return {
-      ...super.exportJSON(),
-      path: this.__path,
-      type: "composer-mention",
-      version: 1,
-    };
-  }
-
-  override createDOM(_config: EditorConfig): HTMLElement {
-    const dom = document.createElement("span");
-    dom.className = COMPOSER_INLINE_CHIP_CLASS_NAME;
-    dom.contentEditable = "false";
-    dom.setAttribute("spellcheck", "false");
-    renderMentionChipDom(dom, this.__path);
-    return dom;
-  }
-
-  override updateDOM(
-    prevNode: ComposerMentionNode,
-    dom: HTMLElement,
-    _config: EditorConfig,
-  ): boolean {
-    dom.contentEditable = "false";
-    if (prevNode.__text !== this.__text || prevNode.__path !== this.__path) {
-      renderMentionChipDom(dom, this.__path);
-    }
-    return false;
-  }
-
-  override canInsertTextBefore(): false {
-    return false;
-  }
-
-  override canInsertTextAfter(): false {
-    return false;
-  }
-
-  override isTextEntity(): true {
-    return true;
-  }
-
-  override isToken(): true {
-    return true;
-  }
-}
-
-function $createComposerMentionNode(path: string): ComposerMentionNode {
-  return $applyNodeReplacement(new ComposerMentionNode(path));
-}
-
-function renderSkillChipDom(container: HTMLElement, name: string): void {
-  container.textContent = "";
-  container.style.setProperty("user-select", "none");
-  container.style.setProperty("-webkit-user-select", "none");
-
-  const icon = document.createElement("span");
-  icon.ariaHidden = "true";
-  icon.className = COMPOSER_INLINE_SKILL_CHIP_ICON_CLASS_NAME;
-  icon.innerHTML = COMPOSER_INLINE_SKILL_CHIP_ICON_SVG;
-
-  const label = document.createElement("span");
-  label.className = COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME;
-  label.textContent = formatComposerSkillChipLabel(name);
-
-  container.append(icon, label);
-}
-
-class ComposerSkillNode extends TextNode {
-  __skillName: string;
-
-  static override getType(): string {
-    return "composer-skill";
-  }
-
-  static override clone(node: ComposerSkillNode): ComposerSkillNode {
-    return new ComposerSkillNode(node.__skillName, node.__key);
-  }
-
-  static override importJSON(serializedNode: SerializedComposerSkillNode): ComposerSkillNode {
-    return $createComposerSkillNode(serializedNode.skillName);
-  }
-
-  constructor(name: string, key?: NodeKey) {
-    const normalizedName = name.startsWith("$") || name.startsWith("/") ? name.slice(1) : name;
-    const prefix = name.startsWith("/") ? "/" : "$";
-    super(`${prefix}${normalizedName}`, key);
-    this.__skillName = normalizedName;
-  }
-
-  override exportJSON(): SerializedComposerSkillNode {
-    return {
-      ...super.exportJSON(),
-      skillName: this.__skillName,
-      type: "composer-skill",
-      version: 1,
-    };
-  }
-
-  override createDOM(_config: EditorConfig): HTMLElement {
-    const dom = document.createElement("span");
-    dom.className = COMPOSER_INLINE_SKILL_CHIP_CLASS_NAME;
-    dom.contentEditable = "false";
-    dom.setAttribute("spellcheck", "false");
-    renderSkillChipDom(dom, this.__skillName);
-    return dom;
-  }
-
-  override updateDOM(
-    prevNode: ComposerSkillNode,
-    dom: HTMLElement,
-    _config: EditorConfig,
-  ): boolean {
-    dom.contentEditable = "false";
-    if (prevNode.__text !== this.__text || prevNode.__skillName !== this.__skillName) {
-      renderSkillChipDom(dom, this.__skillName);
-    }
-    return false;
-  }
-
-  override canInsertTextBefore(): false {
-    return false;
-  }
-
-  override canInsertTextAfter(): false {
-    return false;
-  }
-
-  override isTextEntity(): true {
-    return true;
-  }
-
-  override isToken(): true {
-    return true;
-  }
-}
-
-function $createComposerSkillNode(name: string): ComposerSkillNode {
-  return $applyNodeReplacement(new ComposerSkillNode(name));
-}
-
-function ComposerTerminalContextDecorator(props: { context: TerminalContextDraft }) {
-  return <ComposerPendingTerminalContextChip context={props.context} />;
-}
-
-class ComposerTerminalContextNode extends DecoratorNode<ReactElement> {
-  __context: TerminalContextDraft;
-
-  static override getType(): string {
-    return "composer-terminal-context";
-  }
-
-  static override clone(node: ComposerTerminalContextNode): ComposerTerminalContextNode {
-    return new ComposerTerminalContextNode(node.__context, node.__key);
-  }
-
-  static override importJSON(
-    serializedNode: SerializedComposerTerminalContextNode,
-  ): ComposerTerminalContextNode {
-    return $createComposerTerminalContextNode(serializedNode.context);
-  }
-
-  constructor(context: TerminalContextDraft, key?: NodeKey) {
-    super(key);
-    this.__context = context;
-  }
-
-  override exportJSON(): SerializedComposerTerminalContextNode {
-    return {
-      ...super.exportJSON(),
-      context: this.__context,
-      type: "composer-terminal-context",
-      version: 1,
-    };
-  }
-
-  override createDOM(): HTMLElement {
-    const dom = document.createElement("span");
-    dom.className = "inline-flex align-middle leading-none";
-    return dom;
-  }
-
-  override updateDOM(): false {
-    return false;
-  }
-
-  override getTextContent(): string {
-    return INLINE_TERMINAL_CONTEXT_PLACEHOLDER;
-  }
-
-  override isInline(): true {
-    return true;
-  }
-
-  override decorate(): ReactElement {
-    return <ComposerTerminalContextDecorator context={this.__context} />;
-  }
-}
-
-function $createComposerTerminalContextNode(
-  context: TerminalContextDraft,
-): ComposerTerminalContextNode {
-  return $applyNodeReplacement(new ComposerTerminalContextNode(context));
-}
-
-type ComposerInlineTokenNode =
-  | ComposerMentionNode
-  | ComposerSkillNode
-  | ComposerTerminalContextNode;
-
-function isComposerInlineTokenNode(candidate: unknown): candidate is ComposerInlineTokenNode {
-  return (
-    candidate instanceof ComposerMentionNode ||
-    candidate instanceof ComposerSkillNode ||
-    candidate instanceof ComposerTerminalContextNode
-  );
-}
-
-function resolvedThemeFromDocument(): "light" | "dark" {
-  return document.documentElement.classList.contains("dark") ? "dark" : "light";
-}
-
-function renderMentionChipDom(container: HTMLElement, pathValue: string): void {
-  container.textContent = "";
-  container.style.setProperty("user-select", "none");
-  container.style.setProperty("-webkit-user-select", "none");
-
-  const theme = resolvedThemeFromDocument();
-  const icon = document.createElement("img");
-  icon.alt = "";
-  icon.ariaHidden = "true";
-  icon.className = COMPOSER_INLINE_CHIP_ICON_CLASS_NAME;
-  icon.loading = "lazy";
-  icon.src = getVscodeIconUrlForEntry(pathValue, inferEntryKindFromPath(pathValue), theme);
-
-  const label = document.createElement("span");
-  label.className = COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME;
-  label.textContent = basenameOfPath(pathValue);
-
-  container.append(icon, label);
-}
+// Node classes imported from ./composer-nodes
 
 function terminalContextSignature(contexts: ReadonlyArray<TerminalContextDraft>): string {
   return contexts
@@ -499,7 +204,7 @@ function getAbsoluteOffsetForPoint(node: LexicalNode, pointOffset: number): numb
   }
 
   if ($isTextNode(node)) {
-    if (node instanceof ComposerMentionNode || node instanceof ComposerSkillNode) {
+    if (node instanceof ComposerMentionNode || node instanceof ComposerSkillNode || node instanceof ComposerAgentMentionNode) {
       return getAbsoluteOffsetForInlineTokenPoint(node, offset, pointOffset);
     }
     return offset + Math.min(pointOffset, node.getTextContentSize());
@@ -546,7 +251,7 @@ function getExpandedAbsoluteOffsetForPoint(node: LexicalNode, pointOffset: numbe
   }
 
   if ($isTextNode(node)) {
-    if (node instanceof ComposerMentionNode || node instanceof ComposerSkillNode) {
+    if (node instanceof ComposerMentionNode || node instanceof ComposerSkillNode || node instanceof ComposerAgentMentionNode) {
       return getExpandedAbsoluteOffsetForInlineTokenPoint(node, offset, pointOffset);
     }
     return offset + Math.min(pointOffset, node.getTextContentSize());
@@ -577,7 +282,7 @@ function findSelectionPointAtOffset(
   node: LexicalNode,
   remainingRef: { value: number },
 ): { key: string; offset: number; type: "text" | "element" } | null {
-  if (node instanceof ComposerMentionNode || node instanceof ComposerSkillNode) {
+  if (node instanceof ComposerMentionNode || node instanceof ComposerSkillNode || node instanceof ComposerAgentMentionNode) {
     return findSelectionPointForInlineToken(node, remainingRef);
   }
   if (node instanceof ComposerTerminalContextNode) {
@@ -720,6 +425,10 @@ function $setComposerEditorPrompt(
       if (segment.context) {
         paragraph.append($createComposerTerminalContextNode(segment.context));
       }
+      continue;
+    }
+    if (segment.type === "agent-mention") {
+      paragraph.append($createComposerAgentMentionNode(segment.alias, segment.task));
       continue;
     }
     $appendTextWithLineBreaks(paragraph, segment.text);
@@ -1259,7 +968,7 @@ export const ComposerPromptEditor = forwardRef<
     () => ({
       namespace: "t3tools-composer-editor",
       editable: true,
-      nodes: [ComposerMentionNode, ComposerSkillNode, ComposerTerminalContextNode],
+      nodes: [ComposerMentionNode, ComposerSkillNode, ComposerTerminalContextNode, ComposerAgentMentionNode],
       editorState: () => {
         $setComposerEditorPrompt(initialValueRef.current, initialTerminalContextsRef.current);
       },

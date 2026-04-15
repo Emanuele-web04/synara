@@ -161,6 +161,14 @@ export type ComposerCommandItem =
       skill: ProviderSkillDescriptor;
       label: string;
       description: string;
+    }
+  | {
+      id: string;
+      type: "agent";
+      alias: string;
+      model: string;
+      label: string;
+      description: string;
     };
 
 type ComposerCommandGroupModel = {
@@ -408,6 +416,9 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
         <Badge variant="outline" className="px-1 py-0 text-[9px]">
           model
         </Badge>
+      ) : null}
+      {props.item.type === "agent" ? (
+        <TbUsers className="size-3.5 text-muted-foreground/60" />
       ) : null}
       <div className="min-w-0 flex flex-1 items-center gap-2">
         <div className="min-w-0 flex flex-1 items-center gap-1.5 overflow-hidden">
