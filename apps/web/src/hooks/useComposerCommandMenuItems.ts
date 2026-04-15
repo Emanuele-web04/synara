@@ -6,6 +6,7 @@ import type {
   ProviderPluginDescriptor,
   ProviderSkillDescriptor,
 } from "@t3tools/contracts";
+import { getAgentMentionAliases } from "@t3tools/contracts";
 import { useMemo } from "react";
 import {
   buildCommandSearchBlob,
@@ -68,6 +69,26 @@ export function useComposerCommandMenuItems(input: {
     // Keep trigger-specific discovery outside ChatView so the view mostly orchestrates state.
     if (composerTrigger.kind === "mention") {
       const query = normalizeProviderDiscoveryText(composerTrigger.query);
+
+      // Agent items for @alias(task) syntax - only show for Codex provider
+      const agentItems: ComposerCommandItem[] =
+        provider === "codex"
+          ? getAgentMentionAliases()
+              .filter(({ alias, displayName }) => {
+                if (!query) return true;
+                const searchBlob = `${alias} ${displayName}`.toLowerCase();
+                return searchBlob.includes(query);
+              })
+              .map(({ alias, model, displayName }) => ({
+                id: `agent:${alias}`,
+                type: "agent" as const,
+                alias,
+                model,
+                label: `@${alias}`,
+                description: `${displayName} · delegate task to subagent`,
+              }))
+          : [];
+
       const pluginItems = providerPlugins
         .filter(({ plugin }) => {
           if (!query) return true;
@@ -89,7 +110,8 @@ export function useComposerCommandMenuItems(input: {
         label: basenameOfPath(entry.path),
         description: entry.parentPath ?? "",
       }));
-      return [...pluginItems, ...pathItems];
+      // Show agents first, then plugins, then paths
+      return [...agentItems, ...pluginItems, ...pathItems];
     }
 
     if (composerTrigger.kind === "slash-command") {

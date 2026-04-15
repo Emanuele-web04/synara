@@ -243,6 +243,18 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
   },
 };
 
+// ── Agent mention aliases ─────────────────────────────────────────────
+// Re-exported from agentMentions.ts for backward compatibility
+export {
+  AGENT_MENTION_ALIASES,
+  getAgentMentionAliases,
+  resolveAgentAlias,
+  isValidAgentAlias,
+  getAgentAliasNames,
+  type AgentAliasDefinition,
+  type ResolvedAgentAlias,
+} from "./agentMentions";
+
 // ── Model capabilities index ──────────────────────────────────────────
 
 export const MODEL_CAPABILITIES_INDEX = Object.fromEntries(

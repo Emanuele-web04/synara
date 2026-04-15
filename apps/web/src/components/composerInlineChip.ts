@@ -20,6 +20,15 @@ export const COMPOSER_INLINE_CHIP_DISMISS_BUTTON_CLASS_NAME =
 
 export const COMPOSER_INLINE_SKILL_CHIP_ICON_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>`;
 
+// Agent mention chip styling (for @alias(task) syntax)
+export const COMPOSER_INLINE_AGENT_CHIP_CLASS_NAME =
+  "inline-flex max-w-full select-none items-center gap-1 rounded-md bg-[var(--warning-foreground)]/15 px-2 py-1 text-[var(--warning-foreground)] align-middle -translate-y-0.5";
+
+export const COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME = "size-3.5 shrink-0";
+
+// Users icon SVG for agent mentions
+export const COMPOSER_INLINE_AGENT_CHIP_ICON_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`;
+
 // Formats raw skill ids like `check-code` into the label used by inline skill chips.
 export function formatComposerSkillChipLabel(name: string): string {
   return name

@@ -5332,10 +5332,32 @@ export default function ChatView({
         if (applied) {
           setComposerHighlightedItemId(null);
         }
+        return;
+      }
+      if (item.type === "agent") {
+        // Insert @alias() and position cursor inside parentheses
+        const replacement = `@${item.alias}()`;
+        const applied = applyPromptReplacement(
+          trigger.rangeStart,
+          trigger.rangeEnd,
+          replacement,
+          { expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd) },
+        );
+        if (applied) {
+          setComposerHighlightedItemId(null);
+          // Move cursor back one position to be inside the parentheses
+          window.requestAnimationFrame(() => {
+            const currentCursor = composerCursor;
+            const newCursor = Math.max(0, currentCursor - 1);
+            setComposerCursor(newCursor);
+            composerEditorRef.current?.focusAt(newCursor);
+          });
+        }
       }
     },
     [
       applyPromptReplacement,
+      composerCursor,
       handleForkTargetSelection,
       handleReviewTargetSelection,
       handleSlashCommandSelection,
