@@ -198,8 +198,6 @@ const SIDEBAR_LIST_ANIMATION_OPTIONS = {
 } as const;
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS = 6;
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS = 50;
-const ADD_PROJECT_CREATE_SYNC_ERROR =
-  "Project was created, but it has not appeared in the sidebar yet. Try again in a moment.";
 const ADD_PROJECT_EXISTING_SYNC_ERROR =
   "This folder is already linked, but the existing project has not synced into the sidebar yet. Try again in a moment.";
 
@@ -1346,8 +1344,15 @@ export default function Sidebar() {
           finishAddingProject();
           return;
         }
-        setIsAddingProject(false);
-        setAddProjectError(ADD_PROJECT_CREATE_SYNC_ERROR);
+
+        // The command already committed successfully at this point. If the projection
+        // snapshot is just slow to catch up, continue with the local new-thread flow
+        // instead of surfacing a false-negative sidebar sync error.
+        setProjectExpanded(projectId, true);
+        await handleNewThread(projectId, {
+          envMode: appSettings.defaultThreadEnvMode,
+        }).catch(() => undefined);
+        finishAddingProject();
         return;
       } catch (error) {
         const description =
@@ -1372,12 +1377,15 @@ export default function Sidebar() {
       }
     },
     [
+      appSettings.defaultThreadEnvMode,
+      handleNewThread,
       isAddingProject,
       openExistingProjectLocally,
       projects,
       recoverExistingProjectFromServer,
       recoverExistingProjectByWorkspaceRootFromServer,
       recoverProjectThreadFromServer,
+      setProjectExpanded,
     ],
   );
 

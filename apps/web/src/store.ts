@@ -280,9 +280,10 @@ function normalizeProjectFromReadModel(
   const workspaceRootKey = projectCwdKey(incoming.workspaceRoot);
   const folderName = basenameOfPath(incoming.workspaceRoot) ?? incoming.title;
   const localName = previous?.localName ?? persistedProjectNamesByCwd.get(workspaceRootKey) ?? null;
-  const defaultModelSelection = incoming.defaultModelSelection
-    ? normalizeModelSelection(incoming.defaultModelSelection, previous?.defaultModelSelection)
-    : (previous?.defaultModelSelection ?? null);
+  const defaultModelSelection =
+    incoming.defaultModelSelection === null
+      ? null
+      : normalizeModelSelection(incoming.defaultModelSelection, previous?.defaultModelSelection);
   const scripts = normalizeProjectScripts(incoming.scripts, previous?.scripts);
   const expanded =
     previous?.expanded ??
@@ -320,6 +321,28 @@ function normalizeProjectFromReadModel(
     updatedAt: incoming.updatedAt,
     scripts,
   } satisfies Project;
+}
+
+function upsertProjectFromReadModel(state: AppState, incoming: ReadModelProject): AppState {
+  const existingProject = state.projects.find((project) => project.id === incoming.id);
+  const nextProject = normalizeProjectFromReadModel(incoming, existingProject);
+
+  if (existingProject) {
+    if (existingProject === nextProject) {
+      return state;
+    }
+    return {
+      ...state,
+      projects: state.projects.map((project) =>
+        project.id === incoming.id ? nextProject : project,
+      ),
+    };
+  }
+
+  return {
+    ...state,
+    projects: [...state.projects, nextProject],
+  };
 }
 
 function normalizeChatAttachments(
@@ -1416,6 +1439,45 @@ function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEve
 
 function applyOrchestrationEvent(state: AppState, event: OrchestrationEvent): AppState {
   switch (event.type) {
+    case "project.created":
+      return upsertProjectFromReadModel(state, {
+        id: event.payload.projectId,
+        title: event.payload.title,
+        workspaceRoot: event.payload.workspaceRoot,
+        defaultModelSelection: event.payload.defaultModelSelection,
+        scripts: event.payload.scripts,
+        createdAt: event.payload.createdAt,
+        updatedAt: event.payload.updatedAt,
+        deletedAt: null,
+      });
+
+    case "project.meta-updated": {
+      const existingProject = state.projects.find(
+        (project) => project.id === event.payload.projectId,
+      );
+      if (!existingProject) {
+        return state;
+      }
+      return upsertProjectFromReadModel(state, {
+        id: existingProject.id,
+        title: event.payload.title ?? existingProject.remoteName,
+        workspaceRoot: event.payload.workspaceRoot ?? existingProject.cwd,
+        defaultModelSelection:
+          event.payload.defaultModelSelection !== undefined
+            ? event.payload.defaultModelSelection
+            : existingProject.defaultModelSelection,
+        scripts: event.payload.scripts ?? existingProject.scripts,
+        createdAt: existingProject.createdAt ?? event.payload.updatedAt,
+        updatedAt: event.payload.updatedAt,
+        deletedAt: null,
+      });
+    }
+
+    case "project.deleted": {
+      const projects = state.projects.filter((project) => project.id !== event.payload.projectId);
+      return projects === state.projects ? state : { ...state, projects };
+    }
+
     case "thread.message-sent":
       return applyThreadUpdate(state, event.payload.threadId, (thread) =>
         applyThreadMessageSentEvent(thread, event),
