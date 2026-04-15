@@ -165,6 +165,10 @@ export interface Thread extends ThreadWorkspaceState {
   subagentRole?: string | null;
   forkSourceThreadId?: ThreadId | null;
   handoff?: ThreadHandoff | null;
+  latestUserMessageAt?: string | null;
+  hasPendingApprovals?: boolean;
+  hasPendingUserInput?: boolean;
+  hasActionableProposedPlan?: boolean;
   turnDiffSummaries: TurnDiffSummary[];
   activities: OrchestrationThreadActivity[];
 }
@@ -190,7 +194,7 @@ export interface SidebarThreadSummary {
   hasPendingApprovals: boolean;
   hasPendingUserInput: boolean;
   hasActionableProposedPlan: boolean;
-  hasLiveTailWork?: boolean;
+  hasLiveTailWork: boolean;
   forkSourceThreadId?: ThreadId | null;
   handoff?: ThreadHandoff | null;
 }

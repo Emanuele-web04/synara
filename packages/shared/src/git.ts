@@ -2,6 +2,9 @@
  * Sanitize an arbitrary string into a valid, lowercase git branch fragment.
  * Strips quotes, collapses separators, limits to 64 chars.
  */
+export const WORKTREE_BRANCH_PREFIX = "dpcode";
+const TEMP_WORKTREE_BRANCH_PATTERN = new RegExp(`^${WORKTREE_BRANCH_PREFIX}\\/[0-9a-f]{8}$`);
+
 export function sanitizeBranchFragment(raw: string): string {
   const normalized = raw
     .trim()
@@ -58,4 +61,26 @@ export function resolveAutoFeatureBranchName(
   }
 
   return `${resolvedBase}-${suffix}`;
+}
+
+export function isTemporaryWorktreeBranch(branch: string): boolean {
+  return TEMP_WORKTREE_BRANCH_PATTERN.test(branch.trim().toLowerCase());
+}
+
+// Preserve semantic thread branches when transient worktree placeholders briefly
+// appear in git status during rename/bootstrap transitions.
+export function resolveThreadBranchRegressionGuard(input: {
+  currentBranch: string | null;
+  nextBranch: string | null;
+}): string | null {
+  if (
+    input.currentBranch !== null &&
+    input.nextBranch !== null &&
+    !isTemporaryWorktreeBranch(input.currentBranch) &&
+    isTemporaryWorktreeBranch(input.nextBranch)
+  ) {
+    return input.currentBranch;
+  }
+
+  return input.nextBranch;
 }

@@ -3,6 +3,7 @@ import type {
   GitStackedAction,
   GitStatusResult,
 } from "@t3tools/contracts";
+import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
 
 export type GitActionIconName = "commit" | "push" | "pr";
 
@@ -382,6 +383,36 @@ export function resolveDefaultBranchActionDialogCopy(input: {
     title: "Create feature branch & PR?",
     description: `Pull requests can't be opened from "${branchLabel}" into itself. This action will create a feature branch from your current commits, push it, and create the PR.`,
     continueLabel: "Create feature branch & continue",
+  };
+}
+
+export function resolveLiveThreadBranchUpdate(input: {
+  threadBranch: string | null;
+  gitStatus: GitStatusResult | null;
+}): { branch: string | null } | null {
+  if (!input.gitStatus) {
+    return null;
+  }
+
+  if (input.gitStatus.branch === null && input.threadBranch !== null) {
+    return null;
+  }
+
+  if (input.threadBranch === input.gitStatus.branch) {
+    return null;
+  }
+
+  if (
+    input.threadBranch !== null &&
+    input.gitStatus.branch !== null &&
+    !isTemporaryWorktreeBranch(input.threadBranch) &&
+    isTemporaryWorktreeBranch(input.gitStatus.branch)
+  ) {
+    return null;
+  }
+
+  return {
+    branch: input.gitStatus.branch,
   };
 }
 

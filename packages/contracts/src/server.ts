@@ -103,3 +103,11 @@ export const ServerConfigUpdatedPayload = Schema.Struct({
   providers: ServerProviderStatuses,
 });
 export type ServerConfigUpdatedPayload = typeof ServerConfigUpdatedPayload.Type;
+
+export const ServerProviderStatusesUpdatedPayload = Schema.Struct({
+  providers: ServerProviderStatuses,
+});
+export type ServerProviderStatusesUpdatedPayload = typeof ServerProviderStatusesUpdatedPayload.Type;
+
+export const ServerRefreshProvidersResult = ServerProviderStatusesUpdatedPayload;
+export type ServerRefreshProvidersResult = typeof ServerRefreshProvidersResult.Type;

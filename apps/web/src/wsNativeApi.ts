@@ -2,6 +2,7 @@ import {
   type ThreadId,
   type ThreadBrowserState,
   type GitActionProgressEvent,
+  type ServerProviderStatusesUpdatedPayload,
   type TerminalEvent,
   ORCHESTRATION_WS_CHANNELS,
   ORCHESTRATION_WS_METHODS,
@@ -20,6 +21,9 @@ import { WsTransport } from "./wsTransport";
 let instance: { api: NativeApi; transport: WsTransport } | null = null;
 const welcomeListeners = new Set<(payload: WsWelcomePayload) => void>();
 const serverConfigUpdatedListeners = new Set<(payload: ServerConfigUpdatedPayload) => void>();
+const serverProviderStatusesUpdatedListeners = new Set<
+  (payload: ServerProviderStatusesUpdatedPayload) => void
+>();
 const gitActionProgressListeners = new Set<(payload: GitActionProgressEvent) => void>();
 const terminalEventListeners = new Set<(payload: TerminalEvent) => void>();
 const fallbackBrowserStateListeners = new Set<(state: ThreadBrowserState) => void>();
@@ -158,6 +162,29 @@ export function onServerConfigUpdated(
   };
 }
 
+/**
+ * Subscribe to provider status updates without forcing a full config reload.
+ */
+export function onServerProviderStatusesUpdated(
+  listener: (payload: ServerProviderStatusesUpdatedPayload) => void,
+): () => void {
+  serverProviderStatusesUpdatedListeners.add(listener);
+
+  const latestProviderStatuses =
+    instance?.transport.getLatestPush(WS_CHANNELS.serverProviderStatusesUpdated)?.data ?? null;
+  if (latestProviderStatuses) {
+    try {
+      listener(latestProviderStatuses);
+    } catch {
+      // Swallow listener errors
+    }
+  }
+
+  return () => {
+    serverProviderStatusesUpdatedListeners.delete(listener);
+  };
+}
+
 export function createWsNativeApi(): NativeApi {
   if (instance) return instance.api;
 
@@ -176,6 +203,16 @@ export function createWsNativeApi(): NativeApi {
   transport.subscribe(WS_CHANNELS.serverConfigUpdated, (message) => {
     const payload = message.data;
     for (const listener of serverConfigUpdatedListeners) {
+      try {
+        listener(payload);
+      } catch {
+        // Swallow listener errors
+      }
+    }
+  });
+  transport.subscribe(WS_CHANNELS.serverProviderStatusesUpdated, (message) => {
+    const payload = message.data;
+    for (const listener of serverProviderStatusesUpdatedListeners) {
       try {
         listener(payload);
       } catch {
@@ -295,6 +332,7 @@ export function createWsNativeApi(): NativeApi {
     },
     server: {
       getConfig: () => transport.request(WS_METHODS.serverGetConfig),
+      refreshProviders: () => transport.request(WS_METHODS.serverRefreshProviders),
       listWorktrees: () => transport.request(WS_METHODS.serverListWorktrees),
       transcribeVoice: (input) => {
         if (window.desktopBridge?.server?.transcribeVoice) {

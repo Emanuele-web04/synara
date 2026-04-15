@@ -79,6 +79,15 @@ describe("threadBootstrap", () => {
       worktreePath: "/repo/.worktrees/new-branch",
       entryPoint: "terminal",
     });
+    expect(
+      buildDraftThreadContextPatch("terminal", {
+        envMode: "local",
+      }),
+    ).toEqual({
+      envMode: "local",
+      worktreePath: null,
+      entryPoint: "terminal",
+    });
   });
 
   it("recognizes when the active route draft can be reused", () => {
@@ -100,7 +109,16 @@ describe("threadBootstrap", () => {
     ).toBe(false);
   });
 
-  it("resolves bootstrap precedence as stored draft, then route draft, then fresh", () => {
+  it("resolves bootstrap precedence as route draft, then stored draft, then fresh", () => {
+    expect(
+      resolveThreadBootstrapPlan({
+        storedDraftThread: { threadId: ThreadId.makeUnsafe("stored-thread"), ...makeDraftThread() },
+        latestActiveDraftThread: makeDraftThread({ branch: "feature/route-draft" }),
+        entryPoint: "terminal",
+        projectId: PROJECT_ID,
+        routeThreadId: THREAD_ID,
+      }),
+    ).toMatchObject({ kind: "route", threadId: THREAD_ID });
     expect(
       resolveThreadBootstrapPlan({
         storedDraftThread: { threadId: THREAD_ID, ...makeDraftThread() },
@@ -110,15 +128,6 @@ describe("threadBootstrap", () => {
         routeThreadId: null,
       }),
     ).toMatchObject({ kind: "stored", threadId: THREAD_ID });
-    expect(
-      resolveThreadBootstrapPlan({
-        storedDraftThread: null,
-        latestActiveDraftThread: makeDraftThread(),
-        entryPoint: "terminal",
-        projectId: PROJECT_ID,
-        routeThreadId: THREAD_ID,
-      }),
-    ).toMatchObject({ kind: "route", threadId: THREAD_ID });
     expect(
       resolveThreadBootstrapPlan({
         storedDraftThread: null,
@@ -218,6 +227,32 @@ describe("threadBootstrap", () => {
       envMode: "worktree",
       branch: "feature/terminal-bootstrap",
       worktreePath: "/repo/.worktrees/terminal-bootstrap",
+    });
+  });
+
+  it("clears inherited worktree state when an explicit local env override is requested", () => {
+    expect(
+      resolveTerminalThreadCreationState({
+        activeDraftThread: null,
+        activeThread: {
+          projectId: PROJECT_ID,
+          modelSelection: modelSelection("codex", "gpt-5"),
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          envMode: "worktree",
+        },
+        draftComposerState: makeComposerDraftState(),
+        draftThread: makeDraftThread(),
+        options: {
+          envMode: "local",
+        },
+        projectDefaultModelSelection: modelSelection("codex", "gpt-5.4"),
+        projectId: PROJECT_ID,
+      }),
+    ).toMatchObject({
+      envMode: "local",
+      worktreePath: null,
+      branch: "feature/terminal-bootstrap",
     });
   });
 });

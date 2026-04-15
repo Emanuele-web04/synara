@@ -1932,8 +1932,24 @@ export default function ChatView({
     [providerStatuses],
   );
   const refreshVoiceStatus = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: serverQueryKeys.config() });
-  }, [queryClient]);
+    const api = readNativeApi();
+    if (!api) return;
+    void api.server
+      .refreshProviders()
+      .then((result) => {
+        queryClient.setQueryData(serverQueryKeys.config(), (current) =>
+          current ? { ...current, providers: result.providers } : current,
+        );
+      })
+      .catch((error) => {
+        toastManager.add({
+          type: "error",
+          title: "Unable to refresh provider status",
+          description:
+            error instanceof Error ? error.message : "Unknown error refreshing provider status.",
+        });
+      });
+  }, [queryClient, toastManager]);
   const voiceRecordingDurationLabel = useMemo(
     () => formatVoiceRecordingDuration(voiceRecordingDurationMs),
     [voiceRecordingDurationMs],
@@ -5903,7 +5919,7 @@ export default function ChatView({
                               ? "min-w-0 shrink-0 gap-1"
                               : isComposerFooterCompact
                                 ? "min-w-0 flex-1 gap-1 overflow-hidden"
-                                : "min-w-0 flex-1 gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:min-w-max sm:overflow-visible",
+                                : "-m-1 min-w-0 flex-1 gap-1 overflow-x-auto p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:min-w-max sm:overflow-visible",
                           )}
                         >
                           <ComposerExtrasMenu

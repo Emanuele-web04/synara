@@ -10,7 +10,7 @@ export interface WaitForHttpReadyOptions {
   readonly fetchImpl?: typeof fetch;
   readonly signal?: AbortSignal;
   readonly path?: string;
-  readonly isReady?: (response: Response) => boolean;
+  readonly isReady?: (response: Response) => boolean | Promise<boolean>;
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -88,7 +88,7 @@ export async function waitForHttpReady(
         redirect: "manual",
         signal: requestController.signal,
       });
-      if (isReady(response)) {
+      if (await isReady(response)) {
         return;
       }
     } catch (error) {

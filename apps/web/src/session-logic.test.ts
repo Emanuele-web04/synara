@@ -1403,6 +1403,7 @@ describe("hasLiveLatestTurn", () => {
 describe("hasLiveTurnTailWork", () => {
   const latestTurn = {
     turnId: TurnId.makeUnsafe("turn-1"),
+    completedAt: null,
   } as const;
 
   it("keeps the turn live while assistant text is still streaming", () => {
@@ -1420,6 +1421,26 @@ describe("hasLiveTurnTailWork", () => {
         session: { orchestrationStatus: "ready" },
       }),
     ).toBe(true);
+  });
+
+  it("ignores stale assistant streaming flags once the turn is completed", () => {
+    expect(
+      hasLiveTurnTailWork({
+        latestTurn: {
+          ...latestTurn,
+          completedAt: "2026-04-13T00:00:05.000Z",
+        },
+        messages: [
+          {
+            role: "assistant",
+            streaming: true,
+            turnId: TurnId.makeUnsafe("turn-1"),
+          },
+        ],
+        activities: [],
+        session: { orchestrationStatus: "ready" },
+      }),
+    ).toBe(false);
   });
 
   it("keeps the turn live while a background task is still open", () => {

@@ -7,6 +7,7 @@ import {
   requiresDefaultBranchConfirmation,
   resolveAutoFeatureBranchName,
   resolveDefaultBranchActionDialogCopy,
+  resolveLiveThreadBranchUpdate,
   resolveQuickAction,
   summarizeGitResult,
 } from "./GitActionsControl.logic";
@@ -1117,5 +1118,25 @@ describe("resolveAutoFeatureBranchName", () => {
   it("falls back to feature/update when no preferred name is provided", () => {
     const branch = resolveAutoFeatureBranchName(["main"]);
     assert.equal(branch, "feature/update");
+  });
+});
+
+describe("resolveLiveThreadBranchUpdate", () => {
+  it("does not regress a semantic thread branch back to a temporary worktree branch", () => {
+    const update = resolveLiveThreadBranchUpdate({
+      threadBranch: "feature/semantic-branch",
+      gitStatus: status({ branch: "dpcode/deadbeef" }),
+    });
+
+    assert.equal(update, null);
+  });
+
+  it("accepts real branch changes", () => {
+    const update = resolveLiveThreadBranchUpdate({
+      threadBranch: "feature/old",
+      gitStatus: status({ branch: "feature/new" }),
+    });
+
+    assert.deepEqual(update, { branch: "feature/new" });
   });
 });

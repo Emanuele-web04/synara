@@ -502,7 +502,7 @@ export function deriveActiveBackgroundTasksState(
 // Keeps the UI "working" while the provider still has visible assistant text or
 // background-task updates to finish for the latest turn.
 export function hasLiveTurnTailWork(input: {
-  latestTurn: Pick<OrchestrationLatestTurn, "turnId"> | null;
+  latestTurn: Pick<OrchestrationLatestTurn, "turnId" | "completedAt"> | null;
   messages: ReadonlyArray<Pick<ChatMessage, "role" | "streaming" | "turnId">>;
   activities: ReadonlyArray<OrchestrationThreadActivity>;
   session?: Pick<ThreadSession, "orchestrationStatus"> | null;
@@ -517,7 +517,9 @@ export function hasLiveTurnTailWork(input: {
       message.role === "assistant" && message.turnId === latestTurnId && message.streaming,
   );
   if (hasStreamingAssistantText) {
-    return true;
+    // Once the turn is terminal, a stale `streaming` flag should not keep the
+    // stop button/timer alive indefinitely.
+    return input.latestTurn?.completedAt == null;
   }
 
   // Some providers can leave task lifecycle bookkeeping behind after the turn

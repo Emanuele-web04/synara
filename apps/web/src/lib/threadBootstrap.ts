@@ -131,13 +131,6 @@ export function resolveThreadBootstrapPlan(input: {
   routeThreadId: ThreadId | null;
   storedDraftThread: ({ threadId: ThreadId } & DraftThreadState) | null;
 }): ThreadBootstrapPlan {
-  if (input.storedDraftThread) {
-    return {
-      kind: "stored",
-      threadId: input.storedDraftThread.threadId,
-      draftThread: input.storedDraftThread,
-    };
-  }
   if (
     shouldReuseActiveDraftThread({
       draftThread: input.latestActiveDraftThread,
@@ -150,6 +143,13 @@ export function resolveThreadBootstrapPlan(input: {
       kind: "route",
       threadId: input.routeThreadId!,
       draftThread: input.latestActiveDraftThread!,
+    };
+  }
+  if (input.storedDraftThread) {
+    return {
+      kind: "stored",
+      threadId: input.storedDraftThread.threadId,
+      draftThread: input.storedDraftThread,
     };
   }
   return { kind: "fresh" };
@@ -194,9 +194,13 @@ export function buildDraftThreadContextPatch(
   if (!hasDraftContextOverrides(options)) {
     return null;
   }
+  const shouldClearWorktreeForLocalMode =
+    options?.envMode === "local" && options?.worktreePath === undefined;
   return {
     ...(options?.branch !== undefined ? { branch: options.branch ?? null } : {}),
-    ...(options?.worktreePath !== undefined ? { worktreePath: options.worktreePath ?? null } : {}),
+    ...(options?.worktreePath !== undefined || shouldClearWorktreeForLocalMode
+      ? { worktreePath: options?.worktreePath ?? null }
+      : {}),
     ...(options?.envMode !== undefined ? { envMode: options.envMode } : {}),
     entryPoint,
   };
@@ -228,6 +232,9 @@ export function resolveTerminalThreadCreationState(
 ): TerminalThreadCreationState {
   const hasExplicitEnvModeOverride =
     input.options !== undefined && Object.hasOwn(input.options, "envMode");
+  const explicitEnvMode: DraftThreadEnvMode | undefined = hasExplicitEnvModeOverride
+    ? (input.options?.envMode ?? "local")
+    : undefined;
   const inheritedEnvMode =
     input.draftThread?.envMode !== undefined
       ? input.draftThread.envMode
@@ -261,15 +268,20 @@ export function resolveTerminalThreadCreationState(
         : null) ??
       DEFAULT_INTERACTION_MODE,
     envMode: hasExplicitEnvModeOverride
-      ? (input.options?.envMode ?? "local")
+      ? (explicitEnvMode ?? "local")
       : (inheritedEnvMode ?? "local"),
     branch:
       input.options?.branch !== undefined
         ? (input.options.branch ?? null)
         : (input.draftThread?.branch ?? null),
-    worktreePath:
-      input.options?.worktreePath !== undefined
-        ? (input.options.worktreePath ?? null)
-        : (input.draftThread?.worktreePath ?? null),
+    worktreePath: (() => {
+      if (input.options?.worktreePath !== undefined) {
+        return input.options.worktreePath ?? null;
+      }
+      if (explicitEnvMode === "local") {
+        return null;
+      }
+      return input.draftThread?.worktreePath ?? null;
+    })(),
   };
 }

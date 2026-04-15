@@ -1,10 +1,4 @@
-import {
-  DEFAULT_MODEL_BY_PROVIDER,
-  ProjectId,
-  ThreadId,
-  TurnId,
-  type OrchestrationReadModel,
-} from "@t3tools/contracts";
+import { ProjectId, ThreadId, TurnId, type OrchestrationReadModel } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -12,6 +6,7 @@ import {
   markThreadUnread,
   renameProjectLocally,
   reorderProjects,
+  setThreadWorkspace,
   setAllProjectsExpanded,
   syncServerReadModel,
   type AppState,
@@ -185,6 +180,94 @@ describe("store pure functions", () => {
     const next = markThreadUnread(initialState, ThreadId.makeUnsafe("thread-1"));
 
     expect(next).toEqual(initialState);
+  });
+
+  it("preserves a semantic branch when a temp worktree branch arrives from the read model", () => {
+    const initialThread = makeThread({
+      branch: "feature/semantic-branch",
+      updatedAt: "2026-02-27T00:00:00.000Z",
+    });
+
+    const next = syncServerReadModel(
+      makeState(initialThread),
+      makeReadModel(
+        makeReadModelThread({
+          branch: "dpcode/abc123ef",
+          updatedAt: "2026-02-27T00:05:00.000Z",
+        }),
+      ),
+    );
+
+    expect(next.threads[0]?.branch).toBe("feature/semantic-branch");
+  });
+
+  it("does not regress a semantic branch when local workspace patches only report a temp branch", () => {
+    const state = makeState(
+      makeThread({
+        branch: "feature/semantic-branch",
+      }),
+    );
+
+    const next = setThreadWorkspace(state, ThreadId.makeUnsafe("thread-1"), {
+      branch: "dpcode/abc123ef",
+    });
+
+    expect(next.threads[0]?.branch).toBe("feature/semantic-branch");
+  });
+
+  it("stores server-provided sidebar metadata on hydrated threads", () => {
+    const next = syncServerReadModel(
+      makeState(makeThread()),
+      makeReadModel(
+        makeReadModelThread({
+          latestUserMessageAt: "2026-02-27T00:03:00.000Z",
+          hasPendingApprovals: true,
+          hasPendingUserInput: true,
+          hasActionableProposedPlan: true,
+          updatedAt: "2026-02-27T00:05:00.000Z",
+        }),
+      ),
+    );
+
+    expect(next.threads[0]).toMatchObject({
+      latestUserMessageAt: "2026-02-27T00:03:00.000Z",
+      hasPendingApprovals: true,
+      hasPendingUserInput: true,
+      hasActionableProposedPlan: true,
+    });
+    expect(next.sidebarThreadSummaryById["thread-1"]).toMatchObject({
+      latestUserMessageAt: "2026-02-27T00:03:00.000Z",
+      hasPendingApprovals: true,
+      hasPendingUserInput: true,
+      hasActionableProposedPlan: true,
+    });
+  });
+
+  it("falls back to local derivation when server summary metadata is absent", () => {
+    const next = syncServerReadModel(
+      makeState(makeThread()),
+      makeReadModel(
+        makeReadModelThread({
+          messages: [
+            {
+              id: "message-user" as Thread["messages"][number]["id"],
+              role: "user",
+              text: "hello",
+              turnId: null,
+              streaming: false,
+              source: "native",
+              createdAt: "2026-02-27T00:03:00.000Z",
+              updatedAt: "2026-02-27T00:03:00.000Z",
+            },
+          ],
+        }),
+      ),
+    );
+
+    expect(next.threads[0]?.latestUserMessageAt).toBeUndefined();
+    expect(next.sidebarThreadSummaryById["thread-1"]?.latestUserMessageAt).toBe(
+      "2026-02-27T00:03:00.000Z",
+    );
   });
 
   it("reorderProjects moves a project to a target index", () => {

@@ -361,6 +361,10 @@ export const OrchestrationThread = Schema.Struct({
     Schema.withDecodingDefault(() => null),
   ),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
+  latestUserMessageAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  hasPendingApprovals: Schema.optional(Schema.Boolean),
+  hasPendingUserInput: Schema.optional(Schema.Boolean),
+  hasActionableProposedPlan: Schema.optional(Schema.Boolean),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   archivedAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(

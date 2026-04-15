@@ -1,4 +1,4 @@
-import { ThreadId } from "@t3tools/contracts";
+import { ThreadId, type ServerConfig } from "@t3tools/contracts";
 import { defaultTerminalTitleForCliKind } from "@t3tools/shared/terminalThreads";
 import {
   Outlet,
@@ -21,13 +21,18 @@ import { clearPromotedDraftThreads, useComposerDraftStore } from "../composerDra
 import { useStore } from "../store";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { terminalActivityFromEvent } from "../terminalActivity";
-import { onServerConfigUpdated, onServerWelcome } from "../wsNativeApi";
+import {
+  onServerConfigUpdated,
+  onServerProviderStatusesUpdated,
+  onServerWelcome,
+} from "../wsNativeApi";
 import { providerQueryKeys } from "../lib/providerReactQuery";
 import { projectQueryKeys } from "../lib/projectReactQuery";
 import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
 import { TaskCompletionNotifications } from "../notifications/taskCompletion";
 import { useWorkspaceStore, workspaceThreadId } from "../workspaceStore";
 import { useAppTypography } from "../hooks/useAppTypography";
+import { invalidateGitQueries } from "../lib/gitReactQuery";
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient;
@@ -168,6 +173,7 @@ function EventRouter() {
     let syncing = false;
     let pending = false;
     let needsProviderInvalidation = false;
+    let needsGitInvalidation = false;
 
     const removeOrphanedTerminalsForCurrentState = () => {
       const draftThreadIds = Object.keys(
@@ -241,6 +247,10 @@ function EventRouter() {
           // reflects files created, deleted, or restored during this turn.
           void queryClient.invalidateQueries({ queryKey: projectQueryKeys.all });
         }
+        if (needsGitInvalidation) {
+          needsGitInvalidation = false;
+          void invalidateGitQueries(queryClient);
+        }
         void syncSnapshot();
       },
       {
@@ -257,6 +267,17 @@ function EventRouter() {
       latestSequence = event.sequence;
       if (event.type === "thread.turn-diff-completed" || event.type === "thread.reverted") {
         needsProviderInvalidation = true;
+      }
+      if (
+        event.type === "thread.meta-updated" &&
+        (event.payload.branch !== undefined ||
+          event.payload.envMode !== undefined ||
+          event.payload.worktreePath !== undefined ||
+          event.payload.associatedWorktreePath !== undefined ||
+          event.payload.associatedWorktreeBranch !== undefined ||
+          event.payload.associatedWorktreeRef !== undefined)
+      ) {
+        needsGitInvalidation = true;
       }
       if (event.type === "thread.turn-diff-completed") {
         useStore.getState().applyThreadTurnDiffCompleted(event.payload.threadId, {
@@ -367,6 +388,17 @@ function EventRouter() {
         },
       });
     });
+    const unsubProviderStatusesUpdated = onServerProviderStatusesUpdated((payload) => {
+      const currentConfig = queryClient.getQueryData<ServerConfig>(serverQueryKeys.config());
+      if (!currentConfig) {
+        void queryClient.fetchQuery(serverConfigQueryOptions()).catch(() => undefined);
+        return;
+      }
+      queryClient.setQueryData(serverQueryKeys.config(), {
+        ...currentConfig,
+        providers: payload.providers,
+      });
+    });
     subscribed = true;
     return () => {
       disposed = true;
@@ -376,6 +408,7 @@ function EventRouter() {
       unsubTerminalEvent();
       unsubWelcome();
       unsubServerConfigUpdated();
+      unsubProviderStatusesUpdated();
     };
   }, [
     navigate,

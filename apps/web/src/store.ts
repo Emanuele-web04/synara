@@ -9,6 +9,7 @@ import {
   type OrchestrationReadModel,
   type OrchestrationSessionStatus,
 } from "@t3tools/contracts";
+import { resolveThreadBranchRegressionGuard } from "@t3tools/shared/git";
 import { resolveModelSlugForProvider } from "@t3tools/shared/model";
 import { normalizeWorkspaceRootForComparison } from "@t3tools/shared/threadWorkspace";
 import { create } from "zustand";
@@ -21,13 +22,8 @@ import {
   type ThreadWorkspacePatch,
 } from "./types";
 import { Debouncer } from "@tanstack/react-pacer";
-import {
-  derivePendingApprovals,
-  derivePendingUserInputs,
-  findLatestProposedPlan,
-  hasActionableProposedPlan,
-  hasLiveTurnTailWork,
-} from "./session-logic";
+import { hasLiveTurnTailWork } from "./session-logic";
+import { deriveThreadSummaryMetadata } from "@t3tools/shared/threadSummary";
 
 // ── State ────────────────────────────────────────────────────────────
 
@@ -613,6 +609,22 @@ function normalizeThreadFromReadModel(
       ? incoming.session.lastError
       : null;
   const lastVisitedAt = previous?.lastVisitedAt ?? incoming.updatedAt;
+  const resolvedLatestUserMessageAt =
+    Object.hasOwn(incoming, "latestUserMessageAt") && incoming.latestUserMessageAt !== undefined
+      ? (incoming.latestUserMessageAt ?? null)
+      : undefined;
+  const resolvedHasPendingApprovals =
+    typeof incoming.hasPendingApprovals === "boolean" ? incoming.hasPendingApprovals : undefined;
+  const resolvedHasPendingUserInput =
+    typeof incoming.hasPendingUserInput === "boolean" ? incoming.hasPendingUserInput : undefined;
+  const resolvedHasActionableProposedPlan =
+    typeof incoming.hasActionableProposedPlan === "boolean"
+      ? incoming.hasActionableProposedPlan
+      : undefined;
+  const resolvedBranch = resolveThreadBranchRegressionGuard({
+    currentBranch: previous?.branch ?? null,
+    nextBranch: incoming.branch,
+  });
 
   if (
     previous &&
@@ -634,11 +646,15 @@ function normalizeThreadFromReadModel(
     (previous.subagentNickname ?? null) === (incoming.subagentNickname ?? null) &&
     (previous.subagentRole ?? null) === (incoming.subagentRole ?? null) &&
     previous.envMode === (incoming.envMode ?? "local") &&
-    previous.branch === incoming.branch &&
+    previous.branch === resolvedBranch &&
     previous.worktreePath === incoming.worktreePath &&
     (previous.associatedWorktreePath ?? null) === (incoming.associatedWorktreePath ?? null) &&
     (previous.associatedWorktreeBranch ?? null) === (incoming.associatedWorktreeBranch ?? null) &&
     (previous.associatedWorktreeRef ?? null) === (incoming.associatedWorktreeRef ?? null) &&
+    previous.latestUserMessageAt === resolvedLatestUserMessageAt &&
+    previous.hasPendingApprovals === resolvedHasPendingApprovals &&
+    previous.hasPendingUserInput === resolvedHasPendingUserInput &&
+    previous.hasActionableProposedPlan === resolvedHasActionableProposedPlan &&
     (previous.forkSourceThreadId ?? null) === (incoming.forkSourceThreadId ?? null) &&
     (previous.handoff ?? null) === handoff &&
     previous.turnDiffSummaries === turnDiffSummaries &&
@@ -668,13 +684,25 @@ function normalizeThreadFromReadModel(
     subagentNickname: incoming.subagentNickname ?? null,
     subagentRole: incoming.subagentRole ?? null,
     envMode: incoming.envMode ?? "local",
-    branch: incoming.branch,
+    branch: resolvedBranch,
     worktreePath: incoming.worktreePath,
     associatedWorktreePath: incoming.associatedWorktreePath ?? null,
     associatedWorktreeBranch: incoming.associatedWorktreeBranch ?? null,
     associatedWorktreeRef: incoming.associatedWorktreeRef ?? null,
     forkSourceThreadId: incoming.forkSourceThreadId ?? null,
     handoff,
+    ...(resolvedLatestUserMessageAt !== undefined
+      ? { latestUserMessageAt: resolvedLatestUserMessageAt }
+      : {}),
+    ...(resolvedHasPendingApprovals !== undefined
+      ? { hasPendingApprovals: resolvedHasPendingApprovals }
+      : {}),
+    ...(resolvedHasPendingUserInput !== undefined
+      ? { hasPendingUserInput: resolvedHasPendingUserInput }
+      : {}),
+    ...(resolvedHasActionableProposedPlan !== undefined
+      ? { hasActionableProposedPlan: resolvedHasActionableProposedPlan }
+      : {}),
     turnDiffSummaries,
     activities,
   };
@@ -783,17 +811,38 @@ function attachmentPreviewRoutePath(attachmentId: string): string {
   return `/attachments/${encodeURIComponent(attachmentId)}`;
 }
 
-function getLatestUserMessageAt(messages: ReadonlyArray<ChatMessage>): string | null {
-  let latestUserMessageAt: string | null = null;
-  for (const message of messages) {
-    if (message.role !== "user") {
-      continue;
-    }
-    if (latestUserMessageAt === null || message.createdAt > latestUserMessageAt) {
-      latestUserMessageAt = message.createdAt;
-    }
-  }
-  return latestUserMessageAt;
+function resolveThreadSidebarMetadata(
+  thread: Thread,
+): Pick<
+  SidebarThreadSummary,
+  | "latestUserMessageAt"
+  | "hasPendingApprovals"
+  | "hasPendingUserInput"
+  | "hasActionableProposedPlan"
+  | "hasLiveTailWork"
+> {
+  const derivedMetadata = deriveThreadSummaryMetadata({
+    messages: thread.messages,
+    activities: thread.activities,
+    proposedPlans: thread.proposedPlans,
+    latestTurn: thread.latestTurn,
+  });
+
+  return {
+    latestUserMessageAt: thread.latestUserMessageAt ?? derivedMetadata.latestUserMessageAt,
+    hasPendingApprovals: thread.hasPendingApprovals ?? derivedMetadata.hasPendingApprovals,
+    hasPendingUserInput: thread.hasPendingUserInput ?? derivedMetadata.hasPendingUserInput,
+    hasActionableProposedPlan:
+      thread.hasActionableProposedPlan ?? derivedMetadata.hasActionableProposedPlan,
+    hasLiveTailWork: Boolean(
+      hasLiveTurnTailWork({
+        latestTurn: thread.latestTurn,
+        messages: thread.messages,
+        activities: thread.activities,
+        session: thread.session,
+      }),
+    ),
+  };
 }
 
 function sidebarThreadSummariesEqual(
@@ -834,6 +883,7 @@ function buildSidebarThreadSummary(
   thread: Thread,
   previous?: SidebarThreadSummary,
 ): SidebarThreadSummary {
+  const metadata = resolveThreadSidebarMetadata(thread);
   const nextSummary: SidebarThreadSummary = {
     id: thread.id,
     projectId: thread.projectId,
@@ -851,18 +901,11 @@ function buildSidebarThreadSummary(
     subagentAgentId: thread.subagentAgentId ?? null,
     subagentNickname: thread.subagentNickname ?? null,
     subagentRole: thread.subagentRole ?? null,
-    latestUserMessageAt: getLatestUserMessageAt(thread.messages),
-    hasPendingApprovals: derivePendingApprovals(thread.activities).length > 0,
-    hasPendingUserInput: derivePendingUserInputs(thread.activities).length > 0,
-    hasActionableProposedPlan: hasActionableProposedPlan(
-      findLatestProposedPlan(thread.proposedPlans, thread.latestTurn?.turnId ?? null),
-    ),
-    hasLiveTailWork: hasLiveTurnTailWork({
-      latestTurn: thread.latestTurn,
-      messages: thread.messages,
-      activities: thread.activities,
-      session: thread.session,
-    }),
+    latestUserMessageAt: metadata.latestUserMessageAt,
+    hasPendingApprovals: metadata.hasPendingApprovals,
+    hasPendingUserInput: metadata.hasPendingUserInput,
+    hasActionableProposedPlan: metadata.hasActionableProposedPlan,
+    hasLiveTailWork: metadata.hasLiveTailWork,
     forkSourceThreadId: thread.forkSourceThreadId ?? null,
     handoff: thread.handoff ?? null,
   };
@@ -1178,7 +1221,10 @@ export function setThreadWorkspace(
 ): AppState {
   const threads = updateThread(state.threads, threadId, (t) => {
     const nextEnvMode = patch.envMode !== undefined ? patch.envMode : t.envMode;
-    const nextBranch = patch.branch !== undefined ? patch.branch : t.branch;
+    const nextBranch = resolveThreadBranchRegressionGuard({
+      currentBranch: t.branch,
+      nextBranch: patch.branch !== undefined ? patch.branch : t.branch,
+    });
     const nextWorktreePath = patch.worktreePath !== undefined ? patch.worktreePath : t.worktreePath;
     const nextAssociatedWorktreePath =
       patch.associatedWorktreePath !== undefined

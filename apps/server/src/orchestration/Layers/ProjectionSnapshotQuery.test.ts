@@ -90,16 +90,27 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           created_at,
           updated_at
         )
-        VALUES (
-          'message-1',
-          'thread-1',
-          'turn-1',
-          'assistant',
-          'hello from projection',
-          0,
-          '2026-02-24T00:00:04.000Z',
-          '2026-02-24T00:00:05.000Z'
-        )
+        VALUES
+          (
+            'message-0',
+            'thread-1',
+            'turn-1',
+            'user',
+            'ship it',
+            0,
+            '2026-02-24T00:00:03.500Z',
+            '2026-02-24T00:00:03.500Z'
+          ),
+          (
+            'message-1',
+            'thread-1',
+            'turn-1',
+            'assistant',
+            'hello from projection',
+            0,
+            '2026-02-24T00:00:04.000Z',
+            '2026-02-24T00:00:05.000Z'
+          )
       `;
 
       yield* sql`
@@ -118,8 +129,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           'thread-1',
           'turn-1',
           '# Ship it',
-          '2026-02-24T00:00:05.500Z',
-          'thread-2',
+          NULL,
+          NULL,
           '2026-02-24T00:00:05.000Z',
           '2026-02-24T00:00:05.500Z'
         )
@@ -136,16 +147,37 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           payload_json,
           created_at
         )
-        VALUES (
-          'activity-1',
-          'thread-1',
-          'turn-1',
-          'info',
-          'runtime.note',
-          'provider started',
-          '{"stage":"start"}',
-          '2026-02-24T00:00:06.000Z'
-        )
+        VALUES
+          (
+            'activity-1',
+            'thread-1',
+            'turn-1',
+            'info',
+            'runtime.note',
+            'provider started',
+            '{"stage":"start"}',
+            '2026-02-24T00:00:06.000Z'
+          ),
+          (
+            'activity-2',
+            'thread-1',
+            'turn-1',
+            'approval',
+            'approval.requested',
+            'Command approval requested',
+            '{"requestId":"approval-1","requestKind":"command"}',
+            '2026-02-24T00:00:06.500Z'
+          ),
+          (
+            'activity-3',
+            'thread-1',
+            'turn-1',
+            'info',
+            'user-input.requested',
+            'User input requested',
+            '{"requestId":"input-1","questions":[{"id":"q-1","header":"Mode","question":"Choose","options":[{"label":"A","description":"Pick A"}]}]}',
+            '2026-02-24T00:00:06.750Z'
+          )
       `;
 
       yield* sql`
@@ -269,7 +301,15 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           associatedWorktreePath: null,
           associatedWorktreeBranch: null,
           associatedWorktreeRef: null,
+          parentThreadId: null,
+          subagentAgentId: null,
+          subagentNickname: null,
+          subagentRole: null,
           forkSourceThreadId: null,
+          latestUserMessageAt: "2026-02-24T00:00:03.500Z",
+          hasPendingApprovals: true,
+          hasPendingUserInput: true,
+          hasActionableProposedPlan: true,
           latestTurn: {
             turnId: asTurnId("turn-1"),
             state: "completed",
@@ -289,6 +329,16 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           handoff: null,
           messages: [
             {
+              id: asMessageId("message-0"),
+              role: "user",
+              text: "ship it",
+              turnId: asTurnId("turn-1"),
+              streaming: false,
+              source: "native",
+              createdAt: "2026-02-24T00:00:03.500Z",
+              updatedAt: "2026-02-24T00:00:03.500Z",
+            },
+            {
               id: asMessageId("message-1"),
               role: "assistant",
               text: "hello from projection",
@@ -304,8 +354,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               id: "plan-1",
               turnId: asTurnId("turn-1"),
               planMarkdown: "# Ship it",
-              implementedAt: "2026-02-24T00:00:05.500Z",
-              implementationThreadId: ThreadId.makeUnsafe("thread-2"),
+              implementedAt: null,
+              implementationThreadId: null,
               createdAt: "2026-02-24T00:00:05.000Z",
               updatedAt: "2026-02-24T00:00:05.500Z",
             },
@@ -319,6 +369,34 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               payload: { stage: "start" },
               turnId: asTurnId("turn-1"),
               createdAt: "2026-02-24T00:00:06.000Z",
+            },
+            {
+              id: asEventId("activity-2"),
+              tone: "approval",
+              kind: "approval.requested",
+              summary: "Command approval requested",
+              payload: { requestId: "approval-1", requestKind: "command" },
+              turnId: asTurnId("turn-1"),
+              createdAt: "2026-02-24T00:00:06.500Z",
+            },
+            {
+              id: asEventId("activity-3"),
+              tone: "info",
+              kind: "user-input.requested",
+              summary: "User input requested",
+              payload: {
+                requestId: "input-1",
+                questions: [
+                  {
+                    id: "q-1",
+                    header: "Mode",
+                    question: "Choose",
+                    options: [{ label: "A", description: "Pick A" }],
+                  },
+                ],
+              },
+              turnId: asTurnId("turn-1"),
+              createdAt: "2026-02-24T00:00:06.750Z",
             },
           ],
           checkpoints: [

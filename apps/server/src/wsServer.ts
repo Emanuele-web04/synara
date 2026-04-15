@@ -423,8 +423,6 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     ),
   );
 
-  const providerStatuses = yield* providerHealth.getStatuses;
-
   const clients = yield* Ref.make(new Set<WebSocket>());
   const logger = createLogger("ws");
   const readiness = yield* makeServerReadiness;
@@ -674,7 +672,19 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       Effect.gen(function* () {
         const url = new URL(req.url ?? "/", `http://localhost:${port}`);
         if (url.pathname === "/health") {
-          respond(200, { "Content-Type": "application/json; charset=utf-8" }, '{"status":"ok"}');
+          const readinessSnapshot = yield* readiness.getSnapshot;
+          respond(
+            200,
+            { "Content-Type": "application/json; charset=utf-8" },
+            JSON.stringify({
+              status: "ok",
+              startupReady: readinessSnapshot.startupReady,
+              pushBusReady: readinessSnapshot.pushBusReady,
+              keybindingsReady: readinessSnapshot.keybindingsReady,
+              terminalSubscriptionsReady: readinessSnapshot.terminalSubscriptionsReady,
+              orchestrationSubscriptionsReady: readinessSnapshot.orchestrationSubscriptionsReady,
+            }),
+          );
           return;
         }
 
@@ -866,8 +876,17 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   ).pipe(Effect.forkIn(subscriptionsScope));
 
   yield* Stream.runForEach(keybindingsManager.streamChanges, (event) =>
-    pushBus.publishAll(WS_CHANNELS.serverConfigUpdated, {
-      issues: event.issues,
+    Effect.gen(function* () {
+      const providerStatuses = yield* providerHealth.getStatuses;
+      yield* pushBus.publishAll(WS_CHANNELS.serverConfigUpdated, {
+        issues: event.issues,
+        providers: providerStatuses,
+      });
+    }),
+  ).pipe(Effect.forkIn(subscriptionsScope));
+
+  yield* Stream.runForEach(providerHealth.streamChanges, (providerStatuses) =>
+    pushBus.publishAll(WS_CHANNELS.serverProviderStatusesUpdated, {
       providers: providerStatuses,
     }),
   ).pipe(Effect.forkIn(subscriptionsScope));
@@ -1184,6 +1203,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
 
       case WS_METHODS.serverGetConfig:
         const keybindingsConfig = yield* keybindingsManager.loadConfigState;
+        const providerStatuses = yield* providerHealth.getStatuses;
         return {
           cwd,
           homeDir,
@@ -1193,6 +1213,11 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           issues: keybindingsConfig.issues,
           providers: providerStatuses,
           availableEditors,
+        };
+
+      case WS_METHODS.serverRefreshProviders:
+        return {
+          providers: yield* providerHealth.refresh,
         };
 
       case WS_METHODS.serverListWorktrees:

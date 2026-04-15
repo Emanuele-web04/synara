@@ -48,6 +48,10 @@
       "types": "./src/threadEnvironment.ts",
       "import": "./src/threadEnvironment.ts"
     },
+    "./threadSummary": {
+      "types": "./src/threadSummary.ts",
+      "import": "./src/threadSummary.ts"
+    },
     "./threadWorkspace": {
       "types": "./src/threadWorkspace.ts",
       "import": "./src/threadWorkspace.ts"

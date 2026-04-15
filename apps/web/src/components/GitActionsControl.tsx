@@ -24,6 +24,7 @@ import {
   type DefaultBranchConfirmableAction,
   requiresFeatureBranchForDefaultBranchAction,
   requiresDefaultBranchConfirmation,
+  resolveLiveThreadBranchUpdate,
   resolveDefaultBranchActionDialogCopy,
   resolveQuickAction,
   summarizeGitResult,
@@ -295,8 +296,15 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
   const isRepo = branchList?.isRepo ?? true;
   const hasOriginRemote = branchList?.hasOriginRemote ?? false;
   const currentBranch = branchList?.branches.find((branch) => branch.current)?.name ?? null;
-  const isGitStatusOutOfSync =
-    !!gitStatus?.branch && !!currentBranch && gitStatus.branch !== currentBranch;
+  const liveThreadBranchUpdate = useMemo(
+    () =>
+      resolveLiveThreadBranchUpdate({
+        threadBranch: currentBranch,
+        gitStatus,
+      }),
+    [currentBranch, gitStatus],
+  );
+  const isGitStatusOutOfSync = liveThreadBranchUpdate !== null;
 
   useEffect(() => {
     if (!isGitStatusOutOfSync) return;

@@ -1,8 +1,8 @@
 /**
- * ProviderHealthLive - Startup-time provider health checks.
+ * ProviderHealthLive - Cache-backed provider health service.
  *
- * Performs one-time provider readiness probes when the server starts and
- * keeps the resulting snapshot in memory for `server.getConfig`.
+ * Seeds provider status from disk cache when available, then refreshes from
+ * CLI probes without blocking the rest of server startup.
  *
  * Uses effect's ChildProcessSpawner to run CLI probes natively.
  *
@@ -15,7 +15,21 @@ import type {
   ServerProviderStatusState,
 } from "@t3tools/contracts";
 import { parseCodexConfigModelProvider } from "@t3tools/shared/codexConfig";
-import { Array, Effect, Fiber, FileSystem, Layer, Option, Path, Result, Stream } from "effect";
+import {
+  Array,
+  Effect,
+  Exit,
+  Fiber,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  PubSub,
+  Ref,
+  Result,
+  Scope,
+  Stream,
+} from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import {
@@ -23,11 +37,19 @@ import {
   isCodexCliVersionSupported,
   parseCodexCliVersion,
 } from "../codexCliVersion";
+import { ServerConfig } from "../../config";
 import { ProviderHealth, type ProviderHealthShape } from "../Services/ProviderHealth";
+import {
+  orderProviderStatuses,
+  readProviderStatusCache,
+  resolveProviderStatusCachePath,
+  writeProviderStatusCache,
+} from "../providerStatusCache";
 
 const DEFAULT_TIMEOUT_MS = 4_000;
 const CODEX_PROVIDER = "codex" as const;
 const CLAUDE_AGENT_PROVIDER = "claudeAgent" as const;
+type ProviderStatuses = ReadonlyArray<ServerProviderStatus>;
 
 // ── Pure helpers ────────────────────────────────────────────────────
 
@@ -627,17 +649,147 @@ export const checkClaudeProviderStatus: Effect.Effect<
   } satisfies ServerProviderStatus;
 });
 
+// ── Snapshot helpers ────────────────────────────────────────────────
+
+function providerStatusesEqual(left: ProviderStatuses, right: ProviderStatuses): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  return left.every((status, index) => {
+    const next = right[index];
+    return (
+      next !== undefined &&
+      status.provider === next.provider &&
+      status.status === next.status &&
+      status.available === next.available &&
+      status.authStatus === next.authStatus &&
+      status.voiceTranscriptionAvailable === next.voiceTranscriptionAvailable &&
+      (status.message ?? null) === (next.message ?? null)
+    );
+  });
+}
+
 // ── Layer ───────────────────────────────────────────────────────────
 
 export const ProviderHealthLive = Layer.effect(
   ProviderHealth,
   Effect.gen(function* () {
-    const statusesFiber = yield* Effect.all([checkCodexProviderStatus, checkClaudeProviderStatus], {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const serverConfig = yield* ServerConfig;
+    const changesPubSub = yield* Effect.acquireRelease(
+      PubSub.unbounded<ReadonlyArray<ServerProviderStatus>>(),
+      PubSub.shutdown,
+    );
+    const refreshScope = yield* Scope.make("sequential");
+    yield* Effect.addFinalizer(() => Scope.close(refreshScope, Exit.void));
+
+    const cachePathByProvider = new Map(
+      [CODEX_PROVIDER, CLAUDE_AGENT_PROVIDER].map(
+        (provider) =>
+          [
+            provider,
+            resolveProviderStatusCachePath({
+              stateDir: serverConfig.stateDir,
+              provider,
+            }),
+          ] as const,
+      ),
+    );
+
+    const cachedStatuses: ProviderStatuses = yield* Effect.forEach(
+      [CODEX_PROVIDER, CLAUDE_AGENT_PROVIDER] as const,
+      (provider) =>
+        readProviderStatusCache(cachePathByProvider.get(provider)!).pipe(
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+        ),
+      { concurrency: "unbounded" },
+    ).pipe(
+      Effect.map((statuses) =>
+        orderProviderStatuses(
+          statuses.filter((status): status is ServerProviderStatus => status !== undefined),
+        ),
+      ),
+    );
+
+    const statusesRef = yield* Ref.make<ProviderStatuses>(cachedStatuses);
+    const refreshFiberRef = yield* Ref.make<Fiber.Fiber<ProviderStatuses, never> | null>(null);
+
+    const loadProviderStatuses = Effect.all([checkCodexProviderStatus, checkClaudeProviderStatus], {
       concurrency: "unbounded",
-    }).pipe(Effect.forkScoped);
+    }).pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
+      Effect.map(orderProviderStatuses),
+    );
+
+    const persistStatuses = (statuses: ProviderStatuses) =>
+      Effect.forEach(
+        statuses,
+        (status) =>
+          writeProviderStatusCache({
+            filePath: cachePathByProvider.get(status.provider)!,
+            provider: status,
+          }).pipe(
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
+            Effect.tapError(Effect.logError),
+            Effect.ignore,
+          ),
+        { concurrency: "unbounded", discard: true },
+      );
+
+    const refreshNow = Effect.gen(function* () {
+      const nextStatuses = yield* loadProviderStatuses;
+      const previousStatuses = yield* Ref.get(statusesRef);
+      if (providerStatusesEqual(previousStatuses, nextStatuses)) {
+        yield* Ref.set(statusesRef, nextStatuses);
+        return nextStatuses;
+      }
+      yield* Ref.set(statusesRef, nextStatuses);
+      yield* persistStatuses(nextStatuses);
+      yield* PubSub.publish(changesPubSub, nextStatuses);
+      return nextStatuses;
+    });
+
+    // Keep a single refresh in flight so repeated config reads do not spawn
+    // overlapping CLI probes while the cache already gives us a usable answer.
+    const ensureRefreshFiber: Effect.Effect<Fiber.Fiber<ProviderStatuses, never>> = Effect.gen(
+      function* () {
+        const inFlight = yield* Ref.get(refreshFiberRef);
+        if (inFlight) {
+          return inFlight;
+        }
+        const refreshFiber = yield* Effect.gen(function* () {
+          const refreshExit = yield* Effect.exit(refreshNow);
+          if (Exit.isSuccess(refreshExit)) {
+            return refreshExit.value;
+          }
+          // Keep the current in-memory snapshot as the source of truth if a
+          // foreground refresh fails after startup.
+          return yield* Ref.get(statusesRef);
+        }).pipe(Effect.ensuring(Ref.set(refreshFiberRef, null)), Effect.forkIn(refreshScope));
+        yield* Ref.set(refreshFiberRef, refreshFiber);
+        return refreshFiber;
+      },
+    );
+
+    yield* ensureRefreshFiber;
+
+    const refresh: Effect.Effect<ProviderStatuses> = ensureRefreshFiber.pipe(
+      Effect.flatMap(Fiber.join),
+    );
 
     return {
-      getStatuses: Fiber.join(statusesFiber),
+      // Mirror upstream's behavior here: reads consume the latest stable
+      // snapshot, while refreshes happen explicitly or from provider streams.
+      getStatuses: Ref.get(statusesRef),
+      refresh,
+      get streamChanges() {
+        return Stream.fromPubSub(changesPubSub);
+      },
     } satisfies ProviderHealthShape;
   }),
 );

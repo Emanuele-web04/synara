@@ -207,6 +207,19 @@ async function waitForBackendHttpReady(baseUrl: string): Promise<void> {
     await waitForHttpReady(baseUrl, {
       signal: controller.signal,
       path: "/health",
+      isReady: async (response) => {
+        if (!response.ok) {
+          return false;
+        }
+        try {
+          const payload = (await response.json()) as {
+            startupReady?: unknown;
+          };
+          return payload.startupReady === true;
+        } catch {
+          return false;
+        }
+      },
     });
   } finally {
     if (backendReadinessAbortController === controller) {

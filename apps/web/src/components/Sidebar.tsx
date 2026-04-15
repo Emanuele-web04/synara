@@ -72,6 +72,10 @@ import { showConfirmDialogFallback } from "../confirmDialogFallback";
 import { isMacPlatform, newCommandId, newProjectId } from "../lib/utils";
 import { useStore } from "../store";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
+import {
+  createSidebarDisplayThreadsSelector,
+  createSidebarThreadSummariesSelector,
+} from "../storeSelectors";
 import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
 import { gitRemoveWorktreeMutationOptions, gitStatusQueryOptions } from "../lib/gitReactQuery";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
@@ -824,6 +828,10 @@ export default function Sidebar() {
   // results do not depend on a separate immediate-add branch.
   const shouldShowProjectPathEntry = addingProject;
   const activeSidebarThreadId = activeSplitView?.sourceThreadId ?? routeThreadId;
+  const selectSidebarThreads = useMemo(() => createSidebarThreadSummariesSelector(), []);
+  const selectSidebarDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
+  const sidebarThreads = useStore(selectSidebarThreads);
+  const sidebarDisplayThreads = useStore(selectSidebarDisplayThreads);
   const terminalOpen = routeThreadId
     ? selectThreadTerminalState(terminalStateByThreadId, routeThreadId).terminalOpen
     : false;
@@ -833,19 +841,6 @@ export default function Sidebar() {
         (splitView): splitView is SplitView => splitView !== undefined,
       ),
     [splitViewsById],
-  );
-  const sidebarThreads = useMemo(
-    () =>
-      threads.flatMap((thread) => {
-        const summary = sidebarThreadSummaryById[thread.id];
-        return summary ? [summary] : [];
-      }),
-    [sidebarThreadSummaryById, threads],
-  );
-  // Keep subagent threads addressable in state, but hide them from the main sidebar lists.
-  const sidebarDisplayThreads = useMemo(
-    () => sidebarThreads.filter((thread) => !thread.parentThreadId),
-    [sidebarThreads],
   );
   const pinnedThreadIdSet = useMemo(() => new Set(pinnedThreadIds), [pinnedThreadIds]);
   const pinnedThreads = useMemo(
@@ -2486,19 +2481,31 @@ export default function Sidebar() {
             />
           )}
           <div className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
-            <span className="min-w-0 flex-1 truncate">
-              {isSubagentThread
-                ? renderSubagentLabel({
-                    threadId: thread.id,
-                    parentThreadId: thread.parentThreadId,
-                    agentId: thread.subagentAgentId,
-                    nickname: thread.subagentNickname,
-                    role: thread.subagentRole,
-                    title: thread.title,
-                    threads,
-                  })
-                : thread.title}
-            </span>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span
+                    className="min-w-0 flex-1 truncate"
+                    data-testid={`thread-title-${thread.id}`}
+                  >
+                    {isSubagentThread
+                      ? renderSubagentLabel({
+                          threadId: thread.id,
+                          parentThreadId: thread.parentThreadId,
+                          agentId: thread.subagentAgentId,
+                          nickname: thread.subagentNickname,
+                          role: thread.subagentRole,
+                          title: thread.title,
+                          threads,
+                        })
+                      : thread.title}
+                  </span>
+                }
+              />
+              <TooltipPopup side="top" className="max-w-80 whitespace-normal leading-tight">
+                {thread.title}
+              </TooltipPopup>
+            </Tooltip>
           </div>
           <div className="ml-auto flex shrink-0 items-center gap-1.5 pr-1">
             {projectLabel ? (

@@ -79,6 +79,8 @@ const defaultProviderStatuses: ReadonlyArray<ServerProviderStatus> = [
 
 const defaultProviderHealthService: ProviderHealthShape = {
   getStatuses: Effect.succeed(defaultProviderStatuses),
+  refresh: Effect.succeed(defaultProviderStatuses),
+  streamChanges: Stream.empty,
 };
 
 class MockTerminalManager implements TerminalManagerShape {
@@ -688,7 +690,14 @@ describe("WebSocket Server", () => {
     const response = await fetch(`http://127.0.0.1:${port}/health`);
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("application/json");
-    expect(await response.json()).toEqual({ status: "ok" });
+    expect(await response.json()).toEqual({
+      status: "ok",
+      startupReady: true,
+      pushBusReady: true,
+      keybindingsReady: true,
+      terminalSubscriptionsReady: true,
+      orchestrationSubscriptionsReady: true,
+    });
   });
 
   it("rejects static path traversal attempts", async () => {
@@ -1159,6 +1168,79 @@ describe("WebSocket Server", () => {
       (push) => Array.isArray(push.data.issues) && push.data.issues.length === 0,
     );
     expect(successPush.data).toEqual({ issues: [], providers: defaultProviderStatuses });
+  });
+
+  it("pushes server.providerStatusesUpdated when provider statuses change", async () => {
+    const providerUpdates = await Effect.runPromise(
+      PubSub.unbounded<ReadonlyArray<ServerProviderStatus>>(),
+    );
+    const providerHealth: ProviderHealthShape = {
+      getStatuses: Effect.succeed(defaultProviderStatuses),
+      refresh: Effect.succeed(defaultProviderStatuses),
+      streamChanges: Stream.fromPubSub(providerUpdates),
+    };
+
+    server = await createTestServer({ cwd: "/my/workspace", providerHealth });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const [ws] = await connectAndAwaitWelcome(port);
+    connections.push(ws);
+
+    await sendRequest(ws, WS_METHODS.serverGetConfig);
+
+    const updatedProviders: ReadonlyArray<ServerProviderStatus> = [
+      {
+        provider: "codex",
+        status: "warning",
+        available: true,
+        authStatus: "unknown",
+        checkedAt: "2026-01-01T00:10:00.000Z",
+        message: "Could not verify Codex authentication status.",
+      },
+    ];
+
+    const providerPushPromise = waitForPush(
+      ws,
+      WS_CHANNELS.serverProviderStatusesUpdated,
+      (push) => push.data.providers[0]?.checkedAt === "2026-01-01T00:10:00.000Z",
+      20,
+      3_000,
+    );
+
+    await Effect.runPromise(PubSub.publish(providerUpdates, updatedProviders));
+    const providerPush = await providerPushPromise;
+    expect(providerPush.data).toEqual({ providers: updatedProviders });
+
+    await Effect.runPromise(PubSub.shutdown(providerUpdates));
+  });
+
+  it("responds to server.refreshProviders", async () => {
+    const refreshedProviders: ReadonlyArray<ServerProviderStatus> = [
+      {
+        provider: "codex",
+        status: "ready",
+        available: true,
+        authStatus: "authenticated",
+        checkedAt: "2026-01-01T00:20:00.000Z",
+      },
+    ];
+    const providerHealth: ProviderHealthShape = {
+      getStatuses: Effect.succeed(defaultProviderStatuses),
+      refresh: Effect.succeed(refreshedProviders),
+      streamChanges: Stream.empty,
+    };
+
+    server = await createTestServer({ cwd: "/my/workspace", providerHealth });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const [ws] = await connectAndAwaitWelcome(port);
+    connections.push(ws);
+
+    const response = await sendRequest(ws, WS_METHODS.serverRefreshProviders);
+    expect(response.error).toBeUndefined();
+    expect(response.result).toEqual({ providers: refreshedProviders });
   });
 
   it("routes shell.openInEditor through the injected open service", async () => {

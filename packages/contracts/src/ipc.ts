@@ -36,6 +36,7 @@ import type {
 import type {
   ServerConfig,
   ServerListWorktreesResult,
+  ServerRefreshProvidersResult,
   ServerUpsertKeybindingInput,
   ServerUpsertKeybindingResult,
   ServerVoiceTranscriptionInput,
@@ -294,6 +295,7 @@ export interface NativeApi {
   };
   server: {
     getConfig: () => Promise<ServerConfig>;
+    refreshProviders: () => Promise<ServerRefreshProvidersResult>;
     listWorktrees: () => Promise<ServerListWorktreesResult>;
     transcribeVoice: (
       input: ServerVoiceTranscriptionInput,

@@ -1,3 +1,7 @@
+// FILE: storeSelectors.ts
+// Purpose: Stable Zustand selectors for entity lookups and lightweight sidebar projections.
+// Exports: Selector factories used by routes and sidebar-heavy components.
+
 import type { ProjectId, ThreadId } from "@t3tools/contracts";
 
 import type { AppState } from "./store";
@@ -56,6 +60,50 @@ export function createSidebarThreadSummarySelector(
   threadId: ThreadId | null | undefined,
 ): (state: AppState) => SidebarThreadSummary | undefined {
   return (state) => (threadId ? state.sidebarThreadSummaryById[threadId] : undefined);
+}
+
+export function createSidebarThreadSummariesSelector(): (
+  state: AppState,
+) => readonly SidebarThreadSummary[] {
+  let previousThreads: readonly Thread[] | undefined;
+  let previousSummaryById: Record<string, SidebarThreadSummary> | undefined;
+  let previousSummaries: readonly SidebarThreadSummary[] = [];
+
+  return (state) => {
+    if (
+      state.threads === previousThreads &&
+      state.sidebarThreadSummaryById === previousSummaryById
+    ) {
+      return previousSummaries;
+    }
+
+    previousThreads = state.threads;
+    previousSummaryById = state.sidebarThreadSummaryById;
+    previousSummaries = state.threads.flatMap((thread) => {
+      const summary = state.sidebarThreadSummaryById[thread.id];
+      return summary ? [summary] : [];
+    });
+    return previousSummaries;
+  };
+}
+
+export function createSidebarDisplayThreadsSelector(): (
+  state: AppState,
+) => readonly SidebarThreadSummary[] {
+  const selectSidebarSummaries = createSidebarThreadSummariesSelector();
+  let previousSummaries: readonly SidebarThreadSummary[] | undefined;
+  let previousDisplaySummaries: readonly SidebarThreadSummary[] = [];
+
+  return (state) => {
+    const sidebarSummaries = selectSidebarSummaries(state);
+    if (sidebarSummaries === previousSummaries) {
+      return previousDisplaySummaries;
+    }
+
+    previousSummaries = sidebarSummaries;
+    previousDisplaySummaries = sidebarSummaries.filter((thread) => !thread.parentThreadId);
+    return previousDisplaySummaries;
+  };
 }
 
 export function createFirstProjectSelector(): (state: AppState) => Project | undefined {

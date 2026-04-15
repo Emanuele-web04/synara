@@ -1,4 +1,3 @@
-import { resolveLoginShell } from "@t3tools/shared/shell";
 import { describe, expect, it, vi } from "vitest";
 
 import { syncShellEnvironment } from "./syncShellEnvironment";
@@ -7,11 +6,12 @@ describe("syncShellEnvironment", () => {
   it("hydrates PATH and missing SSH_AUTH_SOCK from the login shell on macOS", () => {
     const env: NodeJS.ProcessEnv = {
       SHELL: "/bin/zsh",
-      PATH: "/usr/bin",
+      PATH: "/Users/test/.local/bin:/usr/bin",
     };
     const readEnvironment = vi.fn(() => ({
       PATH: "/opt/homebrew/bin:/usr/bin",
       SSH_AUTH_SOCK: "/tmp/secretive.sock",
+      HOMEBREW_PREFIX: "/opt/homebrew",
     }));
 
     syncShellEnvironment(env, {
@@ -19,9 +19,18 @@ describe("syncShellEnvironment", () => {
       readEnvironment,
     });
 
-    expect(readEnvironment).toHaveBeenCalledWith("/bin/zsh", ["PATH", "SSH_AUTH_SOCK"]);
-    expect(env.PATH).toBe("/opt/homebrew/bin:/usr/bin");
+    expect(readEnvironment).toHaveBeenCalledWith("/bin/zsh", [
+      "PATH",
+      "SSH_AUTH_SOCK",
+      "HOMEBREW_PREFIX",
+      "HOMEBREW_CELLAR",
+      "HOMEBREW_REPOSITORY",
+      "XDG_CONFIG_HOME",
+      "XDG_DATA_HOME",
+    ]);
+    expect(env.PATH).toBe("/opt/homebrew/bin:/usr/bin:/Users/test/.local/bin");
     expect(env.SSH_AUTH_SOCK).toBe("/tmp/secretive.sock");
+    expect(env.HOMEBREW_PREFIX).toBe("/opt/homebrew");
   });
 
   it("preserves an inherited SSH_AUTH_SOCK value", () => {
@@ -78,12 +87,20 @@ describe("syncShellEnvironment", () => {
       readEnvironment,
     });
 
-    expect(readEnvironment).toHaveBeenCalledWith("/bin/zsh", ["PATH", "SSH_AUTH_SOCK"]);
+    expect(readEnvironment).toHaveBeenCalledWith("/bin/zsh", [
+      "PATH",
+      "SSH_AUTH_SOCK",
+      "HOMEBREW_PREFIX",
+      "HOMEBREW_CELLAR",
+      "HOMEBREW_REPOSITORY",
+      "XDG_CONFIG_HOME",
+      "XDG_DATA_HOME",
+    ]);
     expect(env.PATH).toBe("/usr/local/bin:/usr/bin");
     expect(env.SSH_AUTH_SOCK).toBe("/tmp/ssh.sock");
   });
 
-  it("falls back to a default login shell when SHELL is missing", () => {
+  it("falls back to a user login shell when SHELL is missing", () => {
     const env: NodeJS.ProcessEnv = {
       PATH: "/usr/bin",
     };
@@ -94,12 +111,67 @@ describe("syncShellEnvironment", () => {
     syncShellEnvironment(env, {
       platform: "linux",
       readEnvironment,
+      userShell: "/bin/bash",
     });
 
-    const expectedShell = resolveLoginShell("linux", env.SHELL);
-    expect(expectedShell).toBeTruthy();
-    expect(readEnvironment).toHaveBeenCalledWith(expectedShell, ["PATH", "SSH_AUTH_SOCK"]);
+    expect(readEnvironment).toHaveBeenCalledWith("/bin/bash", [
+      "PATH",
+      "SSH_AUTH_SOCK",
+      "HOMEBREW_PREFIX",
+      "HOMEBREW_CELLAR",
+      "HOMEBREW_REPOSITORY",
+      "XDG_CONFIG_HOME",
+      "XDG_DATA_HOME",
+    ]);
     expect(env.PATH).toBe("/usr/local/bin:/usr/bin");
+  });
+
+  it("falls back to launchctl PATH on macOS when shell probing does not return one", () => {
+    const env: NodeJS.ProcessEnv = {
+      SHELL: "/opt/homebrew/bin/nu",
+      PATH: "/usr/bin",
+    };
+    const readEnvironment = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error("unknown flag");
+      })
+      .mockImplementationOnce(() => ({}));
+    const readLaunchctlPath = vi.fn(() => "/opt/homebrew/bin:/usr/bin");
+    const logWarning = vi.fn();
+
+    syncShellEnvironment(env, {
+      platform: "darwin",
+      readEnvironment,
+      readLaunchctlPath,
+      userShell: "/bin/zsh",
+      logWarning,
+    });
+
+    expect(readEnvironment).toHaveBeenNthCalledWith(1, "/opt/homebrew/bin/nu", [
+      "PATH",
+      "SSH_AUTH_SOCK",
+      "HOMEBREW_PREFIX",
+      "HOMEBREW_CELLAR",
+      "HOMEBREW_REPOSITORY",
+      "XDG_CONFIG_HOME",
+      "XDG_DATA_HOME",
+    ]);
+    expect(readEnvironment).toHaveBeenNthCalledWith(2, "/bin/zsh", [
+      "PATH",
+      "SSH_AUTH_SOCK",
+      "HOMEBREW_PREFIX",
+      "HOMEBREW_CELLAR",
+      "HOMEBREW_REPOSITORY",
+      "XDG_CONFIG_HOME",
+      "XDG_DATA_HOME",
+    ]);
+    expect(readLaunchctlPath).toHaveBeenCalledTimes(1);
+    expect(logWarning).toHaveBeenCalledWith(
+      "Failed to read login shell environment from /opt/homebrew/bin/nu.",
+      expect.any(Error),
+    );
+    expect(env.PATH).toBe("/opt/homebrew/bin:/usr/bin");
   });
 
   it("does nothing outside macOS and Linux", () => {

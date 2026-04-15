@@ -34,6 +34,7 @@ import {
   toPersistenceSqlError,
   type ProjectionRepositoryError,
 } from "../../persistence/Errors.ts";
+import { deriveThreadSummaryMetadata } from "@t3tools/shared/threadSummary";
 import { ProjectionCheckpoint } from "../../persistence/Services/ProjectionCheckpoints.ts";
 import { ProjectionProject } from "../../persistence/Services/ProjectionProjects.ts";
 import { ProjectionState } from "../../persistence/Services/ProjectionState.ts";
@@ -251,6 +252,7 @@ function toProjectedThread(input: {
   readonly session: OrchestrationSession | null;
 }): OrchestrationThread {
   const { threadRow } = input;
+  const summary = deriveThreadSummaryMetadata(input);
   return {
     id: threadRow.threadId,
     projectId: threadRow.projectId,
@@ -275,6 +277,10 @@ function toProjectedThread(input: {
     archivedAt: threadRow.archivedAt ?? null,
     deletedAt: threadRow.deletedAt,
     handoff: threadRow.handoff,
+    latestUserMessageAt: summary.latestUserMessageAt,
+    hasPendingApprovals: summary.hasPendingApprovals,
+    hasPendingUserInput: summary.hasPendingUserInput,
+    hasActionableProposedPlan: summary.hasActionableProposedPlan,
     messages: input.messages,
     proposedPlans: input.proposedPlans,
     activities: input.activities,

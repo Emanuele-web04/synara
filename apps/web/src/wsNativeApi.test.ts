@@ -244,6 +244,27 @@ describe("wsNativeApi", () => {
     });
   });
 
+  it("delivers and caches provider-only status updates", async () => {
+    const { createWsNativeApi, onServerProviderStatusesUpdated } = await import("./wsNativeApi");
+
+    createWsNativeApi();
+    const listener = vi.fn();
+    onServerProviderStatusesUpdated(listener);
+
+    const payload = {
+      providers: defaultProviders,
+    } as const;
+    emitPush(WS_CHANNELS.serverProviderStatusesUpdated, payload);
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith(payload);
+
+    const lateListener = vi.fn();
+    onServerProviderStatusesUpdated(lateListener);
+    expect(lateListener).toHaveBeenCalledTimes(1);
+    expect(lateListener).toHaveBeenCalledWith(payload);
+  });
+
   it("forwards valid terminal and orchestration events", async () => {
     const { createWsNativeApi } = await import("./wsNativeApi");
 

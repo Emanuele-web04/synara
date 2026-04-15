@@ -44,6 +44,38 @@ describe("waitForHttpReady", () => {
     );
   });
 
+  it("supports async readiness predicates for semantic health responses", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ startupReady: false }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ startupReady: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+
+    await waitForHttpReady("http://127.0.0.1:3773", {
+      fetchImpl,
+      timeoutMs: 100,
+      intervalMs: 0,
+      path: "/health",
+      isReady: async (response) => {
+        const payload = (await response.json()) as {
+          startupReady?: boolean;
+        };
+        return payload.startupReady === true;
+      },
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
   it("retries after a readiness request stalls past the per-request timeout", async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
