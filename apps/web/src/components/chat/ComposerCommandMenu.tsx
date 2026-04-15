@@ -8,6 +8,7 @@ import {
   type ProviderSkillDescriptor,
 } from "@t3tools/contracts";
 import { memo, useEffect, useMemo, useRef } from "react";
+import { RiRobot3Line } from "react-icons/ri";
 import { type ComposerTriggerKind } from "../../composer-logic";
 import { type ComposerSlashCommand } from "../../composerSlashCommands";
 import { ListTodoIcon, PlugIcon } from "~/lib/icons";
@@ -243,7 +244,7 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
         );
       }}
     >
-      <div className="relative overflow-hidden rounded-xl border border-border/60 bg-card shadow-[0_0_0_1px_rgba(255,255,255,0.04)_inset]">
+      <div className="chat-composer-surface relative overflow-hidden rounded-xl border border-border/60 bg-card shadow-[0_0_0_1px_rgba(255,255,255,0.04)_inset]">
         <CommandList className="max-h-72 py-1">
           {groups.map((group, groupIndex) => (
             <div key={group.id}>
@@ -418,7 +419,7 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
         </Badge>
       ) : null}
       {props.item.type === "agent" ? (
-        <TbUsers className="size-3.5 text-muted-foreground/60" />
+        <RiRobot3Line className="size-3.5 text-muted-foreground/60" />
       ) : null}
       <div className="min-w-0 flex flex-1 items-center gap-2">
         <div className="min-w-0 flex flex-1 items-center gap-1.5 overflow-hidden">

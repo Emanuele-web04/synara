@@ -3,7 +3,7 @@ import {
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
   type TerminalContextDraft,
 } from "./lib/terminalContext";
-import { resolveAgentAlias, type ModelSlug } from "@t3tools/contracts";
+import { resolveAgentAlias } from "@t3tools/contracts";
 
 export type ComposerPromptSegment =
   | {
@@ -24,12 +24,10 @@ export type ComposerPromptSegment =
       context: TerminalContextDraft | null;
     }
   | {
-      /** Agent mention: @alias(task) - delegates task to a subagent */
+      /** Agent mention: @alias - chip for subagent reference (parens are plain text) */
       type: "agent-mention";
       alias: string;
-      model: ModelSlug;
-      displayName: string;
-      task: string;
+      color: string;
     };
 
 const MENTION_TOKEN_REGEX = /(^|\s)@([^\s@]+)(?=\s)/g;
@@ -37,10 +35,9 @@ const SKILL_TOKEN_REGEX = /(^|\s)([$/])([a-zA-Z][a-zA-Z0-9_:-]*)(?=\s)/g;
 const DISPLAY_MENTION_TOKEN_REGEX = /(^|\s)@([^\s@]+)(?=\s|$)/g;
 const DISPLAY_SKILL_TOKEN_REGEX = /(^|\s)([$/])([a-zA-Z][a-zA-Z0-9_:-]*)(?=\s|$)/g;
 
-// Agent mention: @alias(task content here)
-// Matches @alias followed by parentheses with task content
-// Supports nested parentheses by counting open/close parens
-const AGENT_MENTION_TOKEN_REGEX = /(^|\s)@([a-zA-Z0-9._-]+)\(/g;
+// Agent mention chip: @alias(
+// Keep plain @alias text editable while typing so the picker can stay open.
+const AGENT_MENTION_TOKEN_REGEX = /(^|\s)@([a-zA-Z0-9._-]+)(?=\()/g;
 
 function pushTextSegment(segments: ComposerPromptSegment[], text: string): void {
   if (!text) return;
@@ -63,40 +60,10 @@ type InlineTokenMatch =
   | {
       kind: "agent-mention";
       alias: string;
-      model: ModelSlug;
-      displayName: string;
-      task: string;
+      color: string;
       start: number;
       end: number;
     };
-
-/**
- * Extract the content inside parentheses, handling nested parens.
- * Returns the task content and the end position (after closing paren).
- */
-function extractParenContent(text: string, startIndex: number): { task: string; endIndex: number } | null {
-  let depth = 1;
-  let index = startIndex;
-
-  while (index < text.length && depth > 0) {
-    const char = text[index];
-    if (char === "(") {
-      depth++;
-    } else if (char === ")") {
-      depth--;
-    }
-    index++;
-  }
-
-  if (depth !== 0) {
-    // Unclosed parenthesis
-    return null;
-  }
-
-  // Extract content between opening and closing parens
-  const task = text.slice(startIndex, index - 1);
-  return { task, endIndex: index };
-}
 
 function collectInlineTokenMatches(
   text: string,
@@ -115,13 +82,13 @@ function collectInlineTokenMatches(
   // Track positions covered by agent mentions to avoid double-matching
   const agentMentionRanges: Array<{ start: number; end: number }> = [];
 
-  // First, match agent mentions: @alias(task)
+  // First, match agent mentions: @alias (just the alias, parens are plain text)
   for (const match of text.matchAll(AGENT_MENTION_TOKEN_REGEX)) {
     const whitespace = match[1] ?? "";
     const alias = match[2] ?? "";
     const matchIndex = match.index ?? 0;
     const start = matchIndex + whitespace.length;
-    const parenStart = matchIndex + match[0].length; // position after "("
+    const end = start + 1 + alias.length; // @alias
 
     // Try to resolve the alias
     const resolved = resolveAgentAlias(alias);
@@ -130,22 +97,12 @@ function collectInlineTokenMatches(
       continue;
     }
 
-    // Extract content inside parentheses
-    const parenContent = extractParenContent(text, parenStart);
-    if (!parenContent) {
-      // Unclosed parenthesis, skip
-      continue;
-    }
-
-    const end = parenContent.endIndex;
     agentMentionRanges.push({ start, end });
 
     matches.push({
       kind: "agent-mention",
       alias,
-      model: resolved.model,
-      displayName: resolved.displayName,
-      task: parenContent.task,
+      color: resolved.color,
       start,
       end,
     });
@@ -218,9 +175,7 @@ function splitTextIntoPromptSegments(
       segments.push({
         type: "agent-mention",
         alias: match.alias,
-        model: match.model,
-        displayName: match.displayName,
-        task: match.task,
+        color: match.color,
       });
     } else if (match.kind === "mention") {
       segments.push({ type: "mention", path: match.value });

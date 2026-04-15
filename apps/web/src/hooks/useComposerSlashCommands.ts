@@ -75,8 +75,8 @@ export function useComposerSlashCommands(input: {
       rangeStart: number,
       rangeEnd: number,
       replacement: string,
-      options?: { expectedText?: string },
-    ) => boolean;
+      options?: { expectedText?: string; cursorOffset?: number },
+    ) => number | false;
     extendReplacementRangeForTrailingSpace: (
       text: string,
       rangeEnd: number,

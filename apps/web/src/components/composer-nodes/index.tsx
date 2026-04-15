@@ -19,6 +19,8 @@ import {
   type Spread,
 } from "lexical";
 import type { ReactElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { RiRobot3Line } from "react-icons/ri";
 
 import {
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
@@ -34,7 +36,6 @@ import {
   COMPOSER_INLINE_SKILL_CHIP_ICON_CLASS_NAME,
   COMPOSER_INLINE_AGENT_CHIP_CLASS_NAME,
   COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME,
-  COMPOSER_INLINE_AGENT_CHIP_ICON_SVG,
   formatComposerSkillChipLabel,
 } from "../composerInlineChip";
 import { ComposerPendingTerminalContextChip } from "../chat/ComposerPendingTerminalContexts";
@@ -62,7 +63,7 @@ export type SerializedComposerSkillNode = Spread<
 export type SerializedComposerAgentMentionNode = Spread<
   {
     alias: string;
-    task: string;
+    color: string;
     type: "composer-agent-mention";
     version: 1;
   },
@@ -121,21 +122,39 @@ function renderSkillChipDom(container: HTMLElement, name: string): void {
   container.append(icon, label);
 }
 
-function renderAgentMentionChipDom(container: HTMLElement, alias: string, task: string): void {
+const AGENT_ROBOT_ICON_SVG = renderToStaticMarkup(
+  <RiRobot3Line aria-hidden="true" className={COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME} />,
+);
+
+// Color mapping for agent aliases (Tailwind color classes)
+const DEFAULT_AGENT_COLOR = { bg: "rgb(245 158 11 / 0.15)", text: "rgb(245 158 11)" };
+const AGENT_COLOR_STYLES: Record<string, { bg: string; text: string }> = {
+  violet: { bg: "rgb(139 92 246 / 0.15)", text: "rgb(139 92 246)" },
+  fuchsia: { bg: "rgb(217 70 239 / 0.15)", text: "rgb(217 70 239)" },
+  teal: { bg: "rgb(20 184 166 / 0.15)", text: "rgb(20 184 166)" },
+  cyan: { bg: "rgb(6 182 212 / 0.15)", text: "rgb(6 182 212)" },
+  amber: DEFAULT_AGENT_COLOR,
+  orange: { bg: "rgb(249 115 22 / 0.15)", text: "rgb(249 115 22)" },
+};
+
+function renderAgentMentionChipDom(container: HTMLElement, alias: string, color: string): void {
   container.textContent = "";
   container.style.setProperty("user-select", "none");
   container.style.setProperty("-webkit-user-select", "none");
 
+  // Apply color-specific styles
+  const colorStyles = AGENT_COLOR_STYLES[color] ?? DEFAULT_AGENT_COLOR;
+  container.style.backgroundColor = colorStyles.bg;
+  container.style.color = colorStyles.text;
+
   const icon = document.createElement("span");
   icon.ariaHidden = "true";
   icon.className = COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME;
-  icon.innerHTML = COMPOSER_INLINE_AGENT_CHIP_ICON_SVG;
+  icon.innerHTML = AGENT_ROBOT_ICON_SVG;
 
   const label = document.createElement("span");
   label.className = COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME;
-  // Show @alias with truncated task preview
-  const taskPreview = task.length > 20 ? `${task.slice(0, 20)}...` : task;
-  label.textContent = `@${alias}(${taskPreview})`;
+  label.textContent = `@${alias}`;
 
   container.append(icon, label);
 }
@@ -293,34 +312,34 @@ export function $createComposerSkillNode(name: string): ComposerSkillNode {
 
 export class ComposerAgentMentionNode extends TextNode {
   __alias: string;
-  __task: string;
+  __color: string;
 
   static override getType(): string {
     return "composer-agent-mention";
   }
 
   static override clone(node: ComposerAgentMentionNode): ComposerAgentMentionNode {
-    return new ComposerAgentMentionNode(node.__alias, node.__task, node.__key);
+    return new ComposerAgentMentionNode(node.__alias, node.__color, node.__key);
   }
 
   static override importJSON(
     serializedNode: SerializedComposerAgentMentionNode,
   ): ComposerAgentMentionNode {
-    return $createComposerAgentMentionNode(serializedNode.alias, serializedNode.task);
+    return $createComposerAgentMentionNode(serializedNode.alias, serializedNode.color);
   }
 
-  constructor(alias: string, task: string, key?: NodeKey) {
-    // The text content is the full @alias(task) for proper serialization
-    super(`@${alias}(${task})`, key);
+  constructor(alias: string, color: string, key?: NodeKey) {
+    // The text content is just @alias - parentheses are regular text
+    super(`@${alias}`, key);
     this.__alias = alias;
-    this.__task = task;
+    this.__color = color;
   }
 
   override exportJSON(): SerializedComposerAgentMentionNode {
     return {
       ...super.exportJSON(),
       alias: this.__alias,
-      task: this.__task,
+      color: this.__color,
       type: "composer-agent-mention",
       version: 1,
     };
@@ -331,7 +350,7 @@ export class ComposerAgentMentionNode extends TextNode {
     dom.className = COMPOSER_INLINE_AGENT_CHIP_CLASS_NAME;
     dom.contentEditable = "false";
     dom.setAttribute("spellcheck", "false");
-    renderAgentMentionChipDom(dom, this.__alias, this.__task);
+    renderAgentMentionChipDom(dom, this.__alias, this.__color);
     return dom;
   }
 
@@ -341,8 +360,8 @@ export class ComposerAgentMentionNode extends TextNode {
     _config: EditorConfig,
   ): boolean {
     dom.contentEditable = "false";
-    if (prevNode.__alias !== this.__alias || prevNode.__task !== this.__task) {
-      renderAgentMentionChipDom(dom, this.__alias, this.__task);
+    if (prevNode.__alias !== this.__alias || prevNode.__color !== this.__color) {
+      renderAgentMentionChipDom(dom, this.__alias, this.__color);
     }
     return false;
   }
@@ -366,9 +385,9 @@ export class ComposerAgentMentionNode extends TextNode {
 
 export function $createComposerAgentMentionNode(
   alias: string,
-  task: string,
+  color: string,
 ): ComposerAgentMentionNode {
-  return $applyNodeReplacement(new ComposerAgentMentionNode(alias, task));
+  return $applyNodeReplacement(new ComposerAgentMentionNode(alias, color));
 }
 
 // ── ComposerTerminalContextNode ───────────────────────────────────────

@@ -11,6 +11,7 @@ import type {
 } from "@t3tools/contracts";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { FiUploadCloud } from "react-icons/fi";
 import { GoGitBranch } from "react-icons/go";
 import { IoGitPullRequestOutline } from "react-icons/io5";
 import { PiCloudArrowUp } from "react-icons/pi";
@@ -216,7 +217,7 @@ const COMMIT_DIALOG_DESCRIPTION =
 
 // Keep the header quick action visually distinct from the generic push/menu icon.
 function CommitPushHeaderIcon({ className }: { className?: string }) {
-  return <PiCloudArrowUp className={className} />;
+  return <FiUploadCloud className={className} />;
 }
 
 function GitActionItemIcon({ icon }: { icon: GitActionIconName }) {

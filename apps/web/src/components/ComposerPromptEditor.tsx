@@ -204,7 +204,11 @@ function getAbsoluteOffsetForPoint(node: LexicalNode, pointOffset: number): numb
   }
 
   if ($isTextNode(node)) {
-    if (node instanceof ComposerMentionNode || node instanceof ComposerSkillNode || node instanceof ComposerAgentMentionNode) {
+    if (
+      node instanceof ComposerMentionNode ||
+      node instanceof ComposerSkillNode ||
+      node instanceof ComposerAgentMentionNode
+    ) {
       return getAbsoluteOffsetForInlineTokenPoint(node, offset, pointOffset);
     }
     return offset + Math.min(pointOffset, node.getTextContentSize());
@@ -251,7 +255,11 @@ function getExpandedAbsoluteOffsetForPoint(node: LexicalNode, pointOffset: numbe
   }
 
   if ($isTextNode(node)) {
-    if (node instanceof ComposerMentionNode || node instanceof ComposerSkillNode || node instanceof ComposerAgentMentionNode) {
+    if (
+      node instanceof ComposerMentionNode ||
+      node instanceof ComposerSkillNode ||
+      node instanceof ComposerAgentMentionNode
+    ) {
       return getExpandedAbsoluteOffsetForInlineTokenPoint(node, offset, pointOffset);
     }
     return offset + Math.min(pointOffset, node.getTextContentSize());
@@ -282,7 +290,11 @@ function findSelectionPointAtOffset(
   node: LexicalNode,
   remainingRef: { value: number },
 ): { key: string; offset: number; type: "text" | "element" } | null {
-  if (node instanceof ComposerMentionNode || node instanceof ComposerSkillNode || node instanceof ComposerAgentMentionNode) {
+  if (
+    node instanceof ComposerMentionNode ||
+    node instanceof ComposerSkillNode ||
+    node instanceof ComposerAgentMentionNode
+  ) {
     return findSelectionPointForInlineToken(node, remainingRef);
   }
   if (node instanceof ComposerTerminalContextNode) {
@@ -428,7 +440,7 @@ function $setComposerEditorPrompt(
       continue;
     }
     if (segment.type === "agent-mention") {
-      paragraph.append($createComposerAgentMentionNode(segment.alias, segment.task));
+      paragraph.append($createComposerAgentMentionNode(segment.alias, segment.color));
       continue;
     }
     $appendTextWithLineBreaks(paragraph, segment.text);
@@ -968,7 +980,12 @@ export const ComposerPromptEditor = forwardRef<
     () => ({
       namespace: "t3tools-composer-editor",
       editable: true,
-      nodes: [ComposerMentionNode, ComposerSkillNode, ComposerTerminalContextNode, ComposerAgentMentionNode],
+      nodes: [
+        ComposerMentionNode,
+        ComposerSkillNode,
+        ComposerTerminalContextNode,
+        ComposerAgentMentionNode,
+      ],
       editorState: () => {
         $setComposerEditorPrompt(initialValueRef.current, initialTerminalContextsRef.current);
       },

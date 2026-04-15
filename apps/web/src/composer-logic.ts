@@ -28,7 +28,7 @@ type ComposerSegmentLike =
   | { type: "mention" }
   | { type: "skill" }
   | { type: "terminal-context" }
-  | { type: "agent-mention"; alias: string; task: string };
+  | { type: "agent-mention"; alias: string };
 
 const isInlineTokenSegment = (segment: ComposerSegmentLike): boolean => segment.type !== "text";
 
@@ -85,8 +85,8 @@ export function expandCollapsedComposerCursor(text: string, cursorInput: number)
       continue;
     }
     if (segment.type === "agent-mention") {
-      // @alias(task) = 1 + alias.length + 1 + task.length + 1
-      const expandedLength = segment.alias.length + segment.task.length + 3;
+      // @alias = 1 + alias.length
+      const expandedLength = segment.alias.length + 1;
       if (remaining <= 1) {
         return expandedCursor + (remaining === 0 ? 0 : expandedLength);
       }
@@ -178,8 +178,8 @@ export function collapseExpandedComposerCursor(text: string, cursorInput: number
       continue;
     }
     if (segment.type === "agent-mention") {
-      // @alias(task) = 1 + alias.length + 1 + task.length + 1
-      const expandedLength = segment.alias.length + segment.task.length + 3;
+      // @alias = 1 + alias.length
+      const expandedLength = segment.alias.length + 1;
       if (remaining === 0) {
         return collapsedCursor;
       }
@@ -301,6 +301,10 @@ export function detectComposerTrigger(text: string, cursorInput: number): Compos
     };
   }
   if (!token.startsWith("@")) {
+    return null;
+  }
+
+  if (!/^@[^()\s]*$/.test(token)) {
     return null;
   }
 

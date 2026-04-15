@@ -4016,7 +4016,10 @@ export default function ChatView({
       return true;
     }
     const queuedChatTurn = queuedTurn ?? null;
-    const promptForSend = queuedChatTurn?.prompt ?? promptRef.current;
+    const liveComposerSnapshot =
+      queuedChatTurn === null ? (composerEditorRef.current?.readSnapshot() ?? null) : null;
+    const promptForSend =
+      queuedChatTurn?.prompt ?? liveComposerSnapshot?.value ?? promptRef.current;
     const composerImagesForSend = queuedChatTurn?.images ?? composerImages;
     const composerTerminalContextsForSend =
       queuedChatTurn?.terminalContexts ?? composerTerminalContexts;
@@ -5043,8 +5046,8 @@ export default function ChatView({
       rangeStart: number,
       rangeEnd: number,
       replacement: string,
-      options?: { expectedText?: string },
-    ): boolean => {
+      options?: { expectedText?: string; cursorOffset?: number },
+    ): number | false => {
       const currentText = promptRef.current;
       const safeStart = Math.max(0, Math.min(currentText.length, rangeStart));
       const safeEnd = Math.max(safeStart, Math.min(currentText.length, rangeEnd));
@@ -5055,7 +5058,11 @@ export default function ChatView({
         return false;
       }
       const next = replaceTextRange(promptRef.current, rangeStart, rangeEnd, replacement);
-      const nextCursor = collapseExpandedComposerCursor(next.text, next.cursor);
+      let nextCursor = collapseExpandedComposerCursor(next.text, next.cursor);
+      // Apply cursor offset if specified (e.g., -1 to position inside parentheses)
+      if (options?.cursorOffset !== undefined) {
+        nextCursor = Math.max(0, nextCursor + options.cursorOffset);
+      }
       promptRef.current = next.text;
       const activePendingQuestion = activePendingProgress?.activeQuestion;
       if (activePendingQuestion && activePendingUserInput) {
@@ -5079,7 +5086,7 @@ export default function ChatView({
       window.requestAnimationFrame(() => {
         composerEditorRef.current?.focusAt(nextCursor);
       });
-      return true;
+      return nextCursor;
     },
     [activePendingProgress?.activeQuestion, activePendingUserInput, setPrompt],
   );
@@ -5243,7 +5250,7 @@ export default function ChatView({
           replacement,
           { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
         );
-        if (applied) {
+        if (applied !== false) {
           setComposerHighlightedItemId(null);
         }
         return;
@@ -5265,7 +5272,7 @@ export default function ChatView({
           replacement,
           { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
         );
-        if (applied) {
+        if (applied !== false) {
           setComposerHighlightedItemId(null);
         }
         return;
@@ -5283,7 +5290,7 @@ export default function ChatView({
           replacement,
           { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
         );
-        if (applied) {
+        if (applied !== false) {
           setSelectedComposerSkills((existing) => {
             const nextSkill = {
               name: item.skill.name,
@@ -5312,7 +5319,7 @@ export default function ChatView({
           replacement,
           { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
         );
-        if (applied) {
+        if (applied !== false) {
           setSelectedComposerMentions((existing) => {
             const nextMention = item.mention;
             const nextWithoutSameName = existing.filter(
@@ -5329,7 +5336,7 @@ export default function ChatView({
         const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
           expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
         });
-        if (applied) {
+        if (applied !== false) {
           setComposerHighlightedItemId(null);
         }
         return;
@@ -5337,21 +5344,12 @@ export default function ChatView({
       if (item.type === "agent") {
         // Insert @alias() and position cursor inside parentheses
         const replacement = `@${item.alias}()`;
-        const applied = applyPromptReplacement(
-          trigger.rangeStart,
-          trigger.rangeEnd,
-          replacement,
-          { expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd) },
-        );
-        if (applied) {
+        const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, replacement, {
+          expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+          cursorOffset: -1, // Move cursor back 1 to be inside the parentheses
+        });
+        if (applied !== false) {
           setComposerHighlightedItemId(null);
-          // Move cursor back one position to be inside the parentheses
-          window.requestAnimationFrame(() => {
-            const currentCursor = composerCursor;
-            const newCursor = Math.max(0, currentCursor - 1);
-            setComposerCursor(newCursor);
-            composerEditorRef.current?.focusAt(newCursor);
-          });
         }
       }
     },
@@ -5748,7 +5746,7 @@ export default function ChatView({
                       <div
                         key={queuedTurn.id}
                         data-testid="queued-follow-up-row"
-                        className="flex items-center gap-2 rounded-t-2xl border border-b-0 border-border/60 bg-card px-2.5 py-2 text-[12px]"
+                        className="chat-composer-surface flex items-center gap-2 rounded-t-2xl border border-b-0 border-border/60 bg-card px-2.5 py-2 text-[12px]"
                       >
                         <div className="flex min-w-0 flex-1 items-center gap-1.5">
                           <PiArrowBendDownRight className="size-3 shrink-0 text-muted-foreground/70" />
@@ -5812,7 +5810,7 @@ export default function ChatView({
                   <div
                     className={cn(
                       "chat-composer-surface rounded-2xl border bg-card transition-colors duration-200 focus-within:border-neutral-500/15",
-                      isDragOverComposer ? "border-primary/50 bg-accent/20" : "border-border/80",
+                      isDragOverComposer ? "border-primary/50 bg-accent/20" : "border-border/60",
                       composerProviderState.composerSurfaceClassName,
                     )}
                   >

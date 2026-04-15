@@ -247,6 +247,7 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
 // Re-exported from agentMentions.ts for backward compatibility
 export {
   AGENT_MENTION_ALIASES,
+  getAgentMentionAutocompleteAliases,
   getAgentMentionAliases,
   resolveAgentAlias,
   isValidAgentAlias,

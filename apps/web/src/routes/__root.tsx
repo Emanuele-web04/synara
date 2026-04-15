@@ -219,13 +219,11 @@ function EventRouter() {
         useComposerDraftStore.getState().draftThreadsByThreadId,
       ) as ThreadId[];
       const activeThreadIds = collectActiveTerminalThreadIds({
-        snapshotThreads: useStore
-          .getState()
-          .threads.map((thread) => ({
-            id: thread.id,
-            deletedAt: null,
-            archivedAt: thread.archivedAt ?? null,
-          })),
+        snapshotThreads: useStore.getState().threads.map((thread) => ({
+          id: thread.id,
+          deletedAt: null,
+          archivedAt: thread.archivedAt ?? null,
+        })),
         draftThreadIds,
         retainedThreadIds: workspacePages.map((workspace) => workspaceThreadId(workspace.id)),
       });

@@ -6,7 +6,7 @@ import type {
   ProviderPluginDescriptor,
   ProviderSkillDescriptor,
 } from "@t3tools/contracts";
-import { getAgentMentionAliases } from "@t3tools/contracts";
+import { getAgentMentionAutocompleteAliases } from "@t3tools/contracts";
 import { useMemo } from "react";
 import {
   buildCommandSearchBlob,
@@ -73,7 +73,7 @@ export function useComposerCommandMenuItems(input: {
       // Agent items for @alias(task) syntax - only show for Codex provider
       const agentItems: ComposerCommandItem[] =
         provider === "codex"
-          ? getAgentMentionAliases()
+          ? getAgentMentionAutocompleteAliases()
               .filter(({ alias, displayName }) => {
                 if (!query) return true;
                 const searchBlob = `${alias} ${displayName}`.toLowerCase();

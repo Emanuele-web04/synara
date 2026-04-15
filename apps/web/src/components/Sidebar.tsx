@@ -1803,18 +1803,15 @@ export default function Sidebar() {
   /**
    * Unarchive a thread: restore it to the sidebar.
    */
-  const unarchiveThread = useCallback(
-    async (threadId: ThreadId): Promise<void> => {
-      const api = readNativeApi();
-      if (!api) return;
-      await api.orchestration.dispatchCommand({
-        type: "thread.unarchive",
-        commandId: newCommandId(),
-        threadId,
-      });
-    },
-    [],
-  );
+  const unarchiveThread = useCallback(async (threadId: ThreadId): Promise<void> => {
+    const api = readNativeApi();
+    if (!api) return;
+    await api.orchestration.dispatchCommand({
+      type: "thread.unarchive",
+      commandId: newCommandId(),
+      threadId,
+    });
+  }, []);
   const handleThreadContextMenu = useCallback(
     async (
       threadId: ThreadId,
