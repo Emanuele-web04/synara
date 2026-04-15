@@ -3,6 +3,7 @@ import {
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
   type TerminalContextDraft,
 } from "./lib/terminalContext";
+import { resolveAgentAlias, type ModelSlug } from "@t3tools/contracts";
 
 export type ComposerPromptSegment =
   | {
@@ -21,12 +22,25 @@ export type ComposerPromptSegment =
   | {
       type: "terminal-context";
       context: TerminalContextDraft | null;
+    }
+  | {
+      /** Agent mention: @alias(task) - delegates task to a subagent */
+      type: "agent-mention";
+      alias: string;
+      model: ModelSlug;
+      displayName: string;
+      task: string;
     };
 
 const MENTION_TOKEN_REGEX = /(^|\s)@([^\s@]+)(?=\s)/g;
 const SKILL_TOKEN_REGEX = /(^|\s)([$/])([a-zA-Z][a-zA-Z0-9_:-]*)(?=\s)/g;
 const DISPLAY_MENTION_TOKEN_REGEX = /(^|\s)@([^\s@]+)(?=\s|$)/g;
 const DISPLAY_SKILL_TOKEN_REGEX = /(^|\s)([$/])([a-zA-Z][a-zA-Z0-9_:-]*)(?=\s|$)/g;
+
+// Agent mention: @alias(task content here)
+// Matches @alias followed by parentheses with task content
+// Supports nested parentheses by counting open/close parens
+const AGENT_MENTION_TOKEN_REGEX = /(^|\s)@([a-zA-Z0-9._-]+)\(/g;
 
 function pushTextSegment(segments: ComposerPromptSegment[], text: string): void {
   if (!text) return;
@@ -38,13 +52,51 @@ function pushTextSegment(segments: ComposerPromptSegment[], text: string): void 
   segments.push({ type: "text", text });
 }
 
-type InlineTokenMatch = {
-  kind: "mention" | "skill";
-  value: string;
-  skillPrefix?: string;
-  start: number;
-  end: number;
-};
+type InlineTokenMatch =
+  | {
+      kind: "mention" | "skill";
+      value: string;
+      skillPrefix?: string;
+      start: number;
+      end: number;
+    }
+  | {
+      kind: "agent-mention";
+      alias: string;
+      model: ModelSlug;
+      displayName: string;
+      task: string;
+      start: number;
+      end: number;
+    };
+
+/**
+ * Extract the content inside parentheses, handling nested parens.
+ * Returns the task content and the end position (after closing paren).
+ */
+function extractParenContent(text: string, startIndex: number): { task: string; endIndex: number } | null {
+  let depth = 1;
+  let index = startIndex;
+
+  while (index < text.length && depth > 0) {
+    const char = text[index];
+    if (char === "(") {
+      depth++;
+    } else if (char === ")") {
+      depth--;
+    }
+    index++;
+  }
+
+  if (depth !== 0) {
+    // Unclosed parenthesis
+    return null;
+  }
+
+  // Extract content between opening and closing parens
+  const task = text.slice(startIndex, index - 1);
+  return { task, endIndex: index };
+}
 
 function collectInlineTokenMatches(
   text: string,
@@ -60,6 +112,49 @@ function collectInlineTokenMatches(
     ? DISPLAY_SKILL_TOKEN_REGEX
     : SKILL_TOKEN_REGEX;
 
+  // Track positions covered by agent mentions to avoid double-matching
+  const agentMentionRanges: Array<{ start: number; end: number }> = [];
+
+  // First, match agent mentions: @alias(task)
+  for (const match of text.matchAll(AGENT_MENTION_TOKEN_REGEX)) {
+    const whitespace = match[1] ?? "";
+    const alias = match[2] ?? "";
+    const matchIndex = match.index ?? 0;
+    const start = matchIndex + whitespace.length;
+    const parenStart = matchIndex + match[0].length; // position after "("
+
+    // Try to resolve the alias
+    const resolved = resolveAgentAlias(alias);
+    if (!resolved) {
+      // Not a valid agent alias, skip - will be handled as regular mention
+      continue;
+    }
+
+    // Extract content inside parentheses
+    const parenContent = extractParenContent(text, parenStart);
+    if (!parenContent) {
+      // Unclosed parenthesis, skip
+      continue;
+    }
+
+    const end = parenContent.endIndex;
+    agentMentionRanges.push({ start, end });
+
+    matches.push({
+      kind: "agent-mention",
+      alias,
+      model: resolved.model,
+      displayName: resolved.displayName,
+      task: parenContent.task,
+      start,
+      end,
+    });
+  }
+
+  // Helper to check if a position is inside an agent mention
+  const isInsideAgentMention = (pos: number): boolean =>
+    agentMentionRanges.some((range) => pos >= range.start && pos < range.end);
+
   for (const match of text.matchAll(mentionRegex)) {
     const fullMatch = match[0];
     const prefix = match[1] ?? "";
@@ -67,6 +162,10 @@ function collectInlineTokenMatches(
     const matchIndex = match.index ?? 0;
     const start = matchIndex + prefix.length;
     const end = start + fullMatch.length - prefix.length;
+
+    // Skip if this overlaps with an agent mention
+    if (isInsideAgentMention(start)) continue;
+
     if (path.length > 0) {
       matches.push({ kind: "mention", value: path, start, end });
     }
@@ -80,6 +179,10 @@ function collectInlineTokenMatches(
     const matchIndex = match.index ?? 0;
     const start = matchIndex + whitespace.length;
     const end = start + fullMatch.length - whitespace.length;
+
+    // Skip if this overlaps with an agent mention
+    if (isInsideAgentMention(start)) continue;
+
     // Skip built-in slash commands so `/clear`, `/plan` etc. stay as plain text.
     if (name.length > 0 && !(skillPrefix === "/" && isBuiltInComposerSlashCommand(name))) {
       matches.push({ kind: "skill", value: name, skillPrefix, start, end });
@@ -111,7 +214,15 @@ function splitTextIntoPromptSegments(
       pushTextSegment(segments, text.slice(cursor, match.start));
     }
 
-    if (match.kind === "mention") {
+    if (match.kind === "agent-mention") {
+      segments.push({
+        type: "agent-mention",
+        alias: match.alias,
+        model: match.model,
+        displayName: match.displayName,
+        task: match.task,
+      });
+    } else if (match.kind === "mention") {
       segments.push({ type: "mention", path: match.value });
     } else {
       const skillSegment: ComposerPromptSegment = match.skillPrefix

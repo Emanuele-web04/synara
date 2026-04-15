@@ -27,7 +27,8 @@ type ComposerSegmentLike =
   | { type: "text"; text: string }
   | { type: "mention" }
   | { type: "skill" }
-  | { type: "terminal-context" };
+  | { type: "terminal-context" }
+  | { type: "agent-mention"; alias: string; task: string };
 
 const isInlineTokenSegment = (segment: ComposerSegmentLike): boolean => segment.type !== "text";
 
@@ -76,6 +77,16 @@ export function expandCollapsedComposerCursor(text: string, cursorInput: number)
     }
     if (segment.type === "skill") {
       const expandedLength = segment.name.length + 1;
+      if (remaining <= 1) {
+        return expandedCursor + (remaining === 0 ? 0 : expandedLength);
+      }
+      remaining -= 1;
+      expandedCursor += expandedLength;
+      continue;
+    }
+    if (segment.type === "agent-mention") {
+      // @alias(task) = 1 + alias.length + 1 + task.length + 1
+      const expandedLength = segment.alias.length + segment.task.length + 3;
       if (remaining <= 1) {
         return expandedCursor + (remaining === 0 ? 0 : expandedLength);
       }
@@ -156,6 +167,19 @@ export function collapseExpandedComposerCursor(text: string, cursorInput: number
     }
     if (segment.type === "skill") {
       const expandedLength = segment.name.length + 1;
+      if (remaining === 0) {
+        return collapsedCursor;
+      }
+      if (remaining <= expandedLength) {
+        return collapsedCursor + 1;
+      }
+      remaining -= expandedLength;
+      collapsedCursor += 1;
+      continue;
+    }
+    if (segment.type === "agent-mention") {
+      // @alias(task) = 1 + alias.length + 1 + task.length + 1
+      const expandedLength = segment.alias.length + segment.task.length + 3;
       if (remaining === 0) {
         return collapsedCursor;
       }
