@@ -815,7 +815,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       <button
                         key={`inline-summary-edit:${row.message.id}:${file.path}`}
                         type="button"
-                        className="group flex w-full max-w-full items-baseline gap-2.5 px-0 py-[1px] text-left transition-opacity duration-150 hover:opacity-95"
+                        className="group flex w-full max-w-full items-baseline gap-1 px-0 py-[1px] text-left transition-opacity duration-150 hover:opacity-95"
                         title={file.path}
                         onClick={() => onOpenTurnDiff(turnSummary!.turnId, file.path)}
                       >
@@ -1657,7 +1657,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                 key={`${workEntry.id}:${changedFilePath}`}
                 type="button"
                 className={cn(
-                  "group flex w-full max-w-full items-baseline gap-2.5 text-left transition-opacity duration-150",
+                  "group flex w-full max-w-full items-baseline gap-1 text-left transition-opacity duration-150",
                   compact
                     ? "px-0 py-[1px] hover:opacity-95"
                     : "rounded-md border border-border/45 bg-background/65 px-2 py-1 hover:bg-background/80",
