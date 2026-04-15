@@ -208,6 +208,8 @@ const PROJECT_CONTEXT_MENU_EDIT_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4Z"/></svg>';
 const PROJECT_CONTEXT_MENU_REMOVE_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
+const PROJECT_CONTEXT_MENU_COPY_PATH_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -2016,6 +2018,11 @@ export default function Sidebar() {
             icon: PROJECT_CONTEXT_MENU_FOLDER_ICON,
           },
           {
+            id: "copy-path",
+            label: "Copy Path",
+            icon: PROJECT_CONTEXT_MENU_COPY_PATH_ICON,
+          },
+          {
             id: "rename",
             label: "Edit name",
             icon: PROJECT_CONTEXT_MENU_EDIT_ICON,
@@ -2043,6 +2050,10 @@ export default function Sidebar() {
                 : "An unknown error occurred opening the folder.",
           });
         }
+        return;
+      }
+      if (clicked === "copy-path") {
+        copyPathToClipboard(project.cwd, { path: project.cwd });
         return;
       }
       if (clicked === "rename") {
@@ -2083,7 +2094,7 @@ export default function Sidebar() {
         });
       }
     },
-    [clearProjectDraftThreads, projects, threads],
+    [clearProjectDraftThreads, copyPathToClipboard, projects, threads],
   );
 
   const projectDnDSensors = useSensors(
