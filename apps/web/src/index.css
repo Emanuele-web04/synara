@@ -482,6 +482,11 @@ diffs-container {
   background: color-mix(in srgb, var(--card) 92%, var(--background));
 }
 
+/* Match composer input background to code block in dark mode (solid color to avoid grain bleed-through) */
+.dark .chat-composer-surface {
+  background: color-mix(in srgb, var(--background) 96%, var(--foreground));
+}
+
 @keyframes ultrathink-rainbow {
   0% {
     background-position: 0% 50%;

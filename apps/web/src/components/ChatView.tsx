@@ -5789,7 +5789,7 @@ export default function ChatView({
                 >
                   <div
                     className={cn(
-                      "rounded-2xl border bg-card transition-colors duration-200 focus-within:border-neutral-500/15",
+                      "chat-composer-surface rounded-2xl border bg-card transition-colors duration-200 focus-within:border-neutral-500/15",
                       isDragOverComposer ? "border-primary/50 bg-accent/20" : "border-border/80",
                       composerProviderState.composerSurfaceClassName,
                     )}

@@ -1474,8 +1474,16 @@ function applyOrchestrationEvent(state: AppState, event: OrchestrationEvent): Ap
     }
 
     case "project.deleted": {
-      const projects = state.projects.filter((project) => project.id !== event.payload.projectId);
-      return projects === state.projects ? state : { ...state, projects };
+      const existingIndex = state.projects.findIndex(
+        (project) => project.id === event.payload.projectId,
+      );
+      if (existingIndex < 0) {
+        return state;
+      }
+      return {
+        ...state,
+        projects: state.projects.filter((project) => project.id !== event.payload.projectId),
+      };
     }
 
     case "thread.message-sent":
