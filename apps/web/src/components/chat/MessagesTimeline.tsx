@@ -994,11 +994,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       {row.kind === "working" && (
         <div className="py-0.5 pl-1.5">
           <div
-            className="flex items-center gap-1 pt-1 text-muted-foreground/70"
-            style={{
-              fontSize: `${appTypographyScale.chatPx}px`,
-              fontFamily: "var(--font-ui-family)",
-            }}
+            className="flex items-center gap-1 pt-1 text-muted-foreground/70 font-system-ui"
+            style={{ fontSize: `${appTypographyScale.chatPx}px` }}
           >
             <span>Working for</span>
             <span>
@@ -1508,10 +1505,10 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   return workToneIcon(workEntry.tone).icon;
 }
 
-// Keep command and agent-task rows visually compact so their icon can trail the label.
+// Keep command, agent-task, and file-change rows visually compact so their icon can trail the label.
 function prefersCompactWorkEntryRow(workEntry: TimelineWorkEntry): boolean {
   const EntryIcon = workEntryIcon(workEntry);
-  return EntryIcon === TerminalIcon || EntryIcon === HammerIcon || EntryIcon === AgentTaskIcon;
+  return EntryIcon === TerminalIcon || EntryIcon === HammerIcon || EntryIcon === AgentTaskIcon || EntryIcon === SquarePenIcon;
 }
 
 function capitalizePhrase(value: string): string {

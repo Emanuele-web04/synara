@@ -4285,7 +4285,7 @@ export default function Sidebar() {
         projects={searchPaletteProjects}
         threads={searchPaletteThreads}
         onCreateThread={handlePrimaryNewThread}
-        onAddProject={handleStartAddProject}
+        onAddProject={() => void handlePickFolder()}
         onOpenSettings={() => {
           void navigate({ to: "/settings" });
         }}

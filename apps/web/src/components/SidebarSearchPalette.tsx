@@ -246,7 +246,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                     <CommandItem
                       key={id}
                       value={id}
-                      className="cursor-pointer items-start gap-2 rounded-lg px-2.5 py-2"
+                      className="cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2"
                       onMouseDown={(event) => {
                         event.preventDefault();
                       }}
@@ -255,9 +255,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                         props.onOpenThread(thread.id);
                       }}
                     >
-                      <div className="pt-0.5">
-                        <ProviderIcon provider={thread.provider} />
-                      </div>
+                      <ProviderIcon provider={thread.provider} />
                       <div className="min-w-0 flex-1">
                         <div className="flex items-baseline gap-3">
                           <div className="min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)] text-foreground">
