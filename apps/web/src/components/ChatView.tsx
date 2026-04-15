@@ -3266,14 +3266,15 @@ export default function ChatView({
   });
 
   useEffect(() => {
-    if (phase !== "running") return;
+    if (!isWorking) return;
+    setNowTick(Date.now());
     const timer = window.setInterval(() => {
       setNowTick(Date.now());
     }, 1000);
     return () => {
       window.clearInterval(timer);
     };
-  }, [phase]);
+  }, [isWorking]);
 
   const beginLocalDispatch = useCallback(
     (options?: { preparingWorktree?: boolean }) => {
