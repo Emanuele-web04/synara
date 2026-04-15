@@ -506,6 +506,18 @@ const ThreadDeleteCommand = Schema.Struct({
   threadId: ThreadId,
 });
 
+const ThreadArchiveCommand = Schema.Struct({
+  type: Schema.Literal("thread.archive"),
+  commandId: CommandId,
+  threadId: ThreadId,
+});
+
+const ThreadUnarchiveCommand = Schema.Struct({
+  type: Schema.Literal("thread.unarchive"),
+  commandId: CommandId,
+  threadId: ThreadId,
+});
+
 const ThreadMetaUpdateCommand = Schema.Struct({
   type: Schema.Literal("thread.meta.update"),
   commandId: CommandId,
@@ -662,6 +674,8 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadHandoffCreateCommand,
   ThreadForkCreateCommand,
   ThreadDeleteCommand,
+  ThreadArchiveCommand,
+  ThreadUnarchiveCommand,
   ThreadMetaUpdateCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
@@ -683,6 +697,8 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadHandoffCreateCommand,
   ThreadForkCreateCommand,
   ThreadDeleteCommand,
+  ThreadArchiveCommand,
+  ThreadUnarchiveCommand,
   ThreadMetaUpdateCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
@@ -882,13 +898,16 @@ export const ThreadDeletedPayload = Schema.Struct({
 
 export const ThreadArchivedPayload = Schema.Struct({
   threadId: ThreadId,
+  // Required for new events, optional for legacy events
   archivedAt: Schema.optional(IsoDateTime),
   updatedAt: Schema.optional(IsoDateTime),
 });
 
 export const ThreadUnarchivedPayload = Schema.Struct({
   threadId: ThreadId,
+  // Legacy field - kept for backward compatibility with old events
   unarchivedAt: Schema.optional(IsoDateTime),
+  // Required for new events
   updatedAt: Schema.optional(IsoDateTime),
 });
 

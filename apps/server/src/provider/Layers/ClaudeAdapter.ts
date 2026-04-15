@@ -112,6 +112,7 @@ interface ClaudeTurnState {
   readonly assistantTextBlocks: Map<number, AssistantTextBlockState>;
   readonly assistantTextBlockOrder: Array<AssistantTextBlockState>;
   readonly capturedProposedPlanKeys: Set<string>;
+  readonly sawFileChange: boolean;
   nextSyntheticAssistantBlockIndex: number;
 }
 
@@ -1676,6 +1677,12 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               payload: result ?? { status },
             },
           });
+          if (tool.itemType === "file_change") {
+            context.turnState = {
+              ...turnState,
+              sawFileChange: true,
+            };
+          }
           context.inFlightTools.delete(index);
         }
         // Clear any remaining stale entries (e.g. from interrupted content blocks)
@@ -1707,6 +1714,28 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               usage: usageSnapshot,
             },
             providerRefs: nativeProviderRefs(context),
+          });
+        }
+
+        // Feed Claude edits into the same placeholder checkpoint flow used by Codex.
+        if (status === "completed" && turnState.sawFileChange) {
+          const diffStamp = yield* makeEventStamp();
+          yield* offerRuntimeEvent({
+            type: "turn.diff.updated",
+            eventId: diffStamp.eventId,
+            provider: PROVIDER,
+            createdAt: diffStamp.createdAt,
+            threadId: context.session.threadId,
+            turnId: turnState.turnId,
+            payload: {
+              unifiedDiff: "",
+            },
+            providerRefs: nativeProviderRefs(context),
+            raw: {
+              source: "claude.sdk.message",
+              method: "claude/result",
+              payload: result ?? { status },
+            },
           });
         }
 
@@ -2082,6 +2111,12 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             },
           });
 
+          if (tool.itemType === "file_change" && context.turnState) {
+            context.turnState = {
+              ...context.turnState,
+              sawFileChange: true,
+            };
+          }
           context.inFlightTools.delete(index);
         }
       });
@@ -2107,6 +2142,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             assistantTextBlocks: new Map(),
             assistantTextBlockOrder: [],
             capturedProposedPlanKeys: new Set(),
+            sawFileChange: false,
             nextSyntheticAssistantBlockIndex: -1,
           };
           context.session = {
@@ -3208,6 +3244,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           assistantTextBlocks: new Map(),
           assistantTextBlockOrder: [],
           capturedProposedPlanKeys: new Set(),
+          sawFileChange: false,
           nextSyntheticAssistantBlockIndex: -1,
         };
 

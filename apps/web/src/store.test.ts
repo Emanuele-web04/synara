@@ -976,6 +976,25 @@ describe("store read model sync", () => {
     expect(next.threads[0]?.updatedAt).toBe("2026-02-27T00:05:00.000Z");
   });
 
+  it("retains archived threads in the synced store for the archived settings panel", () => {
+    const initialState = makeState(makeThread());
+    const readModel = makeReadModel(
+      makeReadModelThread({
+        id: ThreadId.makeUnsafe("thread-archived"),
+        archivedAt: "2026-02-27T00:05:00.000Z",
+      }),
+    );
+
+    const next = syncServerReadModel(initialState, readModel);
+
+    expect(next.threads).toHaveLength(1);
+    expect(next.threads[0]?.id).toBe("thread-archived");
+    expect(next.threads[0]?.archivedAt).toBe("2026-02-27T00:05:00.000Z");
+    expect(next.sidebarThreadSummaryById["thread-archived"]?.archivedAt).toBe(
+      "2026-02-27T00:05:00.000Z",
+    );
+  });
+
   it("preserves the current project order when syncing incoming read model updates", () => {
     const project1 = ProjectId.makeUnsafe("project-1");
     const project2 = ProjectId.makeUnsafe("project-2");

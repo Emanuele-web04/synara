@@ -3,7 +3,11 @@
 // Layer: Route screen
 // Exports: Settings route component for `/settings`
 
-import { type ProviderKind, DEFAULT_GIT_TEXT_GENERATION_MODEL } from "@t3tools/contracts";
+import {
+  type ProviderKind,
+  type ThreadId,
+  DEFAULT_GIT_TEXT_GENERATION_MODEL,
+} from "@t3tools/contracts";
 import { createFileRoute, useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
@@ -39,7 +43,14 @@ import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { isElectron } from "../env";
 import { useTheme } from "../hooks/useTheme";
 import { gitRemoveWorktreeMutationOptions } from "../lib/gitReactQuery";
-import { ChevronDownIcon, PlusIcon, RotateCcwIcon, Undo2Icon, XIcon } from "../lib/icons";
+import {
+  ArchiveIcon,
+  ChevronDownIcon,
+  PlusIcon,
+  RotateCcwIcon,
+  Undo2Icon,
+  XIcon,
+} from "../lib/icons";
 import {
   serverConfigQueryOptions,
   serverQueryKeys,
@@ -55,6 +66,7 @@ import {
 } from "../notifications/taskCompletion";
 import { normalizeSettingsSection, SETTINGS_NAV_ITEMS } from "../settingsNavigation";
 import { useStore } from "../store";
+import { formatRelativeTime } from "../components/Sidebar";
 import { formatWorktreePathForDisplay } from "../worktreeCleanup";
 
 // ── Settings taxonomy ──────────────────────────────────────────────────────
@@ -246,6 +258,8 @@ function SettingsRouteView() {
   const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
   const threads = useStore((store) => store.threads);
+  const projects = useStore((store) => store.projects);
+  const archivedThreads = threads.filter((thread) => thread.archivedAt != null);
   const shouldOfferRecoveryTools = useStore((store) => {
     if (!store.threadsHydrated || store.projects.length === 0) {
       return false;
@@ -381,6 +395,9 @@ function SettingsRouteView() {
     ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
     ...(settings.confirmThreadDelete !== defaults.confirmThreadDelete
       ? ["Delete confirmation"]
+      : []),
+    ...(settings.confirmThreadArchive !== defaults.confirmThreadArchive
+      ? ["Archive confirmation"]
       : []),
     ...(settings.confirmTerminalTabClose !== defaults.confirmTerminalTabClose
       ? ["Terminal close confirmation"]
@@ -699,6 +716,89 @@ function SettingsRouteView() {
       }
     },
     [queryClient, removeWorktreeMutation],
+  );
+
+  const unarchiveThread = useCallback(
+    async (threadId: ThreadId) => {
+      const api = readNativeApi();
+      if (!api) return;
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "thread.unarchive",
+          commandId: newCommandId(),
+          threadId,
+        });
+        toastManager.add({
+          type: "success",
+          title: "Thread restored",
+          description: "The thread has been moved back to the sidebar.",
+        });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not restore thread",
+          description: error instanceof Error ? error.message : "Unable to restore the thread.",
+        });
+      }
+    },
+    [],
+  );
+
+  const deleteArchivedThread = useCallback(
+    async (threadId: ThreadId, threadTitle: string) => {
+      const api = readNativeApi();
+      if (!api) return;
+
+      const confirmed = await api.dialogs.confirm(
+        `Permanently delete "${threadTitle}"?\n\nThis will remove the thread and its conversation history forever.`,
+      );
+      if (!confirmed) return;
+
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "thread.delete",
+          commandId: newCommandId(),
+          threadId,
+        });
+        toastManager.add({
+          type: "success",
+          title: "Thread deleted",
+          description: "The archived thread has been permanently removed.",
+        });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not delete thread",
+          description: error instanceof Error ? error.message : "Unable to delete the thread.",
+        });
+      }
+    },
+    [],
+  );
+
+  const handleArchivedThreadContextMenu = useCallback(
+    async (threadId: ThreadId, threadTitle: string, position: { x: number; y: number }) => {
+      const api = readNativeApi();
+      if (!api) return;
+
+      const clicked = await api.contextMenu.show(
+        [
+          { id: "restore", label: "Restore" },
+          { id: "delete", label: "Delete", destructive: true },
+        ],
+        position,
+      );
+
+      if (clicked === "restore") {
+        await unarchiveThread(threadId);
+        return;
+      }
+
+      if (clicked === "delete") {
+        await deleteArchivedThread(threadId, threadTitle);
+      }
+    },
+    [deleteArchivedThread, unarchiveThread],
   );
 
   const renderGeneralPanel = () => (
@@ -1268,6 +1368,34 @@ function SettingsRouteView() {
           />
 
           <SettingsRow
+            title="Archive confirmation"
+            description="Ask before archiving a thread."
+            resetAction={
+              settings.confirmThreadArchive !== defaults.confirmThreadArchive ? (
+                <SettingResetButton
+                  label="archive confirmation"
+                  onClick={() =>
+                    updateSettings({
+                      confirmThreadArchive: defaults.confirmThreadArchive,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                checked={settings.confirmThreadArchive}
+                onCheckedChange={(checked) =>
+                  updateSettings({
+                    confirmThreadArchive: Boolean(checked),
+                  })
+                }
+                aria-label="Confirm thread archive"
+              />
+            }
+          />
+
+          <SettingsRow
             title="Terminal close confirmation"
             description="Ask before closing a terminal tab and clearing its history."
             resetAction={
@@ -1394,6 +1522,108 @@ function SettingsRouteView() {
       </SettingsSection>
     </div>
   );
+
+  const renderArchivedPanel = () => {
+    const archivedGroups = [
+      ...projects.map((project) => ({
+        project,
+        threads: archivedThreads
+          .filter((thread) => thread.projectId === project.id)
+          .toSorted((left, right) => {
+            const leftKey = left.archivedAt ?? left.updatedAt ?? left.createdAt;
+            const rightKey = right.archivedAt ?? right.updatedAt ?? right.createdAt;
+            return rightKey.localeCompare(leftKey) || right.id.localeCompare(left.id);
+          }),
+      })),
+      ...(() => {
+        const knownProjectIds = new Set(projects.map((project) => project.id));
+        const orphanedThreads = archivedThreads
+          .filter((thread) => !knownProjectIds.has(thread.projectId))
+          .toSorted((left, right) => {
+            const leftKey = left.archivedAt ?? left.updatedAt ?? left.createdAt;
+            const rightKey = right.archivedAt ?? right.updatedAt ?? right.createdAt;
+            return rightKey.localeCompare(leftKey) || right.id.localeCompare(left.id);
+          });
+        return orphanedThreads.length > 0
+          ? [
+              {
+                project: null,
+                threads: orphanedThreads,
+              },
+            ]
+          : [];
+      })(),
+    ].filter((group) => group.threads.length > 0);
+
+    return (
+      <div className="space-y-6">
+        {archivedGroups.length === 0 ? (
+          <SettingsSection title="Archived threads">
+            <div className="rounded-2xl border border-dashed border-border/70 bg-card/35 px-5 py-10 text-center">
+              <div className="mx-auto mb-3 flex size-11 items-center justify-center rounded-full border border-border/70 bg-background/70 text-muted-foreground">
+                <ArchiveIcon className="size-5" />
+              </div>
+              <div className="text-sm font-medium text-foreground">No archived threads</div>
+              <div className="mt-1 text-sm text-muted-foreground">
+                Archived threads will appear here and can be restored to the sidebar.
+              </div>
+            </div>
+          </SettingsSection>
+        ) : (
+          archivedGroups.map(({ project, threads: projectThreads }) => (
+            <SettingsSection
+              key={project?.id ?? "unknown-project"}
+              title={project?.name ?? "Unknown project"}
+            >
+              <div className="overflow-hidden rounded-2xl border border-border/70 bg-card/50">
+                {projectThreads.map((thread, index) => (
+                  <div
+                    key={thread.id}
+                    className={cn(
+                      "flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between",
+                      index > 0 && "border-t border-border/60",
+                    )}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      void handleArchivedThreadContextMenu(thread.id, thread.title, {
+                        x: event.clientX,
+                        y: event.clientY,
+                      });
+                    }}
+                  >
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <div className="truncate text-sm font-medium text-foreground">
+                        {thread.title}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        Archived {formatRelativeTime(thread.archivedAt ?? thread.createdAt)}
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        onClick={() => void unarchiveThread(thread.id)}
+                      >
+                        Restore
+                      </Button>
+                      <Button
+                        size="xs"
+                        variant="destructive"
+                        onClick={() => void deleteArchivedThread(thread.id, thread.title)}
+                      >
+                        Delete
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </SettingsSection>
+          ))
+        )}
+      </div>
+    );
+  };
 
   const renderModelsPanel = () => (
     <div className="space-y-6">
@@ -1820,6 +2050,8 @@ function SettingsRouteView() {
         return renderBehaviorPanel();
       case "worktrees":
         return renderWorktreesPanel();
+      case "archived":
+        return renderArchivedPanel();
       case "models":
         return renderModelsPanel();
       case "advanced":

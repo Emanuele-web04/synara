@@ -156,6 +156,7 @@ export interface Thread extends ThreadWorkspaceState {
   proposedPlans: ProposedPlan[];
   error: string | null;
   createdAt: string;
+  archivedAt?: string | null;
   updatedAt?: string | undefined;
   latestTurn: OrchestrationLatestTurn | null;
   pendingSourceProposedPlan?: OrchestrationLatestTurn["sourceProposedPlan"];
@@ -184,6 +185,7 @@ export interface SidebarThreadSummary {
   worktreePath: string | null;
   session: ThreadSession | null;
   createdAt: string;
+  archivedAt?: string | null;
   updatedAt?: string | undefined;
   latestTurn: OrchestrationLatestTurn | null;
   lastVisitedAt?: string | undefined;

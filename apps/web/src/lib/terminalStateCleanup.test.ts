@@ -9,8 +9,8 @@ describe("collectActiveTerminalThreadIds", () => {
   it("retains non-deleted server threads", () => {
     const activeThreadIds = collectActiveTerminalThreadIds({
       snapshotThreads: [
-        { id: threadId("server-1"), deletedAt: null },
-        { id: threadId("server-2"), deletedAt: null },
+        { id: threadId("server-1"), deletedAt: null, archivedAt: null },
+        { id: threadId("server-2"), deletedAt: null, archivedAt: null },
       ],
       draftThreadIds: [],
     });
@@ -21,8 +21,12 @@ describe("collectActiveTerminalThreadIds", () => {
   it("ignores deleted server threads and keeps local draft threads", () => {
     const activeThreadIds = collectActiveTerminalThreadIds({
       snapshotThreads: [
-        { id: threadId("server-active"), deletedAt: null },
-        { id: threadId("server-deleted"), deletedAt: "2026-03-05T08:00:00.000Z" },
+        { id: threadId("server-active"), deletedAt: null, archivedAt: null },
+        {
+          id: threadId("server-deleted"),
+          deletedAt: "2026-03-05T08:00:00.000Z",
+          archivedAt: null,
+        },
       ],
       draftThreadIds: [threadId("local-draft")],
     });
@@ -40,5 +44,36 @@ describe("collectActiveTerminalThreadIds", () => {
     expect(activeThreadIds).toEqual(
       new Set([threadId("workspace:alpha"), threadId("workspace:beta")]),
     );
+  });
+
+  it("ignores archived server threads", () => {
+    const activeThreadIds = collectActiveTerminalThreadIds({
+      snapshotThreads: [
+        { id: threadId("server-active"), deletedAt: null, archivedAt: null },
+        {
+          id: threadId("server-archived"),
+          deletedAt: null,
+          archivedAt: "2026-03-05T09:00:00.000Z",
+        },
+      ],
+      draftThreadIds: [],
+    });
+
+    expect(activeThreadIds).toEqual(new Set([threadId("server-active")]));
+  });
+
+  it("does not retain draft-linked state for archived server threads", () => {
+    const activeThreadIds = collectActiveTerminalThreadIds({
+      snapshotThreads: [
+        {
+          id: threadId("server-archived"),
+          deletedAt: null,
+          archivedAt: "2026-03-05T09:00:00.000Z",
+        },
+      ],
+      draftThreadIds: [threadId("server-archived"), threadId("local-draft")],
+    });
+
+    expect(activeThreadIds).toEqual(new Set([threadId("local-draft")]));
   });
 });

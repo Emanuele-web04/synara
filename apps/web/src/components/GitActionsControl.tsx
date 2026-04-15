@@ -11,9 +11,11 @@ import type {
 } from "@t3tools/contracts";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { GoGitBranch } from "react-icons/go";
 import { IoGitPullRequestOutline } from "react-icons/io5";
 import { PiCloudArrowUp } from "react-icons/pi";
 import { ChevronDownIcon, GitCommitIcon, InfoIcon, RefreshCwIcon } from "~/lib/icons";
+import { Input } from "~/components/ui/input";
 import { GitHubIcon } from "./Icons";
 import {
   buildGitActionProgressStages,
@@ -234,6 +236,7 @@ function GitQuickActionIcon({ quickAction }: { quickAction: GitQuickAction }) {
   const iconClassName = "size-3.5";
   if (quickAction.kind === "open_pr") return <GitHubIcon className={iconClassName} />;
   if (quickAction.kind === "run_pull") return <RefreshCwIcon className={iconClassName} />;
+  if (quickAction.kind === "create_branch") return <GoGitBranch className={iconClassName} />;
   if (quickAction.kind === "run_action") {
     if (quickAction.action === "commit") return <GitCommitIcon className={iconClassName} />;
     if (quickAction.action === "push") return <PiCloudArrowUp className={iconClassName} />;
@@ -273,6 +276,8 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
   const [isEditingFiles, setIsEditingFiles] = useState(false);
   const [pendingDefaultBranchAction, setPendingDefaultBranchAction] =
     useState<PendingDefaultBranchAction | null>(null);
+  const [isCreateBranchDialogOpen, setIsCreateBranchDialogOpen] = useState(false);
+  const [createBranchName, setCreateBranchName] = useState("");
   const activeGitActionProgressRef = useRef<ActiveGitActionProgress | null>(null);
 
   const updateActiveProgressToast = useCallback(() => {
@@ -729,6 +734,11 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
     });
   }, [allSelected, isCommitDialogOpen, dialogCommitMessage, selectedFiles]);
 
+  const openCreateBranchDialog = useCallback(() => {
+    setCreateBranchName("");
+    setIsCreateBranchDialogOpen(true);
+  }, []);
+
   const runQuickAction = useCallback(() => {
     if (quickAction.kind === "open_pr") {
       void openExistingPr();
@@ -736,6 +746,10 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
     }
     if (quickAction.kind === "run_pull") {
       runSyncWithRemote();
+      return;
+    }
+    if (quickAction.kind === "create_branch") {
+      openCreateBranchDialog();
       return;
     }
     if (quickAction.kind === "show_hint") {
@@ -750,13 +764,59 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
     if (quickAction.action) {
       void runGitActionWithToast({ action: quickAction.action });
     }
-  }, [openExistingPr, quickAction, runSyncWithRemote, threadToastData]);
+  }, [openCreateBranchDialog, openExistingPr, quickAction, runSyncWithRemote, threadToastData]);
 
   const openCommitDialog = useCallback(() => {
     setExcludedFiles(new Set());
     setIsEditingFiles(false);
     setIsCommitDialogOpen(true);
   }, []);
+
+  const branchNames = useMemo(
+    () => new Set((branchList?.branches ?? []).map((b) => b.name.toLowerCase())),
+    [branchList?.branches],
+  );
+
+  const createAndCheckoutBranch = useCallback(
+    async (branchName: string) => {
+      const api = readNativeApi();
+      if (!api || !gitCwd) return;
+
+      const trimmedName = branchName.trim();
+      if (!trimmedName) return;
+
+      setIsCreateBranchDialogOpen(false);
+      setCreateBranchName("");
+
+      const toastId = toastManager.add({
+        type: "loading",
+        title: "Creating branch...",
+        timeout: 0,
+        data: threadToastData,
+      });
+
+      try {
+        await api.git.createBranch({ cwd: gitCwd, branch: trimmedName });
+        await api.git.checkout({ cwd: gitCwd, branch: trimmedName });
+        await invalidateGitQueries(queryClient);
+
+        toastManager.update(toastId, {
+          type: "success",
+          title: `Switched to ${trimmedName}`,
+          description: "Branch created and checked out.",
+          data: threadToastData,
+        });
+      } catch (error) {
+        toastManager.update(toastId, {
+          type: "error",
+          title: "Failed to create branch",
+          description: error instanceof Error ? error.message : "An error occurred.",
+          data: threadToastData,
+        });
+      }
+    },
+    [gitCwd, queryClient, threadToastData],
+  );
 
   const openDialogForMenuItem = useCallback(
     (item: GitActionMenuItem) => {
@@ -1217,6 +1277,75 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
               </Button>
             ) : null}
           </DialogFooter>
+        </DialogPopup>
+      </Dialog>
+
+      <Dialog
+        open={isCreateBranchDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            setIsCreateBranchDialogOpen(false);
+            setCreateBranchName("");
+          }
+        }}
+      >
+        <DialogPopup className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Create Branch</DialogTitle>
+            <DialogDescription>
+              Create a permanent branch for this worktree. The temporary branch will be replaced.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogPanel className="space-y-3">
+            <form
+              className="space-y-3"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const trimmedName = createBranchName.trim();
+                if (!trimmedName || branchNames.has(trimmedName.toLowerCase())) {
+                  return;
+                }
+                void createAndCheckoutBranch(trimmedName);
+              }}
+            >
+              <div className="space-y-1.5">
+                <label className="block font-medium text-sm" htmlFor="create-branch-name">
+                  Branch name
+                </label>
+                <Input
+                  autoFocus
+                  id="create-branch-name"
+                  placeholder="feature/my-change"
+                  value={createBranchName}
+                  onChange={(event) => setCreateBranchName(event.target.value)}
+                />
+              </div>
+              {branchNames.has(createBranchName.trim().toLowerCase()) ? (
+                <p className="text-destructive text-sm">A branch with this name already exists.</p>
+              ) : null}
+              <DialogFooter variant="bare">
+                <Button
+                  variant="outline"
+                  type="button"
+                  onClick={() => {
+                    setIsCreateBranchDialogOpen(false);
+                    setCreateBranchName("");
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  disabled={
+                    createBranchName.trim().length === 0 ||
+                    branchNames.has(createBranchName.trim().toLowerCase())
+                  }
+                >
+                  Create Branch
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogPanel>
         </DialogPopup>
       </Dialog>
     </>

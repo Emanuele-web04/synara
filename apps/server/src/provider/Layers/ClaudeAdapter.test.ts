@@ -971,6 +971,151 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("emits a turn diff update when Claude finishes a file-change tool", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 13).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      const turn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "edit the file",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-file-edit",
+        uuid: "stream-text-start",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_start",
+          index: 0,
+          content_block: {
+            type: "text",
+            text: "",
+          },
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-file-edit",
+        uuid: "stream-text-delta",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_delta",
+          index: 0,
+          delta: {
+            type: "text_delta",
+            text: "Updated it.",
+          },
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-file-edit",
+        uuid: "stream-text-stop",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_stop",
+          index: 0,
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-file-edit",
+        uuid: "stream-edit-start",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_start",
+          index: 1,
+          content_block: {
+            type: "tool_use",
+            id: "tool-edit-1",
+            name: "Edit",
+            input: {
+              file_path: "src/example.ts",
+              old_string: "before",
+              new_string: "after",
+            },
+          },
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-file-edit",
+        uuid: "stream-edit-stop",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_stop",
+          index: 1,
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "user",
+        session_id: "sdk-session-file-edit",
+        uuid: "user-edit-result",
+        parent_tool_use_id: null,
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "tool-edit-1",
+              content: "Updated src/example.ts",
+            },
+          ],
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-file-edit",
+        uuid: "result-file-edit",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const diffUpdatedIndex = runtimeEvents.findIndex(
+        (event) => event.type === "turn.diff.updated",
+      );
+      const turnCompletedIndex = runtimeEvents.findIndex(
+        (event) => event.type === "turn.completed",
+      );
+
+      assert.equal(diffUpdatedIndex >= 0, true);
+      assert.equal(turnCompletedIndex >= 0, true);
+      assert.equal(diffUpdatedIndex < turnCompletedIndex, true);
+
+      const diffUpdated = runtimeEvents[diffUpdatedIndex];
+      assert.equal(diffUpdated?.type, "turn.diff.updated");
+      if (diffUpdated?.type === "turn.diff.updated") {
+        assert.equal(String(diffUpdated.turnId), String(turn.turnId));
+        assert.equal(diffUpdated.payload.unifiedDiff, "");
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("classifies Claude Task tool invocations as collaboration agent work", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

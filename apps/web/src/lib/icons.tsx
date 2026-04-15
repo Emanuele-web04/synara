@@ -7,6 +7,7 @@ import {
   IconAdjustments,
   IconAlertCircle,
   IconAlertTriangle,
+  IconArchive,
   IconArrowBackUp,
   IconArrowDown,
   IconArrowLeft,
@@ -110,6 +111,7 @@ export const EyeIcon = adaptIcon(IconEye);
 export const PaletteIcon = adaptIcon(IconPalette);
 export const PaperclipIcon = adaptIcon(IconPaperclip);
 export const AdjustmentsIcon = adaptIcon(IconAdjustments);
+export const ArchiveIcon = adaptIcon(IconArchive);
 export const BrainIcon = adaptIcon(IconBrain);
 export const FileIcon = adaptIcon(IconFile);
 export const FlaskConicalIcon = adaptIcon(IconFlask2);

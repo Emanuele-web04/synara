@@ -221,7 +221,11 @@ function EventRouter() {
       const activeThreadIds = collectActiveTerminalThreadIds({
         snapshotThreads: useStore
           .getState()
-          .threads.map((thread) => ({ id: thread.id, deletedAt: null })),
+          .threads.map((thread) => ({
+            id: thread.id,
+            deletedAt: null,
+            archivedAt: thread.archivedAt ?? null,
+          })),
         draftThreadIds,
         retainedThreadIds: workspacePages.map((workspace) => workspaceThreadId(workspace.id)),
       });

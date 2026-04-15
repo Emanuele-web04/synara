@@ -107,6 +107,25 @@ export function requireProjectWorkspaceRootAvailable(input: {
   );
 }
 
+export function requireProjectHasNoThreads(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly command: OrchestrationCommand;
+  readonly projectId: ProjectId;
+}): Effect.Effect<void, OrchestrationCommandInvariantError> {
+  const remainingThreads = listThreadsByProjectId(input.readModel, input.projectId).filter(
+    (thread) => thread.deletedAt === null,
+  );
+  if (remainingThreads.length === 0) {
+    return Effect.void;
+  }
+  return Effect.fail(
+    invariantError(
+      input.command.type,
+      `Project '${input.projectId}' still has ${remainingThreads.length} thread${remainingThreads.length === 1 ? "" : "s"} and cannot be deleted.`,
+    ),
+  );
+}
+
 export function requireThread(input: {
   readonly readModel: OrchestrationReadModel;
   readonly command: OrchestrationCommand;
@@ -136,6 +155,44 @@ export function requireThreadAbsent(input: {
     invariantError(
       input.command.type,
       `Thread '${input.threadId}' already exists and cannot be created twice.`,
+    ),
+  );
+}
+
+export function requireThreadArchived(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly command: OrchestrationCommand;
+  readonly threadId: ThreadId;
+}): Effect.Effect<OrchestrationThread, OrchestrationCommandInvariantError> {
+  return requireThread(input).pipe(
+    Effect.flatMap((thread) =>
+      thread.archivedAt != null
+        ? Effect.succeed(thread)
+        : Effect.fail(
+            invariantError(
+              input.command.type,
+              `Thread '${input.threadId}' is not archived for command '${input.command.type}'.`,
+            ),
+          ),
+    ),
+  );
+}
+
+export function requireThreadNotArchived(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly command: OrchestrationCommand;
+  readonly threadId: ThreadId;
+}): Effect.Effect<OrchestrationThread, OrchestrationCommandInvariantError> {
+  return requireThread(input).pipe(
+    Effect.flatMap((thread) =>
+      thread.archivedAt == null
+        ? Effect.succeed(thread)
+        : Effect.fail(
+            invariantError(
+              input.command.type,
+              `Thread '${input.threadId}' is already archived and cannot handle command '${input.command.type}'.`,
+            ),
+          ),
     ),
   );
 }

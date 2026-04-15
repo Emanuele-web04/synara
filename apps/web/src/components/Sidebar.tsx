@@ -1728,6 +1728,93 @@ export default function Sidebar() {
     },
     [appSettings.confirmThreadDelete, deleteThread, threads],
   );
+
+  /**
+   * Archive a thread: stop any running session first, then dispatch archive command.
+   * Archived threads are hidden from the sidebar but can be restored later.
+   */
+  const archiveThread = useCallback(
+    async (threadId: ThreadId): Promise<void> => {
+      const api = readNativeApi();
+      if (!api) return;
+      const thread = threads.find((t) => t.id === threadId);
+      if (!thread) return;
+
+      // Cannot archive a running thread
+      if (thread.session?.status === "running" && thread.session.activeTurnId != null) {
+        toastManager.add({
+          type: "error",
+          title: "Cannot archive",
+          description: "Stop the running session before archiving this thread.",
+        });
+        return;
+      }
+
+      await api.orchestration.dispatchCommand({
+        type: "thread.archive",
+        commandId: newCommandId(),
+        threadId,
+      });
+
+      // Navigate away if viewing the archived thread
+      if (routeThreadId === threadId) {
+        const fallbackThreadId = getFallbackThreadIdAfterDelete({
+          threads,
+          deletedThreadId: threadId,
+          deletedThreadIds: new Set<ThreadId>(),
+          sortOrder: appSettings.sidebarThreadSortOrder,
+        });
+        if (fallbackThreadId) {
+          void navigate({
+            to: "/$threadId",
+            params: { threadId: fallbackThreadId },
+            replace: true,
+          });
+        } else {
+          void navigate({ to: "/", replace: true });
+        }
+      }
+    },
+    [appSettings.sidebarThreadSortOrder, navigate, routeThreadId, threads],
+  );
+
+  const confirmAndArchiveThread = useCallback(
+    async (threadId: ThreadId) => {
+      const thread = threads.find((candidate) => candidate.id === threadId);
+      if (!thread) return;
+
+      if (appSettings.confirmThreadArchive) {
+        const api = readNativeApi();
+        const confirmationMessage = [
+          `Archive thread "${thread.title}"?`,
+          "Archived threads are hidden from the sidebar but can be restored later.",
+        ].join("\n");
+        const confirmed = api
+          ? await api.dialogs.confirm(confirmationMessage)
+          : await showConfirmDialogFallback(confirmationMessage);
+        if (!confirmed) return;
+      }
+
+      await archiveThread(threadId);
+    },
+    [appSettings.confirmThreadArchive, archiveThread, threads],
+  );
+
+  /**
+   * Unarchive a thread: restore it to the sidebar.
+   */
+  const unarchiveThread = useCallback(
+    async (threadId: ThreadId): Promise<void> => {
+      const api = readNativeApi();
+      if (!api) return;
+      await api.orchestration.dispatchCommand({
+        type: "thread.unarchive",
+        commandId: newCommandId(),
+        threadId,
+      });
+    },
+    [],
+  );
   const handleThreadContextMenu = useCallback(
     async (
       threadId: ThreadId,
@@ -1772,6 +1859,7 @@ export default function Sidebar() {
           { id: "copy-path", label: "Copy Path" },
           { id: "copy-thread-id", label: "Copy Thread ID" },
           ...(options?.extraItems ?? []),
+          { id: "archive", label: "Archive" },
           { id: "delete", label: "Delete", destructive: true },
         ],
         position,
@@ -1816,10 +1904,15 @@ export default function Sidebar() {
         await options?.onExtraAction?.("return-to-single-chat");
         return;
       }
+      if (clicked === "archive") {
+        await confirmAndArchiveThread(threadId);
+        return;
+      }
       if (clicked !== "delete") return;
       await confirmAndDeleteThread(threadId);
     },
     [
+      confirmAndArchiveThread,
       confirmAndDeleteThread,
       copyPathToClipboard,
       copyThreadIdToClipboard,
@@ -1893,6 +1986,7 @@ export default function Sidebar() {
       const clicked = await api.contextMenu.show(
         [
           { id: "mark-unread", label: `Mark unread (${count})` },
+          { id: "archive", label: `Archive (${count})` },
           { id: "delete", label: `Delete (${count})`, destructive: true },
         ],
         position,
@@ -1903,6 +1997,24 @@ export default function Sidebar() {
           markThreadUnread(id);
         }
         clearSelection();
+        return;
+      }
+
+      if (clicked === "archive") {
+        if (appSettings.confirmThreadArchive) {
+          const confirmed = await api.dialogs.confirm(
+            [
+              `Archive ${count} thread${count === 1 ? "" : "s"}?`,
+              "Archived threads are hidden from the sidebar but can be restored later.",
+            ].join("\n"),
+          );
+          if (!confirmed) return;
+        }
+
+        for (const id of ids) {
+          await archiveThread(id);
+        }
+        removeFromSelection(ids);
         return;
       }
 
@@ -1925,7 +2037,9 @@ export default function Sidebar() {
       removeFromSelection(ids);
     },
     [
+      appSettings.confirmThreadArchive,
       appSettings.confirmThreadDelete,
+      archiveThread,
       clearSelection,
       deleteThread,
       markThreadUnread,
@@ -2496,7 +2610,7 @@ export default function Sidebar() {
           ) : (
             <ProviderGlyph
               provider={thread.modelSelection.provider}
-              className="size-3.5 shrink-0"
+              className="size-3.5 shrink-0 opacity-80"
             />
           )}
           <div className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
@@ -2504,7 +2618,7 @@ export default function Sidebar() {
               <TooltipTrigger
                 render={
                   <span
-                    className="min-w-0 flex-1 truncate"
+                    className="min-w-0 flex-1 truncate opacity-80"
                     data-testid={`thread-title-${thread.id}`}
                   >
                     {isSubagentThread
@@ -2752,7 +2866,7 @@ export default function Sidebar() {
           ) : (
             <ProviderGlyph
               provider={thread.modelSelection.provider}
-              className="size-3.5 shrink-0"
+              className="size-3.5 shrink-0 opacity-80"
             />
           )}
           <div
@@ -2814,7 +2928,7 @@ export default function Sidebar() {
             ) : (
               <span
                 className={cn(
-                  "min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)] text-foreground/86",
+                  "min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)] text-foreground/86 opacity-80",
                   isSubagentThread ? "leading-[18px] text-foreground/80" : "leading-5",
                 )}
               >

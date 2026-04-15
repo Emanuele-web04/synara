@@ -21,7 +21,7 @@ export interface GitActionMenuItem {
 export interface GitQuickAction {
   label: string;
   disabled: boolean;
-  kind: "run_action" | "run_pull" | "open_pr" | "show_hint";
+  kind: "run_action" | "run_pull" | "open_pr" | "show_hint" | "create_branch";
   action?: GitStackedAction;
   hint?: string;
 }
@@ -233,6 +233,16 @@ export function resolveQuickAction(
       disabled: true,
       kind: "show_hint",
       hint: "Create and checkout a branch before pushing or opening a PR.",
+    };
+  }
+
+  // Worktree with temporary branch (dpcode/xxxxxxxx) that hasn't been pushed yet
+  // → prompt user to create a permanent branch name
+  if (isTemporaryWorktreeBranch(gitStatus.branch!) && !gitStatus.hasUpstream) {
+    return {
+      label: "Create Branch",
+      disabled: false,
+      kind: "create_branch",
     };
   }
 

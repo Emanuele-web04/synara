@@ -101,7 +101,9 @@ export function createSidebarDisplayThreadsSelector(): (
     }
 
     previousSummaries = sidebarSummaries;
-    previousDisplaySummaries = sidebarSummaries.filter((thread) => !thread.parentThreadId);
+    previousDisplaySummaries = sidebarSummaries.filter(
+      (thread) => !thread.parentThreadId && thread.archivedAt == null,
+    );
     return previousDisplaySummaries;
   };
 }

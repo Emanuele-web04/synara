@@ -668,6 +668,7 @@ function normalizeThreadFromReadModel(
     previous.proposedPlans === proposedPlans &&
     previous.error === error &&
     previous.createdAt === incoming.createdAt &&
+    (previous.archivedAt ?? null) === (incoming.archivedAt ?? null) &&
     previous.updatedAt === incoming.updatedAt &&
     previous.latestTurn === latestTurn &&
     previous.pendingSourceProposedPlan === pendingSourceProposedPlan &&
@@ -707,6 +708,7 @@ function normalizeThreadFromReadModel(
     proposedPlans,
     error,
     createdAt: incoming.createdAt,
+    archivedAt: incoming.archivedAt ?? null,
     updatedAt: incoming.updatedAt,
     latestTurn,
     ...(pendingSourceProposedPlan ? { pendingSourceProposedPlan } : {}),
@@ -892,6 +894,7 @@ function sidebarThreadSummariesEqual(
     left.worktreePath === right.worktreePath &&
     left.session === right.session &&
     left.createdAt === right.createdAt &&
+    (left.archivedAt ?? null) === (right.archivedAt ?? null) &&
     left.updatedAt === right.updatedAt &&
     left.latestTurn === right.latestTurn &&
     left.lastVisitedAt === right.lastVisitedAt &&
@@ -926,6 +929,7 @@ function buildSidebarThreadSummary(
     worktreePath: thread.worktreePath,
     session: thread.session,
     createdAt: thread.createdAt,
+    archivedAt: thread.archivedAt ?? null,
     updatedAt: thread.updatedAt,
     latestTurn: thread.latestTurn,
     lastVisitedAt: thread.lastVisitedAt,
@@ -1726,6 +1730,20 @@ function applyOrchestrationEvent(state: AppState, event: OrchestrationEvent): Ap
         };
       });
 
+    case "thread.archived":
+      return applyThreadUpdate(state, event.payload.threadId, (thread) => ({
+        ...thread,
+        archivedAt: event.payload.archivedAt ?? event.occurredAt,
+        updatedAt: event.payload.updatedAt ?? event.occurredAt,
+      }));
+
+    case "thread.unarchived":
+      return applyThreadUpdate(state, event.payload.threadId, (thread) => ({
+        ...thread,
+        archivedAt: null,
+        updatedAt: event.payload.updatedAt ?? event.occurredAt,
+      }));
+
     default:
       return state;
   }
@@ -1753,7 +1771,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
   );
   const existingThreadById = new Map(state.threads.map((thread) => [thread.id, thread] as const));
   const nextThreads = readModel.threads
-    .filter((thread) => thread.deletedAt === null && (thread.archivedAt ?? null) === null)
+    .filter((thread) => thread.deletedAt === null)
     .map((thread) => {
       const existing = existingThreadById.get(thread.id);
       return normalizeThreadFromReadModel(thread, existing);

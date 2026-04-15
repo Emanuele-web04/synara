@@ -5,6 +5,7 @@
 
 import {
   AdjustmentsIcon,
+  ArchiveIcon,
   BellIcon,
   BrainIcon,
   type LucideIcon,
@@ -20,6 +21,7 @@ export const SETTINGS_SECTION_IDS = [
   "notifications",
   "behavior",
   "worktrees",
+  "archived",
   "models",
   "advanced",
 ] as const;
@@ -84,6 +86,14 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     description: "Review and clean up the worktrees created by DP Code.",
     icon: WorktreeIcon,
     eyebrow: "Workspace management",
+  },
+  {
+    id: "archived",
+    group: "app",
+    label: "Archived",
+    description: "View and restore archived threads.",
+    icon: ArchiveIcon,
+    eyebrow: "Thread management",
   },
   {
     id: "models",
