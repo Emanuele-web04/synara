@@ -367,6 +367,132 @@ describe("store pure functions", () => {
     });
   });
 
+  it("adds projects immediately from live project.created events", () => {
+    const next = applyOrchestrationEvents(
+      {
+        projects: [],
+        threads: [],
+        sidebarThreadSummaryById: {},
+        threadsHydrated: false,
+      },
+      [
+        makeDomainEvent(
+          "project.created",
+          {
+            projectId: ProjectId.makeUnsafe("project-live"),
+            title: "Live Project",
+            workspaceRoot: "/tmp/live-project",
+            defaultModelSelection: {
+              provider: "codex",
+              model: "gpt-5-codex",
+            },
+            scripts: [],
+            createdAt: "2026-02-27T00:00:00.000Z",
+            updatedAt: "2026-02-27T00:00:00.000Z",
+          },
+          { aggregateKind: "project" },
+        ),
+      ],
+    );
+
+    expect(next.projects).toHaveLength(1);
+    expect(next.projects[0]).toMatchObject({
+      id: ProjectId.makeUnsafe("project-live"),
+      name: "Live Project",
+      remoteName: "Live Project",
+      folderName: "live-project",
+      cwd: "/tmp/live-project",
+      createdAt: "2026-02-27T00:00:00.000Z",
+      updatedAt: "2026-02-27T00:00:00.000Z",
+    });
+  });
+
+  it("updates existing projects immediately from live project.meta-updated events", () => {
+    const initialState: AppState = {
+      projects: [
+        makeProject({
+          id: ProjectId.makeUnsafe("project-live"),
+          name: "Local Name",
+          remoteName: "Original Name",
+          localName: "Local Name",
+          folderName: "original-project",
+          cwd: "/tmp/original-project",
+          createdAt: "2026-02-27T00:00:00.000Z",
+          updatedAt: "2026-02-27T00:00:00.000Z",
+        }),
+      ],
+      threads: [],
+      sidebarThreadSummaryById: {},
+      threadsHydrated: true,
+    };
+
+    const next = applyOrchestrationEvents(initialState, [
+      makeDomainEvent(
+        "project.meta-updated",
+        {
+          projectId: ProjectId.makeUnsafe("project-live"),
+          title: "Renamed Remotely",
+          workspaceRoot: "/tmp/renamed-project",
+          defaultModelSelection: null,
+          scripts: [
+            {
+              id: "lint",
+              name: "Lint",
+              command: "bun lint",
+              icon: "lint",
+              runOnWorktreeCreate: false,
+            },
+          ],
+          updatedAt: "2026-02-27T00:05:00.000Z",
+        },
+        { aggregateKind: "project" },
+      ),
+    ]);
+
+    expect(next.projects[0]).toMatchObject({
+      id: ProjectId.makeUnsafe("project-live"),
+      name: "Local Name",
+      remoteName: "Renamed Remotely",
+      folderName: "renamed-project",
+      localName: "Local Name",
+      cwd: "/tmp/renamed-project",
+      defaultModelSelection: null,
+      updatedAt: "2026-02-27T00:05:00.000Z",
+      scripts: [
+        {
+          id: "lint",
+          name: "Lint",
+          command: "bun lint",
+          icon: "lint",
+          runOnWorktreeCreate: false,
+        },
+      ],
+    });
+  });
+
+  it("removes projects immediately from live project.deleted events", () => {
+    const next = applyOrchestrationEvents(
+      {
+        projects: [makeProject({ id: ProjectId.makeUnsafe("project-live") })],
+        threads: [],
+        sidebarThreadSummaryById: {},
+        threadsHydrated: true,
+      },
+      [
+        makeDomainEvent(
+          "project.deleted",
+          {
+            projectId: ProjectId.makeUnsafe("project-live"),
+            deletedAt: "2026-02-27T00:06:00.000Z",
+          },
+          { aggregateKind: "project" },
+        ),
+      ],
+    );
+
+    expect(next.projects).toEqual([]);
+  });
+
   it("settles a running latest turn immediately when session stop is requested", () => {
     const initialState = makeState(
       makeThread({
