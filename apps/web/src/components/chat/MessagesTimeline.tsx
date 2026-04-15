@@ -1508,7 +1508,12 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
 // Keep command, agent-task, and file-change rows visually compact so their icon can trail the label.
 function prefersCompactWorkEntryRow(workEntry: TimelineWorkEntry): boolean {
   const EntryIcon = workEntryIcon(workEntry);
-  return EntryIcon === TerminalIcon || EntryIcon === HammerIcon || EntryIcon === AgentTaskIcon || EntryIcon === SquarePenIcon;
+  return (
+    EntryIcon === TerminalIcon ||
+    EntryIcon === HammerIcon ||
+    EntryIcon === AgentTaskIcon ||
+    EntryIcon === SquarePenIcon
+  );
 }
 
 function capitalizePhrase(value: string): string {
