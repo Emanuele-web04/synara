@@ -12,7 +12,7 @@ import {
   TurnId,
   ProviderKind,
 } from "@t3tools/contracts";
-import { Effect, Queue, Stream } from "effect";
+import { Effect, PubSub, Stream } from "effect";
 
 import {
   ProviderAdapterSessionNotFoundError,
@@ -225,7 +225,7 @@ function missingSessionEffect(
 export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapterHarnessOptions) =>
   Effect.gen(function* () {
     const provider = options?.provider ?? "codex";
-    const runtimeEvents = yield* Queue.unbounded<ProviderRuntimeEvent>();
+    const runtimeEvents = yield* PubSub.unbounded<ProviderRuntimeEvent>();
     let sessionCount = 0;
     const sessions = new Map<ThreadId, SessionState>();
     const queuedResponsesForNextSession: TestTurnResponse[] = [];
@@ -239,7 +239,7 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
       }>
     >();
 
-    const emit = (event: ProviderRuntimeEvent) => Queue.offer(runtimeEvents, event);
+    const emit = (event: ProviderRuntimeEvent) => PubSub.publish(runtimeEvents, event);
 
     const startSession: ProviderAdapterShape<ProviderAdapterError>["startSession"] = (input) =>
       Effect.gen(function* () {
@@ -488,7 +488,7 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
       readThread,
       rollbackThread,
       stopAll,
-      streamEvents: Stream.fromQueue(runtimeEvents),
+      streamEvents: Stream.fromPubSub(runtimeEvents),
     };
 
     const queueTurnResponse = (

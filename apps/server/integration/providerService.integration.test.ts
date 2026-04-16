@@ -1,8 +1,7 @@
-import type { ProviderRuntimeEvent } from "@t3tools/contracts";
 import { ThreadId } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it, assert } from "@effect/vitest";
-import { Effect, FileSystem, Layer, Path, Queue, Stream } from "effect";
+import { Effect, FileSystem, Layer, Path } from "effect";
 
 import { ProviderUnsupportedError } from "../src/provider/Errors.ts";
 import { ProviderAdapterRegistry } from "../src/provider/Services/ProviderAdapterRegistry.ts";
@@ -72,26 +71,6 @@ const makeIntegrationFixture = Effect.gen(function* () {
   } satisfies IntegrationFixture;
 });
 
-const collectEventsDuring = <A, E, R>(
-  stream: Stream.Stream<ProviderRuntimeEvent>,
-  count: number,
-  action: Effect.Effect<A, E, R>,
-) =>
-  Effect.gen(function* () {
-    const queue = yield* Queue.unbounded<ProviderRuntimeEvent>();
-    yield* Stream.runForEach(stream, (event) => Queue.offer(queue, event).pipe(Effect.asVoid)).pipe(
-      Effect.forkScoped,
-    );
-
-    yield* action;
-
-    return yield* Effect.forEach(
-      Array.from({ length: count }, () => undefined),
-      () => Queue.take(queue),
-      { discard: false },
-    );
-  });
-
 const runTurn = (input: {
   readonly provider: ProviderServiceShape;
   readonly harness: TestProviderAdapterHarness;
@@ -102,15 +81,13 @@ const runTurn = (input: {
   Effect.gen(function* () {
     yield* input.harness.queueTurnResponse(input.threadId, input.response);
 
-    return yield* collectEventsDuring(
-      input.provider.streamEvents,
-      input.response.events.length,
-      input.provider.sendTurn({
-        threadId: input.threadId,
-        input: input.userText,
-        attachments: [],
-      }),
-    );
+    yield* input.provider.sendTurn({
+      threadId: input.threadId,
+      input: input.userText,
+      attachments: [],
+    });
+
+    return yield* input.harness.adapter.readThread(input.threadId);
   });
 
 it.effect("replays typed runtime fixture events", () =>
@@ -130,7 +107,7 @@ it.effect("replays typed runtime fixture events", () =>
       );
       assert.equal((session.threadId ?? "").length > 0, true);
 
-      const observedEvents = yield* runTurn({
+      const snapshot = yield* runTurn({
         provider,
         harness: fixture.harness,
         threadId: session.threadId,
@@ -138,10 +115,17 @@ it.effect("replays typed runtime fixture events", () =>
         response: { events: codexTurnTextFixture },
       });
 
-      assert.deepEqual(
-        observedEvents.map((event) => event.type),
-        codexTurnTextFixture.map((event) => event.type),
-      );
+      assert.equal(snapshot.turns.length, 1);
+      assert.deepEqual(snapshot.turns[0]?.items, [
+        {
+          type: "userMessage",
+          content: [{ type: "text", text: "hello" }],
+        },
+        {
+          type: "agentMessage",
+          text: "I will make a small update.\nDone.\n",
+        },
+      ]);
     }).pipe(Effect.provide(fixture.layer));
   }).pipe(Effect.provide(NodeServices.layer)),
 );
@@ -165,7 +149,7 @@ it.effect("replays file-changing fixture turn events", () =>
       );
       assert.equal((session.threadId ?? "").length > 0, true);
 
-      const observedEvents = yield* runTurn({
+      const snapshot = yield* runTurn({
         provider,
         harness: fixture.harness,
         threadId: session.threadId,
@@ -177,10 +161,17 @@ it.effect("replays file-changing fixture turn events", () =>
         },
       });
 
-      assert.deepEqual(
-        observedEvents.map((event) => event.type),
-        codexTurnToolFixture.map((event) => event.type),
-      );
+      assert.equal(snapshot.turns.length, 1);
+      assert.deepEqual(snapshot.turns[0]?.items, [
+        {
+          type: "userMessage",
+          content: [{ type: "text", text: "make a small change" }],
+        },
+        {
+          type: "agentMessage",
+          text: "Applied the requested edit.\n",
+        },
+      ]);
     }).pipe(Effect.provide(fixture.layer));
   }).pipe(Effect.provide(NodeServices.layer)),
 );
@@ -204,7 +195,7 @@ it.effect("runs multi-turn tool/approval flow", () =>
       );
       assert.equal((session.threadId ?? "").length > 0, true);
 
-      const firstTurnEvents = yield* runTurn({
+      const firstSnapshot = yield* runTurn({
         provider,
         harness: fixture.harness,
         threadId: session.threadId,
@@ -215,12 +206,19 @@ it.effect("runs multi-turn tool/approval flow", () =>
             writeFileString(join(cwd, "README.md"), "v2\n").pipe(Effect.asVoid, Effect.ignore),
         },
       });
-      assert.deepEqual(
-        firstTurnEvents.map((event) => event.type),
-        codexTurnToolFixture.map((event) => event.type),
-      );
+      assert.equal(firstSnapshot.turns.length, 1);
+      assert.deepEqual(firstSnapshot.turns[0]?.items, [
+        {
+          type: "userMessage",
+          content: [{ type: "text", text: "turn 1" }],
+        },
+        {
+          type: "agentMessage",
+          text: "Applied the requested edit.\n",
+        },
+      ]);
 
-      const secondTurnEvents = yield* runTurn({
+      const secondSnapshot = yield* runTurn({
         provider,
         harness: fixture.harness,
         threadId: session.threadId,
@@ -231,10 +229,17 @@ it.effect("runs multi-turn tool/approval flow", () =>
             writeFileString(join(cwd, "README.md"), "v3\n").pipe(Effect.asVoid, Effect.ignore),
         },
       });
-      assert.deepEqual(
-        secondTurnEvents.map((event) => event.type),
-        codexTurnApprovalFixture.map((event) => event.type),
-      );
+      assert.equal(secondSnapshot.turns.length, 2);
+      assert.deepEqual(secondSnapshot.turns[1]?.items, [
+        {
+          type: "userMessage",
+          content: [{ type: "text", text: "turn 2 approval" }],
+        },
+        {
+          type: "agentMessage",
+          text: "Approval received and command executed.\n",
+        },
+      ]);
     }).pipe(Effect.provide(fixture.layer));
   }).pipe(Effect.provide(NodeServices.layer)),
 );
