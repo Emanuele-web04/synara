@@ -10,23 +10,23 @@ describe("agentMentions", () => {
   it("shows one preferred alias per Codex model in autocomplete", () => {
     expect(getAgentMentionAutocompleteAliases("codex")).toEqual([
       {
-        alias: "5.2",
+        alias: "5.4",
         provider: "codex",
         kind: "model",
-        model: "gpt-5.2",
-        displayName: "GPT-5.2",
-        color: "amber",
+        model: "gpt-5.4",
+        displayName: "GPT-5.4",
+        color: "violet",
       },
       {
-        alias: "5.2-codex",
+        alias: "mini",
         provider: "codex",
         kind: "model",
-        model: "gpt-5.2-codex",
-        displayName: "GPT-5.2 Codex",
-        color: "orange",
+        model: "gpt-5.4-mini",
+        displayName: "GPT-5.4 Mini",
+        color: "fuchsia",
       },
       {
-        alias: "codex",
+        alias: "5.3-codex",
         provider: "codex",
         kind: "model",
         model: "gpt-5.3-codex",
@@ -42,20 +42,20 @@ describe("agentMentions", () => {
         color: "cyan",
       },
       {
-        alias: "5.4",
+        alias: "5.2",
         provider: "codex",
         kind: "model",
-        model: "gpt-5.4",
-        displayName: "GPT-5.4",
-        color: "violet",
+        model: "gpt-5.2",
+        displayName: "GPT-5.2",
+        color: "amber",
       },
       {
-        alias: "mini",
+        alias: "5.2-codex",
         provider: "codex",
         kind: "model",
-        model: "gpt-5.4-mini",
-        displayName: "GPT-5.4 Mini",
-        color: "fuchsia",
+        model: "gpt-5.2-codex",
+        displayName: "GPT-5.2 Codex",
+        color: "orange",
       },
     ]);
   });
@@ -122,10 +122,10 @@ describe("agentMentions", () => {
   });
 
   it("keeps compatibility aliases resolvable even when hidden from autocomplete", () => {
-    const codexCompatAlias = resolveAgentAlias("5.3", "codex");
+    const codexCompatAlias = resolveAgentAlias("codex", "codex");
     const claudeCompatAlias = resolveAgentAlias("reviewer", "claudeAgent");
 
-    expect(getAgentMentionAliases("codex").map(({ alias }) => alias)).toContain("5.3");
+    expect(getAgentMentionAliases("codex").map(({ alias }) => alias)).toContain("codex");
     expect(getAgentMentionAliases("codex").map(({ alias }) => alias)).toContain("5.3-spark");
     expect(getAgentMentionAliases("codex").map(({ alias }) => alias)).toContain("5.4-mini");
     expect(getAgentMentionAliases("claudeAgent").map(({ alias }) => alias)).toContain("reviewer");
