@@ -3,7 +3,14 @@ import type { ProviderKind } from "./orchestration";
 
 export const CODEX_REASONING_EFFORT_OPTIONS = ["xhigh", "high", "medium", "low"] as const;
 export type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORT_OPTIONS)[number];
-export const CLAUDE_CODE_EFFORT_OPTIONS = ["low", "medium", "high", "xhigh", "max", "ultrathink"] as const;
+export const CLAUDE_CODE_EFFORT_OPTIONS = [
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultrathink",
+] as const;
 export type ClaudeCodeEffort = (typeof CLAUDE_CODE_EFFORT_OPTIONS)[number];
 export type ProviderReasoningEffort = CodexReasoningEffort | ClaudeCodeEffort;
 

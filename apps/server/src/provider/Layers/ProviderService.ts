@@ -25,7 +25,7 @@ import {
   type ProviderRuntimeEvent,
   type ProviderSession,
 } from "@t3tools/contracts";
-import { Effect, Layer, Option, PubSub, Queue, Schema, SchemaIssue, Stream } from "effect";
+import { Effect, Layer, Option, PubSub, Schema, SchemaIssue, Stream } from "effect";
 
 import { ProviderValidationError } from "../Errors.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
@@ -159,7 +159,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
     const registry = yield* ProviderAdapterRegistry;
     const directory = yield* ProviderSessionDirectory;
-    const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
     const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
 
     const publishRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
@@ -197,15 +196,10 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const processRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
       publishRuntimeEvent(event);
 
-    const worker = Effect.forever(
-      Queue.take(runtimeEventQueue).pipe(Effect.flatMap(processRuntimeEvent)),
-    );
-    yield* Effect.forkScoped(worker);
-
+    // Fan provider events straight into the pubsub so Claude's high-volume
+    // streams do not pay for an extra queue hop in the hot path.
     yield* Effect.forEach(adapters, (adapter) =>
-      Stream.runForEach(adapter.streamEvents, (event) =>
-        Queue.offer(runtimeEventQueue, event).pipe(Effect.asVoid),
-      ).pipe(Effect.forkScoped),
+      Stream.runForEach(adapter.streamEvents, processRuntimeEvent).pipe(Effect.forkScoped),
     ).pipe(Effect.asVoid);
 
     const recoverSessionForThread = (input: {

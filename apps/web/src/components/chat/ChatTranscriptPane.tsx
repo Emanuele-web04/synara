@@ -34,7 +34,6 @@ interface ChatTranscriptPaneProps {
   isWorking: boolean;
   markdownCwd: string | undefined;
   messagesScrollElement: HTMLDivElement | null;
-  nowIso: string;
   onExpandTimelineImage: (preview: ExpandedImagePreview) => void;
   onMessagesClickCapture: MouseEventHandler<HTMLDivElement>;
   onMessagesPointerCancel: PointerEventHandler<HTMLDivElement>;
@@ -77,7 +76,6 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   isWorking,
   markdownCwd,
   messagesScrollElement,
-  nowIso,
   onExpandTimelineImage,
   onMessagesClickCapture,
   onMessagesPointerCancel,
@@ -139,7 +137,6 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
             completionDividerBeforeEntryId={completionDividerBeforeEntryId}
             completionSummary={completionSummary}
             turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
-            nowIso={nowIso}
             expandedWorkGroups={expandedWorkGroups}
             onToggleWorkGroup={onToggleWorkGroup}
             onOpenTurnDiff={onOpenTurnDiff}

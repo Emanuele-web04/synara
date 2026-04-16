@@ -3133,29 +3133,39 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
         // Populate model cache in background from first session
         if (!cachedModels) {
-          queryRuntime.supportedModels().then((models) => {
-            cachedModels = {
-              models: models.map((m) => ({ slug: m.value, name: m.displayName })),
-              source: "sdk",
-              cached: false,
-            };
-          }).catch(() => { /* ignore discovery failures */ });
+          queryRuntime
+            .supportedModels()
+            .then((models) => {
+              cachedModels = {
+                models: models.map((m) => ({ slug: m.value, name: m.displayName })),
+                source: "sdk",
+                cached: false,
+              };
+            })
+            .catch(() => {
+              /* ignore discovery failures */
+            });
         }
 
         // Populate agent cache in background from first session
         if (!cachedAgents) {
-          queryRuntime.supportedAgents().then((agents) => {
-            cachedAgents = {
-              agents: agents.map((a) => ({
-                name: a.name,
-                displayName: a.name,
-                ...(a.description ? { description: a.description } : {}),
-                ...(a.model ? { model: a.model } : {}),
-              })),
-              source: "sdk",
-              cached: false,
-            };
-          }).catch(() => { /* ignore discovery failures */ });
+          queryRuntime
+            .supportedAgents()
+            .then((agents) => {
+              cachedAgents = {
+                agents: agents.map((a) => ({
+                  name: a.name,
+                  displayName: a.name,
+                  ...(a.description ? { description: a.description } : {}),
+                  ...(a.model ? { model: a.model } : {}),
+                })),
+                source: "sdk",
+                cached: false,
+              };
+            })
+            .catch(() => {
+              /* ignore discovery failures */
+            });
         }
 
         const session: ProviderSession = {
@@ -3583,13 +3593,16 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         for (const [, context] of sessions) {
           if (!context.stopped && context.query) {
             // Trigger async cache population
-            context.query.supportedModels().then((models) => {
-              cachedModels = {
-                models: models.map((m) => ({ slug: m.value, name: m.displayName })),
-                source: "sdk",
-                cached: false,
-              };
-            }).catch(() => {});
+            context.query
+              .supportedModels()
+              .then((models) => {
+                cachedModels = {
+                  models: models.map((m) => ({ slug: m.value, name: m.displayName })),
+                  source: "sdk",
+                  cached: false,
+                };
+              })
+              .catch(() => {});
             break;
           }
         }
@@ -3604,18 +3617,21 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
         for (const [, context] of sessions) {
           if (!context.stopped && context.query) {
-            context.query.supportedAgents().then((agents) => {
-              cachedAgents = {
-                agents: agents.map((a) => ({
-                  name: a.name,
-                  displayName: a.name,
-                  ...(a.description ? { description: a.description } : {}),
-                  ...(a.model ? { model: a.model } : {}),
-                })),
-                source: "sdk",
-                cached: false,
-              };
-            }).catch(() => {});
+            context.query
+              .supportedAgents()
+              .then((agents) => {
+                cachedAgents = {
+                  agents: agents.map((a) => ({
+                    name: a.name,
+                    displayName: a.name,
+                    ...(a.description ? { description: a.description } : {}),
+                    ...(a.model ? { model: a.model } : {}),
+                  })),
+                  source: "sdk",
+                  cached: false,
+                };
+              })
+              .catch(() => {});
             break;
           }
         }

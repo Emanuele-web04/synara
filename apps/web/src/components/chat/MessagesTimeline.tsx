@@ -149,7 +149,7 @@ interface MessagesTimelineProps {
   completionDividerBeforeEntryId: string | null;
   completionSummary: string | null;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
-  nowIso: string;
+  nowIso?: string;
   expandedWorkGroups: Record<string, boolean>;
   onToggleWorkGroup: (groupId: string) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
@@ -754,18 +754,40 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             hasGenericInlineFileChangeEntry && (turnSummary?.files.length ?? 0) > 0
               ? turnSummary!.files
               : [];
-          const assistantMeta = [
-            formatMessageMeta(
-              row.message.createdAt,
-              row.message.streaming
-                ? formatElapsed(row.durationStart, nowIso)
-                : formatElapsed(row.durationStart, row.message.completedAt),
-              timestampFormat,
-            ),
-            inlineWorkSummary,
-          ]
-            .filter((value): value is string => Boolean(value))
-            .join(" • ");
+          const assistantMeta = row.message.streaming ? (
+            nowIso ? (
+              [
+                formatMessageMeta(
+                  row.message.createdAt,
+                  formatElapsed(row.durationStart, nowIso),
+                  timestampFormat,
+                ),
+                inlineWorkSummary,
+              ]
+                .filter((value): value is string => Boolean(value))
+                .join(" • ")
+            ) : (
+              <>
+                <LiveMessageMeta
+                  createdAt={row.message.createdAt}
+                  durationStart={row.durationStart}
+                  timestampFormat={timestampFormat}
+                />
+                {inlineWorkSummary ? <> • {inlineWorkSummary}</> : null}
+              </>
+            )
+          ) : (
+            [
+              formatMessageMeta(
+                row.message.createdAt,
+                formatElapsed(row.durationStart, row.message.completedAt),
+                timestampFormat,
+              ),
+              inlineWorkSummary,
+            ]
+              .filter((value): value is string => Boolean(value))
+              .join(" • ")
+          );
           return (
             <>
               {row.showCompletionDivider && (
@@ -1009,9 +1031,19 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             className="flex items-center gap-1 pt-1 text-muted-foreground/70 font-system-ui"
             style={{ fontSize: `${appTypographyScale.uiSmPx}px` }}
           >
-            <span>Working for</span>
             <span>
-              {row.createdAt ? (formatWorkingTimer(row.createdAt, nowIso) ?? "0s") : "00:00"}
+              {row.createdAt ? (
+                <>
+                  Working for{" "}
+                  {nowIso ? (
+                    (formatWorkingTimer(row.createdAt, nowIso) ?? "0s")
+                  ) : (
+                    <WorkingTimer createdAt={row.createdAt} />
+                  )}
+                </>
+              ) : (
+                "Working..."
+              )}
             </span>
             <span className="inline-flex items-center gap-1">
               <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse" />
@@ -1107,6 +1139,51 @@ function estimateTimelineProposedPlanHeight(
 ): number {
   const estimatedLines = Math.max(1, Math.ceil(proposedPlan.planMarkdown.length / 72));
   return 120 + Math.min(estimatedLines * getChatTranscriptLineHeightPx(chatFontSizePx), 880);
+}
+
+// Keep the live clock scoped to tiny leaf components so active Claude turns do
+// not force the full transcript tree to re-render every second.
+function WorkingTimer({ createdAt }: { createdAt: string }) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 1000);
+    return () => {
+      window.clearInterval(id);
+    };
+  }, [createdAt]);
+  return <>{formatWorkingTimer(createdAt, new Date(nowMs).toISOString()) ?? "0s"}</>;
+}
+
+function LiveMessageMeta({
+  createdAt,
+  durationStart,
+  timestampFormat,
+}: {
+  createdAt: string;
+  durationStart: string;
+  timestampFormat: TimestampFormat;
+}) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 1000);
+    return () => {
+      window.clearInterval(id);
+    };
+  }, [durationStart]);
+
+  return (
+    <>
+      {formatMessageMeta(
+        createdAt,
+        formatElapsed(durationStart, new Date(nowMs).toISOString()),
+        timestampFormat,
+      )}
+    </>
+  );
 }
 
 function formatWorkingTimer(startIso: string, endIso: string): string | null {

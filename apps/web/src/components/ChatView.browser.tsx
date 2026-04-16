@@ -972,6 +972,20 @@ function dispatchThreadShortcut(key: string): void {
   );
 }
 
+function dispatchComposerPickerShortcut(target: EventTarget, key: "m" | "e"): void {
+  const useMetaForMod = isMacPlatform(navigator.platform);
+  target.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      key,
+      shiftKey: true,
+      metaKey: useMetaForMod,
+      ctrlKey: !useMetaForMod,
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+}
+
 async function triggerChatNewShortcutUntilPath(
   router: ReturnType<typeof getRouter>,
   predicate: (pathname: string) => boolean,
@@ -1794,6 +1808,54 @@ describe("ChatView timeline estimator parity (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("opens the composer model picker with Cmd+Shift+M", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-model-picker-shortcut" as MessageId,
+        targetText: "model picker shortcut",
+      }),
+    });
+
+    try {
+      const composerEditor = await waitForComposerEditor();
+      composerEditor.focus();
+      dispatchComposerPickerShortcut(composerEditor, "m");
+
+      await vi.waitFor(() => {
+        const text = document.body.textContent ?? "";
+        expect(text).toContain("Codex");
+        expect(text).toContain("Claude");
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("opens the composer effort picker with Cmd+Shift+E", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-effort-picker-shortcut" as MessageId,
+        targetText: "effort picker shortcut",
+      }),
+    });
+
+    try {
+      const composerEditor = await waitForComposerEditor();
+      composerEditor.focus();
+      dispatchComposerPickerShortcut(composerEditor, "e");
+
+      await vi.waitFor(() => {
+        const text = document.body.textContent ?? "";
+        expect(text).toContain("Effort");
+        expect(text).toContain("Low");
+      });
     } finally {
       await mounted.cleanup();
     }

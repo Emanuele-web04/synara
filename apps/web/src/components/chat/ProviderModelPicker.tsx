@@ -1,6 +1,11 @@
+// FILE: ProviderModelPicker.tsx
+// Purpose: Renders the composer provider/model menu and supports controlled opening for shortcuts.
+// Layer: Chat composer presentation
+// Depends on: provider availability metadata, shared menu primitives, and picker trigger styling.
+
 import { type ModelSlug, type ProviderKind, type ServerProviderStatus } from "@t3tools/contracts";
 import { resolveSelectableModel } from "@t3tools/shared/model";
-import { memo, useState } from "react";
+import { memo, useCallback, useState } from "react";
 import { type ProviderPickerKind, PROVIDER_OPTIONS } from "../../session-logic";
 import {
   Menu,
@@ -82,14 +87,27 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   activeProviderIconClassName?: string;
   compact?: boolean;
   disabled?: boolean;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   onProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
 }) {
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const { onOpenChange, open } = props;
+  const [uncontrolledMenuOpen, setUncontrolledMenuOpen] = useState(false);
   const activeProvider = props.lockedProvider ?? props.provider;
+  const isMenuOpen = open ?? uncontrolledMenuOpen;
   const selectedProviderOptions = props.modelOptionsByProvider[activeProvider];
   const selectedModelLabel =
     selectedProviderOptions.find((option) => option.slug === props.model)?.name ?? props.model;
   const ProviderIcon = PROVIDER_ICON_BY_PROVIDER[activeProvider];
+  const setMenuOpen = useCallback(
+    (nextOpen: boolean) => {
+      if (open === undefined) {
+        setUncontrolledMenuOpen(nextOpen);
+      }
+      onOpenChange?.(nextOpen);
+    },
+    [onOpenChange, open],
+  );
   const handleModelChange = (provider: ProviderKind, value: string) => {
     if (props.disabled) return;
     if (!value) return;
@@ -100,7 +118,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     );
     if (!resolvedModel) return;
     props.onProviderModelChange(provider, resolvedModel);
-    setIsMenuOpen(false);
+    setMenuOpen(false);
   };
 
   return (
@@ -108,10 +126,10 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
       open={isMenuOpen}
       onOpenChange={(open) => {
         if (props.disabled) {
-          setIsMenuOpen(false);
+          setMenuOpen(false);
           return;
         }
-        setIsMenuOpen(open);
+        setMenuOpen(open);
       }}
     >
       <MenuTrigger
@@ -146,7 +164,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                 <MenuRadioItem
                   key={`${props.lockedProvider}:${modelOption.slug}`}
                   value={modelOption.slug}
-                  onClick={() => setIsMenuOpen(false)}
+                  onClick={() => setMenuOpen(false)}
                 >
                   {modelOption.name}
                 </MenuRadioItem>
@@ -200,7 +218,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                           <MenuRadioItem
                             key={`${option.value}:${modelOption.slug}`}
                             value={modelOption.slug}
-                            onClick={() => setIsMenuOpen(false)}
+                            onClick={() => setMenuOpen(false)}
                           >
                             {modelOption.name}
                           </MenuRadioItem>

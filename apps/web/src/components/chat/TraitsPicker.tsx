@@ -172,8 +172,23 @@ export const TraitsPicker = memo(function TraitsPicker({
   onPromptChange,
   includeFastMode = true,
   modelOptions,
-}: TraitsMenuContentProps) {
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  open,
+  onOpenChange,
+}: TraitsMenuContentProps & {
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}) {
+  const [uncontrolledMenuOpen, setUncontrolledMenuOpen] = useState(false);
+  const isMenuOpen = open ?? uncontrolledMenuOpen;
+  const setMenuOpen = useCallback(
+    (nextOpen: boolean) => {
+      if (open === undefined) {
+        setUncontrolledMenuOpen(nextOpen);
+      }
+      onOpenChange?.(nextOpen);
+    },
+    [onOpenChange, open],
+  );
   const {
     caps,
     effort,
@@ -201,7 +216,7 @@ export const TraitsPicker = memo(function TraitsPicker({
     <Menu
       open={isMenuOpen}
       onOpenChange={(open) => {
-        setIsMenuOpen(open);
+        setMenuOpen(open);
       }}
     >
       <MenuTrigger

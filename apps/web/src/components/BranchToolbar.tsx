@@ -348,7 +348,6 @@ export default function BranchToolbar({
                   </CollapsiblePanel>
                 </Collapsible>
               </div>
-
             </PopoverPopup>
           </Popover>
         ) : (
