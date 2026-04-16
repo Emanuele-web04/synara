@@ -4343,16 +4343,7 @@ export default function Sidebar() {
         <SidebarMenu>
           <SidebarMenuItem>
             <div className="flex items-center gap-2">
-              {isOnSettings ? (
-                <SidebarMenuButton
-                  size="default"
-                  className="h-8 flex-1 gap-2.5 rounded-lg px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
-                  isActive
-                >
-                  <SettingsIcon className="size-[15px]" />
-                  <span>Settings</span>
-                </SidebarMenuButton>
-              ) : (
+              {!isOnSettings && (
                 <SidebarMenuButton
                   size="default"
                   className="h-8 flex-1 gap-2.5 rounded-lg px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
