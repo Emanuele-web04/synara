@@ -203,6 +203,55 @@ describe("decider worktree metadata", () => {
     expect(event.payload).not.toHaveProperty("associatedWorktreeRef");
   });
 
+  it("keeps associated worktree metadata when switching back to local without an explicit clear", async () => {
+    const now = new Date().toISOString();
+    const readModel = await createWorktreeThreadReadModel(now);
+
+    const result = await Effect.runPromise(
+      decideOrchestrationCommand({
+        command: {
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("cmd-thread-meta-detach-to-local"),
+          threadId: THREAD_ID,
+          envMode: "local",
+          worktreePath: null,
+        },
+        readModel,
+      }),
+    );
+
+    const event = Array.isArray(result) ? result[0] : result;
+    expect(event?.type).toBe("thread.meta-updated");
+    if (!event || event.type !== "thread.meta-updated") {
+      return;
+    }
+
+    expect(event.payload).toMatchObject({
+      threadId: THREAD_ID,
+      envMode: "local",
+      worktreePath: null,
+    });
+    expect(event.payload).not.toHaveProperty("associatedWorktreePath");
+    expect(event.payload).not.toHaveProperty("associatedWorktreeBranch");
+    expect(event.payload).not.toHaveProperty("associatedWorktreeRef");
+
+    const nextReadModel = await Effect.runPromise(
+      projectEvent(readModel, {
+        ...event,
+        sequence: 3,
+      }),
+    );
+    const thread = nextReadModel.threads.find((candidate) => candidate.id === THREAD_ID);
+
+    expect(thread).toMatchObject({
+      envMode: "local",
+      worktreePath: null,
+      associatedWorktreePath: WORKTREE_PATH,
+      associatedWorktreeBranch: WORKTREE_BRANCH,
+      associatedWorktreeRef: WORKTREE_BRANCH,
+    });
+  });
+
   it("still forwards explicit associated worktree clears during thread.meta.update", async () => {
     const now = new Date().toISOString();
     const readModel = await createWorktreeThreadReadModel(now);
