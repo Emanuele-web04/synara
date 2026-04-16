@@ -330,7 +330,7 @@ describe("store pure functions", () => {
     );
   });
 
-  it("updates latest turn and thread error immediately from session-set events", () => {
+  it("updates thread error without auto-finalizing the latest turn from session-set events", () => {
     const initialState = makeState(
       makeThread({
         latestTurn: {
@@ -362,8 +362,8 @@ describe("store pure functions", () => {
     expect(next.threads[0]?.error).toBe("provider crashed");
     expect(next.threads[0]?.latestTurn).toMatchObject({
       turnId: TurnId.makeUnsafe("turn-running"),
-      state: "error",
-      completedAt: "2026-02-27T00:02:00.000Z",
+      state: "running",
+      completedAt: null,
     });
   });
 

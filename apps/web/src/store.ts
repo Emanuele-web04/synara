@@ -1051,32 +1051,8 @@ function reconcileLatestTurnFromSession(
     });
   }
 
-  if (
-    thread.latestTurn === null ||
-    thread.latestTurn.state !== "running" ||
-    thread.latestTurn.completedAt !== null
-  ) {
-    return thread.latestTurn;
-  }
-
-  if (
-    session.status !== "error" &&
-    session.status !== "interrupted" &&
-    session.status !== "idle" &&
-    session.status !== "stopped"
-  ) {
-    return thread.latestTurn;
-  }
-
-  return buildLatestTurn({
-    previous: thread.latestTurn,
-    turnId: thread.latestTurn.turnId,
-    state: session.status === "error" || error ? "error" : "interrupted",
-    requestedAt: thread.latestTurn.requestedAt,
-    startedAt: thread.latestTurn.startedAt ?? session.updatedAt,
-    completedAt: thread.latestTurn.completedAt ?? session.updatedAt,
-    assistantMessageId: thread.latestTurn.assistantMessageId,
-  });
+  void error;
+  return thread.latestTurn;
 }
 
 function rebindTurnDiffSummariesForAssistantMessage(

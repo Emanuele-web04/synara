@@ -14,6 +14,7 @@ import {
   type LocalDispatchSnapshot,
   deriveComposerSendState,
   hasLiveChatTurn,
+  shouldStartActiveTurnLayoutGrace,
   shouldRenderTerminalWorkspace,
 } from "./ChatView.logic";
 
@@ -231,6 +232,48 @@ describe("hasLiveChatTurn", () => {
   });
 });
 
+describe("shouldStartActiveTurnLayoutGrace", () => {
+  it("starts the grace window when a live turn just became settled", () => {
+    expect(
+      shouldStartActiveTurnLayoutGrace({
+        previousTurnLayoutLive: true,
+        currentTurnLayoutLive: false,
+        latestTurnStartedAt: "2026-04-13T00:00:00.000Z",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not start the grace window for already-idle threads", () => {
+    expect(
+      shouldStartActiveTurnLayoutGrace({
+        previousTurnLayoutLive: false,
+        currentTurnLayoutLive: false,
+        latestTurnStartedAt: "2026-04-13T00:00:00.000Z",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not start the grace window while work is still live", () => {
+    expect(
+      shouldStartActiveTurnLayoutGrace({
+        previousTurnLayoutLive: true,
+        currentTurnLayoutLive: true,
+        latestTurnStartedAt: "2026-04-13T00:00:00.000Z",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not start the grace window when the turn never started", () => {
+    expect(
+      shouldStartActiveTurnLayoutGrace({
+        previousTurnLayoutLive: true,
+        currentTurnLayoutLive: false,
+        latestTurnStartedAt: null,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("shouldForceSettleLatestTurn", () => {
   const unsettledLatestTurn = {
     turnId: TurnId.makeUnsafe("turn-1"),
@@ -241,7 +284,7 @@ describe("shouldForceSettleLatestTurn", () => {
     assistantMessageId: null,
   } as const;
 
-  it("treats a latest turn as settled when the session is already idle", () => {
+  it("does not treat a latest turn as settled just because the session is already idle", () => {
     expect(
       shouldForceSettleLatestTurn({
         latestTurn: unsettledLatestTurn,
@@ -254,7 +297,7 @@ describe("shouldForceSettleLatestTurn", () => {
         },
         hasLiveTurnTail: false,
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("does not settle while visible tail work is still active", () => {

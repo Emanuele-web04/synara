@@ -276,18 +276,27 @@ export function hasLiveChatTurn(options: {
   );
 }
 
-// Treats a turn as settled when the provider session is already idle but the
-// latest-turn snapshot has not caught up with a completedAt timestamp yet.
+export const ACTIVE_TURN_LAYOUT_SETTLE_DELAY_MS = 180;
+
+export function shouldStartActiveTurnLayoutGrace(options: {
+  previousTurnLayoutLive: boolean;
+  currentTurnLayoutLive: boolean;
+  latestTurnStartedAt: string | null;
+}): boolean {
+  return (
+    options.previousTurnLayoutLive &&
+    !options.currentTurnLayoutLive &&
+    options.latestTurnStartedAt !== null
+  );
+}
+
 export function shouldForceSettleLatestTurn(options: {
   latestTurn: Thread["latestTurn"] | null;
   session: Thread["session"] | null;
   hasLiveTurnTail: boolean;
 }): boolean {
-  const { latestTurn, session, hasLiveTurnTail } = options;
-  if (!latestTurn?.startedAt || latestTurn.completedAt || hasLiveTurnTail || !session) {
-    return false;
-  }
-  return session.orchestrationStatus !== "running";
+  void options;
+  return false;
 }
 
 export function readFileAsDataUrl(file: File): Promise<string> {

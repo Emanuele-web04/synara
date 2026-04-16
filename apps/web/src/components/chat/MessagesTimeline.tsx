@@ -995,13 +995,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         <div className="py-0.5 pl-1.5">
           <div
             className="flex items-center gap-1 pt-1 text-muted-foreground/70 font-system-ui"
-            style={{ fontSize: `${appTypographyScale.chatPx}px` }}
+            style={{ fontSize: `${appTypographyScale.uiSmPx}px` }}
           >
             <span>Working for</span>
             <span>
               {row.createdAt ? (formatWorkingTimer(row.createdAt, nowIso) ?? "0s") : "00:00"}
             </span>
-            <span className="inline-flex items-center gap-[3px]">
+            <span className="inline-flex items-center gap-1">
               <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse" />
               <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse [animation-delay:200ms]" />
               <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse [animation-delay:400ms]" />

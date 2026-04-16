@@ -83,7 +83,6 @@ import {
   stripComposerTriggerText,
 } from "../composer-logic";
 import { createProjectSelector, createThreadSelector } from "../storeSelectors";
-import { shouldForceSettleLatestTurn } from "./ChatView.logic";
 import {
   canOfferForkSlashCommand,
   canOfferReviewSlashCommand,
@@ -239,10 +238,12 @@ import { ProviderHealthBanner } from "./chat/ProviderHealthBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
 import { RateLimitBanner, deriveLatestRateLimitStatus } from "./chat/RateLimitBanner";
 import {
+  ACTIVE_TURN_LAYOUT_SETTLE_DELAY_MS,
   appendVoiceTranscriptToPrompt,
   describeVoiceRecordingStartError,
   isVoiceAuthExpiredMessage,
   sanitizeVoiceErrorMessage,
+  shouldStartActiveTurnLayoutGrace,
   shouldAutoDeleteTerminalThreadOnLastClose,
   buildExpiredTerminalContextToastCopy,
   buildLocalDraftThread,
@@ -1014,14 +1015,7 @@ export default function ChatView({
     activeLatestTurn,
     activeThread?.session ?? null,
   );
-  const latestTurnSettled =
-    (latestTurnSettledByProvider ||
-      shouldForceSettleLatestTurn({
-        latestTurn: activeLatestTurn,
-        session: activeThread?.session ?? null,
-        hasLiveTurnTail,
-      })) &&
-    !hasLiveTurnTail;
+  const latestTurnSettled = latestTurnSettledByProvider && !hasLiveTurnTail;
   const activeProjectId = activeThread?.projectId ?? draftThread?.projectId ?? null;
   const activeProject = useStore(
     useMemo(() => createProjectSelector(activeProjectId), [activeProjectId]),
@@ -1411,6 +1405,10 @@ export default function ChatView({
   const isSendBusy = localDispatch !== null && !serverAcknowledgedLocalDispatch;
   const isPreparingWorktree = localDispatch?.preparingWorktree ?? false;
   const isWorking = hasLiveTurn || isSendBusy || isConnecting || isRevertingCheckpoint;
+  const activeTurnLayoutLive = isWorking || !latestTurnSettled;
+  const [keepSettledActiveTurnLayout, setKeepSettledActiveTurnLayout] = useState(false);
+  const previousActiveTurnLayoutLiveRef = useRef(activeTurnLayoutLive);
+  const previousActiveTurnLayoutKeyRef = useRef<string | null>(null);
   const nowIso = new Date(nowTick).toISOString();
   const activeWorkStartedAt = hasLiveTurnTail
     ? (activeLatestTurn?.startedAt ?? localDispatch?.startedAt ?? null)
@@ -1419,6 +1417,9 @@ export default function ChatView({
         activeThread?.session ?? null,
         localDispatch?.startedAt ?? null,
       );
+  const activeTurnLayoutKey =
+    activeThreadId === null ? null : `${activeThreadId}:${activeLatestTurn?.turnId ?? "idle"}`;
+  const activeTurnInProgress = activeTurnLayoutLive || keepSettledActiveTurnLayout;
   const isComposerApprovalState = activePendingApproval !== null;
   const composerFooterHasWideActions = showPlanFollowUpPrompt || activePendingProgress !== null;
   const handoffDisabled = !(
@@ -1436,6 +1437,39 @@ export default function ChatView({
     requestId: string | null;
     questionId: string | null;
   } | null>(null);
+  useLayoutEffect(() => {
+    if (previousActiveTurnLayoutKeyRef.current !== activeTurnLayoutKey) {
+      previousActiveTurnLayoutKeyRef.current = activeTurnLayoutKey;
+      previousActiveTurnLayoutLiveRef.current = activeTurnLayoutLive;
+      setKeepSettledActiveTurnLayout(false);
+      return;
+    }
+
+    const shouldStartGrace = shouldStartActiveTurnLayoutGrace({
+      previousTurnLayoutLive: previousActiveTurnLayoutLiveRef.current,
+      currentTurnLayoutLive: activeTurnLayoutLive,
+      latestTurnStartedAt: activeLatestTurn?.startedAt ?? null,
+    });
+    previousActiveTurnLayoutLiveRef.current = activeTurnLayoutLive;
+
+    if (activeTurnLayoutLive) {
+      setKeepSettledActiveTurnLayout(false);
+      return;
+    }
+
+    if (!shouldStartGrace) {
+      return;
+    }
+
+    setKeepSettledActiveTurnLayout(true);
+    const timeoutId = window.setTimeout(() => {
+      setKeepSettledActiveTurnLayout(false);
+    }, ACTIVE_TURN_LAYOUT_SETTLE_DELAY_MS);
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [activeLatestTurn?.startedAt, activeTurnLayoutKey, activeTurnLayoutLive]);
+
   useEffect(() => {
     const nextCustomAnswer = activePendingProgress?.customAnswer;
     if (typeof nextCustomAnswer !== "string") {
@@ -5681,7 +5715,7 @@ export default function ChatView({
               activeThreadId={activeThread.id}
               hasMessages={timelineEntries.length > 0}
               isWorking={isWorking}
-              activeTurnInProgress={isWorking || !latestTurnSettled}
+              activeTurnInProgress={activeTurnInProgress}
               activeTurnStartedAt={activeWorkStartedAt}
               messagesScrollElement={messagesScrollElement}
               setMessagesBottomAnchorRef={setMessagesBottomAnchorRef}

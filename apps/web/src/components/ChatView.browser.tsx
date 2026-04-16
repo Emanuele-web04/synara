@@ -662,6 +662,71 @@ function createSnapshotWithSettledInlinePlan(): OrchestrationReadModel {
   };
 }
 
+function createSnapshotWithInlineToolOverflow(options: {
+  active: boolean;
+}): OrchestrationReadModel {
+  const snapshot = createSnapshotForTargetUser({
+    targetMessageId: "msg-user-inline-tools-target" as MessageId,
+    targetText: "inline tools thread",
+    sessionStatus: options.active ? "running" : "ready",
+  });
+  const activeTurnId = TurnId.makeUnsafe("turn-inline-tools");
+
+  return {
+    ...snapshot,
+    threads: snapshot.threads.map((thread) =>
+      thread.id === THREAD_ID
+        ? {
+            ...thread,
+            latestTurn: {
+              turnId: activeTurnId,
+              state: options.active ? "running" : "completed",
+              requestedAt: isoAt(1_100),
+              startedAt: isoAt(1_101),
+              completedAt: options.active ? null : isoAt(1_108),
+              assistantMessageId: MessageId.makeUnsafe("msg-assistant-inline-tools"),
+            },
+            activities: Array.from({ length: 6 }, (_, index) => ({
+              id: EventId.makeUnsafe(`activity-inline-tool-${index + 1}`),
+              createdAt: isoAt(1_102 + index),
+              kind: "tool.completed" as const,
+              summary: `tool ${index + 1}`,
+              tone: "tool" as const,
+              turnId: activeTurnId,
+              payload: {
+                itemType: "dynamic_tool_call",
+                toolName: `tool-${index + 1}`,
+              },
+            })),
+            messages: [
+              ...thread.messages,
+              {
+                turnId: activeTurnId,
+                id: MessageId.makeUnsafe("msg-assistant-inline-tools"),
+                role: "assistant",
+                text: "Wrapped up the inline tool review.",
+                createdAt: isoAt(1_109),
+                updatedAt: isoAt(1_109),
+                completedAt: options.active ? undefined : isoAt(1_109),
+                streaming: false,
+                source: "native",
+              },
+            ],
+            session: thread.session
+              ? {
+                  ...thread.session,
+                  status: options.active ? "running" : "ready",
+                  activeTurnId: options.active ? activeTurnId : null,
+                  updatedAt: options.active ? isoAt(1_107) : isoAt(1_108),
+                }
+              : null,
+            updatedAt: options.active ? isoAt(1_107) : isoAt(1_109),
+          }
+        : thread,
+    ),
+  };
+}
+
 function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
   const tag = body._tag;
   if (tag === ORCHESTRATION_WS_METHODS.getSnapshot) {
@@ -2857,6 +2922,44 @@ describe("ChatView timeline estimator parity (full app)", () => {
           expect(
             document.querySelector<HTMLButtonElement>('button[aria-label="Stop generation"]'),
           ).toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps the live inline-tool layout through the first settled paint, then relaxes after the grace delay", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithInlineToolOverflow({ active: true }),
+    });
+
+    try {
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("Tool 6");
+          expect(document.body.textContent).not.toContain("Tool 1");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      useStore
+        .getState()
+        .syncServerReadModel(createSnapshotWithInlineToolOverflow({ active: false }));
+
+      expect(document.body.textContent).toContain("Tool 6");
+      expect(document.body.textContent).not.toContain("Tool 1");
+
+      await new Promise<void>((resolve) => {
+        window.setTimeout(() => resolve(), 260);
+      });
+
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("Tool 1");
+          expect(document.body.textContent).not.toContain("Tool 6");
         },
         { timeout: 8_000, interval: 16 },
       );
