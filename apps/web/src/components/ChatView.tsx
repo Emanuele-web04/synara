@@ -40,7 +40,6 @@ import {
   GENERIC_CHAT_THREAD_TITLE,
 } from "@t3tools/shared/chatThreads";
 import {
-  isPendingThreadWorktree,
   resolveThreadWorkspaceState,
   resolveThreadBranchSourceCwd,
   resolveThreadWorkspaceCwd as resolveSharedThreadWorkspaceCwd,
@@ -268,7 +267,10 @@ import {
   resolveHandoffTargetProvider,
   resolveThreadHandoffBadgeLabel,
 } from "../lib/threadHandoff";
-import { resolveThreadEnvironmentMode } from "../lib/threadEnvironment";
+import {
+  resolveDiffEnvironmentState,
+  resolveThreadEnvironmentMode,
+} from "../lib/threadEnvironment";
 import { buildNextProviderOptions } from "../providerModelOptions";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
@@ -1026,13 +1028,13 @@ export default function ChatView({
   const resolvedThreadWorktreePath = isServerThread
     ? (activeThread?.worktreePath ?? null)
     : (draftThread?.worktreePath ?? null);
-  const diffEnvironmentPending = isPendingThreadWorktree({
+  const diffEnvironmentState = resolveDiffEnvironmentState({
+    projectCwd: activeProject?.cwd ?? null,
     envMode: resolvedThreadEnvMode,
     worktreePath: resolvedThreadWorktreePath,
   });
-  const diffDisabledReason = diffEnvironmentPending
-    ? "Diff and summary will be available once the worktree is ready for this chat."
-    : null;
+  const diffEnvironmentPending = diffEnvironmentState.pending;
+  const diffDisabledReason = diffEnvironmentState.disabledReason;
   const activeThreadAssociatedWorktree = useMemo(
     () =>
       deriveAssociatedWorktreeMetadata({

@@ -5,7 +5,9 @@
 
 import type { ThreadEnvironmentMode } from "@t3tools/contracts";
 import {
+  isPendingThreadWorktree,
   resolveThreadEnvironmentMode,
+  resolveThreadWorkspaceCwd,
   resolveThreadWorkspaceState,
   type ResolvedThreadWorkspaceState,
 } from "@t3tools/shared/threadEnvironment";
@@ -58,6 +60,34 @@ export function resolveThreadEnvironmentPresentation(input: {
         : workspaceState === "worktree-pending"
           ? "Worktree pending"
           : null,
+  };
+}
+
+export interface DiffEnvironmentState {
+  pending: boolean;
+  cwd: string | null;
+  disabledReason: string | null;
+}
+
+// Diff surfaces stay disabled while a worktree-intended chat is still waiting for its path.
+export function resolveDiffEnvironmentState(input: {
+  projectCwd?: string | null | undefined;
+  envMode?: ThreadEnvironmentMode | null | undefined;
+  worktreePath?: string | null | undefined;
+}): DiffEnvironmentState {
+  const pending = isPendingThreadWorktree(input);
+  return {
+    pending,
+    cwd: pending
+      ? null
+      : resolveThreadWorkspaceCwd({
+          projectCwd: input.projectCwd,
+          envMode: input.envMode,
+          worktreePath: input.worktreePath,
+        }),
+    disabledReason: pending
+      ? "Diff and summary will be available once the worktree is ready for this chat."
+      : null,
   };
 }
 

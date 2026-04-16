@@ -3,10 +3,6 @@ import { FileDiff, type FileDiffMetadata, Virtualizer } from "@pierre/diffs/reac
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { ThreadId, type TurnId } from "@t3tools/contracts";
-import {
-  isPendingThreadWorktree,
-  resolveThreadWorkspaceCwd,
-} from "@t3tools/shared/threadEnvironment";
 import { FaPlusMinus } from "react-icons/fa6";
 import { LuWrapText } from "react-icons/lu";
 import {
@@ -40,6 +36,7 @@ import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch"
 import { useTheme } from "../hooks/useTheme";
 import { buildPatchCacheKey } from "../lib/diffRendering";
 import { resolveDiffThemeName } from "../lib/diffRendering";
+import { resolveDiffEnvironmentState } from "../lib/threadEnvironment";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { useStore } from "../store";
@@ -258,17 +255,13 @@ export default function DiffPanel({
     serverThread?.envMode ?? draftThread?.envMode ?? activeThread?.envMode;
   const resolvedThreadWorktreePath =
     serverThread?.worktreePath ?? draftThread?.worktreePath ?? activeThread?.worktreePath ?? null;
-  const diffEnvironmentPending = isPendingThreadWorktree({
+  const diffEnvironmentState = resolveDiffEnvironmentState({
+    projectCwd: activeProject?.cwd ?? null,
     envMode: resolvedThreadEnvMode,
     worktreePath: resolvedThreadWorktreePath,
   });
-  const activeCwd = diffEnvironmentPending
-    ? null
-    : resolveThreadWorkspaceCwd({
-        projectCwd: activeProject?.cwd ?? null,
-        envMode: resolvedThreadEnvMode,
-        worktreePath: resolvedThreadWorktreePath,
-      });
+  const diffEnvironmentPending = diffEnvironmentState.pending;
+  const activeCwd = diffEnvironmentState.cwd;
   const gitBranchesQuery = useQuery(gitBranchesQueryOptions(activeCwd ?? null));
   const isGitRepo = gitBranchesQuery.data?.isRepo ?? true;
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =

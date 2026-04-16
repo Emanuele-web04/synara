@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveForkThreadEnvironment } from "./threadEnvironment";
+import { resolveDiffEnvironmentState, resolveForkThreadEnvironment } from "./threadEnvironment";
 
 describe("threadEnvironment", () => {
   it("keeps a worktree fork into local on the same worktree", () => {
@@ -65,6 +65,35 @@ describe("threadEnvironment", () => {
       associatedWorktreePath: null,
       associatedWorktreeBranch: "feature/source-branch",
       associatedWorktreeRef: "feature/source-branch",
+    });
+  });
+
+  it("marks diff state as pending when a worktree chat has no materialized path yet", () => {
+    expect(
+      resolveDiffEnvironmentState({
+        projectCwd: "/repo",
+        envMode: "worktree",
+        worktreePath: null,
+      }),
+    ).toEqual({
+      pending: true,
+      cwd: null,
+      disabledReason:
+        "Diff and summary will be available once the worktree is ready for this chat.",
+    });
+  });
+
+  it("resolves diff state to the worktree cwd once the path exists", () => {
+    expect(
+      resolveDiffEnvironmentState({
+        projectCwd: "/repo",
+        envMode: "worktree",
+        worktreePath: "/repo/.worktrees/feature-x",
+      }),
+    ).toEqual({
+      pending: false,
+      cwd: "/repo/.worktrees/feature-x",
+      disabledReason: null,
     });
   });
 });
