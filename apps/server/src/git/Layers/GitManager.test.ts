@@ -549,6 +549,24 @@ function preparePullRequestThread(
   return manager.preparePullRequestThread(input);
 }
 
+function handoffThread(
+  manager: GitManagerShape,
+  input: {
+    cwd: string;
+    targetMode: "local" | "worktree";
+    currentBranch: string | null;
+    worktreePath: string | null;
+    associatedWorktreePath: string | null;
+    associatedWorktreeBranch: string | null;
+    associatedWorktreeRef: string | null;
+    preferredLocalBranch: string | null;
+    preferredWorktreeBaseBranch: string | null;
+    preferredNewWorktreeName: string | null;
+  },
+) {
+  return manager.handoffThread(input);
+}
+
 function makeManager(input?: {
   ghScenario?: FakeGhScenario;
   textGeneration?: Partial<FakeGitTextGeneration>;
@@ -2490,6 +2508,45 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       );
 
       expect(errorMessage).toContain("already checked out in the main repo");
+    }),
+  );
+
+  it.effect("creates a new handoff worktree on a named branch instead of detached HEAD", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+
+      const { manager } = yield* makeManager();
+      const result = yield* handoffThread(manager, {
+        cwd: repoDir,
+        targetMode: "worktree",
+        currentBranch: "main",
+        worktreePath: null,
+        associatedWorktreePath: null,
+        associatedWorktreeBranch: null,
+        associatedWorktreeRef: null,
+        preferredLocalBranch: "main",
+        preferredWorktreeBaseBranch: "main",
+        preferredNewWorktreeName: "worktree/demo-handoff",
+      });
+
+      expect(result.targetMode).toBe("worktree");
+      expect(result.branch).toBe("worktree/demo-handoff");
+      expect(result.associatedWorktreeBranch).toBe("worktree/demo-handoff");
+
+      const worktreeBranch = (yield* runGit(result.worktreePath as string, [
+        "rev-parse",
+        "--abbrev-ref",
+        "HEAD",
+      ])).stdout.trim();
+      expect(worktreeBranch).toBe("worktree/demo-handoff");
+
+      const localBranch = (yield* runGit(repoDir, [
+        "rev-parse",
+        "--abbrev-ref",
+        "HEAD",
+      ])).stdout.trim();
+      expect(localBranch).toBe("main");
     }),
   );
 

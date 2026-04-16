@@ -1631,6 +1631,22 @@ export const makeGitManager = Effect.gen(function* () {
       return worktree;
     });
 
+  const createNamedWorktree = (input: {
+    cwd: string;
+    baseBranch: string;
+    name: string;
+    path: string | null;
+  }) =>
+    Effect.gen(function* () {
+      const resolvedPath = input.path ?? buildNamedWorktreePath(input.cwd, input.name);
+      return yield* gitCore.createWorktree({
+        cwd: input.cwd,
+        branch: input.baseBranch,
+        newBranch: input.name,
+        path: resolvedPath,
+      });
+    });
+
   const stashWorkingTree = (cwd: string, label: string) =>
     Effect.gen(function* () {
       if (!(yield* gitCore.statusDetails(cwd)).hasWorkingTreeChanges) {
@@ -2188,11 +2204,11 @@ The local stash entry was kept for recovery.`,
             "Select a base branch before creating a new worktree.",
           );
         }
-        return yield* createDetachedWorktree({
+        return yield* createNamedWorktree({
           cwd: input.cwd,
-          ref: targetBaseBranch,
-          path: null,
+          baseBranch: targetBaseBranch,
           name: targetWorktreeName,
+          path: null,
         });
       }
       if (targetAssociatedWorktreeBranch) {

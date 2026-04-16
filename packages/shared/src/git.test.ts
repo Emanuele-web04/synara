@@ -2,11 +2,16 @@ import { describe, expect, it } from "vitest";
 
 import {
   WORKTREE_BRANCH_PREFIX,
+  buildTemporaryWorktreeBranchName,
   isTemporaryWorktreeBranch,
   resolveThreadBranchRegressionGuard,
 } from "./git";
 
 describe("isTemporaryWorktreeBranch", () => {
+  it("matches generated temporary worktree branches", () => {
+    expect(isTemporaryWorktreeBranch(buildTemporaryWorktreeBranchName())).toBe(true);
+  });
+
   it("matches generated temporary worktree branches", () => {
     expect(isTemporaryWorktreeBranch(`${WORKTREE_BRANCH_PREFIX}/deadbeef`)).toBe(true);
     expect(isTemporaryWorktreeBranch(` ${WORKTREE_BRANCH_PREFIX}/DEADBEEF `)).toBe(true);

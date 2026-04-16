@@ -365,6 +365,21 @@ describe("when: working tree has local changes", () => {
     });
   });
 
+  it("resolveQuickAction keeps create-branch visible for unpushed worktree branches after rename", () => {
+    const quick = resolveQuickAction(
+      status({ branch: "worktree/semantic-name", hasUpstream: false }),
+      false,
+      false,
+      true,
+      true,
+    );
+    assert.deepInclude(quick, {
+      kind: "create_branch",
+      label: "Create Branch",
+      disabled: false,
+    });
+  });
+
   it("resolveQuickAction returns commit and push when open PR exists", () => {
     const quick = resolveQuickAction(
       status({

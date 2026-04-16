@@ -282,13 +282,13 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
       }}
     >
       <div className="chat-composer-surface relative overflow-hidden rounded-xl border border-border/60 bg-card shadow-[0_0_0_1px_rgba(255,255,255,0.04)_inset]">
-        <CommandList className="max-h-72 py-1">
+        <CommandList className="max-h-72 py-0.5">
           {groups.map((group, groupIndex) => (
             <div key={group.id}>
               {groupIndex > 0 ? <CommandSeparator className="my-0.5" /> : null}
               <CommandGroup>
                 {group.label ? (
-                  <CommandGroupLabel className="px-2.5 pt-1.5 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/55">
+                  <CommandGroupLabel className="px-2 pt-1.5 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/55">
                     {group.label}
                   </CommandGroupLabel>
                 ) : null}
@@ -310,7 +310,7 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
           ))}
         </CommandList>
         {props.items.length === 0 && (
-          <p className="px-2.5 py-1.5 text-muted-foreground/50 text-[11px]">
+          <p className="px-2 py-1.5 text-muted-foreground/50 text-[11px]">
             {props.isLoading
               ? props.triggerKind === "mention"
                 ? "Searching workspace files..."
@@ -344,7 +344,7 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
       ref={props.itemRef}
       value={props.item.id}
       className={cn(
-        "cursor-pointer select-none gap-2 rounded-lg px-2.5 py-1 transition-colors hover:bg-accent/40 data-highlighted:bg-accent/40 data-highlighted:text-accent-foreground",
+        "cursor-pointer select-none gap-2 rounded-lg px-2 py-1 transition-colors hover:bg-accent/40 data-highlighted:bg-accent/40 data-highlighted:text-accent-foreground",
         props.isActive && "bg-accent/40 text-accent-foreground",
       )}
       onMouseMove={() => {

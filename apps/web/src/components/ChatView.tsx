@@ -34,6 +34,7 @@ import {
   getModelCapabilities,
   normalizeModelSlug,
 } from "@t3tools/shared/model";
+import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import {
   buildPromptThreadTitleFallback,
   GENERIC_CHAT_THREAD_TITLE,
@@ -51,10 +52,7 @@ import { PiArrowBendDownRight } from "react-icons/pi";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import {
-  gitBranchesQueryOptions,
-  gitCreateDetachedWorktreeMutationOptions,
-} from "~/lib/gitReactQuery";
+import { gitCreateWorktreeMutationOptions, gitBranchesQueryOptions } from "~/lib/gitReactQuery";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import {
   providerComposerCapabilitiesQueryOptions,
@@ -716,9 +714,7 @@ export default function ChatView({
   const removeThreadFromSplitViews = useSplitViewStore((store) => store.removeThreadFromSplitViews);
   const { resolvedTheme } = useTheme();
   const queryClient = useQueryClient();
-  const createDetachedWorktreeMutation = useMutation(
-    gitCreateDetachedWorktreeMutationOptions({ queryClient }),
-  );
+  const createWorktreeMutation = useMutation(gitCreateWorktreeMutationOptions({ queryClient }));
   const composerDraft = useComposerThreadDraft(threadId);
   const prompt = composerDraft.prompt;
   const composerImages = composerDraft.images;
@@ -4270,16 +4266,16 @@ export default function ChatView({
       // On first message: lock in branch + create worktree if needed.
       if (baseBranchForWorktree) {
         beginLocalDispatch({ preparingWorktree: true });
-        const result = await createDetachedWorktreeMutation.mutateAsync({
+        const result = await createWorktreeMutation.mutateAsync({
           cwd: activeProject.cwd,
-          ref: baseBranchForWorktree,
+          branch: baseBranchForWorktree,
+          newBranch: buildTemporaryWorktreeBranchName(),
         });
         nextThreadBranch = result.worktree.branch;
         nextThreadWorktreePath = result.worktree.path;
         const nextAssociatedWorktree = deriveAssociatedWorktreeMetadata({
+          branch: result.worktree.branch,
           worktreePath: result.worktree.path,
-          associatedWorktreeBranch: null,
-          associatedWorktreeRef: result.worktree.ref,
         });
         if (isServerThread) {
           await api.orchestration.dispatchCommand({

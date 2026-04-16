@@ -764,6 +764,20 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
       pr: null,
     };
   }
+  if (tag === WS_METHODS.gitCreateWorktree) {
+    const requestedBranch =
+      typeof body.newBranch === "string"
+        ? body.newBranch
+        : typeof body.branch === "string"
+          ? body.branch
+          : "main";
+    return {
+      worktree: {
+        path: `/repo/.codex/worktrees/project/${requestedBranch.replaceAll("/", "-")}`,
+        branch: requestedBranch,
+      },
+    };
+  }
   if (tag === WS_METHODS.projectsSearchEntries) {
     return {
       entries: [],
@@ -2290,6 +2304,82 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await expect.element(page.getByText("New worktree")).toBeInTheDocument();
       expect(useComposerDraftStore.getState().getDraftThread(newThreadId)?.envMode).toBe(
         "worktree",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("creates a temporary branch-backed worktree on first send in New worktree mode", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-new-worktree-send-test" as MessageId,
+        targetText: "new worktree send test",
+      }),
+    });
+
+    try {
+      const newThreadButton = page.getByTestId("new-thread-button");
+      await expect.element(newThreadButton).toBeInTheDocument();
+      await newThreadButton.click();
+
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a new draft thread UUID.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+
+      const envPickerTrigger = page.getByText("Local");
+      await expect.element(envPickerTrigger).toBeInTheDocument();
+      await envPickerTrigger.click();
+
+      const newWorktreeOption = page.getByText("New worktree");
+      await expect.element(newWorktreeOption).toBeInTheDocument();
+      await newWorktreeOption.click();
+
+      useComposerDraftStore.getState().setPrompt(newThreadId, "Ship it");
+
+      const sendButton = await waitForSendButton();
+      expect(sendButton.disabled).toBe(false);
+      await sendButton.click();
+
+      await vi.waitFor(
+        () => {
+          const createWorktreeRequest = wsRequests.find(
+            (request) =>
+              request._tag === WS_METHODS.gitCreateWorktree &&
+              request.cwd === "/repo/project" &&
+              request.branch === "main" &&
+              typeof request.newBranch === "string",
+          );
+          expect(createWorktreeRequest).toBeTruthy();
+          expect(createWorktreeRequest?.newBranch).toMatch(/^dpcode\/[0-9a-f]{8}$/);
+
+          const detachedRequest = wsRequests.find(
+            (request) => request._tag === WS_METHODS.gitCreateDetachedWorktree,
+          );
+          expect(detachedRequest).toBeUndefined();
+
+          const createThreadRequest = wsRequests.find(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              typeof request.command === "object" &&
+              request.command !== null &&
+              "type" in request.command &&
+              "threadId" in request.command &&
+              request.command.type === "thread.create" &&
+              request.command.threadId === newThreadId,
+          );
+          expect(createThreadRequest).toBeTruthy();
+          expect(createThreadRequest?.command).toMatchObject({
+            envMode: "worktree",
+            branch: createWorktreeRequest?.newBranch,
+            worktreePath: `/repo/.codex/worktrees/project/${String(createWorktreeRequest?.newBranch).replaceAll("/", "-")}`,
+          });
+        },
+        { timeout: 8_000, interval: 16 },
       );
     } finally {
       await mounted.cleanup();

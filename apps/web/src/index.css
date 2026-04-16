@@ -105,7 +105,7 @@
   --card-foreground: var(--color-neutral-800);
   --popover: var(--color-white);
   --popover-foreground: var(--color-neutral-800);
-  --primary: oklch(0.488 0.217 264);
+  --primary: var(--color-neutral-900);
   --primary-foreground: var(--color-white);
   --secondary: --alpha(var(--color-black) / 4%);
   --secondary-foreground: var(--color-neutral-800);
@@ -116,7 +116,7 @@
   --destructive: var(--color-red-500);
   --border: --alpha(var(--color-black) / 5%);
   --input: --alpha(var(--color-black) / 6%);
-  --ring: oklch(0.488 0.217 264);
+  --ring: var(--color-neutral-400);
   --destructive-foreground: var(--color-red-700);
   --info: var(--color-blue-500);
   --info-foreground: #526fff;
@@ -134,8 +134,8 @@
     --card-foreground: var(--color-neutral-100);
     --popover: color-mix(in srgb, var(--background) 99%, var(--color-white));
     --popover-foreground: var(--color-neutral-100);
-    --primary: oklch(0.588 0.217 264);
-    --primary-foreground: var(--color-white);
+    --primary: var(--color-neutral-100);
+    --primary-foreground: var(--color-neutral-900);
     --secondary: --alpha(var(--color-white) / 4%);
     --secondary-foreground: var(--color-neutral-100);
     --muted: --alpha(var(--color-white) / 4%);
@@ -145,7 +145,7 @@
     --destructive: color-mix(in srgb, var(--color-red-500) 90%, var(--color-white));
     --border: --alpha(var(--color-white) / 4%);
     --input: --alpha(var(--color-white) / 5%);
-    --ring: oklch(0.588 0.217 264);
+    --ring: var(--color-neutral-500);
     --destructive-foreground: var(--color-red-400);
     --info: var(--color-blue-500);
     --info-foreground: #6073cc;

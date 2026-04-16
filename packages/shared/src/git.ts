@@ -67,6 +67,11 @@ export function isTemporaryWorktreeBranch(branch: string): boolean {
   return TEMP_WORKTREE_BRANCH_PATTERN.test(branch.trim().toLowerCase());
 }
 
+export function buildTemporaryWorktreeBranchName(): string {
+  const token = crypto.randomUUID().replace(/-/g, "").slice(0, 8).toLowerCase();
+  return `${WORKTREE_BRANCH_PREFIX}/${token}`;
+}
+
 // Preserve semantic thread branches when transient worktree placeholders briefly
 // appear in git status during rename/bootstrap transitions.
 export function resolveThreadBranchRegressionGuard(input: {

@@ -71,6 +71,8 @@ import {
 import { randomUUID } from "~/lib/utils";
 import { resolvePathLinkTarget } from "~/terminal-links";
 import { readNativeApi } from "~/nativeApi";
+import { createThreadSelector } from "~/storeSelectors";
+import { useStore } from "~/store";
 
 interface GitActionsControlProps {
   gitCwd: string | null;
@@ -266,6 +268,9 @@ function GitPickerMenuRow({ item }: { item: GitPickerMenuItem }) {
 
 export default function GitActionsControl({ gitCwd, activeThreadId }: GitActionsControlProps) {
   const { settings } = useAppSettings();
+  const activeThread = useStore(
+    useMemo(() => createThreadSelector(activeThreadId), [activeThreadId]),
+  );
   const threadToastData = useMemo(
     () => (activeThreadId ? { threadId: activeThreadId } : undefined),
     [activeThreadId],
@@ -346,11 +351,35 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
     const current = branchList?.branches.find((branch) => branch.name === branchName);
     return current?.isDefault ?? (branchName === "main" || branchName === "master");
   }, [branchList?.branches, gitStatusForActions?.branch]);
+  const shouldOfferCreateBranch = useMemo(() => {
+    if (!activeThread?.worktreePath || !gitStatusForActions?.branch) {
+      return false;
+    }
+    return !gitStatusForActions.hasUpstream;
+  }, [activeThread?.worktreePath, gitStatusForActions?.branch, gitStatusForActions?.hasUpstream]);
+  const currentBranchName =
+    gitStatusForActions?.branch ?? currentBranch ?? activeThread?.branch ?? null;
+  const suggestedCreateBranchName = useMemo(
+    () => activeThread?.associatedWorktreeBranch ?? currentBranchName ?? "",
+    [activeThread?.associatedWorktreeBranch, currentBranchName],
+  );
 
   const quickAction = useMemo(
     () =>
-      resolveQuickAction(gitStatusForActions, isGitActionRunning, isDefaultBranch, hasOriginRemote),
-    [gitStatusForActions, hasOriginRemote, isDefaultBranch, isGitActionRunning],
+      resolveQuickAction(
+        gitStatusForActions,
+        isGitActionRunning,
+        isDefaultBranch,
+        hasOriginRemote,
+        shouldOfferCreateBranch,
+      ),
+    [
+      gitStatusForActions,
+      hasOriginRemote,
+      isDefaultBranch,
+      isGitActionRunning,
+      shouldOfferCreateBranch,
+    ],
   );
   const gitActionMenuItems = useMemo(
     () => buildMenuItems(gitStatusForActions, isGitActionRunning, hasOriginRemote, isDefaultBranch),
@@ -736,9 +765,9 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
   }, [allSelected, isCommitDialogOpen, dialogCommitMessage, selectedFiles]);
 
   const openCreateBranchDialog = useCallback(() => {
-    setCreateBranchName("");
+    setCreateBranchName(suggestedCreateBranchName);
     setIsCreateBranchDialogOpen(true);
-  }, []);
+  }, [suggestedCreateBranchName]);
 
   const runQuickAction = useCallback(() => {
     if (quickAction.kind === "open_pr") {
@@ -777,6 +806,12 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
     () => new Set((branchList?.branches ?? []).map((b) => b.name.toLowerCase())),
     [branchList?.branches],
   );
+  const normalizedCurrentBranchName = currentBranchName?.trim().toLowerCase() ?? "";
+  const normalizedCreateBranchName = createBranchName.trim().toLowerCase();
+  const createBranchNameConflicts =
+    normalizedCreateBranchName.length > 0 &&
+    normalizedCreateBranchName !== normalizedCurrentBranchName &&
+    branchNames.has(normalizedCreateBranchName);
 
   const createAndCheckoutBranch = useCallback(
     async (branchName: string) => {
@@ -788,6 +823,16 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
 
       setIsCreateBranchDialogOpen(false);
       setCreateBranchName("");
+
+      if (trimmedName.toLowerCase() === normalizedCurrentBranchName) {
+        toastManager.add({
+          type: "success",
+          title: `Keeping ${trimmedName}`,
+          description: "Branch name confirmed.",
+          data: threadToastData,
+        });
+        return;
+      }
 
       const toastId = toastManager.add({
         type: "loading",
@@ -816,7 +861,7 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
         });
       }
     },
-    [gitCwd, queryClient, threadToastData],
+    [gitCwd, normalizedCurrentBranchName, queryClient, threadToastData],
   );
 
   const openDialogForMenuItem = useCallback(
@@ -1303,7 +1348,7 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
               onSubmit={(event) => {
                 event.preventDefault();
                 const trimmedName = createBranchName.trim();
-                if (!trimmedName || branchNames.has(trimmedName.toLowerCase())) {
+                if (!trimmedName || createBranchNameConflicts) {
                   return;
                 }
                 void createAndCheckoutBranch(trimmedName);
@@ -1321,7 +1366,7 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
                   onChange={(event) => setCreateBranchName(event.target.value)}
                 />
               </div>
-              {branchNames.has(createBranchName.trim().toLowerCase()) ? (
+              {createBranchNameConflicts ? (
                 <p className="text-destructive text-sm">A branch with this name already exists.</p>
               ) : null}
               <DialogFooter variant="bare">
@@ -1337,10 +1382,7 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
                 </Button>
                 <Button
                   type="submit"
-                  disabled={
-                    createBranchName.trim().length === 0 ||
-                    branchNames.has(createBranchName.trim().toLowerCase())
-                  }
+                  disabled={createBranchName.trim().length === 0 || createBranchNameConflicts}
                 >
                   Create Branch
                 </Button>

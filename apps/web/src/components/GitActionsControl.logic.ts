@@ -206,6 +206,7 @@ export function resolveQuickAction(
   isBusy: boolean,
   isDefaultBranch = false,
   hasOriginRemote = true,
+  shouldOfferCreateBranch = false,
 ): GitQuickAction {
   if (isBusy) {
     return { label: "Commit", disabled: true, kind: "show_hint", hint: "Git action in progress." };
@@ -238,7 +239,10 @@ export function resolveQuickAction(
 
   // Worktree with temporary branch (dpcode/xxxxxxxx) that hasn't been pushed yet
   // → prompt user to create a permanent branch name
-  if (isTemporaryWorktreeBranch(gitStatus.branch!) && !gitStatus.hasUpstream) {
+  if (
+    !gitStatus.hasUpstream &&
+    (isTemporaryWorktreeBranch(gitStatus.branch!) || shouldOfferCreateBranch)
+  ) {
     return {
       label: "Create Branch",
       disabled: false,

@@ -2575,16 +2575,23 @@ export default function Sidebar() {
 
     return (
       <div key={thread.id} className="group/thread-row relative w-full">
-        <button
-          type="button"
+        <div
+          role="button"
+          tabIndex={0}
           data-thread-item
           className={cn(
-            "relative flex h-8 w-full items-center gap-2 rounded-md px-2 pr-9 text-left text-[length:var(--app-font-size-ui,12px)] transition-colors",
+            "relative flex h-8 w-full items-center gap-2 rounded-md px-2 pr-9 text-left text-[length:var(--app-font-size-ui,12px)] transition-colors cursor-pointer",
             isActive
               ? "bg-accent/62 text-foreground/90 dark:bg-accent/42"
               : "text-foreground/72 hover:bg-accent/40 hover:text-foreground/90",
           )}
           onClick={() => activateThread(thread.id)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              activateThread(thread.id);
+            }
+          }}
           onContextMenu={(event) => {
             event.preventDefault();
             void handleThreadContextMenu(thread.id, {
@@ -2663,7 +2670,7 @@ export default function Sidebar() {
               })}
             </div>
           </div>
-        </button>
+        </div>
       </div>
     );
   }
