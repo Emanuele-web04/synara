@@ -1,13 +1,20 @@
-import { ThreadId, type OrchestrationEvent, type ServerConfig } from "@t3tools/contracts";
+import {
+  ThreadId,
+  type OrchestrationEvent,
+  type OrchestrationShellStreamEvent,
+  type ServerConfig,
+} from "@t3tools/contracts";
 import { defaultTerminalTitleForCliKind } from "@t3tools/shared/terminalThreads";
 import {
   Outlet,
   createRootRouteWithContext,
   type ErrorComponentProps,
   useNavigate,
+  useParams,
   useRouterState,
+  useSearch,
 } from "@tanstack/react-router";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { QueryClient, useQueryClient } from "@tanstack/react-query";
 import { Throttler } from "@tanstack/react-pacer";
 
@@ -33,6 +40,8 @@ import { TaskCompletionNotifications } from "../notifications/taskCompletion";
 import { useWorkspaceStore, workspaceThreadId } from "../workspaceStore";
 import { useAppTypography } from "../hooks/useAppTypography";
 import { invalidateGitQueries } from "../lib/gitReactQuery";
+import { parseDiffRouteSearch } from "../diffRouteSearch";
+import { resolveSplitViewThreadIds, selectSplitView, useSplitViewStore } from "../splitViewStore";
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient;
@@ -142,13 +151,6 @@ function errorDetails(error: unknown): string {
   }
 }
 
-const SNAPSHOT_CATCH_UP_MAX_ATTEMPTS = 5;
-const SNAPSHOT_CATCH_UP_DELAY_MS = 40;
-
-function wait(ms: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
 function coalesceOrchestrationUiEvents(
   events: ReadonlyArray<OrchestrationEvent>,
 ): OrchestrationEvent[] {
@@ -187,8 +189,12 @@ function coalesceOrchestrationUiEvents(
 }
 
 function EventRouter() {
-  const syncServerReadModel = useStore((store) => store.syncServerReadModel);
-  const applyOrchestrationEvents = useStore((store) => store.applyOrchestrationEvents);
+  const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
+  const syncServerThreadDetailHotPath = useStore((store) => store.syncServerThreadDetailHotPath);
+  const applyShellEvent = useStore((store) => store.applyShellEvent);
+  const applyOrchestrationEventsHotPath = useStore(
+    (store) => store.applyOrchestrationEventsHotPath,
+  );
   const setProjectExpanded = useStore((store) => store.setProjectExpanded);
   const removeOrphanedTerminalStates = useTerminalStateStore(
     (store) => store.removeOrphanedTerminalStates,
@@ -198,21 +204,140 @@ function EventRouter() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const routeThreadId = useParams({
+    strict: false,
+    select: (params) => (params.threadId ? ThreadId.makeUnsafe(params.threadId) : null),
+  });
+  const routeSearch = useSearch({
+    strict: false,
+    select: (search) => parseDiffRouteSearch(search),
+  });
+  const activeSplitView = useSplitViewStore(selectSplitView(routeSearch.splitViewId ?? null));
+  const visibleThreadIds = useMemo(() => {
+    if (activeSplitView) {
+      return resolveSplitViewThreadIds(activeSplitView);
+    }
+    return routeThreadId ? [routeThreadId] : [];
+  }, [activeSplitView, routeThreadId]);
   const pathnameRef = useRef(pathname);
   const handledBootstrapThreadIdRef = useRef<string | null>(null);
+  const visibleThreadIdsRef = useRef(visibleThreadIds);
+  const reconcileThreadSubscriptionsRef = useRef<
+    ((threadIds: readonly ThreadId[]) => Promise<void>) | null
+  >(null);
 
   pathnameRef.current = pathname;
+  visibleThreadIdsRef.current = visibleThreadIds;
 
   useEffect(() => {
     const api = readNativeApi();
     if (!api) return;
     let disposed = false;
-    let latestSequence = 0;
-    let syncing = false;
-    let pending = false;
     let needsProviderInvalidation = false;
     let needsGitInvalidation = false;
     let pendingDomainEvents: OrchestrationEvent[] = [];
+    let shellSnapshotSequence = -1;
+    let pendingShellEvents: OrchestrationShellStreamEvent[] = [];
+    const subscribedThreadIds = new Set<ThreadId>();
+    const threadSnapshotSequenceById = new Map<ThreadId, number>();
+    const pendingThreadEventsById = new Map<ThreadId, OrchestrationEvent[]>();
+    const threadSnapshotRequestInFlight = new Set<ThreadId>();
+    let reconcileThreadSubscriptionsChain = Promise.resolve();
+
+    const beginThreadSubscription = (threadId: ThreadId) => {
+      threadSnapshotSequenceById.delete(threadId);
+      pendingThreadEventsById.set(threadId, []);
+      threadSnapshotRequestInFlight.delete(threadId);
+    };
+
+    // Draft routes can subscribe before the server thread exists. Once the shell
+    // row appears, explicitly request the first thread snapshot so buffered detail
+    // events can flush instead of waiting forever.
+    const requestThreadSnapshot = async (threadId: ThreadId) => {
+      if (threadSnapshotSequenceById.has(threadId) || threadSnapshotRequestInFlight.has(threadId)) {
+        return;
+      }
+      threadSnapshotRequestInFlight.add(threadId);
+      try {
+        await api.orchestration.subscribeThread({ threadId });
+      } catch {
+        // Keep the pending buffer intact and retry on the next shell/detail update.
+      } finally {
+        threadSnapshotRequestInFlight.delete(threadId);
+      }
+    };
+
+    const flushThreadBuffer = (threadId: ThreadId, snapshotSequence: number) => {
+      const pendingEvents = pendingThreadEventsById.get(threadId) ?? [];
+      pendingThreadEventsById.delete(threadId);
+      let latestThreadSequence = threadSnapshotSequenceById.get(threadId) ?? snapshotSequence;
+      for (const event of pendingEvents.toSorted((left, right) => left.sequence - right.sequence)) {
+        if (event.sequence > latestThreadSequence) {
+          latestThreadSequence = event.sequence;
+          threadSnapshotSequenceById.set(threadId, latestThreadSequence);
+          queueDomainEvent(event);
+        }
+      }
+    };
+
+    const flushShellBuffer = (snapshotSequence: number) => {
+      const nextPending = pendingShellEvents
+        .filter((event) => event.sequence > snapshotSequence)
+        .toSorted((left, right) => left.sequence - right.sequence);
+      pendingShellEvents = [];
+      for (const event of nextPending) {
+        shellSnapshotSequence = Math.max(shellSnapshotSequence, event.sequence);
+        applyShellEvent(event);
+      }
+    };
+
+    const reconcileThreadSubscriptions = async (threadIds: readonly ThreadId[]) => {
+      const nextThreadIds = new Set(threadIds);
+      const removals = [...subscribedThreadIds].filter((threadId) => !nextThreadIds.has(threadId));
+      const additions = [...nextThreadIds].filter((threadId) => !subscribedThreadIds.has(threadId));
+
+      for (const threadId of removals) {
+        threadSnapshotSequenceById.delete(threadId);
+        pendingThreadEventsById.delete(threadId);
+        threadSnapshotRequestInFlight.delete(threadId);
+      }
+      await Promise.all(
+        removals.map((threadId) =>
+          api.orchestration.unsubscribeThread({ threadId }).catch(() => undefined),
+        ),
+      );
+      for (const threadId of additions) {
+        beginThreadSubscription(threadId);
+      }
+      await Promise.all(
+        additions.map((threadId) =>
+          api.orchestration.subscribeThread({ threadId }).catch(() => undefined),
+        ),
+      );
+
+      subscribedThreadIds.clear();
+      for (const threadId of nextThreadIds) {
+        subscribedThreadIds.add(threadId);
+      }
+    };
+
+    const enqueueThreadSubscriptionReconcile = (threadIds: readonly ThreadId[]) => {
+      const nextThreadIds = [...threadIds];
+      reconcileThreadSubscriptionsChain = reconcileThreadSubscriptionsChain
+        .catch(() => undefined)
+        .then(() => reconcileThreadSubscriptions(nextThreadIds));
+      return reconcileThreadSubscriptionsChain;
+    };
+
+    const ensureScopedSubscriptions = async () => {
+      shellSnapshotSequence = -1;
+      pendingShellEvents = [];
+      subscribedThreadIds.clear();
+      threadSnapshotSequenceById.clear();
+      pendingThreadEventsById.clear();
+      await api.orchestration.subscribeShell().catch(() => undefined);
+      await enqueueThreadSubscriptionReconcile(visibleThreadIdsRef.current);
+    };
 
     const removeOrphanedTerminalsForCurrentState = () => {
       const draftThreadIds = Object.keys(
@@ -230,86 +355,7 @@ function EventRouter() {
       removeOrphanedTerminalStates(activeThreadIds);
     };
 
-    const flushSnapshotSync = async (): Promise<void> => {
-      let snapshot = await api.orchestration.getSnapshot();
-      if (disposed) return;
-      // Domain events can reach the client before the projection snapshot catches up.
-      // Wait briefly for the snapshot cursor so late turn-diff summaries do not disappear
-      // until the next user message or a manual refresh.
-      for (
-        let attempt = 1;
-        snapshot.snapshotSequence < latestSequence && attempt < SNAPSHOT_CATCH_UP_MAX_ATTEMPTS;
-        attempt += 1
-      ) {
-        await wait(SNAPSHOT_CATCH_UP_DELAY_MS * attempt);
-        if (disposed) return;
-        snapshot = await api.orchestration.getSnapshot();
-        if (disposed) return;
-      }
-      if (snapshot.snapshotSequence < latestSequence) {
-        pending = true;
-        return;
-      }
-      latestSequence = Math.max(latestSequence, snapshot.snapshotSequence);
-      syncServerReadModel(snapshot);
-      clearPromotedDraftThreads(new Set(snapshot.threads.map((t) => t.id)));
-      removeOrphanedTerminalsForCurrentState();
-      if (pending) {
-        pending = false;
-        await flushSnapshotSync();
-      }
-    };
-
-    const syncSnapshot = async () => {
-      if (syncing) {
-        pending = true;
-        return;
-      }
-      syncing = true;
-      pending = false;
-      try {
-        await flushSnapshotSync();
-      } catch {
-        // Keep prior state and wait for the next domain event to trigger a resync.
-      }
-      syncing = false;
-      if (pending) {
-        pending = false;
-        void syncSnapshot();
-      }
-    };
-
-    const domainEventFlushThrottler = new Throttler(
-      () => {
-        if (pendingDomainEvents.length > 0) {
-          applyOrchestrationEvents(coalesceOrchestrationUiEvents(pendingDomainEvents));
-          pendingDomainEvents = [];
-        }
-        if (needsProviderInvalidation) {
-          needsProviderInvalidation = false;
-          void queryClient.invalidateQueries({ queryKey: providerQueryKeys.all });
-          // Invalidate workspace entry queries so the @-mention file picker
-          // reflects files created, deleted, or restored during this turn.
-          void queryClient.invalidateQueries({ queryKey: projectQueryKeys.all });
-        }
-        if (needsGitInvalidation) {
-          needsGitInvalidation = false;
-          void invalidateGitQueries(queryClient);
-        }
-        void syncSnapshot();
-      },
-      {
-        wait: 100,
-        leading: false,
-        trailing: true,
-      },
-    );
-
-    const unsubDomainEvent = api.orchestration.onDomainEvent((event) => {
-      if (event.sequence <= latestSequence) {
-        return;
-      }
-      latestSequence = event.sequence;
+    const queueDomainEvent = (event: OrchestrationEvent) => {
       pendingDomainEvents.push(event);
       if (event.type === "thread.turn-diff-completed" || event.type === "thread.reverted") {
         needsProviderInvalidation = true;
@@ -326,6 +372,93 @@ function EventRouter() {
         needsGitInvalidation = true;
       }
       domainEventFlushThrottler.maybeExecute();
+    };
+
+    const domainEventFlushThrottler = new Throttler(
+      () => {
+        if (pendingDomainEvents.length > 0) {
+          applyOrchestrationEventsHotPath(coalesceOrchestrationUiEvents(pendingDomainEvents));
+          pendingDomainEvents = [];
+        }
+        if (needsProviderInvalidation) {
+          needsProviderInvalidation = false;
+          void queryClient.invalidateQueries({ queryKey: providerQueryKeys.all });
+          // Invalidate workspace entry queries so the @-mention file picker
+          // reflects files created, deleted, or restored during this turn.
+          void queryClient.invalidateQueries({ queryKey: projectQueryKeys.all });
+        }
+        if (needsGitInvalidation) {
+          needsGitInvalidation = false;
+          void invalidateGitQueries(queryClient);
+        }
+      },
+      {
+        wait: 100,
+        leading: false,
+        trailing: true,
+      },
+    );
+
+    reconcileThreadSubscriptionsRef.current = (threadIds) =>
+      enqueueThreadSubscriptionReconcile(threadIds);
+
+    const unsubShellEvent = api.orchestration.onShellEvent((item) => {
+      if (item.kind === "snapshot") {
+        shellSnapshotSequence = item.snapshot.snapshotSequence;
+        syncServerShellSnapshot(item.snapshot);
+        clearPromotedDraftThreads(new Set(item.snapshot.threads.map((thread) => thread.id)));
+        removeOrphanedTerminalsForCurrentState();
+        flushShellBuffer(item.snapshot.snapshotSequence);
+        return;
+      }
+
+      if (shellSnapshotSequence < 0) {
+        pendingShellEvents.push(item);
+        return;
+      }
+      if (item.sequence <= shellSnapshotSequence) {
+        return;
+      }
+      shellSnapshotSequence = item.sequence;
+      applyShellEvent(item);
+      if (item.kind === "thread-upserted") {
+        clearPromotedDraftThreads(new Set([item.thread.id]));
+      }
+      if (
+        item.kind === "thread-upserted" &&
+        subscribedThreadIds.has(item.thread.id) &&
+        !threadSnapshotSequenceById.has(item.thread.id)
+      ) {
+        void requestThreadSnapshot(item.thread.id);
+      }
+    });
+    const unsubThreadEvent = api.orchestration.onThreadEvent((item) => {
+      if (item.kind === "snapshot") {
+        const threadId = item.snapshot.thread.id;
+        threadSnapshotSequenceById.set(threadId, item.snapshot.snapshotSequence);
+        threadSnapshotRequestInFlight.delete(threadId);
+        syncServerThreadDetailHotPath(item.snapshot.thread);
+        clearPromotedDraftThreads(new Set([threadId]));
+        flushThreadBuffer(threadId, item.snapshot.snapshotSequence);
+        return;
+      }
+
+      const threadId = ThreadId.makeUnsafe(String(item.event.aggregateId));
+      const latestThreadSequence = threadSnapshotSequenceById.get(threadId);
+      if (latestThreadSequence === undefined) {
+        const pendingThreadEvents = pendingThreadEventsById.get(threadId) ?? [];
+        pendingThreadEvents.push(item.event);
+        pendingThreadEventsById.set(threadId, pendingThreadEvents);
+        if (subscribedThreadIds.has(threadId)) {
+          void requestThreadSnapshot(threadId);
+        }
+        return;
+      }
+      if (item.event.sequence <= latestThreadSequence) {
+        return;
+      }
+      threadSnapshotSequenceById.set(threadId, item.event.sequence);
+      queueDomainEvent(item.event);
     });
     const unsubTerminalEvent = api.terminal.onEvent((event) => {
       const terminalThreadId = ThreadId.makeUnsafe(event.threadId);
@@ -349,7 +482,7 @@ function EventRouter() {
     const unsubWelcome = onServerWelcome((payload) => {
       void (async () => {
         setWorkspaceHomeDir(payload.homeDir);
-        await syncSnapshot();
+        await ensureScopedSubscriptions();
         if (disposed) {
           return;
         }
@@ -430,26 +563,46 @@ function EventRouter() {
       });
     });
     subscribed = true;
+    void ensureScopedSubscriptions();
+
     return () => {
       disposed = true;
       needsProviderInvalidation = false;
       domainEventFlushThrottler.cancel();
-      unsubDomainEvent();
+      reconcileThreadSubscriptionsRef.current = null;
+      void api.orchestration.unsubscribeShell().catch(() => undefined);
+      void Promise.all(
+        [...subscribedThreadIds].map((threadId) =>
+          api.orchestration.unsubscribeThread({ threadId }).catch(() => undefined),
+        ),
+      );
+      unsubShellEvent();
+      unsubThreadEvent();
       unsubTerminalEvent();
       unsubWelcome();
       unsubServerConfigUpdated();
       unsubProviderStatusesUpdated();
     };
   }, [
-    applyOrchestrationEvents,
+    applyOrchestrationEventsHotPath,
+    applyShellEvent,
     navigate,
     queryClient,
     removeOrphanedTerminalStates,
     setProjectExpanded,
     setWorkspaceHomeDir,
-    syncServerReadModel,
+    syncServerShellSnapshot,
+    syncServerThreadDetailHotPath,
     workspacePages,
   ]);
+
+  useEffect(() => {
+    const reconcile = reconcileThreadSubscriptionsRef.current;
+    if (!reconcile) {
+      return;
+    }
+    void reconcile(visibleThreadIds);
+  }, [visibleThreadIds]);
 
   return null;
 }

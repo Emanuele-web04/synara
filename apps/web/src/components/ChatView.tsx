@@ -82,7 +82,11 @@ import {
   replaceTextRange,
   stripComposerTriggerText,
 } from "../composer-logic";
-import { createProjectSelector, createThreadSelector } from "../storeSelectors";
+import {
+  createAllThreadsSelector,
+  createProjectSelector,
+  createThreadSelector,
+} from "../storeSelectors";
 import {
   canOfferForkSlashCommand,
   canOfferReviewSlashCommand,
@@ -115,6 +119,7 @@ import {
   type PendingUserInputDraftAnswer,
 } from "../pendingUserInput";
 import { useStore } from "../store";
+import { getThreadFromState } from "../threadDerivation";
 import {
   buildPlanImplementationThreadTitle,
   buildPlanImplementationPrompt,
@@ -698,6 +703,142 @@ function enrichSubagentWorkEntries(
   });
 }
 
+function shallowEqualThreads(left: ReadonlyArray<Thread>, right: ReadonlyArray<Thread>): boolean {
+  return left.length === right.length && left.every((thread, index) => thread === right[index]);
+}
+
+function createRelevantWorkLogThreadsSelector(input: {
+  workEntries: ReadonlyArray<WorkLogEntry>;
+  parentThreadId: ThreadIdType | null;
+  enabled: boolean;
+}) {
+  const selectAllThreads = createAllThreadsSelector();
+  const directThreadIds = new Set<ThreadIdType>();
+  const agentIds = new Set<string>();
+
+  if (input.parentThreadId) {
+    directThreadIds.add(input.parentThreadId);
+  }
+
+  for (const entry of input.workEntries) {
+    for (const subagent of entry.subagents ?? []) {
+      const directThreadId = subagent.resolvedThreadId ?? subagent.threadId;
+      if (directThreadId) {
+        directThreadIds.add(ThreadId.makeUnsafe(directThreadId));
+      }
+
+      const providerThreadId = subagent.providerThreadId ?? subagent.threadId;
+      if (input.parentThreadId && providerThreadId) {
+        directThreadIds.add(localSubagentThreadId(input.parentThreadId, providerThreadId));
+      }
+
+      if (subagent.agentId) {
+        agentIds.add(subagent.agentId);
+      }
+    }
+  }
+
+  let previousThreads: ReadonlyArray<Thread> | null = null;
+  let previousResult: Thread[] = [];
+
+  return (store: Parameters<typeof selectAllThreads>[0]): Thread[] => {
+    const threads = selectAllThreads(store);
+    if (!input.enabled) {
+      previousThreads = threads;
+      if (previousResult.length === 0) {
+        return previousResult;
+      }
+      previousResult = [];
+      return previousResult;
+    }
+
+    if (threads === previousThreads) {
+      return previousResult;
+    }
+    previousThreads = threads;
+
+    const selectedThreadIds = new Set<ThreadIdType>();
+    const threadById = new Map(threads.map((thread) => [thread.id, thread] as const));
+
+    for (const thread of threads) {
+      if (directThreadIds.has(thread.id)) {
+        selectedThreadIds.add(thread.id);
+      }
+      if (input.parentThreadId && thread.parentThreadId === input.parentThreadId) {
+        selectedThreadIds.add(thread.id);
+      }
+      if (thread.subagentAgentId && agentIds.has(thread.subagentAgentId)) {
+        selectedThreadIds.add(thread.id);
+      }
+    }
+
+    const pendingAncestorIds = [...selectedThreadIds];
+    while (pendingAncestorIds.length > 0) {
+      const threadId = pendingAncestorIds.pop();
+      if (!threadId) {
+        continue;
+      }
+      const parentThreadId = threadById.get(threadId)?.parentThreadId ?? null;
+      if (parentThreadId && !selectedThreadIds.has(parentThreadId)) {
+        selectedThreadIds.add(parentThreadId);
+        pendingAncestorIds.push(parentThreadId);
+      }
+    }
+
+    const nextResult = threads.filter((thread) => selectedThreadIds.has(thread.id));
+    if (shallowEqualThreads(previousResult, nextResult)) {
+      return previousResult;
+    }
+
+    previousResult = nextResult;
+    return previousResult;
+  };
+}
+
+function createThreadLineageSelector(threadId: ThreadIdType | null) {
+  const selectAllThreads = createAllThreadsSelector();
+  let previousThreads: ReadonlyArray<Thread> | null = null;
+  let previousResult: Thread[] = [];
+
+  return (store: Parameters<typeof selectAllThreads>[0]): Thread[] => {
+    const threads = selectAllThreads(store);
+    if (!threadId) {
+      previousThreads = threads;
+      if (previousResult.length === 0) {
+        return previousResult;
+      }
+      previousResult = [];
+      return previousResult;
+    }
+
+    if (threads === previousThreads) {
+      return previousResult;
+    }
+    previousThreads = threads;
+
+    const threadById = new Map(threads.map((thread) => [thread.id, thread] as const));
+    const selectedThreadIds = new Set<ThreadIdType>();
+    let currentThreadId: ThreadIdType | null = threadId;
+
+    while (currentThreadId) {
+      const thread = threadById.get(currentThreadId);
+      if (!thread || selectedThreadIds.has(thread.id)) {
+        break;
+      }
+      selectedThreadIds.add(thread.id);
+      currentThreadId = thread.parentThreadId ?? null;
+    }
+
+    const nextResult = threads.filter((thread) => selectedThreadIds.has(thread.id));
+    if (shallowEqualThreads(previousResult, nextResult)) {
+      return previousResult;
+    }
+
+    previousResult = nextResult;
+    return previousResult;
+  };
+}
+
 interface ChatViewProps {
   threadId: ThreadId;
   paneScopeId?: string;
@@ -816,7 +957,6 @@ export default function ChatView({
   const draftThread = useComposerDraftStore(
     (store) => store.draftThreadsByThreadId[threadId] ?? null,
   );
-  const allThreads = useStore((store) => store.threads);
   const serverThread = useStore(useMemo(() => createThreadSelector(threadId), [threadId]));
   const fallbackDraftProjectId = draftThread?.projectId ?? null;
   const fallbackDraftProject = useStore(
@@ -1047,9 +1187,12 @@ export default function ChatView({
   const activeProject = useStore(
     useMemo(() => createProjectSelector(activeProjectId), [activeProjectId]),
   );
+  const threadLineageThreads = useStore(
+    useMemo(() => createThreadLineageSelector(activeThread?.id ?? null), [activeThread?.id]),
+  );
   const threadBreadcrumbs = useMemo(
-    () => buildThreadBreadcrumbs(allThreads, activeThread),
-    [activeThread, allThreads],
+    () => buildThreadBreadcrumbs(threadLineageThreads, activeThread),
+    [activeThread, threadLineageThreads],
   );
   const resolvedThreadEnvMode = isServerThread
     ? (activeThread?.envMode ?? null)
@@ -1300,14 +1443,35 @@ export default function ChatView({
     [lockedProvider, modelOptionsByProvider],
   );
   const phase = derivePhase(activeThread?.session ?? null);
+  const rawWorkLogEntries = useMemo(
+    () => deriveWorkLogEntries(threadActivities, activeLatestTurn?.turnId ?? undefined),
+    [activeLatestTurn?.turnId, threadActivities],
+  );
+  const hasWorkLogSubagents = useMemo(
+    () => rawWorkLogEntries.some((entry) => (entry.subagents?.length ?? 0) > 0),
+    [rawWorkLogEntries],
+  );
+  const relevantWorkLogThreads = useStore(
+    useMemo(
+      () =>
+        createRelevantWorkLogThreadsSelector({
+          workEntries: rawWorkLogEntries,
+          parentThreadId: activeThread?.id ?? null,
+          enabled: hasWorkLogSubagents,
+        }),
+      [activeThread?.id, hasWorkLogSubagents, rawWorkLogEntries],
+    ),
+  );
   const workLogEntries = useMemo(
     () =>
-      enrichSubagentWorkEntries(
-        deriveWorkLogEntries(threadActivities, activeLatestTurn?.turnId ?? undefined),
-        allThreads,
-        activeThread?.id ?? null,
-      ),
-    [activeLatestTurn?.turnId, activeThread?.id, allThreads, threadActivities],
+      hasWorkLogSubagents
+        ? enrichSubagentWorkEntries(
+            rawWorkLogEntries,
+            relevantWorkLogThreads,
+            activeThread?.id ?? null,
+          )
+        : rawWorkLogEntries,
+    [activeThread?.id, hasWorkLogSubagents, rawWorkLogEntries, relevantWorkLogThreads],
   );
   const latestTurnHasToolActivity = useMemo(
     () => hasToolActivityForTurn(threadActivities, activeLatestTurn?.turnId),
@@ -2195,7 +2359,7 @@ export default function ChatView({
   const setThreadError = useCallback(
     (targetThreadId: ThreadId | null, error: string | null) => {
       if (!targetThreadId) return;
-      if (useStore.getState().threads.some((thread) => thread.id === targetThreadId)) {
+      if (getThreadFromState(useStore.getState(), targetThreadId)) {
         setStoreThreadError(targetThreadId, error);
         return;
       }
@@ -5749,7 +5913,7 @@ export default function ChatView({
             activeThread.parentThreadId
               ? resolveSubagentPresentationForThread({
                   thread: activeThread,
-                  threads: allThreads,
+                  threads: threadLineageThreads,
                 }).fullLabel
               : activeThread.title
           }

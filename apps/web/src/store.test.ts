@@ -8,11 +8,13 @@ import {
   TurnId,
   type OrchestrationEvent,
   type OrchestrationReadModel,
+  type OrchestrationShellStreamEvent,
   type OrchestrationThreadActivity,
 } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  applyShellEvent,
   applyOrchestrationEvents,
   collapseProjectsExcept,
   markThreadUnread,
@@ -491,6 +493,114 @@ describe("store pure functions", () => {
     );
 
     expect(next.projects).toEqual([]);
+  });
+
+  it("reuses the existing project slot for shell upserts that keep the same workspace root", () => {
+    const initialState: AppState = {
+      projects: [
+        makeProject({
+          id: ProjectId.makeUnsafe("project-old"),
+          name: "Local Name",
+          remoteName: "Old Name",
+          localName: "Local Name",
+          cwd: "/tmp/shared-root",
+        }),
+      ],
+      threads: [],
+      sidebarThreadSummaryById: {},
+      threadsHydrated: true,
+    };
+
+    const next = applyShellEvent(initialState, {
+      kind: "project-upserted",
+      sequence: 2,
+      project: {
+        id: ProjectId.makeUnsafe("project-new"),
+        title: "Server Name",
+        workspaceRoot: "/tmp/shared-root",
+        defaultModelSelection: null,
+        scripts: [],
+        createdAt: "2026-02-27T00:00:00.000Z",
+        updatedAt: "2026-02-27T00:05:00.000Z",
+      },
+    } satisfies OrchestrationShellStreamEvent);
+
+    expect(next.projects).toHaveLength(1);
+    expect(next.projects[0]).toMatchObject({
+      id: ProjectId.makeUnsafe("project-new"),
+      name: "Local Name",
+      remoteName: "Server Name",
+      localName: "Local Name",
+      cwd: "/tmp/shared-root",
+    });
+  });
+
+  it("drops descendant thread state when a shell project removal arrives", () => {
+    const initialThread = makeThread({
+      id: ThreadId.makeUnsafe("thread-project-1"),
+      projectId: ProjectId.makeUnsafe("project-shell"),
+    });
+    const untouchedThread = makeThread({
+      id: ThreadId.makeUnsafe("thread-project-2"),
+      projectId: ProjectId.makeUnsafe("project-other"),
+    });
+    const initialState = syncServerReadModel(
+      {
+        projects: [
+          makeProject({
+            id: ProjectId.makeUnsafe("project-shell"),
+            cwd: "/tmp/project-shell",
+          }),
+          makeProject({
+            id: ProjectId.makeUnsafe("project-other"),
+            cwd: "/tmp/project-other",
+          }),
+        ],
+        threads: [initialThread, untouchedThread],
+        sidebarThreadSummaryById: {},
+        threadsHydrated: true,
+      },
+      {
+        snapshotSequence: 1,
+        updatedAt: "2026-02-27T00:00:00.000Z",
+        projects: [
+          makeReadModelProject({
+            id: ProjectId.makeUnsafe("project-shell"),
+            workspaceRoot: "/tmp/project-shell",
+          }),
+          makeReadModelProject({
+            id: ProjectId.makeUnsafe("project-other"),
+            workspaceRoot: "/tmp/project-other",
+          }),
+        ],
+        threads: [
+          makeReadModelThread({
+            id: ThreadId.makeUnsafe("thread-project-1"),
+            projectId: ProjectId.makeUnsafe("project-shell"),
+          }),
+          makeReadModelThread({
+            id: ThreadId.makeUnsafe("thread-project-2"),
+            projectId: ProjectId.makeUnsafe("project-other"),
+          }),
+        ],
+      },
+    );
+
+    const next = applyShellEvent(initialState, {
+      kind: "project-removed",
+      sequence: 2,
+      projectId: ProjectId.makeUnsafe("project-shell"),
+    } satisfies OrchestrationShellStreamEvent);
+
+    expect(next.projects.map((project) => project.id)).toEqual([
+      ProjectId.makeUnsafe("project-other"),
+    ]);
+    expect(next.threads.map((thread) => thread.id)).toEqual([
+      ThreadId.makeUnsafe("thread-project-2"),
+    ]);
+    expect(next.threadIds).toEqual([ThreadId.makeUnsafe("thread-project-2")]);
+    expect(next.threadShellById?.[ThreadId.makeUnsafe("thread-project-1")]).toBeUndefined();
+    expect(next.sidebarThreadSummaryById["thread-project-1"]).toBeUndefined();
   });
 
   it("settles a running latest turn immediately when session stop is requested", () => {

@@ -11,7 +11,7 @@ import {
 import { createFileRoute, useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
-import { type ReactNode, useCallback, useEffect, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import {
   MAX_CHAT_FONT_SIZE_PX,
   getAppModelOptions,
@@ -66,6 +66,7 @@ import {
 } from "../notifications/taskCompletion";
 import { normalizeSettingsSection, SETTINGS_NAV_ITEMS } from "../settingsNavigation";
 import { useStore } from "../store";
+import { createAllThreadsSelector } from "../storeSelectors";
 import { formatRelativeTime } from "../components/Sidebar";
 import { formatWorktreePathForDisplay } from "../worktreeCleanup";
 
@@ -257,17 +258,16 @@ function SettingsRouteView() {
   const serverWorktreesQuery = useQuery(serverWorktreesQueryOptions());
   const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
-  const threads = useStore((store) => store.threads);
+  const threads = useStore(useMemo(() => createAllThreadsSelector(), []));
   const projects = useStore((store) => store.projects);
+  const threadsHydrated = useStore((store) => store.threadsHydrated);
   const archivedThreads = threads.filter((thread) => thread.archivedAt != null);
-  const shouldOfferRecoveryTools = useStore((store) => {
-    if (!store.threadsHydrated || store.projects.length === 0) {
+  const shouldOfferRecoveryTools = useMemo(() => {
+    if (!threadsHydrated || projects.length === 0) {
       return false;
     }
-    return (
-      store.threads.length === 0 || store.threads.every((thread) => thread.messages.length === 0)
-    );
-  });
+    return threads.length === 0 || threads.every((thread) => thread.messages.length === 0);
+  }, [projects.length, threads, threadsHydrated]);
 
   const [isOpeningKeybindings, setIsOpeningKeybindings] = useState(false);
   const [isRepairingLocalState, setIsRepairingLocalState] = useState(false);

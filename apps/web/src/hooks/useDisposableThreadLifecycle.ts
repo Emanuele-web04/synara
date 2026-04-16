@@ -8,6 +8,7 @@ import { useSplitViewStore } from "../splitViewStore";
 import { useStore } from "../store";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
+import { getThreadFromState } from "../threadDerivation";
 
 export function useDisposableThreadLifecycle(activeThreadId: ThreadId | null): void {
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
@@ -56,8 +57,8 @@ export function useDisposableThreadLifecycle(activeThreadId: ThreadId | null): v
     void (async () => {
       try {
         const api = readNativeApi();
-        const serverThread =
-          useStore.getState().threads.find((thread) => thread.id === disposableThreadId) ?? null;
+        const storeState = useStore.getState();
+        const serverThread = getThreadFromState(storeState, disposableThreadId) ?? null;
 
         if (api) {
           if (serverThread?.session && serverThread.session.status !== "closed") {

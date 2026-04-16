@@ -7,14 +7,18 @@ import { LuSplit } from "react-icons/lu";
 import { ChevronDownIcon, ChevronRightIcon, ExternalLinkIcon, HandoffIcon } from "~/lib/icons";
 import { LiaUnlockAltSolid, LiaLockSolid } from "react-icons/lia";
 import { PiLaptop } from "react-icons/pi";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import { newCommandId, cn } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
 import { useStore } from "../store";
-import { createProjectSelector, createThreadSelector } from "../storeSelectors";
+import {
+  createAllThreadsSelector,
+  createProjectSelector,
+  createThreadSelector,
+} from "../storeSelectors";
 import {
   EnvMode,
   resolveDraftEnvModeAfterBranchChange,
@@ -62,10 +66,10 @@ export default function BranchToolbar({
   contextWindow,
   cumulativeCostUsd,
 }: BranchToolbarProps) {
-  const threads = useStore((store) => store.threads);
   const setThreadWorkspaceAction = useStore((store) => store.setThreadWorkspace);
   const draftThread = useComposerDraftStore((store) => store.getDraftThread(threadId));
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
+  const threads = useStore(useRef(createAllThreadsSelector()).current);
 
   const serverThread = useStore(useMemo(() => createThreadSelector(threadId), [threadId]));
   const activeProjectId = serverThread?.projectId ?? draftThread?.projectId ?? null;

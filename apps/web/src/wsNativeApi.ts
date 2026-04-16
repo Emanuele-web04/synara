@@ -2,6 +2,9 @@ import {
   type ThreadId,
   type ThreadBrowserState,
   type GitActionProgressEvent,
+  type OrchestrationEvent,
+  type OrchestrationShellStreamItem,
+  type OrchestrationThreadStreamItem,
   type ServerProviderStatusesUpdatedPayload,
   type TerminalEvent,
   ORCHESTRATION_WS_CHANNELS,
@@ -26,6 +29,11 @@ const serverProviderStatusesUpdatedListeners = new Set<
 >();
 const gitActionProgressListeners = new Set<(payload: GitActionProgressEvent) => void>();
 const terminalEventListeners = new Set<(payload: TerminalEvent) => void>();
+const orchestrationDomainEventListeners = new Set<(payload: OrchestrationEvent) => void>();
+const orchestrationShellEventListeners = new Set<(payload: OrchestrationShellStreamItem) => void>();
+const orchestrationThreadEventListeners = new Set<
+  (payload: OrchestrationThreadStreamItem) => void
+>();
 const fallbackBrowserStateListeners = new Set<(state: ThreadBrowserState) => void>();
 const fallbackBrowserStates = new Map<ThreadId, ThreadBrowserState>();
 
@@ -240,7 +248,36 @@ export function createWsNativeApi(): NativeApi {
       }
     }
   });
-
+  transport.subscribe(ORCHESTRATION_WS_CHANNELS.domainEvent, (message) => {
+    const payload = message.data;
+    for (const listener of orchestrationDomainEventListeners) {
+      try {
+        listener(payload);
+      } catch {
+        // Swallow listener errors
+      }
+    }
+  });
+  transport.subscribe(ORCHESTRATION_WS_CHANNELS.shellEvent, (message) => {
+    const payload = message.data;
+    for (const listener of orchestrationShellEventListeners) {
+      try {
+        listener(payload);
+      } catch {
+        // Swallow listener errors
+      }
+    }
+  });
+  transport.subscribe(ORCHESTRATION_WS_CHANNELS.threadEvent, (message) => {
+    const payload = message.data;
+    for (const listener of orchestrationThreadEventListeners) {
+      try {
+        listener(payload);
+      } catch {
+        // Swallow listener errors
+      }
+    }
+  });
   const api: NativeApi = {
     dialogs: {
       pickFolder: async () => {
@@ -362,10 +399,31 @@ export function createWsNativeApi(): NativeApi {
         transport.request(ORCHESTRATION_WS_METHODS.getFullThreadDiff, input),
       replayEvents: (fromSequenceExclusive) =>
         transport.request(ORCHESTRATION_WS_METHODS.replayEvents, { fromSequenceExclusive }),
-      onDomainEvent: (callback) =>
-        transport.subscribe(ORCHESTRATION_WS_CHANNELS.domainEvent, (message) =>
-          callback(message.data),
-        ),
+      subscribeShell: () => transport.request<void>(ORCHESTRATION_WS_METHODS.subscribeShell, {}),
+      unsubscribeShell: () =>
+        transport.request<void>(ORCHESTRATION_WS_METHODS.unsubscribeShell, {}),
+      subscribeThread: (input) =>
+        transport.request<void>(ORCHESTRATION_WS_METHODS.subscribeThread, input),
+      unsubscribeThread: (input) =>
+        transport.request<void>(ORCHESTRATION_WS_METHODS.unsubscribeThread, input),
+      onDomainEvent: (callback) => {
+        orchestrationDomainEventListeners.add(callback);
+        return () => {
+          orchestrationDomainEventListeners.delete(callback);
+        };
+      },
+      onShellEvent: (callback) => {
+        orchestrationShellEventListeners.add(callback);
+        return () => {
+          orchestrationShellEventListeners.delete(callback);
+        };
+      },
+      onThreadEvent: (callback) => {
+        orchestrationThreadEventListeners.add(callback);
+        return () => {
+          orchestrationThreadEventListeners.delete(callback);
+        };
+      },
     },
     browser: {
       open: async (input) => {

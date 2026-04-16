@@ -46,10 +46,12 @@ import { DiffStatLabel } from "./DiffStatLabel";
 import { VscodeEntryIcon } from "./VscodeEntryIcon";
 import { MessageCopyButton } from "./MessageCopyButton";
 import {
-  computeMessageDurationStart,
-  deriveTerminalAssistantMessageIds,
+  computeStableMessagesTimelineRows,
+  deriveMessagesTimelineRows,
+  type MessagesTimelineRow,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
+  type StableMessagesTimelineRowsState,
 } from "./MessagesTimeline.logic";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
 import {
@@ -243,126 +245,26 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     };
   }, [hasMessages, isWorking, onTimelineHeightChange]);
 
-  const rows = useMemo<TimelineRow[]>(() => {
-    const nextRows: TimelineRow[] = [];
-    const timelineMessages = timelineEntries.flatMap((entry) =>
-      entry.kind === "message" ? [entry.message] : [],
-    );
-    const durationStartByMessageId = computeMessageDurationStart(timelineMessages);
-    const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(timelineMessages);
-    let pendingWorkGroup: Extract<TimelineRow, { kind: "work" }> | null = null;
-
-    const appendWorkEntriesToPreviousAssistant = (groupedEntries: TimelineWorkEntry[]): boolean => {
-      const previousRow = nextRows.at(-1);
-      if (
-        !previousRow ||
-        previousRow.kind !== "message" ||
-        previousRow.message.role !== "assistant"
-      ) {
-        return false;
-      }
-
-      previousRow.inlineWorkEntries = [...(previousRow.inlineWorkEntries ?? []), ...groupedEntries];
-      return true;
-    };
-
-    const flushPendingWorkGroup = (options?: { attachToPreviousAssistant?: boolean }) => {
-      if (!pendingWorkGroup) return;
-      const shouldAttachToPreviousAssistant = options?.attachToPreviousAssistant ?? true;
-      if (
-        !shouldAttachToPreviousAssistant ||
-        !appendWorkEntriesToPreviousAssistant(pendingWorkGroup.groupedEntries)
-      ) {
-        nextRows.push(pendingWorkGroup);
-      }
-      pendingWorkGroup = null;
-    };
-
-    for (let index = 0; index < timelineEntries.length; index += 1) {
-      const timelineEntry = timelineEntries[index];
-      if (!timelineEntry) {
-        continue;
-      }
-
-      if (timelineEntry.kind === "work") {
-        const groupedEntries = [timelineEntry.entry];
-        let cursor = index + 1;
-        while (cursor < timelineEntries.length) {
-          const nextEntry = timelineEntries[cursor];
-          if (!nextEntry || nextEntry.kind !== "work") break;
-          groupedEntries.push(nextEntry.entry);
-          cursor += 1;
-        }
-        flushPendingWorkGroup();
-        pendingWorkGroup = {
-          kind: "work",
-          id: timelineEntry.id,
-          createdAt: timelineEntry.createdAt,
-          groupedEntries,
-        };
-        index = cursor - 1;
-        continue;
-      }
-
-      if (timelineEntry.kind === "proposed-plan") {
-        flushPendingWorkGroup();
-        nextRows.push({
-          kind: "proposed-plan",
-          id: timelineEntry.id,
-          createdAt: timelineEntry.createdAt,
-          proposedPlan: timelineEntry.proposedPlan,
-        });
-        continue;
-      }
-
-      const inlineWorkEntries =
-        timelineEntry.message.role === "assistant" ? pendingWorkGroup?.groupedEntries : undefined;
-      const inlineWorkGroupId =
-        timelineEntry.message.role === "assistant" ? pendingWorkGroup?.id : undefined;
-      if (timelineEntry.message.role === "assistant") {
-        pendingWorkGroup = null;
-      } else {
-        flushPendingWorkGroup();
-      }
-
-      nextRows.push({
-        kind: "message",
-        id: timelineEntry.id,
-        createdAt: timelineEntry.createdAt,
-        message: timelineEntry.message,
-        ...(inlineWorkEntries ? { inlineWorkEntries } : {}),
-        ...(inlineWorkGroupId ? { inlineWorkGroupId } : {}),
-        durationStart:
-          durationStartByMessageId.get(timelineEntry.message.id) ?? timelineEntry.message.createdAt,
-        showCompletionDivider:
-          timelineEntry.message.role === "assistant" &&
-          completionDividerBeforeEntryId === timelineEntry.id,
-        showAssistantCopyButton:
-          timelineEntry.message.role === "assistant" &&
-          terminalAssistantMessageIds.has(timelineEntry.message.id),
-      });
-    }
-
-    // Keep any trailing work summary visually attached to the last answer so a
-    // completed chat does not end with a detached tool-log footer.
-    flushPendingWorkGroup();
-
-    if (isWorking) {
-      nextRows.push({
-        kind: "working",
-        id: "working-indicator-row",
-        createdAt: activeTurnStartedAt,
-      });
-    }
-
-    return nextRows;
-  }, [
-    timelineEntries,
-    completionDividerBeforeEntryId,
-    isWorking,
-    activeTurnInProgress,
-    activeTurnStartedAt,
-  ]);
+  const rawRows = useMemo(
+    () =>
+      deriveMessagesTimelineRows({
+        timelineEntries,
+        completionDividerBeforeEntryId,
+        isWorking,
+        activeTurnStartedAt,
+        turnDiffSummaryByAssistantMessageId,
+        revertTurnCountByUserMessageId,
+      }),
+    [
+      timelineEntries,
+      completionDividerBeforeEntryId,
+      isWorking,
+      activeTurnStartedAt,
+      turnDiffSummaryByAssistantMessageId,
+      revertTurnCountByUserMessageId,
+    ],
+  );
+  const rows = useStableRows(rawRows);
 
   const firstUnvirtualizedRowIndex = useMemo(() => {
     const firstTailRowIndex = Math.max(rows.length - ALWAYS_UNVIRTUALIZED_TAIL_ROWS, 0);
@@ -444,10 +346,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         return estimateTimelineProposedPlanHeight(row.proposedPlan, normalizedChatFontSizePx);
       }
       if (row.kind === "working") return 40;
-      const turnSummary =
-        row.message.role === "assistant"
-          ? turnDiffSummaryByAssistantMessageId.get(row.message.id)
-          : undefined;
+      const turnSummary = row.assistantTurnDiffSummary;
       const messageHeightInput = {
         ...row.message,
         showCompletionDivider: row.showCompletionDivider,
@@ -569,7 +468,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     }));
   }, []);
 
-  const renderRowContent = (row: TimelineRow) => (
+  const renderRowContent = (row: MessagesTimelineRow) => (
     <div
       className={cn(
         row.kind === "work" || (row.kind === "message" && row.message.role === "assistant")
@@ -634,7 +533,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const terminalContexts = displayedUserMessage.contexts;
           const showUserText =
             displayedUserMessage.visibleText.trim().length > 0 || terminalContexts.length > 0;
-          const canRevertAgentWork = revertTurnCountByUserMessageId.has(row.message.id);
+          const canRevertAgentWork = typeof row.revertTurnCount === "number";
           return (
             <div className="flex w-full justify-end">
               <div className="group flex max-w-[80%] flex-col items-end gap-px">
@@ -728,7 +627,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             showCopyButton: row.showAssistantCopyButton,
             streaming: row.message.streaming,
           });
-          const turnSummary = turnDiffSummaryByAssistantMessageId.get(row.message.id);
+          const turnSummary = row.assistantTurnDiffSummary;
           const fileDiffStatByPath = new Map(
             (turnSummary?.files ?? []).map((file) => [
               file.path,
@@ -1103,35 +1002,24 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   );
 });
 
-type TimelineEntry = ReturnType<typeof deriveTimelineEntries>[number];
-type TimelineMessage = Extract<TimelineEntry, { kind: "message" }>["message"];
-type TimelineProposedPlan = Extract<TimelineEntry, { kind: "proposed-plan" }>["proposedPlan"];
-type TimelineWorkEntry = Extract<TimelineEntry, { kind: "work" }>["entry"];
-type TimelineRow =
-  | {
-      kind: "work";
-      id: string;
-      createdAt: string;
-      groupedEntries: TimelineWorkEntry[];
-    }
-  | {
-      kind: "message";
-      id: string;
-      createdAt: string;
-      message: TimelineMessage;
-      inlineWorkEntries?: TimelineWorkEntry[];
-      inlineWorkGroupId?: string;
-      durationStart: string;
-      showCompletionDivider: boolean;
-      showAssistantCopyButton: boolean;
-    }
-  | {
-      kind: "proposed-plan";
-      id: string;
-      createdAt: string;
-      proposedPlan: TimelineProposedPlan;
-    }
-  | { kind: "working"; id: string; createdAt: string | null };
+type TimelineMessage = Extract<MessagesTimelineRow, { kind: "message" }>["message"];
+type TimelineProposedPlan = Extract<MessagesTimelineRow, { kind: "proposed-plan" }>["proposedPlan"];
+type TimelineWorkEntry = Extract<MessagesTimelineRow, { kind: "work" }>["groupedEntries"][number];
+
+// Reuse stable row references so streaming updates only force React work for
+// rows whose visible content actually changed.
+function useStableRows(rows: MessagesTimelineRow[]): MessagesTimelineRow[] {
+  const previousStateRef = useRef<StableMessagesTimelineRowsState>({
+    byId: new Map<string, MessagesTimelineRow>(),
+    result: [],
+  });
+
+  return useMemo(() => {
+    const nextState = computeStableMessagesTimelineRows(rows, previousStateRef.current);
+    previousStateRef.current = nextState;
+    return nextState.result;
+  }, [rows]);
+}
 
 function estimateTimelineProposedPlanHeight(
   proposedPlan: TimelineProposedPlan,

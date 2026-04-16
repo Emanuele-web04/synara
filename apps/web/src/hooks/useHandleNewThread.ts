@@ -18,6 +18,7 @@ import { useFocusedChatContext } from "../focusedChatContext";
 import { useStore } from "../store";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
+import { getThreadFromState } from "../threadDerivation";
 
 export function useHandleNewThread() {
   const projects = useStore((store) => store.projects);
@@ -107,7 +108,7 @@ export function useHandleNewThread() {
         threadId: ThreadId,
         creationState: ReturnType<typeof resolveCreationState>,
       ): Promise<void> => {
-        if (useStore.getState().threads.some((thread) => thread.id === threadId)) {
+        if (getThreadFromState(useStore.getState(), threadId)) {
           return;
         }
         const api = readNativeApi();

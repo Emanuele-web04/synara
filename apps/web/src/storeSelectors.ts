@@ -5,6 +5,7 @@
 import type { ProjectId, ThreadId } from "@t3tools/contracts";
 
 import type { AppState } from "./store";
+import { getThreadFromState, getThreadsFromState } from "./threadDerivation";
 import type { Project, SidebarThreadSummary, Thread } from "./types";
 
 function createStableEntitySelector<T extends { id: string }>(
@@ -39,7 +40,61 @@ export function createProjectSelector(
 export function createThreadSelector(
   threadId: ThreadId | null | undefined,
 ): (state: AppState) => Thread | undefined {
-  return createStableEntitySelector((state) => state.threads, threadId);
+  return (state) =>
+    threadId
+      ? (getThreadFromState(state, threadId) ??
+        state.threads.find((thread) => thread.id === threadId))
+      : undefined;
+}
+
+export function createAllThreadsSelector(): (state: AppState) => readonly Thread[] {
+  let previousThreadIds: readonly ThreadId[] | undefined;
+  let previousThreadShellById = {} as AppState["threadShellById"];
+  let previousThreadSessionById = {} as AppState["threadSessionById"];
+  let previousThreadTurnStateById = {} as AppState["threadTurnStateById"];
+  let previousMessageIdsByThreadId = {} as AppState["messageIdsByThreadId"];
+  let previousMessageByThreadId = {} as AppState["messageByThreadId"];
+  let previousActivityIdsByThreadId = {} as AppState["activityIdsByThreadId"];
+  let previousActivityByThreadId = {} as AppState["activityByThreadId"];
+  let previousProposedPlanIdsByThreadId = {} as AppState["proposedPlanIdsByThreadId"];
+  let previousProposedPlanByThreadId = {} as AppState["proposedPlanByThreadId"];
+  let previousTurnDiffIdsByThreadId = {} as AppState["turnDiffIdsByThreadId"];
+  let previousTurnDiffSummaryByThreadId = {} as AppState["turnDiffSummaryByThreadId"];
+  let previousThreads: readonly Thread[] = [];
+
+  return (state) => {
+    if (
+      previousThreadIds === state.threadIds &&
+      previousThreadShellById === state.threadShellById &&
+      previousThreadSessionById === state.threadSessionById &&
+      previousThreadTurnStateById === state.threadTurnStateById &&
+      previousMessageIdsByThreadId === state.messageIdsByThreadId &&
+      previousMessageByThreadId === state.messageByThreadId &&
+      previousActivityIdsByThreadId === state.activityIdsByThreadId &&
+      previousActivityByThreadId === state.activityByThreadId &&
+      previousProposedPlanIdsByThreadId === state.proposedPlanIdsByThreadId &&
+      previousProposedPlanByThreadId === state.proposedPlanByThreadId &&
+      previousTurnDiffIdsByThreadId === state.turnDiffIdsByThreadId &&
+      previousTurnDiffSummaryByThreadId === state.turnDiffSummaryByThreadId
+    ) {
+      return previousThreads;
+    }
+
+    previousThreadIds = state.threadIds;
+    previousThreadShellById = state.threadShellById;
+    previousThreadSessionById = state.threadSessionById;
+    previousThreadTurnStateById = state.threadTurnStateById;
+    previousMessageIdsByThreadId = state.messageIdsByThreadId;
+    previousMessageByThreadId = state.messageByThreadId;
+    previousActivityIdsByThreadId = state.activityIdsByThreadId;
+    previousActivityByThreadId = state.activityByThreadId;
+    previousProposedPlanIdsByThreadId = state.proposedPlanIdsByThreadId;
+    previousProposedPlanByThreadId = state.proposedPlanByThreadId;
+    previousTurnDiffIdsByThreadId = state.turnDiffIdsByThreadId;
+    previousTurnDiffSummaryByThreadId = state.turnDiffSummaryByThreadId;
+    previousThreads = getThreadsFromState(state);
+    return previousThreads;
+  };
 }
 
 export function createThreadProjectIdSelector(
@@ -65,22 +120,20 @@ export function createSidebarThreadSummarySelector(
 export function createSidebarThreadSummariesSelector(): (
   state: AppState,
 ) => readonly SidebarThreadSummary[] {
-  let previousThreads: readonly Thread[] | undefined;
+  let previousThreadIds: readonly ThreadId[] | undefined;
   let previousSummaryById: Record<string, SidebarThreadSummary> | undefined;
   let previousSummaries: readonly SidebarThreadSummary[] = [];
 
   return (state) => {
-    if (
-      state.threads === previousThreads &&
-      state.sidebarThreadSummaryById === previousSummaryById
-    ) {
+    const threadIds = state.threadIds ?? state.threads.map((thread) => thread.id);
+    if (threadIds === previousThreadIds && state.sidebarThreadSummaryById === previousSummaryById) {
       return previousSummaries;
     }
 
-    previousThreads = state.threads;
+    previousThreadIds = threadIds;
     previousSummaryById = state.sidebarThreadSummaryById;
-    previousSummaries = state.threads.flatMap((thread) => {
-      const summary = state.sidebarThreadSummaryById[thread.id];
+    previousSummaries = threadIds.flatMap((threadId) => {
+      const summary = state.sidebarThreadSummaryById[threadId];
       return summary ? [summary] : [];
     });
     return previousSummaries;

@@ -16,7 +16,9 @@ import {
   DEFAULT_TERMINAL_ID,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   type ClientOrchestrationCommand,
+  type OrchestrationEvent,
   type OrchestrationReadModel,
+  type OrchestrationShellStreamEvent,
   type OrchestrationCommand,
   ORCHESTRATION_WS_CHANNELS,
   ORCHESTRATION_WS_METHODS,
@@ -37,6 +39,7 @@ import {
   Exit,
   FileSystem,
   Layer,
+  Option,
   Path,
   Ref,
   Result,
@@ -154,6 +157,33 @@ function rejectUpgrade(socket: Duplex, statusCode: number, message: string): voi
 }
 
 type BootstrapSnapshotThread = OrchestrationReadModel["threads"][number];
+
+interface ClientOrchestrationSubscriptions {
+  readonly shell: boolean;
+  readonly threadIds: ReadonlySet<ThreadId>;
+}
+
+function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
+  OrchestrationEvent,
+  {
+    type:
+      | "thread.message-sent"
+      | "thread.proposed-plan-upserted"
+      | "thread.activity-appended"
+      | "thread.turn-diff-completed"
+      | "thread.reverted"
+      | "thread.session-set";
+  }
+> {
+  return (
+    event.type === "thread.message-sent" ||
+    event.type === "thread.proposed-plan-upserted" ||
+    event.type === "thread.activity-appended" ||
+    event.type === "thread.turn-diff-completed" ||
+    event.type === "thread.reverted" ||
+    event.type === "thread.session-set"
+  );
+}
 
 function toSortableBootstrapTimestamp(iso: string | undefined): number {
   if (!iso) {
@@ -871,8 +901,127 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const subscriptionsScope = yield* Scope.make("sequential");
   yield* Effect.addFinalizer(() => Scope.close(subscriptionsScope, Exit.void));
 
-  yield* Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) =>
-    pushBus.publishAll(ORCHESTRATION_WS_CHANNELS.domainEvent, event),
+  const clientOrchestrationSubscriptions = new Map<WebSocket, ClientOrchestrationSubscriptions>();
+
+  const getClientOrchestrationSubscriptions = (ws: WebSocket): ClientOrchestrationSubscriptions => {
+    const existing = clientOrchestrationSubscriptions.get(ws);
+    if (existing) {
+      return existing;
+    }
+    const initial: ClientOrchestrationSubscriptions = {
+      shell: false,
+      threadIds: new Set<ThreadId>(),
+    };
+    clientOrchestrationSubscriptions.set(ws, initial);
+    return initial;
+  };
+
+  const setClientOrchestrationSubscriptions = (
+    ws: WebSocket,
+    subscriptions: ClientOrchestrationSubscriptions,
+  ): void => {
+    clientOrchestrationSubscriptions.set(ws, subscriptions);
+  };
+
+  const clearClientOrchestrationSubscriptions = (ws: WebSocket): void => {
+    clientOrchestrationSubscriptions.delete(ws);
+  };
+
+  const toShellStreamEvent = (
+    event: OrchestrationEvent,
+  ): Effect.Effect<Option.Option<OrchestrationShellStreamEvent>, never, never> => {
+    switch (event.type) {
+      case "project.created":
+      case "project.meta-updated":
+        return projectionReadModelQuery.getProjectShellById(event.payload.projectId).pipe(
+          Effect.map((project) =>
+            Option.map(project, (nextProject) => ({
+              kind: "project-upserted" as const,
+              sequence: event.sequence,
+              project: nextProject,
+            })),
+          ),
+          Effect.catch(() => Effect.succeed(Option.none())),
+        );
+      case "project.deleted":
+        return Effect.succeed(
+          Option.some({
+            kind: "project-removed" as const,
+            sequence: event.sequence,
+            projectId: event.payload.projectId,
+          }),
+        );
+      case "thread.deleted":
+        return Effect.succeed(
+          Option.some({
+            kind: "thread-removed" as const,
+            sequence: event.sequence,
+            threadId: event.payload.threadId,
+          }),
+        );
+      default:
+        if (event.aggregateKind !== "thread") {
+          return Effect.succeed(Option.none());
+        }
+        return projectionReadModelQuery
+          .getThreadShellById(ThreadId.makeUnsafe(String(event.aggregateId)))
+          .pipe(
+            Effect.map((thread) =>
+              Option.map(thread, (nextThread) => ({
+                kind: "thread-upserted" as const,
+                sequence: event.sequence,
+                thread: nextThread,
+              })),
+            ),
+            Effect.catch(() => Effect.succeed(Option.none())),
+          );
+    }
+  };
+
+  const publishScopedOrchestrationEvent = Effect.fnUntraced(function* (event: OrchestrationEvent) {
+    const connectedClients = yield* Ref.get(clients);
+    for (const client of connectedClients) {
+      const subscriptions = getClientOrchestrationSubscriptions(client);
+      const hasScopedSubscriptions = subscriptions.shell || subscriptions.threadIds.size > 0;
+      // Preserve the legacy firehose for callers that have not opted into
+      // scoped orchestration subscriptions yet.
+      if (!hasScopedSubscriptions) {
+        yield* pushBus
+          .publishClient(client, ORCHESTRATION_WS_CHANNELS.domainEvent, event)
+          .pipe(Effect.asVoid);
+        continue;
+      }
+
+      if (subscriptions.shell) {
+        const shellEvent = yield* toShellStreamEvent(event);
+        if (Option.isSome(shellEvent)) {
+          yield* pushBus
+            .publishClient(client, ORCHESTRATION_WS_CHANNELS.shellEvent, shellEvent.value)
+            .pipe(Effect.asVoid);
+        }
+      }
+
+      if (event.aggregateKind !== "thread" || !isThreadDetailEvent(event)) {
+        continue;
+      }
+
+      const threadId = ThreadId.makeUnsafe(String(event.aggregateId));
+      if (!subscriptions.threadIds.has(threadId)) {
+        continue;
+      }
+
+      yield* pushBus
+        .publishClient(client, ORCHESTRATION_WS_CHANNELS.threadEvent, {
+          kind: "event" as const,
+          event,
+        })
+        .pipe(Effect.asVoid);
+    }
+  });
+
+  yield* Stream.runForEach(
+    orchestrationEngine.streamDomainEvents,
+    publishScopedOrchestrationEvent,
   ).pipe(Effect.forkIn(subscriptionsScope));
 
   yield* Stream.runForEach(keybindingsManager.streamChanges, (event) =>
@@ -1035,6 +1184,64 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
             }),
           ),
         ).pipe(Effect.map((events) => Array.from(events)));
+      }
+
+      case ORCHESTRATION_WS_METHODS.subscribeShell: {
+        const subscriptions = getClientOrchestrationSubscriptions(ws);
+        setClientOrchestrationSubscriptions(ws, {
+          ...subscriptions,
+          shell: true,
+        });
+        const snapshot = yield* projectionReadModelQuery.getShellSnapshot();
+        yield* pushBus
+          .publishClient(ws, ORCHESTRATION_WS_CHANNELS.shellEvent, {
+            kind: "snapshot" as const,
+            snapshot,
+          })
+          .pipe(Effect.asVoid);
+        return undefined;
+      }
+
+      case ORCHESTRATION_WS_METHODS.unsubscribeShell: {
+        const subscriptions = getClientOrchestrationSubscriptions(ws);
+        setClientOrchestrationSubscriptions(ws, {
+          ...subscriptions,
+          shell: false,
+        });
+        return undefined;
+      }
+
+      case ORCHESTRATION_WS_METHODS.subscribeThread: {
+        const subscriptions = getClientOrchestrationSubscriptions(ws);
+        const nextThreadIds = new Set(subscriptions.threadIds);
+        nextThreadIds.add(request.body.threadId);
+        setClientOrchestrationSubscriptions(ws, {
+          ...subscriptions,
+          threadIds: nextThreadIds,
+        });
+        const threadSnapshot = yield* projectionReadModelQuery.getThreadDetailSnapshotById(
+          request.body.threadId,
+        );
+        if (Option.isSome(threadSnapshot)) {
+          yield* pushBus
+            .publishClient(ws, ORCHESTRATION_WS_CHANNELS.threadEvent, {
+              kind: "snapshot" as const,
+              snapshot: threadSnapshot.value,
+            })
+            .pipe(Effect.asVoid);
+        }
+        return undefined;
+      }
+
+      case ORCHESTRATION_WS_METHODS.unsubscribeThread: {
+        const subscriptions = getClientOrchestrationSubscriptions(ws);
+        const nextThreadIds = new Set(subscriptions.threadIds);
+        nextThreadIds.delete(request.body.threadId);
+        setClientOrchestrationSubscriptions(ws, {
+          ...subscriptions,
+          threadIds: nextThreadIds,
+        });
+        return undefined;
       }
 
       case WS_METHODS.projectsSearchEntries: {
@@ -1384,6 +1591,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     });
 
     ws.on("close", () => {
+      clearClientOrchestrationSubscriptions(ws);
       void runPromise(
         Ref.update(clients, (clients) => {
           clients.delete(ws);
@@ -1393,6 +1601,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     });
 
     ws.on("error", () => {
+      clearClientOrchestrationSubscriptions(ws);
       void runPromise(
         Ref.update(clients, (clients) => {
           clients.delete(ws);

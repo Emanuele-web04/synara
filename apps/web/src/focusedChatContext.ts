@@ -15,6 +15,7 @@ import {
   useSplitViewStore,
 } from "./splitViewStore";
 import { useStore } from "./store";
+import { createProjectSelector, createThreadSelector } from "./storeSelectors";
 import type { Project, Thread } from "./types";
 
 export interface FocusedChatContext {
@@ -65,8 +66,6 @@ export function resolveFocusedChatContext(input: {
 }
 
 export function useFocusedChatContext(): FocusedChatContext {
-  const projects = useStore((store) => store.projects);
-  const threads = useStore((store) => store.threads);
   const draftThreadsByThreadId = useComposerDraftStore((store) => store.draftThreadsByThreadId);
   const routeThreadId = useParams({
     strict: false,
@@ -77,16 +76,42 @@ export function useFocusedChatContext(): FocusedChatContext {
     select: (search) => parseDiffRouteSearch(search),
   });
   const activeSplitView = useSplitViewStore(selectSplitView(routeSearch.splitViewId ?? null));
+  const focusedThreadId = useMemo(
+    () => (activeSplitView ? resolveSplitViewFocusedPaneThreadId(activeSplitView) : routeThreadId),
+    [activeSplitView, routeThreadId],
+  );
+  const activeThread = useStore(
+    useMemo(() => createThreadSelector(focusedThreadId), [focusedThreadId]),
+  );
+  const activeDraftThread =
+    focusedThreadId !== null ? (draftThreadsByThreadId[focusedThreadId] ?? null) : null;
+  const activeProjectId =
+    activeDraftThread?.projectId ??
+    activeThread?.projectId ??
+    activeSplitView?.ownerProjectId ??
+    null;
+  const activeProject = useStore(
+    useMemo(() => createProjectSelector(activeProjectId), [activeProjectId]),
+  );
 
   return useMemo(
-    () =>
-      resolveFocusedChatContext({
-        routeThreadId,
-        splitView: activeSplitView,
-        threads,
-        projects,
-        draftThreadsByThreadId,
-      }),
-    [activeSplitView, draftThreadsByThreadId, projects, routeThreadId, threads],
+    () => ({
+      routeThreadId,
+      splitView: activeSplitView,
+      focusedThreadId,
+      activeThread: activeThread ?? null,
+      activeDraftThread,
+      activeProject: activeProject ?? null,
+      activeProjectId,
+    }),
+    [
+      activeDraftThread,
+      activeProject,
+      activeProjectId,
+      activeSplitView,
+      activeThread,
+      focusedThreadId,
+      routeThreadId,
+    ],
   );
 }

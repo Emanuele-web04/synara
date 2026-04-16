@@ -175,6 +175,36 @@ export interface Thread extends ThreadWorkspaceState {
   activities: OrchestrationThreadActivity[];
 }
 
+export interface ThreadShell extends ThreadWorkspaceState {
+  id: ThreadId;
+  codexThreadId: string | null;
+  projectId: ProjectId;
+  title: string;
+  modelSelection: ModelSelection;
+  runtimeMode: RuntimeMode;
+  interactionMode: ProviderInteractionMode;
+  error: string | null;
+  createdAt: string;
+  archivedAt?: string | null;
+  updatedAt?: string | undefined;
+  parentThreadId?: ThreadId | null;
+  subagentAgentId?: string | null;
+  subagentNickname?: string | null;
+  subagentRole?: string | null;
+  forkSourceThreadId?: ThreadId | null;
+  handoff?: ThreadHandoff | null;
+  latestUserMessageAt?: string | null;
+  hasPendingApprovals?: boolean;
+  hasPendingUserInput?: boolean;
+  hasActionableProposedPlan?: boolean;
+  lastVisitedAt?: string | undefined;
+}
+
+export interface ThreadTurnState {
+  latestTurn: OrchestrationLatestTurn | null;
+  pendingSourceProposedPlan?: OrchestrationLatestTurn["sourceProposedPlan"];
+}
+
 export interface SidebarThreadSummary {
   id: ThreadId;
   projectId: ProjectId;
@@ -182,6 +212,7 @@ export interface SidebarThreadSummary {
   modelSelection: ModelSelection;
   interactionMode: ProviderInteractionMode;
   envMode?: ThreadEnvironmentMode | undefined;
+  branch: string | null;
   worktreePath: string | null;
   session: ThreadSession | null;
   createdAt: string;

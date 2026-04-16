@@ -10,6 +10,7 @@ import { useAppSettings } from "../appSettings";
 import { isElectron } from "../env";
 import { resolvePreferredSplitViewIdForThread, useSplitViewStore } from "../splitViewStore";
 import { useStore } from "../store";
+import { createAllThreadsSelector } from "../storeSelectors";
 import { useTerminalStateStore } from "../terminalStateStore";
 import type { Thread } from "../types";
 import {
@@ -139,7 +140,7 @@ function showThreadToast(
 export function TaskCompletionNotifications() {
   const { settings } = useAppSettings();
   const navigate = useNavigate();
-  const threads = useStore((store) => store.threads);
+  const threads = useStore(useRef(createAllThreadsSelector()).current);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
   const terminalStateByThreadId = useTerminalStateStore((store) => store.terminalStateByThreadId);
   const splitViewsById = useSplitViewStore((store) => store.splitViewsById);
