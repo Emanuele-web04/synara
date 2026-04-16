@@ -70,24 +70,21 @@ export function useComposerCommandMenuItems(input: {
     if (composerTrigger.kind === "mention") {
       const query = normalizeProviderDiscoveryText(composerTrigger.query);
 
-      // Agent items for @alias(task) syntax - only show for Codex provider
-      const agentItems: ComposerCommandItem[] =
-        provider === "codex"
-          ? getAgentMentionAutocompleteAliases()
-              .filter(({ alias, displayName }) => {
-                if (!query) return true;
-                const searchBlob = `${alias} ${displayName}`.toLowerCase();
-                return searchBlob.includes(query);
-              })
-              .map(({ alias, model, displayName }) => ({
-                id: `agent:${alias}`,
-                type: "agent" as const,
-                alias,
-                model,
-                label: `@${alias}`,
-                description: `${displayName} · delegate task to subagent`,
-              }))
-          : [];
+      const agentItems: ComposerCommandItem[] = getAgentMentionAutocompleteAliases(provider)
+        .filter(({ alias, displayName }) => {
+          if (!query) return true;
+          const searchBlob = `${alias} ${displayName}`.toLowerCase();
+          return searchBlob.includes(query);
+        })
+        .map(({ alias, displayName, color }) => ({
+          id: `agent:${provider}:${alias}`,
+          type: "agent" as const,
+          provider,
+          alias,
+          color,
+          label: `@${alias}`,
+          description: displayName,
+        }));
 
       const pluginItems = providerPlugins
         .filter(({ plugin }) => {

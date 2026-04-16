@@ -8,6 +8,7 @@
  */
 import {
   type CanUseTool,
+  type AgentDefinition,
   ModelUsage,
   NonNullableUsage,
   query,
@@ -47,6 +48,7 @@ import {
   type ProviderListCommandsResult,
   type ProviderListSkillsInput,
   type ProviderListSkillsResult,
+  getAgentMentionAliases,
 } from "@t3tools/contracts";
 import {
   hasEffortLevel,
@@ -54,6 +56,7 @@ import {
   getModelCapabilities,
   trimOrNull,
 } from "@t3tools/shared/model";
+import { buildClaudeSubagentPrompt } from "@t3tools/shared/agentMentions";
 import {
   Cause,
   DateTime,
@@ -644,7 +647,28 @@ const CLAUDE_SETTING_SOURCES = [
   "local",
 ] as const satisfies ReadonlyArray<SettingSource>;
 
+function buildClaudeSdkSubagents(): Record<string, AgentDefinition> {
+  const agents: Record<string, AgentDefinition> = {};
+
+  for (const alias of getAgentMentionAliases("claudeAgent")) {
+    if (alias.kind !== "claude-subagent" || agents[alias.agentName]) {
+      continue;
+    }
+
+    agents[alias.agentName] = {
+      description: alias.description,
+      prompt: alias.prompt,
+      ...(alias.tools ? { tools: [...alias.tools] } : {}),
+      ...(alias.disallowedTools ? { disallowedTools: [...alias.disallowedTools] } : {}),
+      ...(alias.model ? { model: alias.model } : {}),
+    };
+  }
+
+  return agents;
+}
+
 function buildPromptText(input: ProviderSendTurnInput): string {
+  const basePrompt = buildClaudeSubagentPrompt(input.input?.trim() ?? "").prompt;
   const rawEffort =
     input.modelSelection?.provider === "claudeAgent" ? input.modelSelection.options?.effort : null;
   const requestedEffort = trimOrNull(rawEffort);
@@ -657,7 +681,7 @@ function buildPromptText(input: ProviderSendTurnInput): string {
       : requestedEffort && hasEffortLevel(caps, requestedEffort)
         ? requestedEffort
         : null;
-  return applyClaudePromptEffortPrefix(input.input?.trim() ?? "", promptEffort);
+  return applyClaudePromptEffortPrefix(basePrompt, promptEffort);
 }
 
 function buildUserMessage(input: {
@@ -3056,12 +3080,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           ...(typeof thinking === "boolean" ? { alwaysThinkingEnabled: thinking } : {}),
           ...(fastMode ? { fastMode: true } : {}),
         };
+        const claudeSubagents = buildClaudeSdkSubagents();
 
         const queryOptions: ClaudeQueryOptions = {
           ...(input.cwd ? { cwd: input.cwd } : {}),
           ...(modelSelection?.model ? { model: modelSelection.model } : {}),
           pathToClaudeCodeExecutable: providerOptions?.binaryPath ?? "claude",
           settingSources: [...CLAUDE_SETTING_SOURCES],
+          ...(Object.keys(claudeSubagents).length > 0 ? { agents: claudeSubagents } : {}),
           ...(effectiveEffort ? { effort: effectiveEffort } : {}),
           ...(permissionMode ? { permissionMode } : {}),
           ...(permissionMode === "bypassPermissions"

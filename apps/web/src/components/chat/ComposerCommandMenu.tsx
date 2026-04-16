@@ -21,10 +21,10 @@ import {
   TbBug,
   TbChartBar,
   TbUsers,
-  TbGitFork,
   TbGitCompare,
   TbTerminal2,
 } from "react-icons/tb";
+import { GoRepoForked } from "react-icons/go";
 import { formatSkillScope } from "~/lib/providerDiscovery";
 import { cn } from "~/lib/utils";
 import { Badge } from "../ui/badge";
@@ -101,6 +101,42 @@ function commandMenuTitle(
   }
 }
 
+function commandMenuTrailingMeta(item: ComposerCommandItem): string | null {
+  if (item.type === "agent") {
+    return "delegate task to subagent";
+  }
+
+  if (item.type === "plugin") {
+    return "Plugin";
+  }
+
+  if (item.type === "skill") {
+    return formatSkillScope(item.skill.scope);
+  }
+
+  if (item.type === "slash-command" || item.type === "provider-native-command") {
+    return `/${item.command}`;
+  }
+
+  return null;
+}
+
+function commandMenuSecondaryText(item: ComposerCommandItem): string | null {
+  if (item.type === "slash-command" || item.type === "provider-native-command") {
+    return item.description;
+  }
+
+  if (item.type === "agent") {
+    return item.description;
+  }
+
+  if (item.type === "plugin" || item.type === "skill") {
+    return item.description;
+  }
+
+  return null;
+}
+
 export type ComposerCommandItem =
   | {
       id: string;
@@ -166,8 +202,9 @@ export type ComposerCommandItem =
   | {
       id: string;
       type: "agent";
+      provider: ProviderKind;
       alias: string;
-      model: string;
+      color: string;
       label: string;
       description: string;
     };
@@ -299,53 +336,8 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
   onHighlight: (itemId: string | null) => void;
   onSelect: (item: ComposerCommandItem) => void;
 }) {
-  if (props.item.type === "plugin" || props.item.type === "skill") {
-    return (
-      <CommandItem
-        ref={props.itemRef}
-        value={props.item.id}
-        className={cn(
-          "cursor-pointer rounded-lg px-2.5 py-1 transition-colors hover:bg-accent/40 data-highlighted:bg-accent/40 data-highlighted:text-accent-foreground",
-          props.isActive && "bg-accent/40 text-accent-foreground",
-        )}
-        onMouseMove={() => {
-          if (!props.isActive) props.onHighlight(props.item.id);
-        }}
-        onMouseDown={(event) => {
-          event.preventDefault();
-        }}
-        onClick={() => {
-          props.onSelect(props.item);
-        }}
-      >
-        <div className="flex min-w-0 items-center gap-2">
-          <div
-            className={cn(
-              "flex size-3.5 shrink-0 items-center justify-center text-muted-foreground/50",
-              props.isActive && "text-foreground/60",
-            )}
-          >
-            {props.item.type === "skill" ? (
-              <SkillCubeIcon className="size-3" />
-            ) : (
-              <PlugIcon className="size-3" />
-            )}
-          </div>
-          <div className="min-w-0 flex flex-1 items-center gap-1.5">
-            <span className="truncate font-semibold text-[11px] leading-none text-foreground/80">
-              {props.item.label}
-            </span>
-            <span className="min-w-0 flex-1 truncate text-[10.5px] leading-none text-muted-foreground/45">
-              {props.item.description}
-            </span>
-          </div>
-          <div className="shrink-0 pl-2 text-[10px] leading-none text-muted-foreground/35">
-            {props.item.type === "skill" ? formatSkillScope(props.item.skill.scope) : "Plugin"}
-          </div>
-        </div>
-      </CommandItem>
-    );
-  }
+  const secondaryText = commandMenuSecondaryText(props.item);
+  const trailingMeta = commandMenuTrailingMeta(props.item);
 
   return (
     <CommandItem
@@ -376,7 +368,7 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
         props.item.target === "local" ? (
           <TbDeviceLaptop className="size-3.5 text-muted-foreground/60" />
         ) : (
-          <TbGitFork className="size-3.5 text-muted-foreground/60" />
+          <GoRepoForked className="size-3.5 text-muted-foreground/60" />
         )
       ) : null}
       {props.item.type === "review-target" ? (
@@ -407,7 +399,7 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
               case "subagents":
                 return <TbUsers className={cls} />;
               case "fork":
-                return <TbGitFork className={cls} />;
+                return <GoRepoForked className={cls} />;
               default:
                 return <TbTerminal2 className={cls} />;
             }
@@ -421,22 +413,41 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
       {props.item.type === "agent" ? (
         <RiRobot3Line className="size-3.5 text-muted-foreground/60" />
       ) : null}
-      <div className="min-w-0 flex flex-1 items-center gap-2">
+      {props.item.type === "plugin" || props.item.type === "skill" ? (
+        <div
+          className={cn(
+            "flex size-3.5 shrink-0 items-center justify-center text-muted-foreground/50",
+            props.isActive && "text-foreground/60",
+          )}
+        >
+          {props.item.type === "skill" ? (
+            <SkillCubeIcon className="size-3" />
+          ) : (
+            <PlugIcon className="size-3" />
+          )}
+        </div>
+      ) : null}
+      <div className="min-w-0 flex flex-1 items-center gap-3">
         <div className="min-w-0 flex flex-1 items-center gap-1.5 overflow-hidden">
-          <span className="shrink-0 text-[11.5px] font-medium text-foreground/80">
+          <span
+            className={cn(
+              "shrink-0 text-[11.5px] font-medium text-foreground/80",
+              (props.item.type === "plugin" || props.item.type === "skill") && "font-semibold",
+            )}
+          >
             {props.item.type === "slash-command" || props.item.type === "provider-native-command"
               ? commandMenuTitle(props.item)
               : props.item.label}
           </span>
-          <span className="truncate text-[11px] text-muted-foreground/55">
-            {props.item.description}
-          </span>
+          {secondaryText ? (
+            <span className="truncate text-[11px] text-muted-foreground/55">{secondaryText}</span>
+          ) : null}
         </div>
-        {(props.item.type === "slash-command" || props.item.type === "provider-native-command") && (
-          <span className="shrink-0 text-[10.5px] text-muted-foreground/45">
-            /{props.item.command}
+        {trailingMeta ? (
+          <span className="shrink-0 pl-2 text-right text-[10.5px] text-muted-foreground/42">
+            {trailingMeta}
           </span>
-        )}
+        ) : null}
       </div>
     </CommandItem>
   );

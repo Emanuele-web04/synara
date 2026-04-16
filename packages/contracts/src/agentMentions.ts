@@ -1,113 +1,284 @@
 /**
- * Agent Mentions - @alias(task) syntax for subagent delegation
+ * Agent Mentions - @alias(task) syntax for subagent delegation.
  *
- * Provides aliases for calling subagents with specific models.
- * Usage: @spark(do this task) or @mini(handle this)
+ * Provides provider-aware alias metadata used by the composer UI and provider runtimes.
  */
 
+import type { ProviderKind } from "./orchestration";
 import type { ModelSlug } from "./model";
 
-// ── Types ─────────────────────────────────────────────────────────────
+type AgentAliasColor = "violet" | "fuchsia" | "teal" | "cyan" | "amber" | "orange";
 
-export interface AgentAliasDefinition {
-  readonly model: ModelSlug;
+interface BaseAgentAliasDefinition {
+  readonly provider: ProviderKind;
   readonly displayName: string;
-  readonly color: string; // Tailwind color class suffix (e.g., "violet", "teal", "amber")
+  readonly color: AgentAliasColor;
 }
 
-export interface ResolvedAgentAlias {
+export interface CodexAgentAliasDefinition extends BaseAgentAliasDefinition {
+  readonly provider: "codex";
+  readonly kind: "model";
+  readonly model: ModelSlug;
+}
+
+export interface ClaudeSubagentAliasDefinition extends BaseAgentAliasDefinition {
+  readonly provider: "claudeAgent";
+  readonly kind: "claude-subagent";
+  readonly agentName: string;
+  readonly description: string;
+  readonly prompt: string;
+  readonly tools?: readonly string[];
+  readonly disallowedTools?: readonly string[];
+  readonly model?: string;
+}
+
+export type AgentAliasDefinition = CodexAgentAliasDefinition | ClaudeSubagentAliasDefinition;
+
+export type ResolvedAgentAlias = AgentAliasDefinition & {
   readonly alias: string;
-  readonly model: ModelSlug;
-  readonly displayName: string;
-  readonly color: string;
+};
+
+const CODEX_AGENT_MENTION_ALIASES: Record<string, CodexAgentAliasDefinition> = {
+  "5.4": {
+    provider: "codex",
+    kind: "model",
+    model: "gpt-5.4",
+    displayName: "GPT-5.4",
+    color: "violet",
+  },
+  mini: {
+    provider: "codex",
+    kind: "model",
+    model: "gpt-5.4-mini",
+    displayName: "GPT-5.4 Mini",
+    color: "fuchsia",
+  },
+  "5.4-mini": {
+    provider: "codex",
+    kind: "model",
+    model: "gpt-5.4-mini",
+    displayName: "GPT-5.4 Mini",
+    color: "fuchsia",
+  },
+  codex: {
+    provider: "codex",
+    kind: "model",
+    model: "gpt-5.3-codex",
+    displayName: "GPT-5.3 Codex",
+    color: "teal",
+  },
+  "5.3": {
+    provider: "codex",
+    kind: "model",
+    model: "gpt-5.3-codex",
+    displayName: "GPT-5.3 Codex",
+    color: "teal",
+  },
+  spark: {
+    provider: "codex",
+    kind: "model",
+    model: "gpt-5.3-codex-spark",
+    displayName: "GPT-5.3 Spark",
+    color: "cyan",
+  },
+  "5.3-spark": {
+    provider: "codex",
+    kind: "model",
+    model: "gpt-5.3-codex-spark",
+    displayName: "GPT-5.3 Spark",
+    color: "cyan",
+  },
+  "5.2": {
+    provider: "codex",
+    kind: "model",
+    model: "gpt-5.2",
+    displayName: "GPT-5.2",
+    color: "amber",
+  },
+  "5.2-codex": {
+    provider: "codex",
+    kind: "model",
+    model: "gpt-5.2-codex",
+    displayName: "GPT-5.2 Codex",
+    color: "orange",
+  },
+};
+
+const CLAUDE_AGENT_MENTION_ALIASES: Record<string, ClaudeSubagentAliasDefinition> = {
+  explore: {
+    provider: "claudeAgent",
+    kind: "claude-subagent",
+    agentName: "explore",
+    displayName: "Explore",
+    color: "cyan",
+    description:
+      "Read-only codebase explorer. Use for file discovery, code search, and gathering context before implementation.",
+    prompt:
+      "You are a focused codebase exploration specialist. Search broadly, gather the most relevant findings, and return a concise summary with the key files, evidence, and risks. Do not make code changes.",
+    tools: ["Read", "Grep", "Glob"],
+    model: "haiku",
+  },
+  review: {
+    provider: "claudeAgent",
+    kind: "claude-subagent",
+    agentName: "review",
+    displayName: "Code Review",
+    color: "amber",
+    description:
+      "Bug and risk reviewer. Use for code review, regression hunting, and edge-case analysis.",
+    prompt:
+      "You are a senior code reviewer. Focus on behavioral regressions, correctness bugs, edge cases, and missing tests. Return findings first, then open questions, then a brief summary.",
+    tools: ["Read", "Grep", "Glob"],
+    model: "sonnet",
+  },
+  reviewer: {
+    provider: "claudeAgent",
+    kind: "claude-subagent",
+    agentName: "review",
+    displayName: "Code Review",
+    color: "amber",
+    description:
+      "Bug and risk reviewer. Use for code review, regression hunting, and edge-case analysis.",
+    prompt:
+      "You are a senior code reviewer. Focus on behavioral regressions, correctness bugs, edge cases, and missing tests. Return findings first, then open questions, then a brief summary.",
+    tools: ["Read", "Grep", "Glob"],
+    model: "sonnet",
+  },
+  build: {
+    provider: "claudeAgent",
+    kind: "claude-subagent",
+    agentName: "build",
+    displayName: "Implementer",
+    color: "violet",
+    description:
+      "Implementation teammate. Use for scoped code changes, debugging, and hands-on execution tasks.",
+    prompt:
+      "You are an implementation-focused coding teammate. Make targeted changes, validate assumptions with the available tools, and return a short implementation summary plus any remaining risks.",
+    tools: ["Read", "Grep", "Glob", "Bash", "Edit", "Write", "MultiEdit"],
+    model: "sonnet",
+  },
+  implement: {
+    provider: "claudeAgent",
+    kind: "claude-subagent",
+    agentName: "build",
+    displayName: "Implementer",
+    color: "violet",
+    description:
+      "Implementation teammate. Use for scoped code changes, debugging, and hands-on execution tasks.",
+    prompt:
+      "You are an implementation-focused coding teammate. Make targeted changes, validate assumptions with the available tools, and return a short implementation summary plus any remaining risks.",
+    tools: ["Read", "Grep", "Glob", "Bash", "Edit", "Write", "MultiEdit"],
+    model: "sonnet",
+  },
+  plan: {
+    provider: "claudeAgent",
+    kind: "claude-subagent",
+    agentName: "plan",
+    displayName: "Planner",
+    color: "fuchsia",
+    description:
+      "Planning specialist. Use for breaking work into steps, evaluating approaches, and preparing execution plans.",
+    prompt:
+      "You are a planning specialist. Clarify goals, evaluate tradeoffs, identify edge cases, and return a concrete ordered plan with the main risks called out explicitly.",
+    tools: ["Read", "Grep", "Glob", "TodoWrite"],
+    model: "sonnet",
+  },
+  planner: {
+    provider: "claudeAgent",
+    kind: "claude-subagent",
+    agentName: "plan",
+    displayName: "Planner",
+    color: "fuchsia",
+    description:
+      "Planning specialist. Use for breaking work into steps, evaluating approaches, and preparing execution plans.",
+    prompt:
+      "You are a planning specialist. Clarify goals, evaluate tradeoffs, identify edge cases, and return a concrete ordered plan with the main risks called out explicitly.",
+    tools: ["Read", "Grep", "Glob", "TodoWrite"],
+    model: "sonnet",
+  },
+};
+
+export const AGENT_MENTION_ALIASES_BY_PROVIDER = {
+  codex: CODEX_AGENT_MENTION_ALIASES,
+  claudeAgent: CLAUDE_AGENT_MENTION_ALIASES,
+} as const satisfies Record<ProviderKind, Record<string, AgentAliasDefinition>>;
+
+// Backward compatibility for legacy call sites that still expect a flat alias table.
+export const AGENT_MENTION_ALIASES: Record<string, AgentAliasDefinition> = Object.assign(
+  {},
+  ...Object.values(AGENT_MENTION_ALIASES_BY_PROVIDER),
+);
+
+const AGENT_MENTION_AUTOCOMPLETE_ALIASES_BY_PROVIDER: Record<ProviderKind, readonly string[]> = {
+  codex: ["5.2", "5.2-codex", "codex", "spark", "5.4", "mini"],
+  claudeAgent: ["explore", "review", "build", "plan"],
+};
+
+function mapAgentEntries(input: Record<string, AgentAliasDefinition>): ResolvedAgentAlias[] {
+  return Object.entries(input)
+    .map(([alias, definition]) => Object.assign({ alias }, definition))
+    .toSorted((a, b) => a.alias.localeCompare(b.alias));
 }
 
-// ── Alias Definitions ─────────────────────────────────────────────────
-
 /**
- * Agent aliases for the @agent(task) mention syntax.
- * Maps short names to model slugs for subagent delegation.
+ * Get all available agent aliases for a provider. When no provider is passed,
+ * returns the global union for parsing and validation helpers.
  */
-export const AGENT_MENTION_ALIASES: Record<string, AgentAliasDefinition> = {
-  // GPT-5.4 family - violet/purple
-  "5.4": { model: "gpt-5.4", displayName: "GPT-5.4", color: "violet" },
-  mini: { model: "gpt-5.4-mini", displayName: "GPT-5.4 Mini", color: "fuchsia" },
-  "5.4-mini": { model: "gpt-5.4-mini", displayName: "GPT-5.4 Mini", color: "fuchsia" },
-  // GPT-5.3 family - teal/cyan
-  codex: { model: "gpt-5.3-codex", displayName: "GPT-5.3 Codex", color: "teal" },
-  "5.3": { model: "gpt-5.3-codex", displayName: "GPT-5.3 Codex", color: "teal" },
-  spark: { model: "gpt-5.3-codex-spark", displayName: "GPT-5.3 Spark", color: "cyan" },
-  "5.3-spark": { model: "gpt-5.3-codex-spark", displayName: "GPT-5.3 Spark", color: "cyan" },
-  // GPT-5.2 family - amber/orange
-  "5.2": { model: "gpt-5.2", displayName: "GPT-5.2", color: "amber" },
-  "5.2-codex": { model: "gpt-5.2-codex", displayName: "GPT-5.2 Codex", color: "orange" },
-} as const;
+export function getAgentMentionAliases(provider?: ProviderKind): ResolvedAgentAlias[] {
+  if (provider) {
+    return mapAgentEntries(AGENT_MENTION_ALIASES_BY_PROVIDER[provider]);
+  }
 
-const AGENT_MENTION_AUTOCOMPLETE_ALIASES = [
-  "5.2",
-  "5.2-codex",
-  "codex",
-  "spark",
-  "5.4",
-  "mini",
-] as const;
-
-// ── Helper Functions ──────────────────────────────────────────────────
-
-/**
- * Get all available agent aliases for autocomplete.
- * Returns array sorted by alias name.
- */
-export function getAgentMentionAliases(): ResolvedAgentAlias[] {
-  return Object.entries(AGENT_MENTION_ALIASES)
-    .map(([alias, { model, displayName, color }]) => ({
-      alias,
-      model,
-      displayName,
-      color,
-    }))
-    .sort((a, b) => a.alias.localeCompare(b.alias));
+  return Object.values(AGENT_MENTION_ALIASES_BY_PROVIDER).flatMap((definitions) =>
+    mapAgentEntries(definitions),
+  );
 }
 
 /**
- * Get the preferred aliases shown in autocomplete.
- * Keeps hidden compatibility aliases valid for parsing without duplicating rows in the picker.
+ * Get the preferred aliases shown in autocomplete for a provider.
  */
-export function getAgentMentionAutocompleteAliases(): ResolvedAgentAlias[] {
-  return AGENT_MENTION_AUTOCOMPLETE_ALIASES.map((alias) => {
-    const definition = AGENT_MENTION_ALIASES[alias];
+export function getAgentMentionAutocompleteAliases(provider: ProviderKind): ResolvedAgentAlias[] {
+  return AGENT_MENTION_AUTOCOMPLETE_ALIASES_BY_PROVIDER[provider].map((alias) => {
+    const definition = AGENT_MENTION_ALIASES_BY_PROVIDER[provider][alias];
     if (!definition) {
-      throw new Error(`Unknown autocomplete alias: ${alias}`);
+      throw new Error(`Unknown autocomplete alias for ${provider}: ${alias}`);
     }
-    return {
-      alias,
-      model: definition.model,
-      displayName: definition.displayName,
-      color: definition.color,
-    };
+
+    return Object.assign({ alias }, definition);
   });
 }
 
 /**
- * Resolve an agent alias to its model slug.
- * Case-insensitive lookup.
- * @returns Resolved alias info or null if not found
+ * Resolve an agent alias. When a provider is passed, only provider-specific aliases are considered.
  */
-export function resolveAgentAlias(alias: string): AgentAliasDefinition | null {
+export function resolveAgentAlias(
+  alias: string,
+  provider?: ProviderKind,
+): AgentAliasDefinition | null {
   const normalized = alias.toLowerCase();
-  return AGENT_MENTION_ALIASES[normalized] ?? null;
+  if (provider) {
+    return AGENT_MENTION_ALIASES_BY_PROVIDER[provider][normalized] ?? null;
+  }
+
+  for (const definitions of Object.values(AGENT_MENTION_ALIASES_BY_PROVIDER)) {
+    const resolved = definitions[normalized];
+    if (resolved) {
+      return resolved;
+    }
+  }
+  return null;
 }
 
-/**
- * Check if a string is a valid agent alias.
- */
-export function isValidAgentAlias(alias: string): boolean {
-  return resolveAgentAlias(alias) !== null;
+export function isValidAgentAlias(alias: string, provider?: ProviderKind): boolean {
+  return resolveAgentAlias(alias, provider) !== null;
 }
 
-/**
- * Get the list of all alias names (for validation/autocomplete).
- */
-export function getAgentAliasNames(): string[] {
-  return Object.keys(AGENT_MENTION_ALIASES);
+export function getAgentAliasNames(provider?: ProviderKind): string[] {
+  if (provider) {
+    return Object.keys(AGENT_MENTION_ALIASES_BY_PROVIDER[provider]);
+  }
+
+  return Object.values(AGENT_MENTION_ALIASES_BY_PROVIDER).flatMap((definitions) =>
+    Object.keys(definitions),
+  );
 }

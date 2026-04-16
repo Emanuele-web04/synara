@@ -60,6 +60,10 @@
       "types": "./src/subagents.ts",
       "import": "./src/subagents.ts"
     },
+    "./agentMentions": {
+      "types": "./src/agentMentions.ts",
+      "import": "./src/agentMentions.ts"
+    },
     "./worktreeHandoff": {
       "types": "./src/worktreeHandoff.ts",
       "import": "./src/worktreeHandoff.ts"

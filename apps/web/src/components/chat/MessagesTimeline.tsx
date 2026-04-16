@@ -71,6 +71,8 @@ import {
 import { splitPromptIntoDisplaySegments } from "~/composer-editor-mentions";
 import {
   COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME,
+  COMPOSER_INLINE_AGENT_CHIP_CLASS_NAME,
+  COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME,
   COMPOSER_INLINE_SKILL_CHIP_CLASS_NAME,
   COMPOSER_INLINE_SKILL_CHIP_ICON_CLASS_NAME,
   COMPOSER_INLINE_SKILL_CHIP_ICON_SVG,
@@ -85,7 +87,7 @@ import {
   normalizeSubagentStatusKind,
   resolveSubagentPresentation,
 } from "../../lib/subagentPresentation";
-import { GrRobot } from "react-icons/gr";
+import { RiRobot3Line } from "react-icons/ri";
 
 const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
 const MAX_VISIBLE_INLINE_TOOL_ENTRIES = 4;
@@ -118,8 +120,18 @@ const SkillCubeIcon: LucideIcon = (props) => (
 );
 
 const AgentTaskIcon: LucideIcon = (props) => (
-  <GrRobot className={props.className} style={props.style} />
+  <RiRobot3Line className={props.className} style={props.style} />
 );
+
+const DEFAULT_AGENT_COLOR = { bg: "rgb(245 158 11 / 0.15)", text: "rgb(245 158 11)" };
+const AGENT_COLOR_STYLES: Record<string, { bg: string; text: string }> = {
+  violet: { bg: "rgb(139 92 246 / 0.15)", text: "rgb(139 92 246)" },
+  fuchsia: { bg: "rgb(217 70 239 / 0.15)", text: "rgb(217 70 239)" },
+  teal: { bg: "rgb(20 184 166 / 0.15)", text: "rgb(20 184 166)" },
+  cyan: { bg: "rgb(6 182 212 / 0.15)", text: "rgb(6 182 212)" },
+  amber: DEFAULT_AGENT_COLOR,
+  orange: { bg: "rgb(249 115 22 / 0.15)", text: "rgb(249 115 22)" },
+};
 
 function basename(value: string): string {
   const slash = Math.max(value.lastIndexOf("/"), value.lastIndexOf("\\"));
@@ -1224,6 +1236,15 @@ function renderUserMessageInlineText(text: string, keyPrefix: string): ReactNode
     if (segment.type === "mention") {
       return [<span key={`${key}:mention`}>{`@${segment.path}`}</span>];
     }
+    if (segment.type === "agent-mention") {
+      return [
+        <UserMessageInlineAgentChip
+          key={`${key}:agent`}
+          alias={segment.alias}
+          color={segment.color}
+        />,
+      ];
+    }
     return [];
   });
 }
@@ -1345,7 +1366,10 @@ const UserMessageBody = memo(function UserMessageBody(props: {
 
   if (props.terminalContexts.length === 0 && hasOnlyInlineSkillChips(props.text)) {
     return (
-      <div className="flex max-w-full min-w-0 items-center leading-none text-foreground">
+      <div
+        className="flex max-w-full min-w-0 items-center leading-none text-foreground"
+        style={props.chatTypographyStyle}
+      >
         {renderUserMessageInlineText(props.text, "user-message-inline-chip-only")}
       </div>
     );
@@ -1358,6 +1382,26 @@ const UserMessageBody = memo(function UserMessageBody(props: {
     >
       {renderUserMessageInlineText(props.text, "user-message-inline")}
     </div>
+  );
+});
+
+const UserMessageInlineAgentChip = memo(function UserMessageInlineAgentChip(props: {
+  alias: string;
+  color: string;
+}) {
+  const colors = AGENT_COLOR_STYLES[props.color] ?? DEFAULT_AGENT_COLOR;
+
+  return (
+    <span
+      className={COMPOSER_INLINE_AGENT_CHIP_CLASS_NAME}
+      style={{
+        backgroundColor: colors.bg,
+        color: colors.text,
+      }}
+    >
+      <RiRobot3Line className={COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME} />
+      <span className={COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME}>{`@${props.alias}`}</span>
+    </span>
   );
 });
 

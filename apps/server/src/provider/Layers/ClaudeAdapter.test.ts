@@ -2801,6 +2801,65 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("registers shared Claude subagent definitions with the SDK query options", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      const createInput = harness.getLastCreateQueryInput();
+      assert.isDefined(createInput?.options.agents);
+      assert.deepEqual(Object.keys(createInput?.options.agents ?? {}).toSorted(), [
+        "build",
+        "explore",
+        "plan",
+        "review",
+      ]);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect(
+    "rewrites inline Claude subagent mentions into explicit Agent-tool instructions",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "full-access",
+        });
+
+        yield* adapter.sendTurn({
+          threadId: THREAD_ID,
+          input:
+            "Compare the migration and @review(check regressions) then @explore(find related files)",
+          attachments: [],
+        });
+
+        const createInput = harness.getLastCreateQueryInput();
+        const promptText = yield* Effect.promise(() => readFirstPromptText(createInput));
+        assert.isDefined(promptText);
+        assert.include(promptText ?? "", 'Use the "review" agent for this task:');
+        assert.include(promptText ?? "", "check regressions");
+        assert.include(promptText ?? "", 'Use the "explore" agent for this task:');
+        assert.include(promptText ?? "", "Original user prompt:");
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
   it.effect("classifies Agent tools and read-only Claude tools correctly for approvals", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

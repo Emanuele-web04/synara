@@ -18,6 +18,7 @@ import {
 } from "~/lib/icons";
 import { autoAnimate } from "@formkit/auto-animate";
 import { FiGitBranch, FiPlus } from "react-icons/fi";
+import { GoRepoForked } from "react-icons/go";
 import { HiOutlineCheckCircle } from "react-icons/hi2";
 import { HiOutlineFolderOpen } from "react-icons/hi2";
 import { TbArrowsDiagonal, TbArrowsDiagonalMinimize2, TbCursorText } from "react-icons/tb";
@@ -294,7 +295,7 @@ function resolveThreadRowMetaBadge(input: {
   if (forkBadgeLabel) {
     return {
       tooltip: forkBadgeLabel,
-      icon: <GitPullRequestIcon className="size-3 text-emerald-600 dark:text-emerald-300/90" />,
+      icon: <GoRepoForked className="size-3 text-emerald-600 dark:text-emerald-300/90" />,
     };
   }
 
