@@ -9,6 +9,8 @@ import {
 import { type Thread } from "../types";
 import { randomUUID } from "./utils";
 
+const HANDOFF_PROVIDER_ORDER: ReadonlyArray<ProviderKind> = ["codex", "claudeAgent", "gemini"];
+
 function isImportableThreadMessage(
   message: Thread["messages"][number],
 ): message is Thread["messages"][number] & {
@@ -18,7 +20,11 @@ function isImportableThreadMessage(
 }
 
 export function resolveHandoffTargetProvider(sourceProvider: ProviderKind): ProviderKind {
-  return sourceProvider === "claudeAgent" ? "codex" : "claudeAgent";
+  const sourceIndex = HANDOFF_PROVIDER_ORDER.indexOf(sourceProvider);
+  if (sourceIndex === -1) {
+    return "codex";
+  }
+  return HANDOFF_PROVIDER_ORDER[(sourceIndex + 1) % HANDOFF_PROVIDER_ORDER.length]!;
 }
 
 export function resolveThreadHandoffBadgeLabel(thread: Pick<Thread, "handoff">): string | null {

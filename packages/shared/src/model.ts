@@ -6,6 +6,9 @@ import {
   type ClaudeModelOptions,
   type ClaudeCodeEffort,
   type CodexModelOptions,
+  type GeminiModelOptions,
+  type GeminiThinkingBudget,
+  type GeminiThinkingLevel,
   type ModelCapabilities,
   type ModelSelection,
   type ModelSlug,
@@ -16,11 +19,70 @@ import {
 const MODEL_SLUG_SET_BY_PROVIDER: Record<ProviderKind, ReadonlySet<ModelSlug>> = {
   claudeAgent: new Set(MODEL_OPTIONS_BY_PROVIDER.claudeAgent.map((option) => option.slug)),
   codex: new Set(MODEL_OPTIONS_BY_PROVIDER.codex.map((option) => option.slug)),
+  gemini: new Set(MODEL_OPTIONS_BY_PROVIDER.gemini.map((option) => option.slug)),
 };
 
 export interface SelectableModelOption {
   slug: string;
   name: string;
+}
+
+export type GeminiThinkingConfigKind = "budget" | "level";
+
+const GEMINI_3_MODEL_PATTERN = /^(?:auto-)?gemini-3(?:[.-]|$)/i;
+const GEMINI_2_5_MODEL_PATTERN = /^(?:auto-)?gemini-2\.5(?:[.-]|$)/i;
+const GEMINI_THINKING_LEVEL_SET = new Set<GeminiThinkingLevel>(["LOW", "HIGH"]);
+const GEMINI_THINKING_BUDGET_MAP = new Map<string, GeminiThinkingBudget>([
+  ["-1", -1],
+  ["0", 0],
+  ["512", 512],
+]);
+
+export const EMPTY_MODEL_CAPABILITIES: ModelCapabilities = {
+  reasoningEffortLevels: [],
+  supportsFastMode: false,
+  supportsThinkingToggle: false,
+  promptInjectedEffortLevels: [],
+  contextWindowOptions: [],
+};
+export const DEFAULT_GEMINI_MODEL_CAPABILITIES = EMPTY_MODEL_CAPABILITIES;
+
+export const GEMINI_3_MODEL_CAPABILITIES: ModelCapabilities = {
+  reasoningEffortLevels: [
+    { value: "HIGH", label: "High", isDefault: true },
+    { value: "LOW", label: "Low" },
+  ],
+  supportsFastMode: false,
+  supportsThinkingToggle: false,
+  promptInjectedEffortLevels: [],
+};
+
+export const GEMINI_2_5_MODEL_CAPABILITIES: ModelCapabilities = {
+  reasoningEffortLevels: [
+    { value: "-1", label: "Dynamic", isDefault: true },
+    { value: "512", label: "512 Tokens" },
+    { value: "0", label: "Off" },
+  ],
+  supportsFastMode: false,
+  supportsThinkingToggle: false,
+  promptInjectedEffortLevels: [],
+};
+
+function isGeminiThinkingLevel(value: string): value is GeminiThinkingLevel {
+  return GEMINI_THINKING_LEVEL_SET.has(value as GeminiThinkingLevel);
+}
+
+function isGeminiThinkingBudget(value: string): value is `${GeminiThinkingBudget}` {
+  return GEMINI_THINKING_BUDGET_MAP.has(value);
+}
+
+function sanitizeGeminiAliasSegment(value: string): string {
+  const sanitized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return sanitized || "model";
 }
 
 export function getModelOptions(provider: ProviderKind = "codex") {
@@ -29,6 +91,100 @@ export function getModelOptions(provider: ProviderKind = "codex") {
 
 export function getDefaultModel(provider: ProviderKind = "codex"): ModelSlug {
   return DEFAULT_MODEL_BY_PROVIDER[provider];
+}
+
+export function getGeminiThinkingConfigKind(
+  model: string | null | undefined,
+): GeminiThinkingConfigKind | null {
+  const trimmed = trimOrNull(model);
+  if (!trimmed) {
+    return null;
+  }
+  if (GEMINI_3_MODEL_PATTERN.test(trimmed)) {
+    return "level";
+  }
+  if (GEMINI_2_5_MODEL_PATTERN.test(trimmed)) {
+    return "budget";
+  }
+  return null;
+}
+
+export function geminiCapabilitiesForModel(
+  modelId: string | null | undefined,
+  fallbackCapabilities: ModelCapabilities = EMPTY_MODEL_CAPABILITIES,
+): ModelCapabilities {
+  switch (getGeminiThinkingConfigKind(modelId)) {
+    case "level":
+      return GEMINI_3_MODEL_CAPABILITIES;
+    case "budget":
+      return GEMINI_2_5_MODEL_CAPABILITIES;
+    default:
+      return fallbackCapabilities;
+  }
+}
+
+export function getGeminiThinkingSelectionValue(
+  caps: ModelCapabilities,
+  modelOptions: GeminiModelOptions | null | undefined,
+): string | null {
+  const candidates = [
+    trimOrNull(modelOptions?.thinkingLevel),
+    modelOptions?.thinkingBudget !== undefined ? String(modelOptions.thinkingBudget) : null,
+  ];
+
+  return (
+    candidates.find(
+      (candidate): candidate is string => !!candidate && hasEffortLevel(caps, candidate),
+    ) ??
+    candidates.find((candidate): candidate is string => !!candidate) ??
+    null
+  );
+}
+
+export function geminiModelOptionsFromEffortValue(
+  value: string | null | undefined,
+): GeminiModelOptions | undefined {
+  const trimmed = trimOrNull(value);
+  if (!trimmed) {
+    return undefined;
+  }
+  if (isGeminiThinkingLevel(trimmed)) {
+    return { thinkingLevel: trimmed };
+  }
+  if (isGeminiThinkingBudget(trimmed)) {
+    return {
+      thinkingBudget: GEMINI_THINKING_BUDGET_MAP.get(trimmed) as GeminiThinkingBudget,
+    };
+  }
+  return undefined;
+}
+
+export function getGeminiThinkingModelAlias(
+  model: string,
+  modelOptions: GeminiModelOptions | null | undefined,
+): string | null {
+  const kind = getGeminiThinkingConfigKind(model);
+  if (!kind || !modelOptions) {
+    return null;
+  }
+
+  const base = sanitizeGeminiAliasSegment(model);
+  if (kind === "level" && modelOptions.thinkingLevel) {
+    return `dpcode-gemini-${base}-thinking-level-${modelOptions.thinkingLevel.toLowerCase()}`;
+  }
+  if (kind === "budget" && modelOptions.thinkingBudget !== undefined) {
+    const budget =
+      modelOptions.thinkingBudget === -1 ? "dynamic" : String(modelOptions.thinkingBudget);
+    return `dpcode-gemini-${base}-thinking-budget-${budget}`;
+  }
+  return null;
+}
+
+export function resolveGeminiApiModelId(
+  model: string,
+  modelOptions: GeminiModelOptions | null | undefined,
+): string {
+  return getGeminiThinkingModelAlias(model, modelOptions) ?? model;
 }
 
 // ── Effort helpers ────────────────────────────────────────────────────
@@ -63,13 +219,10 @@ export function getModelCapabilities(
   if (slug && MODEL_CAPABILITIES_INDEX[provider]?.[slug]) {
     return MODEL_CAPABILITIES_INDEX[provider][slug];
   }
-  return {
-    reasoningEffortLevels: [],
-    supportsFastMode: false,
-    supportsThinkingToggle: false,
-    promptInjectedEffortLevels: [],
-    contextWindowOptions: [],
-  };
+  if (provider === "gemini") {
+    return geminiCapabilitiesForModel(slug ?? model, EMPTY_MODEL_CAPABILITIES);
+  }
+  return EMPTY_MODEL_CAPABILITIES;
 }
 
 export function isClaudeUltrathinkPrompt(text: string | null | undefined): boolean {
@@ -220,6 +373,29 @@ export function resolveApiModelId(modelSelection: ModelSelection): string {
     default:
       return modelSelection.model;
   }
+}
+
+export function normalizeGeminiModelOptions(
+  model: string | null | undefined,
+  modelOptions: GeminiModelOptions | null | undefined,
+): GeminiModelOptions | undefined {
+  const caps = getModelCapabilities("gemini", model);
+  const effort = getGeminiThinkingSelectionValue(caps, modelOptions);
+  const defaultEffort = getDefaultEffort(caps);
+  const nextOptions = geminiModelOptionsFromEffortValue(effort);
+  if (!nextOptions) {
+    return undefined;
+  }
+
+  const normalizedEffort =
+    nextOptions.thinkingLevel !== undefined
+      ? nextOptions.thinkingLevel
+      : String(nextOptions.thinkingBudget);
+  if (normalizedEffort === defaultEffort) {
+    return undefined;
+  }
+
+  return nextOptions;
 }
 
 export function applyClaudePromptEffortPrefix(

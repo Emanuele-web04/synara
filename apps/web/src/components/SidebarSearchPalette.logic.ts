@@ -1,6 +1,7 @@
 // Purpose: Scores sidebar palette results for actions, projects, and chat threads.
 // Keeps search local and deterministic so the palette can rank title hits above
 // message-content hits while still surfacing a useful snippet for chat matches.
+import type { ProviderKind } from "@t3tools/contracts";
 import { basenameOfPath } from "../vscode-icons";
 
 export interface SidebarSearchAction {
@@ -33,7 +34,7 @@ export interface SidebarSearchThread {
   projectId: string;
   projectName: string;
   projectRemoteName: string;
-  provider: "codex" | "claudeAgent";
+  provider: ProviderKind;
   createdAt: string;
   updatedAt?: string | undefined;
   messages: readonly {

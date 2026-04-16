@@ -293,7 +293,11 @@ import {
   resolveDiffEnvironmentState,
   resolveThreadEnvironmentMode,
 } from "../lib/threadEnvironment";
-import { buildNextProviderOptions } from "../providerModelOptions";
+import { waitForRecoverableProjectForDuplicateCreate } from "../lib/projectCreateRecovery";
+import {
+  buildModelSelection,
+  buildNextProviderOptions,
+} from "../providerModelOptions";
 import { waitForRecoverableProjectForDuplicateCreate } from "../lib/projectCreateRecovery";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
@@ -1129,11 +1133,7 @@ export default function ChatView({
   const selectedPromptEffort = composerProviderState.promptEffort;
   const selectedModelOptionsForDispatch = composerProviderState.modelOptionsForDispatch;
   const selectedModelSelection = useMemo<ModelSelection>(
-    () => ({
-      provider: selectedProvider,
-      model: selectedModel,
-      ...(selectedModelOptionsForDispatch ? { options: selectedModelOptionsForDispatch } : {}),
-    }),
+    () => buildModelSelection(selectedProvider, selectedModel, selectedModelOptionsForDispatch),
     [selectedModel, selectedModelOptionsForDispatch, selectedProvider],
   );
   const providerOptionsForDispatch = useMemo(() => getProviderStartOptions(settings), [settings]);
@@ -1142,6 +1142,12 @@ export default function ChatView({
     providerModelsQueryOptions({ provider: "claudeAgent" }),
   );
   const codexDynamicModelsQuery = useQuery(providerModelsQueryOptions({ provider: "codex" }));
+  const geminiModelsQuery = useQuery(
+    providerModelsQueryOptions({
+      provider: "gemini",
+      enabled: selectedProvider === "gemini" || lockedProvider === "gemini",
+    }),
+  );
   const claudeDynamicAgentsQuery = useQuery(
     providerAgentsQueryOptions({ provider: "claudeAgent" }),
   );
@@ -1150,13 +1156,13 @@ export default function ChatView({
     const staticOptions = getCustomModelOptionsByProvider(settings);
     const result = { ...staticOptions };
 
-    // Merge dynamic models for each provider when available from the SDK
     const dynamicSources: Record<ProviderKind, typeof claudeDynamicModelsQuery.data> = {
       claudeAgent: claudeDynamicModelsQuery.data,
       codex: codexDynamicModelsQuery.data,
+      gemini: geminiModelsQuery.data,
     };
 
-    for (const provider of ["claudeAgent", "codex"] as const) {
+    for (const provider of ["claudeAgent", "codex", "gemini"] as const) {
       const dynamicModels = dynamicSources[provider]?.models;
       if (dynamicModels && dynamicModels.length > 0) {
         result[provider] = mergeDynamicModelOptions({
@@ -1171,7 +1177,7 @@ export default function ChatView({
     }
 
     return result;
-  }, [settings, claudeDynamicModelsQuery.data, codexDynamicModelsQuery.data]);
+  }, [settings, claudeDynamicModelsQuery.data, codexDynamicModelsQuery.data, geminiModelsQuery.data]);
   const selectedModelForPickerWithCustomFallback = useMemo(() => {
     const currentOptions = modelOptionsByProvider[selectedProvider];
     return currentOptions.some((option) => option.slug === selectedModelForPicker)
@@ -4509,16 +4515,13 @@ export default function ChatView({
       }
       // Keep the optimistic label short while the server asks Codex for a better summary.
       const title = buildPromptThreadTitleFallback(titleSeed);
-      const threadCreateModelSelection: ModelSelection = {
-        provider: selectedProviderForSend,
-        model:
-          selectedModelForSend ||
+      const threadCreateModelSelection: ModelSelection = buildModelSelection(
+        selectedProviderForSend,
+        selectedModelForSend ||
           targetProjectDefaultModelSelectionForSend?.model ||
           DEFAULT_MODEL_BY_PROVIDER.codex,
-        ...(selectedModelSelectionForSend.options
-          ? { options: selectedModelSelectionForSend.options }
-          : {}),
-      };
+        selectedModelSelectionForSend.options,
+      );
 
       if (isLocalDraftThread) {
         await api.orchestration.dispatchCommand({

@@ -55,6 +55,7 @@ import {
   type OrchestrationReadModel,
   PROVIDER_DISPLAY_NAMES,
   ProjectId,
+  type ProviderKind,
   ThreadId,
   type GitStatusResult,
   type ResolvedKeybindingsConfig,
@@ -100,7 +101,7 @@ import { dispatchThreadRename } from "../lib/threadRename";
 import { quotePosixShellArgument } from "../lib/shellQuote";
 import { DEFAULT_THREAD_TERMINAL_ID, type SidebarThreadSummary, type Thread } from "../types";
 import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
-import { ClaudeAI, OpenAI } from "./Icons";
+import { ClaudeAI, Gemini, OpenAI } from "./Icons";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
 import { ThreadRunningSpinner } from "./ThreadRunningSpinner";
@@ -341,15 +342,12 @@ function buildThreadJumpLabelMap(input: {
   return mapping.size > 0 ? mapping : EMPTY_THREAD_JUMP_LABELS;
 }
 
-function ProviderGlyph({
-  provider,
-  className,
-}: {
-  provider: "codex" | "claudeAgent";
-  className?: string;
-}) {
+function ProviderGlyph({ provider, className }: { provider: ProviderKind; className?: string }) {
   if (provider === "claudeAgent") {
     return <ClaudeAI aria-hidden="true" className={cn("text-foreground", className)} />;
+  }
+  if (provider === "gemini") {
+    return <Gemini aria-hidden="true" className={cn("text-foreground", className)} />;
   }
   return <OpenAI aria-hidden="true" className={cn("text-muted-foreground/60", className)} />;
 }
@@ -358,8 +356,8 @@ function HandoffProviderGlyph({
   sourceProvider,
   targetProvider,
 }: {
-  sourceProvider: "codex" | "claudeAgent";
-  targetProvider: "codex" | "claudeAgent";
+  sourceProvider: ProviderKind;
+  targetProvider: ProviderKind;
 }) {
   return (
     <div className="relative h-4.5 w-5 shrink-0">
@@ -445,7 +443,7 @@ function resolveThreadRowMetaBadge(input: {
 
 type SidebarSplitPreview = {
   title: string;
-  provider: "codex" | "claudeAgent";
+  provider: ProviderKind;
   threadId: ThreadId | null;
 };
 

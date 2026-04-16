@@ -20,7 +20,7 @@ import {
   MenuSubTrigger,
   MenuTrigger,
 } from "../ui/menu";
-import { ClaudeAI, Icon, OpenAI } from "../Icons";
+import { ClaudeAI, Gemini, Icon, OpenAI } from "../Icons";
 import { cn } from "~/lib/utils";
 import { PickerTriggerButton } from "./PickerTriggerButton";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -37,6 +37,7 @@ function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): o
 const PROVIDER_ICON_BY_PROVIDER: Record<ProviderPickerKind, Icon> = {
   codex: OpenAI,
   claudeAgent: ClaudeAI,
+  gemini: Gemini,
 };
 
 function resolveLiveProviderAvailability(provider: ServerProviderStatus | undefined): {
@@ -77,7 +78,9 @@ function providerIconClassName(
   provider: ProviderKind | ProviderPickerKind,
   fallbackClassName: string,
 ): string {
-  return provider === "claudeAgent" ? "text-foreground" : fallbackClassName;
+  return provider === "claudeAgent" || provider === "gemini"
+    ? "text-foreground"
+    : fallbackClassName;
 }
 
 export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
@@ -204,7 +207,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
               value={props.model}
               onValueChange={(value) => handleModelChange(props.lockedProvider!, value)}
             >
-              {props.modelOptionsByProvider[props.lockedProvider].map((modelOption) => (
+              {modelOptionsByProvider[props.lockedProvider].map((modelOption) => (
                 <MenuRadioItem
                   key={`${props.lockedProvider}:${modelOption.slug}`}
                   value={modelOption.slug}
@@ -258,7 +261,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                         value={props.provider === option.value ? props.model : ""}
                         onValueChange={(value) => handleModelChange(option.value, value)}
                       >
-                        {props.modelOptionsByProvider[option.value].map((modelOption) => (
+                        {modelOptionsByProvider[option.value].map((modelOption) => (
                           <MenuRadioItem
                             key={`${option.value}:${modelOption.slug}`}
                             value={modelOption.slug}

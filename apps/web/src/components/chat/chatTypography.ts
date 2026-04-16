@@ -6,7 +6,7 @@
 import type { CSSProperties } from "react";
 import { DEFAULT_CHAT_FONT_SIZE_PX, normalizeChatFontSizePx } from "../../appSettings";
 
-const CHAT_TRANSCRIPT_USER_CHAR_WIDTH_RATIO = 0.6;
+const CHAT_TRANSCRIPT_USER_CHAR_WIDTH_RATIO = 0.48;
 const CHAT_TRANSCRIPT_ASSISTANT_CHAR_WIDTH_RATIO = 0.52;
 
 export function getChatTranscriptLineHeightPx(chatFontSizePx = DEFAULT_CHAT_FONT_SIZE_PX): number {

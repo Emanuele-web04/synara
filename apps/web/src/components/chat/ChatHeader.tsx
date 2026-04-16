@@ -32,7 +32,7 @@ import { readNativeApi } from "~/nativeApi";
 import { resolveEditorIcon } from "../../editorMetadata";
 import { usePreferredEditor } from "../../editorPreferences";
 import { useIsDisposableThread } from "~/hooks/useIsDisposableThread";
-import { ClaudeAI, OpenAI } from "../Icons";
+import { ClaudeAI, Gemini, OpenAI } from "../Icons";
 import { gitStatusQueryOptions } from "~/lib/gitReactQuery";
 
 /** Width (px) below which collapsible header controls fold into the ellipsis menu. */
@@ -157,6 +157,9 @@ export const ChatHeader = memo(function ChatHeader({
   const renderProviderIcon = (provider: ProviderKind | null, className: string) => {
     if (provider === "claudeAgent") {
       return <ClaudeAI className={cn("text-foreground", className)} />;
+    }
+    if (provider === "gemini") {
+      return <Gemini className={cn("text-foreground", className)} />;
     }
     if (provider === "codex") {
       return <OpenAI className={cn("text-muted-foreground/75", className)} />;

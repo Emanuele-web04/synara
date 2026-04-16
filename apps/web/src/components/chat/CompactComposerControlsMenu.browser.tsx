@@ -133,7 +133,7 @@ describe("CompactComposerControlsMenu", () => {
       expect(text).toContain("Low");
       expect(text).toContain("Medium");
       expect(text).toContain("High");
-      expect(text).not.toContain("Max");
+      expect(text).toContain("Max");
       expect(text).toContain("Ultrathink");
     });
   });
