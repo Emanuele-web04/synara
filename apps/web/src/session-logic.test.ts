@@ -1257,22 +1257,22 @@ describe("isLatestTurnSettled", () => {
     completedAt: "2026-02-27T21:10:06.000Z",
   } as const;
 
-  it("returns true for a terminal turn even when the session stays stale-running", () => {
+  it("returns false while the session still reports the latest turn as running", () => {
     expect(
       isLatestTurnSettled(latestTurn, {
         orchestrationStatus: "running",
         activeTurnId: TurnId.makeUnsafe("turn-1"),
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
-  it("returns true for a terminal turn even when another session turn still looks active", () => {
+  it("returns false while the session still reports another running turn", () => {
     expect(
       isLatestTurnSettled(latestTurn, {
         orchestrationStatus: "running",
         activeTurnId: TurnId.makeUnsafe("turn-2"),
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("returns true once the session is no longer running that turn", () => {
@@ -1298,7 +1298,7 @@ describe("isLatestTurnSettled", () => {
     ).toBe(false);
   });
 
-  it("returns false for non-terminal interrupted placeholders while the session is running", () => {
+  it("returns true for interrupted turns even while the session is still running", () => {
     expect(
       isLatestTurnSettled(
         {
@@ -1310,7 +1310,22 @@ describe("isLatestTurnSettled", () => {
           activeTurnId: TurnId.makeUnsafe("turn-1"),
         },
       ),
-    ).toBe(false);
+    ).toBe(true);
+  });
+
+  it("returns true for error turns even while the session is still running", () => {
+    expect(
+      isLatestTurnSettled(
+        {
+          ...latestTurn,
+          state: "error",
+        },
+        {
+          orchestrationStatus: "running",
+          activeTurnId: TurnId.makeUnsafe("turn-1"),
+        },
+      ),
+    ).toBe(true);
   });
 });
 
@@ -1322,13 +1337,10 @@ describe("deriveActiveWorkStartedAt", () => {
     completedAt: "2026-02-27T21:10:06.000Z",
   } as const;
 
-  it("prefers the in-flight turn start when the latest turn is not settled", () => {
+  it("prefers the latest-turn start while the running session still points at it", () => {
     expect(
       deriveActiveWorkStartedAt(
-        {
-          ...latestTurn,
-          state: "interrupted",
-        },
+        latestTurn,
         {
           orchestrationStatus: "running",
           activeTurnId: TurnId.makeUnsafe("turn-1"),
@@ -1338,20 +1350,20 @@ describe("deriveActiveWorkStartedAt", () => {
     ).toBe("2026-02-27T21:10:00.000Z");
   });
 
-  it("falls back to sendStartedAt once the latest turn is settled", () => {
+  it("falls back to sendStartedAt when a different turn is currently running", () => {
     expect(
       deriveActiveWorkStartedAt(
         latestTurn,
         {
-          orchestrationStatus: "ready",
-          activeTurnId: undefined,
+          orchestrationStatus: "running",
+          activeTurnId: TurnId.makeUnsafe("turn-2"),
         },
         "2026-02-27T21:11:00.000Z",
       ),
     ).toBe("2026-02-27T21:11:00.000Z");
   });
 
-  it("uses sendStartedAt for a fresh send after the prior turn completed", () => {
+  it("uses sendStartedAt once the prior turn is settled", () => {
     expect(
       deriveActiveWorkStartedAt(
         {
@@ -1375,16 +1387,16 @@ describe("hasLiveLatestTurn", () => {
     completedAt: "2026-02-27T21:10:06.000Z",
   } as const;
 
-  it("returns false for terminal turns even when the session is stale-running", () => {
+  it("returns true while the session still reports the latest turn as running", () => {
     expect(
       hasLiveLatestTurn(latestTurn, {
         orchestrationStatus: "running",
         activeTurnId: TurnId.makeUnsafe("turn-1"),
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
-  it("returns true for non-terminal turns that are still running", () => {
+  it("returns false for interrupted turns because they are terminal locally", () => {
     expect(
       hasLiveLatestTurn(
         {
@@ -1396,7 +1408,22 @@ describe("hasLiveLatestTurn", () => {
           activeTurnId: TurnId.makeUnsafe("turn-1"),
         },
       ),
-    ).toBe(true);
+    ).toBe(false);
+  });
+
+  it("returns false for error turns because they are terminal locally", () => {
+    expect(
+      hasLiveLatestTurn(
+        {
+          ...latestTurn,
+          state: "error",
+        },
+        {
+          orchestrationStatus: "running",
+          activeTurnId: TurnId.makeUnsafe("turn-1"),
+        },
+      ),
+    ).toBe(false);
   });
 });
 

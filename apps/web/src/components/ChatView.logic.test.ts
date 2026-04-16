@@ -1,4 +1,4 @@
-import { ThreadId, TurnId } from "@t3tools/contracts";
+import { ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -8,12 +8,10 @@ import {
   hasServerAcknowledgedLocalDispatch,
   isVoiceAuthExpiredMessage,
   sanitizeVoiceErrorMessage,
-  shouldForceSettleLatestTurn,
   shouldAutoDeleteTerminalThreadOnLastClose,
   buildExpiredTerminalContextToastCopy,
   type LocalDispatchSnapshot,
   deriveComposerSendState,
-  hasLiveChatTurn,
   shouldStartActiveTurnLayoutGrace,
   shouldRenderTerminalWorkspace,
 } from "./ChatView.logic";
@@ -180,58 +178,6 @@ describe("shouldRenderTerminalWorkspace", () => {
   });
 });
 
-describe("hasLiveChatTurn", () => {
-  it("treats running sessions as live even before settlement catches up", () => {
-    expect(
-      hasLiveChatTurn({
-        phase: "running",
-        latestTurnSettled: true,
-        latestTurnStartedAt: null,
-      }),
-    ).toBe(true);
-  });
-
-  it("keeps the turn live while the latest turn is still unsettled", () => {
-    expect(
-      hasLiveChatTurn({
-        phase: "ready",
-        latestTurnSettled: false,
-        latestTurnStartedAt: "2026-04-13T00:00:00.000Z",
-      }),
-    ).toBe(true);
-  });
-
-  it("keeps a brand new thread idle when no turn has started yet", () => {
-    expect(
-      hasLiveChatTurn({
-        phase: "ready",
-        latestTurnSettled: false,
-        latestTurnStartedAt: null,
-      }),
-    ).toBe(false);
-  });
-
-  it("returns false once the session is ready and the latest turn is settled", () => {
-    expect(
-      hasLiveChatTurn({
-        phase: "ready",
-        latestTurnSettled: true,
-        latestTurnStartedAt: "2026-04-13T00:00:00.000Z",
-      }),
-    ).toBe(false);
-  });
-
-  it("returns false for a settled turn even when the session phase is stale-running", () => {
-    expect(
-      hasLiveChatTurn({
-        phase: "running",
-        latestTurnSettled: true,
-        latestTurnStartedAt: "2026-04-13T00:00:00.000Z",
-      }),
-    ).toBe(false);
-  });
-});
-
 describe("shouldStartActiveTurnLayoutGrace", () => {
   it("starts the grace window when a live turn just became settled", () => {
     expect(
@@ -269,66 +215,6 @@ describe("shouldStartActiveTurnLayoutGrace", () => {
         previousTurnLayoutLive: true,
         currentTurnLayoutLive: false,
         latestTurnStartedAt: null,
-      }),
-    ).toBe(false);
-  });
-});
-
-describe("shouldForceSettleLatestTurn", () => {
-  const unsettledLatestTurn = {
-    turnId: TurnId.makeUnsafe("turn-1"),
-    state: "running",
-    requestedAt: "2026-04-13T00:00:00.000Z",
-    startedAt: "2026-04-13T00:00:00.000Z",
-    completedAt: null,
-    assistantMessageId: null,
-  } as const;
-
-  it("does not treat a latest turn as settled just because the session is already idle", () => {
-    expect(
-      shouldForceSettleLatestTurn({
-        latestTurn: unsettledLatestTurn,
-        session: {
-          provider: "codex",
-          status: "running",
-          orchestrationStatus: "ready",
-          createdAt: "2026-04-13T00:00:00.000Z",
-          updatedAt: "2026-04-13T00:00:05.000Z",
-        },
-        hasLiveTurnTail: false,
-      }),
-    ).toBe(false);
-  });
-
-  it("does not settle while visible tail work is still active", () => {
-    expect(
-      shouldForceSettleLatestTurn({
-        latestTurn: unsettledLatestTurn,
-        session: {
-          provider: "codex",
-          status: "running",
-          orchestrationStatus: "ready",
-          createdAt: "2026-04-13T00:00:00.000Z",
-          updatedAt: "2026-04-13T00:00:05.000Z",
-        },
-        hasLiveTurnTail: true,
-      }),
-    ).toBe(false);
-  });
-
-  it("does not settle while the provider still reports the turn as running", () => {
-    expect(
-      shouldForceSettleLatestTurn({
-        latestTurn: unsettledLatestTurn,
-        session: {
-          provider: "codex",
-          status: "running",
-          orchestrationStatus: "running",
-          createdAt: "2026-04-13T00:00:00.000Z",
-          updatedAt: "2026-04-13T00:00:05.000Z",
-          activeTurnId: TurnId.makeUnsafe("turn-1"),
-        },
-        hasLiveTurnTail: false,
       }),
     ).toBe(false);
   });

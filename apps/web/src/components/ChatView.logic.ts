@@ -262,20 +262,6 @@ export function hasServerAcknowledgedLocalDispatch(input: {
   return false;
 }
 
-export function hasLiveChatTurn(options: {
-  phase: SessionPhase;
-  latestTurnSettled: boolean;
-  latestTurnStartedAt: string | null;
-}): boolean {
-  if (options.latestTurnStartedAt !== null) {
-    return !options.latestTurnSettled;
-  }
-  return (
-    options.phase === "running" ||
-    (options.latestTurnStartedAt !== null && !options.latestTurnSettled)
-  );
-}
-
 export const ACTIVE_TURN_LAYOUT_SETTLE_DELAY_MS = 180;
 
 export function shouldStartActiveTurnLayoutGrace(options: {
@@ -288,15 +274,6 @@ export function shouldStartActiveTurnLayoutGrace(options: {
     !options.currentTurnLayoutLive &&
     options.latestTurnStartedAt !== null
   );
-}
-
-export function shouldForceSettleLatestTurn(options: {
-  latestTurn: Thread["latestTurn"] | null;
-  session: Thread["session"] | null;
-  hasLiveTurnTail: boolean;
-}): boolean {
-  void options;
-  return false;
 }
 
 export function readFileAsDataUrl(file: File): Promise<string> {

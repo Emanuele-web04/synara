@@ -253,7 +253,6 @@ import {
   createLocalDispatchSnapshot,
   deriveComposerSendState,
   hasServerAcknowledgedLocalDispatch,
-  hasLiveChatTurn,
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
   LastInvokedScriptByProjectSchema,
   type LocalDispatchSnapshot,
@@ -1397,13 +1396,9 @@ export default function ChatView({
       phase,
     ],
   );
-  const hasLiveTurn = hasLiveChatTurn({
-    phase,
-    latestTurnSettled,
-    latestTurnStartedAt: activeLatestTurn?.startedAt ?? null,
-  });
   const isSendBusy = localDispatch !== null && !serverAcknowledgedLocalDispatch;
   const isPreparingWorktree = localDispatch?.preparingWorktree ?? false;
+  const hasLiveTurn = phase === "running";
   const isWorking = hasLiveTurn || isSendBusy || isConnecting || isRevertingCheckpoint;
   const activeTurnLayoutLive = isWorking || !latestTurnSettled;
   const [keepSettledActiveTurnLayout, setKeepSettledActiveTurnLayout] = useState(false);
@@ -6102,7 +6097,7 @@ export default function ChatView({
                                     : "Next question"}
                               </Button>
                             </div>
-                          ) : hasLiveTurn ? (
+                          ) : phase === "running" ? (
                             <button
                               type="button"
                               className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-full bg-foreground text-background transition-all duration-150 hover:scale-105 sm:h-[26px] sm:w-[26px]"

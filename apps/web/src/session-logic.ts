@@ -175,7 +175,7 @@ export function isLatestTurnSettled(
 ): boolean {
   if (!latestTurn?.startedAt) return false;
   if (!latestTurn.completedAt) return false;
-  if (latestTurn.state === "completed" || latestTurn.state === "error") {
+  if (latestTurn.state === "interrupted" || latestTurn.state === "error") {
     return true;
   }
   if (!session) return true;
@@ -198,7 +198,15 @@ export function deriveActiveWorkStartedAt(
   session: SessionActivityState | null,
   sendStartedAt: string | null,
 ): string | null {
-  if (hasLiveLatestTurn(latestTurn, session)) {
+  const runningTurnId =
+    session?.orchestrationStatus === "running" ? (session.activeTurnId ?? null) : null;
+  if (runningTurnId !== null && runningTurnId === latestTurn?.turnId) {
+    return latestTurn?.startedAt ?? sendStartedAt;
+  }
+  if (runningTurnId !== null) {
+    return sendStartedAt;
+  }
+  if (!isLatestTurnSettled(latestTurn, session)) {
     return latestTurn?.startedAt ?? sendStartedAt;
   }
   return sendStartedAt;
