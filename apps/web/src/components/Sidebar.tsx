@@ -2770,7 +2770,7 @@ export default function Sidebar() {
             <span
               aria-hidden="true"
               className={cn(
-                "pointer-events-none absolute left-2.5 top-1/2 z-10 size-3 -translate-y-1/2 animate-spin rounded-full text-muted-foreground/55 transition-opacity [animation-duration:1.3s]",
+                "pointer-events-none absolute left-2.5 top-1/2 z-10 size-3 -translate-y-1/2 animate-spin rounded-full text-muted-foreground/55 transition-opacity [animation-duration:1.6s]",
                 isPinned
                   ? "opacity-0"
                   : "opacity-100 group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",

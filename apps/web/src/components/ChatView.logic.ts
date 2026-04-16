@@ -45,6 +45,7 @@ export function buildLocalDraftThread(
     createdAt: draftThread.createdAt,
     latestTurn: null,
     lastVisitedAt: draftThread.createdAt,
+    envMode: draftThread.envMode,
     branch: draftThread.branch,
     worktreePath: draftThread.worktreePath,
     handoff: null,

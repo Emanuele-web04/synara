@@ -66,6 +66,7 @@ interface ChatHeaderProps {
   browserOpen: boolean;
   gitCwd: string | null;
   diffOpen: boolean;
+  diffDisabledReason?: string | null;
   surfaceMode?: "single" | "split";
   chatLayoutAction?: {
     kind: "split" | "maximize";
@@ -110,6 +111,7 @@ export const ChatHeader = memo(function ChatHeader({
   browserOpen,
   gitCwd,
   diffOpen,
+  diffDisabledReason = null,
   surfaceMode = "single",
   chatLayoutAction = null,
   onRunProjectScript,
@@ -370,7 +372,7 @@ export const ChatHeader = memo(function ChatHeader({
                 aria-label="Toggle diff panel"
                 variant="default"
                 size="xs"
-                disabled={!isGitRepo}
+                disabled={!isGitRepo || (diffDisabledReason !== null && !diffOpen)}
               >
                 {showDiffTotals ? (
                   <span className="inline-flex items-center gap-1">
@@ -389,9 +391,11 @@ export const ChatHeader = memo(function ChatHeader({
           <TooltipPopup side="bottom">
             {!isGitRepo
               ? "Diff panel is unavailable because this project is not a git repository."
-              : diffToggleShortcutLabel
-                ? `Toggle diff panel (${diffToggleShortcutLabel})`
-                : "Toggle diff panel"}
+              : diffDisabledReason && !diffOpen
+                ? diffDisabledReason
+                : diffToggleShortcutLabel
+                  ? `Toggle diff panel (${diffToggleShortcutLabel})`
+                  : "Toggle diff panel"}
           </TooltipPopup>
         </Tooltip>
       </div>

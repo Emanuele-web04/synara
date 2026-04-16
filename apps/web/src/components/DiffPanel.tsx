@@ -3,7 +3,10 @@ import { FileDiff, type FileDiffMetadata, Virtualizer } from "@pierre/diffs/reac
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { ThreadId, type TurnId } from "@t3tools/contracts";
-import { resolveThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
+import {
+  isPendingThreadWorktree,
+  resolveThreadWorkspaceCwd,
+} from "@t3tools/shared/threadEnvironment";
 import { FaPlusMinus } from "react-icons/fa6";
 import { LuWrapText } from "react-icons/lu";
 import {
@@ -42,8 +45,10 @@ import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { useStore } from "../store";
 import { createProjectSelector, createThreadSelector } from "../storeSelectors";
 import { useAppSettings } from "../appSettings";
+import { useComposerDraftStore } from "../composerDraftStore";
 import { formatShortTimestamp } from "../timestampFormat";
 import ChatMarkdown from "./ChatMarkdown";
+import { resolveDiffPanelThread } from "./DiffPanel.logic";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { Button } from "./ui/button";
 import { ToggleGroup, Toggle } from "./ui/toggle-group";
@@ -224,18 +229,46 @@ export default function DiffPanel({
   const diffSearch = useSearch({ strict: false, select: (search) => parseDiffRouteSearch(search) });
   const diffOpen = panelState ? panelState.panel === "diff" : diffSearch.diff === "1";
   const activeThreadId = controlledThreadId ?? routeThreadId;
-  const activeThread = useStore(
+  const serverThread = useStore(
     useMemo(() => createThreadSelector(activeThreadId), [activeThreadId]),
   );
-  const activeProjectId = activeThread?.projectId ?? null;
+  const draftThread = useComposerDraftStore((store) =>
+    activeThreadId ? (store.draftThreadsByThreadId[activeThreadId] ?? null) : null,
+  );
+  const fallbackDraftProjectId = draftThread?.projectId ?? null;
+  const fallbackDraftProject = useStore(
+    useMemo(() => createProjectSelector(fallbackDraftProjectId), [fallbackDraftProjectId]),
+  );
+  // Keep diff summary access available for draft chats before the first turn promotes them into the server store.
+  const activeThread = useMemo(
+    () =>
+      resolveDiffPanelThread({
+        threadId: activeThreadId,
+        serverThread,
+        draftThread,
+        fallbackModelSelection: fallbackDraftProject?.defaultModelSelection ?? null,
+      }),
+    [activeThreadId, draftThread, fallbackDraftProject?.defaultModelSelection, serverThread],
+  );
+  const activeProjectId = activeThread?.projectId ?? draftThread?.projectId ?? null;
   const activeProject = useStore(
     useMemo(() => createProjectSelector(activeProjectId), [activeProjectId]),
   );
-  const activeCwd = resolveThreadWorkspaceCwd({
-    projectCwd: activeProject?.cwd ?? null,
-    envMode: activeThread?.envMode,
-    worktreePath: activeThread?.worktreePath ?? null,
+  const resolvedThreadEnvMode =
+    serverThread?.envMode ?? draftThread?.envMode ?? activeThread?.envMode;
+  const resolvedThreadWorktreePath =
+    serverThread?.worktreePath ?? draftThread?.worktreePath ?? activeThread?.worktreePath ?? null;
+  const diffEnvironmentPending = isPendingThreadWorktree({
+    envMode: resolvedThreadEnvMode,
+    worktreePath: resolvedThreadWorktreePath,
   });
+  const activeCwd = diffEnvironmentPending
+    ? null
+    : resolveThreadWorkspaceCwd({
+        projectCwd: activeProject?.cwd ?? null,
+        envMode: resolvedThreadEnvMode,
+        worktreePath: resolvedThreadWorktreePath,
+      });
   const gitBranchesQuery = useQuery(gitBranchesQueryOptions(activeCwd ?? null));
   const isGitRepo = gitBranchesQuery.data?.isRepo ?? true;
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
@@ -320,7 +353,7 @@ export default function DiffPanel({
       fromTurnCount: activeCheckpointRange?.fromTurnCount ?? null,
       toTurnCount: activeCheckpointRange?.toTurnCount ?? null,
       cacheScope: selectedTurn ? `turn:${selectedTurn.turnId}` : conversationCacheScope,
-      enabled: isGitRepo,
+      enabled: isGitRepo && !diffEnvironmentPending,
     }),
   );
   const selectedTurnCheckpointDiff = selectedTurn
@@ -344,7 +377,7 @@ export default function DiffPanel({
   const workingTreeDiffQuery = useQuery(
     gitWorkingTreeDiffQueryOptions({
       cwd: activeCwd ?? null,
-      enabled: diffOpen && surfaceMode !== "review",
+      enabled: diffOpen && surfaceMode !== "review" && !diffEnvironmentPending,
     }),
   );
   const workingTreePatch = workingTreeDiffQuery.data?.patch;
@@ -464,12 +497,18 @@ export default function DiffPanel({
         ? "Failed to generate diff summary."
         : null;
   const canShowSummary = Boolean(
-    activeCwd && (!hasResolvedWorkingTreePatch || !hasNoWorkingTreeChanges),
+    !diffEnvironmentPending &&
+    activeCwd &&
+    (!hasResolvedWorkingTreePatch || !hasNoWorkingTreeChanges),
   );
   const canPrefetchSummary = Boolean(
-    diffOpen && activeCwd && normalizedWorkingTreePatch && !hasNoWorkingTreeChanges,
+    diffOpen &&
+    !diffEnvironmentPending &&
+    activeCwd &&
+    normalizedWorkingTreePatch &&
+    !hasNoWorkingTreeChanges,
   );
-  const canShowTotal = Boolean(activeCwd);
+  const canShowTotal = Boolean(!diffEnvironmentPending && activeCwd);
 
   useEffect(() => {
     if (!canPrefetchSummary) {
@@ -769,6 +808,11 @@ export default function DiffPanel({
       ) : !isGitRepo ? (
         <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
           Turn diffs are unavailable because this project is not a git repository.
+        </div>
+      ) : diffEnvironmentPending ? (
+        <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
+          This chat environment is still being prepared. Diff and summary will be available once the
+          worktree is ready.
         </div>
       ) : (
         <>
