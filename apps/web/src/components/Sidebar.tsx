@@ -4380,11 +4380,6 @@ export default function Sidebar() {
                           <span className="truncate text-[10px] font-semibold">
                             {desktopUpdateButtonPresentation.label}
                           </span>
-                          {desktopUpdateButtonPresentation.detail ? (
-                            <span className="truncate text-[8.5px] font-normal text-white/86">
-                              {desktopUpdateButtonPresentation.detail}
-                            </span>
-                          ) : null}
                         </span>
                         {desktopUpdateButtonPresentation.progressPercent !== null ? (
                           <span className="rounded-full bg-white/20 px-1.5 py-0.5 text-[9px] font-semibold tabular-nums text-white/95">

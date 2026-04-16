@@ -61,7 +61,6 @@ function formatDesktopUpdateDownloadPercent(percent: number | null): string | nu
 
 export interface DesktopUpdateButtonPresentation {
   label: string;
-  detail: string | null;
   progressPercent: number | null;
 }
 
@@ -72,7 +71,6 @@ export function getDesktopUpdateButtonPresentation(
   if (options?.installing) {
     return {
       label: "Updating...",
-      detail: "Applying update",
       progressPercent: null,
     };
   }
@@ -80,7 +78,6 @@ export function getDesktopUpdateButtonPresentation(
   if (!state) {
     return {
       label: "Update",
-      detail: null,
       progressPercent: null,
     };
   }
@@ -88,7 +85,6 @@ export function getDesktopUpdateButtonPresentation(
   if (state.status === "checking") {
     return {
       label: "Checking...",
-      detail: "Looking for updates",
       progressPercent: null,
     };
   }
@@ -97,7 +93,6 @@ export function getDesktopUpdateButtonPresentation(
     const percentText = formatDesktopUpdateDownloadPercent(state.downloadPercent);
     return {
       label: "Downloading...",
-      detail: percentText ? `Progress ${percentText}` : "Preparing download",
       progressPercent: percentText ? Number.parseInt(percentText, 10) : null,
     };
   }
@@ -107,13 +102,11 @@ export function getDesktopUpdateButtonPresentation(
     if (state.status === "error" && state.errorContext === "download") {
       return {
         label: "Download failed",
-        detail: "Click to retry",
         progressPercent: null,
       };
     }
     return {
       label: "Update available",
-      detail: state.availableVersion ? `Version ${state.availableVersion}` : "Ready to download",
       progressPercent: null,
     };
   }
@@ -121,26 +114,22 @@ export function getDesktopUpdateButtonPresentation(
     if (state.status === "error" && state.errorContext === "install") {
       return {
         label: "Install failed",
-        detail: "Click to retry",
         progressPercent: null,
       };
     }
     return {
       label: "Ready to update",
-      detail: "Restart to install",
       progressPercent: null,
     };
   }
   if (action === "check") {
     return {
       label: "Check updates",
-      detail: null,
       progressPercent: null,
     };
   }
   return {
     label: "Update",
-    detail: null,
     progressPercent: null,
   };
 }

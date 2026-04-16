@@ -101,7 +101,6 @@ describe("desktop update button state", () => {
     expect(isDesktopUpdateButtonDisabled(state)).toBe(true);
     expect(getDesktopUpdateButtonTooltip(state)).toContain("42%");
     expect(getDesktopUpdateButtonLabel(state)).toBe("Downloading...");
-    expect(getDesktopUpdateButtonPresentation(state).detail).toBe("Progress 42%");
     expect(getDesktopUpdateButtonPresentation(state).progressPercent).toBe(42);
   });
 
@@ -150,7 +149,6 @@ describe("desktop update button state", () => {
     };
     const presentation = getDesktopUpdateButtonPresentation(installingState, { installing: true });
     expect(presentation.label).toBe("Updating...");
-    expect(presentation.detail).toBe("Applying update");
     expect(getDesktopUpdateButtonTooltip(installingState, { installing: true })).toBe(
       "Applying update...",
     );

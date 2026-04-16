@@ -20,13 +20,12 @@ const baseState: DesktopUpdateState = {
 };
 
 describe("desktop update button presentation timeline", () => {
-  it("surfaces checking, downloading and ready-to-install states with details", () => {
+  it("surfaces checking, downloading and ready-to-install states without secondary detail text", () => {
     const checking = getDesktopUpdateButtonPresentation({
       ...baseState,
       status: "checking",
     });
     expect(checking.label).toBe("Checking...");
-    expect(checking.detail).toBe("Looking for updates");
     expect(checking.progressPercent).toBeNull();
 
     const downloading = getDesktopUpdateButtonPresentation({
@@ -36,7 +35,6 @@ describe("desktop update button presentation timeline", () => {
       downloadPercent: 37.9,
     });
     expect(downloading.label).toBe("Downloading...");
-    expect(downloading.detail).toBe("Progress 37%");
     expect(downloading.progressPercent).toBe(37);
 
     const downloaded = getDesktopUpdateButtonPresentation({
@@ -46,7 +44,6 @@ describe("desktop update button presentation timeline", () => {
       downloadedVersion: "1.2.0",
     });
     expect(downloaded.label).toBe("Ready to update");
-    expect(downloaded.detail).toBe("Restart to install");
     expect(downloaded.progressPercent).toBeNull();
   });
 
@@ -59,7 +56,6 @@ describe("desktop update button presentation timeline", () => {
     });
 
     expect(downloading.label).toBe("Downloading...");
-    expect(downloading.detail).toBe("Preparing download");
     expect(downloading.progressPercent).toBeNull();
   });
 
@@ -70,7 +66,6 @@ describe("desktop update button presentation timeline", () => {
       availableVersion: "1.2.0",
       downloadPercent: 126.9,
     });
-    expect(over.detail).toBe("Progress 100%");
     expect(over.progressPercent).toBe(100);
 
     const below = getDesktopUpdateButtonPresentation({
@@ -79,7 +74,6 @@ describe("desktop update button presentation timeline", () => {
       availableVersion: "1.2.0",
       downloadPercent: -8,
     });
-    expect(below.detail).toBe("Progress 0%");
     expect(below.progressPercent).toBe(0);
   });
 });
