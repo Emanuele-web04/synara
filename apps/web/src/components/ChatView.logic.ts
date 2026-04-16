@@ -1,8 +1,9 @@
 import {
   ProjectId,
+  ThreadId,
   type ModelSelection,
   type ServerProviderAuthStatus,
-  type ThreadId,
+  type ThreadId as ThreadIdType,
 } from "@t3tools/contracts";
 import { sanitizeBranchFragment } from "@t3tools/shared/git";
 import { isGenericTerminalThreadTitle } from "@t3tools/shared/terminalThreads";
@@ -19,6 +20,12 @@ import {
   stripInlineTerminalContextPlaceholders,
   type TerminalContextDraft,
 } from "../lib/terminalContext";
+import {
+  humanizeSubagentStatus,
+  resolveSubagentPresentationForThread,
+} from "../lib/subagentPresentation";
+import { hasLiveTurnTailWork, type WorkLogEntry } from "../session-logic";
+import { localSubagentThreadId } from "./ChatView.selectors";
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "t3code:last-invoked-script-by-project";
 const WORKTREE_NAME_PREFIX = "dpcode";
@@ -248,9 +255,6 @@ export function hasServerAcknowledgedLocalDispatch(input: {
   }
 
   if (input.localDispatch.sessionOrchestrationStatus !== nextSessionOrchestrationStatus) {
-    // Keep the optimistic timer alive through the first-turn Claude bootstrap:
-    // a fresh thread often transitions null -> ready before the provider emits
-    // the real running/latest-turn snapshot.
     if (
       input.localDispatch.sessionOrchestrationStatus === null &&
       nextSessionOrchestrationStatus === "ready"
@@ -402,4 +406,187 @@ export function shouldAutoDeleteTerminalThreadOnLastClose(options: {
     thread.activities.length === 0 &&
     thread.proposedPlans.length === 0
   );
+}
+
+export interface ThreadBreadcrumb {
+  threadId: ThreadIdType;
+  title: string;
+}
+
+export function buildThreadBreadcrumbs(
+  threads: ReadonlyArray<Thread>,
+  thread: Pick<Thread, "id" | "parentThreadId"> | null | undefined,
+): ThreadBreadcrumb[] {
+  if (!thread?.parentThreadId) {
+    return [];
+  }
+
+  const threadById = new Map(threads.map((entry) => [entry.id, entry] as const));
+  const breadcrumbs: ThreadBreadcrumb[] = [];
+  const visited = new Set<ThreadIdType>();
+  let currentParentId: ThreadIdType | null = thread.parentThreadId ?? null;
+
+  while (currentParentId && !visited.has(currentParentId)) {
+    visited.add(currentParentId);
+    const parentThread = threadById.get(currentParentId);
+    if (!parentThread) {
+      break;
+    }
+    breadcrumbs.unshift({
+      threadId: parentThread.id,
+      title: parentThread.parentThreadId
+        ? resolveSubagentPresentationForThread({ thread: parentThread, threads }).fullLabel
+        : parentThread.title,
+    });
+    currentParentId = parentThread.parentThreadId ?? null;
+  }
+
+  return breadcrumbs;
+}
+
+function deriveSubagentStatus(thread: Thread | undefined): {
+  isActive: boolean;
+  label: string | undefined;
+} {
+  if (!thread) {
+    return {
+      isActive: false,
+      label: undefined,
+    };
+  }
+
+  if (thread.error || thread.session?.status === "error") {
+    return {
+      isActive: false,
+      label: "Error",
+    };
+  }
+  if (thread.session?.status === "connecting") {
+    return {
+      isActive: true,
+      label: "Connecting",
+    };
+  }
+  if (
+    thread.session?.status === "running" ||
+    hasLiveTurnTailWork({
+      latestTurn: thread.latestTurn,
+      messages: thread.messages,
+      activities: thread.activities,
+      session: thread.session,
+    })
+  ) {
+    return {
+      isActive: true,
+      label: "Running",
+    };
+  }
+  if (thread.session?.status === "closed") {
+    return {
+      isActive: false,
+      label: "Closed",
+    };
+  }
+
+  return {
+    isActive: false,
+    label: thread.session ? "Idle" : undefined,
+  };
+}
+
+function humanizeSubagentRawStatus(rawStatus: string | undefined): string | undefined {
+  return humanizeSubagentStatus(rawStatus);
+}
+
+function resolveTimelineSubagentThread(input: {
+  subagent: NonNullable<WorkLogEntry["subagents"]>[number];
+  parentThreadId: ThreadIdType | null;
+  threadById: ReadonlyMap<ThreadIdType, Thread>;
+  threads: ReadonlyArray<Thread>;
+}): Thread | undefined {
+  const directThreadId = input.subagent.resolvedThreadId ?? input.subagent.threadId;
+  if (directThreadId) {
+    const directMatch = input.threadById.get(ThreadId.makeUnsafe(directThreadId));
+    if (directMatch) {
+      return directMatch;
+    }
+  }
+
+  if (input.parentThreadId) {
+    const providerThreadId = input.subagent.providerThreadId ?? input.subagent.threadId;
+    const derivedLocalThreadId = localSubagentThreadId(input.parentThreadId, providerThreadId);
+    const derivedLocalMatch = input.threadById.get(derivedLocalThreadId);
+    if (derivedLocalMatch) {
+      return derivedLocalMatch;
+    }
+
+    if (input.subagent.agentId) {
+      const matchedByAgent = input.threads.find(
+        (thread) =>
+          thread.parentThreadId === input.parentThreadId &&
+          thread.subagentAgentId === input.subagent.agentId,
+      );
+      if (matchedByAgent) {
+        return matchedByAgent;
+      }
+    }
+  }
+
+  if (input.subagent.agentId) {
+    return input.threads.find((thread) => thread.subagentAgentId === input.subagent.agentId);
+  }
+
+  return undefined;
+}
+
+export function enrichSubagentWorkEntries(
+  workEntries: ReadonlyArray<WorkLogEntry>,
+  threads: ReadonlyArray<Thread>,
+  parentThreadId: ThreadIdType | null,
+): WorkLogEntry[] {
+  if (workEntries.length === 0) {
+    return [];
+  }
+
+  const threadById = new Map(threads.map((thread) => [thread.id, thread] as const));
+
+  return workEntries.map((entry) => {
+    if ((entry.subagents?.length ?? 0) === 0) {
+      return entry;
+    }
+
+    const subagents = entry.subagents!.map((subagent) => {
+      const matchedThread = resolveTimelineSubagentThread({
+        subagent,
+        parentThreadId,
+        threadById,
+        threads,
+      });
+      const status = deriveSubagentStatus(matchedThread);
+      const fallbackStatusLabel = humanizeSubagentRawStatus(subagent.rawStatus);
+      const matchedPresentation =
+        matchedThread !== undefined
+          ? resolveSubagentPresentationForThread({ thread: matchedThread, threads })
+          : null;
+      const nextSubagent = Object.assign({}, subagent);
+      if (matchedThread) {
+        nextSubagent.resolvedThreadId = matchedThread.id;
+      }
+      if (matchedPresentation) {
+        nextSubagent.title = matchedPresentation.fullLabel;
+      }
+      if (status.label ?? fallbackStatusLabel) {
+        nextSubagent.statusLabel = status.label ?? fallbackStatusLabel;
+      }
+      if (status.isActive || fallbackStatusLabel === "Running") {
+        nextSubagent.isActive = true;
+      }
+      return nextSubagent;
+    });
+
+    return {
+      ...entry,
+      subagents,
+    };
+  });
 }
