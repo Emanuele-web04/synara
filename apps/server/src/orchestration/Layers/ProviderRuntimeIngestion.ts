@@ -874,6 +874,86 @@ const make = Effect.gen(function* () {
   const clearAssistantMessageState = (messageId: MessageId) =>
     clearBufferedAssistantText(messageId);
 
+  const flushBufferedAssistantMessageDelta = (input: {
+    event: ProviderRuntimeEvent;
+    threadId: ThreadId;
+    messageId: MessageId;
+    turnId?: TurnId;
+    createdAt: string;
+    commandTag: string;
+  }) =>
+    Effect.gen(function* () {
+      const bufferedText = yield* takeBufferedAssistantText(input.messageId);
+      if (bufferedText.length === 0) {
+        return false;
+      }
+
+      yield* orchestrationEngine.dispatch({
+        type: "thread.message.assistant.delta",
+        commandId: providerCommandId(input.event, input.commandTag),
+        threadId: input.threadId,
+        messageId: input.messageId,
+        delta: bufferedText,
+        ...(input.turnId ? { turnId: input.turnId } : {}),
+        createdAt: input.createdAt,
+      });
+      return true;
+    });
+
+  const flushBufferedAssistantMessagesForTurn = (input: {
+    event: ProviderRuntimeEvent;
+    threadId: ThreadId;
+    turnId: TurnId;
+    createdAt: string;
+    commandTag: string;
+  }) =>
+    Effect.gen(function* () {
+      const assistantMessageIds = yield* getAssistantMessageIdsForTurn(
+        input.threadId,
+        input.turnId,
+      );
+      for (const assistantMessageId of assistantMessageIds) {
+        yield* flushBufferedAssistantMessageDelta({
+          event: input.event,
+          threadId: input.threadId,
+          messageId: assistantMessageId,
+          turnId: input.turnId,
+          createdAt: input.createdAt,
+          commandTag: input.commandTag,
+        });
+      }
+    });
+
+  const finalizeBufferedAssistantMessagesForTurn = (input: {
+    event: ProviderRuntimeEvent;
+    threadId: ThreadId;
+    turnId: TurnId;
+    createdAt: string;
+    commandTag: string;
+    finalDeltaCommandTag: string;
+  }) =>
+    Effect.gen(function* () {
+      const assistantMessageIds = yield* getAssistantMessageIdsForTurn(
+        input.threadId,
+        input.turnId,
+      );
+      yield* Effect.forEach(
+        assistantMessageIds,
+        (assistantMessageId) =>
+          finalizeAssistantMessage({
+            event: input.event,
+            threadId: input.threadId,
+            messageId: assistantMessageId,
+            turnId: input.turnId,
+            createdAt: input.createdAt,
+            commandTag: input.commandTag,
+            finalDeltaCommandTag: input.finalDeltaCommandTag,
+          }),
+        { concurrency: 1 },
+      ).pipe(Effect.asVoid);
+      yield* clearAssistantMessageIdsForTurn(input.threadId, input.turnId);
+    });
+
   const finalizeAssistantMessage = (input: {
     event: ProviderRuntimeEvent;
     threadId: ThreadId;
@@ -1514,11 +1594,34 @@ const make = Effect.gen(function* () {
       }
 
       if (event.type === "session.exited") {
+        const exitedTurnId = eventTurnId ?? activeTurnId ?? undefined;
+        if (exitedTurnId) {
+          yield* finalizeBufferedAssistantMessagesForTurn({
+            event,
+            threadId: thread.id,
+            turnId: exitedTurnId,
+            createdAt: now,
+            commandTag: "assistant-complete-session-exit",
+            finalDeltaCommandTag: "assistant-delta-session-exit",
+          });
+        }
         yield* clearTurnStateForSession(thread.id);
       }
 
       if (event.type === "runtime.error") {
         const runtimeErrorMessage = runtimeErrorMessageFromEvent(event) ?? "Provider runtime error";
+        const erroredTurnId = eventTurnId ?? activeTurnId ?? undefined;
+
+        if (erroredTurnId) {
+          yield* finalizeBufferedAssistantMessagesForTurn({
+            event,
+            threadId: thread.id,
+            turnId: erroredTurnId,
+            createdAt: now,
+            commandTag: "assistant-complete-runtime-error",
+            finalDeltaCommandTag: "assistant-delta-runtime-error",
+          });
+        }
 
         const shouldApplyRuntimeError = !STRICT_PROVIDER_LIFECYCLE_GUARD
           ? true
@@ -1599,10 +1702,38 @@ const make = Effect.gen(function* () {
     });
 
   const processDomainEvent = (event: TurnStartRequestedDomainEvent) =>
-    Ref.set(
-      assistantDeliveryModeRef,
-      event.payload.assistantDeliveryMode ?? DEFAULT_ASSISTANT_DELIVERY_MODE,
-    );
+    Effect.gen(function* () {
+      const nextAssistantDeliveryMode =
+        event.payload.assistantDeliveryMode ?? DEFAULT_ASSISTANT_DELIVERY_MODE;
+      yield* Ref.set(assistantDeliveryModeRef, nextAssistantDeliveryMode);
+      if (nextAssistantDeliveryMode !== "streaming") {
+        return;
+      }
+
+      const readModel = yield* orchestrationEngine.getReadModel();
+      const thread = readModel.threads.find((entry) => entry.id === event.payload.threadId);
+      const activeTurnId = thread?.session?.activeTurnId ?? undefined;
+      if (!activeTurnId) {
+        return;
+      }
+
+      const flushEvent: ProviderRuntimeEvent = {
+        type: "turn.started",
+        eventId: event.eventId,
+        provider: thread?.session?.providerName === "claudeAgent" ? "claudeAgent" : "codex",
+        createdAt: event.payload.createdAt,
+        threadId: event.payload.threadId,
+        turnId: activeTurnId,
+        payload: {},
+      };
+      yield* flushBufferedAssistantMessagesForTurn({
+        event: flushEvent,
+        threadId: event.payload.threadId,
+        turnId: activeTurnId,
+        createdAt: event.payload.createdAt,
+        commandTag: "assistant-delta-domain-flush",
+      });
+    });
 
   const processInput = (input: RuntimeIngestionInput) =>
     input.source === "runtime" ? processRuntimeEvent(input.event) : processDomainEvent(input.event);

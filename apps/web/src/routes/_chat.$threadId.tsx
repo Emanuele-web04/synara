@@ -54,7 +54,11 @@ import {
 } from "../splitViewStore";
 import { selectSingleChatPanelState, useSingleChatPanelStore } from "../singleChatPanelStore";
 import { useStore } from "../store";
-import { createThreadExistsSelector, createThreadProjectIdSelector } from "../storeSelectors";
+import {
+  createAllThreadsSelector,
+  createThreadExistsSelector,
+  createThreadProjectIdSelector,
+} from "../storeSelectors";
 import { Button } from "../components/ui/button";
 import {
   Dialog,
@@ -590,7 +594,8 @@ function SplitPaneSurface(props: {
 
 function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: ThreadIdType }) {
   const navigate = useNavigate();
-  const threads = useStore((store) => store.threads);
+  const selectAllThreads = useMemo(() => createAllThreadsSelector(), []);
+  const threads = useStore(selectAllThreads);
   const projects = useStore((store) => store.projects);
   const splitView = useSplitViewStore(selectSplitView(props.splitViewId));
   const setFocusedPane = useSplitViewStore((store) => store.setFocusedPane);

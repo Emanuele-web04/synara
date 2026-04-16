@@ -1963,7 +1963,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           ) {
             return;
           }
-
           const toolName = block.name;
           const itemType = classifyToolItemType(toolName);
           const toolInput =
@@ -2203,7 +2202,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             },
           });
         }
-
         const content = message.message?.content;
         if (Array.isArray(content)) {
           for (const block of content) {
@@ -3096,9 +3094,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           pathToClaudeCodeExecutable: providerOptions?.binaryPath ?? "claude",
           settingSources: [...CLAUDE_SETTING_SOURCES],
           ...(Object.keys(claudeSubagents).length > 0 ? { agents: claudeSubagents } : {}),
-          // Cast: SDK EffortLevel doesn't include "xhigh" yet, but the API supports it (Opus 4.7).
+          // Keep the runtime value explicit so Opus 4.7 can pass xhigh through to the SDK.
           ...(effectiveEffort
-            ? { effort: effectiveEffort as "low" | "medium" | "high" | "max" }
+            ? { effort: effectiveEffort as "low" | "medium" | "high" | "xhigh" | "max" }
             : {}),
           ...(permissionMode ? { permissionMode } : {}),
           ...(permissionMode === "bypassPermissions"

@@ -188,6 +188,27 @@ function coalesceOrchestrationUiEvents(
   return coalesced;
 }
 
+function shouldFlushDomainEventImmediately(
+  event: OrchestrationEvent,
+  immediatelyFlushedAssistantMessageIds: Set<string>,
+): boolean {
+  if (event.type !== "thread.message-sent" || event.payload.role !== "assistant") {
+    return false;
+  }
+
+  if (!event.payload.streaming) {
+    immediatelyFlushedAssistantMessageIds.delete(event.payload.messageId);
+    return false;
+  }
+
+  if (immediatelyFlushedAssistantMessageIds.has(event.payload.messageId)) {
+    return false;
+  }
+
+  immediatelyFlushedAssistantMessageIds.add(event.payload.messageId);
+  return true;
+}
+
 function EventRouter() {
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const syncServerThreadDetailHotPath = useStore((store) => store.syncServerThreadDetailHotPath);
@@ -236,6 +257,7 @@ function EventRouter() {
     let needsProviderInvalidation = false;
     let needsGitInvalidation = false;
     let pendingDomainEvents: OrchestrationEvent[] = [];
+    const immediatelyFlushedAssistantMessageIds = new Set<string>();
     let shellSnapshotSequence = -1;
     let pendingShellEvents: OrchestrationShellStreamEvent[] = [];
     const subscribedThreadIds = new Set<ThreadId>();
@@ -355,6 +377,24 @@ function EventRouter() {
       removeOrphanedTerminalStates(activeThreadIds);
     };
 
+    const flushPendingDomainEvents = () => {
+      if (pendingDomainEvents.length > 0) {
+        applyOrchestrationEventsHotPath(coalesceOrchestrationUiEvents(pendingDomainEvents));
+        pendingDomainEvents = [];
+      }
+      if (needsProviderInvalidation) {
+        needsProviderInvalidation = false;
+        void queryClient.invalidateQueries({ queryKey: providerQueryKeys.all });
+        // Invalidate workspace entry queries so the @-mention file picker
+        // reflects files created, deleted, or restored during this turn.
+        void queryClient.invalidateQueries({ queryKey: projectQueryKeys.all });
+      }
+      if (needsGitInvalidation) {
+        needsGitInvalidation = false;
+        void invalidateGitQueries(queryClient);
+      }
+    };
+
     const queueDomainEvent = (event: OrchestrationEvent) => {
       pendingDomainEvents.push(event);
       if (event.type === "thread.turn-diff-completed" || event.type === "thread.reverted") {
@@ -371,26 +411,17 @@ function EventRouter() {
       ) {
         needsGitInvalidation = true;
       }
+      if (shouldFlushDomainEventImmediately(event, immediatelyFlushedAssistantMessageIds)) {
+        domainEventFlushThrottler.cancel();
+        flushPendingDomainEvents();
+        return;
+      }
       domainEventFlushThrottler.maybeExecute();
     };
 
     const domainEventFlushThrottler = new Throttler(
       () => {
-        if (pendingDomainEvents.length > 0) {
-          applyOrchestrationEventsHotPath(coalesceOrchestrationUiEvents(pendingDomainEvents));
-          pendingDomainEvents = [];
-        }
-        if (needsProviderInvalidation) {
-          needsProviderInvalidation = false;
-          void queryClient.invalidateQueries({ queryKey: providerQueryKeys.all });
-          // Invalidate workspace entry queries so the @-mention file picker
-          // reflects files created, deleted, or restored during this turn.
-          void queryClient.invalidateQueries({ queryKey: projectQueryKeys.all });
-        }
-        if (needsGitInvalidation) {
-          needsGitInvalidation = false;
-          void invalidateGitQueries(queryClient);
-        }
+        flushPendingDomainEvents();
       },
       {
         wait: 100,
@@ -566,6 +597,7 @@ function EventRouter() {
     void ensureScopedSubscriptions();
 
     return () => {
+      flushPendingDomainEvents();
       disposed = true;
       needsProviderInvalidation = false;
       domainEventFlushThrottler.cancel();

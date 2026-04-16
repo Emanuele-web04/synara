@@ -1317,6 +1317,19 @@ describe("composerDraftStore provider-scoped option updates", () => {
     expect(draft?.modelSelectionByProvider.claudeAgent?.options).toEqual({ effort: "max" });
     expect(draft?.activeProvider).toBe("codex");
   });
+
+  it("retains Claude xhigh effort in provider-scoped options", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.setProviderModelOptions(threadId, "claudeAgent", { effort: "xhigh" });
+
+    const draft = useComposerDraftStore.getState().draftsByThreadId[threadId];
+    expect(draft?.modelSelectionByProvider.claudeAgent).toEqual(
+      modelSelection("claudeAgent", "claude-sonnet-4-6", {
+        effort: "xhigh",
+      }),
+    );
+  });
 });
 
 describe("composerDraftStore runtime and interaction settings", () => {

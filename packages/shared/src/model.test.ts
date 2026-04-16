@@ -169,6 +169,17 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
     ]);
   });
 
+  it("returns claude effort options for Opus 4.7", () => {
+    expect(values("claudeAgent", "claude-opus-4-7")).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultrathink",
+    ]);
+  });
+
   it("returns claude effort options for Sonnet 4.6", () => {
     expect(values("claudeAgent", "claude-sonnet-4-6")).toEqual([
       "low",
@@ -187,7 +198,7 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
     const levels = getModelCapabilities("claudeAgent", "claude-opus-4-6").reasoningEffortLevels;
     const high = levels.find((l) => l.value === "high");
     expect(high).toEqual({ value: "high", label: "High", isDefault: true });
-    const xhigh = getModelCapabilities("codex", "gpt-5.4").reasoningEffortLevels.find(
+    const xhigh = getModelCapabilities("claudeAgent", "claude-opus-4-7").reasoningEffortLevels.find(
       (l) => l.value === "xhigh",
     );
     expect(xhigh).toEqual({ value: "xhigh", label: "Extra High" });
@@ -197,6 +208,7 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
 describe("getDefaultEffort", () => {
   it("returns the default effort from capabilities", () => {
     expect(getDefaultEffort(getModelCapabilities("codex", "gpt-5.4"))).toBe("high");
+    expect(getDefaultEffort(getModelCapabilities("claudeAgent", "claude-opus-4-7"))).toBe("high");
     expect(getDefaultEffort(getModelCapabilities("claudeAgent", "claude-opus-4-6"))).toBe("high");
     expect(getDefaultEffort(getModelCapabilities("claudeAgent", "claude-haiku-4-5"))).toBeNull();
   });
@@ -207,6 +219,9 @@ describe("hasEffortLevel", () => {
     const opusCaps = getModelCapabilities("claudeAgent", "claude-opus-4-6");
     expect(hasEffortLevel(opusCaps, "max")).toBe(true);
     expect(hasEffortLevel(opusCaps, "xhigh")).toBe(false);
+
+    const opus47Caps = getModelCapabilities("claudeAgent", "claude-opus-4-7");
+    expect(hasEffortLevel(opus47Caps, "xhigh")).toBe(true);
 
     const codexCaps = getModelCapabilities("codex", "gpt-5.4");
     expect(hasEffortLevel(codexCaps, "xhigh")).toBe(true);
@@ -274,6 +289,7 @@ describe("getModelCapabilities Claude capability flags", () => {
   it("only enables adaptive reasoning for Opus 4.6 and Sonnet 4.6", () => {
     const has = (m: string | undefined) =>
       getModelCapabilities("claudeAgent", m).reasoningEffortLevels.length > 0;
+    expect(has("claude-opus-4-7")).toBe(true);
     expect(has("claude-opus-4-6")).toBe(true);
     expect(has("claude-sonnet-4-6")).toBe(true);
     expect(has("claude-haiku-4-5")).toBe(false);
@@ -283,6 +299,7 @@ describe("getModelCapabilities Claude capability flags", () => {
   it("only enables max effort for Opus 4.6 and Sonnet 4.6", () => {
     const has = (m: string | undefined) =>
       getModelCapabilities("claudeAgent", m).reasoningEffortLevels.some((l) => l.value === "max");
+    expect(has("claude-opus-4-7")).toBe(true);
     expect(has("claude-opus-4-6")).toBe(true);
     expect(has("claude-sonnet-4-6")).toBe(true);
     expect(has("claude-haiku-4-5")).toBe(false);
@@ -291,6 +308,7 @@ describe("getModelCapabilities Claude capability flags", () => {
 
   it("only enables Claude fast mode for Opus 4.6", () => {
     const has = (m: string | undefined) => getModelCapabilities("claudeAgent", m).supportsFastMode;
+    expect(has("claude-opus-4-7")).toBe(true);
     expect(has("claude-opus-4-6")).toBe(true);
     expect(has("opus")).toBe(true);
     expect(has("claude-sonnet-4-6")).toBe(false);
@@ -301,6 +319,7 @@ describe("getModelCapabilities Claude capability flags", () => {
   it("only enables ultrathink keyword handling for Opus 4.6 and Sonnet 4.6", () => {
     const has = (m: string | undefined) =>
       getModelCapabilities("claudeAgent", m).promptInjectedEffortLevels.includes("ultrathink");
+    expect(has("claude-opus-4-7")).toBe(true);
     expect(has("claude-opus-4-6")).toBe(true);
     expect(has("claude-sonnet-4-6")).toBe(true);
     expect(has("claude-haiku-4-5")).toBe(false);

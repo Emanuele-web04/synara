@@ -63,7 +63,7 @@ async function mountClaudePicker(props?: {
   prompt?: string;
   options?: ClaudeModelOptions;
   fallbackModelOptions?: {
-    effort?: "low" | "medium" | "high" | "max" | "ultrathink";
+    effort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultrathink";
     thinking?: boolean;
     fastMode?: boolean;
   } | null;
@@ -174,6 +174,20 @@ describe("TraitsPicker (Claude)", () => {
       expect(text).toContain("High");
       expect(text).toContain("Max");
       expect(text).toContain("Ultrathink");
+    });
+  });
+
+  it("shows Extra High for Claude Opus 4.7", async () => {
+    await using _ = await mountClaudePicker({
+      model: "claude-opus-4-7",
+    });
+
+    await page.getByRole("button").click();
+
+    await vi.waitFor(() => {
+      const text = document.body.textContent ?? "";
+      expect(text).toContain("Extra High");
+      expect(text).toContain("Max");
     });
   });
 

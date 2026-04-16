@@ -2590,7 +2590,7 @@ export default function Sidebar() {
           tabIndex={0}
           data-thread-item
           className={cn(
-            "relative flex h-9 w-full items-center gap-2 rounded-md px-2 pr-9 text-left text-[length:var(--app-font-size-ui,12px)] transition-colors cursor-pointer",
+            "relative flex h-8 w-full items-center gap-2 rounded-md px-2 pr-9 text-left text-[length:var(--app-font-size-ui,12px)] transition-colors cursor-pointer",
             isActive
               ? "bg-accent/62 text-foreground/90 dark:bg-accent/42"
               : "text-foreground/72 hover:bg-accent/40 hover:text-foreground/90",
@@ -2634,7 +2634,7 @@ export default function Sidebar() {
                 render={
                   <span
                     className={cn(
-                      "min-w-0 flex-1 truncate",
+                      "min-w-0 flex-1 truncate transition-opacity group-hover/thread-row:opacity-100",
                       isActive ? "opacity-100" : "opacity-80",
                     )}
                     data-testid={`thread-title-${thread.id}`}
@@ -2946,7 +2946,7 @@ export default function Sidebar() {
             ) : (
               <span
                 className={cn(
-                  "min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)] text-foreground/86",
+                  "min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)] text-foreground/86 transition-opacity group-hover/thread-row:opacity-100",
                   isActive ? "opacity-100" : "opacity-80",
                   isSubagentThread ? "leading-[18px] text-foreground/80" : "leading-5",
                 )}
@@ -3953,7 +3953,7 @@ export default function Sidebar() {
                               render={<button type="button" />}
                               size="sm"
                               isActive={isActive}
-                              className="h-7.5 w-full justify-start gap-2 rounded-lg px-2 py-0.5 text-[length:var(--app-font-size-ui,12px)] font-normal hover:bg-accent"
+                              className="group/settings-nav-item h-7.5 w-full justify-start gap-2 rounded-lg px-2 py-0.5 text-[length:var(--app-font-size-ui,12px)] font-normal hover:bg-accent"
                               onClick={() => {
                                 void navigate({
                                   to: "/settings",
@@ -3965,7 +3965,12 @@ export default function Sidebar() {
                               }}
                             >
                               <Icon className="size-3.5 shrink-0" />
-                              <span className="truncate text-[length:var(--app-font-size-ui,12px)] leading-5">
+                              <span
+                                className={cn(
+                                  "truncate text-[length:var(--app-font-size-ui,12px)] leading-5 transition-opacity group-hover/settings-nav-item:opacity-100",
+                                  isActive ? "opacity-100" : "opacity-80",
+                                )}
+                              >
                                 {item.label}
                               </span>
                             </SidebarMenuSubButton>

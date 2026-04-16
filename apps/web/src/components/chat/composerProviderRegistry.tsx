@@ -50,6 +50,7 @@ type ProviderRegistryEntry = {
     includeFastMode?: boolean;
     open?: boolean;
     onOpenChange?: (open: boolean) => void;
+    shortcutLabel?: string | null;
     onPromptChange: (prompt: string) => void;
   }) => ReactNode;
 };
@@ -133,6 +134,7 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
       includeFastMode,
       open,
       onOpenChange,
+      shortcutLabel,
       onPromptChange,
     }) => (
       <TraitsPicker
@@ -143,6 +145,7 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
         prompt={prompt}
         {...(open !== undefined ? { open } : {})}
         {...(onOpenChange ? { onOpenChange } : {})}
+        {...(shortcutLabel !== undefined ? { shortcutLabel } : {})}
         {...(includeFastMode === undefined ? {} : { includeFastMode })}
         onPromptChange={onPromptChange}
       />
@@ -176,6 +179,7 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
       includeFastMode,
       open,
       onOpenChange,
+      shortcutLabel,
       onPromptChange,
     }) => (
       <TraitsPicker
@@ -186,6 +190,7 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
         prompt={prompt}
         {...(open !== undefined ? { open } : {})}
         {...(onOpenChange ? { onOpenChange } : {})}
+        {...(shortcutLabel !== undefined ? { shortcutLabel } : {})}
         {...(includeFastMode === undefined ? {} : { includeFastMode })}
         onPromptChange={onPromptChange}
       />
@@ -235,6 +240,7 @@ export function renderProviderTraitsPicker(input: {
   includeFastMode?: boolean;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  shortcutLabel?: string | null;
   onPromptChange: (prompt: string) => void;
 }): ReactNode {
   return composerProviderRegistry[input.provider].renderTraitsPicker(
@@ -246,6 +252,7 @@ export function renderProviderTraitsPicker(input: {
           prompt: input.prompt,
           ...(input.open !== undefined ? { open: input.open } : {}),
           ...(input.onOpenChange ? { onOpenChange: input.onOpenChange } : {}),
+          ...(input.shortcutLabel !== undefined ? { shortcutLabel: input.shortcutLabel } : {}),
           onPromptChange: input.onPromptChange,
         }
       : {
@@ -256,6 +263,7 @@ export function renderProviderTraitsPicker(input: {
           includeFastMode: input.includeFastMode,
           ...(input.open !== undefined ? { open: input.open } : {}),
           ...(input.onOpenChange ? { onOpenChange: input.onOpenChange } : {}),
+          ...(input.shortcutLabel !== undefined ? { shortcutLabel: input.shortcutLabel } : {}),
           onPromptChange: input.onPromptChange,
         },
   );

@@ -731,6 +731,289 @@ function normalizeChatMessages(
   return arraysShallowEqual(previous, nextMessages) ? previous : nextMessages;
 }
 
+function readModelAttachmentsFromChatMessage(
+  attachments: ChatMessage["attachments"],
+): ReadModelThread["messages"][number]["attachments"] {
+  return (
+    attachments?.map((attachment) => ({
+      id: attachment.id,
+      name: attachment.name,
+      type: "image" as const,
+      mimeType: attachment.mimeType,
+      sizeBytes: attachment.sizeBytes,
+    })) ?? []
+  );
+}
+
+function readModelMessageFromChatMessage(
+  message: ChatMessage,
+): ReadModelThread["messages"][number] {
+  return {
+    id: message.id,
+    role: message.role,
+    text: message.text,
+    turnId: message.turnId ?? null,
+    streaming: message.streaming,
+    source: message.source ?? "native",
+    createdAt: message.createdAt,
+    updatedAt: message.completedAt ?? message.createdAt,
+    attachments: readModelAttachmentsFromChatMessage(message.attachments),
+  };
+}
+
+function shouldRetainLiveAssistantMessageForHotPath(
+  previousThread: Thread,
+  message: ChatMessage,
+): boolean {
+  if (message.role !== "assistant") {
+    return false;
+  }
+  if (message.streaming) {
+    return true;
+  }
+  const latestTurn = previousThread.latestTurn;
+  if (!latestTurn) {
+    return false;
+  }
+  if (latestTurn.assistantMessageId === message.id) {
+    return true;
+  }
+  return (
+    previousThread.session?.orchestrationStatus === "running" &&
+    message.turnId !== undefined &&
+    latestTurn.turnId === message.turnId
+  );
+}
+
+function mergeReadModelMessagesWithLiveHotPath(
+  incomingMessages: ReadModelThread["messages"],
+  previousThread: Thread | undefined,
+): ReadModelThread["messages"] {
+  if (!previousThread || previousThread.messages.length === 0) {
+    return incomingMessages;
+  }
+
+  const previousMessageById = new Map(
+    previousThread.messages.map((message) => [message.id, message] as const),
+  );
+  const mergedById = new Map<MessageId, ReadModelThread["messages"][number]>();
+  let changed = false;
+
+  for (const incomingMessage of incomingMessages) {
+    const previousMessage = previousMessageById.get(incomingMessage.id);
+    if (!previousMessage || previousMessage.role !== incomingMessage.role) {
+      mergedById.set(incomingMessage.id, incomingMessage);
+      continue;
+    }
+
+    const incomingCompletedAt = incomingMessage.streaming ? undefined : incomingMessage.updatedAt;
+    const shouldPreferLiveMessage =
+      previousMessage.text.length > incomingMessage.text.length ||
+      (!previousMessage.streaming && incomingMessage.streaming) ||
+      (previousMessage.completedAt !== undefined &&
+        (incomingCompletedAt === undefined || previousMessage.completedAt > incomingCompletedAt));
+
+    if (!shouldPreferLiveMessage) {
+      mergedById.set(incomingMessage.id, incomingMessage);
+      continue;
+    }
+
+    changed = true;
+    mergedById.set(incomingMessage.id, {
+      ...incomingMessage,
+      text: previousMessage.text,
+      turnId: previousMessage.turnId ?? incomingMessage.turnId ?? null,
+      source: previousMessage.source ?? incomingMessage.source ?? "native",
+      streaming: previousMessage.streaming,
+      updatedAt: previousMessage.completedAt ?? incomingMessage.updatedAt,
+      attachments: readModelAttachmentsFromChatMessage(previousMessage.attachments),
+    });
+  }
+
+  for (const previousMessage of previousThread.messages) {
+    if (mergedById.has(previousMessage.id)) {
+      continue;
+    }
+    if (!shouldRetainLiveAssistantMessageForHotPath(previousThread, previousMessage)) {
+      continue;
+    }
+    changed = true;
+    mergedById.set(previousMessage.id, readModelMessageFromChatMessage(previousMessage));
+  }
+
+  if (!changed) {
+    return incomingMessages;
+  }
+
+  return [...mergedById.values()].toSorted((left, right) =>
+    left.createdAt === right.createdAt
+      ? String(left.id).localeCompare(String(right.id))
+      : left.createdAt.localeCompare(right.createdAt),
+  );
+}
+
+function hasLiveAssistantIntro(previousThread: Thread | undefined): boolean {
+  if (!previousThread) {
+    return false;
+  }
+  const latestTurn = previousThread.latestTurn;
+  if (!latestTurn || latestTurn.state !== "running") {
+    return false;
+  }
+  if (previousThread.session?.orchestrationStatus !== "running") {
+    return false;
+  }
+  return previousThread.messages.some(
+    (message) =>
+      message.role === "assistant" &&
+      message.turnId === latestTurn.turnId &&
+      (message.streaming || message.id === latestTurn.assistantMessageId),
+  );
+}
+
+function readModelSessionFromThreadSession(
+  previousSession: ThreadSession,
+  previousThread: Thread | undefined,
+  incomingSession: ReadModelThread["session"],
+): NonNullable<ReadModelThread["session"]> {
+  return {
+    threadId: previousThread?.id ?? incomingSession?.threadId ?? ThreadId.makeUnsafe("unknown"),
+    status: previousSession.orchestrationStatus,
+    providerName: previousSession.provider,
+    runtimeMode: previousThread?.runtimeMode ?? incomingSession?.runtimeMode ?? "full-access",
+    activeTurnId: previousSession.activeTurnId ?? null,
+    lastError: previousSession.lastError ?? null,
+    updatedAt: previousSession.updatedAt,
+  };
+}
+
+function mergeReadModelSessionWithLiveHotPath(
+  incomingSession: ReadModelThread["session"],
+  previousThread: Thread | undefined,
+  options: {
+    preserveRunningTurn: boolean;
+  },
+): ReadModelThread["session"] {
+  const previousSession = previousThread?.session;
+  if (!previousSession || !options.preserveRunningTurn) {
+    return incomingSession;
+  }
+  if (!incomingSession) {
+    return previousSession.orchestrationStatus === "running"
+      ? readModelSessionFromThreadSession(previousSession, previousThread, incomingSession)
+      : incomingSession;
+  }
+  if (previousSession.updatedAt > incomingSession.updatedAt) {
+    const nextSession = readModelSessionFromThreadSession(
+      previousSession,
+      previousThread,
+      incomingSession,
+    );
+    return {
+      ...nextSession,
+      providerName: incomingSession.providerName,
+      runtimeMode: incomingSession.runtimeMode,
+      activeTurnId: previousSession.activeTurnId ?? incomingSession.activeTurnId,
+      lastError: previousSession.lastError ?? incomingSession.lastError,
+    };
+  }
+  if (
+    previousSession.orchestrationStatus === "running" &&
+    incomingSession.status !== "running" &&
+    previousSession.activeTurnId !== undefined
+  ) {
+    return {
+      ...incomingSession,
+      status: "running",
+      activeTurnId: previousSession.activeTurnId,
+      lastError: previousSession.lastError ?? incomingSession.lastError,
+      updatedAt:
+        previousSession.updatedAt >= incomingSession.updatedAt
+          ? previousSession.updatedAt
+          : incomingSession.updatedAt,
+    };
+  }
+  return incomingSession;
+}
+
+function mergeReadModelLatestTurnWithLiveHotPath(
+  incomingLatestTurn: ReadModelThread["latestTurn"],
+  previousThread: Thread | undefined,
+  options: {
+    preserveRunningTurn: boolean;
+  },
+): ReadModelThread["latestTurn"] {
+  const previousLatestTurn = previousThread?.latestTurn;
+  if (!previousLatestTurn) {
+    return incomingLatestTurn;
+  }
+  if (options.preserveRunningTurn) {
+    if (incomingLatestTurn === null || incomingLatestTurn.turnId === previousLatestTurn.turnId) {
+      return {
+        ...(incomingLatestTurn ?? previousLatestTurn),
+        turnId: previousLatestTurn.turnId,
+        state: "running",
+        requestedAt: incomingLatestTurn?.requestedAt ?? previousLatestTurn.requestedAt,
+        startedAt: incomingLatestTurn?.startedAt ?? previousLatestTurn.startedAt,
+        completedAt: null,
+        assistantMessageId:
+          previousLatestTurn.assistantMessageId ?? incomingLatestTurn?.assistantMessageId ?? null,
+        ...((incomingLatestTurn?.sourceProposedPlan ?? previousLatestTurn.sourceProposedPlan)
+          ? {
+              sourceProposedPlan:
+                incomingLatestTurn?.sourceProposedPlan ?? previousLatestTurn.sourceProposedPlan,
+            }
+          : {}),
+      };
+    }
+    return incomingLatestTurn;
+  }
+  if (incomingLatestTurn === null || incomingLatestTurn.turnId !== previousLatestTurn.turnId) {
+    return incomingLatestTurn;
+  }
+  if (
+    previousLatestTurn.assistantMessageId === undefined ||
+    incomingLatestTurn.assistantMessageId === previousLatestTurn.assistantMessageId
+  ) {
+    return incomingLatestTurn;
+  }
+  return {
+    ...incomingLatestTurn,
+    assistantMessageId: previousLatestTurn.assistantMessageId,
+  };
+}
+
+function mergeReadModelThreadDetailWithLiveHotPath(
+  incoming: ReadModelThread,
+  previousThread: Thread | undefined,
+): ReadModelThread {
+  if (!previousThread) {
+    return incoming;
+  }
+
+  const preserveRunningTurn = hasLiveAssistantIntro(previousThread);
+  const messages = mergeReadModelMessagesWithLiveHotPath(incoming.messages, previousThread);
+  const session = mergeReadModelSessionWithLiveHotPath(incoming.session, previousThread, {
+    preserveRunningTurn,
+  });
+  const latestTurn = mergeReadModelLatestTurnWithLiveHotPath(incoming.latestTurn, previousThread, {
+    preserveRunningTurn,
+  });
+  if (
+    messages === incoming.messages &&
+    session === incoming.session &&
+    latestTurn === incoming.latestTurn
+  ) {
+    return incoming;
+  }
+  return {
+    ...incoming,
+    messages,
+    session,
+    latestTurn,
+  };
+}
+
 function normalizeProposedPlans(
   incoming: ReadModelThread["proposedPlans"],
   previous: Thread["proposedPlans"] | undefined,
@@ -1688,7 +1971,7 @@ function commitThreadProjection(
     ...state,
     threads,
     sidebarThreadSummaryById:
-      nextSummary === previousSummary
+      nextSummary === previousSummary || nextSummary === undefined
         ? state.sidebarThreadSummaryById
         : {
             ...state.sidebarThreadSummaryById,
@@ -2614,8 +2897,16 @@ function syncServerThreadDetailWithOptions(
 ): AppState {
   const previousThread =
     getThreadFromState(state, thread.id) ?? state.threads.find((entry) => entry.id === thread.id);
+  const nextThreadDetail =
+    options?.updateThreadArray === false
+      ? mergeReadModelThreadDetailWithLiveHotPath(thread, previousThread)
+      : thread;
   return commitThreadProjection(
-    writeThreadState(state, normalizeThreadFromReadModel(thread, previousThread), previousThread),
+    writeThreadState(
+      state,
+      normalizeThreadFromReadModel(nextThreadDetail, previousThread),
+      previousThread,
+    ),
     thread.id,
     {
       updateThreadArray: options?.updateThreadArray ?? true,

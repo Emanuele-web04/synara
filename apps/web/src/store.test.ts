@@ -1088,6 +1088,166 @@ describe("store read model sync", () => {
     expect(next.threads[0]?.updatedAt).toBe("2026-02-27T00:05:00.000Z");
   });
 
+  it("preserves a newer live assistant intro when a hot-path snapshot lags behind", () => {
+    const threadId = ThreadId.makeUnsafe("thread-hot-path");
+    const turnId = TurnId.makeUnsafe("turn-hot-path");
+    const assistantId = MessageId.makeUnsafe("assistant-hot-path");
+    const liveState = makeState(
+      makeThread({
+        id: threadId,
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-7",
+        },
+        session: {
+          provider: "claudeAgent",
+          status: "running",
+          orchestrationStatus: "running",
+          activeTurnId: turnId,
+          createdAt: "2026-02-27T00:00:00.000Z",
+          updatedAt: "2026-02-27T00:00:02.000Z",
+        },
+        latestTurn: {
+          turnId,
+          state: "running",
+          requestedAt: "2026-02-27T00:00:00.000Z",
+          startedAt: "2026-02-27T00:00:00.000Z",
+          completedAt: null,
+          assistantMessageId: assistantId,
+        },
+        messages: [
+          {
+            id: MessageId.makeUnsafe("user-hot-path"),
+            role: "user",
+            text: "scan repo",
+            turnId,
+            createdAt: "2026-02-27T00:00:00.000Z",
+            streaming: false,
+          },
+          {
+            id: assistantId,
+            role: "assistant",
+            text: "I'll start by scanning the repo.",
+            turnId,
+            createdAt: "2026-02-27T00:00:01.000Z",
+            streaming: true,
+            source: "native",
+          },
+        ],
+      }),
+    );
+
+    const next = syncServerThreadDetailHotPath(
+      liveState,
+      makeReadModelThread({
+        id: threadId,
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-7",
+        },
+        latestTurn: {
+          turnId,
+          state: "running",
+          requestedAt: "2026-02-27T00:00:00.000Z",
+          startedAt: "2026-02-27T00:00:00.000Z",
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        updatedAt: "2026-02-27T00:00:02.000Z",
+        messages: [
+          {
+            id: MessageId.makeUnsafe("user-hot-path"),
+            role: "user",
+            text: "scan repo",
+            turnId,
+            streaming: false,
+            source: "native",
+            createdAt: "2026-02-27T00:00:00.000Z",
+            updatedAt: "2026-02-27T00:00:00.000Z",
+            attachments: [],
+          },
+        ],
+        session: {
+          threadId,
+          status: "running",
+          providerName: "claudeAgent",
+          runtimeMode: "full-access",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: "2026-02-27T00:00:02.000Z",
+        },
+      }),
+    );
+
+    const nextThread = next.threads.find((thread) => thread.id === threadId);
+    expect(nextThread?.messages.find((message) => message.id === assistantId)?.text).toBe(
+      "I'll start by scanning the repo.",
+    );
+    expect(nextThread?.latestTurn?.assistantMessageId).toBe(assistantId);
+    expect(nextThread?.latestTurn?.state).toBe("running");
+    expect(nextThread?.latestTurn?.completedAt).toBeNull();
+    expect(nextThread?.session?.orchestrationStatus).toBe("running");
+    expect(nextThread?.session?.activeTurnId).toBe(turnId);
+  });
+
+  it("updates sidebar summaries during hot-path thread detail syncs", () => {
+    // Seed the hydrated store with the original thread metadata that the sidebar already shows.
+    const initialState = syncServerReadModel(
+      makeState(makeThread({ title: "Original title" })),
+      makeReadModel(
+        makeReadModelThread({
+          title: "Original title",
+          updatedAt: "2026-02-27T00:00:00.000Z",
+        }),
+      ),
+    );
+
+    // Apply the live detail snapshot that renames and archives the same thread.
+    const next = syncServerThreadDetailHotPath(
+      initialState,
+      makeReadModelThread({
+        title: "Renamed title",
+        archivedAt: "2026-02-27T00:05:00.000Z",
+        updatedAt: "2026-02-27T00:05:00.000Z",
+      }),
+    );
+
+    // The sidebar row must reflect the latest title and archive state immediately.
+    expect(next.sidebarThreadSummaryById["thread-1"]).toMatchObject({
+      title: "Renamed title",
+      archivedAt: "2026-02-27T00:05:00.000Z",
+    });
+  });
+
+  it("updates sidebar summaries for hot-path archive events", () => {
+    // Start from a hydrated unarchived thread so the event must flip the sidebar summary.
+    const initialState = syncServerReadModel(
+      makeState(makeThread({ title: "Archivable thread" })),
+      makeReadModel(
+        makeReadModelThread({
+          title: "Archivable thread",
+          updatedAt: "2026-02-27T00:00:00.000Z",
+        }),
+      ),
+    );
+
+    // Replay the live archive event through the hot path used by the event router.
+    const next = applyOrchestrationEventsHotPath(
+      initialState,
+      [
+        makeDomainEvent("thread.archived", {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          archivedAt: "2026-02-27T00:07:00.000Z",
+          updatedAt: "2026-02-27T00:07:00.000Z",
+        }),
+      ],
+      { updateThreadArray: false },
+    );
+
+    // The sidebar summary must expose the new archive timestamp without waiting for a full refresh.
+    expect(next.sidebarThreadSummaryById["thread-1"]?.archivedAt).toBe("2026-02-27T00:07:00.000Z");
+  });
+
   it("retains archived threads in the synced store for the archived settings panel", () => {
     const initialState = makeState(makeThread());
     const readModel = makeReadModel(

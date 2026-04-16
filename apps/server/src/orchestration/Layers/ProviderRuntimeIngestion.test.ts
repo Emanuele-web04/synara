@@ -1509,6 +1509,197 @@ describe("ProviderRuntimeIngestion", () => {
     expect(finalMessage?.streaming).toBe(false);
   });
 
+  it("flushes buffered assistant text when streaming mode is requested after an early delta", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-late-streaming-mode"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-late-streaming-mode"),
+    });
+    await waitForThread(
+      harness.engine,
+      (thread) =>
+        thread.session?.status === "running" &&
+        thread.session?.activeTurnId === "turn-late-streaming-mode",
+    );
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-message-delta-late-streaming-mode"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-late-streaming-mode"),
+      itemId: asItemId("item-late-streaming-mode"),
+      payload: {
+        streamKind: "assistant_text",
+        delta: "show me live",
+      },
+    });
+    await harness.drain();
+
+    const beforeFlush = await Effect.runPromise(harness.engine.getReadModel());
+    const beforeFlushThread = beforeFlush.threads.find(
+      (entry) => entry.id === ThreadId.makeUnsafe("thread-1"),
+    );
+    expect(
+      beforeFlushThread?.messages.some(
+        (message: ProviderRuntimeTestMessage) =>
+          message.id === "assistant:item-late-streaming-mode",
+      ),
+    ).toBe(false);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.dispatch-queued",
+        commandId: CommandId.makeUnsafe("cmd-dispatch-queued-late-streaming-mode"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: asMessageId("message-late-streaming-mode"),
+        assistantDeliveryMode: "streaming",
+        dispatchMode: "queue",
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    const flushedThread = await waitForThread(harness.engine, (entry) =>
+      entry.messages.some(
+        (message: ProviderRuntimeTestMessage) =>
+          message.id === "assistant:item-late-streaming-mode" &&
+          message.streaming &&
+          message.text === "show me live",
+      ),
+    );
+    const flushedMessage = flushedThread.messages.find(
+      (entry: ProviderRuntimeTestMessage) => entry.id === "assistant:item-late-streaming-mode",
+    );
+    expect(flushedMessage?.streaming).toBe(true);
+    expect(flushedMessage?.text).toBe("show me live");
+  });
+
+  it("flushes buffered assistant text before session exit clears turn state", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-buffered-session-exit"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-buffered-session-exit"),
+    });
+    await waitForThread(
+      harness.engine,
+      (thread) =>
+        thread.session?.status === "running" &&
+        thread.session?.activeTurnId === "turn-buffered-session-exit",
+    );
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-message-delta-buffered-session-exit"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-buffered-session-exit"),
+      itemId: asItemId("item-buffered-session-exit"),
+      payload: {
+        streamKind: "assistant_text",
+        delta: "persist me before exit",
+      },
+    });
+    await harness.drain();
+
+    harness.emit({
+      type: "session.exited",
+      eventId: asEventId("evt-session-exited-buffered-session-exit"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.messages.some(
+        (message: ProviderRuntimeTestMessage) =>
+          message.id === "assistant:item-buffered-session-exit" &&
+          message.text === "persist me before exit",
+      ),
+    );
+    const message = thread.messages.find(
+      (entry: ProviderRuntimeTestMessage) => entry.id === "assistant:item-buffered-session-exit",
+    );
+    expect(message?.text).toBe("persist me before exit");
+    expect(message?.streaming).toBe(false);
+  });
+
+  it("flushes buffered assistant text before runtime.error marks the session errored", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-buffered-runtime-error"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-buffered-runtime-error"),
+    });
+    await waitForThread(
+      harness.engine,
+      (thread) =>
+        thread.session?.status === "running" &&
+        thread.session?.activeTurnId === "turn-buffered-runtime-error",
+    );
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-message-delta-buffered-runtime-error"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-buffered-runtime-error"),
+      itemId: asItemId("item-buffered-runtime-error"),
+      payload: {
+        streamKind: "assistant_text",
+        delta: "persist me before error",
+      },
+    });
+    await harness.drain();
+
+    harness.emit({
+      type: "runtime.error",
+      eventId: asEventId("evt-runtime-error-buffered-runtime-error"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-buffered-runtime-error"),
+      payload: {
+        message: "boom",
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.messages.some(
+        (message: ProviderRuntimeTestMessage) =>
+          message.id === "assistant:item-buffered-runtime-error" &&
+          message.text === "persist me before error",
+      ),
+    );
+    const message = thread.messages.find(
+      (entry: ProviderRuntimeTestMessage) => entry.id === "assistant:item-buffered-runtime-error",
+    );
+    expect(message?.text).toBe("persist me before error");
+    expect(message?.streaming).toBe(false);
+    expect(thread.session?.status).toBe("error");
+  });
+
   it("spills oversized buffered deltas and still finalizes full assistant text", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

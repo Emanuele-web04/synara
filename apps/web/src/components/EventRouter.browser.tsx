@@ -531,6 +531,85 @@ describe("EventRouter scoped orchestration sync", () => {
     }
   });
 
+  it("flushes only the first assistant chunk immediately for a message", async () => {
+    const mounted = await mountApp();
+
+    try {
+      const firstAssistantChunk = {
+        sequence: 2,
+        eventId: EventId.makeUnsafe("event-message-immediate-1"),
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        occurredAt: "2026-03-04T12:00:05.000Z",
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.message-sent",
+        payload: {
+          threadId: THREAD_ID,
+          messageId: MessageId.makeUnsafe("msg-assistant-immediate"),
+          role: "assistant",
+          text: "I’ll start",
+          turnId: TurnId.makeUnsafe("turn-immediate"),
+          source: "native",
+          streaming: true,
+          createdAt: "2026-03-04T12:00:05.000Z",
+          updatedAt: "2026-03-04T12:00:05.000Z",
+        },
+      } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
+
+      sendThreadEventPush(firstAssistantChunk);
+
+      await vi.waitFor(
+        () => {
+          const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+          const message = thread?.messages.find(
+            (entry) => entry.id === MessageId.makeUnsafe("msg-assistant-immediate"),
+          );
+          expect(message?.text).toBe("I’ll start");
+          expect(message?.streaming).toBe(true);
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+
+      const secondAssistantChunk = {
+        ...firstAssistantChunk,
+        sequence: 3,
+        eventId: EventId.makeUnsafe("event-message-immediate-2"),
+        occurredAt: "2026-03-04T12:00:05.050Z",
+        payload: {
+          ...firstAssistantChunk.payload,
+          text: " by scanning the repository.",
+          updatedAt: "2026-03-04T12:00:05.050Z",
+        },
+      } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
+
+      sendThreadEventPush(secondAssistantChunk);
+
+      await new Promise((resolve) => window.setTimeout(resolve, 20));
+
+      const threadBeforeThrottleFlush = getThreadFromState(useStore.getState(), THREAD_ID);
+      const messageBeforeThrottleFlush = threadBeforeThrottleFlush?.messages.find(
+        (entry) => entry.id === MessageId.makeUnsafe("msg-assistant-immediate"),
+      );
+      expect(messageBeforeThrottleFlush?.text).toBe("I’ll start");
+
+      await vi.waitFor(
+        () => {
+          const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+          const message = thread?.messages.find(
+            (entry) => entry.id === MessageId.makeUnsafe("msg-assistant-immediate"),
+          );
+          expect(message?.text).toBe("I’ll start by scanning the repository.");
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("recovers buffered thread events by re-requesting the missing thread snapshot", async () => {
     delayNextThreadSnapshot = true;
     const mounted = await mountApp();
@@ -655,6 +734,86 @@ describe("EventRouter scoped orchestration sync", () => {
         { timeout: 4_000, interval: 16 },
       );
     } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps a live assistant intro when a lagging thread snapshot arrives right after it", async () => {
+    const mounted = await mountApp();
+
+    try {
+      const introEvent = {
+        sequence: 2,
+        eventId: EventId.makeUnsafe("event-assistant-intro"),
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        occurredAt: "2026-03-04T12:00:07.000Z",
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.message-sent",
+        payload: {
+          threadId: THREAD_ID,
+          messageId: MessageId.makeUnsafe("msg-assistant-intro"),
+          role: "assistant",
+          text: "I'll start by scanning the repository.",
+          turnId: TurnId.makeUnsafe("turn-intro"),
+          source: "native",
+          streaming: true,
+          createdAt: "2026-03-04T12:00:07.000Z",
+          updatedAt: "2026-03-04T12:00:07.000Z",
+        },
+      } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
+
+      sendThreadEventPush(introEvent);
+
+      await vi.waitFor(
+        () => {
+          const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+          const message = thread?.messages.find(
+            (entry) => entry.id === MessageId.makeUnsafe("msg-assistant-intro"),
+          );
+          expect(message?.text).toBe("I'll start by scanning the repository.");
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+
+      const previousFixture = fixture;
+      fixture = {
+        ...fixture,
+        snapshot: createSnapshot({
+          latestTurn: {
+            turnId: TurnId.makeUnsafe("turn-intro"),
+            state: "running",
+            requestedAt: "2026-03-04T12:00:07.000Z",
+            startedAt: "2026-03-04T12:00:07.000Z",
+            completedAt: null,
+            assistantMessageId: null,
+          },
+          updatedAt: "2026-03-04T12:00:07.500Z",
+        }),
+      };
+
+      sendThreadSnapshotPush(THREAD_ID, 3);
+
+      await vi.waitFor(
+        () => {
+          const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+          const message = thread?.messages.find(
+            (entry) => entry.id === MessageId.makeUnsafe("msg-assistant-intro"),
+          );
+          expect(message?.text).toBe("I'll start by scanning the repository.");
+          expect(thread?.latestTurn?.assistantMessageId).toBe(
+            MessageId.makeUnsafe("msg-assistant-intro"),
+          );
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+
+      fixture = previousFixture;
+    } finally {
+      fixture = buildFixture();
       await mounted.cleanup();
     }
   });

@@ -138,7 +138,11 @@ import { useThreadHandoff } from "../hooks/useThreadHandoff";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import BranchToolbar from "./BranchToolbar";
 import { ThreadWorktreeHandoffDialog } from "./ThreadWorktreeHandoffDialog";
-import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
+import {
+  formatShortcutLabel,
+  resolveShortcutCommand,
+  shortcutLabelForCommand,
+} from "../keybindings";
 import PlanSidebar from "./PlanSidebar";
 import TerminalWorkspaceTabs from "./TerminalWorkspaceTabs";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
@@ -376,6 +380,53 @@ function formatModelSlug(slug: string): string {
     .replace(/^claude-/i, "Claude ")
     .replace(/-/g, " ")
     .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function mergeDynamicModelOptions(input: {
+  provider: ProviderKind;
+  staticOptions: ReadonlyArray<{ slug: string; name: string; isCustom?: boolean }>;
+  dynamicModels: ReadonlyArray<{ slug: string; name?: string | null }>;
+}): ReadonlyArray<{ slug: string; name: string; isCustom?: boolean }> {
+  const staticNameBySlug = new Map(input.staticOptions.map((model) => [model.slug, model.name]));
+  const dynamicNormalizedSlugs = new Set<string>();
+  const normalizedDynamicOptions: Array<{ slug: string; name: string }> = [];
+
+  for (const dynamicModel of input.dynamicModels) {
+    const rawName = dynamicModel.name?.trim() ?? "";
+    const isClaudeDefaultAlias =
+      input.provider === "claudeAgent" &&
+      (rawName.toLowerCase() === "default (recommended)" ||
+        rawName.toLowerCase() === "default recommended" ||
+        dynamicModel.slug.trim().toLowerCase() === "default");
+    if (isClaudeDefaultAlias) {
+      continue;
+    }
+
+    const normalizedSlug =
+      normalizeModelSlug(dynamicModel.slug, input.provider) ?? dynamicModel.slug;
+    if (dynamicNormalizedSlugs.has(normalizedSlug)) {
+      continue;
+    }
+    dynamicNormalizedSlugs.add(normalizedSlug);
+    normalizedDynamicOptions.push({
+      slug: normalizedSlug,
+      name:
+        staticNameBySlug.get(normalizedSlug) ??
+        dynamicModel.name ??
+        formatModelSlug(normalizedSlug),
+    });
+  }
+
+  const customOnlyModels = input.staticOptions.filter(
+    (model) => "isCustom" in model && model.isCustom && !dynamicNormalizedSlugs.has(model.slug),
+  );
+
+  const orderedDynamicOptions =
+    input.provider === "claudeAgent"
+      ? [...normalizedDynamicOptions].reverse()
+      : normalizedDynamicOptions;
+
+  return [...orderedDynamicOptions, ...customOnlyModels];
 }
 
 function skillMentionPrefix(provider: string): string {
@@ -1068,21 +1119,14 @@ export default function ChatView({
     for (const provider of ["claudeAgent", "codex"] as const) {
       const dynamicModels = dynamicSources[provider]?.models;
       if (dynamicModels && dynamicModels.length > 0) {
-        const dynamicSlugs = new Set(dynamicModels.map((m) => m.slug));
-        // Build a lookup from static options for proper display names
-        const staticNameBySlug = new Map(staticOptions[provider].map((m) => [m.slug, m.name]));
-        // Keep custom models that aren't already in the dynamic list
-        const customOnlyModels = staticOptions[provider].filter(
-          (m) => "isCustom" in m && m.isCustom && !dynamicSlugs.has(m.slug),
-        );
-        result[provider] = [
-          ...dynamicModels.map((m) => ({
-            slug: m.slug,
-            // Prefer static display name, then SDK name, then format the slug
-            name: staticNameBySlug.get(m.slug) ?? m.name ?? formatModelSlug(m.slug),
+        result[provider] = mergeDynamicModelOptions({
+          provider,
+          staticOptions: staticOptions[provider],
+          dynamicModels: dynamicModels.map((model) => ({
+            slug: model.slug,
+            name: model.name,
           })),
-          ...customOnlyModels,
-        ];
+        });
       }
     }
 
@@ -1959,6 +2003,33 @@ export default function ChatView({
   const chatSplitShortcutLabel = useMemo(
     () => shortcutLabelForCommand(keybindings, "chat.split"),
     [keybindings],
+  );
+  // Composer picker shortcuts are hard-coded in the keydown handler below
+  // (Mod+Shift+M opens the model picker, Mod+Shift+E opens the reasoning picker).
+  // Build their display labels directly so the tooltips match the handler exactly.
+  const modelPickerShortcutLabel = useMemo(
+    () =>
+      formatShortcutLabel({
+        key: "m",
+        metaKey: false,
+        ctrlKey: false,
+        shiftKey: true,
+        altKey: false,
+        modKey: true,
+      }),
+    [],
+  );
+  const traitsPickerShortcutLabel = useMemo(
+    () =>
+      formatShortcutLabel({
+        key: "e",
+        metaKey: false,
+        ctrlKey: false,
+        shiftKey: true,
+        altKey: false,
+        modKey: true,
+      }),
+    [],
   );
   const onToggleDiff = useCallback(() => {
     if (diffEnvironmentPending && !diffOpen) {
@@ -4962,6 +5033,7 @@ export default function ChatView({
     includeFastMode: false,
     open: isTraitsPickerOpen,
     onOpenChange: handleTraitsPickerOpenChange,
+    shortcutLabel: traitsPickerShortcutLabel,
     onPromptChange: setPromptFromTraits,
   });
   const toggleFastMode = useCallback(() => {
@@ -5953,6 +6025,7 @@ export default function ChatView({
                                 modelOptionsByProvider={modelOptionsByProvider}
                                 open={isModelPickerOpen}
                                 onOpenChange={handleModelPickerOpenChange}
+                                shortcutLabel={modelPickerShortcutLabel}
                                 {...(composerProviderState.modelPickerIconClassName
                                   ? {
                                       activeProviderIconClassName:

@@ -560,7 +560,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   </div>
                 )}
                 {showUserText && (
-                  <div className="w-max max-w-full min-w-0 self-end rounded-xl border border-border/70 bg-secondary px-3 py-1">
+                  <div className="w-max max-w-full min-w-0 self-end rounded-lg border border-border/70 bg-secondary px-3 pt-[3px] pb-[5px]">
                     <UserMessageBody
                       text={displayedUserMessage.visibleText}
                       terminalContexts={terminalContexts}
@@ -925,7 +925,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       )}
 
       {row.kind === "working" && (
-        <div className="py-0.5 pl-1.5">
+        <div>
           <div
             className="flex items-center gap-1 pt-1 text-muted-foreground/70 font-system-ui"
             style={{ fontSize: `${appTypographyScale.uiSmPx}px` }}
@@ -1656,7 +1656,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const rowFontSizePx = textFontSizePx;
 
   return (
-    <div className={cn(compact ? "py-0.5" : "rounded-lg px-1 py-1")}>
+    <div className={cn(compact ? "py-0.5" : "rounded-lg py-1")}>
       {showEditedRows ? (
         <div className="space-y-0.5">
           {changedFiles.map((changedFilePath) => {

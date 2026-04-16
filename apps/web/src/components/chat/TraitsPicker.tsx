@@ -22,6 +22,8 @@ import { useComposerDraftStore } from "../../composerDraftStore";
 import { buildNextProviderOptions, type ProviderOptions } from "../../providerModelOptions";
 import { COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME } from "./composerPickerStyles";
 import { getComposerTraitSelection } from "./composerTraits";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { ShortcutKbd } from "../ui/shortcut-kbd";
 
 const ULTRATHINK_PROMPT_PREFIX = "Ultrathink:\n";
 
@@ -174,9 +176,11 @@ export const TraitsPicker = memo(function TraitsPicker({
   modelOptions,
   open,
   onOpenChange,
+  shortcutLabel,
 }: TraitsMenuContentProps & {
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  shortcutLabel?: string | null;
 }) {
   const [uncontrolledMenuOpen, setUncontrolledMenuOpen] = useState(false);
   const isMenuOpen = open ?? uncontrolledMenuOpen;
@@ -212,6 +216,54 @@ export const TraitsPicker = memo(function TraitsPicker({
 
   const isCodexStyle = provider === "codex";
 
+  const triggerButton = (
+    <Button
+      size="sm"
+      variant="ghost"
+      className={
+        isCodexStyle
+          ? `min-w-0 max-w-40 shrink justify-start overflow-hidden whitespace-nowrap px-2 sm:max-w-48 sm:px-3 [&_svg]:mx-0 ${COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME}`
+          : `shrink-0 whitespace-nowrap px-2 sm:px-3 ${COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME}`
+      }
+    />
+  );
+
+  const triggerContent = isCodexStyle ? (
+    <span className="flex min-w-0 w-full items-center gap-2 overflow-hidden">
+      <span className="min-w-0 flex flex-1 items-center gap-1.5 truncate">
+        {primaryTriggerLabel ? <span className="truncate">{primaryTriggerLabel}</span> : null}
+        {showsFastBadge ? (
+          <>
+            {primaryTriggerLabel ? (
+              <span className="shrink-0 text-muted-foreground/45">·</span>
+            ) : null}
+            <span className="inline-flex shrink-0 items-center gap-1">
+              <IoFlash aria-hidden="true" className="size-3 text-[hsl(var(--chart-4))]" />
+              <span>Fast</span>
+            </span>
+          </>
+        ) : null}
+      </span>
+      <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 opacity-60" />
+    </span>
+  ) : (
+    <>
+      <span className="inline-flex items-center gap-1.5">
+        {primaryTriggerLabel ? <span>{primaryTriggerLabel}</span> : null}
+        {showsFastBadge ? (
+          <>
+            {primaryTriggerLabel ? <span className="text-muted-foreground/45">·</span> : null}
+            <span className="inline-flex items-center gap-1">
+              <IoFlash aria-hidden="true" className="size-3 text-[hsl(var(--chart-4))]" />
+              <span>Fast</span>
+            </span>
+          </>
+        ) : null}
+      </span>
+      <ChevronDownIcon aria-hidden="true" className="size-3 opacity-60" />
+    </>
+  );
+
   return (
     <Menu
       open={isMenuOpen}
@@ -219,55 +271,24 @@ export const TraitsPicker = memo(function TraitsPicker({
         setMenuOpen(open);
       }}
     >
-      <MenuTrigger
-        render={
-          <Button
-            size="sm"
-            variant="ghost"
-            className={
-              isCodexStyle
-                ? `min-w-0 max-w-40 shrink justify-start overflow-hidden whitespace-nowrap px-2 sm:max-w-48 sm:px-3 [&_svg]:mx-0 ${COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME}`
-                : `shrink-0 whitespace-nowrap px-2 sm:px-3 ${COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME}`
-            }
-          />
-        }
-      >
-        {isCodexStyle ? (
-          <span className="flex min-w-0 w-full items-center gap-2 overflow-hidden">
-            <span className="min-w-0 flex flex-1 items-center gap-1.5 truncate">
-              {primaryTriggerLabel ? <span className="truncate">{primaryTriggerLabel}</span> : null}
-              {showsFastBadge ? (
-                <>
-                  {primaryTriggerLabel ? (
-                    <span className="shrink-0 text-muted-foreground/45">·</span>
-                  ) : null}
-                  <span className="inline-flex shrink-0 items-center gap-1">
-                    <IoFlash aria-hidden="true" className="size-3 text-[hsl(var(--chart-4))]" />
-                    <span>Fast</span>
-                  </span>
-                </>
-              ) : null}
+      {shortcutLabel && !isMenuOpen ? (
+        <Tooltip>
+          <TooltipTrigger render={<MenuTrigger render={triggerButton} />}>
+            {triggerContent}
+          </TooltipTrigger>
+          <TooltipPopup side="top" sideOffset={6}>
+            <span className="inline-flex items-center gap-2 px-1 py-0.5">
+              <span>Change reasoning</span>
+              <ShortcutKbd
+                shortcutLabel={shortcutLabel}
+                className="h-4 min-w-4 px-1 text-[length:var(--app-font-size-ui-2xs,9px)] text-muted-foreground"
+              />
             </span>
-            <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 opacity-60" />
-          </span>
-        ) : (
-          <>
-            <span className="inline-flex items-center gap-1.5">
-              {primaryTriggerLabel ? <span>{primaryTriggerLabel}</span> : null}
-              {showsFastBadge ? (
-                <>
-                  {primaryTriggerLabel ? <span className="text-muted-foreground/45">·</span> : null}
-                  <span className="inline-flex items-center gap-1">
-                    <IoFlash aria-hidden="true" className="size-3 text-[hsl(var(--chart-4))]" />
-                    <span>Fast</span>
-                  </span>
-                </>
-              ) : null}
-            </span>
-            <ChevronDownIcon aria-hidden="true" className="size-3 opacity-60" />
-          </>
-        )}
-      </MenuTrigger>
+          </TooltipPopup>
+        </Tooltip>
+      ) : (
+        <MenuTrigger render={triggerButton}>{triggerContent}</MenuTrigger>
+      )}
       <MenuPopup align="start">
         <TraitsMenuContent
           provider={provider}
