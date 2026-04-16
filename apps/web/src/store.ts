@@ -1652,6 +1652,7 @@ function commitThreadProjection(
   state: AppState,
   threadId: ThreadId,
   options?: {
+    updateThreadArray?: boolean;
     updateSidebarSummary?: boolean;
   },
 ): AppState {
@@ -1661,20 +1662,23 @@ function commitThreadProjection(
     return state;
   }
 
+  // Let hot-path detail syncs skip array churn without suppressing sidebar freshness.
+  const shouldUpdateThreadArray = options?.updateThreadArray ?? true;
+  // Sidebar summaries still need the latest title/archive signals for navigation.
   const shouldUpdateSidebarSummary = options?.updateSidebarSummary ?? true;
   const threadExists = previousThread !== undefined;
-  const threads = threadExists
-    ? updateThread(state.threads, threadId, (thread) =>
-        nextThread === thread ? thread : nextThread,
-      )
-    : [...state.threads, nextThread];
-
-  if (!shouldUpdateSidebarSummary) {
-    return state;
-  }
+  const threads = shouldUpdateThreadArray
+    ? threadExists
+      ? updateThread(state.threads, threadId, (thread) =>
+          nextThread === thread ? thread : nextThread,
+        )
+      : [...state.threads, nextThread]
+    : state.threads;
 
   const previousSummary = state.sidebarThreadSummaryById[threadId];
-  const nextSummary = buildSidebarThreadSummary(nextThread, previousSummary);
+  const nextSummary = shouldUpdateSidebarSummary
+    ? buildSidebarThreadSummary(nextThread, previousSummary)
+    : previousSummary;
 
   if (threads === state.threads && nextSummary === previousSummary) {
     return state;
@@ -2017,7 +2021,7 @@ function applyThreadUpdate(
     return state;
   }
   return commitThreadProjection(writeThreadState(state, updatedThread, currentThread), threadId, {
-    updateSidebarSummary: options?.updateThreadArray ?? true,
+    updateThreadArray: options?.updateThreadArray ?? true,
   });
 }
 
@@ -2614,7 +2618,7 @@ function syncServerThreadDetailWithOptions(
     writeThreadState(state, normalizeThreadFromReadModel(thread, previousThread), previousThread),
     thread.id,
     {
-      updateSidebarSummary: options?.updateThreadArray ?? true,
+      updateThreadArray: options?.updateThreadArray ?? true,
     },
   );
 }

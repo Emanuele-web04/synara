@@ -16,6 +16,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   applyShellEvent,
   applyOrchestrationEvents,
+  applyOrchestrationEventsHotPath,
   collapseProjectsExcept,
   markThreadUnread,
   renameProjectLocally,
@@ -23,6 +24,7 @@ import {
   setThreadWorkspace,
   setAllProjectsExpanded,
   syncServerReadModel,
+  syncServerThreadDetailHotPath,
   type AppState,
 } from "./store";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
@@ -1102,6 +1104,66 @@ describe("store read model sync", () => {
     expect(next.threads[0]?.archivedAt).toBe("2026-02-27T00:05:00.000Z");
     expect(next.sidebarThreadSummaryById["thread-archived"]?.archivedAt).toBe(
       "2026-02-27T00:05:00.000Z",
+    );
+  });
+
+  it("updates sidebar summaries during hot-path thread detail syncs", () => {
+    // Seed the hydrated store with the original thread metadata that the sidebar already shows.
+    const initialState = syncServerReadModel(
+      makeState(makeThread({ title: "Original title" })),
+      makeReadModel(
+        makeReadModelThread({
+          title: "Original title",
+          updatedAt: "2026-02-27T00:00:00.000Z",
+        }),
+      ),
+    );
+
+    // Apply the live detail snapshot that renames and archives the same thread.
+    const next = syncServerThreadDetailHotPath(
+      initialState,
+      makeReadModelThread({
+        title: "Renamed title",
+        archivedAt: "2026-02-27T00:05:00.000Z",
+        updatedAt: "2026-02-27T00:05:00.000Z",
+      }),
+    );
+
+    // The sidebar row must reflect the latest title and archive state immediately.
+    expect(next.sidebarThreadSummaryById["thread-1"]).toMatchObject({
+      title: "Renamed title",
+      archivedAt: "2026-02-27T00:05:00.000Z",
+    });
+  });
+
+  it("updates sidebar summaries for hot-path archive events", () => {
+    // Start from a hydrated unarchived thread so the event must flip the sidebar summary.
+    const initialState = syncServerReadModel(
+      makeState(makeThread({ title: "Archivable thread" })),
+      makeReadModel(
+        makeReadModelThread({
+          title: "Archivable thread",
+          updatedAt: "2026-02-27T00:00:00.000Z",
+        }),
+      ),
+    );
+
+    // Replay the live archive event through the hot path used by the event router.
+    const next = applyOrchestrationEventsHotPath(
+      initialState,
+      [
+        makeDomainEvent("thread.archived", {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          archivedAt: "2026-02-27T00:07:00.000Z",
+          updatedAt: "2026-02-27T00:07:00.000Z",
+        }),
+      ],
+      { updateThreadArray: false },
+    );
+
+    // The sidebar summary must expose the new archive timestamp without waiting for a full refresh.
+    expect(next.sidebarThreadSummaryById["thread-1"]?.archivedAt).toBe(
+      "2026-02-27T00:07:00.000Z",
     );
   });
 
