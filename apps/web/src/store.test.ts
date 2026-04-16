@@ -1322,9 +1322,7 @@ describe("store read model sync", () => {
     );
 
     // The sidebar summary must expose the new archive timestamp without waiting for a full refresh.
-    expect(next.sidebarThreadSummaryById["thread-1"]?.archivedAt).toBe(
-      "2026-02-27T00:07:00.000Z",
-    );
+    expect(next.sidebarThreadSummaryById["thread-1"]?.archivedAt).toBe("2026-02-27T00:07:00.000Z");
   });
 
   it("preserves the current project order when syncing incoming read model updates", () => {
