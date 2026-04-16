@@ -1686,13 +1686,15 @@ describe("ProviderRuntimeIngestion", () => {
       },
     });
 
-    const thread = await waitForThread(harness.engine, (entry) =>
-      entry.messages.some(
-        (message: ProviderRuntimeTestMessage) =>
-          message.id === "assistant:item-buffered-runtime-error" &&
-          message.text === "persist me before error" &&
-          message.streaming === false,
-      ),
+    const thread = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.messages.some(
+          (message: ProviderRuntimeTestMessage) =>
+            message.id === "assistant:item-buffered-runtime-error" &&
+            message.text === "persist me before error" &&
+            message.streaming === false,
+        ) && entry.session?.status === "error",
     );
     const message = thread.messages.find(
       (entry: ProviderRuntimeTestMessage) => entry.id === "assistant:item-buffered-runtime-error",
