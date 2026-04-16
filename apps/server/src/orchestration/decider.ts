@@ -56,6 +56,50 @@ function withEventBase(
   };
 }
 
+function deriveCommandAssociatedWorktreeMetadata(input: {
+  readonly branch: string | null;
+  readonly worktreePath: string | null;
+  readonly associatedWorktreePath?: string | null;
+  readonly associatedWorktreeBranch?: string | null;
+  readonly associatedWorktreeRef?: string | null;
+}) {
+  return deriveAssociatedWorktreeMetadata({
+    branch: input.branch,
+    worktreePath: input.worktreePath,
+    ...(input.associatedWorktreePath !== undefined
+      ? { associatedWorktreePath: input.associatedWorktreePath }
+      : {}),
+    ...(input.associatedWorktreeBranch !== undefined
+      ? { associatedWorktreeBranch: input.associatedWorktreeBranch }
+      : {}),
+    ...(input.associatedWorktreeRef !== undefined
+      ? { associatedWorktreeRef: input.associatedWorktreeRef }
+      : {}),
+  });
+}
+
+function deriveCommandAssociatedWorktreeMetadataPatch(input: {
+  readonly branch?: string | null;
+  readonly worktreePath?: string | null;
+  readonly associatedWorktreePath?: string | null;
+  readonly associatedWorktreeBranch?: string | null;
+  readonly associatedWorktreeRef?: string | null;
+}) {
+  return deriveAssociatedWorktreeMetadataPatch({
+    ...(input.branch !== undefined ? { branch: input.branch } : {}),
+    ...(input.worktreePath !== undefined ? { worktreePath: input.worktreePath } : {}),
+    ...(input.associatedWorktreePath !== undefined
+      ? { associatedWorktreePath: input.associatedWorktreePath }
+      : {}),
+    ...(input.associatedWorktreeBranch !== undefined
+      ? { associatedWorktreeBranch: input.associatedWorktreeBranch }
+      : {}),
+    ...(input.associatedWorktreeRef !== undefined
+      ? { associatedWorktreeRef: input.associatedWorktreeRef }
+      : {}),
+  });
+}
+
 export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand")(function* ({
   command,
   readModel,
@@ -191,12 +235,18 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           envMode: command.envMode,
           branch: command.branch,
           worktreePath: command.worktreePath,
-          ...deriveAssociatedWorktreeMetadata({
+          ...deriveCommandAssociatedWorktreeMetadata({
             branch: command.branch,
             worktreePath: command.worktreePath,
-            associatedWorktreePath: command.associatedWorktreePath ?? null,
-            associatedWorktreeBranch: command.associatedWorktreeBranch ?? null,
-            associatedWorktreeRef: command.associatedWorktreeRef ?? null,
+            ...(command.associatedWorktreePath !== undefined
+              ? { associatedWorktreePath: command.associatedWorktreePath }
+              : {}),
+            ...(command.associatedWorktreeBranch !== undefined
+              ? { associatedWorktreeBranch: command.associatedWorktreeBranch }
+              : {}),
+            ...(command.associatedWorktreeRef !== undefined
+              ? { associatedWorktreeRef: command.associatedWorktreeRef }
+              : {}),
           }),
           parentThreadId: command.parentThreadId,
           subagentAgentId: command.subagentAgentId,
@@ -263,12 +313,18 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           envMode: command.envMode,
           branch: command.branch,
           worktreePath: command.worktreePath,
-          ...deriveAssociatedWorktreeMetadata({
+          ...deriveCommandAssociatedWorktreeMetadata({
             branch: command.branch,
             worktreePath: command.worktreePath,
-            associatedWorktreePath: command.associatedWorktreePath ?? null,
-            associatedWorktreeBranch: command.associatedWorktreeBranch ?? null,
-            associatedWorktreeRef: command.associatedWorktreeRef ?? null,
+            ...(command.associatedWorktreePath !== undefined
+              ? { associatedWorktreePath: command.associatedWorktreePath }
+              : {}),
+            ...(command.associatedWorktreeBranch !== undefined
+              ? { associatedWorktreeBranch: command.associatedWorktreeBranch }
+              : {}),
+            ...(command.associatedWorktreeRef !== undefined
+              ? { associatedWorktreeRef: command.associatedWorktreeRef }
+              : {}),
           }),
           parentThreadId: null,
           subagentAgentId: null,
@@ -359,12 +415,18 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           envMode: command.envMode,
           branch: command.branch,
           worktreePath: command.worktreePath,
-          ...deriveAssociatedWorktreeMetadata({
+          ...deriveCommandAssociatedWorktreeMetadata({
             branch: command.branch,
             worktreePath: command.worktreePath,
-            associatedWorktreePath: command.associatedWorktreePath ?? null,
-            associatedWorktreeBranch: command.associatedWorktreeBranch ?? null,
-            associatedWorktreeRef: command.associatedWorktreeRef ?? null,
+            ...(command.associatedWorktreePath !== undefined
+              ? { associatedWorktreePath: command.associatedWorktreePath }
+              : {}),
+            ...(command.associatedWorktreeBranch !== undefined
+              ? { associatedWorktreeBranch: command.associatedWorktreeBranch }
+              : {}),
+            ...(command.associatedWorktreeRef !== undefined
+              ? { associatedWorktreeRef: command.associatedWorktreeRef }
+              : {}),
           }),
           parentThreadId: null,
           subagentAgentId: null,
@@ -494,12 +556,18 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.envMode !== undefined ? { envMode: command.envMode } : {}),
           ...(command.branch !== undefined ? { branch: command.branch } : {}),
           ...(command.worktreePath !== undefined ? { worktreePath: command.worktreePath } : {}),
-          ...deriveAssociatedWorktreeMetadataPatch({
-            branch: command.branch ?? null,
-            worktreePath: command.worktreePath ?? null,
-            associatedWorktreePath: command.associatedWorktreePath ?? null,
-            associatedWorktreeBranch: command.associatedWorktreeBranch ?? null,
-            associatedWorktreeRef: command.associatedWorktreeRef ?? null,
+          ...deriveCommandAssociatedWorktreeMetadataPatch({
+            ...(command.branch !== undefined ? { branch: command.branch } : {}),
+            ...(command.worktreePath !== undefined ? { worktreePath: command.worktreePath } : {}),
+            ...(command.associatedWorktreePath !== undefined
+              ? { associatedWorktreePath: command.associatedWorktreePath }
+              : {}),
+            ...(command.associatedWorktreeBranch !== undefined
+              ? { associatedWorktreeBranch: command.associatedWorktreeBranch }
+              : {}),
+            ...(command.associatedWorktreeRef !== undefined
+              ? { associatedWorktreeRef: command.associatedWorktreeRef }
+              : {}),
           }),
           ...(command.parentThreadId !== undefined
             ? { parentThreadId: command.parentThreadId }
