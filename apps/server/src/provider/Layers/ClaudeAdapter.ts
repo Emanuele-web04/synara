@@ -7,12 +7,14 @@
  * @module ClaudeAdapterLive
  */
 import {
+  type AgentInfo,
   type CanUseTool,
   type AgentDefinition,
   ModelUsage,
   NonNullableUsage,
   query,
   type Options as ClaudeQueryOptions,
+  type ModelInfo,
   type PermissionMode,
   type PermissionResult,
   type PermissionUpdate,
@@ -48,6 +50,8 @@ import {
   type ProviderListCommandsResult,
   type ProviderListSkillsInput,
   type ProviderListSkillsResult,
+  type ProviderListAgentsResult,
+  type ProviderListModelsResult,
   getAgentMentionAliases,
 } from "@t3tools/contracts";
 import {
@@ -181,6 +185,8 @@ interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
   readonly setPermissionMode: (mode: PermissionMode) => Promise<void>;
   readonly setMaxThinkingTokens: (maxThinkingTokens: number | null) => Promise<void>;
   readonly supportedCommands: () => Promise<SlashCommand[]>;
+  readonly supportedModels: () => Promise<ModelInfo[]>;
+  readonly supportedAgents: () => Promise<AgentInfo[]>;
   readonly close: () => void;
 }
 
@@ -331,7 +337,7 @@ function maxClaudeContextWindowFromModelUsage(
 }
 
 function normalizeClaudeTokenUsage(
-  value: NonNullableUsage | undefined,
+  value: NonNullableUsage | Record<string, unknown> | undefined,
   contextWindow?: number,
 ): ThreadTokenUsageSnapshot | undefined {
   if (!value || typeof value !== "object") {
@@ -695,7 +701,7 @@ function buildUserMessage(input: {
       role: "user",
       content: input.sdkContent,
     },
-  } as SDKUserMessage;
+  } as unknown as SDKUserMessage;
 }
 
 function buildClaudeImageContentBlock(input: {
@@ -1142,6 +1148,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       }) => query({ prompt: input.prompt, options: input.options }) as ClaudeQueryRuntime);
 
     const sessions = new Map<ThreadId, ClaudeSessionContext>();
+    let cachedModels: ProviderListModelsResult | null = null;
+    let cachedAgents: ProviderListAgentsResult | null = null;
     const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
 
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -2236,7 +2244,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         const perCallUsage = (message.message as { usage?: unknown } | undefined)?.usage;
         if (perCallUsage) {
           const normalizedPerCallUsage = normalizeClaudeTokenUsage(
-            perCallUsage,
+            perCallUsage as Record<string, unknown>,
             context.lastKnownContextWindow,
           );
           if (normalizedPerCallUsage) {
@@ -3088,7 +3096,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           pathToClaudeCodeExecutable: providerOptions?.binaryPath ?? "claude",
           settingSources: [...CLAUDE_SETTING_SOURCES],
           ...(Object.keys(claudeSubagents).length > 0 ? { agents: claudeSubagents } : {}),
-          ...(effectiveEffort ? { effort: effectiveEffort } : {}),
+          // Cast: SDK EffortLevel doesn't include "xhigh" yet, but the API supports it (Opus 4.7).
+          ...(effectiveEffort
+            ? { effort: effectiveEffort as "low" | "medium" | "high" | "max" }
+            : {}),
           ...(permissionMode ? { permissionMode } : {}),
           ...(permissionMode === "bypassPermissions"
             ? { allowDangerouslySkipPermissions: true }
@@ -3119,6 +3130,33 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               cause,
             }),
         });
+
+        // Populate model cache in background from first session
+        if (!cachedModels) {
+          queryRuntime.supportedModels().then((models) => {
+            cachedModels = {
+              models: models.map((m) => ({ slug: m.value, name: m.displayName })),
+              source: "sdk",
+              cached: false,
+            };
+          }).catch(() => { /* ignore discovery failures */ });
+        }
+
+        // Populate agent cache in background from first session
+        if (!cachedAgents) {
+          queryRuntime.supportedAgents().then((agents) => {
+            cachedAgents = {
+              agents: agents.map((a) => ({
+                name: a.name,
+                displayName: a.name,
+                ...(a.description ? { description: a.description } : {}),
+                ...(a.model ? { model: a.model } : {}),
+              })),
+              source: "sdk",
+              cached: false,
+            };
+          }).catch(() => { /* ignore discovery failures */ });
+        }
 
         const session: ProviderSession = {
           threadId,
@@ -3529,12 +3567,60 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       supportsNativeSlashCommandDiscovery: true,
       supportsPluginMentions: false,
       supportsPluginDiscovery: false,
-      supportsRuntimeModelList: false,
+      supportsRuntimeModelList: true,
     };
 
     const getComposerCapabilities: NonNullable<
       ClaudeAdapterShape["getComposerCapabilities"]
     > = () => Effect.succeed(composerCapabilities);
+
+    const listModels: NonNullable<ClaudeAdapterShape["listModels"]> = () =>
+      Effect.sync(() => {
+        if (cachedModels) {
+          return { ...cachedModels, cached: true };
+        }
+        // Fallback: try to get models from any active session
+        for (const [, context] of sessions) {
+          if (!context.stopped && context.query) {
+            // Trigger async cache population
+            context.query.supportedModels().then((models) => {
+              cachedModels = {
+                models: models.map((m) => ({ slug: m.value, name: m.displayName })),
+                source: "sdk",
+                cached: false,
+              };
+            }).catch(() => {});
+            break;
+          }
+        }
+        // Return empty while waiting for cache
+        return { models: [], source: "pending", cached: false };
+      });
+
+    const listAgents: NonNullable<ClaudeAdapterShape["listAgents"]> = () =>
+      Effect.sync(() => {
+        if (cachedAgents) {
+          return { ...cachedAgents, cached: true };
+        }
+        for (const [, context] of sessions) {
+          if (!context.stopped && context.query) {
+            context.query.supportedAgents().then((agents) => {
+              cachedAgents = {
+                agents: agents.map((a) => ({
+                  name: a.name,
+                  displayName: a.name,
+                  ...(a.description ? { description: a.description } : {}),
+                  ...(a.model ? { model: a.model } : {}),
+                })),
+                source: "sdk",
+                cached: false,
+              };
+            }).catch(() => {});
+            break;
+          }
+        }
+        return { agents: [], source: "pending", cached: false };
+      });
 
     return {
       provider: PROVIDER,
@@ -3545,7 +3631,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         supportsNativeSlashCommandDiscovery: true,
         supportsPluginMentions: false,
         supportsPluginDiscovery: false,
-        supportsRuntimeModelList: false,
+        supportsRuntimeModelList: true,
       },
       startSession,
       sendTurn,
@@ -3561,6 +3647,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       getComposerCapabilities,
       listCommands,
       listSkills,
+      listModels,
+      listAgents,
       streamEvents: Stream.fromQueue(runtimeEventQueue),
     } satisfies ClaudeAdapterShape;
   });

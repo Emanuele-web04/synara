@@ -1,6 +1,7 @@
 import type {
   ProviderComposerCapabilities,
   ProviderKind,
+  ProviderListAgentsResult,
   ProviderListCommandsResult,
   ProviderListModelsResult,
   ProviderListPluginsResult,
@@ -28,6 +29,12 @@ const EMPTY_MODELS_RESULT: ProviderListModelsResult = {
   cached: false,
 };
 
+const EMPTY_AGENTS_RESULT: ProviderListAgentsResult = {
+  agents: [],
+  source: "empty",
+  cached: false,
+};
+
 const EMPTY_PLUGINS_RESULT: ProviderListPluginsResult = {
   marketplaces: [],
   marketplaceLoadErrors: [],
@@ -50,6 +57,7 @@ export const providerDiscoveryQueryKeys = {
   plugin: (provider: ProviderKind, marketplacePath: string, pluginName: string) =>
     ["provider-discovery", "plugin", provider, marketplacePath, pluginName] as const,
   models: (provider: ProviderKind) => ["provider-discovery", "models", provider] as const,
+  agents: (provider: ProviderKind) => ["provider-discovery", "agents", provider] as const,
 };
 
 export function providerComposerCapabilitiesQueryOptions(provider: ProviderKind) {
@@ -125,6 +133,19 @@ export function providerModelsQueryOptions(input: { provider: ProviderKind; enab
     enabled: input.enabled ?? true,
     staleTime: 60_000,
     placeholderData: (previous) => previous ?? EMPTY_MODELS_RESULT,
+  });
+}
+
+export function providerAgentsQueryOptions(input: { provider: ProviderKind; enabled?: boolean }) {
+  return queryOptions({
+    queryKey: providerDiscoveryQueryKeys.agents(input.provider),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      return api.provider.listAgents({ provider: input.provider });
+    },
+    enabled: input.enabled ?? true,
+    staleTime: 60_000,
+    placeholderData: (previous) => previous ?? EMPTY_AGENTS_RESULT,
   });
 }
 

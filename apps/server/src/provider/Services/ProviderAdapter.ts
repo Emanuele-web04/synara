@@ -14,6 +14,7 @@ import type {
   ProviderForkThreadInput,
   ProviderForkThreadResult,
   ProviderKind,
+  ProviderListAgentsResult,
   ProviderListCommandsInput,
   ProviderListCommandsResult,
   ProviderListModelsResult,
@@ -212,6 +213,11 @@ export interface ProviderAdapterShape<TError> {
    * List models directly from the provider runtime when supported.
    */
   readonly listModels?: () => Effect.Effect<ProviderListModelsResult, TError>;
+
+  /**
+   * List agents/subagents directly from the provider runtime when supported.
+   */
+  readonly listAgents?: () => Effect.Effect<ProviderListAgentsResult, TError>;
 
   /**
    * Transcribe one captured voice clip into plain text when supported.

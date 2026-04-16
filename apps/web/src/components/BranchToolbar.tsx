@@ -2,7 +2,6 @@
 // Purpose: Renders the chat thread's compact workspace controls, including the
 // local usage popover, inline workspace handoff actions, and runtime access toggle.
 import type { ThreadId, RuntimeMode } from "@t3tools/contracts";
-import { useQuery } from "@tanstack/react-query";
 import { deriveAssociatedWorktreeMetadata } from "@t3tools/shared/threadWorkspace";
 import { LuSplit } from "react-icons/lu";
 import { ChevronDownIcon, ChevronRightIcon, ExternalLinkIcon, HandoffIcon } from "~/lib/icons";
@@ -27,16 +26,7 @@ import type { ContextWindowSnapshot } from "../lib/contextWindow";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "./ui/collapsible";
 import type { ThreadWorkspacePatch } from "../types";
-import {
-  deriveAccountRateLimits,
-  deriveRateLimitLearnMoreHref,
-  mergeProviderRateLimits,
-} from "~/lib/rateLimits";
-import {
-  normalizeOpenUsageSnapshot,
-  normalizeOpenUsageUsageLines,
-} from "~/lib/openUsageRateLimits";
-import { openUsageProviderSnapshotQueryOptions } from "~/lib/openUsageReactQuery";
+import { deriveAccountRateLimits, deriveRateLimitLearnMoreHref } from "~/lib/rateLimits";
 import { RateLimitSummaryList } from "./RateLimitSummaryList";
 
 function WorktreeGlyph({ className }: { className?: string }) {
@@ -190,27 +180,12 @@ export default function BranchToolbar({
   const canSwitchToLocal = Boolean(!envLocked && effectiveEnvMode === "worktree");
   const showEnvPicker = effectiveEnvMode === "local" || canSwitchToLocal;
 
-  const openUsageSnapshotQuery = useQuery(
-    openUsageProviderSnapshotQueryOptions(effectiveEnvMode === "local" ? activeProvider : null),
-  );
-  const runtimeRateLimits = useMemo(() => {
+  const rateLimits = useMemo(() => {
     const derived = deriveAccountRateLimits(threads);
     return activeProvider
       ? derived.filter((rateLimit) => rateLimit.provider === activeProvider)
       : derived;
   }, [activeProvider, threads]);
-  const openUsageRateLimits = useMemo(() => {
-    const normalized = normalizeOpenUsageSnapshot(openUsageSnapshotQuery.data, activeProvider);
-    return normalized ? [normalized] : [];
-  }, [activeProvider, openUsageSnapshotQuery.data]);
-  const openUsageUsageLines = useMemo(
-    () => normalizeOpenUsageUsageLines(openUsageSnapshotQuery.data),
-    [openUsageSnapshotQuery.data],
-  );
-  const rateLimits = useMemo(
-    () => mergeProviderRateLimits(runtimeRateLimits, openUsageRateLimits),
-    [openUsageRateLimits, runtimeRateLimits],
-  );
   const learnMoreHref = useMemo(() => deriveRateLimitLearnMoreHref(rateLimits), [rateLimits]);
   const [rateLimitsOpen, setRateLimitsOpen] = useState(true);
   const [envPickerOpen, setEnvPickerOpen] = useState(false);
@@ -374,30 +349,6 @@ export default function BranchToolbar({
                 </Collapsible>
               </div>
 
-              {openUsageUsageLines.length > 0 ? (
-                <>
-                  <div className="mx-3 border-t border-border/50" />
-                  <div className="space-y-2 px-3 pb-2 pt-2">
-                    <p className="text-[11px] font-medium text-muted-foreground">Token usage</p>
-                    {openUsageUsageLines.map((line) => (
-                      <div
-                        key={line.label}
-                        className="flex items-start justify-between gap-3 text-xs"
-                      >
-                        <span className="font-medium text-foreground">{line.label}</span>
-                        <span className="text-right tabular-nums text-muted-foreground">
-                          <span className="text-foreground">{line.value}</span>
-                          {line.subtitle ? (
-                            <span className="block text-[11px] text-muted-foreground">
-                              {line.subtitle}
-                            </span>
-                          ) : null}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </>
-              ) : null}
             </PopoverPopup>
           </Popover>
         ) : (

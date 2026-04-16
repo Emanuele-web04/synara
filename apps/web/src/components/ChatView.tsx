@@ -55,8 +55,10 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import { gitCreateWorktreeMutationOptions, gitBranchesQueryOptions } from "~/lib/gitReactQuery";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import {
+  providerAgentsQueryOptions,
   providerComposerCapabilitiesQueryOptions,
   providerCommandsQueryOptions,
+  providerModelsQueryOptions,
   providerPluginsQueryOptions,
   providerSkillsQueryOptions,
   supportsNativeSlashCommandDiscovery,
@@ -350,6 +352,15 @@ function warnVoiceGuard(event: string, details?: Record<string, unknown>) {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Turn a raw model slug like "gpt-5.3-codex-spark" into "GPT-5.3 Codex Spark". */
+function formatModelSlug(slug: string): string {
+  return slug
+    .replace(/^gpt-/i, "GPT-")
+    .replace(/^claude-/i, "Claude ")
+    .replace(/-/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function skillMentionPrefix(provider: string): string {
@@ -1206,10 +1217,53 @@ export default function ChatView({
   );
   const providerOptionsForDispatch = useMemo(() => getProviderStartOptions(settings), [settings]);
   const selectedModelForPicker = selectedModel;
-  const modelOptionsByProvider = useMemo(
-    () => getCustomModelOptionsByProvider(settings),
-    [settings],
+  const claudeDynamicModelsQuery = useQuery(
+    providerModelsQueryOptions({ provider: "claudeAgent" }),
   );
+  const codexDynamicModelsQuery = useQuery(
+    providerModelsQueryOptions({ provider: "codex" }),
+  );
+  const claudeDynamicAgentsQuery = useQuery(
+    providerAgentsQueryOptions({ provider: "claudeAgent" }),
+  );
+  const codexDynamicAgentsQuery = useQuery(
+    providerAgentsQueryOptions({ provider: "codex" }),
+  );
+  const modelOptionsByProvider = useMemo(() => {
+    const staticOptions = getCustomModelOptionsByProvider(settings);
+    const result = { ...staticOptions };
+
+    // Merge dynamic models for each provider when available from the SDK
+    const dynamicSources: Record<ProviderKind, typeof claudeDynamicModelsQuery.data> = {
+      claudeAgent: claudeDynamicModelsQuery.data,
+      codex: codexDynamicModelsQuery.data,
+    };
+
+    for (const provider of ["claudeAgent", "codex"] as const) {
+      const dynamicModels = dynamicSources[provider]?.models;
+      if (dynamicModels && dynamicModels.length > 0) {
+        const dynamicSlugs = new Set(dynamicModels.map((m) => m.slug));
+        // Build a lookup from static options for proper display names
+        const staticNameBySlug = new Map(
+          staticOptions[provider].map((m) => [m.slug, m.name]),
+        );
+        // Keep custom models that aren't already in the dynamic list
+        const customOnlyModels = staticOptions[provider].filter(
+          (m) => "isCustom" in m && m.isCustom && !dynamicSlugs.has(m.slug),
+        );
+        result[provider] = [
+          ...dynamicModels.map((m) => ({
+            slug: m.slug,
+            // Prefer static display name, then SDK name, then format the slug
+            name: staticNameBySlug.get(m.slug) ?? m.name ?? formatModelSlug(m.slug),
+          })),
+          ...customOnlyModels,
+        ];
+      }
+    }
+
+    return result;
+  }, [settings, claudeDynamicModelsQuery.data, codexDynamicModelsQuery.data]);
   const selectedModelForPickerWithCustomFallback = useMemo(() => {
     const currentOptions = modelOptionsByProvider[selectedProvider];
     return currentOptions.some((option) => option.slug === selectedModelForPicker)
@@ -1880,6 +1934,15 @@ export default function ChatView({
       selectedMentionCount: selectedComposerMentions.length,
       interactionMode,
     });
+  const dynamicAgents = useMemo(() => {
+    const query =
+      selectedProvider === "claudeAgent" ? claudeDynamicAgentsQuery : codexDynamicAgentsQuery;
+    return (query.data?.agents ?? []).map((a) => ({
+      name: a.name,
+      displayName: a.displayName,
+      ...(a.description ? { description: a.description } : {}),
+    }));
+  }, [selectedProvider, claudeDynamicAgentsQuery.data, codexDynamicAgentsQuery.data]);
   const normalComposerMenuItems = useComposerCommandMenuItems({
     composerTrigger: effectiveComposerTrigger,
     provider: selectedProvider,
@@ -1891,6 +1954,7 @@ export default function ChatView({
     supportsFastSlashCommand,
     canOfferReviewCommand,
     canOfferForkCommand,
+    dynamicAgents,
   });
   const composerMenuItems = useMemo(() => {
     if (composerCommandPicker === "fork-target") {

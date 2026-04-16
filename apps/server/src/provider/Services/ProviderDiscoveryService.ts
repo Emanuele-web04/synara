@@ -1,6 +1,8 @@
 import type {
   ProviderComposerCapabilities,
   ProviderGetComposerCapabilitiesInput,
+  ProviderListAgentsInput,
+  ProviderListAgentsResult,
   ProviderListCommandsInput,
   ProviderListCommandsResult,
   ProviderListModelsInput,
@@ -45,6 +47,9 @@ export interface ProviderDiscoveryServiceShape {
   readonly listModels: (
     input: ProviderListModelsInput,
   ) => Effect.Effect<ProviderListModelsResult, ProviderDiscoveryError>;
+  readonly listAgents: (
+    input: ProviderListAgentsInput,
+  ) => Effect.Effect<ProviderListAgentsResult, ProviderDiscoveryError>;
 }
 
 export class ProviderDiscoveryService extends ServiceMap.Service<

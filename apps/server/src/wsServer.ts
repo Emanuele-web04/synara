@@ -1282,6 +1282,11 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         return yield* providerDiscoveryService.listModels(body);
       }
 
+      case WS_METHODS.providerListAgents: {
+        const body = stripRequestTag(request.body);
+        return yield* providerDiscoveryService.listAgents(body);
+      }
+
       default: {
         const _exhaustiveCheck: never = request.body;
         return yield* new RouteRequestError({

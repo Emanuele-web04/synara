@@ -52,6 +52,7 @@ import {
   ProviderGetComposerCapabilitiesInput,
   ProviderListPluginsInput,
   ProviderListModelsInput,
+  ProviderListAgentsInput,
   ProviderReadPluginInput,
   ProviderListSkillsInput,
 } from "./providerDiscovery";
@@ -108,6 +109,7 @@ export const WS_METHODS = {
   providerListPlugins: "provider.listPlugins",
   providerReadPlugin: "provider.readPlugin",
   providerListModels: "provider.listModels",
+  providerListAgents: "provider.listAgents",
 } as const;
 
 // ── Push Event Channels ──────────────────────────────────────────────
@@ -190,6 +192,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.providerListPlugins, ProviderListPluginsInput),
   tagRequestBody(WS_METHODS.providerReadPlugin, ProviderReadPluginInput),
   tagRequestBody(WS_METHODS.providerListModels, ProviderListModelsInput),
+  tagRequestBody(WS_METHODS.providerListAgents, ProviderListAgentsInput),
 ]);
 
 export const WebSocketRequest = Schema.Struct({

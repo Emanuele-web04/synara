@@ -1559,6 +1559,7 @@ describe("WebSocket Server", () => {
             cached: false,
           }),
         listModels: () => Effect.succeed({ models: [], source: "test", cached: false }),
+        listAgents: () => Effect.succeed({ agents: [], source: "test", cached: false }),
       }),
       Layer.succeed(ProviderAdapterRegistry, {
         getByProvider: (provider) => Effect.fail(new ProviderUnsupportedError({ provider })),

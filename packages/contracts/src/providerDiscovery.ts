@@ -220,3 +220,23 @@ export const ProviderListModelsResult = Schema.Struct({
   cached: Schema.optional(Schema.Boolean),
 });
 export type ProviderListModelsResult = typeof ProviderListModelsResult.Type;
+
+export const ProviderListAgentsInput = Schema.Struct({
+  provider: ProviderDiscoveryKind,
+});
+export type ProviderListAgentsInput = typeof ProviderListAgentsInput.Type;
+
+export const ProviderAgentDescriptor = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  displayName: TrimmedNonEmptyString,
+  description: Schema.optional(TrimmedNonEmptyString),
+  model: Schema.optional(TrimmedNonEmptyString),
+});
+export type ProviderAgentDescriptor = typeof ProviderAgentDescriptor.Type;
+
+export const ProviderListAgentsResult = Schema.Struct({
+  agents: Schema.Array(ProviderAgentDescriptor),
+  source: Schema.optional(TrimmedNonEmptyString),
+  cached: Schema.optional(Schema.Boolean),
+});
+export type ProviderListAgentsResult = typeof ProviderListAgentsResult.Type;

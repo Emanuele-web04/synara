@@ -49,6 +49,7 @@ export function useComposerCommandMenuItems(input: {
   supportsFastSlashCommand: boolean;
   canOfferReviewCommand: boolean;
   canOfferForkCommand: boolean;
+  dynamicAgents: readonly { name: string; displayName: string; description?: string }[];
 }): ComposerCommandItem[] {
   const {
     composerTrigger,
@@ -61,6 +62,7 @@ export function useComposerCommandMenuItems(input: {
     supportsFastSlashCommand,
     canOfferReviewCommand,
     canOfferForkCommand,
+    dynamicAgents,
   } = input;
 
   return useMemo<ComposerCommandItem[]>(() => {
@@ -70,21 +72,42 @@ export function useComposerCommandMenuItems(input: {
     if (composerTrigger.kind === "mention") {
       const query = normalizeProviderDiscoveryText(composerTrigger.query);
 
-      const agentItems: ComposerCommandItem[] = getAgentMentionAutocompleteAliases(provider)
-        .filter(({ alias, displayName }) => {
-          if (!query) return true;
-          const searchBlob = `${alias} ${displayName}`.toLowerCase();
-          return searchBlob.includes(query);
-        })
-        .map(({ alias, displayName, color }) => ({
-          id: `agent:${provider}:${alias}`,
-          type: "agent" as const,
-          provider,
-          alias,
-          color,
-          label: `@${alias}`,
-          description: displayName,
-        }));
+      const agentItems: ComposerCommandItem[] = (() => {
+        // Use dynamic agents when available, fallback to static
+        if (dynamicAgents.length > 0) {
+          return dynamicAgents
+            .filter(({ name, displayName }) => {
+              if (!query) return true;
+              const searchBlob = `${name} ${displayName}`.toLowerCase();
+              return searchBlob.includes(query);
+            })
+            .map(({ name, displayName }) => ({
+              id: `agent:${provider}:${name}`,
+              type: "agent" as const,
+              provider,
+              alias: name,
+              color: "violet" as const,
+              label: `@${name}`,
+              description: displayName,
+            }));
+        }
+        // Static fallback
+        return getAgentMentionAutocompleteAliases(provider)
+          .filter(({ alias, displayName }) => {
+            if (!query) return true;
+            const searchBlob = `${alias} ${displayName}`.toLowerCase();
+            return searchBlob.includes(query);
+          })
+          .map(({ alias, displayName, color }) => ({
+            id: `agent:${provider}:${alias}`,
+            type: "agent" as const,
+            provider,
+            alias,
+            color,
+            label: `@${alias}`,
+            description: displayName,
+          }));
+      })();
 
       const pluginItems = providerPlugins
         .filter(({ plugin }) => {
@@ -205,6 +228,7 @@ export function useComposerCommandMenuItems(input: {
     canOfferForkCommand,
     canOfferReviewCommand,
     composerTrigger,
+    dynamicAgents,
     provider,
     providerPlugins,
     providerNativeCommands,

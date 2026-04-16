@@ -1,6 +1,7 @@
 import {
   type ProviderComposerCapabilities,
   ProviderGetComposerCapabilitiesInput,
+  ProviderListAgentsInput,
   ProviderListCommandsInput,
   ProviderListModelsInput,
   ProviderListPluginsInput,
@@ -155,6 +156,24 @@ const make = Effect.gen(function* () {
       return yield* adapter.listModels();
     });
 
+  const listAgents: ProviderDiscoveryServiceShape["listAgents"] = (input) =>
+    Effect.gen(function* () {
+      const parsed = yield* decodeInputOrValidationError({
+        operation: "ProviderDiscoveryService.listAgents",
+        schema: ProviderListAgentsInput,
+        payload: input,
+      });
+      const adapter = yield* registry.getByProvider(parsed.provider);
+      if (!adapter.listAgents) {
+        return {
+          agents: [],
+          source: "unsupported",
+          cached: false,
+        };
+      }
+      return yield* adapter.listAgents();
+    });
+
   return {
     getComposerCapabilities,
     listCommands,
@@ -162,6 +181,7 @@ const make = Effect.gen(function* () {
     listPlugins,
     readPlugin,
     listModels,
+    listAgents,
   } satisfies ProviderDiscoveryServiceShape;
 });
 

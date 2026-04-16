@@ -96,6 +96,14 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
     return [];
   };
 
+  readonly supportedModels = async (): Promise<[]> => {
+    return [];
+  };
+
+  readonly supportedAgents = async (): Promise<[]> => {
+    return [];
+  };
+
   readonly close = (): void => {
     this.closeCalls += 1;
     this.finish();
@@ -213,7 +221,7 @@ async function readFirstPromptText(
     return undefined;
   }
   const content = next.value.message.content[0];
-  if (!content || content.type !== "text") {
+  if (!content || typeof content === "string" || content.type !== "text") {
     return undefined;
   }
   return content.text;
