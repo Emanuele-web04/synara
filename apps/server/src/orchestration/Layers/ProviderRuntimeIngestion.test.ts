@@ -1629,7 +1629,8 @@ describe("ProviderRuntimeIngestion", () => {
       entry.messages.some(
         (message: ProviderRuntimeTestMessage) =>
           message.id === "assistant:item-buffered-session-exit" &&
-          message.text === "persist me before exit",
+          message.text === "persist me before exit" &&
+          message.streaming === false,
       ),
     );
     const message = thread.messages.find(
@@ -1689,7 +1690,8 @@ describe("ProviderRuntimeIngestion", () => {
       entry.messages.some(
         (message: ProviderRuntimeTestMessage) =>
           message.id === "assistant:item-buffered-runtime-error" &&
-          message.text === "persist me before error",
+          message.text === "persist me before error" &&
+          message.streaming === false,
       ),
     );
     const message = thread.messages.find(
