@@ -33,8 +33,10 @@ import {
   TurnId,
 } from "@t3tools/contracts";
 import {
+  getModelCapabilities,
   getGeminiThinkingConfigKind,
   getGeminiThinkingModelAlias,
+  hasEffortLevel,
   resolveGeminiApiModelId,
 } from "@t3tools/shared/model";
 import { Effect, FileSystem, Layer, Queue, Stream } from "effect";
@@ -193,10 +195,14 @@ export function buildGeminiThinkingModelConfigAliases(
       continue;
     }
     seen.add(model);
+    const caps = getModelCapabilities("gemini", model);
 
     switch (getGeminiThinkingConfigKind(model)) {
       case "level": {
         for (const thinkingLevel of GEMINI_3_THINKING_LEVELS) {
+          if (!hasEffortLevel(caps, thinkingLevel)) {
+            continue;
+          }
           const alias = getGeminiThinkingModelAlias(model, { thinkingLevel });
           if (!alias) {
             continue;
@@ -217,6 +223,9 @@ export function buildGeminiThinkingModelConfigAliases(
       }
       case "budget": {
         for (const thinkingBudget of GEMINI_2_5_THINKING_BUDGETS) {
+          if (!hasEffortLevel(caps, String(thinkingBudget))) {
+            continue;
+          }
           const alias = getGeminiThinkingModelAlias(model, { thinkingBudget });
           if (!alias) {
             continue;

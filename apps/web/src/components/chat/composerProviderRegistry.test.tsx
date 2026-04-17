@@ -204,6 +204,44 @@ describe("getComposerProviderState", () => {
     });
   });
 
+  it("drops unsupported Gemini off overrides for auto 2.5 routing", () => {
+    const state = getComposerProviderState({
+      provider: "gemini",
+      model: "auto-gemini-2.5",
+      prompt: "",
+      modelOptions: {
+        gemini: {
+          thinkingBudget: 0,
+        },
+      },
+    });
+
+    expect(state).toEqual({
+      provider: "gemini",
+      promptEffort: "-1",
+      modelOptionsForDispatch: undefined,
+    });
+  });
+
+  it("drops unsupported Gemini off overrides for 2.5 Flash", () => {
+    const state = getComposerProviderState({
+      provider: "gemini",
+      model: "gemini-2.5-flash",
+      prompt: "",
+      modelOptions: {
+        gemini: {
+          thinkingBudget: 0,
+        },
+      },
+    });
+
+    expect(state).toEqual({
+      provider: "gemini",
+      promptEffort: "-1",
+      modelOptionsForDispatch: undefined,
+    });
+  });
+
   it("drops explicit Gemini default thinking overrides from dispatch", () => {
     const state = getComposerProviderState({
       provider: "gemini",
