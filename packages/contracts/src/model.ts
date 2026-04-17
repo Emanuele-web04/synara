@@ -1,7 +1,7 @@
 import { Schema } from "effect";
 import type { ProviderKind } from "./orchestration";
 
-export const CODEX_REASONING_EFFORT_OPTIONS = ["xhigh", "high", "medium", "low"] as const;
+export const CODEX_REASONING_EFFORT_OPTIONS = ["low", "medium", "high", "xhigh"] as const;
 export type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORT_OPTIONS)[number];
 export const CLAUDE_CODE_EFFORT_OPTIONS = [
   "low",
@@ -71,10 +71,10 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       name: "GPT-5.4",
       capabilities: {
         reasoningEffortLevels: [
-          { value: "xhigh", label: "Extra High" },
-          { value: "high", label: "High", isDefault: true },
-          { value: "medium", label: "Medium" },
           { value: "low", label: "Low" },
+          { value: "medium", label: "Medium" },
+          { value: "high", label: "High", isDefault: true },
+          { value: "xhigh", label: "Extra High" },
         ],
         supportsFastMode: true,
         supportsThinkingToggle: false,
@@ -87,10 +87,10 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       name: "GPT-5.4 Mini",
       capabilities: {
         reasoningEffortLevels: [
-          { value: "xhigh", label: "Extra High" },
-          { value: "high", label: "High", isDefault: true },
-          { value: "medium", label: "Medium" },
           { value: "low", label: "Low" },
+          { value: "medium", label: "Medium" },
+          { value: "high", label: "High", isDefault: true },
+          { value: "xhigh", label: "Extra High" },
         ],
         supportsFastMode: true,
         supportsThinkingToggle: false,
@@ -103,10 +103,10 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       name: "GPT-5.3 Codex",
       capabilities: {
         reasoningEffortLevels: [
-          { value: "xhigh", label: "Extra High" },
-          { value: "high", label: "High", isDefault: true },
-          { value: "medium", label: "Medium" },
           { value: "low", label: "Low" },
+          { value: "medium", label: "Medium" },
+          { value: "high", label: "High", isDefault: true },
+          { value: "xhigh", label: "Extra High" },
         ],
         supportsFastMode: true,
         supportsThinkingToggle: false,
@@ -119,10 +119,10 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       name: "GPT-5.3 Codex Spark",
       capabilities: {
         reasoningEffortLevels: [
-          { value: "xhigh", label: "Extra High" },
-          { value: "high", label: "High", isDefault: true },
-          { value: "medium", label: "Medium" },
           { value: "low", label: "Low" },
+          { value: "medium", label: "Medium" },
+          { value: "high", label: "High", isDefault: true },
+          { value: "xhigh", label: "Extra High" },
         ],
         supportsFastMode: true,
         supportsThinkingToggle: false,
@@ -135,10 +135,10 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       name: "GPT-5.2 Codex",
       capabilities: {
         reasoningEffortLevels: [
-          { value: "xhigh", label: "Extra High" },
-          { value: "high", label: "High", isDefault: true },
-          { value: "medium", label: "Medium" },
           { value: "low", label: "Low" },
+          { value: "medium", label: "Medium" },
+          { value: "high", label: "High", isDefault: true },
+          { value: "xhigh", label: "Extra High" },
         ],
         supportsFastMode: true,
         supportsThinkingToggle: false,
@@ -151,10 +151,10 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       name: "GPT-5.2",
       capabilities: {
         reasoningEffortLevels: [
-          { value: "xhigh", label: "Extra High" },
-          { value: "high", label: "High", isDefault: true },
-          { value: "medium", label: "Medium" },
           { value: "low", label: "Low" },
+          { value: "medium", label: "Medium" },
+          { value: "high", label: "High", isDefault: true },
+          { value: "xhigh", label: "Extra High" },
         ],
         supportsFastMode: true,
         supportsThinkingToggle: false,
