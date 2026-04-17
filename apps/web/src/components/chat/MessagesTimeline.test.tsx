@@ -976,6 +976,57 @@ describe("MessagesTimeline", () => {
     );
   });
 
+  it("renders command rows with a readable summary and keeps the full command on hover", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        scrollContainer={null}
+        timelineEntries={[
+          {
+            id: "entry-inline-command",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-inline-command",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "Ran command",
+              tone: "tool",
+              itemType: "command_execution",
+              toolTitle: "Searched",
+              command: `/bin/zsh -lc 'rg -n "ProjectionSnapshotQuery" apps/server/src'`,
+            },
+          },
+        ]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="dark"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("Searched");
+    expect(markup).toContain("for ProjectionSnapshotQuery in server/src");
+    expect(markup).toContain(
+      `title="/bin/zsh -lc &#x27;rg -n &quot;ProjectionSnapshotQuery&quot; apps/server/src&#x27;"`,
+    );
+    expect(markup).not.toContain("&gt;/bin/zsh -lc");
+  });
+
   it("renders every changed file in the same inline file-change tool call", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const assistantMessageId = MessageId.makeUnsafe("message-assistant-inline-multi-edit");

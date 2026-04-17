@@ -12,6 +12,11 @@ export interface ThreadSummaryMetadata {
   hasActionableProposedPlan: boolean;
 }
 
+export interface ThreadSummaryState extends ThreadSummaryMetadata {
+  pendingApprovalCount: number;
+  pendingUserInputCount: number;
+}
+
 function maxIso(left: string | null, right: string): string {
   if (left === null) {
     return right;
@@ -124,7 +129,7 @@ function resolveLatestProposedPlan(input: {
   );
 }
 
-export function deriveThreadSummaryMetadata(input: {
+export function deriveThreadSummaryState(input: {
   readonly messages: ReadonlyArray<Pick<OrchestrationMessage, "role" | "createdAt">>;
   readonly activities: ReadonlyArray<
     Pick<OrchestrationThreadActivity, "createdAt" | "id" | "kind" | "payload" | "sequence">
@@ -133,7 +138,7 @@ export function deriveThreadSummaryMetadata(input: {
     Pick<OrchestrationProposedPlan, "id" | "turnId" | "updatedAt" | "implementedAt">
   >;
   readonly latestTurn: Pick<OrchestrationLatestTurn, "turnId"> | null;
-}): ThreadSummaryMetadata {
+}): ThreadSummaryState {
   let latestUserMessageAt: string | null = null;
   for (const message of input.messages) {
     if (message.role === "user") {
@@ -204,8 +209,29 @@ export function deriveThreadSummaryMetadata(input: {
 
   return {
     latestUserMessageAt,
+    pendingApprovalCount: openApprovals.size,
+    pendingUserInputCount: openUserInputs.size,
     hasPendingApprovals: openApprovals.size > 0,
     hasPendingUserInput: openUserInputs.size > 0,
     hasActionableProposedPlan: latestProposedPlan?.implementedAt === null,
+  };
+}
+
+export function deriveThreadSummaryMetadata(input: {
+  readonly messages: ReadonlyArray<Pick<OrchestrationMessage, "role" | "createdAt">>;
+  readonly activities: ReadonlyArray<
+    Pick<OrchestrationThreadActivity, "createdAt" | "id" | "kind" | "payload" | "sequence">
+  >;
+  readonly proposedPlans: ReadonlyArray<
+    Pick<OrchestrationProposedPlan, "id" | "turnId" | "updatedAt" | "implementedAt">
+  >;
+  readonly latestTurn: Pick<OrchestrationLatestTurn, "turnId"> | null;
+}): ThreadSummaryMetadata {
+  const summary = deriveThreadSummaryState(input);
+  return {
+    latestUserMessageAt: summary.latestUserMessageAt,
+    hasPendingApprovals: summary.hasPendingApprovals,
+    hasPendingUserInput: summary.hasPendingUserInput,
+    hasActionableProposedPlan: summary.hasActionableProposedPlan,
   };
 }

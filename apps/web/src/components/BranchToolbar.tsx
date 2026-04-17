@@ -361,6 +361,20 @@ export default function BranchToolbar({
           </span>
         )}
 
+        <BranchToolbarBranchSelector
+          activeProjectCwd={activeProject.cwd}
+          activeThreadBranch={activeThreadBranch}
+          activeWorktreePath={activeWorktreePath}
+          branchCwd={branchCwd}
+          effectiveEnvMode={effectiveEnvMode}
+          envLocked={envLocked}
+          onSetThreadWorkspace={setThreadWorkspace}
+          {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}
+          {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}
+        />
+      </div>
+
+      <div className="flex items-center gap-2">
         {runtimeMode && onRuntimeModeChange ? (
           <button
             type="button"
@@ -384,20 +398,6 @@ export default function BranchToolbar({
             {runtimeMode === "full-access" ? "Full access" : "Supervised"}
           </button>
         ) : null}
-      </div>
-
-      <div className="flex items-center gap-2">
-        <BranchToolbarBranchSelector
-          activeProjectCwd={activeProject.cwd}
-          activeThreadBranch={activeThreadBranch}
-          activeWorktreePath={activeWorktreePath}
-          branchCwd={branchCwd}
-          effectiveEnvMode={effectiveEnvMode}
-          envLocked={envLocked}
-          onSetThreadWorkspace={setThreadWorkspace}
-          {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}
-          {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}
-        />
         {contextWindow ? (
           <ContextWindowMeter
             usage={contextWindow}

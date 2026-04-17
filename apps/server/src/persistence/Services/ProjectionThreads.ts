@@ -9,6 +9,7 @@
 import {
   IsoDateTime,
   ModelSelection,
+  NonNegativeInt,
   ThreadHandoff,
   ProjectId,
   ProviderInteractionMode,
@@ -42,6 +43,10 @@ export const ProjectionThread = Schema.Struct({
   forkSourceThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   latestTurnId: Schema.NullOr(TurnId),
   handoff: Schema.NullOr(ThreadHandoff),
+  latestUserMessageAt: Schema.NullOr(IsoDateTime),
+  pendingApprovalCount: NonNegativeInt,
+  pendingUserInputCount: NonNegativeInt,
+  hasActionableProposedPlan: NonNegativeInt,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   archivedAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(

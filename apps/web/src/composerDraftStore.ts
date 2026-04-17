@@ -350,6 +350,7 @@ interface ComposerDraftStoreState {
     provider: ProviderKind,
     nextProviderOptions: ProviderModelOptions[ProviderKind] | null | undefined,
     options?: {
+      model?: string | null;
       persistSticky?: boolean;
     },
   ) => void;
@@ -2310,6 +2311,9 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           normalizedProvider,
         );
         const providerOpts = normalizedOpts?.[normalizedProvider];
+        const fallbackModel =
+          normalizeModelSlug(options?.model, normalizedProvider) ??
+          getDefaultModel(normalizedProvider);
 
         set((state) => {
           const existing = state.draftsByThreadId[threadId];
@@ -2321,7 +2325,9 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           if (providerOpts) {
             nextMap[normalizedProvider] = {
               provider: normalizedProvider,
-              model: currentForProvider?.model ?? getDefaultModel(normalizedProvider),
+              // Trait-only changes should keep the currently visible model instead of
+              // silently snapping back to the provider default.
+              model: currentForProvider?.model ?? fallbackModel,
               options: providerOpts,
             };
           } else if (currentForProvider?.options) {
@@ -2339,7 +2345,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
               base.modelSelectionByProvider[normalizedProvider] ??
               ({
                 provider: normalizedProvider,
-                model: getDefaultModel(normalizedProvider),
+                model: fallbackModel,
               } as ModelSelection);
             if (providerOpts) {
               nextStickyMap[normalizedProvider] = {

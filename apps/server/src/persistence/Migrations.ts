@@ -38,6 +38,8 @@ import Migration0022 from "./Migrations/022_ProjectionThreadsAssociatedWorktreeB
 import Migration0023 from "./Migrations/023_ProjectionThreadsAssociatedWorktreeRef.ts";
 import Migration0024 from "./Migrations/024_ProjectionThreadsArchivedAt.ts";
 import Migration0025 from "./Migrations/025_ProjectionThreadsSubagents.ts";
+import Migration0026 from "./Migrations/026_ProjectionThreadShellSummary.ts";
+import Migration0027 from "./Migrations/027_BackfillProjectionThreadShellSummary.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -75,6 +77,8 @@ export const migrationEntries = [
   [23, "ProjectionThreadsAssociatedWorktreeRef", Migration0023],
   [24, "ProjectionThreadsArchivedAt", Migration0024],
   [25, "ProjectionThreadsSubagents", Migration0025],
+  [26, "ProjectionThreadShellSummary", Migration0026],
+  [27, "BackfillProjectionThreadShellSummary", Migration0027],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

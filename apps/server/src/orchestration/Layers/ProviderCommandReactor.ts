@@ -647,6 +647,9 @@ const make = Effect.gen(function* () {
                 threadId: input.threadId,
                 branch: renamed.branch,
                 worktreePath: cwd,
+                associatedWorktreePath: cwd,
+                associatedWorktreeBranch: renamed.branch,
+                associatedWorktreeRef: renamed.branch,
               }),
           );
         }),

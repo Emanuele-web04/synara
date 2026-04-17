@@ -38,6 +38,7 @@ import { projectQueryKeys } from "../lib/projectReactQuery";
 import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
 import { TaskCompletionNotifications } from "../notifications/taskCompletion";
 import { useWorkspaceStore, workspaceThreadId } from "../workspaceStore";
+import { useRetainedThreadDetailIds } from "../threadDetailSubscriptionRetention";
 import { useAppTypography } from "../hooks/useAppTypography";
 import { invalidateGitQueries } from "../lib/gitReactQuery";
 import { parseDiffRouteSearch } from "../diffRouteSearch";
@@ -240,15 +241,23 @@ function EventRouter() {
     }
     return routeThreadId ? [routeThreadId] : [];
   }, [activeSplitView, routeThreadId]);
+  const retainedThreadIds = useRetainedThreadDetailIds();
+  const subscribedThreadIds = useMemo(() => {
+    const nextThreadIds = new Set<ThreadId>(visibleThreadIds);
+    for (const threadId of retainedThreadIds) {
+      nextThreadIds.add(threadId);
+    }
+    return [...nextThreadIds];
+  }, [retainedThreadIds, visibleThreadIds]);
   const pathnameRef = useRef(pathname);
   const handledBootstrapThreadIdRef = useRef<string | null>(null);
-  const visibleThreadIdsRef = useRef(visibleThreadIds);
+  const visibleThreadIdsRef = useRef(subscribedThreadIds);
   const reconcileThreadSubscriptionsRef = useRef<
     ((threadIds: readonly ThreadId[]) => Promise<void>) | null
   >(null);
 
   pathnameRef.current = pathname;
-  visibleThreadIdsRef.current = visibleThreadIds;
+  visibleThreadIdsRef.current = subscribedThreadIds;
 
   useEffect(() => {
     const api = readNativeApi();
@@ -633,8 +642,8 @@ function EventRouter() {
     if (!reconcile) {
       return;
     }
-    void reconcile(visibleThreadIds);
-  }, [visibleThreadIds]);
+    void reconcile(subscribedThreadIds);
+  }, [subscribedThreadIds]);
 
   return null;
 }

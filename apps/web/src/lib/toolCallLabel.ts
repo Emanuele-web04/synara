@@ -1,3 +1,9 @@
+// FILE: toolCallLabel.ts
+// Purpose: Normalizes generic tool-call titles and humanizes command executions for timeline rows.
+// Layer: UI utility
+// Exports: deriveReadableToolTitle, deriveReadableCommandDisplay, normalizeCompactToolLabel
+// Depends on: @t3tools/contracts tool lifecycle item types
+
 import type { ToolLifecycleItemType } from "@t3tools/contracts";
 
 export function normalizeCompactToolLabel(value: string): string {
@@ -11,12 +17,15 @@ export interface ReadableToolTitleInput {
   readonly requestKind?: "command" | "file-read" | "file-change" | undefined;
   readonly command?: string | null;
   readonly payload?: Record<string, unknown> | null;
+  readonly isRunning?: boolean;
 }
 
 export function deriveReadableToolTitle(input: ReadableToolTitleInput): string | null {
   const normalizedTitle = normalizeCompactToolLabel(input.title ?? "");
   const normalizedFallback = normalizeCompactToolLabel(input.fallbackLabel);
-  const commandLabel = input.command ? humanizeCommandToolLabel(input.command) : null;
+  const commandLabel = input.command
+    ? deriveReadableCommandDisplay(input.command, input.isRunning).verb
+    : null;
   const commandLike = input.itemType === "command_execution" || input.requestKind === "command";
 
   // Derive a verbal label from requestKind when the title is generic
@@ -50,6 +59,12 @@ export function deriveReadableToolTitle(input: ReadableToolTitleInput): string |
     return normalizedFallback;
   }
   return null;
+}
+
+export interface ReadableCommandDisplay {
+  readonly verb: string;
+  readonly target: string;
+  readonly fullCommand: string;
 }
 
 function humanizeRequestKind(
@@ -175,7 +190,11 @@ function collectDescriptorCandidates(
   }
 }
 
-function humanizeCommandToolLabel(rawCommand: string): string {
+// Derives the compact command sentence shown inline while preserving the full command for hover/detail UI.
+export function deriveReadableCommandDisplay(
+  rawCommand: string,
+  isRunning = false,
+): ReadableCommandDisplay {
   const command = unwrapShellCommandIfPresent(rawCommand);
   const [tool, args] = splitToolAndArgs(command);
 
@@ -187,49 +206,303 @@ function humanizeCommandToolLabel(rawCommand: string): string {
     case "sed":
     case "less":
     case "more":
-      return "Read file";
+      return {
+        verb: isRunning ? "Reading" : "Read",
+        target: lastPathComponents(args, "file"),
+        fullCommand: rawCommand,
+      };
     case "rg":
     case "grep":
     case "ag":
     case "ack":
-      return "Search files";
+      return {
+        verb: isRunning ? "Searching" : "Searched",
+        target: searchSummary(args),
+        fullCommand: rawCommand,
+      };
     case "ls":
-      return "List files";
+      return {
+        verb: isRunning ? "Listing" : "Listed",
+        target: lastPathComponents(args, "directory"),
+        fullCommand: rawCommand,
+      };
     case "find":
     case "fd":
-      return "Find files";
+      return {
+        verb: isRunning ? "Finding" : "Found",
+        target: lastPathComponents(args, "files"),
+        fullCommand: rawCommand,
+      };
+    case "mkdir":
+      return {
+        verb: isRunning ? "Creating" : "Created",
+        target: lastPathComponents(args, "directory"),
+        fullCommand: rawCommand,
+      };
+    case "rm":
+      return {
+        verb: isRunning ? "Removing" : "Removed",
+        target: lastPathComponents(args, "file"),
+        fullCommand: rawCommand,
+      };
+    case "cp":
+    case "mv":
+      return {
+        verb: isRunning
+          ? tool === "cp"
+            ? "Copying"
+            : "Moving"
+          : tool === "cp"
+            ? "Copied"
+            : "Moved",
+        target: lastPathComponents(args, "file"),
+        fullCommand: rawCommand,
+      };
     case "git":
-      return humanizeGitCommand(args);
+      return humanizeGitCommand(args, rawCommand, isRunning);
     default:
-      return "Run command";
+      return {
+        verb: isRunning ? "Running" : "Ran",
+        target: command,
+        fullCommand: rawCommand,
+      };
   }
 }
 
-function humanizeGitCommand(args: string): string {
+function humanizeGitCommand(
+  args: string,
+  rawCommand: string,
+  isRunning: boolean,
+): ReadableCommandDisplay {
   const subcommand = args.split(/\s+/, 1)[0]?.toLowerCase() ?? "";
   switch (subcommand) {
     case "status":
-      return "Check git status";
+      return {
+        verb: isRunning ? "Checking" : "Checked",
+        target: "git status",
+        fullCommand: rawCommand,
+      };
     case "diff":
-      return "Inspect git diff";
+      return {
+        verb: isRunning ? "Comparing" : "Compared",
+        target: "changes",
+        fullCommand: rawCommand,
+      };
     case "show":
-      return "Inspect commit";
+      return {
+        verb: isRunning ? "Inspecting" : "Inspected",
+        target: "commit",
+        fullCommand: rawCommand,
+      };
     case "log":
-      return "Review git history";
+      return {
+        verb: isRunning ? "Reviewing" : "Reviewed",
+        target: "git history",
+        fullCommand: rawCommand,
+      };
     case "add":
-      return "Stage changes";
+      return {
+        verb: isRunning ? "Staging" : "Staged",
+        target: "changes",
+        fullCommand: rawCommand,
+      };
     case "commit":
-      return "Commit changes";
+      return {
+        verb: isRunning ? "Committing" : "Committed",
+        target: "changes",
+        fullCommand: rawCommand,
+      };
     case "push":
-      return "Push changes";
+      return {
+        verb: isRunning ? "Pushing" : "Pushed",
+        target: "to remote",
+        fullCommand: rawCommand,
+      };
     case "pull":
-      return "Pull changes";
+      return {
+        verb: isRunning ? "Pulling" : "Pulled",
+        target: "from remote",
+        fullCommand: rawCommand,
+      };
     case "checkout":
     case "switch":
-      return "Switch branch";
+      return {
+        verb: isRunning ? "Switching to" : "Switched to",
+        target: checkoutTarget(args),
+        fullCommand: rawCommand,
+      };
     default:
-      return "Run git command";
+      return {
+        verb: isRunning ? "Running" : "Ran",
+        target: `git ${args}`.trim(),
+        fullCommand: rawCommand,
+      };
   }
+}
+
+function checkoutTarget(args: string): string {
+  const branch = tokenizeCommandArgs(args).at(-1)?.trim();
+  return branch ? branch : "branch";
+}
+
+function lastPathComponents(args: string, fallback: string): string {
+  const tokens = tokenizeCommandArgs(args);
+  for (let index = tokens.length - 1; index >= 0; index -= 1) {
+    const token = tokens[index]!.replace(/^['"]|['"]$/g, "");
+    if (!token || token.startsWith("-")) {
+      continue;
+    }
+    return compactPath(token);
+  }
+  return fallback;
+}
+
+function compactPath(path: string): string {
+  if (path === ".") {
+    return "current directory";
+  }
+  if (path === "..") {
+    return "parent directory";
+  }
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  if (parts.length <= 2) {
+    return path;
+  }
+  return parts.slice(-2).join("/");
+}
+
+function searchSummary(args: string): string {
+  const { pattern, path } = extractSearchPatternAndPath(args);
+  if (pattern && path) {
+    return `for ${pattern} in ${path}`;
+  }
+  if (pattern) {
+    return `for ${pattern}`;
+  }
+  if (path) {
+    return `in ${path}`;
+  }
+  return "files";
+}
+
+function extractSearchPatternAndPath(args: string): {
+  pattern: string | null;
+  path: string | null;
+} {
+  const tokens = tokenizeCommandArgs(args);
+  let pattern: string | null = null;
+  let path: string | null = null;
+  let skipNext = false;
+
+  for (const token of tokens) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
+    if (token.startsWith("-")) {
+      if (
+        token === "-t" ||
+        token === "-g" ||
+        token === "--type" ||
+        token === "--glob" ||
+        token === "--max-count"
+      ) {
+        skipNext = true;
+      }
+      continue;
+    }
+    if (!pattern) {
+      const normalizedPattern = normalizeSearchPatternToken(token);
+      if (!normalizedPattern) {
+        const normalizedPath = normalizeSearchPathToken(token);
+        if (normalizedPath && (!path || path === "current directory")) {
+          path = normalizedPath;
+        }
+        continue;
+      }
+      pattern = normalizedPattern;
+      continue;
+    }
+    if (!path || path === "current directory") {
+      path = normalizeSearchPathToken(token) ?? path;
+      continue;
+    }
+  }
+
+  if (pattern && path === "current directory" && looksLikeSearchPath(pattern)) {
+    path = normalizeSearchPathToken(pattern);
+    pattern = null;
+  }
+
+  return { pattern, path };
+}
+
+function normalizeSearchPatternToken(token: string): string | null {
+  const trimmed = token.trim();
+  if (!trimmed || trimmed === "." || trimmed === "..") {
+    return null;
+  }
+  if (!/[a-z0-9]/i.test(trimmed)) {
+    return null;
+  }
+  return trimmed.length > 30 ? `${trimmed.slice(0, 27)}...` : trimmed;
+}
+
+function normalizeSearchPathToken(token: string): string | null {
+  const trimmed = token.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return compactPath(trimmed);
+}
+
+function looksLikeSearchPath(token: string): boolean {
+  return token.includes("/") || token.startsWith(".") || token.includes("\\");
+}
+
+function tokenizeCommandArgs(args: string): string[] {
+  const tokens: string[] = [];
+  let index = 0;
+
+  while (index < args.length) {
+    while (args[index] === " ") {
+      index += 1;
+    }
+    if (index >= args.length) {
+      break;
+    }
+
+    const quote = args[index];
+    if (quote === '"' || quote === "'") {
+      index += 1;
+      let token = "";
+      while (index < args.length && args[index] !== quote) {
+        if (args[index] === "\\" && index + 1 < args.length) {
+          token += args[index + 1];
+          index += 2;
+          continue;
+        }
+        token += args[index];
+        index += 1;
+      }
+      if (args[index] === quote) {
+        index += 1;
+      }
+      tokens.push(token);
+      continue;
+    }
+
+    let token = "";
+    while (index < args.length && args[index] !== " ") {
+      token += args[index];
+      index += 1;
+    }
+    if (token) {
+      tokens.push(token);
+    }
+  }
+
+  return tokens;
 }
 
 function splitToolAndArgs(command: string): [tool: string, args: string] {
@@ -289,14 +562,48 @@ function unwrapShellCommandIfPresent(rawCommand: string): string {
     ) {
       value = value.slice(1, -1).trim();
     }
-    value = value.replace(/^cd\s+[^;&|]+(?:&&|;)\s*/i, "").trim();
+    const chainedCommandIndex = findShellChainIndex(value);
+    if (chainedCommandIndex >= 0) {
+      value = value.slice(chainedCommandIndex).trim();
+    }
     break;
   }
 
-  const pipeIndex = value.indexOf(" | ");
+  const pipeIndex = value.search(/\s*\|\s*/);
   if (pipeIndex > 0) {
     value = value.slice(0, pipeIndex).trim();
   }
 
   return value;
+}
+
+function findShellChainIndex(value: string): number {
+  let quote: '"' | "'" | null = null;
+
+  for (let index = 0; index < value.length - 1; index += 1) {
+    const char = value[index];
+    if (char === "\\" && index + 1 < value.length) {
+      index += 1;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    const next = value[index + 1];
+    if (char === "&" && next === "&") {
+      return index + 2;
+    }
+    if (char === ";") {
+      return index + 1;
+    }
+  }
+
+  return -1;
 }

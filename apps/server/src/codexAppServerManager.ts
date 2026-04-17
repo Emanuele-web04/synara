@@ -2399,6 +2399,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   private shouldSuppressChildConversationNotification(method: string): boolean {
+    // Intentionally do NOT suppress `turn/plan/updated` or `item/plan/delta` here,
+    // even for child conversations. These are the events that let the active plan
+    // card advance ("1 out of 5" → "2 out of 5" ...) and render streaming plan text;
+    // suppressing them freezes the plan UI at its initial all-pending snapshot.
     return (
       method === "thread/started" ||
       method === "thread/status/changed" ||
@@ -2410,9 +2414,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       method === "thread/tokenUsage/updated" ||
       method === "turn/started" ||
       method === "turn/completed" ||
-      method === "turn/aborted" ||
-      method === "turn/plan/updated" ||
-      method === "item/plan/delta"
+      method === "turn/aborted"
     );
   }
 

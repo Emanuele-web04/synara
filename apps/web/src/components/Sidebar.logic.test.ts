@@ -9,6 +9,8 @@ import {
   getVisibleSidebarEntriesForPreview,
   getPinnedThreadsForSidebar,
   getNextVisibleSidebarThreadId,
+  getSidebarThreadIdForJumpCommand,
+  getSidebarThreadIdsToPrewarm,
   getRenderedThreadsForSidebarProject,
   getUnpinnedThreadsForSidebar,
   getVisibleSidebarThreadIds,
@@ -739,6 +741,47 @@ describe("getNextVisibleSidebarThreadId", () => {
         direction: "backward",
       }),
     ).toBe(ThreadId.makeUnsafe("thread-3"));
+  });
+});
+
+describe("getSidebarThreadIdForJumpCommand", () => {
+  const visibleThreadIds = [
+    ThreadId.makeUnsafe("thread-1"),
+    ThreadId.makeUnsafe("thread-2"),
+    ThreadId.makeUnsafe("thread-3"),
+  ];
+
+  it("resolves numbered jump commands against the visible sidebar order", () => {
+    expect(
+      getSidebarThreadIdForJumpCommand({
+        visibleThreadIds,
+        command: "thread.jump.2",
+      }),
+    ).toBe(ThreadId.makeUnsafe("thread-2"));
+  });
+
+  it("returns null when a jump command points past the visible rows", () => {
+    expect(
+      getSidebarThreadIdForJumpCommand({
+        visibleThreadIds,
+        command: "thread.jump.9",
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("getSidebarThreadIdsToPrewarm", () => {
+  it("returns the first visible sidebar rows up to the requested limit", () => {
+    expect(
+      getSidebarThreadIdsToPrewarm({
+        visibleThreadIds: [
+          ThreadId.makeUnsafe("thread-1"),
+          ThreadId.makeUnsafe("thread-2"),
+          ThreadId.makeUnsafe("thread-3"),
+        ],
+        limit: 2,
+      }),
+    ).toEqual([ThreadId.makeUnsafe("thread-1"), ThreadId.makeUnsafe("thread-2")]);
   });
 });
 

@@ -683,6 +683,51 @@ describe("store pure functions", () => {
     expect(next.threads[0]?.latestTurn?.sourceProposedPlan).toEqual(sourceProposedPlan);
   });
 
+  it("applies thread.meta-updated branch metadata immediately during live updates", () => {
+    const initialState = makeState(
+      makeThread({
+        title: "Old title",
+        envMode: "worktree",
+        branch: "dpcode/tmp-working",
+        worktreePath: "/tmp/project/.worktrees/tmp-working",
+        associatedWorktreePath: "/tmp/project/.worktrees/tmp-working",
+        associatedWorktreeBranch: "dpcode/tmp-working",
+        associatedWorktreeRef: "dpcode/tmp-working",
+        session: {
+          provider: "codex",
+          status: "ready",
+          orchestrationStatus: "ready",
+          createdAt: "2026-02-27T00:00:00.000Z",
+          updatedAt: "2026-02-27T00:00:00.000Z",
+        },
+      }),
+    );
+
+    const next = applyOrchestrationEvents(initialState, [
+      makeDomainEvent("thread.meta-updated", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        title: "New title",
+        branch: "dpcode/app-startup-crash",
+        worktreePath: "/tmp/project/.worktrees/app-startup-crash",
+        associatedWorktreePath: "/tmp/project/.worktrees/app-startup-crash",
+        associatedWorktreeBranch: "dpcode/app-startup-crash",
+        associatedWorktreeRef: "dpcode/app-startup-crash",
+        updatedAt: "2026-02-27T00:01:00.000Z",
+      }),
+    ]);
+
+    expect(next.threads[0]).toMatchObject({
+      title: "New title",
+      branch: "dpcode/app-startup-crash",
+      worktreePath: "/tmp/project/.worktrees/app-startup-crash",
+      associatedWorktreePath: "/tmp/project/.worktrees/app-startup-crash",
+      associatedWorktreeBranch: "dpcode/app-startup-crash",
+      associatedWorktreeRef: "dpcode/app-startup-crash",
+      session: null,
+      updatedAt: "2026-02-27T00:01:00.000Z",
+    });
+  });
+
   it("updates turn diffs and latest turn immediately from live events", () => {
     const initialState = makeState(
       makeThread({

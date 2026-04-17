@@ -53,6 +53,8 @@ import {
   resolveAssistantMessageCopyState,
   type StableMessagesTimelineRowsState,
 } from "./MessagesTimeline.logic";
+import { deriveReadableCommandDisplay } from "../../lib/toolCallLabel";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
 import {
   deriveDisplayedUserMessageState,
@@ -1500,8 +1502,8 @@ function workEntryPreview(
     return `${names.length} files`;
   }
 
-  // For commands, show the command itself
-  if (workEntry.command) return workEntry.command;
+  // Command rows stay human-readable inline and keep the raw invocation for hover details.
+  if (workEntry.command) return deriveReadableCommandDisplay(workEntry.command).target;
 
   if (workEntry.itemType === "collab_agent_tool_call" && (workEntry.subagents?.length ?? 0) > 0) {
     if (workEntry.subagentAction?.summaryText) {
@@ -1655,6 +1657,29 @@ function subagentCardMeta(workEntry: TimelineWorkEntry): string | null {
   return modelLabel ?? workEntry.subagentAction?.prompt ?? null;
 }
 
+function commandTooltipContent(command: string, displayText: string) {
+  return (
+    <div className="max-w-96 whitespace-pre-wrap leading-tight">
+      <div className="space-y-2">
+        <div className="space-y-0.5">
+          <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground/70">
+            Summary
+          </div>
+          <div>{displayText}</div>
+        </div>
+        <div className="space-y-0.5">
+          <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground/70">
+            Raw call
+          </div>
+          <code className="block whitespace-pre-wrap break-words font-chat-code text-[11px] text-foreground/92">
+            {command}
+          </code>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   workEntry: TimelineWorkEntry;
   chatMetaFontSizePx: number;
@@ -1684,6 +1709,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const heading = toolWorkEntryHeading(workEntry);
   const preview = workEntryPreview(workEntry);
   const displayText = preview ? `${heading} ${preview}` : heading;
+  const hoverText = workEntry.command ?? displayText;
   const changedFiles = workEntry.changedFiles ?? [];
   const showEditedRows = isFileChangeWorkEntry(workEntry) && changedFiles.length > 0;
   const showSubagentRows =
@@ -1778,7 +1804,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                   "font-medium text-foreground/72",
                 )}
                 style={{ fontSize: `${rowFontSizePx}px` }}
-                title={displayText}
+                title={hoverText}
               >
                 <span>{subagentSummary}</span>
               </p>
@@ -1901,44 +1927,61 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
           ) : null}
         </div>
       ) : (
-        <div
-          className={cn(
-            "flex items-center transition-[opacity,translate] duration-200",
-            compact ? "gap-1.5" : "gap-2",
-          )}
-        >
-          {showIconLeft && (
-            <span
+        (() => {
+          const rowContent = (
+            <div
               className={cn(
-                "flex shrink-0 items-center justify-center text-muted-foreground/40",
-                compact ? "size-4" : "size-5",
+                "flex items-center transition-[opacity,translate] duration-200",
+                compact ? "gap-1.5" : "gap-2",
               )}
+              title={hoverText}
             >
-              <EntryIcon className={compact ? "size-2.5" : "size-3"} />
-            </span>
-          )}
-          <div className="min-w-0 flex-1 overflow-hidden">
-            <p
-              className={cn(
-                compact ? "truncate leading-5" : "truncate leading-6",
-                "text-muted-foreground/50",
+              {showIconLeft && (
+                <span
+                  className={cn(
+                    "flex shrink-0 items-center justify-center text-muted-foreground/40",
+                    compact ? "size-4" : "size-5",
+                  )}
+                >
+                  <EntryIcon className={compact ? "size-2.5" : "size-3"} />
+                </span>
               )}
-              style={{ fontSize: `${rowFontSizePx}px` }}
-              title={displayText}
-            >
-              <span className="text-muted-foreground/50">{heading}</span>
-              {preview && <span className="text-muted-foreground/25"> {preview}</span>}
-            </p>
-          </div>
-          {showIconRight && (
-            <span
-              className="flex shrink-0 items-center justify-center text-muted-foreground/40"
-              style={{ width: rowFontSizePx, height: rowFontSizePx }}
-            >
-              <EntryIcon style={{ width: rowFontSizePx, height: rowFontSizePx }} />
-            </span>
-          )}
-        </div>
+              <div className="min-w-0 flex-1 overflow-hidden">
+                <p
+                  className={cn(
+                    compact ? "truncate leading-5" : "truncate leading-6",
+                    "text-muted-foreground/50",
+                  )}
+                  style={{ fontSize: `${rowFontSizePx}px` }}
+                >
+                  <span className="text-muted-foreground/50">{heading}</span>
+                  {preview && <span className="text-muted-foreground/25"> {preview}</span>}
+                </p>
+              </div>
+              {showIconRight && (
+                <span
+                  className="flex shrink-0 items-center justify-center text-muted-foreground/40"
+                  style={{ width: rowFontSizePx, height: rowFontSizePx }}
+                >
+                  <EntryIcon style={{ width: rowFontSizePx, height: rowFontSizePx }} />
+                </span>
+              )}
+            </div>
+          );
+
+          if (!workEntry.command) {
+            return rowContent;
+          }
+
+          return (
+            <Tooltip>
+              <TooltipTrigger render={rowContent} />
+              <TooltipPopup side="top" align="start" className="max-w-96 whitespace-normal">
+                {commandTooltipContent(workEntry.command, displayText)}
+              </TooltipPopup>
+            </Tooltip>
+          );
+        })()
       )}
     </div>
   );

@@ -1321,11 +1321,16 @@ describe("composerDraftStore provider-scoped option updates", () => {
   it("retains Claude xhigh effort in provider-scoped options", () => {
     const store = useComposerDraftStore.getState();
 
-    store.setProviderModelOptions(threadId, "claudeAgent", { effort: "xhigh" });
+    store.setProviderModelOptions(
+      threadId,
+      "claudeAgent",
+      { effort: "xhigh" },
+      { model: "claude-opus-4-7" },
+    );
 
     const draft = useComposerDraftStore.getState().draftsByThreadId[threadId];
     expect(draft?.modelSelectionByProvider.claudeAgent).toEqual(
-      modelSelection("claudeAgent", "claude-sonnet-4-6", {
+      modelSelection("claudeAgent", "claude-opus-4-7", {
         effort: "xhigh",
       }),
     );

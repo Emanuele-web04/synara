@@ -20,8 +20,11 @@ import {
   isTerminalSplitShortcut,
   isTerminalToggleShortcut,
   resolveShortcutCommand,
+  shouldShowThreadJumpHints,
   shortcutLabelForCommand,
   terminalNavigationShortcutData,
+  threadJumpCommandForIndex,
+  threadJumpIndexFromCommand,
   type ShortcutEventLike,
 } from "./keybindings";
 
@@ -159,6 +162,78 @@ const DEFAULT_BINDINGS = compile([
     shortcut: modShortcut("x", { altKey: true }),
     command: "chat.newCodex",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
+  {
+    shortcut: modShortcut("1"),
+    command: "thread.jump.1",
+    whenAst: whenAnd(
+      whenNot(whenIdentifier("terminalFocus")),
+      whenNot(whenIdentifier("terminalWorkspaceOpen")),
+    ),
+  },
+  {
+    shortcut: modShortcut("2"),
+    command: "thread.jump.2",
+    whenAst: whenAnd(
+      whenNot(whenIdentifier("terminalFocus")),
+      whenNot(whenIdentifier("terminalWorkspaceOpen")),
+    ),
+  },
+  {
+    shortcut: modShortcut("3"),
+    command: "thread.jump.3",
+    whenAst: whenAnd(
+      whenNot(whenIdentifier("terminalFocus")),
+      whenNot(whenIdentifier("terminalWorkspaceOpen")),
+    ),
+  },
+  {
+    shortcut: modShortcut("4"),
+    command: "thread.jump.4",
+    whenAst: whenAnd(
+      whenNot(whenIdentifier("terminalFocus")),
+      whenNot(whenIdentifier("terminalWorkspaceOpen")),
+    ),
+  },
+  {
+    shortcut: modShortcut("5"),
+    command: "thread.jump.5",
+    whenAst: whenAnd(
+      whenNot(whenIdentifier("terminalFocus")),
+      whenNot(whenIdentifier("terminalWorkspaceOpen")),
+    ),
+  },
+  {
+    shortcut: modShortcut("6"),
+    command: "thread.jump.6",
+    whenAst: whenAnd(
+      whenNot(whenIdentifier("terminalFocus")),
+      whenNot(whenIdentifier("terminalWorkspaceOpen")),
+    ),
+  },
+  {
+    shortcut: modShortcut("7"),
+    command: "thread.jump.7",
+    whenAst: whenAnd(
+      whenNot(whenIdentifier("terminalFocus")),
+      whenNot(whenIdentifier("terminalWorkspaceOpen")),
+    ),
+  },
+  {
+    shortcut: modShortcut("8"),
+    command: "thread.jump.8",
+    whenAst: whenAnd(
+      whenNot(whenIdentifier("terminalFocus")),
+      whenNot(whenIdentifier("terminalWorkspaceOpen")),
+    ),
+  },
+  {
+    shortcut: modShortcut("9"),
+    command: "thread.jump.9",
+    whenAst: whenAnd(
+      whenNot(whenIdentifier("terminalFocus")),
+      whenNot(whenIdentifier("terminalWorkspaceOpen")),
+    ),
   },
   {
     shortcut: modShortcut("]", { shiftKey: true }),
@@ -330,6 +405,57 @@ describe("split/new/close terminal shortcuts", () => {
   });
 });
 
+describe("thread jump shortcuts", () => {
+  it("maps thread jump indices to commands and back", () => {
+    assert.strictEqual(threadJumpCommandForIndex(0), "thread.jump.1");
+    assert.strictEqual(threadJumpCommandForIndex(8), "thread.jump.9");
+    assert.isNull(threadJumpCommandForIndex(9));
+    assert.strictEqual(threadJumpIndexFromCommand("thread.jump.4"), 3);
+    assert.isNull(threadJumpIndexFromCommand("chat.new"));
+  });
+
+  it("resolves numbered thread jumps when the terminal workspace is closed", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "3", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false, terminalWorkspaceOpen: false },
+      }),
+      "thread.jump.3",
+    );
+  });
+
+  it("preserves terminal workspace shortcuts when the workspace is open", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "1", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false, terminalWorkspaceOpen: true },
+      }),
+      "terminal.workspace.terminal",
+    );
+  });
+
+  it("shows thread jump hints only while a numbered jump modifier combo is active", () => {
+    assert.isTrue(
+      shouldShowThreadJumpHints(event({ key: "Meta", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalWorkspaceOpen: false },
+      }),
+    );
+    assert.isTrue(
+      shouldShowThreadJumpHints(event({ key: "Control", ctrlKey: true }), DEFAULT_BINDINGS, {
+        platform: "Linux",
+        context: { terminalWorkspaceOpen: false },
+      }),
+    );
+    assert.isFalse(
+      shouldShowThreadJumpHints(event({ key: "Meta", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalWorkspaceOpen: true },
+      }),
+    );
+  });
+});
+
 describe("workspace terminal tab shortcuts", () => {
   it("resolves the full-width terminal shortcut", () => {
     assert.strictEqual(
@@ -356,7 +482,7 @@ describe("workspace terminal tab shortcuts", () => {
     );
   });
 
-  it("resolves Cmd/Ctrl+1 and Cmd/Ctrl+2 only while the terminal workspace is open", () => {
+  it("prefers workspace tab shortcuts while open and thread jumps otherwise", () => {
     assert.strictEqual(
       resolveShortcutCommand(event({ key: "1", metaKey: true }), DEFAULT_BINDINGS, {
         platform: "MacIntel",
@@ -371,11 +497,12 @@ describe("workspace terminal tab shortcuts", () => {
       }),
       "terminal.workspace.chat",
     );
-    assert.isNull(
+    assert.strictEqual(
       resolveShortcutCommand(event({ key: "1", metaKey: true }), DEFAULT_BINDINGS, {
         platform: "MacIntel",
         context: { terminalWorkspaceOpen: false },
       }),
+      "thread.jump.1",
     );
   });
 
@@ -431,6 +558,28 @@ describe("shortcutLabelForCommand", () => {
     ]);
     assert.strictEqual(
       shortcutLabelForCommand(bindings, "terminal.split", "Linux"),
+      "Ctrl+Shift+\\",
+    );
+  });
+
+  it("respects explicit context when resolving conflicting labels", () => {
+    const bindings = compile([
+      {
+        shortcut: modShortcut("\\"),
+        command: "terminal.split",
+        whenAst: whenIdentifier("terminalFocus"),
+      },
+      {
+        shortcut: modShortcut("\\", { shiftKey: true }),
+        command: "terminal.split",
+        whenAst: whenNot(whenIdentifier("terminalFocus")),
+      },
+    ]);
+    assert.strictEqual(
+      shortcutLabelForCommand(bindings, "terminal.split", {
+        platform: "Linux",
+        context: { terminalFocus: false },
+      }),
       "Ctrl+Shift+\\",
     );
   });

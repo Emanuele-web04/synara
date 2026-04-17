@@ -185,7 +185,7 @@ describe("ProviderCommandReactor", () => {
             : "renamed-branch",
       }),
     );
-    const generateBranchName = vi.fn(() =>
+    const generateBranchName = vi.fn<TextGenerationShape["generateBranchName"]>(() =>
       Effect.fail(
         new TextGenerationError({
           operation: "generateBranchName",
@@ -379,6 +379,60 @@ describe("ProviderCommandReactor", () => {
         readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"))?.title ===
         "Polish loading states"
       );
+    });
+  });
+
+  it("renames temporary worktree branches and keeps associated worktree metadata in sync", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    harness.generateBranchName.mockImplementation(() =>
+      Effect.succeed({
+        branch: "app-startup-crash",
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-thread-worktree-bootstrap"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        envMode: "worktree",
+        branch: "dpcode/cb661f0d",
+        worktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
+        associatedWorktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
+        associatedWorktreeBranch: "dpcode/cb661f0d",
+        associatedWorktreeRef: "dpcode/cb661f0d",
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-worktree-rename"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-worktree-rename"),
+          role: "user",
+          text: "The app crashes during startup, fix it",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.generateBranchName.mock.calls.length === 1);
+    await waitFor(() => harness.renameBranch.mock.calls.length === 1);
+
+    const readModel = await Effect.runPromise(harness.engine.getReadModel());
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
+    expect(thread).toMatchObject({
+      branch: "dpcode/app-startup-crash",
+      worktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
+      associatedWorktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
+      associatedWorktreeBranch: "dpcode/app-startup-crash",
+      associatedWorktreeRef: "dpcode/app-startup-crash",
     });
   });
 

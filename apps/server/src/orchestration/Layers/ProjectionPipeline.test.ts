@@ -1,4 +1,5 @@
 import {
+  ApprovalRequestId,
   CheckpointRef,
   CommandId,
   CorrelationId,
@@ -228,6 +229,148 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-base-")))(
             name: "example.png",
             mimeType: "image/png",
             sizeBytes: 5,
+          },
+        ]);
+      }),
+    );
+  },
+);
+
+it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-pipeline-approvals-")))(
+  "OrchestrationProjectionPipeline",
+  (it) => {
+    it.effect("refreshes stored thread approval summary after approval-response-requested", () =>
+      Effect.gen(function* () {
+        const eventStore = yield* OrchestrationEventStore;
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const sql = yield* SqlClient.SqlClient;
+        const projectId = ProjectId.makeUnsafe("project-approvals");
+        const threadId = ThreadId.makeUnsafe("thread-approvals");
+        const requestId = ApprovalRequestId.makeUnsafe("approval-request-1");
+        const createdAt = "2026-03-05T09:00:00.000Z";
+        const requestedAt = "2026-03-05T09:00:01.000Z";
+        const resolvedAt = "2026-03-05T09:00:02.000Z";
+
+        yield* eventStore.append({
+          type: "project.created",
+          eventId: EventId.makeUnsafe("evt-approvals-project"),
+          aggregateKind: "project",
+          aggregateId: projectId,
+          occurredAt: createdAt,
+          commandId: CommandId.makeUnsafe("cmd-approvals-project"),
+          causationEventId: null,
+          correlationId: CorrelationId.makeUnsafe("cmd-approvals-project"),
+          metadata: {},
+          payload: {
+            projectId,
+            title: "Approvals Project",
+            workspaceRoot: "/tmp/project-approvals",
+            defaultModelSelection: null,
+            scripts: [],
+            createdAt,
+            updatedAt: createdAt,
+          },
+        });
+
+        yield* eventStore.append({
+          type: "thread.created",
+          eventId: EventId.makeUnsafe("evt-approvals-thread"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: createdAt,
+          commandId: CommandId.makeUnsafe("cmd-approvals-thread"),
+          causationEventId: null,
+          correlationId: CorrelationId.makeUnsafe("cmd-approvals-thread"),
+          metadata: {},
+          payload: {
+            threadId,
+            projectId,
+            title: "Approvals Thread",
+            modelSelection: {
+              provider: "codex",
+              model: "gpt-5-codex",
+            },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        });
+
+        yield* eventStore.append({
+          type: "thread.activity-appended",
+          eventId: EventId.makeUnsafe("evt-approvals-requested"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: requestedAt,
+          commandId: CommandId.makeUnsafe("cmd-approvals-requested"),
+          causationEventId: null,
+          correlationId: CorrelationId.makeUnsafe("cmd-approvals-requested"),
+          metadata: {},
+          payload: {
+            threadId,
+            activity: {
+              id: EventId.makeUnsafe("activity-approval-requested"),
+              tone: "approval",
+              kind: "approval.requested",
+              summary: "Command approval requested",
+              payload: {
+                requestId,
+                requestKind: "command",
+              },
+              turnId: null,
+              createdAt: requestedAt,
+            },
+          },
+        });
+
+        yield* projectionPipeline.bootstrap;
+
+        const rowsAfterRequest = yield* sql<{
+          readonly pendingApprovalCount: number;
+        }>`
+        SELECT
+          pending_approval_count AS "pendingApprovalCount"
+        FROM projection_threads
+        WHERE thread_id = ${threadId}
+      `;
+        assert.deepEqual(rowsAfterRequest, [{ pendingApprovalCount: 1 }]);
+
+        yield* eventStore.append({
+          type: "thread.approval-response-requested",
+          eventId: EventId.makeUnsafe("evt-approvals-resolved"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: resolvedAt,
+          commandId: CommandId.makeUnsafe("cmd-approvals-resolved"),
+          causationEventId: null,
+          correlationId: CorrelationId.makeUnsafe("cmd-approvals-resolved"),
+          metadata: {},
+          payload: {
+            threadId,
+            requestId,
+            decision: "accept",
+            createdAt: resolvedAt,
+          },
+        });
+
+        yield* projectionPipeline.bootstrap;
+
+        const rowsAfterResolve = yield* sql<{
+          readonly pendingApprovalCount: number;
+          readonly updatedAt: string;
+        }>`
+        SELECT
+          pending_approval_count AS "pendingApprovalCount",
+          updated_at AS "updatedAt"
+        FROM projection_threads
+        WHERE thread_id = ${threadId}
+      `;
+        assert.deepEqual(rowsAfterResolve, [
+          {
+            pendingApprovalCount: 0,
+            updatedAt: resolvedAt,
           },
         ]);
       }),

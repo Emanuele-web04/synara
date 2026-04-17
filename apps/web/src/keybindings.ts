@@ -4,6 +4,8 @@ import {
   type KeybindingShortcut,
   type KeybindingWhenNode,
   type ResolvedKeybindingsConfig,
+  THREAD_JUMP_KEYBINDING_COMMANDS,
+  type ThreadJumpKeybindingCommand,
 } from "@t3tools/contracts";
 import { isMacPlatform } from "./lib/utils";
 
@@ -26,6 +28,10 @@ export interface ShortcutMatchContext {
 interface ShortcutMatchOptions {
   platform?: string;
   context?: Partial<ShortcutMatchContext>;
+}
+
+interface ResolvedShortcutLabelOptions extends ShortcutMatchOptions {
+  platform?: string;
 }
 
 function commandShortcut(
@@ -51,7 +57,15 @@ function whenNot(node: KeybindingWhenNode): KeybindingWhenNode {
   return { type: "not", node };
 }
 
+function whenAnd(left: KeybindingWhenNode, right: KeybindingWhenNode): KeybindingWhenNode {
+  return { type: "and", left, right };
+}
+
 const whenNotTerminalFocus = whenNot(whenIdentifier("terminalFocus"));
+const whenThreadJumpAvailable = whenAnd(
+  whenNotTerminalFocus,
+  whenNot(whenIdentifier("terminalWorkspaceOpen")),
+);
 
 export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
   {
@@ -68,6 +82,51 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     command: "chat.split",
     shortcut: commandShortcut("\\"),
     whenAst: whenNotTerminalFocus,
+  },
+  {
+    command: "thread.jump.1",
+    shortcut: commandShortcut("1"),
+    whenAst: whenThreadJumpAvailable,
+  },
+  {
+    command: "thread.jump.2",
+    shortcut: commandShortcut("2"),
+    whenAst: whenThreadJumpAvailable,
+  },
+  {
+    command: "thread.jump.3",
+    shortcut: commandShortcut("3"),
+    whenAst: whenThreadJumpAvailable,
+  },
+  {
+    command: "thread.jump.4",
+    shortcut: commandShortcut("4"),
+    whenAst: whenThreadJumpAvailable,
+  },
+  {
+    command: "thread.jump.5",
+    shortcut: commandShortcut("5"),
+    whenAst: whenThreadJumpAvailable,
+  },
+  {
+    command: "thread.jump.6",
+    shortcut: commandShortcut("6"),
+    whenAst: whenThreadJumpAvailable,
+  },
+  {
+    command: "thread.jump.7",
+    shortcut: commandShortcut("7"),
+    whenAst: whenThreadJumpAvailable,
+  },
+  {
+    command: "thread.jump.8",
+    shortcut: commandShortcut("8"),
+    whenAst: whenThreadJumpAvailable,
+  },
+  {
+    command: "thread.jump.9",
+    shortcut: commandShortcut("9"),
+    whenAst: whenThreadJumpAvailable,
   },
   {
     command: "terminal.workspace.newFullWidth",
@@ -214,6 +273,48 @@ function matchesWhenClause(
   return evaluateWhenNode(whenAst, context);
 }
 
+function shortcutConflictKey(shortcut: KeybindingShortcut, platform = navigator.platform): string {
+  const useMetaForMod = isMacPlatform(platform);
+  const metaKey = shortcut.metaKey || (shortcut.modKey && useMetaForMod);
+  const ctrlKey = shortcut.ctrlKey || (shortcut.modKey && !useMetaForMod);
+
+  return [
+    shortcut.key,
+    metaKey ? "meta" : "",
+    ctrlKey ? "ctrl" : "",
+    shortcut.shiftKey ? "shift" : "",
+    shortcut.altKey ? "alt" : "",
+  ].join("|");
+}
+
+function findEffectiveShortcutForCommand(
+  keybindings: ResolvedKeybindingsConfig,
+  command: KeybindingCommand,
+  options?: ShortcutMatchOptions,
+): KeybindingShortcut | null {
+  const platform = resolvePlatform(options);
+  const context = resolveContext(options);
+  const claimedShortcuts = new Set<string>();
+
+  for (let index = keybindings.length - 1; index >= 0; index -= 1) {
+    const binding = keybindings[index];
+    if (!binding) continue;
+    if (!matchesWhenClause(binding.whenAst, context)) continue;
+
+    const conflictKey = shortcutConflictKey(binding.shortcut, platform);
+    if (claimedShortcuts.has(conflictKey)) {
+      continue;
+    }
+
+    claimedShortcuts.add(conflictKey);
+    if (binding.command === command) {
+      return binding.shortcut;
+    }
+  }
+
+  return null;
+}
+
 function matchesCommandShortcut(
   event: ShortcutEventLike,
   keybindings: ResolvedKeybindingsConfig,
@@ -305,18 +406,69 @@ export function formatShortcutLabel(
 export function shortcutLabelForCommand(
   keybindings: ResolvedKeybindingsConfig,
   command: KeybindingCommand,
-  platform = navigator.platform,
+  options?: string | ResolvedShortcutLabelOptions,
 ): string | null {
-  for (let index = keybindings.length - 1; index >= 0; index -= 1) {
-    const binding = keybindings[index];
-    if (!binding || binding.command !== command) continue;
-    return formatShortcutLabel(binding.shortcut, platform);
+  const resolvedOptions =
+    typeof options === "string"
+      ? ({ platform: options } satisfies ResolvedShortcutLabelOptions)
+      : options;
+  const platform = resolvePlatform(resolvedOptions);
+  const contextProvided = resolvedOptions?.context !== undefined;
+
+  if (!contextProvided) {
+    for (let index = keybindings.length - 1; index >= 0; index -= 1) {
+      const binding = keybindings[index];
+      if (!binding || binding.command !== command) continue;
+      return formatShortcutLabel(binding.shortcut, platform);
+    }
+    for (const binding of getFallbackBindings(keybindings)) {
+      if (binding.command !== command) continue;
+      return formatShortcutLabel(binding.shortcut, platform);
+    }
+    return null;
   }
-  for (const binding of getFallbackBindings(keybindings)) {
-    if (binding.command !== command) continue;
-    return formatShortcutLabel(binding.shortcut, platform);
+
+  const shortcut = findEffectiveShortcutForCommand(keybindings, command, resolvedOptions);
+  if (shortcut) {
+    return formatShortcutLabel(shortcut, platform);
   }
-  return null;
+
+  const fallbackShortcut = findEffectiveShortcutForCommand(
+    getFallbackBindings(keybindings),
+    command,
+    resolvedOptions,
+  );
+  return fallbackShortcut ? formatShortcutLabel(fallbackShortcut, platform) : null;
+}
+
+export function threadJumpCommandForIndex(index: number): ThreadJumpKeybindingCommand | null {
+  return THREAD_JUMP_KEYBINDING_COMMANDS[index] ?? null;
+}
+
+export function threadJumpIndexFromCommand(command: string): number | null {
+  const index = THREAD_JUMP_KEYBINDING_COMMANDS.indexOf(command as ThreadJumpKeybindingCommand);
+  return index === -1 ? null : index;
+}
+
+export function shouldShowThreadJumpHints(
+  event: ShortcutEventLike,
+  keybindings: ResolvedKeybindingsConfig,
+  options?: ShortcutMatchOptions,
+): boolean {
+  const platform = resolvePlatform(options);
+  const fallbackBindings = getFallbackBindings(keybindings);
+
+  for (const command of THREAD_JUMP_KEYBINDING_COMMANDS) {
+    const shortcut =
+      findEffectiveShortcutForCommand(keybindings, command, options) ??
+      findEffectiveShortcutForCommand(fallbackBindings, command, options);
+    if (!shortcut) continue;
+    if (matchesShortcutModifiers(event, shortcut, platform)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 export function isTerminalToggleShortcut(

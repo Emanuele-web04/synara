@@ -1818,7 +1818,11 @@ describe("collab child conversation routing", () => {
     expect(updateSession).not.toHaveBeenCalled();
   });
 
-  it("suppresses child plan notifications", () => {
+  it("forwards child plan notifications so the active plan card can advance", () => {
+    // Plan events (`turn/plan/updated`, `item/plan/delta`) are intentionally NOT
+    // suppressed for child conversations. Suppressing them freezes the plan UI at
+    // its initial all-pending snapshot and prevents the card from ticking off steps
+    // as work progresses.
     const { manager, context, emitEvent } = createCollabNotificationHarness();
 
     (
@@ -1866,7 +1870,20 @@ describe("collab child conversation routing", () => {
       },
     });
 
-    expect(emitEvent).not.toHaveBeenCalled();
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "turn/plan/updated",
+        turnId: "turn_child_1",
+        parentTurnId: "turn_parent",
+      }),
+    );
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "item/plan/delta",
+        turnId: "turn_child_1",
+        parentTurnId: "turn_parent",
+      }),
+    );
   });
 
   it("does not suppress provider-parent-only child notifications without a mapped parent turn", () => {

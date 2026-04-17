@@ -812,6 +812,27 @@ describe("deriveWorkLogEntries", () => {
     expect(entry?.command).toBe("bun run lint");
   });
 
+  it("falls back to command-like detail when structured command metadata is missing", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "command-tool-detail-only",
+        kind: "tool.completed",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          title: "Ran command",
+          detail: `/bin/zsh -lc "sed -n '240,520p' src/components/provider-card.tsx"`,
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry?.command).toBe(
+      `/bin/zsh -lc "sed -n '240,520p' src/components/provider-card.tsx"`,
+    );
+    expect(entry?.toolTitle).toBe("Read");
+  });
+
   it("humanizes generic command titles for better readability", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -831,7 +852,7 @@ describe("deriveWorkLogEntries", () => {
     ];
 
     const [entry] = deriveWorkLogEntries(activities, undefined);
-    expect(entry?.toolTitle).toBe("Search files");
+    expect(entry?.toolTitle).toBe("Searched");
   });
 
   it("keeps compact Codex tool metadata used for icons and labels", () => {
@@ -948,6 +969,28 @@ describe("deriveWorkLogEntries", () => {
       itemType: "dynamic_tool_call",
       toolTitle: "Tool call",
     });
+  });
+
+  it("uses present-tense command headings while the command is still running", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "running-command-tool",
+        kind: "tool.updated",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          title: "Ran command",
+          data: {
+            item: {
+              command: `/bin/zsh -lc 'rg -n "tool call" apps/web/src'`,
+            },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry?.toolTitle).toBe("Searching");
   });
 
   it("collapses Claude-style partial tool-input updates into the final lifecycle row", () => {

@@ -9,17 +9,25 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { toPersistenceSqlError, type ProjectionRepositoryError } from "../../persistence/Errors.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
-import { ProjectionPendingApprovalRepository } from "../../persistence/Services/ProjectionPendingApprovals.ts";
+import {
+  type ProjectionPendingApprovalRepositoryShape,
+  ProjectionPendingApprovalRepository,
+} from "../../persistence/Services/ProjectionPendingApprovals.ts";
 import { ProjectionProjectRepository } from "../../persistence/Services/ProjectionProjects.ts";
 import { ProjectionStateRepository } from "../../persistence/Services/ProjectionState.ts";
-import { ProjectionThreadActivityRepository } from "../../persistence/Services/ProjectionThreadActivities.ts";
-import { type ProjectionThreadActivity } from "../../persistence/Services/ProjectionThreadActivities.ts";
+import {
+  type ProjectionThreadActivity,
+  type ProjectionThreadActivityRepositoryShape,
+  ProjectionThreadActivityRepository,
+} from "../../persistence/Services/ProjectionThreadActivities.ts";
 import {
   type ProjectionThreadMessage,
+  type ProjectionThreadMessageRepositoryShape,
   ProjectionThreadMessageRepository,
 } from "../../persistence/Services/ProjectionThreadMessages.ts";
 import {
   type ProjectionThreadProposedPlan,
+  type ProjectionThreadProposedPlanRepositoryShape,
   ProjectionThreadProposedPlanRepository,
 } from "../../persistence/Services/ProjectionThreadProposedPlans.ts";
 import { ProjectionThreadSessionRepository } from "../../persistence/Services/ProjectionThreadSessions.ts";
@@ -27,7 +35,10 @@ import {
   type ProjectionTurn,
   ProjectionTurnRepository,
 } from "../../persistence/Services/ProjectionTurns.ts";
-import { ProjectionThreadRepository } from "../../persistence/Services/ProjectionThreads.ts";
+import {
+  type ProjectionThread,
+  ProjectionThreadRepository,
+} from "../../persistence/Services/ProjectionThreads.ts";
 import { ProjectionPendingApprovalRepositoryLive } from "../../persistence/Layers/ProjectionPendingApprovals.ts";
 import { ProjectionProjectRepositoryLive } from "../../persistence/Layers/ProjectionProjects.ts";
 import { ProjectionStateRepositoryLive } from "../../persistence/Layers/ProjectionState.ts";
@@ -53,6 +64,7 @@ import {
   parseThreadSegmentFromAttachmentId,
   toSafeThreadAttachmentSegment,
 } from "../../attachmentStore.ts";
+import { deriveThreadSummaryState } from "@t3tools/shared/threadSummary";
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
   projects: "projection.projects",
@@ -118,6 +130,58 @@ function extractActivityRequestId(payload: unknown): ApprovalRequestId | null {
   const requestId = (payload as Record<string, unknown>).requestId;
   return typeof requestId === "string" ? ApprovalRequestId.makeUnsafe(requestId) : null;
 }
+
+// Recompute the denormalized sidebar shell summary after per-thread timeline changes.
+const withRefreshedThreadShellSummary = Effect.fn(function* (input: {
+  readonly thread: ProjectionThread;
+  readonly projectionThreadMessageRepository: ProjectionThreadMessageRepositoryShape;
+  readonly projectionThreadActivityRepository: ProjectionThreadActivityRepositoryShape;
+  readonly projectionThreadProposedPlanRepository: ProjectionThreadProposedPlanRepositoryShape;
+  readonly projectionPendingApprovalRepository: ProjectionPendingApprovalRepositoryShape;
+}) {
+  const [messages, activities, proposedPlans, pendingApprovals] = yield* Effect.all([
+    input.projectionThreadMessageRepository.listByThreadId({
+      threadId: input.thread.threadId,
+    }),
+    input.projectionThreadActivityRepository.listByThreadId({
+      threadId: input.thread.threadId,
+    }),
+    input.projectionThreadProposedPlanRepository.listByThreadId({
+      threadId: input.thread.threadId,
+    }),
+    input.projectionPendingApprovalRepository.listByThreadId({
+      threadId: input.thread.threadId,
+    }),
+  ]);
+  const summary = deriveThreadSummaryState({
+    messages,
+    activities: activities.map((activity) => ({
+      id: activity.activityId,
+      kind: activity.kind,
+      payload: activity.payload,
+      sequence: activity.sequence,
+      createdAt: activity.createdAt,
+    })),
+    proposedPlans: proposedPlans.map((plan) => ({
+      id: plan.planId,
+      turnId: plan.turnId,
+      updatedAt: plan.updatedAt,
+      implementedAt: plan.implementedAt,
+    })),
+    latestTurn: input.thread.latestTurnId ? { turnId: input.thread.latestTurnId } : null,
+  });
+  const pendingApprovalCount = pendingApprovals.filter(
+    (approval) => approval.status === "pending",
+  ).length;
+
+  return {
+    ...input.thread,
+    latestUserMessageAt: summary.latestUserMessageAt,
+    pendingApprovalCount,
+    pendingUserInputCount: summary.pendingUserInputCount,
+    hasActionableProposedPlan: summary.hasActionableProposedPlan ? 1 : 0,
+  } satisfies ProjectionThread;
+});
 
 function retainProjectionMessagesAfterRevert(
   messages: ReadonlyArray<ProjectionThreadMessage>,
@@ -428,6 +492,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             forkSourceThreadId: event.payload.forkSourceThreadId,
             latestTurnId: null,
             handoff: event.payload.handoff,
+            latestUserMessageAt: null,
+            pendingApprovalCount: 0,
+            pendingUserInputCount: 0,
+            hasActionableProposedPlan: 0,
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
             archivedAt: null,
@@ -560,17 +628,28 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
 
         case "thread.message-sent":
         case "thread.proposed-plan-upserted":
-        case "thread.activity-appended": {
+        case "thread.activity-appended":
+        case "thread.approval-response-requested":
+        case "thread.reverted": {
           const existingRow = yield* projectionThreadRepository.getById({
             threadId: event.payload.threadId,
           });
           if (Option.isNone(existingRow)) {
             return;
           }
-          yield* projectionThreadRepository.upsert({
-            ...existingRow.value,
-            updatedAt: event.occurredAt,
+          const nextRow = yield* withRefreshedThreadShellSummary({
+            thread: {
+              ...existingRow.value,
+              updatedAt: event.occurredAt,
+              latestTurnId:
+                event.type === "thread.reverted" ? null : existingRow.value.latestTurnId,
+            },
+            projectionThreadMessageRepository,
+            projectionThreadActivityRepository,
+            projectionThreadProposedPlanRepository,
+            projectionPendingApprovalRepository,
           });
+          yield* projectionThreadRepository.upsert(nextRow);
           return;
         }
 
@@ -581,11 +660,18 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           if (Option.isNone(existingRow)) {
             return;
           }
-          yield* projectionThreadRepository.upsert({
-            ...existingRow.value,
-            latestTurnId: event.payload.session.activeTurnId,
-            updatedAt: event.occurredAt,
+          const nextRow = yield* withRefreshedThreadShellSummary({
+            thread: {
+              ...existingRow.value,
+              latestTurnId: event.payload.session.activeTurnId,
+              updatedAt: event.occurredAt,
+            },
+            projectionThreadMessageRepository,
+            projectionThreadActivityRepository,
+            projectionThreadProposedPlanRepository,
+            projectionPendingApprovalRepository,
           });
+          yield* projectionThreadRepository.upsert(nextRow);
           return;
         }
 
@@ -596,26 +682,18 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           if (Option.isNone(existingRow)) {
             return;
           }
-          yield* projectionThreadRepository.upsert({
-            ...existingRow.value,
-            latestTurnId: event.payload.turnId,
-            updatedAt: event.occurredAt,
+          const nextRow = yield* withRefreshedThreadShellSummary({
+            thread: {
+              ...existingRow.value,
+              latestTurnId: event.payload.turnId,
+              updatedAt: event.occurredAt,
+            },
+            projectionThreadMessageRepository,
+            projectionThreadActivityRepository,
+            projectionThreadProposedPlanRepository,
+            projectionPendingApprovalRepository,
           });
-          return;
-        }
-
-        case "thread.reverted": {
-          const existingRow = yield* projectionThreadRepository.getById({
-            threadId: event.payload.threadId,
-          });
-          if (Option.isNone(existingRow)) {
-            return;
-          }
-          yield* projectionThreadRepository.upsert({
-            ...existingRow.value,
-            latestTurnId: null,
-            updatedAt: event.occurredAt,
-          });
+          yield* projectionThreadRepository.upsert(nextRow);
           return;
         }
 

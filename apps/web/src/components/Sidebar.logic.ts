@@ -2,6 +2,7 @@
 // Purpose: Shared sidebar sorting and status helpers used by the thread list UI.
 // Exports: Sidebar row state derivation, add-project error helpers, sort utilities, and visibility helpers.
 
+import type { KeybindingCommand } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "../appSettings";
 import type { ChatMessage, Project, SidebarThreadSummary, Thread } from "../types";
 import { cn } from "../lib/utils";
@@ -14,6 +15,7 @@ import {
 } from "../session-logic";
 
 export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
+export const SIDEBAR_THREAD_PREWARM_LIMIT = 10;
 export type SidebarNewThreadEnvMode = "local" | "worktree";
 type SidebarProject = {
   id: string;
@@ -30,6 +32,17 @@ type SidebarThreadSortInput = {
 
 const DUPLICATE_PROJECT_CREATE_ERROR_PREFIX =
   "Orchestration command invariant failed (project.create): Project '";
+const THREAD_JUMP_COMMANDS = [
+  "thread.jump.1",
+  "thread.jump.2",
+  "thread.jump.3",
+  "thread.jump.4",
+  "thread.jump.5",
+  "thread.jump.6",
+  "thread.jump.7",
+  "thread.jump.8",
+  "thread.jump.9",
+] as const satisfies readonly KeybindingCommand[];
 
 export interface ThreadStatusPill {
   label:
@@ -593,6 +606,32 @@ export function getNextVisibleSidebarThreadId(input: {
       : (activeIndex - 1 + visibleThreadIds.length) % visibleThreadIds.length;
 
   return visibleThreadIds[nextIndex] ?? null;
+}
+
+export function getSidebarThreadIdForJumpCommand(input: {
+  visibleThreadIds: readonly Thread["id"][];
+  command: string | null;
+}): Thread["id"] | null {
+  if (!input.command) {
+    return null;
+  }
+
+  const jumpIndex = THREAD_JUMP_COMMANDS.indexOf(
+    input.command as (typeof THREAD_JUMP_COMMANDS)[number],
+  );
+  if (jumpIndex === -1) {
+    return null;
+  }
+
+  return input.visibleThreadIds[jumpIndex] ?? null;
+}
+
+export function getSidebarThreadIdsToPrewarm(input: {
+  visibleThreadIds: readonly Thread["id"][];
+  limit?: number;
+}): Thread["id"][] {
+  const limit = Math.max(0, input.limit ?? SIDEBAR_THREAD_PREWARM_LIMIT);
+  return input.visibleThreadIds.slice(0, limit);
 }
 
 function toSortableTimestamp(iso: string | undefined): number | null {

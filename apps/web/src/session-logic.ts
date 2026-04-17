@@ -703,6 +703,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     requestKind,
     command,
     payload,
+    isRunning: activity.kind !== "tool.completed",
   });
   if (readableTitle) {
     entry.toolTitle = readableTitle;
@@ -1083,16 +1084,43 @@ function normalizeCommandValue(value: unknown): string | null {
   return parts.length > 0 ? parts.join(" ") : null;
 }
 
+function isCommandLikeDetail(payload: Record<string, unknown> | null): boolean {
+  if (!payload) {
+    return false;
+  }
+  const itemType = extractWorkLogItemType(payload);
+  if (itemType === "command_execution") {
+    return true;
+  }
+  const requestKind = extractWorkLogRequestKind(payload);
+  if (requestKind === "command") {
+    return true;
+  }
+  const normalizedTitle = normalizeCompactToolLabel(asTrimmedString(payload.title) ?? "");
+  return normalizedTitle === "Ran command" || normalizedTitle === "Command run";
+}
+
 function extractToolCommand(payload: Record<string, unknown> | null): string | null {
   const data = asRecord(payload?.data);
   const item = asRecord(data?.item);
   const itemResult = asRecord(item?.result);
   const itemInput = asRecord(item?.input);
+  const detailCommand =
+    isCommandLikeDetail(payload) && typeof payload?.detail === "string"
+      ? stripTrailingExitCode(payload.detail).output
+      : null;
   const candidates = [
     normalizeCommandValue(item?.command),
+    normalizeCommandValue(item?.cmd),
     normalizeCommandValue(itemInput?.command),
+    normalizeCommandValue(itemInput?.cmd),
     normalizeCommandValue(itemResult?.command),
+    normalizeCommandValue(itemResult?.cmd),
     normalizeCommandValue(data?.command),
+    normalizeCommandValue(data?.cmd),
+    normalizeCommandValue(item?.text),
+    normalizeCommandValue(item?.summary),
+    normalizeCommandValue(detailCommand),
   ];
   return candidates.find((candidate) => candidate !== null) ?? null;
 }
