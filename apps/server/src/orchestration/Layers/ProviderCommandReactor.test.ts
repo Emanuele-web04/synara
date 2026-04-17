@@ -425,6 +425,18 @@ describe("ProviderCommandReactor", () => {
     await waitFor(() => harness.generateBranchName.mock.calls.length === 1);
     await waitFor(() => harness.renameBranch.mock.calls.length === 1);
 
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      const thread = readModel.threads.find(
+        (entry) => entry.id === ThreadId.makeUnsafe("thread-1"),
+      );
+      return (
+        thread?.branch === "dpcode/app-startup-crash" &&
+        thread.associatedWorktreeBranch === "dpcode/app-startup-crash" &&
+        thread.associatedWorktreeRef === "dpcode/app-startup-crash"
+      );
+    });
+
     const readModel = await Effect.runPromise(harness.engine.getReadModel());
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
     expect(thread).toMatchObject({
@@ -1979,6 +1991,17 @@ describe("ProviderCommandReactor", () => {
       threadId: "thread-1",
       turnId: "turn-child-stop",
       providerThreadId: "child-provider-1",
+    });
+
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      const thread = readModel.threads.find(
+        (entry) => entry.id === "subagent:thread-1:child-provider-1",
+      );
+      return (
+        thread?.session?.status === "interrupted" &&
+        thread.session.activeTurnId === "turn-child-stop"
+      );
     });
 
     const readModel = await Effect.runPromise(harness.engine.getReadModel());
