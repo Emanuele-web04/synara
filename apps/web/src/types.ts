@@ -18,6 +18,7 @@ import type {
   ProviderKind,
   CheckpointRef,
   ProviderInteractionMode,
+  ProjectKind,
   RuntimeMode,
   ThreadEnvironmentMode,
 } from "@t3tools/contracts";
@@ -113,6 +114,7 @@ export interface TurnDiffSummary {
 
 export interface Project {
   id: ProjectId;
+  kind: ProjectKind;
   name: string;
   remoteName: string;
   folderName: string;

@@ -81,6 +81,30 @@
   }
 }
 
+/* Smooth entry for chat pane swaps (empty landing <-> transcript+bottom composer). */
+@keyframes chat-pane-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.chat-pane-enter {
+  animation: chat-pane-enter 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: opacity, transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-pane-enter {
+    animation: none;
+  }
+}
+
 /* Suppress all transitions during theme changes */
 .no-transitions,
 .no-transitions *,

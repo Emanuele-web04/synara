@@ -1,58 +1,40 @@
-import { DEFAULT_RUNTIME_MODE } from "@t3tools/contracts";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef } from "react";
+// FILE: _chat.index.tsx
+// Purpose: Land the "New chat" route at "/" by bootstrapping a fresh home-based chat draft so
+//          the full thread composer (attach, full-access, model picker, effort, mic, send)
+//          is rendered by ChatView without leaking the landing state into the visible chat list.
+// Layer: Routing
+// Depends on: useWorkspaceStore.homeDir, useHandleNewThread, and the shared hidden chat-project
+//             helper so the route always opens a fresh chat row instead of creating visible folders.
 
-import { useAppSettings } from "~/appSettings";
-import { resolveSidebarNewThreadEnvMode } from "~/components/Sidebar.logic";
-import { useComposerDraftStore } from "../composerDraftStore";
-import { newThreadId } from "../lib/utils";
-import { useStore } from "../store";
-import { createFirstProjectSelector } from "../storeSelectors";
+import { createFileRoute } from "@tanstack/react-router";
+import { useEffect, useRef } from "react";
+
+import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { ensureHomeChatProject } from "../lib/chatProjects";
+import { useWorkspaceStore } from "../workspaceStore";
 
 function ChatIndexRouteView() {
-  const firstProject = useStore(useMemo(() => createFirstProjectSelector(), []));
-  const navigate = useNavigate();
-  const { settings: appSettings } = useAppSettings();
+  const homeDir = useWorkspaceStore((state) => state.homeDir);
+  const { handleNewThread } = useHandleNewThread();
   const hasRedirected = useRef(false);
 
   useEffect(() => {
-    if (!firstProject || hasRedirected.current) return;
+    if (!homeDir || hasRedirected.current) return;
     hasRedirected.current = true;
 
-    const { getDraftThreadByProjectId, setProjectDraftThreadId, applyStickyState } =
-      useComposerDraftStore.getState();
-
-    // Reuse existing draft thread for this project if one exists.
-    const existingDraft = getDraftThreadByProjectId(firstProject.id);
-    if (existingDraft) {
-      void navigate({
-        to: "/$threadId",
-        params: { threadId: existingDraft.threadId },
-        replace: true,
+    void (async () => {
+      const homeChatProjectId = await ensureHomeChatProject(homeDir);
+      if (!homeChatProjectId) {
+        hasRedirected.current = false;
+        return;
+      }
+      await handleNewThread(homeChatProjectId, {
+        fresh: true,
+        envMode: "local",
+        worktreePath: null,
       });
-      return;
-    }
-
-    const threadId = newThreadId();
-    const envMode = resolveSidebarNewThreadEnvMode({
-      defaultEnvMode: appSettings.defaultThreadEnvMode,
-    });
-
-    setProjectDraftThreadId(firstProject.id, threadId, {
-      createdAt: new Date().toISOString(),
-      branch: null,
-      worktreePath: null,
-      envMode,
-      runtimeMode: DEFAULT_RUNTIME_MODE,
-    });
-    applyStickyState(threadId);
-
-    void navigate({
-      to: "/$threadId",
-      params: { threadId },
-      replace: true,
-    });
-  }, [firstProject, navigate, appSettings.defaultThreadEnvMode]);
+    })();
+  }, [handleNewThread, homeDir]);
 
   return null;
 }

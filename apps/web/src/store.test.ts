@@ -120,6 +120,7 @@ function makeProject(
 ): AppState["projects"][number] {
   return {
     id: ProjectId.makeUnsafe("project-1"),
+    kind: "project",
     name: "Project",
     remoteName: "Project",
     folderName: "project",
@@ -171,6 +172,7 @@ function makeReadModel(thread: OrchestrationReadModel["threads"][number]): Orche
     projects: [
       {
         id: ProjectId.makeUnsafe("project-1"),
+        kind: "project",
         title: "Project",
         workspaceRoot: "/tmp/project",
         defaultModelSelection: {
@@ -192,6 +194,7 @@ function makeReadModelProject(
 ): OrchestrationReadModel["projects"][number] {
   return {
     id: ProjectId.makeUnsafe("project-1"),
+    kind: "project",
     title: "Project",
     workspaceRoot: "/tmp/project",
     defaultModelSelection: {

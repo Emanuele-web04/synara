@@ -1,3 +1,8 @@
+// FILE: ChatEmptyStateHero.tsx
+// Purpose: Render the centered empty-state hero for blank transcripts.
+// Layer: Chat presentation
+// Depends on: the caller-supplied project display name.
+
 import { memo } from "react";
 
 export const ChatEmptyStateHero = memo(function ChatEmptyStateHero({
@@ -6,7 +11,7 @@ export const ChatEmptyStateHero = memo(function ChatEmptyStateHero({
   projectName: string | undefined;
 }) {
   return (
-    <div className="flex flex-col items-center gap-4 select-none">
+    <div className="flex flex-col items-center gap-5 select-none">
       <img
         alt="DP Code logo"
         className="size-14 rounded-lg object-contain"

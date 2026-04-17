@@ -59,16 +59,26 @@ export function useHandleNewThread() {
         setProjectDraftThreadId,
         setModelSelection,
       } = useComposerDraftStore.getState();
+      const shouldForceFreshThread = options?.fresh === true;
+
+      if (shouldForceFreshThread) {
+        clearProjectDraftThreadId(projectId, entryPoint);
+      }
+
       const storedDraftThreadCandidate = getDraftThreadByProjectId(projectId, entryPoint);
       const latestActiveDraftThreadCandidate: DraftThreadState | null = focusedThreadId
         ? getDraftThread(focusedThreadId)
         : null;
       const storedDraftThread =
-        !wantsTemporaryThread && storedDraftThreadCandidate?.isTemporary !== true
+        !shouldForceFreshThread &&
+        !wantsTemporaryThread &&
+        storedDraftThreadCandidate?.isTemporary !== true
           ? storedDraftThreadCandidate
           : null;
       const latestActiveDraftThread: DraftThreadState | null =
-        !wantsTemporaryThread && latestActiveDraftThreadCandidate?.isTemporary !== true
+        !shouldForceFreshThread &&
+        !wantsTemporaryThread &&
+        latestActiveDraftThreadCandidate?.isTemporary !== true
           ? latestActiveDraftThreadCandidate
           : null;
       const bootstrapPlan = resolveThreadBootstrapPlan({

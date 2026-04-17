@@ -43,6 +43,7 @@ export function findActiveProjectByWorkspaceRoot(
   return readModel.projects.find(
     (project) =>
       project.deletedAt === null &&
+      project.kind === "project" &&
       normalizeWorkspaceRootForComparison(project.workspaceRoot, {
         platform: process.platform,
       }) === normalizedWorkspaceRoot,

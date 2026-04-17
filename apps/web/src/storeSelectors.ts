@@ -171,7 +171,24 @@ export function createFirstProjectSelector(): (state: AppState) => Project | und
     }
 
     previousProjects = state.projects;
-    previousFirstProject = state.projects[0];
+    previousFirstProject = state.projects.find((project) => project.kind === "project");
     return previousFirstProject;
+  };
+}
+
+export function createProjectsByKindSelector(
+  kind: Project["kind"],
+): (state: AppState) => readonly Project[] {
+  let previousProjects: readonly Project[] | undefined;
+  let previousFiltered: readonly Project[] = [];
+
+  return (state) => {
+    if (state.projects === previousProjects) {
+      return previousFiltered;
+    }
+
+    previousProjects = state.projects;
+    previousFiltered = state.projects.filter((project) => project.kind === kind);
+    return previousFiltered;
   };
 }

@@ -789,6 +789,7 @@ function makeProject(overrides: Partial<Project> = {}): Project {
   const { defaultModelSelection, ...rest } = overrides;
   return {
     id: ProjectId.makeUnsafe("project-1"),
+    kind: "project",
     name: "Project",
     remoteName: "Project",
     folderName: "project",

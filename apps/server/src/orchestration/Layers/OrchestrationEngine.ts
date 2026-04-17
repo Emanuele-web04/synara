@@ -144,6 +144,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const refreshReadModelFromProjectionState = Effect.gen(function* () {
     const projectRows = yield* sql<{
       readonly projectId: string;
+      readonly kind: "project" | "chat";
       readonly title: string;
       readonly workspaceRoot: string;
       readonly defaultModelSelectionJson: string | null;
@@ -154,6 +155,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     }>`
         SELECT
           project_id AS "projectId",
+          kind,
           title,
           workspace_root AS "workspaceRoot",
           default_model_selection_json AS "defaultModelSelectionJson",
@@ -200,6 +202,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       snapshotSequence,
       projects: projectRows.map((row) => ({
         id: row.projectId as ProjectId,
+        kind: row.kind,
         title: row.title,
         workspaceRoot: row.workspaceRoot,
         defaultModelSelection:

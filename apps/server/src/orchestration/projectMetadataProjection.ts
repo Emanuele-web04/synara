@@ -29,6 +29,7 @@ export const applyProjectMetadataProjection = (input: {
       case "project.created":
         yield* input.projectionProjectRepository.upsert({
           projectId: input.event.payload.projectId,
+          kind: input.event.payload.kind ?? "project",
           title: input.event.payload.title,
           workspaceRoot: input.event.payload.workspaceRoot,
           defaultModelSelection: input.event.payload.defaultModelSelection,
@@ -46,6 +47,7 @@ export const applyProjectMetadataProjection = (input: {
         if (Option.isSome(existingRow)) {
           yield* input.projectionProjectRepository.upsert({
             ...existingRow.value,
+            ...(input.event.payload.kind !== undefined ? { kind: input.event.payload.kind } : {}),
             ...(input.event.payload.title !== undefined
               ? { title: input.event.payload.title }
               : {}),

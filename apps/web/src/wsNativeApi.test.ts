@@ -299,6 +299,7 @@ describe("wsNativeApi", () => {
       type: "project.created",
       payload: {
         projectId: ProjectId.makeUnsafe("project-1"),
+        kind: "project",
         title: "Project",
         workspaceRoot: "/tmp/workspace",
         defaultModelSelection: null,
@@ -341,6 +342,7 @@ describe("wsNativeApi", () => {
       type: "project.create",
       commandId: CommandId.makeUnsafe("cmd-1"),
       projectId: ProjectId.makeUnsafe("project-1"),
+      kind: "project",
       title: "Project",
       workspaceRoot: "/tmp/project",
       defaultModelSelection: {

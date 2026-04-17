@@ -72,6 +72,7 @@ function createSnapshot(overrides?: Partial<OrchestrationReadModel["threads"][nu
     projects: [
       {
         id: PROJECT_ID,
+        kind: "project",
         title: "Project",
         workspaceRoot: "/repo/project",
         defaultModelSelection: {
@@ -156,6 +157,7 @@ function createShellSnapshotFromFixtureSnapshot(
       .filter((project) => project.deletedAt === null)
       .map((project) => ({
         id: project.id,
+        kind: project.kind,
         title: project.title,
         workspaceRoot: project.workspaceRoot,
         defaultModelSelection: project.defaultModelSelection,

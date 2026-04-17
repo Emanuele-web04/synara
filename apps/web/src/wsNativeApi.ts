@@ -303,6 +303,7 @@ export function createWsNativeApi(): NativeApi {
       },
     },
     projects: {
+      listDirectories: (input) => transport.request(WS_METHODS.projectsListDirectories, input),
       searchEntries: (input) => transport.request(WS_METHODS.projectsSearchEntries, input),
       writeFile: (input) => transport.request(WS_METHODS.projectsWriteFile, input),
     },

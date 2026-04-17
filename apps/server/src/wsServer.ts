@@ -64,7 +64,7 @@ import { resolveThreadWorkspaceCwd } from "./checkpointing/Utils.ts";
 import { GitManager } from "./git/Services/GitManager.ts";
 import { TerminalManager } from "./terminal/Services/Manager.ts";
 import { Keybindings } from "./keybindings";
-import { searchWorkspaceEntries } from "./workspaceEntries";
+import { listWorkspaceDirectories, searchWorkspaceEntries } from "./workspaceEntries";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReactor";
@@ -1215,6 +1215,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       const mostRecentThread = getMostRecentBootstrapThread(snapshot);
       const existingProject = snapshot.projects.find(
         (project) =>
+          project.kind === "project" &&
           project.deletedAt === null &&
           workspaceRootsEqual(project.workspaceRoot, canonicalCwd, {
             platform: process.platform,
@@ -1235,6 +1236,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           type: "project.create",
           commandId: CommandId.makeUnsafe(crypto.randomUUID()),
           projectId: bootstrapProjectId,
+          kind: "project",
           title: bootstrapProjectTitle,
           workspaceRoot: canonicalCwd,
           defaultModelSelection: bootstrapProjectDefaultModelSelection,
@@ -1595,6 +1597,17 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           catch: (cause) =>
             new RouteRequestError({
               message: `Failed to search workspace entries: ${String(cause)}`,
+            }),
+        });
+      }
+
+      case WS_METHODS.projectsListDirectories: {
+        const body = stripRequestTag(request.body);
+        return yield* Effect.tryPromise({
+          try: () => listWorkspaceDirectories(body),
+          catch: (cause) =>
+            new RouteRequestError({
+              message: `Failed to list workspace directories: ${String(cause)}`,
             }),
         });
       }

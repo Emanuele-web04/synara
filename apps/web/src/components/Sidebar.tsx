@@ -91,6 +91,11 @@ import { derivePendingApprovals, derivePendingUserInputs } from "../session-logi
 import { gitRemoveWorktreeMutationOptions, gitStatusQueryOptions } from "../lib/gitReactQuery";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { readNativeApi } from "../nativeApi";
+import {
+  ensureHomeChatProject,
+  isHomeChatContainerProject,
+  prewarmHomeChatProject,
+} from "../lib/chatProjects";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
 import { type SidebarThreadSummary, type Thread } from "../types";
@@ -851,6 +856,7 @@ export default function Sidebar() {
   const renameWorkspace = useWorkspaceStore((store) => store.renameWorkspace);
   const deleteWorkspace = useWorkspaceStore((store) => store.deleteWorkspace);
   const reorderWorkspace = useWorkspaceStore((store) => store.reorderWorkspace);
+  const homeDir = useWorkspaceStore((store) => store.homeDir);
   const navigate = useNavigate();
   const pathname = useLocation({ select: (loc) => loc.pathname });
   const isOnSettings = useLocation({ select: (loc) => loc.pathname === "/settings" });
@@ -1354,6 +1360,25 @@ export default function Sidebar() {
     navigateToWorkspace(workspaceId);
   }, [createWorkspace, navigateToWorkspace]);
 
+  useEffect(() => {
+    if (!homeDir) {
+      return;
+    }
+    prewarmHomeChatProject(homeDir);
+  }, [homeDir]);
+
+  // Opens the ChatGPT-style "new chat" landing without bouncing through the "/" bootstrap route,
+  // which avoids the visible remount/refresh when the user clicks the Chats-panel pencil action.
+  const handleCreateHomeChat = useCallback(async () => {
+    if (!homeDir) return;
+    const projectId = await ensureHomeChatProject(homeDir);
+    if (!projectId) return;
+    await handleNewThread(projectId, {
+      envMode: "local",
+      worktreePath: null,
+    });
+  }, [handleNewThread, homeDir]);
+
   const beginWorkspaceRename = useCallback((workspaceId: string, title: string) => {
     setRenamingWorkspaceId(workspaceId);
     setRenamingWorkspaceTitle(title);
@@ -1444,6 +1469,7 @@ export default function Sidebar() {
           type: "project.create",
           commandId: newCommandId(),
           projectId,
+          kind: "project",
           title,
           workspaceRoot: cwd,
           defaultModelSelection: {
@@ -2781,9 +2807,33 @@ export default function Sidebar() {
     () => sortProjectsForSidebar(projects, sidebarThreads, appSettings.sidebarProjectSortOrder),
     [appSettings.sidebarProjectSortOrder, projects, sidebarThreads],
   );
+  const chatProjects = useMemo(
+    () => sortedProjects.filter((project) => isHomeChatContainerProject(project, homeDir)),
+    [homeDir, sortedProjects],
+  );
+  const visibleChatThreads = useMemo(
+    () =>
+      sortThreadsForSidebar(
+        sidebarDisplayThreads.filter(
+          (thread) =>
+            chatProjects.some((project) => project.id === thread.projectId) &&
+            !thread.parentThreadId &&
+            !thread.archivedAt,
+        ),
+        appSettings.sidebarThreadSortOrder,
+      ),
+    [appSettings.sidebarThreadSortOrder, chatProjects, sidebarDisplayThreads],
+  );
+  const standardProjects = useMemo(
+    () =>
+      sortedProjects.filter(
+        (project) => project.kind === "project" && !isHomeChatContainerProject(project, homeDir),
+      ),
+    [homeDir, sortedProjects],
+  );
   const allProjectsExpanded = useMemo(
-    () => projects.length > 0 && projects.every((project) => project.expanded),
-    [projects],
+    () => standardProjects.length > 0 && standardProjects.every((project) => project.expanded),
+    [standardProjects],
   );
 
   useEffect(() => {
@@ -2880,7 +2930,7 @@ export default function Sidebar() {
   const visibleSidebarThreadIds = useMemo(() => {
     const visibleThreadIds = pinnedThreads.map((thread) => thread.id);
 
-    for (const project of sortedProjects) {
+    for (const project of standardProjects) {
       const projectThreads = sortThreadsForSidebar(
         getUnpinnedThreadsForSidebar(
           sidebarDisplayThreads.filter((thread) => thread.projectId === project.id),
@@ -2952,7 +3002,7 @@ export default function Sidebar() {
     sidebarDisplayThreads,
     splitViewBySourceThreadId,
     splitViews,
-    sortedProjects,
+    standardProjects,
   ]);
   const isManualProjectSorting = appSettings.sidebarProjectSortOrder === "manual";
   const threadJumpCommandByThreadId = useMemo(() => {
@@ -3603,6 +3653,16 @@ export default function Sidebar() {
           </div>
         </SidebarMenuSubButton>
       </SidebarMenuSubItem>
+    );
+  }
+
+  function renderChatItem(thread: (typeof visibleChatThreads)[number]) {
+    return renderThreadRow(
+      thread,
+      visibleChatThreads.map((visibleThread) => visibleThread.id),
+      0,
+      0,
+      false,
     );
   }
 
@@ -4802,7 +4862,7 @@ export default function Sidebar() {
                     Threads
                   </span>
                   <div className="-mr-1 flex items-center gap-1.5">
-                    {projects.length > 0 ? (
+                    {standardProjects.length > 0 ? (
                       <Tooltip>
                         <TooltipTrigger
                           render={
@@ -4966,7 +5026,7 @@ export default function Sidebar() {
                         items={sortedProjects.map((project) => project.id)}
                         strategy={verticalListSortingStrategy}
                       >
-                        {sortedProjects.map((project) => (
+                        {standardProjects.map((project) => (
                           <SortableProjectItem key={project.id} projectId={project.id}>
                             {(dragHandleProps) => renderProjectItem(project, dragHandleProps)}
                           </SortableProjectItem>
@@ -4976,7 +5036,7 @@ export default function Sidebar() {
                   </DndContext>
                 ) : (
                   <SidebarMenu ref={attachProjectListAutoAnimateRef} className="gap-3">
-                    {sortedProjects.map((project) => (
+                    {standardProjects.map((project) => (
                       <SidebarMenuItem key={project.id} className="rounded-md">
                         {renderProjectItem(project, null)}
                       </SidebarMenuItem>
@@ -4984,7 +5044,7 @@ export default function Sidebar() {
                   </SidebarMenu>
                 )}
 
-                {projects.length === 0 && !shouldShowProjectPathEntry && (
+                {standardProjects.length === 0 && !shouldShowProjectPathEntry && (
                   <div className="px-2 pt-4 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
                     No projects yet
                   </div>
@@ -4996,7 +5056,41 @@ export default function Sidebar() {
       </SidebarContent>
 
       <SidebarSeparator />
-      <SidebarFooter className="p-1.5 font-system-ui">
+      <SidebarFooter className="gap-2 p-2 font-system-ui">
+        <div className="rounded-2xl bg-sidebar-accent/25 ">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <span className="px-2 text-[length:var(--app-font-size-ui,12px)] font-normal tracking-tight text-muted-foreground/58">
+              Chats
+            </span>
+            <div className="flex items-center pr-1.5 gap-1.5">
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-label="Open new chat home"
+                      data-testid="new-chat-button"
+                      className="sidebar-icon-button inline-flex size-5 cursor-pointer"
+                      onClick={() => void handleCreateHomeChat()}
+                    >
+                      <SquarePenIcon className="size-3.5" />
+                    </button>
+                  }
+                />
+                <TooltipPopup side="top">New chat</TooltipPopup>
+              </Tooltip>
+            </div>
+          </div>
+          {visibleChatThreads.length > 0 ? (
+            <SidebarMenu className="gap-1">
+              {visibleChatThreads.map((thread) => renderChatItem(thread))}
+            </SidebarMenu>
+          ) : (
+            <div className="py-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/48">
+              No chats yet
+            </div>
+          )}
+        </div>
         <SidebarMenu>
           <SidebarMenuItem>
             <div className="flex items-center gap-2">

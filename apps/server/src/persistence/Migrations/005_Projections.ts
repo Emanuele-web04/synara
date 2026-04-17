@@ -7,6 +7,7 @@ export default Effect.gen(function* () {
   yield* sql`
     CREATE TABLE IF NOT EXISTS projection_projects (
       project_id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL DEFAULT 'project',
       title TEXT NOT NULL,
       workspace_root TEXT NOT NULL,
       default_model TEXT,

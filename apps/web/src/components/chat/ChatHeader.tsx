@@ -66,6 +66,7 @@ interface ChatHeaderProps {
   handoffBadgeTargetProvider: ProviderKind | null;
   browserOpen: boolean;
   gitCwd: string | null;
+  showGitActions?: boolean;
   diffOpen: boolean;
   diffDisabledReason?: string | null;
   surfaceMode?: "single" | "split";
@@ -111,6 +112,7 @@ export const ChatHeader = memo(function ChatHeader({
   handoffBadgeTargetProvider,
   browserOpen,
   gitCwd,
+  showGitActions = true,
   diffOpen,
   diffDisabledReason = null,
   surfaceMode = "single",
@@ -355,7 +357,7 @@ export const ChatHeader = memo(function ChatHeader({
           </Menu>
         ) : null}
 
-        {!isDisposableThread && activeProjectName ? (
+        {!isDisposableThread && activeProjectName && showGitActions ? (
           <GitActionsControl gitCwd={gitCwd} activeThreadId={activeThreadId} />
         ) : null}
         <Tooltip>

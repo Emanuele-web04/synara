@@ -4,6 +4,9 @@ import path from "node:path";
 import { runProcess } from "./processRunner";
 
 import {
+  ProjectDirectoryEntry,
+  ProjectListDirectoriesInput,
+  ProjectListDirectoriesResult,
   ProjectEntry,
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
@@ -579,4 +582,48 @@ export async function searchWorkspaceEntries(
     entries: rankedEntries.map((candidate) => candidate.entry),
     truncated: index.truncated || matchedEntryCount > limit,
   };
+}
+
+async function directoryHasChildDirectories(absolutePath: string): Promise<boolean> {
+  try {
+    const dirents = await fs.readdir(absolutePath, { withFileTypes: true });
+    return dirents.some(
+      (dirent) => dirent.isDirectory() && dirent.name !== "." && dirent.name !== "..",
+    );
+  } catch {
+    return false;
+  }
+}
+
+export async function listWorkspaceDirectories(
+  input: ProjectListDirectoriesInput,
+): Promise<ProjectListDirectoriesResult> {
+  const relativePath = input.relativePath?.trim() ?? "";
+  const targetDirectory = relativePath ? path.resolve(input.cwd, relativePath) : input.cwd;
+  const dirents = await fs.readdir(targetDirectory, { withFileTypes: true });
+  const directories = dirents
+    .filter(
+      (dirent) =>
+        dirent.isDirectory() &&
+        dirent.name.length > 0 &&
+        dirent.name !== "." &&
+        dirent.name !== ".." &&
+        dirent.name !== ".git",
+    )
+    .toSorted((left, right) => left.name.localeCompare(right.name));
+
+  const entries = await mapWithConcurrency(directories, 16, async (dirent) => {
+    const childRelativePath = toPosixPath(
+      relativePath ? path.join(relativePath, dirent.name) : dirent.name,
+    );
+    const childAbsolutePath = path.join(input.cwd, childRelativePath);
+    return {
+      path: childRelativePath,
+      name: dirent.name,
+      ...(relativePath ? { parentPath: relativePath } : {}),
+      hasChildren: await directoryHasChildDirectories(childAbsolutePath),
+    } satisfies ProjectDirectoryEntry;
+  });
+
+  return { entries };
 }

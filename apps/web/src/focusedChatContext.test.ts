@@ -13,6 +13,7 @@ const THREAD_B = ThreadId.makeUnsafe("thread-b");
 function makeProject(): Project {
   return {
     id: PROJECT_ID,
+    kind: "project",
     name: "Project",
     remoteName: "Project",
     folderName: "project",

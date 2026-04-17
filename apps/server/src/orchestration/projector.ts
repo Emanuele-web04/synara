@@ -190,6 +190,7 @@ export function projectEvent(
           const existing = nextBase.projects.find((entry) => entry.id === payload.projectId);
           const nextProject = {
             id: payload.projectId,
+            kind: payload.kind,
             title: payload.title,
             workspaceRoot: payload.workspaceRoot,
             defaultModelSelection: payload.defaultModelSelection,
@@ -218,6 +219,7 @@ export function projectEvent(
             project.id === payload.projectId
               ? {
                   ...project,
+                  ...(payload.kind !== undefined ? { kind: payload.kind } : {}),
                   ...(payload.title !== undefined ? { title: payload.title } : {}),
                   ...(payload.workspaceRoot !== undefined
                     ? { workspaceRoot: payload.workspaceRoot }

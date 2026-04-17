@@ -960,7 +960,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             </div>
           ) : (
             <div
-              className="flex items-center gap-1 pt-1 text-muted-foreground/70 font-system-ui"
+              className="flex items-center gap-1 pt-1 pl-1 text-muted-foreground/70 font-system-ui"
               style={{ fontSize: `${appTypographyScale.uiSmPx}px` }}
             >
               <span>

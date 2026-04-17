@@ -28,6 +28,7 @@ export interface NewThreadOptions {
   entryPoint?: ThreadPrimarySurface;
   temporary?: boolean;
   provider?: ProviderKind;
+  fresh?: boolean;
 }
 
 interface ActiveThreadSnapshot {

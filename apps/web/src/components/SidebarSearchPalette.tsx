@@ -9,6 +9,7 @@ import { type ProviderKind } from "@t3tools/contracts";
 import { HiOutlineFolderOpen } from "react-icons/hi2";
 import { LuArrowDownToLine, LuArrowLeft } from "react-icons/lu";
 import { type ComponentType, useEffect, useMemo, useState } from "react";
+import { FolderClosed } from "./FolderClosed";
 import { ClaudeAI, OpenAI } from "./Icons";
 import { formatRelativeTime } from "./Sidebar";
 
@@ -78,7 +79,7 @@ type IconComponent = ComponentType<{ className?: string }>;
 
 const ACTION_ICONS: Record<string, IconComponent> = {
   "new-thread": SquarePenIcon,
-  "add-project": HiOutlineFolderOpen,
+  "add-project": FolderClosed,
   "import-thread": LuArrowDownToLine,
   settings: SettingsIcon,
 };
