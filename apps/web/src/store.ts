@@ -221,6 +221,10 @@ function persistState(state: AppState): void {
 }
 const debouncedPersistState = new Debouncer(persistState, { wait: 500 });
 
+export function persistAppStateNow(state: AppState = useStore.getState()): void {
+  persistState(state);
+}
+
 // ── Pure helpers ──────────────────────────────────────────────────────
 
 function updateThread(
@@ -3242,8 +3246,10 @@ export const useStore = create<AppStore>((set) => ({
     set((state) => collapseProjectsExcept(state, activeProjectId)),
   reorderProjects: (draggedProjectId, targetProjectId) =>
     set((state) => reorderProjects(state, draggedProjectId, targetProjectId)),
-  renameProjectLocally: (projectId, name) =>
-    set((state) => renameProjectLocally(state, projectId, name)),
+  renameProjectLocally: (projectId, name) => {
+    set((state) => renameProjectLocally(state, projectId, name));
+    persistAppStateNow();
+  },
   setError: (threadId, error) => set((state) => setError(state, threadId, error)),
   setThreadWorkspace: (threadId, patch) =>
     set((state) => setThreadWorkspace(state, threadId, patch)),
@@ -3259,13 +3265,13 @@ useStore.subscribe((state) => {
 // Flush pending writes synchronously before page unload to prevent data loss.
 if (typeof window !== "undefined") {
   window.addEventListener("beforeunload", () => {
-    debouncedPersistState.flush();
+    persistAppStateNow();
   });
 }
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
-    persistState(useStore.getState());
+    persistAppStateNow();
   }, []);
   return createElement(Fragment, null, children);
 }

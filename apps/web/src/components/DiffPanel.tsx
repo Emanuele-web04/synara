@@ -63,7 +63,10 @@ function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
   /* Route the entire diff viewer through the chat code font so custom code fonts reach line numbers too. */
   --diffs-font-family: var(--font-chat-code-family);
   --diffs-header-font-family: var(--font-chat-code-family);
+  /* Honor the user-chosen chat code font size from settings instead of the library default (13px). */
+  --diffs-font-size: var(--app-font-size-chat-code, 11px);
   font-family: var(--font-chat-code-family) !important;
+  font-size: var(--app-font-size-chat-code, 11px) !important;
 }
 
 [data-diffs-header],
@@ -74,7 +77,9 @@ function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
   /* Re-assert the code font inside the library chrome because these nodes live in shadow-rooted markup. */
   --diffs-font-family: var(--font-chat-code-family) !important;
   --diffs-header-font-family: var(--font-chat-code-family) !important;
+  --diffs-font-size: var(--app-font-size-chat-code, 11px) !important;
   font-family: var(--font-chat-code-family) !important;
+  font-size: var(--app-font-size-chat-code, 11px) !important;
   --diffs-bg: color-mix(in srgb, var(--card) 90%, var(--background)) !important;
   --diffs-light-bg: color-mix(in srgb, var(--card) 90%, var(--background)) !important;
   --diffs-dark-bg: color-mix(in srgb, var(--card) 90%, var(--background)) !important;
@@ -105,6 +110,7 @@ function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
 
 [data-file-info] {
   font-family: var(--font-chat-code-family) !important;
+  font-size: var(--app-font-size-chat-code, 11px) !important;
   background-color: color-mix(in srgb, var(--card) 94%, var(--foreground)) !important;
   border-block-color: var(--border) !important;
   color: var(--foreground) !important;
@@ -126,6 +132,7 @@ function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
 
 [data-title] {
   font-family: var(--font-chat-code-family) !important;
+  font-size: var(--app-font-size-chat-code, 11px) !important;
   cursor: pointer;
   color: ${titleColor} !important;
 }

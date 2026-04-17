@@ -19,8 +19,7 @@ import {
 import { autoAnimate } from "@formkit/auto-animate";
 import { FiGitBranch, FiPlus } from "react-icons/fi";
 import { GoRepoForked } from "react-icons/go";
-import { HiOutlineCheckCircle } from "react-icons/hi2";
-import { HiOutlineFolderOpen } from "react-icons/hi2";
+import { HiOutlineArchiveBox, HiOutlineCheckCircle, HiOutlineFolderOpen } from "react-icons/hi2";
 import { TbArrowsDiagonal, TbArrowsDiagonalMinimize2, TbCursorText } from "react-icons/tb";
 import { IoFilter } from "react-icons/io5";
 import { LuMessageSquareDashed, LuSplit } from "react-icons/lu";
@@ -71,7 +70,7 @@ import { isElectron } from "../env";
 import { APP_VERSION } from "../branding";
 import { showConfirmDialogFallback } from "../confirmDialogFallback";
 import { isMacPlatform, newCommandId, newProjectId } from "../lib/utils";
-import { useStore } from "../store";
+import { persistAppStateNow, useStore } from "../store";
 import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import {
@@ -829,6 +828,8 @@ export default function Sidebar() {
   );
   const addProjectInputRef = useRef<HTMLInputElement | null>(null);
   const [renamingThreadId, setRenamingThreadId] = useState<ThreadId | null>(null);
+  const [pendingArchiveConfirmationThreadId, setPendingArchiveConfirmationThreadId] =
+    useState<ThreadId | null>(null);
   const [renamingTitle, setRenamingTitle] = useState("");
   const [renameDialogThreadId, setRenameDialogThreadId] = useState<ThreadId | null>(null);
   const [renamingProjectId, setRenamingProjectId] = useState<ProjectId | null>(null);
@@ -1829,8 +1830,21 @@ export default function Sidebar() {
       }
 
       await archiveThread(threadId);
+      setPendingArchiveConfirmationThreadId((current) =>
+        current === threadId ? null : current,
+      );
     },
     [appSettings.confirmThreadArchive, archiveThread, sidebarThreadSummaryById],
+  );
+
+  const inlineConfirmArchiveThread = useCallback(
+    async (threadId: ThreadId) => {
+      setPendingArchiveConfirmationThreadId((current) =>
+        current === threadId ? null : current,
+      );
+      await archiveThread(threadId);
+    },
+    [archiveThread],
   );
 
   const handleThreadContextMenu = useCallback(
@@ -2533,7 +2547,7 @@ export default function Sidebar() {
   }
 
   // Keep hover actions in the same trailing slot used by the timestamp they replace.
-  function renderThreadDeleteButton(
+  function renderThreadArchiveAction(
     threadId: ThreadId,
     toneClassName: string,
     options?: {
@@ -2541,11 +2555,40 @@ export default function Sidebar() {
     },
   ) {
     const compact = options?.compact === true;
+    const isPendingConfirmation = pendingArchiveConfirmationThreadId === threadId;
+
+    if (isPendingConfirmation) {
+      return (
+        <button
+          type="button"
+          aria-label="Confirm archive"
+          title="Confirm archive"
+          className={cn(
+            "pointer-events-auto inline-flex h-5 items-center rounded-full px-2.5 text-[10px] font-normal leading-none tracking-[-0.01em] opacity-100 transition-colors",
+            "bg-red-400/12 text-red-400 hover:bg-red-400/16 hover:text-red-300",
+            "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-red-400/45",
+            compact ? "h-4.5 px-1.5 text-[10px]" : undefined,
+          )}
+          onMouseDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            void inlineConfirmArchiveThread(threadId);
+          }}
+        >
+          <span>Confirm</span>
+        </button>
+      );
+    }
+
     return (
       <button
         type="button"
-        aria-label="Delete thread"
-        title="Delete thread"
+        aria-label="Archive thread"
+        title="Archive thread"
         className={cn(
           "sidebar-icon-button pointer-events-none absolute inset-y-0 right-0 my-auto inline-flex justify-center opacity-0 transition-[opacity,color] hover:text-foreground/82",
           compact ? "size-[18px]" : "size-5",
@@ -2559,10 +2602,10 @@ export default function Sidebar() {
         onClick={(event) => {
           event.preventDefault();
           event.stopPropagation();
-          void confirmAndDeleteThread(threadId);
+          setPendingArchiveConfirmationThreadId(threadId);
         }}
       >
-        <Trash2 className={cn("shrink-0", compact ? "size-[11px]" : "size-3")} />
+        <HiOutlineArchiveBox className={cn("shrink-0", compact ? "size-[11px]" : "size-3")} />
       </button>
     );
   }
@@ -2572,6 +2615,7 @@ export default function Sidebar() {
       terminalStateByThreadId,
       thread.id,
     ).entryPoint;
+    const isPendingArchiveConfirmation = pendingArchiveConfirmationThreadId === thread.id;
     const isActive = !activeSplitView && routeThreadId === thread.id;
     const projectLabel = resolvePinnedThreadProjectLabel(thread.projectId);
     const rightMetaBadge = resolveThreadRowMetaBadge({
@@ -2666,20 +2710,19 @@ export default function Sidebar() {
               </span>
             ) : null}
           </div>
-          <div
-            className={cn(
-              "absolute top-1/2 flex -translate-y-1/2 items-center",
-              isSubagentThread ? "right-2" : "right-2.5",
-            )}
-          >
+          <div className={cn("absolute top-1/2 flex -translate-y-1/2 items-center", "right-1.5")}>
             <div className="relative flex shrink-0 items-center justify-end gap-1">
-              <ThreadRowMetaBadge tooltip={rightMetaBadge?.tooltip ?? null}>
-                {rightMetaBadge?.icon}
-              </ThreadRowMetaBadge>
-              <span className={pinnedTimestampClassName}>
-                {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
-              </span>
-              {renderThreadDeleteButton(thread.id, "text-muted-foreground/42", {
+              {!isPendingArchiveConfirmation ? (
+                <ThreadRowMetaBadge tooltip={rightMetaBadge?.tooltip ?? null}>
+                  {rightMetaBadge?.icon}
+                </ThreadRowMetaBadge>
+              ) : null}
+              {!isPendingArchiveConfirmation ? (
+                <span className={pinnedTimestampClassName}>
+                  {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
+                </span>
+              ) : null}
+              {renderThreadArchiveAction(thread.id, "text-muted-foreground/42", {
                 compact: isSubagentThread,
               })}
             </div>
@@ -2698,6 +2741,7 @@ export default function Sidebar() {
   ) {
     const threadTerminalState = selectThreadTerminalState(terminalStateByThreadId, thread.id);
     const threadEntryPoint = threadTerminalState.entryPoint;
+    const isPendingArchiveConfirmation = pendingArchiveConfirmationThreadId === thread.id;
     const isActive = !activeSplitView && routeThreadId === thread.id;
     const isPinned = pinnedThreadIdSet.has(thread.id);
     const isSelected = selectedThreadIds.has(thread.id);
@@ -3039,22 +3083,19 @@ export default function Sidebar() {
               </Tooltip>
             ) : null}
           </div>
-          <div
-            className={cn(
-              "absolute top-1/2 flex -translate-y-1/2 items-center",
-              isSubagentThread ? "right-2" : "right-2.5",
-            )}
-          >
+          <div className={cn("absolute top-1/2 flex -translate-y-1/2 items-center", "right-1.5")}>
             <div className="relative flex shrink-0 items-center justify-end gap-1">
-              {showCompactMeta ? (
+              {showCompactMeta && !isPendingArchiveConfirmation ? (
                 <ThreadRowMetaBadge tooltip={rightMetaBadge?.tooltip ?? null}>
                   {rightMetaBadge?.icon}
                 </ThreadRowMetaBadge>
               ) : null}
-              <span className={trailingTimestampClassName}>
-                {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
-              </span>
-              {renderThreadDeleteButton(thread.id, secondaryMetaClass, {
+              {!isPendingArchiveConfirmation ? (
+                <span className={trailingTimestampClassName}>
+                  {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
+                </span>
+              ) : null}
+              {renderThreadArchiveAction(thread.id, secondaryMetaClass, {
                 compact: isSubagentThread,
               })}
             </div>
@@ -3657,7 +3698,7 @@ export default function Sidebar() {
           ? "bg-rose-500 hover:bg-rose-600"
           : "bg-[var(--info-foreground)] hover:brightness-110";
   const desktopUpdateRowButtonClasses = cn(
-    "inline-flex min-h-8 shrink-0 items-center justify-between gap-2 rounded-full px-2.5 py-1 text-left text-white transition-colors",
+    "inline-flex min-h-8 shrink-0 items-center justify-between gap-2 rounded-full px-2.5 text-left text-white transition-colors",
     desktopUpdateButtonInteractivityClasses,
     desktopUpdateButtonClasses,
   );
@@ -3789,6 +3830,7 @@ export default function Sidebar() {
 
     if (desktopUpdateButtonAction === "install") {
       setInstallingDesktopUpdate(true);
+      persistAppStateNow();
       void bridge
         .installUpdate()
         .then((result) => {

@@ -128,7 +128,7 @@
 
   @variant dark {
     color-scheme: dark;
-    --background: var(--color-neutral-950);
+    --background: #0d0d0d;
     --foreground: var(--color-neutral-100);
     --card: color-mix(in srgb, var(--background) 99%, var(--color-white));
     --card-foreground: var(--color-neutral-100);
@@ -201,18 +201,6 @@ body,
   ~ [data-slot="sidebar-inset"]
   > [data-slot="sidebar-inset-surface"] {
   border-radius: inherit;
-}
-
-/* Noise texture — scoped to main content so it doesn't block native vibrancy on the sidebar */
-[data-slot="sidebar-inset"]::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  opacity: 0.035;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-  background-repeat: repeat;
-  background-size: 256px 256px;
 }
 
 pre,
@@ -373,7 +361,7 @@ label:has(> select#reasoning-effort) select {
   background: var(--muted);
   padding: 0.1rem 0.35rem;
   color: var(--foreground);
-  font-size: 0.75rem;
+  font-size: var(--app-font-size-chat-code);
   font-family: var(--font-chat-code-family);
 }
 

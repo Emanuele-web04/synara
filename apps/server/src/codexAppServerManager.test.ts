@@ -1726,7 +1726,7 @@ describe("collab child conversation routing", () => {
     );
   });
 
-  it("emits child lifecycle notifications without mutating the parent session state", () => {
+  it("suppresses child lifecycle notifications without mutating the parent session state", () => {
     const { manager, context, emitEvent, updateSession } = createCollabNotificationHarness();
 
     (
@@ -1772,22 +1772,82 @@ describe("collab child conversation routing", () => {
       },
     });
 
-    expect(emitEvent).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        method: "turn/started",
+    expect(emitEvent).not.toHaveBeenCalled();
+    expect(updateSession).not.toHaveBeenCalled();
+  });
+
+  it("suppresses child plan notifications", () => {
+    const { manager, context, emitEvent } = createCollabNotificationHarness();
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "item/completed",
+      params: {
+        item: {
+          type: "collabAgentToolCall",
+          id: "call_collab_1",
+          receiverThreadIds: ["child_provider_1"],
+        },
+        threadId: "provider_parent",
+        turnId: "turn_parent",
+      },
+    });
+    emitEvent.mockClear();
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "turn/plan/updated",
+      params: {
+        threadId: "child_provider_1",
         turnId: "turn_child_1",
-        parentTurnId: "turn_parent",
-        providerThreadId: "child_provider_1",
-        providerParentThreadId: "provider_parent",
-      }),
-    );
-    expect(emitEvent).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        method: "turn/completed",
+        plan: [{ step: "Plan child work", status: "inProgress" }],
+      },
+    });
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "item/plan/delta",
+      params: {
+        threadId: "child_provider_1",
         turnId: "turn_child_1",
-        parentTurnId: "turn_parent",
+        itemId: "plan_item_child_1",
+        delta: "still planning",
+      },
+    });
+
+    expect(emitEvent).not.toHaveBeenCalled();
+  });
+
+  it("does not suppress provider-parent-only child notifications without a mapped parent turn", () => {
+    const { manager, context, emitEvent, updateSession } = createCollabNotificationHarness();
+    context.collabReceiverParents.set("child_provider_1", "provider_parent");
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "turn/plan/updated",
+      params: {
+        threadId: "child_provider_1",
+        turnId: "turn_child_1",
+        plan: [{ step: "Plan child work", status: "inProgress" }],
+      },
+    });
+
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "turn/plan/updated",
+        turnId: "turn_child_1",
         providerThreadId: "child_provider_1",
         providerParentThreadId: "provider_parent",
       }),

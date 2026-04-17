@@ -533,6 +533,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const terminalContexts = displayedUserMessage.contexts;
           const showUserText =
             displayedUserMessage.visibleText.trim().length > 0 || terminalContexts.length > 0;
+          const bubbleIsChipOnly =
+            showUserText &&
+            terminalContexts.length === 0 &&
+            hasOnlyInlineSkillChips(displayedUserMessage.visibleText);
           const canRevertAgentWork = typeof row.revertTurnCount === "number";
           return (
             <div className="flex w-full justify-end">
@@ -560,7 +564,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   </div>
                 )}
                 {showUserText && (
-                  <div className="w-max max-w-full min-w-0 self-end rounded-lg border border-border/70 bg-secondary px-3 pt-[3px] pb-[5px]">
+                  <div
+                    className={cn(
+                      "w-max max-w-full min-w-0 self-end rounded-lg border border-border/70 bg-secondary px-3",
+                      bubbleIsChipOnly ? "py-0.5" : "pt-[3px] pb-[5px]",
+                    )}
+                  >
                     <UserMessageBody
                       text={displayedUserMessage.visibleText}
                       terminalContexts={terminalContexts}
@@ -1332,7 +1341,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
   if (props.terminalContexts.length === 0 && hasOnlyInlineSkillChips(props.text)) {
     return (
       <div
-        className="flex max-w-full min-w-0 items-center leading-none text-foreground"
+        className="flex max-w-full min-w-0 items-center leading-none text-foreground [&>span]:translate-y-0"
         style={props.chatTypographyStyle}
       >
         {renderUserMessageInlineText(props.text, "user-message-inline-chip-only")}

@@ -1304,6 +1304,7 @@ export default function ChatView({
       sidebarPlanSourceThreadProposedPlans,
     ],
   );
+  const planSidebarLabel = sidebarProposedPlan || interactionMode === "plan" ? "Plan" : "Tasks";
   const activePlan = useMemo(
     () =>
       latestTurnSettled
@@ -2875,6 +2876,17 @@ export default function ChatView({
   const toggleInteractionMode = useCallback(() => {
     handleInteractionModeChange(interactionMode === "plan" ? "default" : "plan");
   }, [handleInteractionModeChange, interactionMode]);
+  const togglePlanSidebar = useCallback(() => {
+    setPlanSidebarOpen((open) => {
+      if (open) {
+        planSidebarDismissedForTurnRef.current =
+          activePlan?.turnId ?? sidebarProposedPlan?.turnId ?? "__dismissed__";
+      } else {
+        planSidebarDismissedForTurnRef.current = null;
+      }
+      return !open;
+    });
+  }, [activePlan?.turnId, sidebarProposedPlan?.turnId]);
   const setPlanMode = useCallback(
     (enabled: boolean) => {
       handleInteractionModeChange(enabled ? "plan" : "default");
@@ -6061,6 +6073,34 @@ export default function ChatView({
                                   >
                                     <GoTasklist className="size-3.5" />
                                     <span className="sr-only sm:not-sr-only">Plan</span>
+                                  </Button>
+                                </>
+                              ) : null}
+
+                              {activePlan || sidebarProposedPlan || planSidebarOpen ? (
+                                <>
+                                  <Separator
+                                    orientation="vertical"
+                                    className="mx-0.5 hidden h-4 sm:block"
+                                  />
+                                  <Button
+                                    variant="ghost"
+                                    className="shrink-0 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal sm:px-3"
+                                    size="sm"
+                                    type="button"
+                                    onClick={togglePlanSidebar}
+                                    title={
+                                      planSidebarOpen
+                                        ? `Hide ${planSidebarLabel.toLowerCase()} sidebar`
+                                        : `Show ${planSidebarLabel.toLowerCase()} sidebar`
+                                    }
+                                  >
+                                    <GoTasklist className="size-3.5" />
+                                    <span className="sr-only sm:not-sr-only">
+                                      {planSidebarOpen
+                                        ? `Hide ${planSidebarLabel}`
+                                        : planSidebarLabel}
+                                    </span>
                                   </Button>
                                 </>
                               ) : null}

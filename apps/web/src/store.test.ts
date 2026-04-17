@@ -1529,6 +1529,56 @@ describe("store read model sync", () => {
     }
   });
 
+  it("persists project aliases immediately when the local alias changes", async () => {
+    const storage = new Map<string, string>();
+    const setItem = vi.fn((key: string, value: string) => {
+      storage.set(key, value);
+    });
+    const fakeWindow = {
+      localStorage: {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem,
+        removeItem: (key: string) => {
+          storage.delete(key);
+        },
+        clear: () => {
+          storage.clear();
+        },
+      },
+      addEventListener: vi.fn(),
+    };
+    vi.stubGlobal("window", fakeWindow);
+    try {
+      vi.resetModules();
+
+      const freshStore = await import("./store");
+      const projectId = ProjectId.makeUnsafe("project-1");
+      freshStore.useStore.setState((state) => ({
+        ...state,
+        projects: [
+          makeProject({
+            id: projectId,
+            cwd: "/tmp/project",
+          }),
+        ],
+        threads: [makeThread()],
+        sidebarThreadSummaryById: {},
+        threadsHydrated: true,
+      }));
+
+      freshStore.useStore.getState().renameProjectLocally(projectId, "dpcode");
+
+      expect(setItem).toHaveBeenCalled();
+      expect(JSON.parse(storage.get("t3code:renderer-state:v8") ?? "{}")).toMatchObject({
+        projectNamesByCwd: {
+          "/tmp/project": "dpcode",
+        },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("reuses normalized thread objects when the incoming snapshot is unchanged", () => {
     const readModel = {
       snapshotSequence: 1,

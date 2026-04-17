@@ -1880,8 +1880,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       context,
       notification.params,
     );
-    const isChildConversation =
-      providerParentThreadId !== undefined || childParentTurnId !== undefined;
+    const isChildConversation = childParentTurnId !== undefined;
+    if (
+      isChildConversation &&
+      this.shouldSuppressChildConversationNotification(notification.method)
+    ) {
+      return;
+    }
     const textDelta =
       notification.method === "item/agentMessage/delta"
         ? this.readString(notification.params, "delta")
@@ -2334,6 +2339,24 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         context.collabReceiverParents.set(receiverThreadId, parentProviderThreadId);
       }
     }
+  }
+
+  private shouldSuppressChildConversationNotification(method: string): boolean {
+    return (
+      method === "thread/started" ||
+      method === "thread/status/changed" ||
+      method === "thread/archived" ||
+      method === "thread/unarchived" ||
+      method === "thread/closed" ||
+      method === "thread/compacted" ||
+      method === "thread/name/updated" ||
+      method === "thread/tokenUsage/updated" ||
+      method === "turn/started" ||
+      method === "turn/completed" ||
+      method === "turn/aborted" ||
+      method === "turn/plan/updated" ||
+      method === "item/plan/delta"
+    );
   }
 
   private readObject(value: unknown, key?: string): Record<string, unknown> | undefined {

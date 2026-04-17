@@ -271,20 +271,22 @@ export const TraitsPicker = memo(function TraitsPicker({
         setMenuOpen(open);
       }}
     >
-      {shortcutLabel && !isMenuOpen ? (
+      {shortcutLabel ? (
         <Tooltip>
           <TooltipTrigger render={<MenuTrigger render={triggerButton} />}>
             {triggerContent}
           </TooltipTrigger>
-          <TooltipPopup side="top" sideOffset={6}>
-            <span className="inline-flex items-center gap-2 px-1 py-0.5">
-              <span>Change reasoning</span>
-              <ShortcutKbd
-                shortcutLabel={shortcutLabel}
-                className="h-4 min-w-4 px-1 text-[length:var(--app-font-size-ui-2xs,9px)] text-muted-foreground"
-              />
-            </span>
-          </TooltipPopup>
+          {!isMenuOpen ? (
+            <TooltipPopup side="top" sideOffset={6}>
+              <span className="inline-flex items-center gap-2 px-1 py-0.5">
+                <span>Change reasoning</span>
+                <ShortcutKbd
+                  shortcutLabel={shortcutLabel}
+                  className="h-4 min-w-4 px-1 text-[length:var(--app-font-size-ui-2xs,9px)] text-muted-foreground"
+                />
+              </span>
+            </TooltipPopup>
+          ) : null}
         </Tooltip>
       ) : (
         <MenuTrigger render={triggerButton}>{triggerContent}</MenuTrigger>

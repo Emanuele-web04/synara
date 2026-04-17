@@ -135,7 +135,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         setMenuOpen(open);
       }}
     >
-      {props.shortcutLabel && !isMenuOpen ? (
+      {props.shortcutLabel ? (
         <Tooltip>
           <TooltipTrigger
             render={
@@ -162,15 +162,17 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
           >
             <span className="sr-only">{selectedModelLabel}</span>
           </TooltipTrigger>
-          <TooltipPopup side="top" sideOffset={6}>
-            <span className="inline-flex items-center gap-2 px-1 py-0.5">
-              <span>Change model</span>
-              <ShortcutKbd
-                shortcutLabel={props.shortcutLabel}
-                className="h-4 min-w-4 px-1 text-[length:var(--app-font-size-ui-2xs,9px)] text-muted-foreground"
-              />
-            </span>
-          </TooltipPopup>
+          {!isMenuOpen ? (
+            <TooltipPopup side="top" sideOffset={6}>
+              <span className="inline-flex items-center gap-2 px-1 py-0.5">
+                <span>Change model</span>
+                <ShortcutKbd
+                  shortcutLabel={props.shortcutLabel}
+                  className="h-4 min-w-4 px-1 text-[length:var(--app-font-size-ui-2xs,9px)] text-muted-foreground"
+                />
+              </span>
+            </TooltipPopup>
+          ) : null}
         </Tooltip>
       ) : (
         <MenuTrigger
