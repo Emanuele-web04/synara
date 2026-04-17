@@ -703,6 +703,16 @@ export function useComposerSlashCommands(input: {
       }
 
       if (item.command === "review") {
+        if (selectedProvider === "codex") {
+          const applied = clearSlashCommandFromComposer();
+          if (!wasPromptReplacementApplied(applied)) {
+            return;
+          }
+          editorActions.setComposerHighlightedItemId(null);
+          openReviewTargetPicker();
+          editorActions.scheduleComposerFocus();
+          return;
+        }
         if (supportsTextNativeReviewCommand) {
           const replacement = "/review";
           const replacementRangeEnd = editorActions.extendReplacementRangeForTrailingSpace(
@@ -748,6 +758,7 @@ export function useComposerSlashCommands(input: {
       handleInteractionModeChange,
       openForkTargetPicker,
       openReviewTargetPicker,
+      selectedProvider,
       supportsTextNativeReviewCommand,
       runFastSlashCommand,
     ],

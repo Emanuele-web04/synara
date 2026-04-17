@@ -76,6 +76,21 @@ function expandProviderNativeSlashCommandNames(
   return [...expandedNames];
 }
 
+function shouldKeepBuiltInSlashCommandDespiteNativeCollision(
+  provider: ProviderKind,
+  command: ComposerSlashCommand,
+): boolean {
+  return provider === "codex" && command === "review";
+}
+
+export function shouldHideProviderNativeCommandFromComposerMenu(
+  provider: ProviderKind,
+  command: string,
+): boolean {
+  const normalizedCommand = normalizeSlashCommandName(command);
+  return provider === "codex" && normalizedCommand === "review";
+}
+
 export function getProviderNativeSlashCommandSearchTerms(
   provider: ProviderKind,
   command: string,
@@ -309,7 +324,11 @@ export function getAvailableComposerSlashCommands(input: {
     expandProviderNativeSlashCommandNames(
       input.provider,
       input.providerNativeCommandNames ?? [],
-    ).filter((name): name is ComposerSlashCommand => isBuiltInComposerSlashCommand(name)),
+    ).filter(
+      (name): name is ComposerSlashCommand =>
+        isBuiltInComposerSlashCommand(name) &&
+        !shouldKeepBuiltInSlashCommandDespiteNativeCollision(input.provider, name),
+    ),
   );
 
   const availableCommands: ComposerSlashCommand[] =

@@ -12,9 +12,72 @@
       rel="stylesheet"
     />
     <title>DP Code (Alpha)</title>
+    <style>
+      /* Boot splash — shown while the JS bundle is parsing and React mounts.
+         React's createRoot(...).render(...) wipes #root's children, so no teardown needed. */
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: transparent;
+        /* Prevent a white flash before the app's own styles load. */
+        color-scheme: light dark;
+      }
+      #root {
+        min-height: 100vh;
+      }
+      .app-boot-splash {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-app-region: drag;
+        pointer-events: none;
+      }
+      .app-boot-splash__icon {
+        width: 112px;
+        height: 112px;
+        border-radius: 26px; /* ~23% — macOS squircle-ish */
+        box-shadow:
+          0 1px 2px rgba(0, 0, 0, 0.12),
+          0 12px 32px rgba(0, 0, 0, 0.28);
+        opacity: 0;
+        transform: scale(0.96);
+        animation:
+          app-boot-splash-in 420ms ease-out forwards,
+          app-boot-splash-pulse 2.4s ease-in-out 420ms infinite;
+      }
+      @keyframes app-boot-splash-in {
+        to {
+          opacity: 1;
+          transform: scale(1);
+        }
+      }
+      @keyframes app-boot-splash-pulse {
+        0%,
+        100% {
+          transform: scale(1);
+          opacity: 1;
+        }
+        50% {
+          transform: scale(0.98);
+          opacity: 0.85;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .app-boot-splash__icon {
+          animation: app-boot-splash-in 200ms ease-out forwards;
+        }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="app-boot-splash" aria-hidden="true">
+        <img class="app-boot-splash__icon" src="/dpcode.png" alt="" draggable="false" />
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

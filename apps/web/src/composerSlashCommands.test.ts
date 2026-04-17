@@ -13,6 +13,7 @@ import {
   parseComposerSlashInvocationForCommands,
   parseFastSlashCommandAction,
   parseForkSlashCommandArgs,
+  shouldHideProviderNativeCommandFromComposerMenu,
 } from "./composerSlashCommands";
 
 describe("composerSlashCommands", () => {
@@ -158,6 +159,21 @@ describe("composerSlashCommands", () => {
     expect(availableCommands).not.toContain("status");
     expect(hasProviderNativeSlashCommand("codex", ["/fast", "model"], "fast")).toBe(true);
     expect(hasProviderNativeSlashCommand("codex", ["/fast", "model"], "/model")).toBe(true);
+  });
+
+  it("keeps app-level /review available for codex even when native review exists", () => {
+    const availableCommands = getAvailableComposerSlashCommands({
+      provider: "codex",
+      supportsFastSlashCommand: true,
+      canOfferCompactCommand: true,
+      canOfferReviewCommand: true,
+      canOfferForkCommand: true,
+      providerNativeCommandNames: ["review"],
+    });
+
+    expect(availableCommands).toContain("review");
+    expect(shouldHideProviderNativeCommandFromComposerMenu("codex", "review")).toBe(true);
+    expect(shouldHideProviderNativeCommandFromComposerMenu("codex", "status")).toBe(false);
   });
 
   it("never exposes app-level slash commands for claude", () => {

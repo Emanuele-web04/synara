@@ -20,6 +20,7 @@ import {
   filterComposerSlashCommands,
   getAvailableComposerSlashCommands,
   getProviderNativeSlashCommandSearchTerms,
+  shouldHideProviderNativeCommandFromComposerMenu,
 } from "../composerSlashCommands";
 import type { ComposerCommandItem } from "../components/chat/ComposerCommandMenu";
 
@@ -158,6 +159,9 @@ export function useComposerCommandMenuItems(input: {
         source: definition.source,
       }));
       const providerCommandItems = providerNativeCommands
+        .filter(
+          (command) => !shouldHideProviderNativeCommandFromComposerMenu(provider, command.name),
+        )
         .filter((command) => {
           if (!query) return true;
           return (

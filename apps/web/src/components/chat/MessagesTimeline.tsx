@@ -935,7 +935,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
       {row.kind === "working" && (
         <div>
-          {row.label ? (
+          {row.label && isCompactionWorkingLabel(row.label) ? (
             <div className="my-3 flex items-center gap-3">
               <span className="h-px flex-1 bg-border" />
               <span
@@ -1135,6 +1135,11 @@ function formatWorkingLabel(label: string): string {
     return "Compacting conversation...";
   }
   return normalized.endsWith("...") ? normalized : `${normalized}...`;
+}
+
+function isCompactionWorkingLabel(label: string): boolean {
+  const normalized = normalizeCompactToolLabel(label).trim().toLowerCase();
+  return normalized === "compacting context" || normalized === "compacting conversation...";
 }
 
 function formatMessageMeta(

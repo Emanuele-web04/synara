@@ -5340,6 +5340,12 @@ export default function ChatView({
         return;
       }
       if (item.type === "provider-native-command") {
+        if (selectedProvider === "codex" && item.command.toLowerCase() === "review") {
+          setComposerCommandPicker("review-target");
+          setComposerHighlightedItemId("review-target:changes");
+          scheduleComposerFocus();
+          return;
+        }
         const replacement = `/${item.command} `;
         const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
           snapshot.value,
@@ -5436,6 +5442,7 @@ export default function ChatView({
     [
       applyPromptReplacement,
       composerCursor,
+      scheduleComposerFocus,
       handleForkTargetSelection,
       handleReviewTargetSelection,
       handleSlashCommandSelection,

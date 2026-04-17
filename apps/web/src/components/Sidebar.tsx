@@ -89,6 +89,7 @@ import { type SidebarThreadSummary, type Thread } from "../types";
 import { ClaudeAI, OpenAI } from "./Icons";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
+import { ThreadRunningSpinner } from "./ThreadRunningSpinner";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import { SidebarSearchPalette } from "./SidebarSearchPalette";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
@@ -2618,6 +2619,11 @@ export default function Sidebar() {
       thread,
       includeHandoffBadge: true,
     });
+    const threadStatus = resolveThreadStatusPill({
+      thread,
+      hasPendingApprovals: thread.hasPendingApprovals,
+      hasPendingUserInput: thread.hasPendingUserInput,
+    });
     const isSubagentThread = Boolean(thread.parentThreadId);
     const pinnedTimestampClassName = isSubagentThread
       ? "w-[1.2rem] text-right text-[10px] leading-none tabular-nums text-muted-foreground/26 transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0"
@@ -2650,16 +2656,19 @@ export default function Sidebar() {
             });
           }}
         >
-          <ThreadPinToggleButton
-            pinned
-            presentation="inline"
-            toneClassName="text-muted-foreground/50"
-            onToggle={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              togglePinnedThread(thread.id);
-            }}
-          />
+          <div className="flex shrink-0 items-center gap-1.5">
+            <ThreadPinToggleButton
+              pinned
+              presentation="inline"
+              toneClassName="text-muted-foreground/50"
+              onToggle={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                togglePinnedThread(thread.id);
+              }}
+            />
+            {threadStatus?.pulse ? <ThreadRunningSpinner presentation="inline" /> : null}
+          </div>
           {threadEntryPoint === "terminal" ? (
             <TerminalIcon aria-hidden="true" className="size-3.5 shrink-0 text-teal-600/85" />
           ) : (
@@ -2812,37 +2821,27 @@ export default function Sidebar() {
             <HiOutlineCheckCircle
               aria-hidden="true"
               className={cn(
-                "pointer-events-none absolute left-2 top-1/2 z-10 size-4 -translate-y-1/2 transition-opacity",
+                "pointer-events-none absolute top-1/2 z-10 size-4 -translate-y-1/2 transition-opacity",
+                isPinned ? "left-8" : "left-2",
                 threadStatus.colorClass,
-                isPinned
-                  ? "opacity-0"
-                  : "opacity-100 group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
+                "opacity-100 group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
               )}
             />
           ) : threadStatus.pulse ? (
-            <span
-              aria-hidden="true"
+            <ThreadRunningSpinner
+              presentation="overlay"
               className={cn(
-                "pointer-events-none absolute left-2.5 top-1/2 z-10 size-3 -translate-y-1/2 animate-spin rounded-full text-muted-foreground/55 transition-opacity [animation-duration:1.6s]",
-                isPinned
-                  ? "opacity-0"
-                  : "opacity-100 group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
+                isPinned ? "left-8" : "left-2.5",
+                "opacity-100 group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
               )}
-              style={{
-                background: "conic-gradient(from 0deg, transparent 25%, currentColor)",
-                mask: "radial-gradient(farthest-side, transparent calc(100% - 1.5px), black calc(100% - 1.5px))",
-                WebkitMask:
-                  "radial-gradient(farthest-side, transparent calc(100% - 1.5px), black calc(100% - 1.5px))",
-              }}
             />
           ) : (
             <span
               className={cn(
-                "pointer-events-none absolute left-3 top-1/2 z-10 h-1.5 w-1.5 -translate-y-1/2 rounded-full transition-opacity",
+                "pointer-events-none absolute top-1/2 z-10 h-1.5 w-1.5 -translate-y-1/2 rounded-full transition-opacity",
+                isPinned ? "left-8" : "left-3",
                 threadStatus.dotClass,
-                isPinned
-                  ? "opacity-0"
-                  : "opacity-100 group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
+                "opacity-100 group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
               )}
             />
           ))}
