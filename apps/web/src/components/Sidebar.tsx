@@ -1830,18 +1830,14 @@ export default function Sidebar() {
       }
 
       await archiveThread(threadId);
-      setPendingArchiveConfirmationThreadId((current) =>
-        current === threadId ? null : current,
-      );
+      setPendingArchiveConfirmationThreadId((current) => (current === threadId ? null : current));
     },
     [appSettings.confirmThreadArchive, archiveThread, sidebarThreadSummaryById],
   );
 
   const inlineConfirmArchiveThread = useCallback(
     async (threadId: ThreadId) => {
-      setPendingArchiveConfirmationThreadId((current) =>
-        current === threadId ? null : current,
-      );
+      setPendingArchiveConfirmationThreadId((current) => (current === threadId ? null : current));
       await archiveThread(threadId);
     },
     [archiveThread],
