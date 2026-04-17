@@ -2316,10 +2316,16 @@ function mergeStreamingMessage(
   existingMessage: ChatMessage,
   incomingMessage: ChatMessage,
 ): ChatMessage | null {
-  const nextText =
-    incomingMessage.streaming || incomingMessage.text.length === 0
-      ? `${existingMessage.text}${incomingMessage.text}`
-      : incomingMessage.text;
+  let nextText: string;
+  if (incomingMessage.streaming || incomingMessage.text.length === 0) {
+    nextText = `${existingMessage.text}${incomingMessage.text}`;
+  } else if (incomingMessage.text.startsWith(existingMessage.text)) {
+    nextText = incomingMessage.text;
+  } else if (existingMessage.text.startsWith(incomingMessage.text)) {
+    nextText = existingMessage.text;
+  } else {
+    nextText = `${existingMessage.text}${incomingMessage.text}`;
+  }
   const nextAttachments = incomingMessage.attachments ?? existingMessage.attachments;
   const nextCompletedAt = incomingMessage.streaming
     ? existingMessage.completedAt

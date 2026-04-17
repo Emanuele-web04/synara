@@ -683,6 +683,58 @@ describe("store pure functions", () => {
     expect(next.threads[0]?.latestTurn?.sourceProposedPlan).toEqual(sourceProposedPlan);
   });
 
+  it("does not truncate streamed assistant text when completion only carries the trailing chunk", () => {
+    const assistantId = MessageId.makeUnsafe("assistant-message");
+    const turnId = TurnId.makeUnsafe("turn-1");
+    const initialState = makeState(
+      makeThread({
+        messages: [
+          {
+            id: assistantId,
+            role: "assistant",
+            text: "Hello",
+            turnId,
+            createdAt: "2026-02-27T00:01:05.000Z",
+            streaming: true,
+            source: "native",
+          },
+        ],
+        latestTurn: {
+          turnId,
+          state: "running",
+          requestedAt: "2026-02-27T00:01:00.000Z",
+          startedAt: "2026-02-27T00:01:05.000Z",
+          completedAt: null,
+          assistantMessageId: assistantId,
+        },
+      }),
+    );
+
+    const next = applyOrchestrationEvents(initialState, [
+      makeDomainEvent("thread.message-sent", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: assistantId,
+        role: "assistant",
+        text: " world",
+        turnId,
+        streaming: false,
+        createdAt: "2026-02-27T00:01:05.000Z",
+        updatedAt: "2026-02-27T00:01:06.000Z",
+        attachments: [],
+        source: "native",
+      }),
+    ]);
+
+    expect(next.threads[0]?.messages).toMatchObject([
+      {
+        id: assistantId,
+        text: "Hello world",
+        streaming: false,
+        completedAt: "2026-02-27T00:01:06.000Z",
+      },
+    ]);
+  });
+
   it("applies thread.meta-updated branch metadata immediately during live updates", () => {
     const initialState = makeState(
       makeThread({
