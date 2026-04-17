@@ -41,6 +41,8 @@ import { ShortcutKbd } from "./ui/shortcut-kbd";
 
 interface SidebarSearchPaletteProps {
   open: boolean;
+  mode: "search" | "import";
+  onModeChange: (mode: "search" | "import") => void;
   onOpenChange: (open: boolean) => void;
   actions: readonly SidebarSearchAction[];
   projects: readonly SidebarSearchProject[];
@@ -164,7 +166,6 @@ function HighlightedText(props: { text: string; query: string; className?: strin
 
 export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
   const [query, setQuery] = useState("");
-  const [mode, setMode] = useState<"search" | "import">("search");
   const [importProvider, setImportProvider] = useState<ProviderKind>("codex");
   const [importId, setImportId] = useState("");
   const [importError, setImportError] = useState<string | null>(null);
@@ -173,7 +174,6 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
   useEffect(() => {
     if (!props.open) {
       setQuery("");
-      setMode("search");
       setImportProvider("codex");
       setImportId("");
       setImportError(null);
@@ -222,7 +222,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
   return (
     <CommandDialog open={props.open} onOpenChange={props.onOpenChange}>
       <CommandDialogPopup className="max-w-2xl">
-        {mode === "import" ? (
+        {props.mode === "import" ? (
           <div className="flex flex-col overflow-hidden">
             <div className="border-b border-border/70 px-4 py-3">
               <div className="flex items-start gap-3">
@@ -232,7 +232,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                   className="-ml-1 mt-[-2px] size-8 shrink-0"
                   onClick={() => {
                     setImportError(null);
-                    setMode("search");
+                    props.onModeChange("search");
                   }}
                 >
                   <LuArrowLeft className="size-4" />
@@ -355,7 +355,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                                 setImportError(null);
                                 setImportId("");
                                 setImportProvider("codex");
-                                setMode("import");
+                                props.onModeChange("import");
                                 return;
                               }
                               if (!onSelect) return;

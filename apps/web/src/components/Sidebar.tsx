@@ -884,6 +884,7 @@ export default function Sidebar() {
   const [addingProject, setAddingProject] = useState(false);
   const [newCwd, setNewCwd] = useState("");
   const [searchPaletteOpen, setSearchPaletteOpen] = useState(false);
+  const [searchPaletteMode, setSearchPaletteMode] = useState<"search" | "import">("search");
   const [isPickingFolder, setIsPickingFolder] = useState(false);
   const [showManualPathInput, setShowManualPathInput] = useState(false);
   const [isAddingProject, setIsAddingProject] = useState(false);
@@ -3822,7 +3823,8 @@ export default function Sidebar() {
       ) {
         event.preventDefault();
         event.stopPropagation();
-        setSearchPaletteOpen((prev) => !prev);
+        setSearchPaletteMode("search");
+        setSearchPaletteOpen((prev) => !prev || searchPaletteMode !== "search");
         return;
       }
 
@@ -3859,7 +3861,15 @@ export default function Sidebar() {
       if (command === "sidebar.search") {
         event.preventDefault();
         event.stopPropagation();
-        setSearchPaletteOpen((prev) => !prev);
+        setSearchPaletteMode("search");
+        setSearchPaletteOpen((prev) => !prev || searchPaletteMode !== "search");
+        return;
+      }
+      if (command === "sidebar.importThread") {
+        event.preventDefault();
+        event.stopPropagation();
+        setSearchPaletteMode("import");
+        setSearchPaletteOpen((prev) => !prev || searchPaletteMode !== "import");
         return;
       }
       const jumpIndex = threadJumpIndexFromCommand(command ?? "");
@@ -3931,6 +3941,7 @@ export default function Sidebar() {
     handleStartAddProject,
     keybindings,
     getCurrentSidebarShortcutContext,
+    searchPaletteMode,
     threadJumpCommandByThreadId,
     threadJumpThreadIds,
     visibleSidebarThreadIds,
@@ -4015,6 +4026,9 @@ export default function Sidebar() {
   const searchShortcutLabel =
     shortcutLabelForCommand(keybindings, "sidebar.search") ??
     (isMacPlatform(navigator.platform) ? "⌘K" : "Ctrl+K");
+  const importThreadShortcutLabel =
+    shortcutLabelForCommand(keybindings, "sidebar.importThread") ??
+    (isMacPlatform(navigator.platform) ? "⌘I" : "Ctrl+I");
   const searchPaletteProjects = useMemo<SidebarSearchProject[]>(
     () =>
       projects.map((project) => ({
@@ -4049,6 +4063,7 @@ export default function Sidebar() {
         label: "Import thread from...",
         description: "Attach a local thread to an existing Codex or Claude session.",
         keywords: ["import", "resume", "thread", "session", "codex", "claude"],
+        shortcutLabel: importThreadShortcutLabel,
       },
       {
         id: "settings",
@@ -4057,7 +4072,7 @@ export default function Sidebar() {
         keywords: ["preferences", "config"],
       },
     ],
-    [newThreadShortcutLabel],
+    [importThreadShortcutLabel, newThreadShortcutLabel],
   );
 
   const handleDesktopUpdateButtonClick = useCallback(() => {
@@ -4764,7 +4779,14 @@ export default function Sidebar() {
       {searchPaletteOpen ? (
         <SidebarSearchPaletteController
           open={searchPaletteOpen}
-          onOpenChange={setSearchPaletteOpen}
+          mode={searchPaletteMode}
+          onModeChange={setSearchPaletteMode}
+          onOpenChange={(open) => {
+            setSearchPaletteOpen(open);
+            if (!open) {
+              setSearchPaletteMode("search");
+            }
+          }}
           actions={searchPaletteActions}
           projects={searchPaletteProjects}
           projectById={projectById}
@@ -4786,6 +4808,8 @@ export default function Sidebar() {
 
 function SidebarSearchPaletteController(props: {
   open: boolean;
+  mode: "search" | "import";
+  onModeChange: (mode: "search" | "import") => void;
   onOpenChange: (open: boolean) => void;
   actions: readonly SidebarSearchAction[];
   projects: readonly SidebarSearchProject[];
@@ -4798,28 +4822,41 @@ function SidebarSearchPaletteController(props: {
   onOpenThread: (threadId: string) => void;
 }) {
   const selectAllThreads = useMemo(() => createAllThreadsSelector(), []);
+  const selectSidebarDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
   const threads = useStore(selectAllThreads);
-  const searchPaletteThreads = useMemo<SidebarSearchThread[]>(
-    () =>
-      threads.map((thread) => ({
-        id: thread.id,
-        title: thread.title,
-        projectId: thread.projectId,
-        projectName: props.projectById.get(thread.projectId)?.name ?? "Unknown project",
-        projectRemoteName: props.projectById.get(thread.projectId)?.remoteName ?? "Unknown project",
-        provider: thread.modelSelection.provider,
-        createdAt: thread.createdAt,
-        updatedAt: thread.updatedAt,
-        messages: thread.messages.map((message) => ({
-          text: message.text,
-        })),
-      })),
-    [props.projectById, threads],
-  );
+  const sidebarDisplayThreads = useStore(selectSidebarDisplayThreads);
+  const searchPaletteThreads = useMemo<SidebarSearchThread[]>(() => {
+    const threadById = new Map(threads.map((thread) => [thread.id, thread] as const));
+    return sidebarDisplayThreads.flatMap((threadSummary) => {
+      const thread = threadById.get(threadSummary.id);
+      if (!thread) {
+        return [];
+      }
+
+      return [
+        {
+          id: thread.id,
+          title: thread.title,
+          projectId: thread.projectId,
+          projectName: props.projectById.get(thread.projectId)?.name ?? "Unknown project",
+          projectRemoteName:
+            props.projectById.get(thread.projectId)?.remoteName ?? "Unknown project",
+          provider: thread.modelSelection.provider,
+          createdAt: thread.createdAt,
+          updatedAt: thread.updatedAt,
+          messages: thread.messages.map((message) => ({
+            text: message.text,
+          })),
+        },
+      ];
+    });
+  }, [props.projectById, sidebarDisplayThreads, threads]);
 
   return (
     <SidebarSearchPalette
       open={props.open}
+      mode={props.mode}
+      onModeChange={props.onModeChange}
       onOpenChange={props.onOpenChange}
       actions={props.actions}
       projects={props.projects}

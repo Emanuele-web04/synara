@@ -239,7 +239,7 @@ function mapProviderSessionStatusToOrchestrationStatus(
   }
 }
 
-function readCodexSnapshotTextParts(value: unknown): ReadonlyArray<string> {
+function readTranscriptTextParts(value: unknown): ReadonlyArray<string> {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -271,7 +271,7 @@ function readCodexSnapshotMessageText(value: unknown): string {
     return candidate.text;
   }
 
-  return readCodexSnapshotTextParts(candidate.content).join("");
+  return readTranscriptTextParts(candidate.content).join("");
 }
 
 function mapCodexSnapshotMessages(input: {
@@ -321,24 +321,6 @@ function mapCodexSnapshotMessages(input: {
   );
 }
 
-function readClaudeSessionTextParts(value: unknown): ReadonlyArray<string> {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return value.flatMap((part) => {
-    if (!part || typeof part !== "object") {
-      return [];
-    }
-
-    const candidate = part as {
-      readonly type?: unknown;
-      readonly text?: unknown;
-    };
-    return candidate.type === "text" && typeof candidate.text === "string" ? [candidate.text] : [];
-  });
-}
-
 function readClaudeSessionMessageText(value: unknown): string {
   if (!value || typeof value !== "object") {
     return typeof value === "string" ? value : "";
@@ -356,7 +338,7 @@ function readClaudeSessionMessageText(value: unknown): string {
     return candidate.content;
   }
 
-  return readClaudeSessionTextParts(candidate.content).join("\n\n");
+  return readTranscriptTextParts(candidate.content).join("\n\n");
 }
 
 function mapClaudeSessionMessages(input: {
@@ -386,6 +368,10 @@ function mapClaudeSessionMessages(input: {
       },
     ];
   });
+}
+
+function buildImportMessagesError(message: string): RouteRequestError {
+  return new RouteRequestError({ message });
 }
 
 function getMostRecentBootstrapThread(
@@ -1324,6 +1310,111 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     Effect.all([closeAllClients, closeWebSocketServer.pipe(Effect.ignoreCause({ log: true }))]),
   );
 
+  const dispatchImportedMessages = (input: {
+    readonly createdAt: string;
+    readonly messages: ReadonlyArray<ThreadHandoffImportedMessage>;
+    readonly threadId: ThreadId;
+  }) =>
+    input.messages.length === 0
+      ? Effect.void
+      : orchestrationEngine.dispatch({
+          type: "thread.messages.import",
+          commandId: CommandId.makeUnsafe(crypto.randomUUID()),
+          threadId: input.threadId,
+          messages: input.messages,
+          createdAt: input.createdAt,
+        });
+
+  const ensureClaudeThreadImportable = Effect.fn(function* (input: {
+    readonly cwd: string | undefined;
+    readonly externalId: string;
+  }) {
+    const claudeSessionInfo = yield* Effect.tryPromise({
+      try: () => getClaudeSessionInfo(input.externalId, input.cwd ? { dir: input.cwd } : undefined),
+      catch: (cause) =>
+        buildImportMessagesError(
+          cause instanceof Error && cause.message.length > 0
+            ? cause.message
+            : "Failed to inspect Claude session metadata.",
+        ),
+    });
+
+    if (claudeSessionInfo) {
+      return;
+    }
+
+    const sessionFoundElsewhere = yield* Effect.tryPromise({
+      try: () => getClaudeSessionInfo(input.externalId),
+      catch: () => undefined,
+    });
+
+    return yield* buildImportMessagesError(
+      sessionFoundElsewhere && input.cwd
+        ? `Claude session '${input.externalId}' exists, but not for this workspace. Claude resume only works when the session file is stored for '${input.cwd}'.`
+        : `Claude session '${input.externalId}' was not found on this machine for this workspace. Claude import only works with a locally persisted Claude session ID.`,
+    );
+  });
+
+  const importCodexThreadHistory = Effect.fn(function* (input: {
+    readonly importedAt: string;
+    readonly threadId: ThreadId;
+  }) {
+    const adapter = yield* providerAdapterRegistry.getByProvider("codex");
+    const snapshot = yield* adapter
+      .readThread(input.threadId)
+      .pipe(
+        Effect.mapError((cause) =>
+          buildImportMessagesError(
+            cause instanceof Error && cause.message.length > 0
+              ? cause.message
+              : "Failed to read Codex thread history.",
+          ),
+        ),
+      );
+
+    const importedMessages = mapCodexSnapshotMessages({
+      threadId: input.threadId,
+      turns: snapshot.turns,
+      importedAt: input.importedAt,
+    });
+
+    yield* dispatchImportedMessages({
+      threadId: input.threadId,
+      messages: importedMessages,
+      createdAt: input.importedAt,
+    });
+  });
+
+  const importClaudeThreadHistory = Effect.fn(function* (input: {
+    readonly cwd: string | undefined;
+    readonly externalId: string;
+    readonly importedAt: string;
+    readonly threadId: ThreadId;
+  }) {
+    const sessionMessages = yield* Effect.tryPromise({
+      try: () =>
+        getClaudeSessionMessages(input.externalId, input.cwd ? { dir: input.cwd } : undefined),
+      catch: (cause) =>
+        buildImportMessagesError(
+          cause instanceof Error && cause.message.length > 0
+            ? cause.message
+            : "Failed to read Claude session history.",
+        ),
+    });
+
+    const importedMessages = mapClaudeSessionMessages({
+      threadId: input.threadId,
+      messages: sessionMessages,
+      importedAt: input.importedAt,
+    });
+
+    yield* dispatchImportedMessages({
+      threadId: input.threadId,
+      messages: importedMessages,
+      createdAt: input.importedAt,
+    });
+  });
+
   const routeRequest = Effect.fnUntraced(function* (ws: WebSocket, request: WebSocketRequest) {
     switch (request.body._tag) {
       case ORCHESTRATION_WS_METHODS.getSnapshot:
@@ -1366,30 +1457,10 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         const externalId = body.externalId.trim();
 
         if (thread.modelSelection.provider === "claudeAgent") {
-          const claudeSessionInfo = yield* Effect.tryPromise({
-            try: () => getClaudeSessionInfo(externalId, cwd ? { dir: cwd } : undefined),
-            catch: (cause) =>
-              new RouteRequestError({
-                message:
-                  cause instanceof Error && cause.message.length > 0
-                    ? cause.message
-                    : "Failed to inspect Claude session metadata.",
-              }),
+          yield* ensureClaudeThreadImportable({
+            cwd,
+            externalId,
           });
-
-          if (!claudeSessionInfo) {
-            const sessionFoundElsewhere = yield* Effect.tryPromise({
-              try: () => getClaudeSessionInfo(externalId),
-              catch: () => undefined,
-            });
-
-            return yield* new RouteRequestError({
-              message:
-                sessionFoundElsewhere && cwd
-                  ? `Claude session '${externalId}' exists, but not for this workspace. Claude resume only works when the session file is stored for '${cwd}'.`
-                  : `Claude session '${externalId}' was not found on this machine for this workspace. Claude import only works with a locally persisted Claude session ID.`,
-            });
-          }
         }
 
         const session = yield* providerService.startSession(thread.id, {
@@ -1405,59 +1476,17 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         });
 
         if (thread.modelSelection.provider === "codex") {
-          const adapter = yield* providerAdapterRegistry.getByProvider("codex");
-          const snapshot = yield* adapter.readThread(thread.id).pipe(
-            Effect.mapError(
-              (cause) =>
-                new RouteRequestError({
-                  message:
-                    cause instanceof Error && cause.message.length > 0
-                      ? cause.message
-                      : "Failed to read Codex thread history.",
-                }),
-            ),
-          );
-          const importedMessages = mapCodexSnapshotMessages({
+          yield* importCodexThreadHistory({
             threadId: thread.id,
-            turns: snapshot.turns,
             importedAt: session.updatedAt,
           });
-
-          if (importedMessages.length > 0) {
-            yield* orchestrationEngine.dispatch({
-              type: "thread.messages.import",
-              commandId: CommandId.makeUnsafe(crypto.randomUUID()),
-              threadId: thread.id,
-              messages: importedMessages,
-              createdAt: session.updatedAt,
-            });
-          }
         } else if (thread.modelSelection.provider === "claudeAgent") {
-          const sessionMessages = yield* Effect.tryPromise({
-            try: () => getClaudeSessionMessages(externalId, cwd ? { dir: cwd } : undefined),
-            catch: (cause) =>
-              new RouteRequestError({
-                message:
-                  cause instanceof Error && cause.message.length > 0
-                    ? cause.message
-                    : "Failed to read Claude session history.",
-              }),
-          });
-          const importedMessages = mapClaudeSessionMessages({
+          yield* importClaudeThreadHistory({
             threadId: thread.id,
-            messages: sessionMessages,
+            externalId,
+            cwd,
             importedAt: session.updatedAt,
           });
-
-          if (importedMessages.length > 0) {
-            yield* orchestrationEngine.dispatch({
-              type: "thread.messages.import",
-              commandId: CommandId.makeUnsafe(crypto.randomUUID()),
-              threadId: thread.id,
-              messages: importedMessages,
-              createdAt: session.updatedAt,
-            });
-          }
         }
 
         yield* orchestrationEngine.dispatch({

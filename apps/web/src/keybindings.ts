@@ -69,6 +69,11 @@ const whenThreadJumpAvailable = whenAnd(
 
 export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
   {
+    command: "sidebar.importThread",
+    shortcut: commandShortcut("i"),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
     command: "chat.newClaude",
     shortcut: commandShortcut("c", { altKey: true }),
     whenAst: whenNotTerminalFocus,
