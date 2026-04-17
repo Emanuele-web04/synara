@@ -11,6 +11,7 @@ import {
   type ThreadTokenUsageSnapshot,
   TurnId,
   type OrchestrationThreadActivity,
+  type OrchestrationReadModel,
   type ProviderRuntimeEvent,
 } from "@t3tools/contracts";
 import { Cache, Cause, Duration, Effect, Layer, Option, Ref, Stream } from "effect";
@@ -893,6 +894,58 @@ const make = Effect.gen(function* () {
   const clearAssistantMessageState = (messageId: MessageId) =>
     clearBufferedAssistantText(messageId);
 
+  const resolveAssistantCompletionMessageId = (input: {
+    event: ProviderRuntimeEvent;
+    thread: OrchestrationReadModel["threads"][number];
+    turnId?: TurnId;
+  }) =>
+    Effect.gen(function* () {
+      if (input.event.itemId) {
+        return MessageId.makeUnsafe(`assistant:${input.event.itemId}`);
+      }
+
+      if (input.turnId) {
+        const knownAssistantMessageIds = yield* getAssistantMessageIdsForTurn(
+          input.thread.id,
+          input.turnId,
+        );
+        if (knownAssistantMessageIds.size === 1) {
+          const [onlyMessageId] = knownAssistantMessageIds;
+          if (onlyMessageId) {
+            return onlyMessageId;
+          }
+        }
+        if (knownAssistantMessageIds.size > 1) {
+          const preferredKnownMessage = input.thread.messages
+            .filter(
+              (message: OrchestrationReadModel["threads"][number]["messages"][number]) =>
+                message.role === "assistant" &&
+                message.turnId === input.turnId &&
+                knownAssistantMessageIds.has(message.id),
+            )
+            .toSorted(
+              (
+                left: OrchestrationReadModel["threads"][number]["messages"][number],
+                right: OrchestrationReadModel["threads"][number]["messages"][number],
+              ) => {
+                if (left.streaming !== right.streaming) {
+                  return left.streaming ? -1 : 1;
+                }
+                return (
+                  right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id)
+                );
+              },
+            )[0];
+          if (preferredKnownMessage) {
+            return preferredKnownMessage.id;
+          }
+        }
+        return MessageId.makeUnsafe(`assistant:${input.turnId}`);
+      }
+
+      return MessageId.makeUnsafe(`assistant:${input.event.eventId}`);
+    });
+
   const flushBufferedAssistantMessageDelta = (input: {
     event: ProviderRuntimeEvent;
     threadId: ThreadId;
@@ -1521,9 +1574,6 @@ const make = Effect.gen(function* () {
       const assistantCompletion =
         event.type === "item.completed" && event.payload.itemType === "assistant_message"
           ? {
-              messageId: MessageId.makeUnsafe(
-                `assistant:${event.itemId ?? event.turnId ?? event.eventId}`,
-              ),
               fallbackText: event.payload.detail,
             }
           : undefined;
@@ -1537,8 +1587,12 @@ const make = Effect.gen(function* () {
           : undefined;
 
       if (assistantCompletion) {
-        const assistantMessageId = assistantCompletion.messageId;
         const turnId = toTurnId(event.turnId);
+        const assistantMessageId = yield* resolveAssistantCompletionMessageId({
+          event,
+          thread,
+          ...(turnId ? { turnId } : {}),
+        });
         const existingAssistantMessage = thread.messages.find(
           (entry) => entry.id === assistantMessageId,
         );

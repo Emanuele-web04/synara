@@ -75,6 +75,7 @@ import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
 import {
   resolveShortcutCommand,
   shortcutLabelForCommand,
+  splitShortcutLabel,
   shouldShowThreadJumpHints,
   threadJumpCommandForIndex,
   threadJumpIndexFromCommand,
@@ -210,6 +211,7 @@ const SIDEBAR_LIST_ANIMATION_OPTIONS = {
   easing: "ease-out",
 } as const;
 const EMPTY_THREAD_JUMP_LABELS = new Map<ThreadId, string>();
+const EMPTY_SHORTCUT_PARTS: readonly string[] = [];
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS = 6;
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS = 50;
 const ADD_PROJECT_EXISTING_SYNC_ERROR =
@@ -222,7 +224,6 @@ const PROJECT_CONTEXT_MENU_REMOVE_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
 const PROJECT_CONTEXT_MENU_COPY_PATH_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
-const MODIFIER_SYMBOLS = new Set(["⌘", "⌥", "⌃", "⇧"]);
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -246,27 +247,6 @@ function threadJumpLabelMapsEqual(
     }
   }
   return true;
-}
-
-function splitShortcutLabel(shortcutLabel: string): string[] {
-  if (shortcutLabel.includes("+")) {
-    return shortcutLabel
-      .split("+")
-      .map((part) => part.trim())
-      .filter((part) => part.length > 0);
-  }
-
-  if ([...shortcutLabel].some((char) => MODIFIER_SYMBOLS.has(char))) {
-    const parts = [...shortcutLabel];
-    const key = parts
-      .filter((char) => !MODIFIER_SYMBOLS.has(char))
-      .join("")
-      .trim();
-    const modifiers = parts.filter((char) => MODIFIER_SYMBOLS.has(char));
-    return key.length > 0 ? [...modifiers, key] : modifiers;
-  }
-
-  return [shortcutLabel];
 }
 
 // Resolve the visible numbered-thread hints from the active keybinding config.
@@ -2660,6 +2640,13 @@ export default function Sidebar() {
   const visibleThreadJumpLabelByThreadId = showThreadJumpHints
     ? threadJumpLabelByThreadId
     : EMPTY_THREAD_JUMP_LABELS;
+  const visibleThreadJumpLabelPartsByThreadId = useMemo(() => {
+    const partsByThreadId = new Map<ThreadId, readonly string[]>();
+    for (const [threadId, label] of visibleThreadJumpLabelByThreadId) {
+      partsByThreadId.set(threadId, splitShortcutLabel(label));
+    }
+    return partsByThreadId;
+  }, [visibleThreadJumpLabelByThreadId]);
 
   useEffect(() => {
     const threadIdsToPrewarm = getSidebarThreadIdsToPrewarm({
@@ -2766,6 +2753,8 @@ export default function Sidebar() {
     });
     const isSubagentThread = Boolean(thread.parentThreadId);
     const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
+    const threadJumpLabelParts =
+      visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
     const pinnedTimestampClassName = isSubagentThread
       ? "w-[1.2rem] text-right text-[10px] leading-none tabular-nums text-muted-foreground/26 transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0"
       : "w-[1.625rem] text-right text-[length:var(--app-font-size-ui-meta,11px)] leading-none tabular-nums text-muted-foreground/38 transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0";
@@ -2865,7 +2854,7 @@ export default function Sidebar() {
               ) : null}
               {!isPendingArchiveConfirmation && threadJumpLabel ? (
                 <KbdGroup>
-                  {splitShortcutLabel(threadJumpLabel).map((part) => (
+                  {threadJumpLabelParts.map((part) => (
                     <Kbd key={part}>{part}</Kbd>
                   ))}
                 </KbdGroup>
@@ -2939,6 +2928,8 @@ export default function Sidebar() {
     const subagentIndentPx = Math.max(0, Math.min(depth - 1, 3) * 10);
     const showCompactMeta = !isSubagentThread;
     const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
+    const threadJumpLabelParts =
+      visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
     const childCountLabel = `${childCount} subagent${childCount === 1 ? "" : "s"}`;
     const trailingTimestampClassName = isSubagentThread
       ? cn(
@@ -3236,7 +3227,7 @@ export default function Sidebar() {
               ) : null}
               {!isPendingArchiveConfirmation && threadJumpLabel ? (
                 <KbdGroup>
-                  {splitShortcutLabel(threadJumpLabel).map((part) => (
+                  {threadJumpLabelParts.map((part) => (
                     <Kbd key={part}>{part}</Kbd>
                   ))}
                 </KbdGroup>
