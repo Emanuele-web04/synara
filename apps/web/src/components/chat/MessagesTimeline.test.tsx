@@ -1027,6 +1027,52 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("&gt;/bin/zsh -lc");
   });
 
+  it("shows a globe icon next to compact web-search rows", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        scrollContainer={null}
+        timelineEntries={[
+          {
+            id: "entry-inline-web-search",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-inline-web-search",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "Web search",
+              tone: "tool",
+              itemType: "web_search",
+              toolTitle: "Searched the web",
+            },
+          },
+        ]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="dark"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("Searched the web");
+    expect(markup).toContain("tabler-icon-world");
+  });
+
   it("renders every changed file in the same inline file-change tool call", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const assistantMessageId = MessageId.makeUnsafe("message-assistant-inline-multi-edit");

@@ -1706,6 +1706,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
     EntryIcon === TerminalIcon || EntryIcon === HammerIcon || EntryIcon === AgentTaskIcon;
   const showIconRight = compact && usesTrailingCompactIcon;
   const showIconLeft = !compact;
+  const showInlineWebSearchIcon = compact && workEntry.itemType === "web_search";
   const heading = toolWorkEntryHeading(workEntry);
   const preview = workEntryPreview(workEntry);
   const displayText = preview ? `${heading} ${preview}` : heading;
@@ -1954,6 +1955,16 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                   )}
                   style={{ fontSize: `${rowFontSizePx}px` }}
                 >
+                  {showInlineWebSearchIcon ? (
+                    <span className="mr-1 inline-flex align-[-0.125em] text-muted-foreground/38">
+                      <GlobeIcon
+                        style={{
+                          width: `${rowFontSizePx}px`,
+                          height: `${rowFontSizePx}px`,
+                        }}
+                      />
+                    </span>
+                  ) : null}
                   <span className="text-muted-foreground/50">{heading}</span>
                   {preview && <span className="text-muted-foreground/25"> {preview}</span>}
                 </p>
