@@ -1,19 +1,25 @@
 import { type ResolvedKeybindingsConfig } from "@t3tools/contracts";
 import { useQuery } from "@tanstack/react-query";
-import { Outlet, createFileRoute, useNavigate } from "@tanstack/react-router";
+import { Outlet, createFileRoute, useLocation, useNavigate } from "@tanstack/react-router";
 import { useEffect } from "react";
 
 import ThreadSidebar from "../components/Sidebar";
 import { isElectron } from "../env";
+import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useDisposableThreadLifecycle } from "../hooks/useDisposableThreadLifecycle";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { useLatestProjectStore } from "../latestProjectStore";
+import {
+  resolveCurrentProjectTargetId,
+  resolveLatestProjectTargetId,
+} from "../lib/projectShortcutTargets";
 import { resolveThreadEnvironmentMode } from "../lib/threadEnvironment";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { resolveShortcutCommand } from "../keybindings";
+import { useStore } from "../store";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
-import { resolveSidebarNewThreadEnvMode } from "~/components/Sidebar.logic";
 import { useAppSettings } from "~/appSettings";
 import { Sidebar, SidebarProvider, SidebarRail, useSidebar } from "~/components/ui/sidebar";
 import { useChatCodeFont } from "~/hooks/useChatCodeFont";
@@ -26,6 +32,7 @@ const THREAD_MAIN_CONTENT_MIN_WIDTH = 40 * 16;
 
 function ChatRouteGlobalShortcuts() {
   const navigate = useNavigate();
+  const pathname = useLocation({ select: (location) => location.pathname });
   const { toggleSidebar } = useSidebar();
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
   const selectedThreadIdsSize = useThreadSelectionStore((state) => state.selectedThreadIds.size);
@@ -37,6 +44,11 @@ function ChatRouteGlobalShortcuts() {
     handleNewThread,
     projects,
   } = useHandleNewThread();
+  const { handleNewChat } = useHandleNewChat();
+  const latestProjectId = useLatestProjectStore((state) => state.latestProjectId);
+  const setLatestProjectId = useLatestProjectStore((state) => state.setLatestProjectId);
+  const clearLatestProjectId = useLatestProjectStore((state) => state.clearLatestProjectId);
+  const threadsHydrated = useStore((state) => state.threadsHydrated);
   useDisposableThreadLifecycle(activeContextThreadId);
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
@@ -45,7 +57,26 @@ function ChatRouteGlobalShortcuts() {
       ? selectThreadTerminalState(state.terminalStateByThreadId, activeContextThreadId).terminalOpen
       : false,
   );
-  const { settings: appSettings } = useAppSettings();
+  const allowProjectFallback = pathname !== "/";
+  const activeProject =
+    activeProjectId !== null
+      ? (projects.find((project) => project.id === activeProjectId) ?? null)
+      : null;
+  const currentProjectId = resolveCurrentProjectTargetId(projects, activeProject?.id ?? null);
+  const latestUsableProjectId = resolveLatestProjectTargetId(projects, latestProjectId);
+
+  useEffect(() => {
+    if (!currentProjectId) {
+      return;
+    }
+    setLatestProjectId(currentProjectId);
+  }, [currentProjectId, setLatestProjectId]);
+
+  useEffect(() => {
+    if (threadsHydrated && latestProjectId && latestUsableProjectId === null) {
+      clearLatestProjectId(latestProjectId);
+    }
+  }, [clearLatestProjectId, latestProjectId, latestUsableProjectId, threadsHydrated]);
 
   useEffect(() => {
     const onWindowKeyDown = (event: KeyboardEvent) => {
@@ -73,21 +104,23 @@ function ChatRouteGlobalShortcuts() {
 
       if (!command) return;
 
-      if (command === "chat.newLocal") {
-        const projectId = activeProjectId ?? projects[0]?.id;
-        if (!projectId) return;
+      if (command === "chat.newChat" || command === "chat.newLocal") {
         event.preventDefault();
         event.stopPropagation();
-        void handleNewThread(projectId, {
-          envMode: resolveSidebarNewThreadEnvMode({
-            defaultEnvMode: appSettings.defaultThreadEnvMode,
-          }),
-        });
+        void handleNewChat({ fresh: true });
+        return;
+      }
+
+      if (command === "chat.newLatestProject") {
+        if (!latestUsableProjectId) return;
+        event.preventDefault();
+        event.stopPropagation();
+        void handleNewThread(latestUsableProjectId);
         return;
       }
 
       if (command === "chat.newTerminal") {
-        const projectId = activeProjectId ?? projects[0]?.id;
+        const projectId = activeProjectId ?? (allowProjectFallback ? projects[0]?.id : null);
         if (!projectId) return;
         event.preventDefault();
         event.stopPropagation();
@@ -106,7 +139,7 @@ function ChatRouteGlobalShortcuts() {
       }
 
       if (command === "chat.newClaude" || command === "chat.newCodex") {
-        const projectId = activeProjectId ?? projects[0]?.id;
+        const projectId = activeProjectId ?? (allowProjectFallback ? projects[0]?.id : null);
         if (!projectId) return;
         event.preventDefault();
         event.stopPropagation();
@@ -125,11 +158,10 @@ function ChatRouteGlobalShortcuts() {
       }
 
       if (command !== "chat.new") return;
-      const projectId = activeProjectId ?? projects[0]?.id;
-      if (!projectId) return;
+      if (!currentProjectId) return;
       event.preventDefault();
       event.stopPropagation();
-      void handleNewThread(projectId, {
+      void handleNewThread(currentProjectId, {
         branch: activeThread?.branch ?? activeDraftThread?.branch ?? null,
         worktreePath: activeThread?.worktreePath ?? activeDraftThread?.worktreePath ?? null,
         envMode:
@@ -149,14 +181,17 @@ function ChatRouteGlobalShortcuts() {
     activeDraftThread,
     activeProjectId,
     activeThread,
+    allowProjectFallback,
     clearSelection,
+    currentProjectId,
+    handleNewChat,
     handleNewThread,
     keybindings,
+    latestUsableProjectId,
     projects,
     selectedThreadIdsSize,
     terminalOpen,
     toggleSidebar,
-    appSettings.defaultThreadEnvMode,
   ]);
 
   useEffect(() => {

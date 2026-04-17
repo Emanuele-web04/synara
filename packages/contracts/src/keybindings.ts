@@ -26,6 +26,8 @@ const STATIC_KEYBINDING_COMMANDS = [
   "browser.toggle",
   "diff.toggle",
   "chat.new",
+  "chat.newLatestProject",
+  "chat.newChat",
   "chat.newLocal",
   "chat.newTerminal",
   "chat.newClaude",

@@ -290,7 +290,7 @@ interface ProjectDraftThread extends DraftThreadState {
   threadId: ThreadId;
 }
 
-interface ComposerDraftStoreState {
+export interface ComposerDraftStoreState {
   draftsByThreadId: Record<ThreadId, ComposerThreadDraftState>;
   draftThreadsByThreadId: Record<ThreadId, DraftThreadState>;
   projectDraftThreadIdByProjectId: Record<string, ThreadId>;
@@ -701,7 +701,7 @@ function normalizeModelSelection(
       ? modelOptions?.codex
       : inferredClaudeContextWindow !== undefined
         ? {
-            ...(modelOptions?.claudeAgent ?? {}),
+            ...modelOptions?.claudeAgent,
             contextWindow: modelOptions?.claudeAgent?.contextWindow ?? inferredClaudeContextWindow,
           }
         : modelOptions?.claudeAgent;

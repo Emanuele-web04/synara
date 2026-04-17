@@ -89,13 +89,10 @@ import {
 } from "../storeSelectors";
 import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
 import { gitRemoveWorktreeMutationOptions, gitStatusQueryOptions } from "../lib/gitReactQuery";
+import { resolveCurrentProjectTargetId } from "../lib/projectShortcutTargets";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { readNativeApi } from "../nativeApi";
-import {
-  ensureHomeChatProject,
-  isHomeChatContainerProject,
-  prewarmHomeChatProject,
-} from "../lib/chatProjects";
+import { isHomeChatContainerProject, prewarmHomeChatProject } from "../lib/chatProjects";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
 import { type SidebarThreadSummary, type Thread } from "../types";
@@ -106,6 +103,7 @@ import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
 import { ThreadRunningSpinner } from "./ThreadRunningSpinner";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import { SidebarSearchPalette } from "./SidebarSearchPalette";
+import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useThreadHandoff } from "../hooks/useThreadHandoff";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
@@ -863,6 +861,7 @@ export default function Sidebar() {
   const isOnWorkspace = pathname.startsWith("/workspace");
   const { settings: appSettings, updateSettings } = useAppSettings();
   const { handleNewThread } = useHandleNewThread();
+  const { handleNewChat } = useHandleNewChat();
   const { createThreadHandoff } = useThreadHandoff();
   const routeThreadId = useParams({
     strict: false,
@@ -1350,9 +1349,9 @@ export default function Sidebar() {
         navigateToWorkspace(routeWorkspaceId ?? fallbackWorkspaceId);
         return;
       }
-      void navigate({ to: "/" });
+      void handleNewChat({ fresh: true });
     },
-    [navigate, navigateToWorkspace, routeWorkspaceId, workspacePages],
+    [handleNewChat, navigateToWorkspace, routeWorkspaceId, workspacePages],
   );
 
   const handleCreateWorkspace = useCallback(() => {
@@ -1367,17 +1366,11 @@ export default function Sidebar() {
     prewarmHomeChatProject(homeDir);
   }, [homeDir]);
 
-  // Opens the ChatGPT-style "new chat" landing without bouncing through the "/" bootstrap route,
-  // which avoids the visible remount/refresh when the user clicks the Chats-panel pencil action.
+  // Opens a fresh home-chat draft directly on the draft thread route so the first send
+  // does not need a second route swap from "/" to "/$threadId".
   const handleCreateHomeChat = useCallback(async () => {
-    if (!homeDir) return;
-    const projectId = await ensureHomeChatProject(homeDir);
-    if (!projectId) return;
-    await handleNewThread(projectId, {
-      envMode: "local",
-      worktreePath: null,
-    });
-  }, [handleNewThread, homeDir]);
+    await handleNewChat({ fresh: true });
+  }, [handleNewChat]);
 
   const beginWorkspaceRename = useCallback((workspaceId: string, title: string) => {
     setRenamingWorkspaceId(workspaceId);
@@ -1565,12 +1558,14 @@ export default function Sidebar() {
     setShowManualPathInput(false);
     setAddingProject((prev) => !prev);
   }, []);
+  const currentProjectShortcutTargetId = useMemo(
+    () => resolveCurrentProjectTargetId(projects, focusedProjectId),
+    [focusedProjectId, projects],
+  );
 
   const handlePrimaryNewThread = useCallback(() => {
-    const activeProjectId = routeThreadSummary?.projectId ?? projects[0]?.id ?? null;
-
-    if (activeProjectId) {
-      void handleNewThread(activeProjectId, {
+    if (currentProjectShortcutTargetId) {
+      void handleNewThread(currentProjectShortcutTargetId, {
         envMode: resolveSidebarNewThreadEnvMode({
           defaultEnvMode: appSettings.defaultThreadEnvMode,
         }),
@@ -1581,10 +1576,9 @@ export default function Sidebar() {
     handleStartAddProject();
   }, [
     appSettings.defaultThreadEnvMode,
+    currentProjectShortcutTargetId,
     handleNewThread,
     handleStartAddProject,
-    projects,
-    routeThreadSummary,
   ]);
 
   const handleImportThread = useCallback(
@@ -1594,12 +1588,13 @@ export default function Sidebar() {
         throw new Error("The app server is unavailable.");
       }
 
-      const activeProjectId = routeThreadSummary?.projectId ?? projects[0]?.id ?? null;
-      if (!activeProjectId) {
+      if (!currentProjectShortcutTargetId) {
         throw new Error("Add a project before importing a thread.");
       }
 
-      const activeProject = projects.find((project) => project.id === activeProjectId);
+      const activeProject = projects.find(
+        (project) => project.id === currentProjectShortcutTargetId,
+      );
       if (!activeProject) {
         throw new Error("The target project could not be resolved.");
       }
@@ -1662,7 +1657,7 @@ export default function Sidebar() {
         throw error;
       }
     },
-    [appSettings.defaultThreadEnvMode, navigate, projects, routeThreadSummary],
+    [appSettings.defaultThreadEnvMode, currentProjectShortcutTargetId, navigate, projects],
   );
 
   const cancelRename = useCallback(() => {
@@ -1848,7 +1843,7 @@ export default function Sidebar() {
             replace: true,
           });
         } else if (shouldNavigateToFallback) {
-          void navigate({ to: "/", replace: true });
+          void handleNewChat({ fresh: true });
         }
       } else if (shouldNavigateToFallback) {
         if (fallbackThreadId) {
@@ -1858,7 +1853,7 @@ export default function Sidebar() {
             replace: true,
           });
         } else {
-          void navigate({ to: "/", replace: true });
+          void handleNewChat({ fresh: true });
         }
       }
 
@@ -1892,6 +1887,7 @@ export default function Sidebar() {
       clearComposerDraftForThread,
       clearProjectDraftThreadById,
       clearTerminalState,
+      handleNewChat,
       navigate,
       projectById,
       removeWorktreeMutation,
@@ -2018,11 +2014,11 @@ export default function Sidebar() {
             replace: true,
           });
         } else {
-          void navigate({ to: "/", replace: true });
+          void handleNewChat({ fresh: true });
         }
       }
     },
-    [appSettings.sidebarThreadSortOrder, navigate, routeThreadId, sidebarThreads],
+    [appSettings.sidebarThreadSortOrder, handleNewChat, navigate, routeThreadId, sidebarThreads],
   );
 
   const confirmAndArchiveThread = useCallback(
@@ -2811,18 +2807,24 @@ export default function Sidebar() {
     () => sortedProjects.filter((project) => isHomeChatContainerProject(project, homeDir)),
     [homeDir, sortedProjects],
   );
+  const chatProjectIds = useMemo(
+    () => new Set(chatProjects.map((project) => project.id)),
+    [chatProjects],
+  );
   const visibleChatThreads = useMemo(
     () =>
       sortThreadsForSidebar(
         sidebarDisplayThreads.filter(
           (thread) =>
-            chatProjects.some((project) => project.id === thread.projectId) &&
-            !thread.parentThreadId &&
-            !thread.archivedAt,
+            chatProjectIds.has(thread.projectId) && !thread.parentThreadId && !thread.archivedAt,
         ),
         appSettings.sidebarThreadSortOrder,
       ),
-    [appSettings.sidebarThreadSortOrder, chatProjects, sidebarDisplayThreads],
+    [appSettings.sidebarThreadSortOrder, chatProjectIds, sidebarDisplayThreads],
+  );
+  const visibleChatThreadIds = useMemo(
+    () => visibleChatThreads.map((thread) => thread.id),
+    [visibleChatThreads],
   );
   const standardProjects = useMemo(
     () =>
@@ -3657,13 +3659,7 @@ export default function Sidebar() {
   }
 
   function renderChatItem(thread: (typeof visibleChatThreads)[number]) {
-    return renderThreadRow(
-      thread,
-      visibleChatThreads.map((visibleThread) => visibleThread.id),
-      0,
-      0,
-      false,
-    );
+    return renderThreadRow(thread, visibleChatThreadIds, 0, 0, false);
   }
 
   function renderProjectItem(
@@ -4363,8 +4359,11 @@ export default function Sidebar() {
     desktopUpdateButtonClasses,
   );
   const newThreadShortcutLabel =
-    shortcutLabelForCommand(keybindings, "chat.newLocal") ??
-    shortcutLabelForCommand(keybindings, "chat.new");
+    shortcutLabelForCommand(keybindings, "chat.new") ??
+    shortcutLabelForCommand(keybindings, "chat.newLatestProject");
+  const newChatShortcutLabel =
+    shortcutLabelForCommand(keybindings, "chat.newChat") ??
+    shortcutLabelForCommand(keybindings, "chat.newLocal");
   const newTerminalThreadShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newTerminal");
   const searchShortcutLabel =
     shortcutLabelForCommand(keybindings, "sidebar.search") ??
@@ -4389,10 +4388,17 @@ export default function Sidebar() {
   const searchPaletteActions = useMemo<SidebarSearchAction[]>(
     () => [
       {
+        id: "new-chat",
+        label: "New chat",
+        description: "Open the new chat landing screen.",
+        keywords: ["chat", "new", "home"],
+        shortcutLabel: newChatShortcutLabel,
+      },
+      {
         id: "new-thread",
         label: "New thread",
-        description: "Start a fresh chat in the current project.",
-        keywords: ["chat", "new"],
+        description: "Start a fresh thread in the current project.",
+        keywords: ["thread", "new", "project"],
         shortcutLabel: newThreadShortcutLabel,
       },
       {
@@ -4415,7 +4421,7 @@ export default function Sidebar() {
         keywords: ["preferences", "config"],
       },
     ],
-    [importThreadShortcutLabel, newThreadShortcutLabel],
+    [importThreadShortcutLabel, newChatShortcutLabel, newThreadShortcutLabel],
   );
 
   const handleDesktopUpdateButtonClick = useCallback(() => {
@@ -4631,7 +4637,7 @@ export default function Sidebar() {
                 <SidebarMenuButton
                   size="default"
                   className="h-8 gap-2.5 rounded-lg px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
-                  onClick={() => void navigate({ to: "/" })}
+                  onClick={() => void handleNewChat({ fresh: true })}
                 >
                   <ArrowLeftIcon className="size-[15px]" />
                   <span>Back to app</span>
@@ -5086,7 +5092,7 @@ export default function Sidebar() {
               {visibleChatThreads.map((thread) => renderChatItem(thread))}
             </SidebarMenu>
           ) : (
-            <div className="py-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/48">
+            <div className="px-2 py-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/48">
               No chats yet
             </div>
           )}
@@ -5172,6 +5178,7 @@ export default function Sidebar() {
           actions={searchPaletteActions}
           projects={searchPaletteProjects}
           projectById={projectById}
+          onCreateChat={() => void handleCreateHomeChat()}
           onCreateThread={handlePrimaryNewThread}
           onAddProject={() => void handlePickFolder()}
           onOpenSettings={() => {
@@ -5196,6 +5203,7 @@ function SidebarSearchPaletteController(props: {
   actions: readonly SidebarSearchAction[];
   projects: readonly SidebarSearchProject[];
   projectById: ReadonlyMap<ProjectId, { name: string; remoteName: string }>;
+  onCreateChat: () => void;
   onCreateThread: () => void;
   onAddProject: () => void;
   onOpenSettings: () => void;
@@ -5243,6 +5251,7 @@ function SidebarSearchPaletteController(props: {
       actions={props.actions}
       projects={props.projects}
       threads={searchPaletteThreads}
+      onCreateChat={props.onCreateChat}
       onCreateThread={props.onCreateThread}
       onAddProject={props.onAddProject}
       onOpenSettings={props.onOpenSettings}

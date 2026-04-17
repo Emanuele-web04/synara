@@ -44,10 +44,7 @@ import {
   resolveThreadWorkspaceCwd as resolveSharedThreadWorkspaceCwd,
 } from "@t3tools/shared/threadEnvironment";
 import { deriveTerminalCommandIdentity } from "@t3tools/shared/terminalThreads";
-import {
-  deriveAssociatedWorktreeMetadata,
-  workspaceRootsEqual,
-} from "@t3tools/shared/threadWorkspace";
+import { deriveAssociatedWorktreeMetadata } from "@t3tools/shared/threadWorkspace";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { GoTasklist } from "react-icons/go";
 import { PiArrowBendDownRight } from "react-icons/pi";
@@ -73,6 +70,8 @@ import { isElectron } from "../env";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
 import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
 import { isHomeChatContainerProject } from "../lib/chatProjects";
+import { resolveFirstSendTarget } from "../lib/chatFirstSend";
+import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { buildThreadBreadcrumbs, enrichSubagentWorkEntries } from "./ChatView.logic";
 import {
   createRelevantWorkLogThreadsSelector,
@@ -446,7 +445,7 @@ function mergeDynamicModelOptions(input: {
 
   const orderedDynamicOptions =
     input.provider === "claudeAgent"
-      ? [...normalizedDynamicOptions].reverse()
+      ? normalizedDynamicOptions.toReversed()
       : normalizedDynamicOptions;
 
   return [...orderedDynamicOptions, ...missingStaticBuiltIns, ...customOnlyModels];
@@ -618,6 +617,7 @@ export default function ChatView({
   const timestampFormat = settings.timestampFormat;
   const navigate = useNavigate();
   const { handleNewThread } = useHandleNewThread();
+  const { handleNewChat } = useHandleNewChat();
   const { createThreadHandoff } = useThreadHandoff();
   const rawSearch = useSearch({
     strict: false,
@@ -1861,15 +1861,29 @@ export default function ChatView({
       selectedMentionCount: selectedComposerMentions.length,
       interactionMode,
     });
-  const dynamicAgents = useMemo(() => {
-    const query =
-      selectedProvider === "claudeAgent" ? claudeDynamicAgentsQuery : codexDynamicAgentsQuery;
-    return (query.data?.agents ?? []).map((a) => ({
-      name: a.name,
-      displayName: a.displayName,
-      ...(a.description ? { description: a.description } : {}),
-    }));
-  }, [selectedProvider, claudeDynamicAgentsQuery.data, codexDynamicAgentsQuery.data]);
+  const selectedDynamicAgents = useMemo(
+    () =>
+      selectedProvider === "claudeAgent"
+        ? (claudeDynamicAgentsQuery.data?.agents ?? [])
+        : (codexDynamicAgentsQuery.data?.agents ?? []),
+    [selectedProvider, claudeDynamicAgentsQuery.data?.agents, codexDynamicAgentsQuery.data?.agents],
+  );
+  const dynamicAgents = useMemo(
+    () =>
+      selectedDynamicAgents.map((agent) =>
+        agent.description
+          ? {
+              name: agent.name,
+              displayName: agent.displayName,
+              description: agent.description,
+            }
+          : {
+              name: agent.name,
+              displayName: agent.displayName,
+            },
+      ),
+    [selectedDynamicAgents],
+  );
   const normalComposerMenuItems = useComposerCommandMenuItems({
     composerTrigger: effectiveComposerTrigger,
     provider: selectedProvider,
@@ -1980,7 +1994,7 @@ export default function ChatView({
             error instanceof Error ? error.message : "Unknown error refreshing provider status.",
         });
       });
-  }, [queryClient, toastManager]);
+  }, [queryClient]);
   const voiceRecordingDurationLabel = useMemo(
     () => formatVoiceRecordingDuration(voiceRecordingDurationMs),
     [voiceRecordingDurationMs],
@@ -2474,7 +2488,7 @@ export default function ChatView({
               return;
             }
           }
-          await navigate({ to: "/", replace: true });
+          await handleNewChat({ fresh: true });
         } catch (error) {
           console.error("Failed to delete empty terminal thread after closing its last terminal", {
             threadId: activeThreadId,
@@ -2487,6 +2501,7 @@ export default function ChatView({
       activeThread,
       activeThreadId,
       activeSplitView,
+      handleNewChat,
       isServerThread,
       navigate,
       removeThreadFromSplitViews,
@@ -4249,60 +4264,51 @@ export default function ChatView({
     }
     const threadIdForSend = activeThread.id;
     const isFirstMessage = !isServerThread || !hasNativeUserMessages;
-    const selectedWorkspaceRootForSend = isHomeChatContainer
-      ? (resolvedThreadWorktreePath ?? null)
-      : null;
-    let targetProjectIdForSend = activeProject.id;
-    let targetProjectKindForSend = activeProject.kind;
-    let targetProjectCwdForSend = activeProject.cwd;
-    let targetProjectScriptsForSend = activeProject.kind === "project" ? activeProject.scripts : [];
-    let targetProjectDefaultModelSelectionForSend = activeProject.defaultModelSelection ?? null;
+    const firstSendTarget = resolveFirstSendTarget({
+      activeProject,
+      isFirstMessage,
+      isHomeChatContainer,
+      projects: useStore.getState().projects,
+      selectedWorkspaceRoot: isHomeChatContainer ? (resolvedThreadWorktreePath ?? null) : null,
+    });
+    let {
+      targetProjectId: targetProjectIdForSend,
+      targetProjectKind: targetProjectKindForSend,
+      targetProjectCwd: targetProjectCwdForSend,
+      targetProjectScripts: targetProjectScriptsForSend,
+      targetProjectDefaultModelSelection: targetProjectDefaultModelSelectionForSend,
+    } = firstSendTarget.kind === "create-project"
+      ? {
+          targetProjectId: activeProject.id,
+          targetProjectKind: activeProject.kind,
+          targetProjectCwd: activeProject.cwd,
+          targetProjectScripts: activeProject.kind === "project" ? activeProject.scripts : [],
+          targetProjectDefaultModelSelection: activeProject.defaultModelSelection ?? null,
+        }
+      : firstSendTarget.target;
     let nextThreadEnvMode = envModeForSend;
     let nextThreadBranch = activeThread.branch;
     let nextThreadWorktreePath = activeThread.worktreePath;
 
-    if (isFirstMessage && isHomeChatContainer && selectedWorkspaceRootForSend) {
-      const existingProject = useStore
-        .getState()
-        .projects.find(
-          (project) =>
-            project.kind === "project" &&
-            workspaceRootsEqual(project.cwd, selectedWorkspaceRootForSend),
-        );
-
-      if (existingProject) {
-        targetProjectIdForSend = existingProject.id;
-        targetProjectKindForSend = existingProject.kind;
-        targetProjectCwdForSend = existingProject.cwd;
-        targetProjectScriptsForSend = existingProject.scripts;
-        targetProjectDefaultModelSelectionForSend = existingProject.defaultModelSelection ?? null;
-      } else {
+    if (isFirstMessage && isHomeChatContainer && firstSendTarget.kind !== "current") {
+      if (firstSendTarget.kind === "create-project") {
         const projectId = newProjectId();
         const createdAt = new Date().toISOString();
-        const title =
-          selectedWorkspaceRootForSend.split(/[/\\]/).findLast((segment) => segment.length > 0) ??
-          selectedWorkspaceRootForSend;
         await api.orchestration.dispatchCommand({
           type: "project.create",
           commandId: newCommandId(),
           projectId,
           kind: "project",
-          title,
-          workspaceRoot: selectedWorkspaceRootForSend,
-          defaultModelSelection: {
-            provider: "codex",
-            model: DEFAULT_MODEL_BY_PROVIDER.codex,
-          },
+          title: firstSendTarget.creation.title,
+          workspaceRoot: firstSendTarget.creation.workspaceRoot,
+          defaultModelSelection: firstSendTarget.creation.defaultModelSelection,
           createdAt,
         });
         targetProjectIdForSend = projectId;
         targetProjectKindForSend = "project";
-        targetProjectCwdForSend = selectedWorkspaceRootForSend;
+        targetProjectCwdForSend = firstSendTarget.creation.workspaceRoot;
         targetProjectScriptsForSend = [];
-        targetProjectDefaultModelSelectionForSend = {
-          provider: "codex",
-          model: DEFAULT_MODEL_BY_PROVIDER.codex,
-        };
+        targetProjectDefaultModelSelectionForSend = firstSendTarget.creation.defaultModelSelection;
       }
 
       clearProjectDraftThreadId(targetProjectIdForSend);
@@ -5628,7 +5634,6 @@ export default function ChatView({
     },
     [
       applyPromptReplacement,
-      composerCursor,
       scheduleComposerFocus,
       handleForkTargetSelection,
       handleReviewTargetSelection,

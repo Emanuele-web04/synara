@@ -12,16 +12,23 @@ import { newCommandId, newProjectId } from "./utils";
 const pendingHomeChatCreationByHomeDir = new Map<string, Promise<ProjectId | null>>();
 const pendingHomeChatFixupByHomeDir = new Map<string, Promise<void>>();
 
+export function findHomeChatContainerProject<
+  T extends Pick<Project, "cwd" | "kind" | "name" | "remoteName">,
+>(projects: readonly T[], homeDir: string | null | undefined): T | null {
+  if (!homeDir) {
+    return null;
+  }
+  return projects.find((project) => isHomeChatContainerProject(project, homeDir)) ?? null;
+}
+
 function findCanonicalHomeProject(homeDir: string): {
   canonicalProjectId: ProjectId | null;
   duplicateProjectIds: ProjectId[];
   needsKindFixup: boolean;
 } {
   const state = useStore.getState();
-  const homeProjects = state.projects.filter(
-    (project) =>
-      project.cwd === homeDir &&
-      (project.kind === "chat" || project.remoteName === "Home" || project.name === "Home"),
+  const homeProjects = state.projects.filter((project) =>
+    isHomeChatContainerProject(project, homeDir),
   );
   const canonicalProject =
     homeProjects.find((project) => project.kind === "chat") ?? homeProjects[0];

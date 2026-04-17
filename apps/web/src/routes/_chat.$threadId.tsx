@@ -42,6 +42,7 @@ import {
   stripDiffSearchParams,
 } from "../diffRouteSearch";
 import { useMediaQuery } from "../hooks/useMediaQuery";
+import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { resolveActiveSplitView, isSplitRoute } from "../splitViewRoute";
 import {
   resolveSplitViewFocusedThreadId,
@@ -594,6 +595,7 @@ function SplitPaneSurface(props: {
 
 function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: ThreadIdType }) {
   const navigate = useNavigate();
+  const { handleNewChat } = useHandleNewChat();
   const selectAllThreads = useMemo(() => createAllThreadsSelector(), []);
   const threads = useStore(selectAllThreads);
   const projects = useStore((store) => store.projects);
@@ -770,7 +772,7 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
         : activeSplitView.rightPanel;
     removeSplitView(activeSplitView.id);
     if (!nextThreadId) {
-      void navigate({ to: "/", replace: true });
+      void handleNewChat({ fresh: true });
       return;
     }
     void navigate({
@@ -779,7 +781,7 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
       replace: true,
       search: () => normalizeSingleSearchFromPane(focusedPanelState),
     });
-  }, [activeSplitView, focusedThreadId, navigate, removeSplitView]);
+  }, [activeSplitView, focusedThreadId, handleNewChat, navigate, removeSplitView]);
 
   const activeSplitViewIdRef = useRef<SplitViewId | null>(null);
   activeSplitViewIdRef.current = activeSplitView?.id ?? null;
@@ -1169,6 +1171,7 @@ function SingleChatSurface(props: {
 
 function ChatThreadRouteView() {
   const threadsHydrated = useStore((store) => store.threadsHydrated);
+  const { handleNewChat } = useHandleNewChat();
   const threadId = Route.useParams({
     select: (params) => ThreadId.makeUnsafe(params.threadId),
   });
@@ -1210,9 +1213,9 @@ function ChatThreadRouteView() {
     }
 
     if (!routeThreadExists) {
-      void navigate({ to: "/", replace: true });
+      void handleNewChat({ fresh: true });
     }
-  }, [navigate, routeThreadExists, search, splitView, threadId, threadsHydrated]);
+  }, [handleNewChat, navigate, routeThreadExists, search, splitView, threadId, threadsHydrated]);
 
   if (!threadsHydrated) {
     return null;

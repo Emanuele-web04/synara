@@ -6,6 +6,7 @@
  */
 import { SearchIcon, SettingsIcon, SquarePenIcon } from "~/lib/icons";
 import { type ProviderKind } from "@t3tools/contracts";
+import { BsChat } from "react-icons/bs";
 import { HiOutlineFolderOpen } from "react-icons/hi2";
 import { LuArrowDownToLine, LuArrowLeft } from "react-icons/lu";
 import { type ComponentType, useEffect, useMemo, useState } from "react";
@@ -48,6 +49,7 @@ interface SidebarSearchPaletteProps {
   actions: readonly SidebarSearchAction[];
   projects: readonly SidebarSearchProject[];
   threads: readonly SidebarSearchThread[];
+  onCreateChat: () => void;
   onCreateThread: () => void;
   onAddProject: () => void;
   onOpenSettings: () => void;
@@ -64,6 +66,8 @@ function actionHandler(
   >,
 ): (() => void) | null {
   switch (actionId) {
+    case "new-chat":
+      return props.onCreateChat;
     case "new-thread":
       return props.onCreateThread;
     case "add-project":
@@ -78,6 +82,7 @@ function actionHandler(
 type IconComponent = ComponentType<{ className?: string }>;
 
 const ACTION_ICONS: Record<string, IconComponent> = {
+  "new-chat": BsChat,
   "new-thread": SquarePenIcon,
   "add-project": FolderClosed,
   "import-thread": LuArrowDownToLine,
@@ -136,29 +141,35 @@ function HighlightedText(props: { text: string; query: string; className?: strin
   const segments = useMemo(() => {
     const tokens = tokenizeHighlightQuery(props.query);
     if (tokens.length === 0) {
-      return [{ text: props.text, highlighted: false }];
+      return [{ key: "full", text: props.text, highlighted: false }];
     }
 
     const pattern = new RegExp(`(${tokens.map(escapeRegExp).join("|")})`, "gi");
     const parts = props.text.split(pattern).filter((part) => part.length > 0);
-    return parts.map((part) => ({
-      text: part,
-      highlighted: tokens.some((token) => token === part.toLowerCase()),
-    }));
+    let offset = 0;
+    return parts.map((part) => {
+      const segment = {
+        key: `${offset}-${part.length}`,
+        text: part,
+        highlighted: tokens.some((token) => token === part.toLowerCase()),
+      };
+      offset += part.length;
+      return segment;
+    });
   }, [props.query, props.text]);
 
   return (
     <span className={props.className}>
-      {segments.map((segment, index) =>
+      {segments.map((segment) =>
         segment.highlighted ? (
           <mark
-            key={`${segment.text}-${index}`}
+            key={segment.key}
             className="rounded-[3px] bg-amber-200/80 px-[1px] text-current dark:bg-amber-300/25"
           >
             {segment.text}
           </mark>
         ) : (
-          <span key={`${segment.text}-${index}`}>{segment.text}</span>
+          <span key={segment.key}>{segment.text}</span>
         ),
       )}
     </span>

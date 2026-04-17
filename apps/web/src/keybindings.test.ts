@@ -10,7 +10,7 @@ import {
   formatShortcutLabel,
   isBrowserToggleShortcut,
   isChatNewShortcut,
-  isChatNewLocalShortcut,
+  isChatNewChatShortcut,
   isDiffToggleShortcut,
   isOpenFavoriteEditorShortcut,
   isSidebarToggleShortcut,
@@ -145,7 +145,12 @@ const DEFAULT_BINDINGS = compile([
   },
   {
     shortcut: modShortcut("n", { shiftKey: true }),
-    command: "chat.newLocal",
+    command: "chat.newLatestProject",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
+  {
+    shortcut: modShortcut("n", { altKey: true }),
+    command: "chat.newChat",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
   {
@@ -586,6 +591,14 @@ describe("shortcutLabelForCommand", () => {
 
   it("returns labels for non-terminal commands", () => {
     assert.strictEqual(shortcutLabelForCommand(DEFAULT_BINDINGS, "chat.new", "MacIntel"), "⌘N");
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "chat.newLatestProject", "MacIntel"),
+      "⇧⌘N",
+    );
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "chat.newChat", "MacIntel"),
+      "⌥⌘N",
+    );
     assert.strictEqual(shortcutLabelForCommand(DEFAULT_BINDINGS, "terminal.new", "MacIntel"), "⌘T");
     assert.strictEqual(
       shortcutLabelForCommand(DEFAULT_BINDINGS, "chat.newTerminal", "MacIntel"),
@@ -651,16 +664,33 @@ describe("chat/editor shortcuts", () => {
     );
   });
 
-  it("matches chat.newLocal shortcut", () => {
+  it("matches chat.newChat shortcut", () => {
     assert.isTrue(
-      isChatNewLocalShortcut(event({ key: "n", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+      isChatNewChatShortcut(event({ key: "n", metaKey: true, altKey: true }), DEFAULT_BINDINGS, {
         platform: "MacIntel",
       }),
     );
     assert.isTrue(
-      isChatNewLocalShortcut(event({ key: "n", ctrlKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+      isChatNewChatShortcut(event({ key: "n", ctrlKey: true, altKey: true }), DEFAULT_BINDINGS, {
         platform: "Linux",
       }),
+    );
+  });
+
+  it("resolves chat.newLatestProject shortcut", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "n", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "chat.newLatestProject",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "n", ctrlKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "Linux",
+        context: { terminalFocus: false },
+      }),
+      "chat.newLatestProject",
     );
   });
 

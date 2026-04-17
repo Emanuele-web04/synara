@@ -283,7 +283,7 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
         );
       }}
     >
-      <div className="chat-composer-surface relative overflow-hidden rounded-xl border border-border/60 bg-card shadow-[0_0_0_1px_rgba(255,255,255,0.04)_inset]">
+      <div className="chat-composer-surface relative overflow-hidden rounded-xl border border-border/60 bg-card">
         <CommandList className="max-h-72 py-0.5">
           {groups.map((group, groupIndex) => (
             <div key={group.id}>

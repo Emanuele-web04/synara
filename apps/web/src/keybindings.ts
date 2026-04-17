@@ -74,8 +74,18 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     whenAst: whenNotTerminalFocus,
   },
   {
+    command: "chat.newLatestProject",
+    shortcut: commandShortcut("n", { shiftKey: true }),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
     command: "chat.newClaude",
     shortcut: commandShortcut("c", { altKey: true }),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
+    command: "chat.newChat",
+    shortcut: commandShortcut("n", { altKey: true }),
     whenAst: whenNotTerminalFocus,
   },
   {
@@ -563,13 +573,26 @@ export function isChatNewShortcut(
   return matchesCommandShortcut(event, keybindings, "chat.new", options);
 }
 
-export function isChatNewLocalShortcut(
+export function isChatNewLatestProjectShortcut(
   event: ShortcutEventLike,
   keybindings: ResolvedKeybindingsConfig,
   options?: ShortcutMatchOptions,
 ): boolean {
-  return matchesCommandShortcut(event, keybindings, "chat.newLocal", options);
+  return matchesCommandShortcut(event, keybindings, "chat.newLatestProject", options);
 }
+
+export function isChatNewChatShortcut(
+  event: ShortcutEventLike,
+  keybindings: ResolvedKeybindingsConfig,
+  options?: ShortcutMatchOptions,
+): boolean {
+  return (
+    matchesCommandShortcut(event, keybindings, "chat.newChat", options) ||
+    matchesCommandShortcut(event, keybindings, "chat.newLocal", options)
+  );
+}
+
+export const isChatNewLocalShortcut = isChatNewChatShortcut;
 
 export function isChatNewClaudeShortcut(
   event: ShortcutEventLike,

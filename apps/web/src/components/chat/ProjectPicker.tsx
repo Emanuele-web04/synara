@@ -7,6 +7,7 @@ import { memo, useCallback, useDeferredValue, useEffect, useMemo, useState } fro
 import { type ProjectDirectoryEntry } from "@t3tools/contracts";
 import { readNativeApi } from "../../nativeApi";
 import { useStore } from "../../store";
+import { createSidebarDisplayThreadsSelector } from "../../storeSelectors";
 import { PlusIcon, XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { FolderClosed } from "../FolderClosed";
@@ -69,7 +70,7 @@ export const ProjectPicker = memo(function ProjectPicker({
   onResetToHome,
 }: ProjectPickerProps) {
   const projects = useStore((state) => state.projects);
-  const threads = useStore((state) => state.threads);
+  const sidebarThreads = useStore(useMemo(() => createSidebarDisplayThreadsSelector(), []));
   const homeDir = useWorkspaceStore((state) => state.homeDir);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -95,7 +96,7 @@ export const ProjectPicker = memo(function ProjectPicker({
       nextOptions.push({ cwd: project.cwd, primaryLabel, secondaryLabel });
     }
 
-    for (const thread of threads) {
+    for (const thread of sidebarThreads) {
       const workspaceRoot = thread.worktreePath ?? null;
       const folderName = basenameOfPath(workspaceRoot);
       if (!workspaceRoot || !folderName || folderName.startsWith(".") || seen.has(workspaceRoot)) {
@@ -124,7 +125,7 @@ export const ProjectPicker = memo(function ProjectPicker({
     }
 
     return nextOptions;
-  }, [projects, selectedWorkspaceRoot, threads]);
+  }, [projects, selectedWorkspaceRoot, sidebarThreads]);
   const activeFolderPathSet = useMemo(
     () => new Set(activeFolderOptions.map((entry) => entry.cwd)),
     [activeFolderOptions],
