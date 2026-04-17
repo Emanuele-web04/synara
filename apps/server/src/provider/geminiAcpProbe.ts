@@ -16,7 +16,10 @@ import {
 import { Effect } from "effect";
 import { asNumber, asRecord, trimToUndefined } from "./geminiValue.ts";
 
-const GEMINI_ACP_PROBE_TIMEOUT_MS = 8_000;
+// Gemini ACP cold starts can take noticeably longer than a normal request path,
+// especially when the CLI has to warm caches or discover auth state. Keep the
+// health probe patient enough to avoid false warning banners.
+const GEMINI_ACP_PROBE_TIMEOUT_MS = 30_000;
 const GEMINI_ACP_AUTH_REQUIRED_CODE = -32_000;
 const MAX_CAPTURED_LOG_LINES = 5;
 const MAX_CAPTURED_LOG_LENGTH = 240;
@@ -61,6 +64,10 @@ function formatGeminiAuthMessage(detail: string): string {
   return `Gemini is not authenticated. ${detail}`;
 }
 
+function formatGeminiModelDiscoveryFallbackMessage(): string {
+  return "Gemini CLI is installed and authenticated, but it did not report any available models. DP Code will use its built-in Gemini model list.";
+}
+
 function detailFromProbeLogs(
   stdoutLines: ReadonlyArray<string>,
   stderrLines: ReadonlyArray<string>,
@@ -95,6 +102,20 @@ export function parseGeminiAcpProbeError(
     auth: { status: "unknown" },
     message: formatGeminiDiscoveryWarning(message),
   };
+}
+
+export function normalizeGeminiCapabilityProbeResult(
+  result: GeminiCapabilityProbeResult,
+): GeminiCapabilityProbeResult {
+  if (result.auth.status === "authenticated" && result.models.length === 0) {
+    return {
+      ...result,
+      status: "ready",
+      message: formatGeminiModelDiscoveryFallbackMessage(),
+    };
+  }
+
+  return result;
 }
 
 export function parseGeminiDiscoveredModels(
@@ -310,25 +331,16 @@ export const probeGeminiCapabilities = (input: {
             result,
             input.capabilities ?? DEFAULT_GEMINI_MODEL_CAPABILITIES,
           );
-          if (models.length === 0) {
-            finalize({
-              status: "warning",
-              auth: { status: "authenticated" },
-              models: [],
-              message: formatGeminiDiscoveryWarning(
-                "Gemini ACP session started, but it did not report any available models.",
-              ),
-            });
-            return;
-          }
 
           finalize(
-            {
+            normalizeGeminiCapabilityProbeResult({
               status: "ready",
               auth: { status: "authenticated" },
               models,
-              message: "Gemini CLI is installed and authenticated.",
-            },
+              ...(models.length > 0
+                ? { message: "Gemini CLI is installed and authenticated." }
+                : {}),
+            }),
             (() => {
               const sessionId = trimToUndefined(asRecord(result)?.sessionId);
               return sessionId ? { sessionId } : undefined;
