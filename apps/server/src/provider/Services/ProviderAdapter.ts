@@ -157,6 +157,11 @@ export interface ProviderAdapterShape<TError> {
   ) => Effect.Effect<ProviderThreadSnapshot, TError>;
 
   /**
+   * Trigger provider-native context compaction for a thread when supported.
+   */
+  readonly compactThread?: (threadId: ThreadId) => Effect.Effect<void, TError>;
+
+  /**
    * Fork one provider thread into another persisted thread cursor when supported.
    *
    * Adapters may omit this to signal that the caller should fall back to

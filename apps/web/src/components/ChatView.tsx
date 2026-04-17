@@ -1841,6 +1841,11 @@ export default function ChatView({
     workspaceEntries,
     searchableModelOptions,
     supportsFastSlashCommand,
+    canOfferCompactCommand:
+      selectedProvider === "codex" &&
+      isServerThread &&
+      activeThread?.session !== null &&
+      activeThread?.session?.status !== "closed",
     canOfferReviewCommand,
     canOfferForkCommand,
     dynamicAgents,
@@ -5246,6 +5251,11 @@ export default function ChatView({
     activeRootBranch,
     isServerThread,
     supportsFastSlashCommand,
+    canOfferCompactCommand:
+      selectedProvider === "codex" &&
+      isServerThread &&
+      activeThread?.session !== null &&
+      activeThread?.session?.status !== "closed",
     supportsTextNativeReviewCommand,
     fastModeEnabled,
     providerNativeCommands,

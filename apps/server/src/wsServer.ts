@@ -436,6 +436,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const gitManager = yield* GitManager;
   const terminalManager = yield* TerminalManager;
   const keybindingsManager = yield* Keybindings;
+  const providerService = yield* ProviderService;
   const providerHealth = yield* ProviderHealth;
   const providerDiscoveryService = yield* ProviderDiscoveryService;
   const providerAdapterRegistry = yield* ProviderAdapterRegistry;
@@ -1462,6 +1463,11 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       case WS_METHODS.providerGetComposerCapabilities: {
         const body = stripRequestTag(request.body);
         return yield* providerDiscoveryService.getComposerCapabilities(body);
+      }
+
+      case WS_METHODS.providerCompactThread: {
+        const body = stripRequestTag(request.body);
+        return yield* providerService.compactThread(body);
       }
 
       case WS_METHODS.providerListCommands: {

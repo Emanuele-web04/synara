@@ -80,6 +80,8 @@ function commandMenuTitle(
   switch (item.command) {
     case "clear":
       return "Clear";
+    case "compact":
+      return "Compact Context";
     case "model":
       return "Model";
     case "fast":

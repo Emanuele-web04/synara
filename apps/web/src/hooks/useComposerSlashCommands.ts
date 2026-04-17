@@ -44,6 +44,7 @@ export function useComposerSlashCommands(input: {
   activeRootBranch: string | null;
   isServerThread: boolean;
   supportsFastSlashCommand: boolean;
+  canOfferCompactCommand: boolean;
   supportsTextNativeReviewCommand: boolean;
   fastModeEnabled: boolean;
   providerNativeCommands: readonly ProviderNativeCommandDescriptor[];
@@ -95,6 +96,7 @@ export function useComposerSlashCommands(input: {
     activeRootBranch,
     isServerThread,
     supportsFastSlashCommand,
+    canOfferCompactCommand,
     supportsTextNativeReviewCommand,
     fastModeEnabled,
     providerNativeCommands,
@@ -118,10 +120,49 @@ export function useComposerSlashCommands(input: {
   const availableBuiltInSlashCommands = getAvailableComposerSlashCommands({
     provider: selectedProvider,
     supportsFastSlashCommand,
+    canOfferCompactCommand,
     canOfferReviewCommand: true,
     canOfferForkCommand: true,
     providerNativeCommandNames,
   });
+
+  const compactCodexThread = useCallback(async (): Promise<boolean> => {
+    const api = readNativeApi();
+    if (
+      !api ||
+      selectedProvider !== "codex" ||
+      !isServerThread ||
+      !activeThread?.session ||
+      activeThread.session.status === "closed"
+    ) {
+      toastManager.add({
+        type: "warning",
+        title: "Compact is unavailable",
+        description: "Open an active Codex server thread before compacting context.",
+      });
+      return false;
+    }
+
+    try {
+      await api.provider.compactThread({
+        threadId: activeThread.id,
+      });
+      toastManager.add({
+        type: "success",
+        title: "Compaction started",
+        description: "Codex is compacting the current thread context.",
+      });
+      return true;
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Could not compact thread",
+        description:
+          error instanceof Error ? error.message : "An error occurred while compacting context.",
+      });
+      return false;
+    }
+  }, [activeThread, isServerThread, selectedProvider]);
 
   const setFastModeFromSlashCommand = useCallback(
     (enabled: boolean) => {
@@ -443,6 +484,11 @@ export function useComposerSlashCommands(input: {
         await handleClearConversation();
         return true;
       }
+      if (slashInvocation.command === "compact") {
+        editorActions.clearComposerSlashDraft();
+        await compactCodexThread();
+        return true;
+      }
       if (slashInvocation.command === "plan" || slashInvocation.command === "default") {
         await handleInteractionModeChange(slashInvocation.command === "plan" ? "plan" : "default");
         editorActions.clearComposerSlashDraft();
@@ -532,6 +578,7 @@ export function useComposerSlashCommands(input: {
     [
       availableBuiltInSlashCommands,
       checkClaudeFastSlashCommandAvailability,
+      compactCodexThread,
       createForkThreadFromSlashCommand,
       editorActions,
       handleClearConversation,
@@ -582,6 +629,17 @@ export function useComposerSlashCommands(input: {
           editorActions.setComposerHighlightedItemId(null);
         }
         void handleClearConversation();
+        return;
+      }
+
+      if (item.command === "compact") {
+        const applied = clearSlashCommandFromComposer();
+        if (!applied) {
+          return;
+        }
+        editorActions.setComposerHighlightedItemId(null);
+        void compactCodexThread();
+        editorActions.scheduleComposerFocus();
         return;
       }
 
@@ -669,6 +727,7 @@ export function useComposerSlashCommands(input: {
       }
     },
     [
+      compactCodexThread,
       editorActions,
       handleClearConversation,
       handleInteractionModeChange,

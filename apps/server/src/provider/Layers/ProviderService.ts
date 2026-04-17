@@ -10,6 +10,7 @@
  * @module ProviderServiceLive
  */
 import {
+  ProviderCompactThreadInput,
   ProviderForkThreadInput,
   ModelSelection,
   NonNegativeInt,
@@ -730,6 +731,30 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         });
       });
 
+    const compactThread: ProviderServiceShape["compactThread"] = (rawInput) =>
+      Effect.gen(function* () {
+        const input = yield* decodeInputOrValidationError({
+          operation: "ProviderService.compactThread",
+          schema: ProviderCompactThreadInput,
+          payload: rawInput,
+        });
+        const routed = yield* resolveRoutableSession({
+          threadId: input.threadId,
+          operation: "ProviderService.compactThread",
+          allowRecovery: true,
+        });
+        if (!routed.adapter.compactThread) {
+          return yield* toValidationError(
+            "ProviderService.compactThread",
+            `Context compaction is unavailable for provider '${routed.adapter.provider}'.`,
+          );
+        }
+        yield* routed.adapter.compactThread(routed.threadId);
+        yield* analytics.record("provider.thread.compacted", {
+          provider: routed.adapter.provider,
+        });
+      });
+
     const runStopAll = () =>
       Effect.gen(function* () {
         const threadIds = yield* directory.listThreadIds();
@@ -786,6 +811,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       listSessions,
       getCapabilities,
       rollbackConversation,
+      compactThread,
       // Each access creates a fresh PubSub subscription so that multiple
       // consumers (ProviderRuntimeIngestion, CheckpointReactor, etc.) each
       // independently receive all runtime events.

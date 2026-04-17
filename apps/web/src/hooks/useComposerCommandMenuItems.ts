@@ -47,6 +47,7 @@ export function useComposerCommandMenuItems(input: {
   workspaceEntries: readonly ProjectEntry[];
   searchableModelOptions: readonly SearchableModelOption[];
   supportsFastSlashCommand: boolean;
+  canOfferCompactCommand: boolean;
   canOfferReviewCommand: boolean;
   canOfferForkCommand: boolean;
   dynamicAgents: readonly { name: string; displayName: string; description?: string }[];
@@ -60,6 +61,7 @@ export function useComposerCommandMenuItems(input: {
     workspaceEntries,
     searchableModelOptions,
     supportsFastSlashCommand,
+    canOfferCompactCommand,
     canOfferReviewCommand,
     canOfferForkCommand,
     dynamicAgents,
@@ -139,6 +141,7 @@ export function useComposerCommandMenuItems(input: {
       const availableCommands = getAvailableComposerSlashCommands({
         provider,
         supportsFastSlashCommand,
+        canOfferCompactCommand,
         canOfferReviewCommand,
         canOfferForkCommand,
         providerNativeCommandNames: providerNativeCommands.map((command) => command.name),
@@ -226,6 +229,7 @@ export function useComposerCommandMenuItems(input: {
       }));
   }, [
     canOfferForkCommand,
+    canOfferCompactCommand,
     canOfferReviewCommand,
     composerTrigger,
     dynamicAgents,

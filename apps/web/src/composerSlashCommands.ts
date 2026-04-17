@@ -2,6 +2,7 @@ import type { GitBranch, ProviderKind } from "@t3tools/contracts";
 
 export const BUILT_IN_COMPOSER_SLASH_COMMANDS = [
   "clear",
+  "compact",
   "model",
   "plan",
   "default",
@@ -92,6 +93,12 @@ const COMPOSER_SLASH_COMMAND_DEFINITIONS: Record<
     label: "/clear",
     description: "Start a fresh thread and clear the current conversation context",
     source: "shared",
+  },
+  compact: {
+    command: "compact",
+    label: "/compact",
+    description: "Compact the current Codex thread to free context",
+    source: "app",
   },
   model: {
     command: "model",
@@ -293,6 +300,7 @@ export function resolveComposerSlashRootBranch(input: {
 export function getAvailableComposerSlashCommands(input: {
   provider: ProviderKind;
   supportsFastSlashCommand: boolean;
+  canOfferCompactCommand: boolean;
   canOfferReviewCommand: boolean;
   canOfferForkCommand: boolean;
   providerNativeCommandNames?: ReadonlyArray<string>;
@@ -308,6 +316,7 @@ export function getAvailableComposerSlashCommands(input: {
     input.provider === "codex"
       ? [
           "clear",
+          ...(input.canOfferCompactCommand ? (["compact"] as const) : []),
           "model",
           ...(input.supportsFastSlashCommand ? (["fast"] as const) : []),
           "plan",

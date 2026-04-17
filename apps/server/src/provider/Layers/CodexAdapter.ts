@@ -1604,6 +1604,12 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       );
     };
 
+    const compactThread: NonNullable<CodexAdapterShape["compactThread"]> = (threadId) =>
+      Effect.tryPromise({
+        try: () => manager.compactThread(threadId),
+        catch: (cause) => toRequestError(threadId, "thread/compact/start", cause),
+      });
+
     const forkThread: CodexAdapterShape["forkThread"] = (input) =>
       Effect.tryPromise({
         try: () => manager.forkThread(input),
@@ -1785,6 +1791,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       interruptTurn,
       readThread,
       rollbackThread,
+      compactThread,
       forkThread,
       respondToRequest,
       respondToUserInput,
