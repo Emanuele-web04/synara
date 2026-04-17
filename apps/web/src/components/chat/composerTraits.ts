@@ -10,8 +10,10 @@ import {
 } from "@t3tools/contracts";
 import {
   getDefaultEffort,
+  getDefaultContextWindow,
   getModelCapabilities,
   hasEffortLevel,
+  hasContextWindowOption,
   isClaudeUltrathinkPrompt,
   trimOrNull,
 } from "@t3tools/shared/model";
@@ -28,6 +30,16 @@ function getRawEffort(
   return trimOrNull((modelOptions as ClaudeModelOptions | undefined)?.effort);
 }
 
+function getRawContextWindow(
+  provider: ProviderKind,
+  modelOptions: ProviderOptions | null | undefined,
+): string | null {
+  if (provider !== "claudeAgent") {
+    return null;
+  }
+  return trimOrNull((modelOptions as ClaudeModelOptions | undefined)?.contextWindow);
+}
+
 // Resolve the currently selected composer traits from capabilities plus draft overrides.
 export function getComposerTraitSelection(
   provider: ProviderKind,
@@ -38,7 +50,9 @@ export function getComposerTraitSelection(
   const caps = getModelCapabilities(provider, model);
   const effortLevels = caps.reasoningEffortLevels;
   const defaultEffort = getDefaultEffort(caps);
+  const defaultContextWindow = getDefaultContextWindow(caps);
   const resolvedEffort = getRawEffort(provider, modelOptions);
+  const resolvedContextWindow = getRawContextWindow(provider, modelOptions);
   const isPromptInjected = resolvedEffort
     ? caps.promptInjectedEffortLevels.includes(resolvedEffort)
     : false;
@@ -57,6 +71,12 @@ export function getComposerTraitSelection(
     caps.supportsFastMode &&
     (modelOptions as { fastMode?: boolean } | undefined)?.fastMode === true;
 
+  const contextWindowOptions = caps.contextWindowOptions;
+  const contextWindow =
+    resolvedContextWindow && hasContextWindowOption(caps, resolvedContextWindow)
+      ? resolvedContextWindow
+      : defaultContextWindow;
+
   const ultrathinkPromptControlled =
     caps.promptInjectedEffortLevels.length > 0 && isClaudeUltrathinkPrompt(prompt);
 
@@ -67,6 +87,9 @@ export function getComposerTraitSelection(
     effortLevels,
     thinkingEnabled,
     fastModeEnabled,
+    contextWindowOptions,
+    contextWindow,
+    defaultContextWindow,
     ultrathinkPromptControlled,
   };
 }

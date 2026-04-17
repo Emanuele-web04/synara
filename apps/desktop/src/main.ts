@@ -38,6 +38,7 @@ import { NetService } from "@t3tools/shared/Net";
 import { RotatingFileSink } from "@t3tools/shared/logging";
 import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness";
 import { showDesktopConfirmDialog } from "./confirmDialog";
+import { shouldAllowMediaPermissionRequest } from "./mediaPermissions";
 import { syncShellEnvironment } from "./syncShellEnvironment";
 import { getAutoUpdateDisabledReason, shouldBroadcastDownloadProgress } from "./updateState";
 import { registerDesktopVoiceTranscriptionHandler } from "./voiceTranscription";
@@ -1631,9 +1632,9 @@ function configureMediaPermissions(): void {
       return;
     }
 
-    const requestedMediaTypes =
-      "mediaTypes" in details && Array.isArray(details.mediaTypes) ? details.mediaTypes : [];
-    if (!requestedMediaTypes.includes("audio")) {
+    // Some Electron microphone requests omit `mediaTypes`, so denying here can suppress
+    // the macOS permission prompt entirely even though the renderer asked for audio input.
+    if (!shouldAllowMediaPermissionRequest(details)) {
       callback(false);
       return;
     }

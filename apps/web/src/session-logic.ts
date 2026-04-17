@@ -401,58 +401,72 @@ export function deriveActivePlanState(
 ): ActivePlanState | null {
   const ordered = [...activities].toSorted(compareActivitiesByOrder);
   const allPlanActivities = ordered.filter((activity) => activity.kind === "turn.plan.updated");
-  // Prefer the current turn's plan, but keep the most recent prior plan visible
-  // so plan/task state survives follow-up turns that don't emit a new plan update.
-  const latest =
-    (latestTurnId
-      ? allPlanActivities.filter((activity) => activity.turnId === latestTurnId).at(-1)
-      : undefined) ??
-    allPlanActivities.at(-1) ??
-    null;
-  if (!latest) {
-    return null;
-  }
-  const payload =
-    latest.payload && typeof latest.payload === "object"
-      ? (latest.payload as Record<string, unknown>)
-      : null;
-  const rawPlan = payload?.plan;
-  if (!Array.isArray(rawPlan)) {
-    return null;
-  }
-  const steps = rawPlan
-    .map((entry) => {
-      if (!entry || typeof entry !== "object") return null;
-      const record = entry as Record<string, unknown>;
-      if (typeof record.step !== "string") {
-        return null;
-      }
-      const status =
-        record.status === "completed" || record.status === "inProgress" ? record.status : "pending";
-      return {
-        step: record.step,
-        status,
-      };
-    })
-    .filter(
-      (
-        step,
-      ): step is {
-        step: string;
-        status: "pending" | "inProgress" | "completed";
-      } => step !== null,
-    );
-  if (steps.length === 0) {
-    return null;
-  }
-  return {
-    createdAt: latest.createdAt,
-    turnId: latest.turnId,
-    ...(payload && "explanation" in payload
-      ? { explanation: payload.explanation as string | null }
-      : {}),
-    steps,
+
+  const toActivePlanState = (activity: OrchestrationThreadActivity): ActivePlanState | null => {
+    const payload =
+      activity.payload && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>)
+        : null;
+    const rawPlan = payload?.plan;
+    if (!Array.isArray(rawPlan)) {
+      return null;
+    }
+    const steps = rawPlan
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") return null;
+        const record = entry as Record<string, unknown>;
+        if (typeof record.step !== "string") {
+          return null;
+        }
+        const status =
+          record.status === "completed" || record.status === "inProgress"
+            ? record.status
+            : "pending";
+        return {
+          step: record.step,
+          status,
+        };
+      })
+      .filter(
+        (
+          step,
+        ): step is {
+          step: string;
+          status: "pending" | "inProgress" | "completed";
+        } => step !== null,
+      );
+    if (steps.length === 0) {
+      return null;
+    }
+    return {
+      createdAt: activity.createdAt,
+      turnId: activity.turnId,
+      ...(payload && "explanation" in payload
+        ? { explanation: payload.explanation as string | null }
+        : {}),
+      steps,
+    };
   };
+
+  const currentTurnPlan = latestTurnId
+    ? (allPlanActivities
+        .filter((activity) => activity.turnId === latestTurnId)
+        .map(toActivePlanState)
+        .findLast((plan) => plan !== null) ?? null)
+    : null;
+  if (currentTurnPlan) {
+    return currentTurnPlan;
+  }
+
+  // Keep the most recent unfinished prior plan visible so implementation turns
+  // that have started but not emitted their own plan update can still show progress.
+  const latestPriorPlan =
+    allPlanActivities.map(toActivePlanState).findLast((plan) => plan !== null) ?? null;
+  if (!latestPriorPlan) {
+    return null;
+  }
+
+  return latestPriorPlan.steps.some((step) => step.status !== "completed") ? latestPriorPlan : null;
 }
 
 // Counts still-running background work for the active turn so compact UI can surface agent activity.

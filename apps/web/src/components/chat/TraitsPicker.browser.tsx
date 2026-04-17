@@ -66,6 +66,7 @@ async function mountClaudePicker(props?: {
     effort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultrathink";
     thinking?: boolean;
     fastMode?: boolean;
+    contextWindow?: string;
   } | null;
   skipDraftModelOptions?: boolean;
 }) {
@@ -147,6 +148,19 @@ describe("TraitsPicker (Claude)", () => {
       expect(text).toContain("Fast Mode");
       expect(text).toContain("off");
       expect(text).toContain("on");
+    });
+  });
+
+  it("shows context window controls for Opus models", async () => {
+    await using _ = await mountClaudePicker();
+
+    await page.getByRole("button").click();
+
+    await vi.waitFor(() => {
+      const text = document.body.textContent ?? "";
+      expect(text).toContain("Context Window");
+      expect(text).toContain("200k");
+      expect(text).toContain("1M");
     });
   });
 
@@ -246,6 +260,36 @@ describe("TraitsPicker (Claude)", () => {
       provider: "claudeAgent",
       options: {
         effort: "max",
+      },
+    });
+  });
+
+  it("shows the non-default context window in the trigger label", async () => {
+    await using _ = await mountClaudePicker({
+      model: "claude-opus-4-6",
+      options: { contextWindow: "1m" },
+    });
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent ?? "").toContain("1M");
+    });
+  });
+
+  it("persists sticky claude context window when changed", async () => {
+    await using _ = await mountClaudePicker({
+      model: "claude-opus-4-6",
+      options: { contextWindow: "200k" },
+    });
+
+    await page.getByRole("button").click();
+    await page.getByRole("menuitemradio", { name: "1M" }).click();
+
+    expect(
+      useComposerDraftStore.getState().stickyModelSelectionByProvider.claudeAgent,
+    ).toMatchObject({
+      provider: "claudeAgent",
+      options: {
+        contextWindow: "1m",
       },
     });
   });

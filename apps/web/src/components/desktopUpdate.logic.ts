@@ -61,6 +61,7 @@ function formatDesktopUpdateDownloadPercent(percent: number | null): string | nu
 
 export interface DesktopUpdateButtonPresentation {
   label: string;
+  secondaryLabel: string | null;
   progressPercent: number | null;
 }
 
@@ -71,6 +72,7 @@ export function getDesktopUpdateButtonPresentation(
   if (options?.installing) {
     return {
       label: "Updating...",
+      secondaryLabel: null,
       progressPercent: null,
     };
   }
@@ -78,6 +80,7 @@ export function getDesktopUpdateButtonPresentation(
   if (!state) {
     return {
       label: "Update",
+      secondaryLabel: null,
       progressPercent: null,
     };
   }
@@ -85,6 +88,7 @@ export function getDesktopUpdateButtonPresentation(
   if (state.status === "checking") {
     return {
       label: "Checking...",
+      secondaryLabel: null,
       progressPercent: null,
     };
   }
@@ -93,6 +97,7 @@ export function getDesktopUpdateButtonPresentation(
     const percentText = formatDesktopUpdateDownloadPercent(state.downloadPercent);
     return {
       label: "Downloading...",
+      secondaryLabel: state.availableVersion ?? null,
       progressPercent: percentText ? Number.parseInt(percentText, 10) : null,
     };
   }
@@ -102,11 +107,13 @@ export function getDesktopUpdateButtonPresentation(
     if (state.status === "error" && state.errorContext === "download") {
       return {
         label: "Download failed",
+        secondaryLabel: state.availableVersion ?? null,
         progressPercent: null,
       };
     }
     return {
       label: "Update available",
+      secondaryLabel: state.availableVersion ?? null,
       progressPercent: null,
     };
   }
@@ -114,22 +121,26 @@ export function getDesktopUpdateButtonPresentation(
     if (state.status === "error" && state.errorContext === "install") {
       return {
         label: "Install failed",
+        secondaryLabel: state.downloadedVersion ?? state.availableVersion ?? null,
         progressPercent: null,
       };
     }
     return {
       label: "Ready to update",
+      secondaryLabel: state.downloadedVersion ?? state.availableVersion ?? null,
       progressPercent: null,
     };
   }
   if (action === "check") {
     return {
       label: "Check updates",
+      secondaryLabel: null,
       progressPercent: null,
     };
   }
   return {
     label: "Update",
+    secondaryLabel: null,
     progressPercent: null,
   };
 }

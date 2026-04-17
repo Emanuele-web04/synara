@@ -43,6 +43,7 @@ type ProviderIntentEvent = Extract<
   OrchestrationEvent,
   {
     type:
+      | "thread.meta-updated"
       | "thread.runtime-mode-set"
       | "thread.turn-queued"
       | "thread.turn-start-requested"
@@ -1055,6 +1056,31 @@ const make = Effect.gen(function* () {
   const processDomainEvent = (event: ProviderIntentEvent) =>
     Effect.gen(function* () {
       switch (event.type) {
+        case "thread.meta-updated": {
+          const thread = yield* resolveThread(event.payload.threadId);
+          if (event.payload.modelSelection === undefined) {
+            return;
+          }
+
+          if (
+            !thread?.session ||
+            thread.session.status === "stopped" ||
+            thread.session.activeTurnId !== null
+          ) {
+            threadModelSelections.set(event.payload.threadId, event.payload.modelSelection);
+            return;
+          }
+
+          const cachedProviderOptions = threadProviderOptions.get(event.payload.threadId);
+          yield* ensureSessionForThread(event.payload.threadId, event.occurredAt, {
+            modelSelection: event.payload.modelSelection,
+            ...(cachedProviderOptions !== undefined
+              ? { providerOptions: cachedProviderOptions }
+              : {}),
+          });
+          threadModelSelections.set(event.payload.threadId, event.payload.modelSelection);
+          return;
+        }
         case "thread.runtime-mode-set": {
           const thread = yield* resolveThread(event.payload.threadId);
           if (!thread?.session || thread.session.status === "stopped") {
@@ -1123,6 +1149,7 @@ const make = Effect.gen(function* () {
   const start: ProviderCommandReactorShape["start"] = Effect.all([
     Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
       if (
+        event.type !== "thread.meta-updated" &&
         event.type !== "thread.runtime-mode-set" &&
         event.type !== "thread.turn-queued" &&
         event.type !== "thread.turn-start-requested" &&

@@ -56,8 +56,10 @@ import {
 } from "@t3tools/contracts";
 import {
   hasEffortLevel,
+  hasContextWindowOption,
   applyClaudePromptEffortPrefix,
   getModelCapabilities,
+  resolveApiModelId,
   trimOrNull,
 } from "@t3tools/shared/model";
 import { buildClaudeSubagentPrompt } from "@t3tools/shared/agentMentions";
@@ -422,6 +424,8 @@ function mergeClaudeTokenUsageSnapshot(
   };
 }
 
+const CLAUDE_CONTEXT_1M_BETA = "context-1m-2025-08-07" as const;
+
 function asCanonicalTurnId(value: TurnId): TurnId {
   return value;
 }
@@ -652,6 +656,12 @@ const CLAUDE_SETTING_SOURCES = [
   "project",
   "local",
 ] as const satisfies ReadonlyArray<SettingSource>;
+const EMBEDDED_CLAUDE_SYSTEM_PROMPT_APPEND = [
+  "You are running inside DP Code, a coding app that embeds the Claude Agent SDK.",
+  "Do not present the host app as Claude Code unless the user is explicitly asking about Claude Code.",
+  "Treat the current working directory as the active workspace for the task.",
+  "When the user asks about the current project, codebase, or repository, proactively inspect files in the current working directory before asking the user where to look.",
+].join("\n");
 
 function buildClaudeSdkSubagents(): Record<string, AgentDefinition> {
   const agents: Record<string, AgentDefinition> = {};
@@ -3070,9 +3080,13 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         const modelSelection =
           input.modelSelection?.provider === "claudeAgent" ? input.modelSelection : undefined;
         const requestedEffort = trimOrNull(modelSelection?.options?.effort ?? null);
+        const requestedContextWindow = trimOrNull(modelSelection?.options?.contextWindow ?? null);
         const caps = getModelCapabilities("claudeAgent", modelSelection?.model);
+        const apiModelId = modelSelection ? resolveApiModelId(modelSelection) : undefined;
         const effort =
           requestedEffort && hasEffortLevel(caps, requestedEffort) ? requestedEffort : null;
+        const contextWindow1mEnabled =
+          requestedContextWindow === "1m" && hasContextWindowOption(caps, "1m");
         const fastMode = modelSelection?.options?.fastMode === true && caps.supportsFastMode;
         const thinking =
           typeof modelSelection?.options?.thinking === "boolean" && caps.supportsThinkingToggle
@@ -3090,9 +3104,15 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
         const queryOptions: ClaudeQueryOptions = {
           ...(input.cwd ? { cwd: input.cwd } : {}),
-          ...(modelSelection?.model ? { model: modelSelection.model } : {}),
+          ...(apiModelId ? { model: apiModelId } : {}),
+          ...(contextWindow1mEnabled ? { betas: [CLAUDE_CONTEXT_1M_BETA] } : {}),
           pathToClaudeCodeExecutable: providerOptions?.binaryPath ?? "claude",
           settingSources: [...CLAUDE_SETTING_SOURCES],
+          systemPrompt: {
+            type: "preset",
+            preset: "claude_code",
+            append: EMBEDDED_CLAUDE_SYSTEM_PROMPT_APPEND,
+          },
           ...(Object.keys(claudeSubagents).length > 0 ? { agents: claudeSubagents } : {}),
           // Keep the runtime value explicit so Opus 4.7 can pass xhigh through to the SDK.
           ...(effectiveEffort
@@ -3230,6 +3250,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           payload: {
             config: {
               ...(modelSelection?.model ? { model: modelSelection.model } : {}),
+              ...(apiModelId ? { apiModelId } : {}),
+              ...(requestedContextWindow ? { contextWindow: requestedContextWindow } : {}),
               ...(input.cwd ? { cwd: input.cwd } : {}),
               ...(effectiveEffort ? { effort: effectiveEffort } : {}),
               ...(permissionMode ? { permissionMode } : {}),
@@ -3285,8 +3307,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         if (modelSelection?.model) {
+          const apiModelId = resolveApiModelId(modelSelection);
           yield* Effect.tryPromise({
-            try: () => context.query.setModel(modelSelection.model),
+            try: () => context.query.setModel(apiModelId),
             catch: (cause) => toRequestError(input.threadId, "turn/setModel", cause),
           });
         }

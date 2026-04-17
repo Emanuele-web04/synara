@@ -18,8 +18,10 @@ function formatPercentage(value: number | null): string | null {
 export function ContextWindowMeter(props: {
   usage: ContextWindowSnapshot;
   cumulativeCostUsd?: number | null | undefined;
+  activeWindowLabel?: string | null | undefined;
+  pendingWindowLabel?: string | null | undefined;
 }) {
-  const { usage, cumulativeCostUsd } = props;
+  const { usage, cumulativeCostUsd, activeWindowLabel, pendingWindowLabel } = props;
   const usedPercentage = formatPercentage(usage.usedPercentage);
   const normalizedPercentage = Math.max(0, Math.min(100, usage.usedPercentage ?? 0));
   const radius = 6;
@@ -84,6 +86,11 @@ export function ContextWindowMeter(props: {
           <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
             Context window
           </div>
+          {pendingWindowLabel ? (
+            <div className="text-xs text-muted-foreground">
+              Current session: {activeWindowLabel ?? "Unknown"}
+            </div>
+          ) : null}
           {usage.maxTokens !== null && usedPercentage ? (
             <div className="whitespace-nowrap text-xs font-medium text-foreground">
               <span>{usedPercentage}</span>
@@ -97,6 +104,9 @@ export function ContextWindowMeter(props: {
               {formatContextWindowTokens(usage.usedTokens)} tokens used so far
             </div>
           )}
+          {pendingWindowLabel ? (
+            <div className="text-xs text-muted-foreground">Next turn: {pendingWindowLabel}</div>
+          ) : null}
           {(usage.totalProcessedTokens ?? null) !== null &&
           (usage.totalProcessedTokens ?? 0) > usage.usedTokens ? (
             <div className="text-xs text-muted-foreground">

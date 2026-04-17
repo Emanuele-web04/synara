@@ -50,6 +50,8 @@ interface BranchToolbarProps {
   onComposerFocusRequest?: () => void;
   contextWindow?: ContextWindowSnapshot | null;
   cumulativeCostUsd?: number | null;
+  activeContextWindowLabel?: string | null;
+  pendingContextWindowLabel?: string | null;
 }
 
 export default function BranchToolbar({
@@ -65,6 +67,8 @@ export default function BranchToolbar({
   onComposerFocusRequest,
   contextWindow,
   cumulativeCostUsd,
+  activeContextWindowLabel,
+  pendingContextWindowLabel,
 }: BranchToolbarProps) {
   const setThreadWorkspaceAction = useStore((store) => store.setThreadWorkspace);
   const draftThread = useComposerDraftStore((store) => store.getDraftThread(threadId));
@@ -402,6 +406,12 @@ export default function BranchToolbar({
           <ContextWindowMeter
             usage={contextWindow}
             {...(cumulativeCostUsd != null ? { cumulativeCostUsd } : {})}
+            {...(activeContextWindowLabel !== undefined
+              ? { activeWindowLabel: activeContextWindowLabel }
+              : {})}
+            {...(pendingContextWindowLabel !== undefined
+              ? { pendingWindowLabel: pendingContextWindowLabel }
+              : {})}
           />
         ) : null}
       </div>

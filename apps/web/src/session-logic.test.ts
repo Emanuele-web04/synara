@@ -352,7 +352,7 @@ describe("deriveActivePlanState", () => {
         tone: "info",
         turnId: "turn-1",
         payload: {
-          plan: [{ step: "Write tests", status: "completed" }],
+          plan: [{ step: "Write tests", status: "inProgress" }],
         },
       }),
     ];
@@ -360,8 +360,26 @@ describe("deriveActivePlanState", () => {
     expect(deriveActivePlanState(activities, TurnId.makeUnsafe("turn-2"))).toEqual({
       createdAt: "2026-02-23T00:00:01.000Z",
       turnId: "turn-1",
-      steps: [{ step: "Write tests", status: "completed" }],
+      steps: [{ step: "Write tests", status: "inProgress" }],
     });
+  });
+
+  it("does not revive a completed prior-turn plan on a new turn", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "completed-plan-from-turn-1",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "turn.plan.updated",
+        summary: "Plan updated",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          plan: [{ step: "Write tests", status: "completed" }],
+        },
+      }),
+    ];
+
+    expect(deriveActivePlanState(activities, TurnId.makeUnsafe("turn-2"))).toBeNull();
   });
 });
 

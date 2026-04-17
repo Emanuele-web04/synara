@@ -54,6 +54,9 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     effortLevels,
     thinkingEnabled,
     fastModeEnabled,
+    contextWindowOptions,
+    contextWindow,
+    defaultContextWindow,
     ultrathinkPromptControlled,
   } = getComposerTraitSelection(provider, model, prompt, modelOptions);
 
@@ -93,7 +96,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     ],
   );
 
-  if (effort === null && thinkingEnabled === null) {
+  if (effort === null && thinkingEnabled === null && contextWindowOptions.length <= 1) {
     return null;
   }
 
@@ -163,6 +166,34 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
           </MenuGroup>
         </>
       ) : null}
+      {contextWindowOptions.length > 1 ? (
+        <>
+          <MenuDivider />
+          <MenuGroup>
+            <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">
+              Context Window
+            </div>
+            <MenuRadioGroup
+              value={contextWindow ?? defaultContextWindow ?? ""}
+              onValueChange={(value) => {
+                setProviderModelOptions(
+                  threadId,
+                  provider,
+                  buildNextProviderOptions(provider, modelOptions, { contextWindow: value }),
+                  { ...(model !== undefined ? { model } : {}), persistSticky: true },
+                );
+              }}
+            >
+              {contextWindowOptions.map((option) => (
+                <MenuRadioItem key={option.value} value={option.value}>
+                  {option.label}
+                  {option.value === defaultContextWindow ? " (default)" : ""}
+                </MenuRadioItem>
+              ))}
+            </MenuRadioGroup>
+          </MenuGroup>
+        </>
+      ) : null}
     </>
   );
 });
@@ -200,12 +231,19 @@ export const TraitsPicker = memo(function TraitsPicker({
     effortLevels,
     thinkingEnabled,
     fastModeEnabled,
+    contextWindowOptions,
+    contextWindow,
+    defaultContextWindow,
     ultrathinkPromptControlled,
   } = getComposerTraitSelection(provider, model, prompt, modelOptions);
 
   const effortLabel = effort
     ? (effortLevels.find((l) => l.value === effort)?.label ?? effort)
     : null;
+  const contextWindowLabel =
+    contextWindowOptions.length > 1 && contextWindow !== defaultContextWindow
+      ? (contextWindowOptions.find((option) => option.value === contextWindow)?.label ?? null)
+      : null;
   const primaryTriggerLabel = ultrathinkPromptControlled
     ? "Ultrathink"
     : effortLabel
@@ -244,6 +282,14 @@ export const TraitsPicker = memo(function TraitsPicker({
             </span>
           </>
         ) : null}
+        {contextWindowLabel ? (
+          <>
+            {primaryTriggerLabel || showsFastBadge ? (
+              <span className="shrink-0 text-muted-foreground/45">·</span>
+            ) : null}
+            <span className="shrink-0">{contextWindowLabel}</span>
+          </>
+        ) : null}
       </span>
       <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 opacity-60" />
     </span>
@@ -258,6 +304,14 @@ export const TraitsPicker = memo(function TraitsPicker({
               <IoFlash aria-hidden="true" className="size-3 text-[hsl(var(--chart-4))]" />
               <span>Fast</span>
             </span>
+          </>
+        ) : null}
+        {contextWindowLabel ? (
+          <>
+            {primaryTriggerLabel || showsFastBadge ? (
+              <span className="text-muted-foreground/45">·</span>
+            ) : null}
+            <span>{contextWindowLabel}</span>
           </>
         ) : null}
       </span>

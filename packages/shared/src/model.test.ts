@@ -9,13 +9,16 @@ import {
 
 import {
   applyClaudePromptEffortPrefix,
+  getDefaultContextWindow,
   getDefaultModel,
   getModelCapabilities,
   getModelOptions,
+  hasContextWindowOption,
   isClaudeUltrathinkPrompt,
   normalizeClaudeModelOptions,
   normalizeCodexModelOptions,
   normalizeModelSlug,
+  resolveApiModelId,
   resolveSelectableModel,
   resolveModelSlug,
   resolveModelSlugForProvider,
@@ -229,6 +232,22 @@ describe("hasEffortLevel", () => {
   });
 });
 
+describe("context window helpers", () => {
+  it("returns the default context window from capabilities", () => {
+    expect(getDefaultContextWindow(getModelCapabilities("claudeAgent", "claude-opus-4-6"))).toBe(
+      "200k",
+    );
+    expect(getDefaultContextWindow(getModelCapabilities("codex", "gpt-5.4"))).toBeNull();
+  });
+
+  it("validates context window against model capabilities", () => {
+    const opusCaps = getModelCapabilities("claudeAgent", "claude-opus-4-6");
+    expect(hasContextWindowOption(opusCaps, "200k")).toBe(true);
+    expect(hasContextWindowOption(opusCaps, "1m")).toBe(true);
+    expect(hasContextWindowOption(opusCaps, "2m")).toBe(false);
+  });
+});
+
 describe("applyClaudePromptEffortPrefix", () => {
   it("prefixes ultrathink prompts exactly once", () => {
     expect(applyClaudePromptEffortPrefix("Investigate this", "ultrathink")).toBe(
@@ -258,6 +277,61 @@ describe("normalizeCodexModelOptions", () => {
       reasoningEffort: "xhigh",
       fastMode: true,
     });
+  });
+});
+
+describe("normalizeClaudeModelOptions", () => {
+  it("drops default-only claude options", () => {
+    expect(
+      normalizeClaudeModelOptions("claude-opus-4-6", {
+        effort: "high",
+        fastMode: false,
+        contextWindow: "200k",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("preserves non-default claude context window options", () => {
+    expect(
+      normalizeClaudeModelOptions("claude-opus-4-6", {
+        contextWindow: "1m",
+      }),
+    ).toEqual({
+      contextWindow: "1m",
+    });
+  });
+
+  it("omits unsupported claude context window options", () => {
+    expect(
+      normalizeClaudeModelOptions("claude-haiku-4-5", {
+        thinking: false,
+        contextWindow: "1m",
+      }),
+    ).toEqual({
+      thinking: false,
+    });
+  });
+});
+
+describe("resolveApiModelId", () => {
+  it("adds the 1m suffix for Claude models when selected", () => {
+    expect(
+      resolveApiModelId({
+        provider: "claudeAgent",
+        model: "claude-opus-4-6",
+        options: { contextWindow: "1m" },
+      }),
+    ).toBe("claude-opus-4-6[1m]");
+  });
+
+  it("leaves Claude models unchanged for the default context window", () => {
+    expect(
+      resolveApiModelId({
+        provider: "claudeAgent",
+        model: "claude-opus-4-6",
+        options: { contextWindow: "200k" },
+      }),
+    ).toBe("claude-opus-4-6");
   });
 });
 

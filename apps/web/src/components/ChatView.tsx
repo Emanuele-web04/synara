@@ -204,7 +204,11 @@ import {
   type TerminalContextDraft,
   type TerminalContextSelection,
 } from "../lib/terminalContext";
-import { deriveLatestContextWindowSnapshot, deriveCumulativeCostUsd } from "../lib/contextWindow";
+import {
+  deriveContextWindowSelectionStatus,
+  deriveCumulativeCostUsd,
+  deriveLatestContextWindowSnapshot,
+} from "../lib/contextWindow";
 import { formatVoiceRecordingDuration, useVoiceRecorder } from "../lib/voiceRecorder";
 import { shouldUseCompactComposerFooter } from "./composerFooterLayout";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
@@ -382,6 +386,14 @@ function formatModelSlug(slug: string): string {
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+function normalizeDynamicModelSlug(provider: ProviderKind, slug: string): string {
+  if (provider === "claudeAgent") {
+    const withoutContextSuffix = slug.replace(/\[[^\]]+\]$/u, "");
+    return normalizeModelSlug(withoutContextSuffix, provider) ?? withoutContextSuffix;
+  }
+  return normalizeModelSlug(slug, provider) ?? slug;
+}
+
 function mergeDynamicModelOptions(input: {
   provider: ProviderKind;
   staticOptions: ReadonlyArray<{ slug: string; name: string; isCustom?: boolean }>;
@@ -402,8 +414,7 @@ function mergeDynamicModelOptions(input: {
       continue;
     }
 
-    const normalizedSlug =
-      normalizeModelSlug(dynamicModel.slug, input.provider) ?? dynamicModel.slug;
+    const normalizedSlug = normalizeDynamicModelSlug(input.provider, dynamicModel.slug);
     if (dynamicNormalizedSlugs.has(normalizedSlug)) {
       continue;
     }
@@ -420,13 +431,19 @@ function mergeDynamicModelOptions(input: {
   const customOnlyModels = input.staticOptions.filter(
     (model) => "isCustom" in model && model.isCustom && !dynamicNormalizedSlugs.has(model.slug),
   );
+  const staticBuiltInModels = input.staticOptions.filter(
+    (model) => !("isCustom" in model) || model.isCustom !== true,
+  );
+  const missingStaticBuiltIns = staticBuiltInModels.filter(
+    (model) => !dynamicNormalizedSlugs.has(model.slug),
+  );
 
   const orderedDynamicOptions =
     input.provider === "claudeAgent"
       ? [...normalizedDynamicOptions].reverse()
       : normalizedDynamicOptions;
 
-  return [...orderedDynamicOptions, ...customOnlyModels];
+  return [...orderedDynamicOptions, ...missingStaticBuiltIns, ...customOnlyModels];
 }
 
 function skillMentionPrefix(provider: string): string {
@@ -5041,6 +5058,15 @@ export default function ChatView({
     prompt,
     selectedProviderModelOptions,
   );
+  const contextWindowSelectionStatus = useMemo(
+    () =>
+      deriveContextWindowSelectionStatus({
+        activeSnapshot: activeContextWindow,
+        selectedValue:
+          selectedProvider === "claudeAgent" ? composerTraitSelection.contextWindow : null,
+      }),
+    [activeContextWindow, composerTraitSelection.contextWindow, selectedProvider],
+  );
   const providerTraitsPicker = renderProviderTraitsPicker({
     provider: selectedProvider,
     threadId,
@@ -6343,6 +6369,8 @@ export default function ChatView({
                 onComposerFocusRequest={scheduleComposerFocus}
                 contextWindow={activeContextWindow}
                 cumulativeCostUsd={activeCumulativeCostUsd}
+                activeContextWindowLabel={contextWindowSelectionStatus.activeLabel}
+                pendingContextWindowLabel={contextWindowSelectionStatus.pendingSelectedLabel}
                 {...(canCheckoutPullRequestIntoThread
                   ? { onCheckoutPullRequestRequest: openPullRequestDialog }
                   : {})}
@@ -6436,6 +6464,8 @@ export default function ChatView({
         contextWindow={activeContextWindow}
         cumulativeCostUsd={activeCumulativeCostUsd}
         rateLimitStatus={activeRateLimitStatus}
+        activeContextWindowLabel={contextWindowSelectionStatus.activeLabel}
+        pendingContextWindowLabel={contextWindowSelectionStatus.pendingSelectedLabel}
       />
       <ThreadWorktreeHandoffDialog
         open={worktreeHandoffDialogOpen}

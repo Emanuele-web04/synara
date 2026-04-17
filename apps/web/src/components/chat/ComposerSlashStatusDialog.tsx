@@ -56,6 +56,8 @@ export function ComposerSlashStatusDialog(props: {
   contextWindow: ContextWindowSnapshot | null;
   cumulativeCostUsd: number | null;
   rateLimitStatus: RateLimitStatus | null;
+  activeContextWindowLabel?: string | null;
+  pendingContextWindowLabel?: string | null;
 }) {
   const {
     open,
@@ -70,6 +72,8 @@ export function ComposerSlashStatusDialog(props: {
     contextWindow,
     cumulativeCostUsd,
     rateLimitStatus,
+    activeContextWindowLabel,
+    pendingContextWindowLabel,
   } = props;
 
   return (
@@ -124,9 +128,20 @@ export function ComposerSlashStatusDialog(props: {
                 <p className="text-sm text-muted-foreground">
                   Latest usage reported by the active thread.
                 </p>
+                {pendingContextWindowLabel ? (
+                  <p className="text-sm text-muted-foreground">
+                    Current session: {activeContextWindowLabel ?? "Unknown"}. Next turn:{" "}
+                    {pendingContextWindowLabel}.
+                  </p>
+                ) : null}
               </div>
               {contextWindow ? (
-                <ContextWindowMeter usage={contextWindow} cumulativeCostUsd={cumulativeCostUsd} />
+                <ContextWindowMeter
+                  usage={contextWindow}
+                  cumulativeCostUsd={cumulativeCostUsd}
+                  activeWindowLabel={activeContextWindowLabel}
+                  pendingWindowLabel={pendingContextWindowLabel}
+                />
               ) : null}
             </div>
             {contextWindow ? (

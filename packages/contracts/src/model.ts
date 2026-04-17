@@ -24,6 +24,7 @@ export const ClaudeModelOptions = Schema.Struct({
   thinking: Schema.optional(Schema.Boolean),
   effort: Schema.optional(Schema.Literals(CLAUDE_CODE_EFFORT_OPTIONS)),
   fastMode: Schema.optional(Schema.Boolean),
+  contextWindow: Schema.optional(Schema.String),
 });
 export type ClaudeModelOptions = typeof ClaudeModelOptions.Type;
 
@@ -39,11 +40,18 @@ export type EffortOption = {
   readonly isDefault?: true;
 };
 
+export type ContextWindowOption = {
+  readonly value: string;
+  readonly label: string;
+  readonly isDefault?: true;
+};
+
 export type ModelCapabilities = {
   readonly reasoningEffortLevels: readonly EffortOption[];
   readonly supportsFastMode: boolean;
   readonly supportsThinkingToggle: boolean;
   readonly promptInjectedEffortLevels: readonly string[];
+  readonly contextWindowOptions: readonly ContextWindowOption[];
 };
 
 type ModelDefinition = {
@@ -71,6 +79,7 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
         supportsFastMode: true,
         supportsThinkingToggle: false,
         promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
       },
     },
     {
@@ -86,6 +95,7 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
         supportsFastMode: true,
         supportsThinkingToggle: false,
         promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
       },
     },
     {
@@ -101,6 +111,7 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
         supportsFastMode: true,
         supportsThinkingToggle: false,
         promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
       },
     },
     {
@@ -116,6 +127,7 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
         supportsFastMode: true,
         supportsThinkingToggle: false,
         promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
       },
     },
     {
@@ -131,6 +143,7 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
         supportsFastMode: true,
         supportsThinkingToggle: false,
         promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
       },
     },
     {
@@ -146,6 +159,7 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
         supportsFastMode: true,
         supportsThinkingToggle: false,
         promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
       },
     },
   ],
@@ -165,6 +179,10 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
         supportsFastMode: true,
         supportsThinkingToggle: false,
         promptInjectedEffortLevels: ["ultrathink"],
+        contextWindowOptions: [
+          { value: "200k", label: "200k", isDefault: true },
+          { value: "1m", label: "1M" },
+        ],
       },
     },
     {
@@ -181,6 +199,10 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
         supportsFastMode: true,
         supportsThinkingToggle: false,
         promptInjectedEffortLevels: ["ultrathink"],
+        contextWindowOptions: [
+          { value: "200k", label: "200k", isDefault: true },
+          { value: "1m", label: "1M" },
+        ],
       },
     },
     {
@@ -195,6 +217,10 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
         supportsFastMode: false,
         supportsThinkingToggle: false,
         promptInjectedEffortLevels: [],
+        contextWindowOptions: [
+          { value: "200k", label: "200k", isDefault: true },
+          { value: "1m", label: "1M" },
+        ],
       },
     },
     {
@@ -211,6 +237,10 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
         supportsFastMode: false,
         supportsThinkingToggle: false,
         promptInjectedEffortLevels: ["ultrathink"],
+        contextWindowOptions: [
+          { value: "200k", label: "200k", isDefault: true },
+          { value: "1m", label: "1M" },
+        ],
       },
     },
     {
@@ -221,6 +251,7 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
         supportsFastMode: false,
         supportsThinkingToggle: true,
         promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
       },
     },
   ],

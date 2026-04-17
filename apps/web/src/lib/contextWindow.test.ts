@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { EventId, type OrchestrationThreadActivity, TurnId } from "@t3tools/contracts";
 
-import { deriveLatestContextWindowSnapshot, formatContextWindowTokens } from "./contextWindow";
+import {
+  deriveContextWindowSelectionStatus,
+  deriveLatestContextWindowSnapshot,
+  formatContextWindowSelectionLabel,
+  formatContextWindowTokens,
+  inferContextWindowSelectionValue,
+} from "./contextWindow";
 
 function makeActivity(id: string, kind: string, payload: unknown): OrchestrationThreadActivity {
   return {
@@ -63,5 +69,36 @@ describe("contextWindow", () => {
 
     expect(snapshot?.usedTokens).toBe(81_659);
     expect(snapshot?.totalProcessedTokens).toBe(748_126);
+  });
+
+  it("formats context window selection labels for Claude options", () => {
+    expect(formatContextWindowSelectionLabel("1m")).toBe("1M");
+    expect(formatContextWindowSelectionLabel("200k")).toBe("200k");
+  });
+
+  it("infers the active Claude context window from max tokens", () => {
+    expect(inferContextWindowSelectionValue(200_000)).toBe("200k");
+    expect(inferContextWindowSelectionValue(1_000_000)).toBe("1m");
+    expect(inferContextWindowSelectionValue(333_000)).toBeNull();
+  });
+
+  it("marks a selected Claude context window as pending when the live session differs", () => {
+    const snapshot = deriveLatestContextWindowSnapshot([
+      makeActivity("activity-1", "context-window.updated", {
+        usedTokens: 23_000,
+        maxTokens: 200_000,
+      }),
+    ]);
+
+    expect(
+      deriveContextWindowSelectionStatus({
+        activeSnapshot: snapshot,
+        selectedValue: "1m",
+      }),
+    ).toEqual({
+      activeLabel: "200k",
+      selectedLabel: "1M",
+      pendingSelectedLabel: "1M",
+    });
   });
 });
