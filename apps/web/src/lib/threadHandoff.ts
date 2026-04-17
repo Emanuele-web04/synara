@@ -19,12 +19,10 @@ function isImportableThreadMessage(
   return (message.role === "user" || message.role === "assistant") && message.streaming === false;
 }
 
-export function resolveHandoffTargetProvider(sourceProvider: ProviderKind): ProviderKind {
-  const sourceIndex = HANDOFF_PROVIDER_ORDER.indexOf(sourceProvider);
-  if (sourceIndex === -1) {
-    return "codex";
-  }
-  return HANDOFF_PROVIDER_ORDER[(sourceIndex + 1) % HANDOFF_PROVIDER_ORDER.length]!;
+export function resolveAvailableHandoffTargetProviders(
+  sourceProvider: ProviderKind,
+): ReadonlyArray<ProviderKind> {
+  return HANDOFF_PROVIDER_ORDER.filter((provider) => provider !== sourceProvider);
 }
 
 export function resolveThreadHandoffBadgeLabel(thread: Pick<Thread, "handoff">): string | null {
@@ -95,19 +93,19 @@ export function canCreateThreadHandoff(input: {
 
 export function resolveThreadHandoffModelSelection(input: {
   readonly sourceThread: Pick<Thread, "modelSelection">;
+  readonly targetProvider: ProviderKind;
   readonly projectDefaultModelSelection: ModelSelection | null | undefined;
   readonly stickyModelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>>;
 }): ModelSelection {
-  const targetProvider = resolveHandoffTargetProvider(input.sourceThread.modelSelection.provider);
-  const stickySelection = input.stickyModelSelectionByProvider[targetProvider];
+  const stickySelection = input.stickyModelSelectionByProvider[input.targetProvider];
   if (stickySelection) {
     return stickySelection;
   }
-  if (input.projectDefaultModelSelection?.provider === targetProvider) {
+  if (input.projectDefaultModelSelection?.provider === input.targetProvider) {
     return input.projectDefaultModelSelection;
   }
   return {
-    provider: targetProvider,
-    model: DEFAULT_MODEL_BY_PROVIDER[targetProvider],
+    provider: input.targetProvider,
+    model: DEFAULT_MODEL_BY_PROVIDER[input.targetProvider],
   };
 }

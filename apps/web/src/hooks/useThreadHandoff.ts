@@ -1,9 +1,11 @@
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback } from "react";
+import { type ProviderKind } from "@t3tools/contracts";
 import { useComposerDraftStore } from "../composerDraftStore";
 import {
   buildThreadHandoffImportedMessages,
   canCreateThreadHandoff,
+  resolveAvailableHandoffTargetProviders,
   resolveThreadHandoffModelSelection,
 } from "../lib/threadHandoff";
 import { newCommandId, newThreadId } from "../lib/utils";
@@ -17,7 +19,7 @@ export function useThreadHandoff() {
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
 
   const createThreadHandoff = useCallback(
-    async (thread: Thread): Promise<Thread["id"]> => {
+    async (thread: Thread, targetProvider: ProviderKind): Promise<Thread["id"]> => {
       const api = readNativeApi();
       if (!api) {
         throw new Error("Native API not found");
@@ -30,6 +32,13 @@ export function useThreadHandoff() {
 
       if (!canCreateThreadHandoff({ thread })) {
         throw new Error("This thread cannot be handed off yet.");
+      }
+      if (
+        !resolveAvailableHandoffTargetProviders(thread.modelSelection.provider).includes(
+          targetProvider,
+        )
+      ) {
+        throw new Error("This handoff target is not available for the current thread.");
       }
 
       const nextThreadId = newThreadId();
@@ -47,6 +56,7 @@ export function useThreadHandoff() {
         title: thread.title,
         modelSelection: resolveThreadHandoffModelSelection({
           sourceThread: thread,
+          targetProvider,
           projectDefaultModelSelection: project.defaultModelSelection,
           stickyModelSelectionByProvider,
         }),

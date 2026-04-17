@@ -4,6 +4,7 @@
 // Exports: Settings route component for `/settings`
 
 import {
+  PROVIDER_DISPLAY_NAMES,
   type ProviderKind,
   type ThreadId,
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
@@ -853,10 +854,15 @@ function SettingsRouteView() {
                         <OpenAI className="size-3.5" />
                       )}
                       {settings.defaultProvider === "claudeAgent"
-                        ? "Claude"
+                        ? PROVIDER_DISPLAY_NAMES.claudeAgent
                         : settings.defaultProvider === "gemini"
+<<<<<<< HEAD
                           ? "Gemini"
                           : "Codex"}
+=======
+                          ? PROVIDER_DISPLAY_NAMES.gemini
+                          : PROVIDER_DISPLAY_NAMES.codex}
+>>>>>>> e18c4db9 (Add explicit provider handoff targets)
                     </span>
                   </SelectValue>
                 </SelectTrigger>

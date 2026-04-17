@@ -1,15 +1,18 @@
 import { type ModelSelection } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
-import { resolveHandoffTargetProvider, resolveThreadHandoffModelSelection } from "./threadHandoff";
+import {
+  resolveAvailableHandoffTargetProviders,
+  resolveThreadHandoffModelSelection,
+} from "./threadHandoff";
 
 describe("threadHandoff", () => {
-  it("cycles handoff targets across all supported providers", () => {
-    expect(resolveHandoffTargetProvider("codex")).toBe("claudeAgent");
-    expect(resolveHandoffTargetProvider("claudeAgent")).toBe("gemini");
-    expect(resolveHandoffTargetProvider("gemini")).toBe("codex");
+  it("lists all supported handoff targets except the active provider", () => {
+    expect(resolveAvailableHandoffTargetProviders("codex")).toEqual(["claudeAgent", "gemini"]);
+    expect(resolveAvailableHandoffTargetProviders("claudeAgent")).toEqual(["codex", "gemini"]);
+    expect(resolveAvailableHandoffTargetProviders("gemini")).toEqual(["codex", "claudeAgent"]);
   });
 
-  it("prefers sticky model selection for the resolved handoff target", () => {
+  it("prefers sticky model selection for the chosen handoff target", () => {
     const stickySelection = {
       provider: "gemini",
       model: "gemini-2.5-pro",
@@ -23,6 +26,7 @@ describe("threadHandoff", () => {
             model: "claude-sonnet-4-6",
           },
         },
+        targetProvider: "gemini",
         projectDefaultModelSelection: {
           provider: "gemini",
           model: "gemini-3.1-pro-preview",
@@ -43,6 +47,7 @@ describe("threadHandoff", () => {
             model: "gemini-2.5-pro",
           },
         },
+        targetProvider: "codex",
         projectDefaultModelSelection: null,
         stickyModelSelectionByProvider: {},
       }),
