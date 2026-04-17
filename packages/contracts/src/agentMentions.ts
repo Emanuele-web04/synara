@@ -78,14 +78,14 @@ const CODEX_AGENT_MENTION_ALIASES: Record<string, CodexAgentAliasDefinition> = {
     provider: "codex",
     kind: "model",
     model: "gpt-5.3-codex-spark",
-    displayName: "GPT-5.3 Spark",
+    displayName: "GPT-5.3 Codex Spark",
     color: "cyan",
   },
   "5.3-spark": {
     provider: "codex",
     kind: "model",
     model: "gpt-5.3-codex-spark",
-    displayName: "GPT-5.3 Spark",
+    displayName: "GPT-5.3 Codex Spark",
     color: "cyan",
   },
   "5.2": {

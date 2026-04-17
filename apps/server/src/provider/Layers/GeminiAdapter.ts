@@ -2474,9 +2474,9 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
       discard: true,
     }).pipe(Effect.asVoid);
 
-  const listModels: NonNullable<GeminiAdapterShape["listModels"]> = () =>
+  const listModels: NonNullable<GeminiAdapterShape["listModels"]> = (input) =>
     probeGeminiCapabilities({
-      binaryPath: "gemini",
+      binaryPath: trimToUndefined(input.binaryPath) ?? "gemini",
       cwd: os.homedir(),
     }).pipe(
       Effect.map(

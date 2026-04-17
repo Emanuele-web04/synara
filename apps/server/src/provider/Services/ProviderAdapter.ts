@@ -17,6 +17,7 @@ import type {
   ProviderListAgentsResult,
   ProviderListCommandsInput,
   ProviderListCommandsResult,
+  ProviderListModelsInput,
   ProviderListModelsResult,
   ProviderListPluginsInput,
   ProviderListPluginsResult,
@@ -217,7 +218,9 @@ export interface ProviderAdapterShape<TError> {
   /**
    * List models directly from the provider runtime when supported.
    */
-  readonly listModels?: () => Effect.Effect<ProviderListModelsResult, TError>;
+  readonly listModels?: (
+    input: ProviderListModelsInput,
+  ) => Effect.Effect<ProviderListModelsResult, TError>;
 
   /**
    * List agents/subagents directly from the provider runtime when supported.

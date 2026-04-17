@@ -66,6 +66,11 @@ import {
 } from "~/lib/providerDiscoveryReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
+import {
+  isProviderUsable,
+  normalizeProviderStatusForLocalConfig,
+  providerUnavailableReason,
+} from "~/lib/providerAvailability";
 import { isElectron } from "../env";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
 import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
@@ -1145,6 +1150,7 @@ export default function ChatView({
   const geminiModelsQuery = useQuery(
     providerModelsQueryOptions({
       provider: "gemini",
+      binaryPath: settings.geminiBinaryPath || null,
       enabled: selectedProvider === "gemini" || lockedProvider === "gemini",
     }),
   );
@@ -1274,22 +1280,6 @@ export default function ChatView({
         : null,
     [activePendingDraftAnswers, activePendingUserInput],
   );
-  const handoffBadgeLabel = useMemo(
-    () => (activeThread ? resolveThreadHandoffBadgeLabel(activeThread) : null),
-    [activeThread],
-  );
-  const handoffBadgeSourceProvider = activeThread?.handoff?.sourceProvider ?? null;
-  const handoffBadgeTargetProvider = activeThread?.handoff
-    ? activeThread.modelSelection.provider
-    : null;
-  const handoffTargetProviders = useMemo(
-    () =>
-      activeThread
-        ? resolveAvailableHandoffTargetProviders(activeThread.modelSelection.provider)
-        : [],
-    [activeThread],
-  );
-  const handoffActionLabel = activeThread ? "Hand off thread" : "Create handoff thread";
   const activePendingIsResponding = activePendingUserInput
     ? respondingUserInputRequestIds.includes(activePendingUserInput.requestId)
     : false;
@@ -1979,7 +1969,40 @@ export default function ChatView({
   );
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
   const availableEditors = serverConfigQuery.data?.availableEditors ?? EMPTY_AVAILABLE_EDITORS;
-  const providerStatuses = serverConfigQuery.data?.providers ?? EMPTY_PROVIDER_STATUSES;
+  const providerStatuses = useMemo(
+    () =>
+      (serverConfigQuery.data?.providers ?? EMPTY_PROVIDER_STATUSES)
+        .map((status) =>
+          normalizeProviderStatusForLocalConfig({
+            provider: status.provider,
+            status,
+            customBinaryPath: status.provider === "gemini" ? settings.geminiBinaryPath : null,
+          }),
+        )
+        .flatMap((status) => (status ? [status] : [])),
+    [serverConfigQuery.data?.providers, settings.geminiBinaryPath],
+  );
+  const handoffBadgeLabel = useMemo(
+    () => (activeThread ? resolveThreadHandoffBadgeLabel(activeThread) : null),
+    [activeThread],
+  );
+  const handoffBadgeSourceProvider = activeThread?.handoff?.sourceProvider ?? null;
+  const handoffBadgeTargetProvider = activeThread?.handoff
+    ? activeThread.modelSelection.provider
+    : null;
+  const handoffTargetProviders = useMemo(
+    () =>
+      activeThread
+        ? resolveAvailableHandoffTargetProviders(activeThread.modelSelection.provider).filter(
+            (provider) =>
+              isProviderUsable(
+                providerStatuses.find((status) => status.provider === provider) ?? null,
+              ),
+          )
+        : [],
+    [activeThread, providerStatuses],
+  );
+  const handoffActionLabel = activeThread ? "Hand off thread" : "Create handoff thread";
   const activeProviderStatus = useMemo(
     () => providerStatuses.find((status) => status.provider === selectedProvider) ?? null,
     [selectedProvider, providerStatuses],
@@ -3821,6 +3844,7 @@ export default function ChatView({
         title: authExpired ? "Sign in to ChatGPT again" : "Couldn't transcribe voice note",
         description: authExpired
           ? "Voice transcription uses your ChatGPT session in Codex. That session was rejected, so sign in again there and retry."
+          ? "Voice transcription uses your ChatGPT session in Codex. That session was rejected, so sign in again there and retry."
           : description,
         ...(authExpired
           ? {
@@ -4048,6 +4072,15 @@ export default function ChatView({
       }
 
       try {
+        const targetStatus =
+          providerStatuses.find((status) => status.provider === targetProvider) ?? null;
+        if (!isProviderUsable(targetStatus)) {
+          toastManager.add({
+            type: "error",
+            title: providerUnavailableReason(targetStatus),
+          });
+          return;
+        }
         await createThreadHandoff(activeThread, targetProvider);
       } catch (error) {
         toastManager.add({
@@ -4060,7 +4093,7 @@ export default function ChatView({
         });
       }
     },
-    [activeThread, createThreadHandoff, handoffDisabled],
+    [activeThread, createThreadHandoff, handoffDisabled, providerStatuses],
   );
 
   const clearComposerInput = useCallback(

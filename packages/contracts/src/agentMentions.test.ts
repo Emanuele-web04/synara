@@ -38,7 +38,7 @@ describe("agentMentions", () => {
         provider: "codex",
         kind: "model",
         model: "gpt-5.3-codex-spark",
-        displayName: "GPT-5.3 Spark",
+        displayName: "GPT-5.3 Codex Spark",
         color: "cyan",
       },
       {

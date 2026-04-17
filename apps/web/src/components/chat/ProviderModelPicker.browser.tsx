@@ -68,11 +68,7 @@ describe("ProviderModelPicker", () => {
 
       await vi.waitFor(() => {
         const text = document.body.textContent ?? "";
-<<<<<<< HEAD
         expect(text).toContain("Codex");
-=======
-        expect(text).toContain("GPT");
->>>>>>> e18c4db9 (Add explicit provider handoff targets)
         expect(text).toContain("Claude");
         expect(text).not.toContain("Claude Sonnet 4.6");
       });
@@ -95,11 +91,7 @@ describe("ProviderModelPicker", () => {
         const text = document.body.textContent ?? "";
         expect(text).toContain("Claude Sonnet 4.6");
         expect(text).toContain("Claude Haiku 4.5");
-<<<<<<< HEAD
         expect(text).not.toContain("Codex");
-=======
-        expect(text).not.toContain("GPT");
->>>>>>> e18c4db9 (Add explicit provider handoff targets)
       });
     } finally {
       await mounted.cleanup();
@@ -154,11 +146,7 @@ describe("ProviderModelPicker", () => {
 
       await vi.waitFor(() => {
         const text = document.body.textContent ?? "";
-<<<<<<< HEAD
         expect(text).toContain("Codex");
-=======
-        expect(text).toContain("GPT");
->>>>>>> e18c4db9 (Add explicit provider handoff targets)
         expect(text).toContain("Claude");
         expect(text).toContain("Sign in");
       });

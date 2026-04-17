@@ -205,6 +205,7 @@ export type ProviderReadPluginResult = typeof ProviderReadPluginResult.Type;
 
 export const ProviderListModelsInput = Schema.Struct({
   provider: ProviderDiscoveryKind,
+  binaryPath: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderListModelsInput = typeof ProviderListModelsInput.Type;
 

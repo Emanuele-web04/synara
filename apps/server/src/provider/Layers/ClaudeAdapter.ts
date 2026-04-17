@@ -3604,7 +3604,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       ClaudeAdapterShape["getComposerCapabilities"]
     > = () => Effect.succeed(composerCapabilities);
 
-    const listModels: NonNullable<ClaudeAdapterShape["listModels"]> = () =>
+    const listModels: NonNullable<ClaudeAdapterShape["listModels"]> = (_input) =>
       Effect.sync(() => {
         if (cachedModels) {
           return { ...cachedModels, cached: true };

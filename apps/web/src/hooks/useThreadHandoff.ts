@@ -1,13 +1,20 @@
 import { useNavigate } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
 import { useCallback } from "react";
 import { type ProviderKind } from "@t3tools/contracts";
+import { useAppSettings } from "../appSettings";
 import { useComposerDraftStore } from "../composerDraftStore";
+import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import {
   buildThreadHandoffImportedMessages,
   canCreateThreadHandoff,
   resolveAvailableHandoffTargetProviders,
   resolveThreadHandoffModelSelection,
 } from "../lib/threadHandoff";
+import {
+  isProviderUsable,
+  normalizeProviderStatusForLocalConfig,
+} from "../lib/providerAvailability";
 import { newCommandId, newThreadId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { useStore } from "../store";
@@ -15,8 +22,10 @@ import { type Thread } from "../types";
 
 export function useThreadHandoff() {
   const navigate = useNavigate();
+  const { settings } = useAppSettings();
   const projects = useStore((store) => store.projects);
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
+  const serverConfigQuery = useQuery(serverConfigQueryOptions());
 
   const createThreadHandoff = useCallback(
     async (thread: Thread, targetProvider: ProviderKind): Promise<Thread["id"]> => {
@@ -39,6 +48,16 @@ export function useThreadHandoff() {
         )
       ) {
         throw new Error("This handoff target is not available for the current thread.");
+      }
+      const targetStatus = normalizeProviderStatusForLocalConfig({
+        provider: targetProvider,
+        status:
+          serverConfigQuery.data?.providers.find((entry) => entry.provider === targetProvider) ??
+          null,
+        customBinaryPath: targetProvider === "gemini" ? settings.geminiBinaryPath : null,
+      });
+      if (!isProviderUsable(targetStatus)) {
+        throw new Error("This provider is not available yet.");
       }
 
       const nextThreadId = newThreadId();
@@ -84,7 +103,13 @@ export function useThreadHandoff() {
 
       return nextThreadId;
     },
-    [navigate, projects, syncServerReadModel],
+    [
+      navigate,
+      projects,
+      serverConfigQuery.data?.providers,
+      settings.geminiBinaryPath,
+      syncServerReadModel,
+    ],
   );
 
   return {
