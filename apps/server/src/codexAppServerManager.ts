@@ -1332,9 +1332,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       throw new Error("Session is missing a provider resume thread id.");
     }
 
-    await this.sendRequest(context, "thread/compact/start", {
-      threadId: providerThreadId,
-    });
+    await Effect.logInfo("codex app-server compact requested", {
+      threadId: context.session.threadId,
+      providerThreadId,
+      runtimeMode: context.session.runtimeMode,
+      activeTurnId: context.session.activeTurnId ?? null,
+    }).pipe(this.runPromise);
+
     this.updateSession(context, {
       status: "running",
     });
@@ -1352,6 +1356,26 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         state: "compacting",
       },
     });
+    try {
+      await this.sendRequest(context, "thread/compact/start", {
+        threadId: providerThreadId,
+      });
+      await Effect.logInfo("codex app-server compact start acknowledged", {
+        threadId: context.session.threadId,
+        providerThreadId,
+      }).pipe(this.runPromise);
+    } catch (error) {
+      this.updateSession(context, {
+        status: "error",
+        lastError: error instanceof Error ? error.message : context.session.lastError,
+      });
+      await Effect.logWarning("codex app-server compact failed", {
+        threadId: context.session.threadId,
+        providerThreadId,
+        cause: error,
+      }).pipe(this.runPromise);
+      throw error;
+    }
   }
 
   async respondToRequest(

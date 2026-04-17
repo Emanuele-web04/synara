@@ -1246,7 +1246,7 @@ describe("deriveWorkLogEntries context window handling", () => {
     );
 
     expect(entries).toHaveLength(1);
-    expect(entries[0]?.label).toBe("Context compacted");
+    expect(entries[0]?.label).toBe("Context compacted manually");
   });
 
   it("keeps thread-level compaction progress entries visible without a turn id", () => {
@@ -1263,7 +1263,7 @@ describe("deriveWorkLogEntries context window handling", () => {
     );
 
     expect(entries).toHaveLength(1);
-    expect(entries[0]?.label).toBe("Compacting context");
+    expect(entries[0]?.label).toBe("Compacting conversation...");
   });
 });
 

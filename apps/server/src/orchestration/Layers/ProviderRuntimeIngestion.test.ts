@@ -2350,7 +2350,7 @@ describe("ProviderRuntimeIngestion", () => {
     const activity = thread.activities.find(
       (candidate: ProviderRuntimeTestActivity) => candidate.kind === "context-compaction",
     );
-    expect(activity?.summary).toBe("Context compacted");
+    expect(activity?.summary).toBe("Context compacted manually");
     expect(activity?.tone).toBe("info");
   });
 
@@ -2375,13 +2375,15 @@ describe("ProviderRuntimeIngestion", () => {
     const thread = await waitForThread(harness.engine, (entry) =>
       entry.activities.some(
         (activity: ProviderRuntimeTestActivity) =>
-          activity.kind === "context-compaction" && activity.summary === "Compacting context",
+          activity.kind === "context-compaction" &&
+          activity.summary === "Compacting conversation...",
       ),
     );
 
     const activity = thread.activities.find(
       (candidate: ProviderRuntimeTestActivity) =>
-        candidate.kind === "context-compaction" && candidate.summary === "Compacting context",
+        candidate.kind === "context-compaction" &&
+        candidate.summary === "Compacting conversation...",
     );
     expect(activity?.tone).toBe("info");
   });

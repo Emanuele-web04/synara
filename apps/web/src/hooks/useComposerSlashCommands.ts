@@ -38,6 +38,10 @@ type ComposerSnapshot = {
 
 type SlashCommandItem = Extract<ComposerCommandItem, { type: "slash-command" }>;
 
+function wasPromptReplacementApplied(result: number | false): boolean {
+  return result !== false;
+}
+
 export function useComposerSlashCommands(input: {
   activeProject: Project | undefined;
   activeThread: Thread | undefined;
@@ -144,9 +148,20 @@ export function useComposerSlashCommands(input: {
     }
 
     try {
-      await api.provider.compactThread({
-        threadId: activeThread.id,
-      });
+      void api.provider
+        .compactThread({
+          threadId: activeThread.id,
+        })
+        .catch((error) => {
+          toastManager.add({
+            type: "error",
+            title: "Could not compact thread",
+            description:
+              error instanceof Error
+                ? error.message
+                : "An error occurred while compacting context.",
+          });
+        });
       toastManager.add({
         type: "success",
         title: "Compaction started",
@@ -612,7 +627,7 @@ export function useComposerSlashCommands(input: {
           replacement,
           { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
         );
-        if (applied) {
+        if (wasPromptReplacementApplied(applied)) {
           editorActions.setComposerHighlightedItemId(null);
         }
         return;
@@ -625,7 +640,7 @@ export function useComposerSlashCommands(input: {
 
       if (item.command === "clear") {
         const applied = clearSlashCommandFromComposer();
-        if (applied) {
+        if (wasPromptReplacementApplied(applied)) {
           editorActions.setComposerHighlightedItemId(null);
         }
         void handleClearConversation();
@@ -634,7 +649,7 @@ export function useComposerSlashCommands(input: {
 
       if (item.command === "compact") {
         const applied = clearSlashCommandFromComposer();
-        if (!applied) {
+        if (!wasPromptReplacementApplied(applied)) {
           return;
         }
         editorActions.setComposerHighlightedItemId(null);
@@ -646,7 +661,7 @@ export function useComposerSlashCommands(input: {
       if (item.command === "plan" || item.command === "default") {
         void handleInteractionModeChange(item.command === "plan" ? "plan" : "default");
         const applied = clearSlashCommandFromComposer();
-        if (applied) {
+        if (wasPromptReplacementApplied(applied)) {
           editorActions.setComposerHighlightedItemId(null);
         }
         return;
@@ -660,7 +675,7 @@ export function useComposerSlashCommands(input: {
           replacement,
           { expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd) },
         );
-        if (applied) {
+        if (wasPromptReplacementApplied(applied)) {
           editorActions.setComposerHighlightedItemId(null);
         }
         return;
@@ -668,7 +683,7 @@ export function useComposerSlashCommands(input: {
 
       if (item.command === "status") {
         const applied = clearSlashCommandFromComposer();
-        if (applied) {
+        if (wasPromptReplacementApplied(applied)) {
           editorActions.setComposerHighlightedItemId(null);
           setIsSlashStatusDialogOpen(true);
           editorActions.scheduleComposerFocus();
@@ -678,7 +693,7 @@ export function useComposerSlashCommands(input: {
 
       if (item.command === "fast") {
         const applied = clearSlashCommandFromComposer();
-        if (!applied) {
+        if (!wasPromptReplacementApplied(applied)) {
           return;
         }
         editorActions.setComposerHighlightedItemId(null);
@@ -701,13 +716,13 @@ export function useComposerSlashCommands(input: {
             replacement,
             { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
           );
-          if (applied) {
+          if (wasPromptReplacementApplied(applied)) {
             editorActions.setComposerHighlightedItemId(null);
           }
           return;
         }
         const applied = clearSlashCommandFromComposer();
-        if (!applied) {
+        if (!wasPromptReplacementApplied(applied)) {
           return;
         }
         editorActions.setComposerHighlightedItemId(null);
@@ -718,7 +733,7 @@ export function useComposerSlashCommands(input: {
 
       if (item.command === "fork") {
         const applied = clearSlashCommandFromComposer();
-        if (!applied) {
+        if (!wasPromptReplacementApplied(applied)) {
           return;
         }
         editorActions.setComposerHighlightedItemId(null);

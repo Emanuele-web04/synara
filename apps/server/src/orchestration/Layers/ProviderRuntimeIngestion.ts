@@ -515,7 +515,7 @@ function runtimeEventToActivities(
           createdAt: event.createdAt,
           tone: "info",
           kind: "context-compaction",
-          summary: "Context compacted",
+          summary: "Context compacted manually",
           payload: {
             state: event.payload.state,
             ...(event.payload.detail !== undefined ? { detail: event.payload.detail } : {}),
@@ -554,7 +554,7 @@ function runtimeEventToActivities(
             createdAt: event.createdAt,
             tone: "info",
             kind: "context-compaction",
-            summary: "Compacting context",
+            summary: "Compacting conversation...",
             payload: {
               itemType: event.payload.itemType,
               status: event.payload.status,

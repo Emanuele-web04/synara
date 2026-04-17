@@ -96,8 +96,11 @@ function createThreadControlHarness() {
   const updateSession = vi
     .spyOn(manager as unknown as { updateSession: (...args: unknown[]) => void }, "updateSession")
     .mockImplementation(() => {});
+  const emitEvent = vi
+    .spyOn(manager as unknown as { emitEvent: (...args: unknown[]) => void }, "emitEvent")
+    .mockImplementation(() => {});
 
-  return { manager, context, requireSession, sendRequest, updateSession };
+  return { manager, context, requireSession, sendRequest, updateSession, emitEvent };
 }
 
 function createPendingUserInputHarness() {
@@ -1561,6 +1564,45 @@ describe("thread checkpoint control", () => {
       threadId: "thread_1",
       turns: [],
     });
+  });
+
+  it("emits compaction progress before waiting for thread/compact/start", async () => {
+    const { manager, context, sendRequest, updateSession, emitEvent } =
+      createThreadControlHarness();
+    let resolveRequest: (() => void) | undefined;
+    sendRequest.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveRequest = () => resolve({});
+        }),
+    );
+
+    const compactPromise = manager.compactThread(asThreadId("thread_1"));
+
+    await vi.waitFor(() => {
+      expect(sendRequest).toHaveBeenCalledWith(context, "thread/compact/start", {
+        threadId: "thread_1",
+      });
+      expect(updateSession).toHaveBeenCalledWith(context, {
+        status: "running",
+      });
+      expect(emitEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "notification",
+          provider: "codex",
+          threadId: "thread_1",
+          method: "thread/compacting",
+          message: "Compacting context",
+          payload: {
+            threadId: "thread_1",
+            state: "compacting",
+          },
+        }),
+      );
+    });
+
+    resolveRequest?.();
+    await compactPromise;
   });
 });
 

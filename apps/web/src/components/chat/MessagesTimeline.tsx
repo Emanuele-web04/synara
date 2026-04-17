@@ -935,30 +935,53 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
       {row.kind === "working" && (
         <div>
-          <div
-            className="flex items-center gap-1 pt-1 text-muted-foreground/70 font-system-ui"
-            style={{ fontSize: `${appTypographyScale.uiSmPx}px` }}
-          >
-            <span>
-              {row.createdAt ? (
-                <>
-                  Working for{" "}
-                  {nowIso ? (
-                    (formatWorkingTimer(row.createdAt, nowIso) ?? "0s")
-                  ) : (
-                    <WorkingTimer createdAt={row.createdAt} />
-                  )}
-                </>
-              ) : (
-                "Working..."
-              )}
-            </span>
-            <span className="inline-flex items-center gap-1">
-              <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse" />
-              <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse [animation-delay:200ms]" />
-              <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse [animation-delay:400ms]" />
-            </span>
-          </div>
+          {row.label ? (
+            <div className="my-3 flex items-center gap-3">
+              <span className="h-px flex-1 bg-border" />
+              <span
+                className="inline-flex items-center gap-1 text-muted-foreground/80 font-system-ui"
+                style={{ fontSize: `${appTypographyScale.uiSmPx}px` }}
+              >
+                <span>
+                  {formatWorkingLabel(row.label)}
+                  {row.createdAt
+                    ? ` ${nowIso ? (formatWorkingTimer(row.createdAt, nowIso) ?? "0s") : ""}`
+                    : null}
+                </span>
+                <span className="inline-flex items-center gap-1">
+                  <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse" />
+                  <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse [animation-delay:200ms]" />
+                  <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse [animation-delay:400ms]" />
+                </span>
+              </span>
+              <span className="h-px flex-1 bg-border" />
+            </div>
+          ) : (
+            <div
+              className="flex items-center gap-1 pt-1 text-muted-foreground/70 font-system-ui"
+              style={{ fontSize: `${appTypographyScale.uiSmPx}px` }}
+            >
+              <span>
+                {row.createdAt ? (
+                  <>
+                    Working for{" "}
+                    {nowIso ? (
+                      (formatWorkingTimer(row.createdAt, nowIso) ?? "0s")
+                    ) : (
+                      <WorkingTimer createdAt={row.createdAt} />
+                    )}
+                  </>
+                ) : (
+                  "Working..."
+                )}
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse" />
+                <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse [animation-delay:200ms]" />
+                <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse [animation-delay:400ms]" />
+              </span>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -1104,6 +1127,14 @@ function formatWorkingTimer(startIso: string, endIso: string): string | null {
   }
 
   return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+}
+
+function formatWorkingLabel(label: string): string {
+  const normalized = normalizeCompactToolLabel(label).trim();
+  if (normalized === "Compacting context") {
+    return "Compacting conversation...";
+  }
+  return normalized.endsWith("...") ? normalized : `${normalized}...`;
 }
 
 function formatMessageMeta(
