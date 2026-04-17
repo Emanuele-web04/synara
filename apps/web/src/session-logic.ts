@@ -614,7 +614,12 @@ export function deriveWorkLogEntries(
 ): WorkLogEntry[] {
   const ordered = [...activities].toSorted(compareActivitiesByOrder);
   const entries = ordered
-    .filter((activity) => (latestTurnId ? activity.turnId === latestTurnId : true))
+    .filter((activity) =>
+      latestTurnId
+        ? activity.turnId === latestTurnId ||
+          (activity.kind === "context-compaction" && activity.turnId === null)
+        : true,
+    )
     .filter((activity) => activity.kind !== "tool.started")
     .filter((activity) => !isCollabAgentToolActivity(activity))
     .filter((activity) => activity.kind !== "task.started" && activity.kind !== "task.completed")

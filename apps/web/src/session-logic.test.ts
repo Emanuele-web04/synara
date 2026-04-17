@@ -1248,6 +1248,23 @@ describe("deriveWorkLogEntries context window handling", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]?.label).toBe("Context compacted");
   });
+
+  it("keeps thread-level compaction progress entries visible without a turn id", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "compaction-progress-1",
+          kind: "context-compaction",
+          summary: "Compacting context",
+          tone: "info",
+        }),
+      ],
+      TurnId.makeUnsafe("turn-1"),
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.label).toBe("Compacting context");
+  });
 });
 
 describe("hasToolActivityForTurn", () => {

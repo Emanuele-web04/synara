@@ -995,6 +995,40 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       });
     }),
   );
+
+  it.effect("maps thread/compacting notifications to context compaction progress events", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-codex-thread-compacting"),
+        kind: "notification",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        createdAt: new Date().toISOString(),
+        method: "thread/compacting",
+        message: "Compacting context",
+        payload: {
+          threadId: "thread-1",
+          state: "compacting",
+        },
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") {
+        return;
+      }
+      assert.equal(firstEvent.value.type, "item.updated");
+      if (firstEvent.value.type !== "item.updated") {
+        return;
+      }
+      assert.equal(firstEvent.value.payload.itemType, "context_compaction");
+      assert.equal(firstEvent.value.payload.detail, "Compacting context");
+      assert.equal(firstEvent.value.payload.status, "inProgress");
+    }),
+  );
 });
 
 afterAll(() => {

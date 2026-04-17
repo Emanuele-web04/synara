@@ -1338,6 +1338,20 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     this.updateSession(context, {
       status: "running",
     });
+    this.emitEvent({
+      id: EventId.makeUnsafe(randomUUID()),
+      kind: "notification",
+      provider: "codex",
+      threadId: context.session.threadId,
+      createdAt: new Date().toISOString(),
+      ...(context.session.activeTurnId ? { turnId: context.session.activeTurnId } : {}),
+      method: "thread/compacting",
+      message: "Compacting context",
+      payload: {
+        threadId: providerThreadId,
+        state: "compacting",
+      },
+    });
   }
 
   async respondToRequest(

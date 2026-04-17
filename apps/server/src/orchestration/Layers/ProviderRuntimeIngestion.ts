@@ -547,6 +547,25 @@ function runtimeEventToActivities(
     }
 
     case "item.updated": {
+      if (event.payload.itemType === "context_compaction") {
+        return [
+          {
+            id: event.eventId,
+            createdAt: event.createdAt,
+            tone: "info",
+            kind: "context-compaction",
+            summary: "Compacting context",
+            payload: {
+              itemType: event.payload.itemType,
+              status: event.payload.status,
+              ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+              ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
+            },
+            turnId: toTurnId(event.turnId) ?? null,
+            ...maybeSequence,
+          },
+        ];
+      }
       if (!isToolLifecycleItemType(event.payload.itemType)) {
         return [];
       }

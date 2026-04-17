@@ -745,6 +745,22 @@ function mapToRuntimeEvents(
     ];
   }
 
+  if (event.method === "thread/compacting") {
+    return [
+      {
+        ...runtimeEventBase(event, canonicalThreadId),
+        type: "item.updated",
+        payload: {
+          itemType: "context_compaction",
+          status: "inProgress",
+          title: "Context compaction",
+          detail: event.message ?? "Compacting context",
+          ...(event.payload !== undefined ? { data: event.payload } : {}),
+        },
+      },
+    ];
+  }
+
   if (
     event.method === "thread/status/changed" ||
     event.method === "thread/archived" ||
