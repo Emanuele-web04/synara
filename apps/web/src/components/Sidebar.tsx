@@ -69,7 +69,7 @@ import {
 import { isElectron } from "../env";
 import { APP_VERSION } from "../branding";
 import { showConfirmDialogFallback } from "../confirmDialogFallback";
-import { isMacPlatform, newCommandId, newProjectId } from "../lib/utils";
+import { isMacPlatform, newCommandId, newProjectId, newThreadId } from "../lib/utils";
 import { persistAppStateNow, useStore } from "../store";
 import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
 import {
@@ -1555,6 +1555,84 @@ export default function Sidebar() {
     projects,
     routeThreadSummary,
   ]);
+
+  const handleImportThread = useCallback(
+    async (provider: "codex" | "claudeAgent", externalId: string) => {
+      const api = readNativeApi();
+      if (!api) {
+        throw new Error("The app server is unavailable.");
+      }
+
+      const activeProjectId = routeThreadSummary?.projectId ?? projects[0]?.id ?? null;
+      if (!activeProjectId) {
+        throw new Error("Add a project before importing a thread.");
+      }
+
+      const activeProject = projects.find((project) => project.id === activeProjectId);
+      if (!activeProject) {
+        throw new Error("The target project could not be resolved.");
+      }
+
+      const modelSelection =
+        activeProject.defaultModelSelection?.provider === provider
+          ? activeProject.defaultModelSelection
+          : {
+              provider,
+              model: DEFAULT_MODEL_BY_PROVIDER[provider],
+            };
+      const threadId = newThreadId();
+      const createdAt = new Date().toISOString();
+      const trimmedExternalId = externalId.trim();
+      const suffix = trimmedExternalId.slice(-8);
+      const title =
+        provider === "claudeAgent"
+          ? `Imported Claude session${suffix ? ` ${suffix}` : ""}`
+          : `Imported Codex thread${suffix ? ` ${suffix}` : ""}`;
+      let createdThread = false;
+
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "thread.create",
+          commandId: newCommandId(),
+          threadId,
+          projectId: activeProject.id,
+          title,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          envMode: resolveSidebarNewThreadEnvMode({
+            defaultEnvMode: appSettings.defaultThreadEnvMode,
+          }),
+          branch: null,
+          worktreePath: null,
+          createdAt,
+        });
+        createdThread = true;
+
+        await api.orchestration.importThread({
+          threadId,
+          externalId: trimmedExternalId,
+        });
+
+        await navigate({
+          to: "/$threadId",
+          params: { threadId },
+        });
+      } catch (error) {
+        if (createdThread) {
+          await api.orchestration
+            .dispatchCommand({
+              type: "thread.delete",
+              commandId: newCommandId(),
+              threadId,
+            })
+            .catch(() => undefined);
+        }
+        throw error;
+      }
+    },
+    [appSettings.defaultThreadEnvMode, navigate, projects, routeThreadSummary],
+  );
 
   const cancelRename = useCallback(() => {
     setRenamingThreadId(null);
@@ -3967,6 +4045,12 @@ export default function Sidebar() {
         keywords: ["folder", "repo", "repository", "open"],
       },
       {
+        id: "import-thread",
+        label: "Import thread from...",
+        description: "Attach a local thread to an existing Codex or Claude session.",
+        keywords: ["import", "resume", "thread", "session", "codex", "claude"],
+      },
+      {
         id: "settings",
         label: "Settings",
         description: "Open app settings.",
@@ -4690,6 +4774,7 @@ export default function Sidebar() {
             void navigate({ to: "/settings" });
           }}
           onOpenProject={handleOpenProjectFromSearch}
+          onImportThread={handleImportThread}
           onOpenThread={(threadId) => {
             activateThread(ThreadId.makeUnsafe(threadId));
           }}
@@ -4709,6 +4794,7 @@ function SidebarSearchPaletteController(props: {
   onAddProject: () => void;
   onOpenSettings: () => void;
   onOpenProject: (projectId: string) => void;
+  onImportThread: (provider: "codex" | "claudeAgent", externalId: string) => Promise<void>;
   onOpenThread: (threadId: string) => void;
 }) {
   const selectAllThreads = useMemo(() => createAllThreadsSelector(), []);
@@ -4742,6 +4828,7 @@ function SidebarSearchPaletteController(props: {
       onAddProject={props.onAddProject}
       onOpenSettings={props.onOpenSettings}
       onOpenProject={props.onOpenProject}
+      onImportThread={props.onImportThread}
       onOpenThread={props.onOpenThread}
     />
   );

@@ -4,6 +4,10 @@ import os from "node:os";
 import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import {
+  getSessionInfo as getClaudeSessionInfo,
+  getSessionMessages as getClaudeSessionMessages,
+} from "@anthropic-ai/claude-agent-sdk";
 import { Effect, Exit, Layer, PlatformError, PubSub, Scope, Stream } from "effect";
 import { describe, expect, it, afterEach, vi } from "vitest";
 import { createServer } from "./wsServer";
@@ -56,6 +60,15 @@ import { GitCore } from "./git/Services/GitCore.ts";
 import { GitCommandError, GitManagerError } from "./git/Errors.ts";
 import { MigrationError } from "@effect/sql-sqlite-bun/SqliteMigrator";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService.ts";
+
+vi.mock("@anthropic-ai/claude-agent-sdk", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@anthropic-ai/claude-agent-sdk")>();
+  return {
+    ...actual,
+    getSessionInfo: vi.fn(),
+    getSessionMessages: vi.fn(),
+  };
+});
 
 const asEventId = (value: string): EventId => EventId.makeUnsafe(value);
 const asProviderItemId = (value: string): ProviderItemId => ProviderItemId.makeUnsafe(value);
@@ -1513,6 +1526,10 @@ describe("WebSocket Server", () => {
     };
     const providerLayer = Layer.mergeAll(
       Layer.succeed(ProviderService, providerService),
+      Layer.succeed(ProviderAdapterRegistry, {
+        getByProvider: (provider) => Effect.fail(new ProviderUnsupportedError({ provider })),
+        listProviders: () => Effect.succeed([]),
+      }),
       Layer.succeed(ProviderDiscoveryService, {
         getComposerCapabilities: () =>
           Effect.succeed({
@@ -1661,6 +1678,546 @@ describe("WebSocket Server", () => {
     expect(domainEvent.type).toBe("thread.message-sent");
     expect(domainEvent.payload.messageId).toBe("assistant:item-1");
     expect(domainEvent.payload.text).toBe("hello from runtime");
+  });
+
+  it("backfills Codex history when importing a resumed thread", async () => {
+    let startSessionInput: unknown;
+    const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
+    const providerService: ProviderServiceShape = {
+      startSession: (_threadId, input) => {
+        startSessionInput = input;
+        return Effect.succeed({
+          provider: "codex",
+          status: "ready",
+          runtimeMode: "full-access",
+          threadId: input.threadId,
+          createdAt: "2026-04-17T11:11:31.421Z",
+          updatedAt: "2026-04-17T11:11:31.421Z",
+        });
+      },
+      sendTurn: ({ threadId }) =>
+        Effect.succeed({
+          threadId,
+          turnId: asTurnId("provider-turn-1"),
+        }),
+      steerTurn: ({ threadId }) =>
+        Effect.succeed({
+          threadId,
+          turnId: asTurnId("provider-turn-steer-1"),
+        }),
+      startReview: () => unsupported(),
+      forkThread: () => Effect.succeed(null),
+      interruptTurn: () => unsupported(),
+      respondToRequest: () => unsupported(),
+      respondToUserInput: () => unsupported(),
+      stopSession: () => unsupported(),
+      listSessions: () => Effect.succeed([]),
+      getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
+      rollbackConversation: () => unsupported(),
+      compactThread: () => unsupported(),
+      streamEvents: Stream.empty,
+    };
+    const providerLayer = Layer.mergeAll(
+      Layer.succeed(ProviderService, providerService),
+      Layer.succeed(ProviderAdapterRegistry, {
+        getByProvider: (provider) => Effect.fail(new ProviderUnsupportedError({ provider })),
+        listProviders: () => Effect.succeed([]),
+      }),
+      Layer.succeed(ProviderDiscoveryService, {
+        getComposerCapabilities: () =>
+          Effect.succeed({
+            provider: "codex" as const,
+            supportsSkillMentions: false,
+            supportsSkillDiscovery: false,
+            supportsNativeSlashCommandDiscovery: false,
+            supportsPluginMentions: false,
+            supportsPluginDiscovery: false,
+            supportsRuntimeModelList: false,
+          }),
+        listSkills: () => Effect.succeed({ skills: [], source: "test", cached: false }),
+        listCommands: () => Effect.succeed({ commands: [], source: "test", cached: false }),
+        listPlugins: () =>
+          Effect.succeed({
+            marketplaces: [],
+            marketplaceLoadErrors: [],
+            remoteSyncError: null,
+            featuredPluginIds: [],
+            source: "test",
+            cached: false,
+          }),
+        readPlugin: () =>
+          Effect.succeed({
+            plugin: {
+              marketplaceName: "test-marketplace",
+              marketplacePath: "/test/marketplace.json",
+              summary: {
+                id: "plugin/test",
+                name: "test",
+                source: {
+                  type: "local",
+                  path: "/test/plugin",
+                },
+                installed: false,
+                enabled: false,
+                installPolicy: "AVAILABLE",
+                authPolicy: "ON_USE",
+              },
+              skills: [],
+              apps: [],
+              mcpServers: [],
+            },
+            source: "test",
+            cached: false,
+          }),
+        listModels: () => Effect.succeed({ models: [], source: "test", cached: false }),
+        listAgents: () => Effect.succeed({ agents: [], source: "test", cached: false }),
+      }),
+      Layer.succeed(ProviderAdapterRegistry, {
+        getByProvider: (provider) =>
+          provider === "codex"
+            ? Effect.succeed({
+                readThread: () =>
+                  Effect.succeed({
+                    threadId: asThreadId("import-thread-1"),
+                    turns: [
+                      {
+                        id: asTurnId("turn-import-1"),
+                        items: [
+                          {
+                            type: "userMessage",
+                            content: [{ type: "text", text: "Resume me" }],
+                          },
+                          {
+                            type: "agentMessage",
+                            text: "I am back",
+                          },
+                        ],
+                      },
+                    ],
+                  }),
+              } as never)
+            : Effect.fail(new ProviderUnsupportedError({ provider })),
+        listProviders: () => Effect.succeed([]),
+      }),
+    );
+
+    server = await createTestServer({
+      cwd: "/test",
+      providerLayer,
+    });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const [ws] = await connectAndAwaitWelcome(port);
+    connections.push(ws);
+
+    const workspaceRoot = makeTempDir("t3code-ws-import-project-");
+    const createdAt = new Date().toISOString();
+    await sendRequest(ws, ORCHESTRATION_WS_METHODS.dispatchCommand, {
+      type: "project.create",
+      commandId: "cmd-import-project-create",
+      projectId: "project-import-1",
+      title: "Import Project",
+      workspaceRoot,
+      defaultModelSelection: {
+        provider: "codex",
+        model: "gpt-5.4",
+      },
+      createdAt,
+    });
+    await sendRequest(ws, ORCHESTRATION_WS_METHODS.dispatchCommand, {
+      type: "thread.create",
+      commandId: "cmd-import-thread-create",
+      threadId: "import-thread-1",
+      projectId: "project-import-1",
+      title: "Imported Codex thread",
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5.4",
+      },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdAt,
+    });
+
+    const importResponse = await sendRequest(ws, ORCHESTRATION_WS_METHODS.importThread, {
+      threadId: "import-thread-1",
+      externalId: "019d81fc-612f-7b72-8bbb-cd6bece479a1",
+    });
+    expect(importResponse.error).toBeUndefined();
+    expect(startSessionInput).toMatchObject({
+      threadId: "import-thread-1",
+      provider: "codex",
+      resumeCursor: {
+        threadId: "019d81fc-612f-7b72-8bbb-cd6bece479a1",
+      },
+    });
+
+    const snapshotResponse = await sendRequest(ws, ORCHESTRATION_WS_METHODS.getSnapshot);
+    expect(snapshotResponse.error).toBeUndefined();
+    const snapshot = snapshotResponse.result as {
+      threads: Array<{
+        id: string;
+        messages: Array<{ role: string; text: string }>;
+        session: { status: string } | null;
+      }>;
+    };
+    const importedThread = snapshot.threads.find((thread) => thread.id === "import-thread-1");
+    expect(
+      importedThread?.messages.map((message) => ({
+        role: message.role,
+        text: message.text,
+      })),
+    ).toEqual([
+      { role: "user", text: "Resume me" },
+      { role: "assistant", text: "I am back" },
+    ]);
+    expect(importedThread?.session?.status).toBe("ready");
+  });
+
+  it("backfills Claude history when importing a locally persisted session", async () => {
+    vi.mocked(getClaudeSessionInfo).mockResolvedValue({
+      sessionId: "550e8400-e29b-41d4-a716-446655440000",
+      summary: "Claude import",
+      lastModified: Date.now(),
+    });
+    vi.mocked(getClaudeSessionMessages).mockResolvedValue([
+      {
+        type: "user",
+        uuid: "user-msg-1",
+        session_id: "550e8400-e29b-41d4-a716-446655440000",
+        parent_tool_use_id: null,
+        message: {
+          role: "user",
+          content: "Please continue this session",
+        },
+      },
+      {
+        type: "assistant",
+        uuid: "assistant-msg-1",
+        session_id: "550e8400-e29b-41d4-a716-446655440000",
+        parent_tool_use_id: null,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Picking up where we left off." }],
+        },
+      },
+    ]);
+
+    let startSessionInput: unknown;
+    const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
+    const providerService: ProviderServiceShape = {
+      startSession: (_threadId, input) => {
+        startSessionInput = input;
+        return Effect.succeed({
+          provider: "claudeAgent",
+          status: "ready",
+          runtimeMode: "full-access",
+          threadId: input.threadId,
+          createdAt: "2026-04-17T12:00:00.000Z",
+          updatedAt: "2026-04-17T12:00:00.000Z",
+        });
+      },
+      sendTurn: ({ threadId }) =>
+        Effect.succeed({
+          threadId,
+          turnId: asTurnId("provider-turn-1"),
+        }),
+      steerTurn: ({ threadId }) =>
+        Effect.succeed({
+          threadId,
+          turnId: asTurnId("provider-turn-steer-1"),
+        }),
+      startReview: () => unsupported(),
+      forkThread: () => Effect.succeed(null),
+      interruptTurn: () => unsupported(),
+      respondToRequest: () => unsupported(),
+      respondToUserInput: () => unsupported(),
+      stopSession: () => unsupported(),
+      listSessions: () => Effect.succeed([]),
+      getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
+      rollbackConversation: () => unsupported(),
+      compactThread: () => unsupported(),
+      streamEvents: Stream.empty,
+    };
+    const providerLayer = Layer.mergeAll(
+      Layer.succeed(ProviderService, providerService),
+      Layer.succeed(ProviderAdapterRegistry, {
+        getByProvider: (provider) => Effect.fail(new ProviderUnsupportedError({ provider })),
+        listProviders: () => Effect.succeed([]),
+      }),
+      Layer.succeed(ProviderDiscoveryService, {
+        getComposerCapabilities: () =>
+          Effect.succeed({
+            provider: "claudeAgent" as const,
+            supportsSkillMentions: false,
+            supportsSkillDiscovery: false,
+            supportsNativeSlashCommandDiscovery: false,
+            supportsPluginMentions: false,
+            supportsPluginDiscovery: false,
+            supportsRuntimeModelList: false,
+          }),
+        listSkills: () => Effect.succeed({ skills: [], source: "test", cached: false }),
+        listCommands: () => Effect.succeed({ commands: [], source: "test", cached: false }),
+        listPlugins: () =>
+          Effect.succeed({
+            marketplaces: [],
+            marketplaceLoadErrors: [],
+            remoteSyncError: null,
+            featuredPluginIds: [],
+            source: "test",
+            cached: false,
+          }),
+        readPlugin: () =>
+          Effect.succeed({
+            plugin: {
+              marketplaceName: "test-marketplace",
+              marketplacePath: "/test/marketplace.json",
+              summary: {
+                id: "plugin/test",
+                name: "test",
+                source: {
+                  type: "local",
+                  path: "/test/plugin",
+                },
+                installed: false,
+                enabled: false,
+                installPolicy: "AVAILABLE",
+                authPolicy: "ON_USE",
+              },
+              skills: [],
+              apps: [],
+              mcpServers: [],
+            },
+            source: "test",
+            cached: false,
+          }),
+        listModels: () => Effect.succeed({ models: [], source: "test", cached: false }),
+        listAgents: () => Effect.succeed({ agents: [], source: "test", cached: false }),
+      }),
+    );
+
+    server = await createTestServer({
+      cwd: "/test",
+      providerLayer,
+    });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const [ws] = await connectAndAwaitWelcome(port);
+    connections.push(ws);
+
+    const workspaceRoot = makeTempDir("t3code-ws-import-claude-project-");
+    const createdAt = new Date().toISOString();
+    await sendRequest(ws, ORCHESTRATION_WS_METHODS.dispatchCommand, {
+      type: "project.create",
+      commandId: "cmd-import-claude-project-create",
+      projectId: "project-import-claude-1",
+      title: "Import Claude Project",
+      workspaceRoot,
+      defaultModelSelection: {
+        provider: "claudeAgent",
+        model: "claude-sonnet-4-5",
+      },
+      createdAt,
+    });
+    await sendRequest(ws, ORCHESTRATION_WS_METHODS.dispatchCommand, {
+      type: "thread.create",
+      commandId: "cmd-import-claude-thread-create",
+      threadId: "import-claude-thread-1",
+      projectId: "project-import-claude-1",
+      title: "Imported Claude thread",
+      modelSelection: {
+        provider: "claudeAgent",
+        model: "claude-sonnet-4-5",
+      },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdAt,
+    });
+
+    const importResponse = await sendRequest(ws, ORCHESTRATION_WS_METHODS.importThread, {
+      threadId: "import-claude-thread-1",
+      externalId: "550e8400-e29b-41d4-a716-446655440000",
+    });
+    expect(importResponse.error).toBeUndefined();
+    expect(startSessionInput).toMatchObject({
+      threadId: "import-claude-thread-1",
+      provider: "claudeAgent",
+      resumeCursor: {
+        resume: "550e8400-e29b-41d4-a716-446655440000",
+      },
+    });
+    expect(vi.mocked(getClaudeSessionInfo)).toHaveBeenCalledWith(
+      "550e8400-e29b-41d4-a716-446655440000",
+      expect.objectContaining({ dir: expect.stringContaining(path.basename(workspaceRoot)) }),
+    );
+    expect(vi.mocked(getClaudeSessionMessages)).toHaveBeenCalledWith(
+      "550e8400-e29b-41d4-a716-446655440000",
+      expect.objectContaining({ dir: expect.stringContaining(path.basename(workspaceRoot)) }),
+    );
+
+    const snapshotResponse = await sendRequest(ws, ORCHESTRATION_WS_METHODS.getSnapshot);
+    expect(snapshotResponse.error).toBeUndefined();
+    const snapshot = snapshotResponse.result as {
+      threads: Array<{
+        id: string;
+        messages: Array<{ role: string; text: string }>;
+        session: { status: string } | null;
+      }>;
+    };
+    const importedThread = snapshot.threads.find(
+      (thread) => thread.id === "import-claude-thread-1",
+    );
+    expect(
+      importedThread?.messages.map((message) => ({
+        role: message.role,
+        text: message.text,
+      })),
+    ).toEqual([
+      { role: "user", text: "Please continue this session" },
+      { role: "assistant", text: "Picking up where we left off." },
+    ]);
+    expect(importedThread?.session?.status).toBe("ready");
+  });
+
+  it("rejects Claude import when the session is not stored for the target workspace", async () => {
+    vi.mocked(getClaudeSessionInfo).mockResolvedValueOnce(undefined).mockResolvedValueOnce({
+      sessionId: "550e8400-e29b-41d4-a716-446655440000",
+      summary: "Claude import elsewhere",
+      lastModified: Date.now(),
+    });
+
+    let startSessionCalled = false;
+    const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
+    const providerService: ProviderServiceShape = {
+      startSession: () => {
+        startSessionCalled = true;
+        return unsupported();
+      },
+      sendTurn: () => unsupported(),
+      steerTurn: () => unsupported(),
+      startReview: () => unsupported(),
+      forkThread: () => Effect.succeed(null),
+      interruptTurn: () => unsupported(),
+      respondToRequest: () => unsupported(),
+      respondToUserInput: () => unsupported(),
+      stopSession: () => unsupported(),
+      listSessions: () => Effect.succeed([]),
+      getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
+      rollbackConversation: () => unsupported(),
+      compactThread: () => unsupported(),
+      streamEvents: Stream.empty,
+    };
+    const providerLayer = Layer.mergeAll(
+      Layer.succeed(ProviderService, providerService),
+      Layer.succeed(ProviderAdapterRegistry, {
+        getByProvider: (provider) => Effect.fail(new ProviderUnsupportedError({ provider })),
+        listProviders: () => Effect.succeed([]),
+      }),
+      Layer.succeed(ProviderDiscoveryService, {
+        getComposerCapabilities: () =>
+          Effect.succeed({
+            provider: "claudeAgent" as const,
+            supportsSkillMentions: false,
+            supportsSkillDiscovery: false,
+            supportsNativeSlashCommandDiscovery: false,
+            supportsPluginMentions: false,
+            supportsPluginDiscovery: false,
+            supportsRuntimeModelList: false,
+          }),
+        listSkills: () => Effect.succeed({ skills: [], source: "test", cached: false }),
+        listCommands: () => Effect.succeed({ commands: [], source: "test", cached: false }),
+        listPlugins: () =>
+          Effect.succeed({
+            marketplaces: [],
+            marketplaceLoadErrors: [],
+            remoteSyncError: null,
+            featuredPluginIds: [],
+            source: "test",
+            cached: false,
+          }),
+        readPlugin: () =>
+          Effect.succeed({
+            plugin: {
+              marketplaceName: "test-marketplace",
+              marketplacePath: "/test/marketplace.json",
+              summary: {
+                id: "plugin/test",
+                name: "test",
+                source: {
+                  type: "local",
+                  path: "/test/plugin",
+                },
+                installed: false,
+                enabled: false,
+                installPolicy: "AVAILABLE",
+                authPolicy: "ON_USE",
+              },
+              skills: [],
+              apps: [],
+              mcpServers: [],
+            },
+            source: "test",
+            cached: false,
+          }),
+        listModels: () => Effect.succeed({ models: [], source: "test", cached: false }),
+        listAgents: () => Effect.succeed({ agents: [], source: "test", cached: false }),
+      }),
+    );
+
+    server = await createTestServer({
+      cwd: "/test",
+      providerLayer,
+    });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const [ws] = await connectAndAwaitWelcome(port);
+    connections.push(ws);
+
+    const workspaceRoot = makeTempDir("t3code-ws-import-claude-mismatch-");
+    const createdAt = new Date().toISOString();
+    await sendRequest(ws, ORCHESTRATION_WS_METHODS.dispatchCommand, {
+      type: "project.create",
+      commandId: "cmd-import-claude-mismatch-project-create",
+      projectId: "project-import-claude-mismatch-1",
+      title: "Import Claude Project",
+      workspaceRoot,
+      defaultModelSelection: {
+        provider: "claudeAgent",
+        model: "claude-sonnet-4-5",
+      },
+      createdAt,
+    });
+    await sendRequest(ws, ORCHESTRATION_WS_METHODS.dispatchCommand, {
+      type: "thread.create",
+      commandId: "cmd-import-claude-mismatch-thread-create",
+      threadId: "import-claude-mismatch-thread-1",
+      projectId: "project-import-claude-mismatch-1",
+      title: "Imported Claude thread",
+      modelSelection: {
+        provider: "claudeAgent",
+        model: "claude-sonnet-4-5",
+      },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdAt,
+    });
+
+    const importResponse = await sendRequest(ws, ORCHESTRATION_WS_METHODS.importThread, {
+      threadId: "import-claude-mismatch-thread-1",
+      externalId: "550e8400-e29b-41d4-a716-446655440000",
+    });
+    expect(importResponse.result).toBeUndefined();
+    expect(importResponse.error?.message).toContain("exists, but not for this workspace");
+    expect(startSessionCalled).toBe(false);
   });
 
   it("routes terminal RPC methods and broadcasts terminal events", async () => {
