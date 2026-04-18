@@ -223,10 +223,8 @@ import {
 } from "../lib/terminalContext";
 import {
   appendAssistantSelectionsToPrompt,
-  createAssistantSelectionAttachment,
   formatAssistantSelectionQueuePreview,
   formatAssistantSelectionTitleSeed,
-  getAssistantSelectionValidationError,
 } from "../lib/assistantSelections";
 import {
   deriveContextWindowSelectionStatus,
@@ -259,9 +257,10 @@ import { ComposerPlanFollowUpBanner } from "./chat/ComposerPlanFollowUpBanner";
 import { ComposerVoiceButton } from "./chat/ComposerVoiceButton";
 import { ComposerVoiceRecorderBar } from "./chat/ComposerVoiceRecorderBar";
 import { ComposerReferenceAttachments } from "./chat/ComposerReferenceAttachments";
-import { TranscriptSelectionAction } from "./chat/TranscriptSelectionAction";
+import { TranscriptSelectionActionLayer } from "./chat/TranscriptSelectionActionLayer";
 import { ActivePlanCard } from "./chat/ActivePlanCard";
 import { useChatAutoScrollController } from "./chat/useChatAutoScrollController";
+import { useTranscriptAssistantSelectionAction } from "./chat/useTranscriptAssistantSelectionAction";
 import {
   getComposerProviderState,
   renderProviderTraitsPicker,
@@ -309,21 +308,9 @@ import {
 } from "../lib/threadEnvironment";
 import { buildModelSelection, buildNextProviderOptions } from "../providerModelOptions";
 import { waitForRecoverableProjectForDuplicateCreate } from "../lib/projectCreateRecovery";
-import {
-  readTranscriptAssistantSelection,
-  resolveTranscriptSelectionActionLayout,
-  type TranscriptAssistantSelection,
-} from "./chat/chatSelectionActions";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
-
-interface PendingTranscriptSelectionAction {
-  selection: TranscriptAssistantSelection;
-  left: number;
-  top: number;
-  placement: "top" | "bottom";
-}
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_MESSAGES: ChatMessage[] = [];
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
@@ -813,14 +800,11 @@ export default function ChatView({
   );
   const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
   const [isTraitsPickerOpen, setIsTraitsPickerOpen] = useState(false);
-  const [pendingTranscriptSelectionAction, setPendingTranscriptSelectionAction] =
-    useState<PendingTranscriptSelectionAction | null>(null);
 
   useEffect(() => {
     setComposerCommandPicker(null);
     setIsModelPickerOpen(false);
     setIsTraitsPickerOpen(false);
-    setPendingTranscriptSelectionAction(null);
   }, [threadId]);
   useEffect(() => {
     // Thread-bound handoff dialog state is reset by the dedicated hook.
@@ -2361,81 +2345,6 @@ export default function ChatView({
     },
     [activeThread, composerCursor, composerTerminalContexts, insertComposerDraftTerminalContext],
   );
-  const addAssistantSelectionFromTranscript = useCallback(
-    (input: { clientX: number; clientY: number; container: HTMLDivElement | null }) => {
-      if (
-        !activeThread ||
-        !input.container ||
-        pendingUserInputs.length > 0 ||
-        isComposerApprovalState
-      ) {
-        setPendingTranscriptSelectionAction(null);
-        return;
-      }
-      const selectionState = readTranscriptAssistantSelection({ container: input.container });
-      if (!selectionState) {
-        setPendingTranscriptSelectionAction(null);
-        return;
-      }
-      if (
-        composerImagesRef.current.length + composerAssistantSelectionsRef.current.length >=
-        PROVIDER_SEND_TURN_MAX_ATTACHMENTS
-      ) {
-        setPendingTranscriptSelectionAction(null);
-        return;
-      }
-
-      const layout = resolveTranscriptSelectionActionLayout({
-        selectionRect: selectionState.selectionRect,
-        pointer: { x: input.clientX, y: input.clientY },
-      });
-      setPendingTranscriptSelectionAction({
-        selection: selectionState.selection,
-        left: layout.left,
-        top: layout.top,
-        placement: layout.placement,
-      });
-    },
-    [activeThread, isComposerApprovalState, pendingUserInputs.length],
-  );
-  const commitTranscriptAssistantSelection = useCallback(() => {
-    const pendingSelection = pendingTranscriptSelectionAction;
-    if (!pendingSelection) {
-      return;
-    }
-    if (
-      composerImagesRef.current.length + composerAssistantSelectionsRef.current.length >=
-      PROVIDER_SEND_TURN_MAX_ATTACHMENTS
-    ) {
-      setPendingTranscriptSelectionAction(null);
-      toastManager.add({
-        type: "warning",
-        title: `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} references per message.`,
-      });
-      return;
-    }
-    const nextSelection = createAssistantSelectionAttachment(pendingSelection.selection);
-    if (!nextSelection) {
-      setPendingTranscriptSelectionAction(null);
-      if (getAssistantSelectionValidationError(pendingSelection.selection) === "too-long") {
-        toastManager.add({
-          type: "warning",
-          title: "Selections can be up to 4,000 characters.",
-        });
-      }
-      return;
-    }
-    const inserted = addComposerAssistantSelectionToDraft(nextSelection);
-    setPendingTranscriptSelectionAction(null);
-    if (inserted) {
-      window.getSelection()?.removeAllRanges();
-      scheduleComposerFocus();
-    }
-  }, [
-    addComposerAssistantSelectionToDraft,
-    pendingTranscriptSelectionAction,
-    scheduleComposerFocus,
-  ]);
   const setTerminalOpen = useCallback(
     (open: boolean) => {
       if (!activeThreadId) return;
@@ -3212,6 +3121,36 @@ export default function ChatView({
     threadId: activeThread?.id ?? null,
     isStreaming: isWorking,
     messageCount,
+  });
+  const {
+    pendingTranscriptSelectionAction,
+    commitTranscriptAssistantSelection,
+    onMessagesClickCapture,
+    onMessagesMouseUp,
+    onMessagesPointerCancel,
+    onMessagesPointerDown,
+    onMessagesPointerUp,
+    onMessagesScroll,
+    onMessagesTouchEnd,
+    onMessagesTouchMove,
+    onMessagesTouchStart,
+    onMessagesWheel,
+  } = useTranscriptAssistantSelectionAction({
+    threadId,
+    enabled: Boolean(activeThread) && pendingUserInputs.length === 0 && !isComposerApprovalState,
+    composerImagesRef,
+    composerAssistantSelectionsRef,
+    addComposerAssistantSelectionToDraft,
+    scheduleComposerFocus,
+    onMessagesClickCaptureBase,
+    onMessagesPointerCancelBase,
+    onMessagesPointerDownBase,
+    onMessagesPointerUpBase,
+    onMessagesScrollBase,
+    onMessagesTouchEndBase,
+    onMessagesTouchMoveBase,
+    onMessagesTouchStartBase,
+    onMessagesWheelBase,
   });
 
   useLayoutEffect(() => {
@@ -6045,110 +5984,6 @@ export default function ChatView({
   const onScrollToBottom = useCallback(() => {
     forceStickToBottom("smooth");
   }, [forceStickToBottom]);
-  const dismissTranscriptSelectionAction = useCallback(() => {
-    setPendingTranscriptSelectionAction(null);
-  }, []);
-  const onMessagesClickCapture = useCallback(
-    (event: React.MouseEvent<HTMLDivElement>) => {
-      dismissTranscriptSelectionAction();
-      onMessagesClickCaptureBase(event);
-    },
-    [dismissTranscriptSelectionAction, onMessagesClickCaptureBase],
-  );
-  const onMessagesPointerDown = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      dismissTranscriptSelectionAction();
-      onMessagesPointerDownBase(event);
-    },
-    [dismissTranscriptSelectionAction, onMessagesPointerDownBase],
-  );
-  const onMessagesPointerUp = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      onMessagesPointerUpBase(event);
-    },
-    [onMessagesPointerUpBase],
-  );
-  const onMessagesPointerCancel = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      dismissTranscriptSelectionAction();
-      onMessagesPointerCancelBase(event);
-    },
-    [dismissTranscriptSelectionAction, onMessagesPointerCancelBase],
-  );
-  const onMessagesScroll = useCallback(() => {
-    dismissTranscriptSelectionAction();
-    onMessagesScrollBase();
-  }, [dismissTranscriptSelectionAction, onMessagesScrollBase]);
-  const onMessagesWheel = useCallback(
-    (event: React.WheelEvent<HTMLDivElement>) => {
-      dismissTranscriptSelectionAction();
-      onMessagesWheelBase(event);
-    },
-    [dismissTranscriptSelectionAction, onMessagesWheelBase],
-  );
-  const onMessagesTouchStart = useCallback(
-    (event: React.TouchEvent<HTMLDivElement>) => {
-      dismissTranscriptSelectionAction();
-      onMessagesTouchStartBase(event);
-    },
-    [dismissTranscriptSelectionAction, onMessagesTouchStartBase],
-  );
-  const onMessagesTouchMove = useCallback(
-    (event: React.TouchEvent<HTMLDivElement>) => {
-      dismissTranscriptSelectionAction();
-      onMessagesTouchMoveBase(event);
-    },
-    [dismissTranscriptSelectionAction, onMessagesTouchMoveBase],
-  );
-  const onMessagesTouchEnd = useCallback(
-    (event: React.TouchEvent<HTMLDivElement>) => {
-      onMessagesTouchEndBase(event);
-    },
-    [onMessagesTouchEndBase],
-  );
-  const onMessagesMouseUp = useCallback(
-    (event: React.MouseEvent<HTMLDivElement>) => {
-      const container = event.currentTarget;
-      const clientX = event.clientX;
-      const clientY = event.clientY;
-      window.requestAnimationFrame(() => {
-        void addAssistantSelectionFromTranscript({
-          clientX,
-          clientY,
-          container,
-        });
-      });
-    },
-    [addAssistantSelectionFromTranscript],
-  );
-  useEffect(() => {
-    if (!pendingTranscriptSelectionAction) {
-      return;
-    }
-
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target;
-      if (
-        target instanceof Element &&
-        target.closest("[data-transcript-selection-action='true']")
-      ) {
-        return;
-      }
-      setPendingTranscriptSelectionAction(null);
-    };
-    const handleWindowChange = () => {
-      setPendingTranscriptSelectionAction(null);
-    };
-
-    window.addEventListener("pointerdown", handlePointerDown);
-    window.addEventListener("resize", handleWindowChange);
-    document.addEventListener("selectionchange", handleWindowChange);
-    return () => {
-      window.removeEventListener("pointerdown", handlePointerDown);
-      window.removeEventListener("resize", handleWindowChange);
-      document.removeEventListener("selectionchange", handleWindowChange);
-    };
-  }, [pendingTranscriptSelectionAction]);
   const onOpenTurnDiff = useCallback(
     (turnId: TurnId, filePath?: string) => {
       if (diffEnvironmentPending) {
@@ -7646,14 +7481,10 @@ export default function ChatView({
         onOpenChange={setWorktreeHandoffDialogOpen}
         onConfirm={confirmWorktreeHandoff}
       />
-      {pendingTranscriptSelectionAction ? (
-        <TranscriptSelectionAction
-          left={pendingTranscriptSelectionAction.left}
-          top={pendingTranscriptSelectionAction.top}
-          placement={pendingTranscriptSelectionAction.placement}
-          onAddToChat={commitTranscriptAssistantSelection}
-        />
-      ) : null}
+      <TranscriptSelectionActionLayer
+        action={pendingTranscriptSelectionAction}
+        onAddToChat={commitTranscriptAssistantSelection}
+      />
 
       {expandedImage && expandedImageItem && (
         <div
