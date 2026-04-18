@@ -191,7 +191,27 @@ jobs:
             echo "Signing disabled for ${{ matrix.platform }}."
           fi
 
-          bun run dist:desktop:artifact -- "${args[@]}"
+          if [[ "${{ matrix.platform }}" == "mac" && "${{ matrix.arch }}" == "x64" ]]; then
+            # electron-builder occasionally times out fetching x64 DMG helper bundles on GitHub-hosted macOS runners.
+            # Retry this narrow packaging path so transient upstream 504s do not block the whole release.
+            max_attempts=3
+            for attempt in $(seq 1 "$max_attempts"); do
+              if bun run dist:desktop:artifact -- "${args[@]}"; then
+                break
+              fi
+
+              if [[ "$attempt" -eq "$max_attempts" ]]; then
+                echo "macOS x64 desktop artifact build failed after $max_attempts attempts."
+                exit 1
+              fi
+
+              sleep_seconds=$((attempt * 15))
+              echo "macOS x64 desktop artifact build failed on attempt $attempt/$max_attempts. Retrying in ${sleep_seconds}s..."
+              sleep "$sleep_seconds"
+            done
+          else
+            bun run dist:desktop:artifact -- "${args[@]}"
+          fi
 
       - name: Collect release assets
         shell: bash
