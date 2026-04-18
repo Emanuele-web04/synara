@@ -132,7 +132,7 @@ describe("updateMachine", () => {
 
     expect(available.status).toBe("available");
     expect(downloading.status).toBe("downloading");
-    expect(downloading.downloadPercent).toBe(0);
+    expect(downloading.downloadPercent).toBeNull();
     expect(progress.downloadPercent).toBe(55.5);
     expect(progress.errorContext).toBeNull();
   });

@@ -95,7 +95,7 @@ export function reduceDesktopUpdateStateOnDownloadStart(
   return {
     ...state,
     status: "downloading",
-    downloadPercent: 0,
+    downloadPercent: null,
     message: null,
     errorContext: null,
     canRetry: false,

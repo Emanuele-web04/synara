@@ -3389,8 +3389,6 @@ export default function Sidebar() {
     const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
     const threadJumpLabelParts =
       visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
-    const pinnedRowPaddingClassName =
-      rightMetaBadge || threadJumpLabel || isPendingArchiveConfirmation ? "pr-16" : "pr-12";
     const pinnedTimestampClassName = isSubagentThread
       ? "w-[1.2rem] text-right text-[10px] leading-none tabular-nums text-muted-foreground/26 transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0"
       : "w-[1.625rem] text-right text-[length:var(--app-font-size-ui-meta,11px)] leading-none tabular-nums text-muted-foreground/38 transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0";
@@ -3402,8 +3400,7 @@ export default function Sidebar() {
           tabIndex={0}
           data-thread-item
           className={cn(
-            "relative flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[length:var(--app-font-size-ui,12px)] transition-colors cursor-pointer",
-            pinnedRowPaddingClassName,
+            "grid h-8 w-full grid-cols-[auto_auto_minmax(0,1fr)_6rem_5.5rem] items-center gap-x-2 rounded-md px-2 text-left text-[length:var(--app-font-size-ui,12px)] transition-colors cursor-pointer",
             isActive
               ? "bg-accent/62 text-foreground/90 dark:bg-accent/42"
               : "text-foreground/72 hover:bg-accent/40 hover:text-foreground/90",
@@ -3489,36 +3486,35 @@ export default function Sidebar() {
               </span>
             ) : null}
           </div>
-          <div className="ml-auto flex shrink-0 items-center gap-1.5 pr-1">
+          {/* Keep pinned rows on stable columns even when badges/timestamps differ. */}
+          <div className="flex min-w-0 w-24 shrink-0 items-center justify-end pr-1">
             {projectLabel ? (
-              <span className="max-w-24 truncate text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/38">
+              <span className="w-full truncate text-right text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/38">
                 {projectLabel}
               </span>
             ) : null}
           </div>
-          <div className={cn("absolute top-1/2 flex -translate-y-1/2 items-center", "right-1.5")}>
-            <div className="relative flex shrink-0 items-center justify-end gap-1">
-              {!isPendingArchiveConfirmation ? (
-                <ThreadRowMetaBadge tooltip={rightMetaBadge?.tooltip ?? null}>
-                  {rightMetaBadge?.icon}
-                </ThreadRowMetaBadge>
-              ) : null}
-              {!isPendingArchiveConfirmation && threadJumpLabel ? (
-                <KbdGroup>
-                  {threadJumpLabelParts.map((part) => (
-                    <Kbd key={part}>{part}</Kbd>
-                  ))}
-                </KbdGroup>
-              ) : null}
-              {!isPendingArchiveConfirmation && !threadJumpLabel ? (
-                <span className={pinnedTimestampClassName}>
-                  {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
-                </span>
-              ) : null}
-              {renderThreadArchiveAction(thread.id, "text-muted-foreground/42", {
-                compact: isSubagentThread,
-              })}
-            </div>
+          <div className="flex w-[5.5rem] shrink-0 items-center justify-end gap-1">
+            {!isPendingArchiveConfirmation ? (
+              <ThreadRowMetaBadge tooltip={rightMetaBadge?.tooltip ?? null}>
+                {rightMetaBadge?.icon}
+              </ThreadRowMetaBadge>
+            ) : null}
+            {!isPendingArchiveConfirmation && threadJumpLabel ? (
+              <KbdGroup>
+                {threadJumpLabelParts.map((part) => (
+                  <Kbd key={part}>{part}</Kbd>
+                ))}
+              </KbdGroup>
+            ) : null}
+            {!isPendingArchiveConfirmation && !threadJumpLabel ? (
+              <span className={pinnedTimestampClassName}>
+                {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
+              </span>
+            ) : null}
+            {renderThreadArchiveAction(thread.id, "text-muted-foreground/42", {
+              compact: isSubagentThread,
+            })}
           </div>
         </div>
       </div>
