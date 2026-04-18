@@ -91,7 +91,7 @@ describe("ComposerExtrasMenu", () => {
     await page.getByLabelText("Composer extras").click();
     await page.getByText("Plan mode").click();
     await page.getByText("Fast").click();
-    await page.getByText("Fast").click();
+    await page.getByRole("menuitemradio", { name: "Fast" }).click();
 
     expect(menu.onSetPlanMode).toHaveBeenCalledWith(true);
     expect(menu.onToggleFastMode).toHaveBeenCalledTimes(1);

@@ -9,6 +9,7 @@ import {
   type UserInputQuestion,
   type ThreadId,
   type TurnId,
+  PROVIDER_DISPLAY_NAMES,
 } from "@t3tools/contracts";
 import {
   decodeSubagentAgentStates,
@@ -36,6 +37,7 @@ export const PROVIDER_OPTIONS: Array<{
 }> = [
   { value: "codex", label: "Codex", available: true },
   { value: "claudeAgent", label: "Claude", available: true },
+  { value: "gemini", label: "Gemini", available: true },
 ];
 
 export interface WorkLogEntry {

@@ -66,6 +66,11 @@ import {
 } from "~/lib/providerDiscoveryReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
+import {
+  isProviderUsable,
+  normalizeProviderStatusForLocalConfig,
+  providerUnavailableReason,
+} from "~/lib/providerAvailability";
 import { isElectron } from "../env";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
 import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
@@ -286,14 +291,14 @@ import { useComposerSlashCommands } from "../hooks/useComposerSlashCommands";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import {
   canCreateThreadHandoff,
-  resolveHandoffTargetProvider,
+  resolveAvailableHandoffTargetProviders,
   resolveThreadHandoffBadgeLabel,
 } from "../lib/threadHandoff";
 import {
   resolveDiffEnvironmentState,
   resolveThreadEnvironmentMode,
 } from "../lib/threadEnvironment";
-import { buildNextProviderOptions } from "../providerModelOptions";
+import { buildModelSelection, buildNextProviderOptions } from "../providerModelOptions";
 import { waitForRecoverableProjectForDuplicateCreate } from "../lib/projectCreateRecovery";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
@@ -1129,11 +1134,7 @@ export default function ChatView({
   const selectedPromptEffort = composerProviderState.promptEffort;
   const selectedModelOptionsForDispatch = composerProviderState.modelOptionsForDispatch;
   const selectedModelSelection = useMemo<ModelSelection>(
-    () => ({
-      provider: selectedProvider,
-      model: selectedModel,
-      ...(selectedModelOptionsForDispatch ? { options: selectedModelOptionsForDispatch } : {}),
-    }),
+    () => buildModelSelection(selectedProvider, selectedModel, selectedModelOptionsForDispatch),
     [selectedModel, selectedModelOptionsForDispatch, selectedProvider],
   );
   const providerOptionsForDispatch = useMemo(() => getProviderStartOptions(settings), [settings]);
@@ -1142,6 +1143,13 @@ export default function ChatView({
     providerModelsQueryOptions({ provider: "claudeAgent" }),
   );
   const codexDynamicModelsQuery = useQuery(providerModelsQueryOptions({ provider: "codex" }));
+  const geminiModelsQuery = useQuery(
+    providerModelsQueryOptions({
+      provider: "gemini",
+      binaryPath: settings.geminiBinaryPath || null,
+      enabled: selectedProvider === "gemini" || lockedProvider === "gemini",
+    }),
+  );
   const claudeDynamicAgentsQuery = useQuery(
     providerAgentsQueryOptions({ provider: "claudeAgent" }),
   );
@@ -1150,13 +1158,13 @@ export default function ChatView({
     const staticOptions = getCustomModelOptionsByProvider(settings);
     const result = { ...staticOptions };
 
-    // Merge dynamic models for each provider when available from the SDK
     const dynamicSources: Record<ProviderKind, typeof claudeDynamicModelsQuery.data> = {
       claudeAgent: claudeDynamicModelsQuery.data,
       codex: codexDynamicModelsQuery.data,
+      gemini: geminiModelsQuery.data,
     };
 
-    for (const provider of ["claudeAgent", "codex"] as const) {
+    for (const provider of ["claudeAgent", "codex", "gemini"] as const) {
       const dynamicModels = dynamicSources[provider]?.models;
       if (dynamicModels && dynamicModels.length > 0) {
         result[provider] = mergeDynamicModelOptions({
@@ -1171,7 +1179,12 @@ export default function ChatView({
     }
 
     return result;
-  }, [settings, claudeDynamicModelsQuery.data, codexDynamicModelsQuery.data]);
+  }, [
+    settings,
+    claudeDynamicModelsQuery.data,
+    codexDynamicModelsQuery.data,
+    geminiModelsQuery.data,
+  ]);
   const selectedModelForPickerWithCustomFallback = useMemo(() => {
     const currentOptions = modelOptionsByProvider[selectedProvider];
     return currentOptions.some((option) => option.slug === selectedModelForPicker)
@@ -1268,25 +1281,6 @@ export default function ChatView({
         : null,
     [activePendingDraftAnswers, activePendingUserInput],
   );
-  const handoffBadgeLabel = useMemo(
-    () => (activeThread ? resolveThreadHandoffBadgeLabel(activeThread) : null),
-    [activeThread],
-  );
-  const handoffBadgeSourceProvider = activeThread?.handoff?.sourceProvider ?? null;
-  const handoffBadgeTargetProvider = activeThread?.handoff
-    ? activeThread.modelSelection.provider
-    : null;
-  const handoffTargetProvider = useMemo(
-    () =>
-      activeThread ? resolveHandoffTargetProvider(activeThread.modelSelection.provider) : null,
-    [activeThread],
-  );
-  const handoffActionLabel = useMemo(() => {
-    if (!activeThread) {
-      return "Create handoff thread";
-    }
-    return `Handoff to ${PROVIDER_DISPLAY_NAMES[handoffTargetProvider ?? "codex"]}`;
-  }, [activeThread, handoffTargetProvider]);
   const activePendingIsResponding = activePendingUserInput
     ? respondingUserInputRequestIds.includes(activePendingUserInput.requestId)
     : false;
@@ -1976,7 +1970,50 @@ export default function ChatView({
   );
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
   const availableEditors = serverConfigQuery.data?.availableEditors ?? EMPTY_AVAILABLE_EDITORS;
-  const providerStatuses = serverConfigQuery.data?.providers ?? EMPTY_PROVIDER_STATUSES;
+  const providerStatuses = useMemo(
+    () =>
+      (serverConfigQuery.data?.providers ?? EMPTY_PROVIDER_STATUSES)
+        .map((status) =>
+          normalizeProviderStatusForLocalConfig({
+            provider: status.provider,
+            status,
+            customBinaryPath:
+              status.provider === "codex"
+                ? settings.codexBinaryPath
+                : status.provider === "claudeAgent"
+                  ? settings.claudeBinaryPath
+                  : settings.geminiBinaryPath,
+          }),
+        )
+        .flatMap((status) => (status ? [status] : [])),
+    [
+      serverConfigQuery.data?.providers,
+      settings.claudeBinaryPath,
+      settings.codexBinaryPath,
+      settings.geminiBinaryPath,
+    ],
+  );
+  const handoffBadgeLabel = useMemo(
+    () => (activeThread ? resolveThreadHandoffBadgeLabel(activeThread) : null),
+    [activeThread],
+  );
+  const handoffBadgeSourceProvider = activeThread?.handoff?.sourceProvider ?? null;
+  const handoffBadgeTargetProvider = activeThread?.handoff
+    ? activeThread.modelSelection.provider
+    : null;
+  const handoffTargetProviders = useMemo(
+    () =>
+      activeThread
+        ? resolveAvailableHandoffTargetProviders(activeThread.modelSelection.provider).filter(
+            (provider) =>
+              isProviderUsable(
+                providerStatuses.find((status) => status.provider === provider) ?? null,
+              ),
+          )
+        : [],
+    [activeThread, providerStatuses],
+  );
+  const handoffActionLabel = activeThread ? "Hand off thread" : "Create handoff thread";
   const activeProviderStatus = useMemo(
     () => providerStatuses.find((status) => status.provider === selectedProvider) ?? null,
     [selectedProvider, providerStatuses],
@@ -4038,24 +4075,36 @@ export default function ChatView({
     [activeThread, hasLiveTurn, isConnecting, isRevertingCheckpoint, isSendBusy, setThreadError],
   );
 
-  const onCreateHandoffThread = useCallback(async () => {
-    if (!activeThread || handoffDisabled) {
-      return;
-    }
+  const onCreateHandoffThread = useCallback(
+    async (targetProvider: ProviderKind) => {
+      if (!activeThread || handoffDisabled) {
+        return;
+      }
 
-    try {
-      await createThreadHandoff(activeThread);
-    } catch (error) {
-      toastManager.add({
-        type: "error",
-        title: "Could not create handoff thread",
-        description:
-          error instanceof Error
-            ? error.message
-            : "An error occurred while creating the handoff thread.",
-      });
-    }
-  }, [activeThread, createThreadHandoff, handoffDisabled]);
+      try {
+        const targetStatus =
+          providerStatuses.find((status) => status.provider === targetProvider) ?? null;
+        if (!isProviderUsable(targetStatus)) {
+          toastManager.add({
+            type: "error",
+            title: providerUnavailableReason(targetStatus),
+          });
+          return;
+        }
+        await createThreadHandoff(activeThread, targetProvider);
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not create handoff thread",
+          description:
+            error instanceof Error
+              ? error.message
+              : "An error occurred while creating the handoff thread.",
+        });
+      }
+    },
+    [activeThread, createThreadHandoff, handoffDisabled, providerStatuses],
+  );
 
   const clearComposerInput = useCallback(
     (threadId: ThreadId) => {
@@ -4509,16 +4558,13 @@ export default function ChatView({
       }
       // Keep the optimistic label short while the server asks Codex for a better summary.
       const title = buildPromptThreadTitleFallback(titleSeed);
-      const threadCreateModelSelection: ModelSelection = {
-        provider: selectedProviderForSend,
-        model:
-          selectedModelForSend ||
+      const threadCreateModelSelection: ModelSelection = buildModelSelection(
+        selectedProviderForSend,
+        selectedModelForSend ||
           targetProjectDefaultModelSelectionForSend?.model ||
           DEFAULT_MODEL_BY_PROVIDER.codex,
-        ...(selectedModelSelectionForSend.options
-          ? { options: selectedModelSelectionForSend.options }
-          : {}),
-      };
+        selectedModelSelectionForSend.options,
+      );
 
       if (isLocalDraftThread) {
         await api.orchestration.dispatchCommand({
@@ -6527,7 +6573,7 @@ export default function ChatView({
           handoffBadgeLabel={handoffBadgeLabel}
           handoffActionLabel={handoffActionLabel}
           handoffDisabled={handoffDisabled}
-          handoffActionTargetProvider={handoffTargetProvider}
+          handoffActionTargetProviders={handoffTargetProviders}
           handoffBadgeSourceProvider={handoffBadgeSourceProvider}
           handoffBadgeTargetProvider={handoffBadgeTargetProvider}
           browserOpen={resolvedBrowserOpen}

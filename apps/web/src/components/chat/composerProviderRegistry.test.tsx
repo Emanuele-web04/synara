@@ -182,4 +182,82 @@ describe("getComposerProviderState", () => {
       modelOptionsForDispatch: undefined,
     });
   });
+
+  it("derives Gemini effort selections from the active model family", () => {
+    const state = getComposerProviderState({
+      provider: "gemini",
+      model: "gemini-2.5-pro",
+      prompt: "",
+      modelOptions: {
+        gemini: {
+          thinkingBudget: 512,
+        },
+      },
+    });
+
+    expect(state).toEqual({
+      provider: "gemini",
+      promptEffort: "512",
+      modelOptionsForDispatch: {
+        thinkingBudget: 512,
+      },
+    });
+  });
+
+  it("drops unsupported Gemini off overrides for auto 2.5 routing", () => {
+    const state = getComposerProviderState({
+      provider: "gemini",
+      model: "auto-gemini-2.5",
+      prompt: "",
+      modelOptions: {
+        gemini: {
+          thinkingBudget: 0,
+        },
+      },
+    });
+
+    expect(state).toEqual({
+      provider: "gemini",
+      promptEffort: "-1",
+      modelOptionsForDispatch: undefined,
+    });
+  });
+
+  it("drops unsupported Gemini off overrides for 2.5 Flash", () => {
+    const state = getComposerProviderState({
+      provider: "gemini",
+      model: "gemini-2.5-flash",
+      prompt: "",
+      modelOptions: {
+        gemini: {
+          thinkingBudget: 0,
+        },
+      },
+    });
+
+    expect(state).toEqual({
+      provider: "gemini",
+      promptEffort: "-1",
+      modelOptionsForDispatch: undefined,
+    });
+  });
+
+  it("drops explicit Gemini default thinking overrides from dispatch", () => {
+    const state = getComposerProviderState({
+      provider: "gemini",
+      model: "gemini-3.1-pro-preview",
+      prompt: "",
+      modelOptions: {
+        gemini: {
+          thinkingLevel: "HIGH",
+        },
+      },
+    });
+
+    expect(state).toEqual({
+      provider: "gemini",
+      promptEffort: "HIGH",
+      modelOptionsForDispatch: undefined,
+    });
+  });
 });

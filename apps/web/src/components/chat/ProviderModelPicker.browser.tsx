@@ -15,6 +15,10 @@ const MODEL_OPTIONS_BY_PROVIDER = {
     { slug: "gpt-5-codex", name: "GPT-5 Codex" },
     { slug: "gpt-5.3-codex", name: "GPT-5.3 Codex" },
   ],
+  gemini: [
+    { slug: "auto-gemini-3", name: "Auto Gemini 3" },
+    { slug: "gemini-2.5-pro", name: "Gemini 2.5 Pro" },
+  ],
 } as const satisfies Record<ProviderKind, ReadonlyArray<{ slug: ModelSlug; name: string }>>;
 
 async function mountPicker(props: {

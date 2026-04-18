@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { normalizeOpenUsageSnapshot, normalizeOpenUsageUsageLines } from "./openUsageRateLimits";
+import {
+  normalizeOpenUsageSnapshot,
+  normalizeOpenUsageUsageLines,
+  openUsageProviderIdForProvider,
+} from "./openUsageRateLimits";
 import { mergeProviderRateLimits } from "./rateLimits";
 
 describe("openUsageRateLimits", () => {
@@ -138,5 +142,20 @@ describe("openUsageRateLimits", () => {
         subtitle: "via ccusage",
       },
     ]);
+  });
+
+  it("maps Gemini provider ids in both directions", () => {
+    expect(openUsageProviderIdForProvider("gemini")).toBe("gemini");
+    expect(
+      normalizeOpenUsageSnapshot({
+        providerId: "gemini",
+        fetchedAt: "2099-04-08T18:00:00.000Z",
+        lines: [{ type: "progress", label: "Daily", used: 5, limit: 10 }],
+      }),
+    ).toEqual({
+      provider: "gemini",
+      updatedAt: "2099-04-08T18:00:00.000Z",
+      limits: [{ window: "Daily", usedPercent: 50 }],
+    });
   });
 });

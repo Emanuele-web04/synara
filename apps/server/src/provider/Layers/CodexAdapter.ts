@@ -1724,7 +1724,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           }),
       }).pipe(Effect.map((result) => result satisfies ProviderReadPluginResult));
 
-    const listModels: NonNullable<CodexAdapterShape["listModels"]> = () =>
+    const listModels: NonNullable<CodexAdapterShape["listModels"]> = (_input) =>
       Effect.tryPromise({
         try: () => manager.listModels(),
         catch: (cause) =>

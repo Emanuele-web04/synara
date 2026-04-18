@@ -1576,7 +1576,7 @@ describe("WebSocket Server", () => {
             source: "test",
             cached: false,
           }),
-        listModels: () => Effect.succeed({ models: [], source: "test", cached: false }),
+        listModels: (_input) => Effect.succeed({ models: [], source: "test", cached: false }),
         listAgents: () => Effect.succeed({ agents: [], source: "test", cached: false }),
       }),
       Layer.succeed(ProviderAdapterRegistry, {
@@ -1769,7 +1769,7 @@ describe("WebSocket Server", () => {
             source: "test",
             cached: false,
           }),
-        listModels: () => Effect.succeed({ models: [], source: "test", cached: false }),
+        listModels: (_input) => Effect.succeed({ models: [], source: "test", cached: false }),
         listAgents: () => Effect.succeed({ agents: [], source: "test", cached: false }),
       }),
       Layer.succeed(ProviderAdapterRegistry, {
@@ -1994,7 +1994,7 @@ describe("WebSocket Server", () => {
             source: "test",
             cached: false,
           }),
-        listModels: () => Effect.succeed({ models: [], source: "test", cached: false }),
+        listModels: (_input) => Effect.succeed({ models: [], source: "test", cached: false }),
         listAgents: () => Effect.succeed({ agents: [], source: "test", cached: false }),
       }),
     );
@@ -2165,7 +2165,7 @@ describe("WebSocket Server", () => {
             source: "test",
             cached: false,
           }),
-        listModels: () => Effect.succeed({ models: [], source: "test", cached: false }),
+        listModels: (_input) => Effect.succeed({ models: [], source: "test", cached: false }),
         listAgents: () => Effect.succeed({ agents: [], source: "test", cached: false }),
       }),
     );

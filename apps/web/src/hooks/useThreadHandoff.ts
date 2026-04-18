@@ -1,11 +1,20 @@
 import { useNavigate } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
 import { useCallback } from "react";
+import { type ProviderKind } from "@t3tools/contracts";
+import { useAppSettings } from "../appSettings";
 import { useComposerDraftStore } from "../composerDraftStore";
+import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import {
   buildThreadHandoffImportedMessages,
   canCreateThreadHandoff,
+  resolveAvailableHandoffTargetProviders,
   resolveThreadHandoffModelSelection,
 } from "../lib/threadHandoff";
+import {
+  isProviderUsable,
+  normalizeProviderStatusForLocalConfig,
+} from "../lib/providerAvailability";
 import { newCommandId, newThreadId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { useStore } from "../store";
@@ -13,11 +22,13 @@ import { type Thread } from "../types";
 
 export function useThreadHandoff() {
   const navigate = useNavigate();
+  const { settings } = useAppSettings();
   const projects = useStore((store) => store.projects);
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
+  const serverConfigQuery = useQuery(serverConfigQueryOptions());
 
   const createThreadHandoff = useCallback(
-    async (thread: Thread): Promise<Thread["id"]> => {
+    async (thread: Thread, targetProvider: ProviderKind): Promise<Thread["id"]> => {
       const api = readNativeApi();
       if (!api) {
         throw new Error("Native API not found");
@@ -30,6 +41,28 @@ export function useThreadHandoff() {
 
       if (!canCreateThreadHandoff({ thread })) {
         throw new Error("This thread cannot be handed off yet.");
+      }
+      if (
+        !resolveAvailableHandoffTargetProviders(thread.modelSelection.provider).includes(
+          targetProvider,
+        )
+      ) {
+        throw new Error("This handoff target is not available for the current thread.");
+      }
+      const targetStatus = normalizeProviderStatusForLocalConfig({
+        provider: targetProvider,
+        status:
+          serverConfigQuery.data?.providers.find((entry) => entry.provider === targetProvider) ??
+          null,
+        customBinaryPath:
+          targetProvider === "codex"
+            ? settings.codexBinaryPath
+            : targetProvider === "claudeAgent"
+              ? settings.claudeBinaryPath
+              : settings.geminiBinaryPath,
+      });
+      if (!isProviderUsable(targetStatus)) {
+        throw new Error("This provider is not available yet.");
       }
 
       const nextThreadId = newThreadId();
@@ -47,6 +80,7 @@ export function useThreadHandoff() {
         title: thread.title,
         modelSelection: resolveThreadHandoffModelSelection({
           sourceThread: thread,
+          targetProvider,
           projectDefaultModelSelection: project.defaultModelSelection,
           stickyModelSelectionByProvider,
         }),
@@ -74,7 +108,15 @@ export function useThreadHandoff() {
 
       return nextThreadId;
     },
-    [navigate, projects, syncServerReadModel],
+    [
+      navigate,
+      projects,
+      serverConfigQuery.data?.providers,
+      settings.claudeBinaryPath,
+      settings.codexBinaryPath,
+      settings.geminiBinaryPath,
+      syncServerReadModel,
+    ],
   );
 
   return {

@@ -73,6 +73,13 @@ describe("providerStatusCache", () => {
     expect(
       orderProviderStatuses([
         {
+          provider: "gemini",
+          status: "ready",
+          available: true,
+          authStatus: "authenticated",
+          checkedAt: "2026-04-15T10:02:00.000Z",
+        },
+        {
           provider: "claudeAgent",
           status: "warning",
           available: true,
@@ -89,6 +96,13 @@ describe("providerStatusCache", () => {
         available: true,
         authStatus: "unknown",
         checkedAt: "2026-04-15T10:01:00.000Z",
+      },
+      {
+        provider: "gemini",
+        status: "ready",
+        available: true,
+        authStatus: "authenticated",
+        checkedAt: "2026-04-15T10:02:00.000Z",
       },
     ]);
   });

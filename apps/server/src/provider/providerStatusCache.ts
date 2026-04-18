@@ -9,9 +9,11 @@
 import { ServerProviderStatus } from "@t3tools/contracts";
 import { Cause, Effect, FileSystem, Path, Schema } from "effect";
 
-const PROVIDER_STATUS_CACHE_IDS = ["codex", "claudeAgent"] as const satisfies ReadonlyArray<
-  ServerProviderStatus["provider"]
->;
+const PROVIDER_STATUS_CACHE_IDS = [
+  "codex",
+  "claudeAgent",
+  "gemini",
+] as const satisfies ReadonlyArray<ServerProviderStatus["provider"]>;
 
 const decodeProviderStatusCache = Schema.decodeUnknownEffect(
   Schema.fromJsonString(ServerProviderStatus),

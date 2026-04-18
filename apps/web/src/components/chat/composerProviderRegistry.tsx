@@ -6,9 +6,11 @@ import {
 } from "@t3tools/contracts";
 import {
   getModelCapabilities,
+  getGeminiThinkingSelectionValue,
   isClaudeUltrathinkPrompt,
   normalizeClaudeModelOptions,
   normalizeCodexModelOptions,
+  normalizeGeminiModelOptions,
   trimOrNull,
   getDefaultEffort,
   hasEffortLevel,
@@ -60,17 +62,32 @@ function getProviderStateFromCapabilities(
 ): ComposerProviderState {
   const { provider, model, prompt, modelOptions } = input;
   const caps = getModelCapabilities(provider, model);
-  const providerOptions = modelOptions?.[provider];
+
+  let rawEffort: string | null = null;
+  let normalizedOptions: ProviderModelOptions[ProviderKind] | undefined;
+
+  switch (provider) {
+    case "codex": {
+      const providerOptions = modelOptions?.codex;
+      rawEffort = trimOrNull(providerOptions?.reasoningEffort);
+      normalizedOptions = normalizeCodexModelOptions(model, providerOptions);
+      break;
+    }
+    case "claudeAgent": {
+      const providerOptions = modelOptions?.claudeAgent;
+      rawEffort = trimOrNull(providerOptions?.effort);
+      normalizedOptions = normalizeClaudeModelOptions(model, providerOptions);
+      break;
+    }
+    case "gemini": {
+      const providerOptions = modelOptions?.gemini;
+      rawEffort = getGeminiThinkingSelectionValue(caps, providerOptions);
+      normalizedOptions = normalizeGeminiModelOptions(model, providerOptions);
+      break;
+    }
+  }
 
   // Resolve effort
-  const rawEffort = providerOptions
-    ? "effort" in providerOptions
-      ? providerOptions.effort
-      : "reasoningEffort" in providerOptions
-        ? providerOptions.reasoningEffort
-        : null
-    : null;
-
   const draftEffort = trimOrNull(rawEffort);
   const defaultEffort = getDefaultEffort(caps);
   const isPromptInjected = draftEffort
@@ -82,12 +99,6 @@ function getProviderStateFromCapabilities(
       : defaultEffort && hasEffortLevel(caps, defaultEffort)
         ? defaultEffort
         : null;
-
-  // Normalize options for dispatch
-  const normalizedOptions =
-    provider === "codex"
-      ? normalizeCodexModelOptions(model, providerOptions)
-      : normalizeClaudeModelOptions(model, providerOptions);
 
   // Ultrathink styling (driven by capabilities data, not provider identity)
   const ultrathinkActive =
@@ -191,6 +202,45 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
         {...(open !== undefined ? { open } : {})}
         {...(onOpenChange ? { onOpenChange } : {})}
         {...(shortcutLabel !== undefined ? { shortcutLabel } : {})}
+        {...(includeFastMode === undefined ? {} : { includeFastMode })}
+        onPromptChange={onPromptChange}
+      />
+    ),
+  },
+  gemini: {
+    getState: (input) => getProviderStateFromCapabilities(input),
+    renderTraitsMenuContent: ({
+      threadId,
+      model,
+      modelOptions,
+      prompt,
+      includeFastMode,
+      onPromptChange,
+    }) => (
+      <TraitsMenuContent
+        provider="gemini"
+        threadId={threadId}
+        model={model}
+        modelOptions={modelOptions}
+        prompt={prompt}
+        {...(includeFastMode === undefined ? {} : { includeFastMode })}
+        onPromptChange={onPromptChange}
+      />
+    ),
+    renderTraitsPicker: ({
+      threadId,
+      model,
+      modelOptions,
+      prompt,
+      includeFastMode,
+      onPromptChange,
+    }) => (
+      <TraitsPicker
+        provider="gemini"
+        threadId={threadId}
+        model={model}
+        modelOptions={modelOptions}
+        prompt={prompt}
         {...(includeFastMode === undefined ? {} : { includeFastMode })}
         onPromptChange={onPromptChange}
       />

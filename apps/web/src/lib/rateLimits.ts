@@ -384,6 +384,7 @@ export function deriveRateLimitLearnMoreHref(
   if (provider === "claudeAgent") {
     return "https://docs.anthropic.com/en/docs/about-claude/models#rate-limits";
   }
+  if (provider === "gemini") return "https://ai.google.dev/gemini-api/docs/quota";
   return null;
 }
 

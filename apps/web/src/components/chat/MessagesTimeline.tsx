@@ -390,8 +390,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     pendingMeasureFrameRef.current = window.requestAnimationFrame(() => {
       pendingMeasureFrameRef.current = null;
       rowVirtualizer.measure();
+      onTimelineHeightChange?.();
     });
-  }, [rowVirtualizer]);
+  }, [onTimelineHeightChange, rowVirtualizer]);
   useEffect(() => {
     if (timelineWidthPx === null) return;
     scheduleVirtualizerMeasure();
@@ -451,7 +452,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   }, [rowVirtualizer]);
   const onTimelineImageLoad = useCallback(() => {
     scheduleVirtualizerMeasure();
-  }, [scheduleVirtualizerMeasure]);
+    onTimelineHeightChange?.();
+  }, [onTimelineHeightChange, scheduleVirtualizerMeasure]);
   useEffect(() => {
     return () => {
       const frame = pendingMeasureFrameRef.current;

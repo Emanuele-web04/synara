@@ -210,6 +210,18 @@ describe("composerSlashCommands", () => {
     ).not.toContain("compact");
   });
 
+  it("exposes shared app slash commands for gemini", () => {
+    expect(
+      getAvailableComposerSlashCommands({
+        provider: "gemini",
+        supportsFastSlashCommand: false,
+        canOfferCompactCommand: false,
+        canOfferReviewCommand: true,
+        canOfferForkCommand: true,
+      }),
+    ).toEqual(["clear", "model", "plan", "default", "review", "fork", "status", "subagents"]);
+  });
+
   it("treats claude aliases like /fork as provider-native collisions", () => {
     expect(hasProviderNativeSlashCommand("claudeAgent", ["branch", "model"], "fork")).toBe(true);
     expect(hasProviderNativeSlashCommand("claudeAgent", ["clear"], "reset")).toBe(true);

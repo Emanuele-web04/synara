@@ -1,7 +1,7 @@
 import { Schema } from "effect";
 import { TrimmedNonEmptyString } from "./baseSchemas";
 
-const ProviderDiscoveryKind = Schema.Literals(["codex", "claudeAgent"]);
+const ProviderDiscoveryKind = Schema.Literals(["codex", "claudeAgent", "gemini"]);
 
 export const ProviderSkillInterface = Schema.Struct({
   displayName: Schema.optional(TrimmedNonEmptyString),
@@ -205,6 +205,7 @@ export type ProviderReadPluginResult = typeof ProviderReadPluginResult.Type;
 
 export const ProviderListModelsInput = Schema.Struct({
   provider: ProviderDiscoveryKind,
+  binaryPath: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderListModelsInput = typeof ProviderListModelsInput.Type;
 

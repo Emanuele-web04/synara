@@ -12,7 +12,15 @@ export const CLAUDE_CODE_EFFORT_OPTIONS = [
   "ultrathink",
 ] as const;
 export type ClaudeCodeEffort = (typeof CLAUDE_CODE_EFFORT_OPTIONS)[number];
-export type ProviderReasoningEffort = CodexReasoningEffort | ClaudeCodeEffort;
+export const GEMINI_THINKING_LEVEL_OPTIONS = ["LOW", "HIGH"] as const;
+export type GeminiThinkingLevel = (typeof GEMINI_THINKING_LEVEL_OPTIONS)[number];
+export const GEMINI_THINKING_BUDGET_OPTIONS = [-1, 512, 0] as const;
+export type GeminiThinkingBudget = (typeof GEMINI_THINKING_BUDGET_OPTIONS)[number];
+export type ProviderReasoningEffort =
+  | CodexReasoningEffort
+  | ClaudeCodeEffort
+  | GeminiThinkingLevel
+  | `${GeminiThinkingBudget}`;
 
 export const CodexModelOptions = Schema.Struct({
   reasoningEffort: Schema.optional(Schema.Literals(CODEX_REASONING_EFFORT_OPTIONS)),
@@ -28,9 +36,16 @@ export const ClaudeModelOptions = Schema.Struct({
 });
 export type ClaudeModelOptions = typeof ClaudeModelOptions.Type;
 
+export const GeminiModelOptions = Schema.Struct({
+  thinkingLevel: Schema.optional(Schema.Literals(GEMINI_THINKING_LEVEL_OPTIONS)),
+  thinkingBudget: Schema.optional(Schema.Literals(GEMINI_THINKING_BUDGET_OPTIONS)),
+});
+export type GeminiModelOptions = typeof GeminiModelOptions.Type;
+
 export const ProviderModelOptions = Schema.Struct({
   codex: Schema.optional(CodexModelOptions),
   claudeAgent: Schema.optional(ClaudeModelOptions),
+  gemini: Schema.optional(GeminiModelOptions),
 });
 export type ProviderModelOptions = typeof ProviderModelOptions.Type;
 
@@ -52,6 +67,17 @@ export type ModelCapabilities = {
   readonly supportsThinkingToggle: boolean;
   readonly promptInjectedEffortLevels: readonly string[];
   readonly contextWindowOptions: readonly ContextWindowOption[];
+};
+
+const GEMINI_2_5_CAPABILITIES: ModelCapabilities = {
+  reasoningEffortLevels: [
+    { value: "-1", label: "Dynamic", isDefault: true },
+    { value: "512", label: "512 Tokens" },
+  ],
+  supportsFastMode: false,
+  supportsThinkingToggle: false,
+  promptInjectedEffortLevels: [],
+  contextWindowOptions: [],
 };
 
 type ModelDefinition = {
@@ -255,6 +281,84 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       },
     },
   ],
+  gemini: [
+    {
+      slug: "auto-gemini-3",
+      name: "Auto Gemini 3",
+      capabilities: {
+        reasoningEffortLevels: [
+          { value: "HIGH", label: "High", isDefault: true },
+          { value: "LOW", label: "Low" },
+        ],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+    {
+      slug: "auto-gemini-2.5",
+      name: "Auto Gemini 2.5",
+      capabilities: GEMINI_2_5_CAPABILITIES,
+    },
+    {
+      slug: "gemini-3.1-pro-preview",
+      name: "Gemini 3.1 Pro Preview",
+      capabilities: {
+        reasoningEffortLevels: [
+          { value: "HIGH", label: "High", isDefault: true },
+          { value: "LOW", label: "Low" },
+        ],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+    {
+      slug: "gemini-3-flash-preview",
+      name: "Gemini 3 Flash Preview",
+      capabilities: {
+        reasoningEffortLevels: [
+          { value: "HIGH", label: "High", isDefault: true },
+          { value: "LOW", label: "Low" },
+        ],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+    {
+      slug: "gemini-3.1-flash-lite-preview",
+      name: "Gemini 3.1 Flash Lite Preview",
+      capabilities: {
+        reasoningEffortLevels: [
+          { value: "HIGH", label: "High", isDefault: true },
+          { value: "LOW", label: "Low" },
+        ],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+    {
+      slug: "gemini-2.5-pro",
+      name: "Gemini 2.5 Pro",
+      capabilities: GEMINI_2_5_CAPABILITIES,
+    },
+    {
+      slug: "gemini-2.5-flash",
+      name: "Gemini 2.5 Flash",
+      capabilities: GEMINI_2_5_CAPABILITIES,
+    },
+    {
+      slug: "gemini-2.5-flash-lite",
+      name: "Gemini 2.5 Flash Lite",
+      capabilities: GEMINI_2_5_CAPABILITIES,
+    },
+  ],
 } as const satisfies Record<ProviderKind, readonly ModelDefinition[]>;
 export type ModelOptionsByProvider = typeof MODEL_OPTIONS_BY_PROVIDER;
 
@@ -264,6 +368,7 @@ export type ModelSlug = BuiltInModelSlug | (string & {});
 export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderKind, ModelSlug> = {
   codex: "gpt-5.4",
   claudeAgent: "claude-sonnet-4-6",
+  gemini: "auto-gemini-3",
 };
 
 // Backward compatibility for existing Codex-only call sites.
@@ -299,6 +404,18 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "claude-haiku-4.5": "claude-haiku-4-5",
     "claude-haiku-4-5-20251001": "claude-haiku-4-5",
   },
+  gemini: {
+    auto: "auto-gemini-3",
+    "auto-gemini-3": "auto-gemini-3",
+    "auto-gemini-2.5": "auto-gemini-2.5",
+    "gemini-3-pro-preview": "gemini-3.1-pro-preview",
+    "gemini-3.1-pro-preview": "gemini-3.1-pro-preview",
+    "gemini-3-flash-preview": "gemini-3-flash-preview",
+    "gemini-3.1-flash-lite-preview": "gemini-3.1-flash-lite-preview",
+    "gemini-2.5-pro": "gemini-2.5-pro",
+    "gemini-2.5-flash": "gemini-2.5-flash",
+    "gemini-2.5-flash-lite": "gemini-2.5-flash-lite",
+  },
 };
 
 // ── Agent mention aliases ─────────────────────────────────────────────
@@ -328,4 +445,5 @@ export const MODEL_CAPABILITIES_INDEX = Object.fromEntries(
 export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   codex: "Codex",
   claudeAgent: "Claude",
+  gemini: "Gemini",
 };

@@ -32,6 +32,7 @@ const STATIC_KEYBINDING_COMMANDS = [
   "chat.newTerminal",
   "chat.newClaude",
   "chat.newCodex",
+  "chat.newGemini",
   "chat.split",
   "thread.jump.1",
   "thread.jump.2",

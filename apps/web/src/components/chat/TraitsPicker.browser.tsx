@@ -37,7 +37,7 @@ function ClaudeTraitsPickerHarness(props: {
     selectedProvider: "claudeAgent",
     threadModelSelection: props.fallbackModelSelection,
     projectModelSelection: null,
-    customModelsByProvider: { codex: [], claudeAgent: [] },
+    customModelsByProvider: { codex: [], claudeAgent: [], gemini: [] },
   });
   const handlePromptChange = useCallback(
     (nextPrompt: string) => {
@@ -386,7 +386,7 @@ describe("TraitsPicker (Codex)", () => {
     });
 
     await vi.waitFor(() => {
-      expect(document.body.textContent ?? "").toContain("High · Fast");
+      expect(document.body.textContent ?? "").toMatch(/High\s*·\s*Fast/u);
     });
   });
 

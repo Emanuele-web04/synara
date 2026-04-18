@@ -26,7 +26,7 @@ import {
   SiStripe,
   SiVercel,
 } from "react-icons/si";
-import { ClaudeAI } from "./Icons";
+import { ClaudeAI, Gemini } from "./Icons";
 import { useStore } from "~/store";
 import {
   buildPluginSearchBlob,
@@ -77,7 +77,9 @@ type PluginBrandArtwork = {
 const PROVIDER_ICON: Record<ProviderKind, React.FC<React.SVGProps<SVGSVGElement>>> = {
   codex: HammerIcon,
   claudeAgent: ClaudeAI,
+  gemini: Gemini,
 };
+const PROVIDER_DISCOVERY_ORDER: ReadonlyArray<ProviderKind> = ["codex", "claudeAgent", "gemini"];
 const KNOWN_PLUGIN_BRANDS: Record<string, PluginBrandArtwork> = {
   canva: { icon: SiCanva, color: "#00C4CC" },
   figma: { icon: SiFigma, color: "#F24E1E" },
@@ -379,6 +381,7 @@ export function PluginLibrary() {
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const codexCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("codex"));
   const claudeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("claudeAgent"));
+  const geminiCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("gemini"));
 
   const providerCapabilities = useMemo<Record<ProviderKind, ProviderCapabilities>>(
     () => ({
@@ -390,8 +393,12 @@ export function PluginLibrary() {
         plugins: supportsPluginDiscovery(claudeCapabilitiesQuery.data),
         skills: supportsSkillDiscovery(claudeCapabilitiesQuery.data),
       },
+      gemini: {
+        plugins: supportsPluginDiscovery(geminiCapabilitiesQuery.data),
+        skills: supportsSkillDiscovery(geminiCapabilitiesQuery.data),
+      },
     }),
-    [claudeCapabilitiesQuery.data, codexCapabilitiesQuery.data],
+    [claudeCapabilitiesQuery.data, codexCapabilitiesQuery.data, geminiCapabilitiesQuery.data],
   );
 
   // Auto-fallback: switch provider when current tab/provider combo is unsupported
@@ -401,20 +408,16 @@ export function PluginLibrary() {
         ? providerCapabilities[selectedProvider].plugins
         : providerCapabilities[selectedProvider].skills;
     if (supportsTab) return;
-    const fallback =
+    const fallbackOrder =
       selectedTab === "plugins"
-        ? providerCapabilities.codex.plugins
-          ? "codex"
-          : providerCapabilities.claudeAgent.plugins
-            ? "claudeAgent"
-            : null
-        : providerCapabilities[preferredProvider].skills
-          ? preferredProvider
-          : providerCapabilities.codex.skills
-            ? "codex"
-            : providerCapabilities.claudeAgent.skills
-              ? "claudeAgent"
-              : null;
+        ? PROVIDER_DISCOVERY_ORDER
+        : [preferredProvider, ...PROVIDER_DISCOVERY_ORDER.filter((p) => p !== preferredProvider)];
+    const fallback =
+      fallbackOrder.find((provider) =>
+        selectedTab === "plugins"
+          ? providerCapabilities[provider].plugins
+          : providerCapabilities[provider].skills,
+      ) ?? null;
     if (fallback) setSelectedProvider(fallback);
   }, [preferredProvider, providerCapabilities, selectedProvider, selectedTab]);
 
@@ -523,39 +526,28 @@ export function PluginLibrary() {
           </div>
           <div className="flex-1" />
           <div className="inline-flex rounded-full border border-border/60 bg-background/60 p-0.5">
-            <ProviderToggleButton
-              label="Codex"
-              provider="codex"
-              active={selectedProvider === "codex"}
-              disabled={!providerCapabilities.codex.plugins && !providerCapabilities.codex.skills}
-              onClick={() => {
-                setSelectedProvider("codex");
-                if (
-                  selectedTab === "skills" &&
-                  !providerCapabilities.codex.skills &&
-                  providerCapabilities.codex.plugins
-                )
-                  setSelectedTab("plugins");
-              }}
-            />
-            <ProviderToggleButton
-              label="Claude"
-              provider="claudeAgent"
-              active={selectedProvider === "claudeAgent"}
-              disabled={
-                !providerCapabilities.claudeAgent.plugins &&
-                !providerCapabilities.claudeAgent.skills
-              }
-              onClick={() => {
-                setSelectedProvider("claudeAgent");
-                if (
-                  selectedTab === "plugins" &&
-                  !providerCapabilities.claudeAgent.plugins &&
-                  providerCapabilities.claudeAgent.skills
-                )
-                  setSelectedTab("skills");
-              }}
-            />
+            {PROVIDER_DISCOVERY_ORDER.map((provider) => {
+              const capabilities = providerCapabilities[provider];
+              const label = PROVIDER_DISPLAY_NAMES[provider];
+              return (
+                <ProviderToggleButton
+                  key={provider}
+                  label={label}
+                  provider={provider}
+                  active={selectedProvider === provider}
+                  disabled={!capabilities.plugins && !capabilities.skills}
+                  onClick={() => {
+                    setSelectedProvider(provider);
+                    if (selectedTab === "plugins" && !capabilities.plugins && capabilities.skills) {
+                      setSelectedTab("skills");
+                    }
+                    if (selectedTab === "skills" && !capabilities.skills && capabilities.plugins) {
+                      setSelectedTab("plugins");
+                    }
+                  }}
+                />
+              );
+            })}
           </div>
         </div>
 

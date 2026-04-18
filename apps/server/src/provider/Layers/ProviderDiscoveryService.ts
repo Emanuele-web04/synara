@@ -153,7 +153,7 @@ const make = Effect.gen(function* () {
           cached: false,
         };
       }
-      return yield* adapter.listModels();
+      return yield* adapter.listModels(parsed);
     });
 
   const listAgents: ProviderDiscoveryServiceShape["listAgents"] = (input) =>

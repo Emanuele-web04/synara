@@ -9,6 +9,8 @@ import {
 import { type Thread } from "../types";
 import { randomUUID } from "./utils";
 
+const HANDOFF_PROVIDER_ORDER: ReadonlyArray<ProviderKind> = ["codex", "claudeAgent", "gemini"];
+
 function isImportableThreadMessage(
   message: Thread["messages"][number],
 ): message is Thread["messages"][number] & {
@@ -17,8 +19,10 @@ function isImportableThreadMessage(
   return (message.role === "user" || message.role === "assistant") && message.streaming === false;
 }
 
-export function resolveHandoffTargetProvider(sourceProvider: ProviderKind): ProviderKind {
-  return sourceProvider === "claudeAgent" ? "codex" : "claudeAgent";
+export function resolveAvailableHandoffTargetProviders(
+  sourceProvider: ProviderKind,
+): ReadonlyArray<ProviderKind> {
+  return HANDOFF_PROVIDER_ORDER.filter((provider) => provider !== sourceProvider);
 }
 
 export function resolveThreadHandoffBadgeLabel(thread: Pick<Thread, "handoff">): string | null {
@@ -89,19 +93,19 @@ export function canCreateThreadHandoff(input: {
 
 export function resolveThreadHandoffModelSelection(input: {
   readonly sourceThread: Pick<Thread, "modelSelection">;
+  readonly targetProvider: ProviderKind;
   readonly projectDefaultModelSelection: ModelSelection | null | undefined;
   readonly stickyModelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>>;
 }): ModelSelection {
-  const targetProvider = resolveHandoffTargetProvider(input.sourceThread.modelSelection.provider);
-  const stickySelection = input.stickyModelSelectionByProvider[targetProvider];
+  const stickySelection = input.stickyModelSelectionByProvider[input.targetProvider];
   if (stickySelection) {
     return stickySelection;
   }
-  if (input.projectDefaultModelSelection?.provider === targetProvider) {
+  if (input.projectDefaultModelSelection?.provider === input.targetProvider) {
     return input.projectDefaultModelSelection;
   }
   return {
-    provider: targetProvider,
-    model: DEFAULT_MODEL_BY_PROVIDER[targetProvider],
+    provider: input.targetProvider,
+    model: DEFAULT_MODEL_BY_PROVIDER[input.targetProvider],
   };
 }

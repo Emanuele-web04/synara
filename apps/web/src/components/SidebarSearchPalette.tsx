@@ -11,7 +11,7 @@ import { HiOutlineFolderOpen } from "react-icons/hi2";
 import { LuArrowDownToLine, LuArrowLeft } from "react-icons/lu";
 import { type ComponentType, useEffect, useMemo, useState } from "react";
 import { FolderClosed } from "./FolderClosed";
-import { ClaudeAI, OpenAI } from "./Icons";
+import { ClaudeAI, Gemini, OpenAI } from "./Icons";
 import { formatRelativeTime } from "./Sidebar";
 
 import {
@@ -55,8 +55,10 @@ interface SidebarSearchPaletteProps {
   onOpenSettings: () => void;
   onOpenProject: (projectId: string) => void;
   onOpenThread: (threadId: string) => void;
-  onImportThread: (provider: ProviderKind, externalId: string) => Promise<void>;
+  onImportThread: (provider: "codex" | "claudeAgent", externalId: string) => Promise<void>;
 }
+
+type ImportProviderKind = "codex" | "claudeAgent";
 
 function actionHandler(
   actionId: string,
@@ -98,11 +100,13 @@ function PaletteIcon(props: { icon: IconComponent }) {
   );
 }
 
-function ProviderIcon(props: { provider: "codex" | "claudeAgent" }) {
+function ProviderIcon(props: { provider: "codex" | "claudeAgent" | "gemini" }) {
   return (
     <div className="flex size-5 shrink-0 items-center justify-center">
       {props.provider === "claudeAgent" ? (
         <ClaudeAI aria-hidden="true" className="size-[15px] text-foreground" />
+      ) : props.provider === "gemini" ? (
+        <Gemini aria-hidden="true" className="size-[15px] text-foreground" />
       ) : (
         <OpenAI aria-hidden="true" className="size-[15px] text-muted-foreground/60" />
       )}
@@ -178,7 +182,7 @@ function HighlightedText(props: { text: string; query: string; className?: strin
 
 export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
   const [query, setQuery] = useState("");
-  const [importProvider, setImportProvider] = useState<ProviderKind>("codex");
+  const [importProvider, setImportProvider] = useState<ImportProviderKind>("codex");
   const [importId, setImportId] = useState("");
   const [importError, setImportError] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);

@@ -56,7 +56,8 @@ export const providerDiscoveryQueryKeys = {
     ["provider-discovery", "plugins", provider, cwd] as const,
   plugin: (provider: ProviderKind, marketplacePath: string, pluginName: string) =>
     ["provider-discovery", "plugin", provider, marketplacePath, pluginName] as const,
-  models: (provider: ProviderKind) => ["provider-discovery", "models", provider] as const,
+  models: (provider: ProviderKind, binaryPath: string | null) =>
+    ["provider-discovery", "models", provider, binaryPath] as const,
   agents: (provider: ProviderKind) => ["provider-discovery", "agents", provider] as const,
 };
 
@@ -123,12 +124,19 @@ export function providerCommandsQueryOptions(input: {
   });
 }
 
-export function providerModelsQueryOptions(input: { provider: ProviderKind; enabled?: boolean }) {
+export function providerModelsQueryOptions(input: {
+  provider: ProviderKind;
+  binaryPath?: string | null;
+  enabled?: boolean;
+}) {
   return queryOptions({
-    queryKey: providerDiscoveryQueryKeys.models(input.provider),
+    queryKey: providerDiscoveryQueryKeys.models(input.provider, input.binaryPath ?? null),
     queryFn: async () => {
       const api = ensureNativeApi();
-      return api.provider.listModels({ provider: input.provider });
+      return api.provider.listModels({
+        provider: input.provider,
+        ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+      });
     },
     enabled: input.enabled ?? true,
     staleTime: 60_000,

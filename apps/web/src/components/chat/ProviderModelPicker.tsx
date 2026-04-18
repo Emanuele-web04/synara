@@ -20,7 +20,7 @@ import {
   MenuSubTrigger,
   MenuTrigger,
 } from "../ui/menu";
-import { ClaudeAI, Icon, OpenAI } from "../Icons";
+import { ClaudeAI, Gemini, Icon, OpenAI } from "../Icons";
 import { cn } from "~/lib/utils";
 import { PickerTriggerButton } from "./PickerTriggerButton";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -37,6 +37,7 @@ function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): o
 const PROVIDER_ICON_BY_PROVIDER: Record<ProviderPickerKind, Icon> = {
   codex: OpenAI,
   claudeAgent: ClaudeAI,
+  gemini: Gemini,
 };
 
 function resolveLiveProviderAvailability(provider: ServerProviderStatus | undefined): {
@@ -77,7 +78,9 @@ function providerIconClassName(
   provider: ProviderKind | ProviderPickerKind,
   fallbackClassName: string,
 ): string {
-  return provider === "claudeAgent" ? "text-foreground" : fallbackClassName;
+  return provider === "claudeAgent" || provider === "gemini"
+    ? "text-foreground"
+    : fallbackClassName;
 }
 
 export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
