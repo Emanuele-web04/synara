@@ -53,7 +53,7 @@ const changedFilesSummaryHeightCache = new WeakMap<
 interface TimelineMessageHeightInput {
   role: "user" | "assistant" | "system";
   text: string;
-  attachments?: ReadonlyArray<{ id: string }>;
+  attachments?: ReadonlyArray<{ id: string; type?: "image" | "assistant-selection" }>;
   diffSummaryFiles?: ReadonlyArray<TurnDiffFileChange>;
   diffSummaryAllDirectoriesExpanded?: boolean;
   inlineToolEntries?: ReadonlyArray<TimelineWorkEntryHeightInput>;
@@ -293,13 +293,23 @@ export function estimateTimelineMessageHeight(
         : displayedUserMessage.visibleText;
     const estimatedLines =
       renderedText.length > 0 ? estimateWrappedLineCount(renderedText, charsPerLine) : 0;
-    const attachmentCount = message.attachments?.length ?? 0;
-    const attachmentHeight =
-      attachmentCount > 0
-        ? Math.ceil(attachmentCount / USER_ATTACHMENT_THUMBNAILS_PER_ROW) *
+    const imageAttachmentCount =
+      message.attachments?.filter((attachment) => attachment.type === "image").length ?? 0;
+    const assistantSelectionCount =
+      message.attachments?.filter((attachment) => attachment.type === "assistant-selection")
+        .length ?? 0;
+    const imageAttachmentHeight =
+      imageAttachmentCount > 0
+        ? Math.ceil(imageAttachmentCount / USER_ATTACHMENT_THUMBNAILS_PER_ROW) *
             USER_ATTACHMENT_THUMBNAIL_SIZE_PX +
-          Math.max(Math.ceil(attachmentCount / USER_ATTACHMENT_THUMBNAILS_PER_ROW) - 1, 0) *
-            USER_ATTACHMENT_THUMBNAIL_GAP_PX +
+          Math.max(Math.ceil(imageAttachmentCount / USER_ATTACHMENT_THUMBNAILS_PER_ROW) - 1, 0) *
+            USER_ATTACHMENT_THUMBNAIL_GAP_PX
+        : 0;
+    const assistantSelectionHeight = assistantSelectionCount > 0 ? 40 : 0;
+    const attachmentHeight =
+      imageAttachmentHeight + assistantSelectionHeight > 0
+        ? imageAttachmentHeight +
+          assistantSelectionHeight +
           (renderedText.length > 0 ? USER_ATTACHMENT_ROW_MARGIN_BOTTOM_PX : 0)
         : 0;
     return USER_BASE_HEIGHT_PX + estimatedLines * lineHeightPx + attachmentHeight;

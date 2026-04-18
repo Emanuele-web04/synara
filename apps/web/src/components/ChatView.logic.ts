@@ -9,6 +9,7 @@ import { sanitizeBranchFragment } from "@t3tools/shared/git";
 import { isGenericChatThreadTitle } from "@t3tools/shared/chatThreads";
 import { isGenericTerminalThreadTitle } from "@t3tools/shared/terminalThreads";
 import {
+  type ChatAssistantSelectionAttachment,
   type ChatMessage,
   type SessionPhase,
   type Thread,
@@ -349,6 +350,7 @@ export function cloneComposerImageForRetry(
 export function deriveComposerSendState(options: {
   prompt: string;
   imageCount: number;
+  assistantSelectionCount: number;
   terminalContexts: ReadonlyArray<TerminalContextDraft>;
 }): {
   trimmedPrompt: string;
@@ -365,8 +367,23 @@ export function deriveComposerSendState(options: {
     sendableTerminalContexts,
     expiredTerminalContextCount,
     hasSendableContent:
-      trimmedPrompt.length > 0 || options.imageCount > 0 || sendableTerminalContexts.length > 0,
+      trimmedPrompt.length > 0 ||
+      options.imageCount > 0 ||
+      options.assistantSelectionCount > 0 ||
+      sendableTerminalContexts.length > 0,
   };
+}
+
+export function collectUserMessageAssistantSelections(
+  message: ChatMessage,
+): ChatAssistantSelectionAttachment[] {
+  if (message.role !== "user" || !message.attachments) {
+    return [];
+  }
+  return message.attachments.filter(
+    (attachment): attachment is ChatAssistantSelectionAttachment =>
+      attachment.type === "assistant-selection",
+  );
 }
 
 export function buildExpiredTerminalContextToastCopy(

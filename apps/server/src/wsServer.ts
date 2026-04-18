@@ -750,6 +750,22 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       turnStartCommand.message.attachments,
       (attachment) =>
         Effect.gen(function* () {
+          if (attachment.type === "assistant-selection") {
+            const attachmentId = createAttachmentId(turnStartCommand.threadId);
+            if (!attachmentId) {
+              return yield* new RouteRequestError({
+                message: "Failed to create a safe attachment id.",
+              });
+            }
+
+            return {
+              type: "assistant-selection" as const,
+              id: attachmentId,
+              assistantMessageId: attachment.assistantMessageId,
+              text: attachment.text,
+            };
+          }
+
           const parsed = parseBase64DataUrl(attachment.dataUrl);
           if (!parsed || !parsed.mimeType.startsWith("image/")) {
             return yield* new RouteRequestError({

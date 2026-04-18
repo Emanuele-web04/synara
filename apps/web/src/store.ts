@@ -4,7 +4,7 @@
 
 import { Fragment, type ReactNode, createElement, useEffect } from "react";
 import {
-  type MessageId,
+  MessageId,
   type OrchestrationEvent,
   type ProviderKind,
   ThreadId,
@@ -673,21 +673,35 @@ function normalizeChatAttachments(
 
   const previousById = new Map(previous?.map((attachment) => [attachment.id, attachment] as const));
   const nextAttachments = incoming.map((attachment) => {
-    const nextAttachment: ChatAttachment = {
-      type: "image",
-      id: attachment.id,
-      name: attachment.name,
-      mimeType: attachment.mimeType,
-      sizeBytes: attachment.sizeBytes,
-      previewUrl: toAttachmentPreviewUrl(attachmentPreviewRoutePath(attachment.id)),
-    };
+    const nextAttachment: ChatAttachment =
+      attachment.type === "assistant-selection"
+        ? {
+            type: "assistant-selection",
+            id: attachment.id,
+            assistantMessageId: attachment.assistantMessageId,
+            text: attachment.text,
+          }
+        : {
+            type: "image",
+            id: attachment.id,
+            name: attachment.name,
+            mimeType: attachment.mimeType,
+            sizeBytes: attachment.sizeBytes,
+            previewUrl: toAttachmentPreviewUrl(attachmentPreviewRoutePath(attachment.id)),
+          };
     const existing = previousById.get(attachment.id);
     if (
       existing &&
-      existing.name === nextAttachment.name &&
-      existing.mimeType === nextAttachment.mimeType &&
-      existing.sizeBytes === nextAttachment.sizeBytes &&
-      existing.previewUrl === nextAttachment.previewUrl
+      ((existing.type === "assistant-selection" &&
+        nextAttachment.type === "assistant-selection" &&
+        existing.assistantMessageId === nextAttachment.assistantMessageId &&
+        existing.text === nextAttachment.text) ||
+        (existing.type === "image" &&
+          nextAttachment.type === "image" &&
+          existing.name === nextAttachment.name &&
+          existing.mimeType === nextAttachment.mimeType &&
+          existing.sizeBytes === nextAttachment.sizeBytes &&
+          existing.previewUrl === nextAttachment.previewUrl))
     ) {
       return existing;
     }
@@ -745,13 +759,22 @@ function readModelAttachmentsFromChatMessage(
   attachments: ChatMessage["attachments"],
 ): ReadModelThread["messages"][number]["attachments"] {
   return (
-    attachments?.map((attachment) => ({
-      id: attachment.id,
-      name: attachment.name,
-      type: "image" as const,
-      mimeType: attachment.mimeType,
-      sizeBytes: attachment.sizeBytes,
-    })) ?? []
+    attachments?.map((attachment) =>
+      attachment.type === "assistant-selection"
+        ? {
+            id: attachment.id,
+            type: "assistant-selection" as const,
+            assistantMessageId: MessageId.makeUnsafe(attachment.assistantMessageId),
+            text: attachment.text,
+          }
+        : {
+            id: attachment.id,
+            name: attachment.name,
+            type: "image" as const,
+            mimeType: attachment.mimeType,
+            sizeBytes: attachment.sizeBytes,
+          },
+    ) ?? []
   );
 }
 

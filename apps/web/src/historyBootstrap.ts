@@ -1,4 +1,5 @@
 import type { ChatMessage } from "./types";
+import { stripEmbeddedAssistantSelections } from "./lib/assistantSelections";
 
 export interface BootstrapInputResult {
   text: string;
@@ -20,20 +21,39 @@ function messageRoleLabel(message: ChatMessage): "USER" | "ASSISTANT" {
 
 function attachmentSummary(message: ChatMessage): string | null {
   const imageAttachments = message.attachments?.filter((attachment) => attachment.type === "image");
+  const assistantSelections = message.attachments?.filter(
+    (attachment) => attachment.type === "assistant-selection",
+  );
+  const summaries: string[] = [];
+
   const count = imageAttachments?.length ?? 0;
-  if (count === 0) {
-    return null;
+  if (count > 0) {
+    const names = imageAttachments?.slice(0, 3).map((image) => image.name) ?? [];
+    const namesSummary = names.join(", ");
+    const extraCount = count - names.length;
+    const extraSummary = extraCount > 0 ? ` (+${extraCount} more)` : "";
+    summaries.push(`[Attached image${count === 1 ? "" : "s"}: ${namesSummary}${extraSummary}]`);
   }
 
-  const names = imageAttachments?.slice(0, 3).map((image) => image.name) ?? [];
-  const namesSummary = names.join(", ");
-  const extraCount = count - names.length;
-  const extraSummary = extraCount > 0 ? ` (+${extraCount} more)` : "";
-  return `[Attached image${count === 1 ? "" : "s"}: ${namesSummary}${extraSummary}]`;
+  const selectionCount = assistantSelections?.length ?? 0;
+  if (selectionCount > 0) {
+    const previews =
+      assistantSelections
+        ?.slice(0, 2)
+        .map((selection) => `"${selection.text.split("\n")[0] ?? ""}"`) ?? [];
+    const extraCount = selectionCount - previews.length;
+    const extraSummary = extraCount > 0 ? ` (+${extraCount} more)` : "";
+    summaries.push(
+      `[Referenced assistant selection${selectionCount === 1 ? "" : "s"}: ${previews.join(", ")}${extraSummary}]`,
+    );
+  }
+
+  return summaries.length > 0 ? summaries.join("\n") : null;
 }
 
 function buildMessageBlock(message: ChatMessage): string {
-  const text = message.text;
+  const text =
+    message.role === "user" ? stripEmbeddedAssistantSelections(message.text) : message.text;
   const attachments = attachmentSummary(message);
 
   if (text && attachments) {

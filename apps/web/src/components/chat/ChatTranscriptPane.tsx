@@ -36,6 +36,7 @@ interface ChatTranscriptPaneProps {
   messagesScrollElement: HTMLDivElement | null;
   onExpandTimelineImage: (preview: ExpandedImagePreview) => void;
   onMessagesClickCapture: MouseEventHandler<HTMLDivElement>;
+  onMessagesMouseUp: MouseEventHandler<HTMLDivElement>;
   onMessagesPointerCancel: PointerEventHandler<HTMLDivElement>;
   onMessagesPointerDown: PointerEventHandler<HTMLDivElement>;
   onMessagesPointerUp: PointerEventHandler<HTMLDivElement>;
@@ -78,6 +79,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   messagesScrollElement,
   onExpandTimelineImage,
   onMessagesClickCapture,
+  onMessagesMouseUp,
   onMessagesPointerCancel,
   onMessagesPointerDown,
   onMessagesPointerUp,
@@ -117,6 +119,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
           className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-3 py-3 sm:px-5 sm:py-4"
           onScroll={onMessagesScroll}
           onClickCapture={onMessagesClickCapture}
+          onMouseUp={onMessagesMouseUp}
           onWheel={onMessagesWheel}
           onPointerDown={onMessagesPointerDown}
           onPointerUp={onMessagesPointerUp}

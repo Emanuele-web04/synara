@@ -66,6 +66,16 @@ function toNonEmptyProviderInput(value: string | undefined): string | undefined 
   return normalized && normalized.length > 0 ? normalized : undefined;
 }
 
+function attachmentTitleSeed(attachment: ChatAttachment | undefined): string {
+  if (!attachment) {
+    return "";
+  }
+  if (attachment.type === "image") {
+    return attachment.name;
+  }
+  return attachment.text.trim();
+}
+
 function mapProviderSessionStatusToOrchestrationStatus(
   status: "connecting" | "ready" | "running" | "error" | "closed",
 ): OrchestrationSession["status"] {
@@ -684,7 +694,7 @@ const make = Effect.gen(function* () {
     }
 
     const fallbackTitle = buildPromptThreadTitleFallback(
-      input.messageText.trim() || input.attachments?.[0]?.name || "",
+      input.messageText.trim() || attachmentTitleSeed(input.attachments?.[0]) || "",
     );
     const currentTitle = thread.title.trim();
     if (!isGenericChatThreadTitle(currentTitle) && currentTitle !== fallbackTitle) {

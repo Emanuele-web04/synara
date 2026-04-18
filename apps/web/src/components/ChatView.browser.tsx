@@ -2175,6 +2175,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         previewText: firstQueuedPrompt,
         prompt: firstQueuedPrompt,
         images: [queuedImage],
+        assistantSelections: [],
         terminalContexts: [],
         skills: [],
         mentions: [],
@@ -2196,6 +2197,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         previewText: secondQueuedPrompt,
         prompt: secondQueuedPrompt,
         images: [],
+        assistantSelections: [],
         terminalContexts: [],
         skills: [],
         mentions: [],
@@ -2785,6 +2787,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           images: [],
           nonPersistedImageIds: [],
           persistedAttachments: [],
+          assistantSelections: [],
           terminalContexts: [],
           queuedTurns: [],
           modelSelectionByProvider: {

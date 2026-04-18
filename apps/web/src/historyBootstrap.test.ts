@@ -122,4 +122,39 @@ describe("buildBootstrapInput", () => {
     expect(result.text).toContain("Attached image");
     expect(result.text).toContain("screenshot.png");
   });
+
+  it("strips hidden assistant selection markup from user transcript blocks", () => {
+    const result = buildBootstrapInput(
+      [
+        {
+          id: messageId("u-selection"),
+          role: "user",
+          text: [
+            "Please use this",
+            "",
+            "<assistant_selection>",
+            "- assistant message msg-1:",
+            "  selected line",
+            "</assistant_selection>",
+          ].join("\n"),
+          attachments: [
+            {
+              type: "assistant-selection",
+              id: "selection-1",
+              assistantMessageId: messageId("msg-1"),
+              text: "selected line",
+            },
+          ],
+          createdAt: "2026-02-09T00:00:00.000Z",
+          streaming: false,
+        },
+      ],
+      "What next?",
+      1_500,
+    );
+
+    expect(result.text).toContain("USER:\nPlease use this");
+    expect(result.text).toContain("Referenced assistant selection");
+    expect(result.text).not.toContain("<assistant_selection>");
+  });
 });

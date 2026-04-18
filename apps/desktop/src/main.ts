@@ -945,7 +945,9 @@ function clearUpdateBackgroundBlurTimer(): void {
 }
 
 function isDesktopAppForegrounded(): boolean {
-  return BrowserWindow.getAllWindows().some((window) => !window.isDestroyed() && window.isFocused());
+  return BrowserWindow.getAllWindows().some(
+    (window) => !window.isDestroyed() && window.isFocused(),
+  );
 }
 
 function markDesktopAppBackgrounded(): void {

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { Effect, FileSystem, Layer, Option, Path, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "@t3tools/contracts";
+import { DEFAULT_GIT_TEXT_GENERATION_MODEL, type ChatAttachment } from "@t3tools/contracts";
 import { sanitizeGeneratedThreadTitle } from "@t3tools/shared/chatThreads";
 import { resolveCodexHome } from "@t3tools/shared/codexConfig";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
@@ -77,6 +77,15 @@ function limitSection(value: string, maxChars: number): string {
   if (value.length <= maxChars) return value;
   const truncated = value.slice(0, maxChars);
   return `${truncated}\n\n[truncated]`;
+}
+
+function formatAttachmentMetadataLine(attachment: ChatAttachment): string {
+  if (attachment.type === "image") {
+    return `- ${attachment.name} (${attachment.mimeType}, ${attachment.sizeBytes} bytes)`;
+  }
+
+  const preview = limitSection(attachment.text.replace(/\s+/g, " ").trim(), 160);
+  return `- Assistant selection: ${preview}`;
 }
 
 function sanitizeCommitSubject(raw: string): string {
@@ -603,10 +612,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
         "generateBranchName",
         input.attachments,
       );
-      const attachmentLines = (input.attachments ?? []).map(
-        (attachment) =>
-          `- ${attachment.name} (${attachment.mimeType}, ${attachment.sizeBytes} bytes)`,
-      );
+      const attachmentLines = (input.attachments ?? []).map(formatAttachmentMetadataLine);
 
       const promptSections = [
         "You generate concise git branch names.",
@@ -652,10 +658,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
         "generateThreadTitle",
         input.attachments,
       );
-      const attachmentLines = (input.attachments ?? []).map(
-        (attachment) =>
-          `- ${attachment.name} (${attachment.mimeType}, ${attachment.sizeBytes} bytes)`,
-      );
+      const attachmentLines = (input.attachments ?? []).map(formatAttachmentMetadataLine);
 
       const promptSections = [
         "You generate concise chat thread titles.",

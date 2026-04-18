@@ -49,6 +49,7 @@ function makeComposerDraftState(
     images: [],
     nonPersistedImageIds: [],
     persistedAttachments: [],
+    assistantSelections: [],
     terminalContexts: [],
     queuedTurns: [],
     modelSelectionByProvider: {

@@ -88,7 +88,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("flex w-full justify-end");
     expect(markup).toContain("group flex max-w-[80%] flex-col items-end gap-px");
     expect(markup).toContain(
-      "w-max max-w-full min-w-0 self-end rounded-xl border border-border/70",
+      "w-max max-w-full min-w-0 self-end rounded-lg border border-border/70",
     );
     expect(markup).toContain("text-muted-foreground/45");
   });
@@ -192,6 +192,59 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Terminal 1 lines 1-5");
     expect(markup).toContain("tabler-icon-terminal");
     expect(markup).toContain("yoo what&#x27;s ");
+  });
+
+  it("renders assistant selection chips from hidden prompt markup when attachments are missing", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        scrollContainer={null}
+        timelineEntries={[
+          {
+            id: "entry-user-selection-fallback",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-user-selection-fallback"),
+              role: "user",
+              text: [
+                "please use this",
+                "",
+                "<assistant_selection>",
+                "- assistant message assistant-1:",
+                "  selected line from assistant",
+                "</assistant_selection>",
+              ].join("\n"),
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("please use this");
+    expect(markup).toContain("1 selection");
+    expect(markup).not.toContain("&lt;assistant_selection&gt;");
   });
 
   it("renders trailing user skill tokens with the composer skill pill UI", async () => {

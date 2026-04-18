@@ -123,6 +123,7 @@ describe("deriveComposerSendState", () => {
     const state = deriveComposerSendState({
       prompt: "\uFFFC",
       imageCount: 0,
+      assistantSelectionCount: 0,
       terminalContexts: [
         {
           id: "ctx-expired",
@@ -147,6 +148,7 @@ describe("deriveComposerSendState", () => {
     const state = deriveComposerSendState({
       prompt: `yoo \uFFFC waddup`,
       imageCount: 0,
+      assistantSelectionCount: 0,
       terminalContexts: [
         {
           id: "ctx-expired",
@@ -163,6 +165,17 @@ describe("deriveComposerSendState", () => {
 
     expect(state.trimmedPrompt).toBe("yoo  waddup");
     expect(state.expiredTerminalContextCount).toBe(1);
+    expect(state.hasSendableContent).toBe(true);
+  });
+
+  it("treats assistant selections as sendable content", () => {
+    const state = deriveComposerSendState({
+      prompt: "",
+      imageCount: 0,
+      assistantSelectionCount: 1,
+      terminalContexts: [],
+    });
+
     expect(state.hasSendableContent).toBe(true);
   });
 });

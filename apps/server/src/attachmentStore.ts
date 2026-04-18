@@ -62,6 +62,8 @@ export function attachmentRelativePath(attachment: ChatAttachment): string {
       });
       return `${attachment.id}${extension}`;
     }
+    case "assistant-selection":
+      return `${attachment.id}.bin`;
   }
 }
 

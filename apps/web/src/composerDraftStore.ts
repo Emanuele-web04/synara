@@ -31,6 +31,7 @@ import { resolveAppModelSelection } from "./appSettings";
 import {
   DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
+  type ChatAssistantSelectionAttachment,
   type ChatImageAttachment,
   type ThreadPrimarySurface,
 } from "./types";
@@ -39,6 +40,7 @@ import {
   ensureInlineTerminalContextPlaceholders,
   normalizeTerminalContextText,
 } from "./lib/terminalContext";
+import { normalizeAssistantSelectionAttachment } from "./lib/assistantSelections";
 import { buildModelSelection } from "./providerModelOptions";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
@@ -79,6 +81,8 @@ export interface ComposerImageAttachment extends Omit<ChatImageAttachment, "prev
   file: File;
 }
 
+export type ComposerAssistantSelectionAttachment = ChatAssistantSelectionAttachment;
+
 export interface QueuedComposerChatTurn {
   id: string;
   kind: "chat";
@@ -86,6 +90,7 @@ export interface QueuedComposerChatTurn {
   previewText: string;
   prompt: string;
   images: ComposerImageAttachment[];
+  assistantSelections: ComposerAssistantSelectionAttachment[];
   terminalContexts: TerminalContextDraft[];
   skills: ProviderSkillReference[];
   mentions: ProviderMentionReference[];
@@ -146,6 +151,15 @@ const PersistedQueuedComposerChatTurn = Schema.Struct({
   previewText: Schema.String,
   prompt: Schema.String,
   images: Schema.Array(PersistedComposerImageAttachment),
+  assistantSelections: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        id: Schema.String,
+        assistantMessageId: Schema.String,
+        text: Schema.String,
+      }),
+    ),
+  ),
   terminalContexts: Schema.Array(PersistedQueuedTerminalContextDraft),
   skills: Schema.Array(ProviderSkillReference),
   mentions: Schema.Array(ProviderMentionReference),
@@ -185,6 +199,15 @@ type PersistedQueuedComposerTurn = typeof PersistedQueuedComposerTurn.Type;
 const PersistedComposerThreadDraftState = Schema.Struct({
   prompt: Schema.String,
   attachments: Schema.Array(PersistedComposerImageAttachment),
+  assistantSelections: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        id: Schema.String,
+        assistantMessageId: Schema.String,
+        text: Schema.String,
+      }),
+    ),
+  ),
   terminalContexts: Schema.optionalKey(Schema.Array(PersistedTerminalContextDraft)),
   queuedTurns: Schema.optionalKey(Schema.Array(PersistedQueuedComposerTurn)),
   modelSelectionByProvider: Schema.optionalKey(
@@ -271,6 +294,7 @@ export interface ComposerThreadDraftState {
   images: ComposerImageAttachment[];
   nonPersistedImageIds: string[];
   persistedAttachments: PersistedComposerImageAttachment[];
+  assistantSelections: ComposerAssistantSelectionAttachment[];
   terminalContexts: TerminalContextDraft[];
   queuedTurns: QueuedComposerTurn[];
   modelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>>;
@@ -373,6 +397,12 @@ export interface ComposerDraftStoreState {
   addImage: (threadId: ThreadId, image: ComposerImageAttachment) => void;
   addImages: (threadId: ThreadId, images: ComposerImageAttachment[]) => void;
   removeImage: (threadId: ThreadId, imageId: string) => void;
+  addAssistantSelection: (
+    threadId: ThreadId,
+    selection: ComposerAssistantSelectionAttachment,
+  ) => boolean;
+  removeAssistantSelection: (threadId: ThreadId, selectionId: string) => void;
+  clearAssistantSelections: (threadId: ThreadId) => void;
   insertTerminalContext: (
     threadId: ThreadId,
     prompt: string,
@@ -468,6 +498,7 @@ const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   images: EMPTY_IMAGES,
   nonPersistedImageIds: EMPTY_IDS,
   persistedAttachments: EMPTY_PERSISTED_ATTACHMENTS,
+  assistantSelections: [],
   terminalContexts: EMPTY_TERMINAL_CONTEXTS,
   queuedTurns: EMPTY_QUEUED_TURNS,
   modelSelectionByProvider: EMPTY_MODEL_SELECTION_BY_PROVIDER,
@@ -482,6 +513,7 @@ function createEmptyThreadDraft(): ComposerThreadDraftState {
     images: [],
     nonPersistedImageIds: [],
     persistedAttachments: [],
+    assistantSelections: [],
     terminalContexts: [],
     queuedTurns: [],
     modelSelectionByProvider: {},
@@ -499,6 +531,53 @@ function composerImageDedupKey(image: ComposerImageAttachment): string {
 
 function terminalContextDedupKey(context: TerminalContextDraft): string {
   return `${context.terminalId}\u0000${context.lineStart}\u0000${context.lineEnd}`;
+}
+
+function assistantSelectionDedupKey(
+  selection: Pick<ComposerAssistantSelectionAttachment, "assistantMessageId" | "text">,
+): string {
+  return `${selection.assistantMessageId}\u0000${selection.text}`;
+}
+
+function normalizeAssistantSelection(
+  selection: Pick<ComposerAssistantSelectionAttachment, "id" | "assistantMessageId" | "text">,
+): ComposerAssistantSelectionAttachment | null {
+  const normalized = normalizeAssistantSelectionAttachment(selection);
+  if (!normalized) {
+    return null;
+  }
+  return {
+    type: "assistant-selection",
+    ...selection,
+    assistantMessageId: normalized.assistantMessageId,
+    text: normalized.text,
+  };
+}
+
+function normalizeAssistantSelections(
+  selections: ReadonlyArray<
+    Pick<ComposerAssistantSelectionAttachment, "id" | "assistantMessageId" | "text">
+  >,
+): ComposerAssistantSelectionAttachment[] {
+  const normalizedSelections: ComposerAssistantSelectionAttachment[] = [];
+  const existingIds = new Set<string>();
+  const existingDedupKeys = new Set<string>();
+
+  for (const selection of selections) {
+    const normalizedSelection = normalizeAssistantSelection(selection);
+    if (!normalizedSelection) {
+      continue;
+    }
+    const dedupKey = assistantSelectionDedupKey(normalizedSelection);
+    if (existingIds.has(normalizedSelection.id) || existingDedupKeys.has(dedupKey)) {
+      continue;
+    }
+    normalizedSelections.push(normalizedSelection);
+    existingIds.add(normalizedSelection.id);
+    existingDedupKeys.add(dedupKey);
+  }
+
+  return normalizedSelections;
 }
 
 function normalizeTerminalContextForThread(
@@ -558,6 +637,7 @@ function buildTransferredComposerDraft(input: {
   return {
     ...base,
     prompt: sourceDraft.prompt,
+    assistantSelections: normalizeAssistantSelections(sourceDraft.assistantSelections),
     terminalContexts: normalizeTerminalContextsForThread(
       targetThreadId,
       sourceDraft.terminalContexts,
@@ -570,6 +650,7 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     draft.prompt.length === 0 &&
     draft.images.length === 0 &&
     draft.persistedAttachments.length === 0 &&
+    draft.assistantSelections.length === 0 &&
     draft.terminalContexts.length === 0 &&
     draft.queuedTurns.length === 0 &&
     Object.keys(draft.modelSelectionByProvider).length === 0 &&
@@ -1499,6 +1580,11 @@ function partializeComposerDraftStoreState(
           previewText: queuedTurn.previewText,
           prompt: queuedTurn.prompt,
           images,
+          assistantSelections: queuedTurn.assistantSelections.map((selection) => ({
+            id: selection.id,
+            assistantMessageId: selection.assistantMessageId,
+            text: selection.text,
+          })),
           terminalContexts: queuedTurn.terminalContexts.map((context) => ({
             id: context.id,
             threadId: context.threadId,
@@ -1547,6 +1633,7 @@ function partializeComposerDraftStoreState(
     if (
       draft.prompt.length === 0 &&
       draft.persistedAttachments.length === 0 &&
+      draft.assistantSelections.length === 0 &&
       draft.terminalContexts.length === 0 &&
       !hasQueuedTurns &&
       !hasModelData &&
@@ -1558,6 +1645,15 @@ function partializeComposerDraftStoreState(
     const persistedDraft: DeepMutable<PersistedComposerThreadDraftState> = {
       prompt: draft.prompt,
       attachments: draft.persistedAttachments,
+      ...(draft.assistantSelections.length > 0
+        ? {
+            assistantSelections: draft.assistantSelections.map((selection) => ({
+              id: selection.id,
+              assistantMessageId: selection.assistantMessageId,
+              text: selection.text,
+            })),
+          }
+        : {}),
       ...(draft.terminalContexts.length > 0
         ? {
             terminalContexts: draft.terminalContexts.map((context) => ({
@@ -1785,6 +1881,7 @@ function hydrateQueuedTurnsFromPersisted(
       return {
         ...queuedTurn,
         images: hydrateImagesFromPersisted(queuedTurn.images),
+        assistantSelections: normalizeAssistantSelections(queuedTurn.assistantSelections ?? []),
         terminalContexts: normalizeTerminalContextsForThread(threadId, queuedTurn.terminalContexts),
         skills: [...queuedTurn.skills],
         mentions: [...queuedTurn.mentions],
@@ -1808,6 +1905,7 @@ function toHydratedThreadDraft(
     images: hydrateImagesFromPersisted(persistedDraft.attachments),
     nonPersistedImageIds: [],
     persistedAttachments: [...persistedDraft.attachments],
+    assistantSelections: normalizeAssistantSelections(persistedDraft.assistantSelections ?? []),
     terminalContexts:
       persistedDraft.terminalContexts?.map((context) => ({
         ...context,
@@ -2663,6 +2761,85 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           return { draftsByThreadId: nextDraftsByThreadId };
         });
       },
+      addAssistantSelection: (threadId, selection) => {
+        if (threadId.length === 0) {
+          return false;
+        }
+        let inserted = false;
+        set((state) => {
+          const existing = state.draftsByThreadId[threadId] ?? createEmptyThreadDraft();
+          const normalizedSelection = normalizeAssistantSelection(selection);
+          if (!normalizedSelection) {
+            return state;
+          }
+          const dedupKey = assistantSelectionDedupKey(normalizedSelection);
+          if (
+            existing.assistantSelections.some((entry) => entry.id === normalizedSelection.id) ||
+            existing.assistantSelections.some(
+              (entry) => assistantSelectionDedupKey(entry) === dedupKey,
+            )
+          ) {
+            return state;
+          }
+          inserted = true;
+          return {
+            draftsByThreadId: {
+              ...state.draftsByThreadId,
+              [threadId]: {
+                ...existing,
+                assistantSelections: [...existing.assistantSelections, normalizedSelection],
+              },
+            },
+          };
+        });
+        return inserted;
+      },
+      removeAssistantSelection: (threadId, selectionId) => {
+        if (threadId.length === 0 || selectionId.length === 0) {
+          return;
+        }
+        set((state) => {
+          const current = state.draftsByThreadId[threadId];
+          if (!current) {
+            return state;
+          }
+          const nextDraft: ComposerThreadDraftState = {
+            ...current,
+            assistantSelections: current.assistantSelections.filter(
+              (selection) => selection.id !== selectionId,
+            ),
+          };
+          const nextDraftsByThreadId = { ...state.draftsByThreadId };
+          if (shouldRemoveDraft(nextDraft)) {
+            delete nextDraftsByThreadId[threadId];
+          } else {
+            nextDraftsByThreadId[threadId] = nextDraft;
+          }
+          return { draftsByThreadId: nextDraftsByThreadId };
+        });
+      },
+      clearAssistantSelections: (threadId) => {
+        if (threadId.length === 0) {
+          return;
+        }
+        set((state) => {
+          const current = state.draftsByThreadId[threadId];
+          if (!current || current.assistantSelections.length === 0) {
+            return state;
+          }
+          const nextDraft: ComposerThreadDraftState = {
+            ...current,
+            assistantSelections: [],
+          };
+          const nextDraftsByThreadId = { ...state.draftsByThreadId };
+          if (shouldRemoveDraft(nextDraft)) {
+            delete nextDraftsByThreadId[threadId];
+          } else {
+            nextDraftsByThreadId[threadId] = nextDraft;
+          }
+          return { draftsByThreadId: nextDraftsByThreadId };
+        });
+      },
       insertTerminalContext: (threadId, prompt, context, index) => {
         if (threadId.length === 0) {
           return false;
@@ -2876,6 +3053,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             images: [],
             nonPersistedImageIds: [],
             persistedAttachments: [],
+            assistantSelections: [],
             terminalContexts: [],
           };
           const nextDraftsByThreadId = { ...state.draftsByThreadId };

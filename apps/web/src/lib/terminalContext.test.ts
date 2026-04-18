@@ -23,6 +23,7 @@ import {
   stripInlineTerminalContextPlaceholders,
   type TerminalContextDraft,
 } from "./terminalContext";
+import { appendAssistantSelectionsToPrompt } from "./assistantSelections";
 
 function makeContext(overrides?: Partial<TerminalContextDraft>): TerminalContextDraft {
   return {
@@ -115,7 +116,7 @@ describe("terminalContext", () => {
     const prompt = appendTerminalContextsToPrompt("Investigate this", [makeContext()]);
     expect(deriveDisplayedUserMessageState(prompt)).toEqual({
       visibleText: "Investigate this",
-      copyText: prompt,
+      copyText: "Investigate this",
       contextCount: 1,
       previewTitle: "Terminal 1 lines 12-13\n12 | git status\n13 | On branch main",
       contexts: [
@@ -124,6 +125,50 @@ describe("terminalContext", () => {
           body: "12 | git status\n13 | On branch main",
         },
       ],
+      assistantSelections: [],
+    });
+  });
+
+  it("strips assistant selection transport markup from displayed and copied text", () => {
+    const prompt = appendAssistantSelectionsToPrompt("Investigate this", [
+      {
+        assistantMessageId: "msg-1",
+        text: "selected line",
+      },
+    ]);
+    expect(deriveDisplayedUserMessageState(prompt)).toEqual({
+      visibleText: "Investigate this",
+      copyText: "Investigate this",
+      contextCount: 0,
+      previewTitle: null,
+      contexts: [],
+      assistantSelections: [{ assistantMessageId: "msg-1", text: "selected line" }],
+    });
+  });
+
+  it("keeps assistant selections and terminal context separate from the copied bubble text", () => {
+    const prompt = appendTerminalContextsToPrompt(
+      appendAssistantSelectionsToPrompt("Investigate this", [
+        {
+          assistantMessageId: "msg-1",
+          text: "selected line",
+        },
+      ]),
+      [makeContext()],
+    );
+
+    expect(deriveDisplayedUserMessageState(prompt)).toEqual({
+      visibleText: "Investigate this",
+      copyText: "Investigate this",
+      contextCount: 1,
+      previewTitle: "Terminal 1 lines 12-13\n12 | git status\n13 | On branch main",
+      contexts: [
+        {
+          header: "Terminal 1 lines 12-13",
+          body: "12 | git status\n13 | On branch main",
+        },
+      ],
+      assistantSelections: [{ assistantMessageId: "msg-1", text: "selected line" }],
     });
   });
 
@@ -147,6 +192,7 @@ describe("terminalContext", () => {
       contextCount: 0,
       previewTitle: null,
       contexts: [],
+      assistantSelections: [],
     });
   });
 

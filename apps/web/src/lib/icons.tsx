@@ -49,6 +49,7 @@ import {
   IconLockOpen,
   IconMaximize,
   IconMinimize,
+  IconMessageCircle,
   IconMicrophone,
   IconPalette,
   IconPaperclip,
@@ -159,6 +160,7 @@ export const LockIcon = adaptIcon(IconLock);
 export const LockOpenIcon = adaptIcon(IconLockOpen);
 export const Maximize2 = adaptIcon(IconMaximize);
 export const Minimize2 = adaptIcon(IconMinimize);
+export const MessageCircleIcon = adaptIcon(IconMessageCircle);
 export const MicIcon = adaptIcon(IconMicrophone);
 export const PanelLeftCloseIcon = adaptIcon(IconLayoutSidebarLeftCollapse);
 export const PanelLeftIcon = adaptIcon(IconLayoutSidebarLeftExpand);

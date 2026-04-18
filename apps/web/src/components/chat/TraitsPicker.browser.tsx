@@ -78,6 +78,7 @@ async function mountClaudePicker(props?: {
       images: [],
       nonPersistedImageIds: [],
       persistedAttachments: [],
+      assistantSelections: [],
       terminalContexts: [],
       queuedTurns: [],
       modelSelectionByProvider: props?.skipDraftModelOptions
@@ -306,6 +307,7 @@ async function mountCodexPicker(props: { model?: string; options?: CodexModelOpt
       images: [],
       nonPersistedImageIds: [],
       persistedAttachments: [],
+      assistantSelections: [],
       terminalContexts: [],
       queuedTurns: [],
       modelSelectionByProvider: {

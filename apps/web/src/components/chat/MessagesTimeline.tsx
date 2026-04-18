@@ -45,6 +45,7 @@ import { ProposedPlanCard } from "./ProposedPlanCard";
 import { DiffStatLabel } from "./DiffStatLabel";
 import { VscodeEntryIcon } from "./VscodeEntryIcon";
 import { MessageCopyButton } from "./MessageCopyButton";
+import { AssistantSelectionsSummaryChip } from "./AssistantSelectionsSummaryChip";
 import {
   computeStableMessagesTimelineRows,
   deriveMessagesTimelineRows,
@@ -530,10 +531,34 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       {row.kind === "message" &&
         row.message.role === "user" &&
         (() => {
-          const userImages = row.message.attachments ?? [];
+          const userImages = (row.message.attachments ?? []).filter(
+            (
+              attachment,
+            ): attachment is Extract<
+              NonNullable<TimelineMessage["attachments"]>[number],
+              { type: "image" }
+            > => attachment.type === "image",
+          );
+          const assistantSelections = (row.message.attachments ?? []).filter(
+            (
+              attachment,
+            ): attachment is Extract<
+              NonNullable<TimelineMessage["attachments"]>[number],
+              { type: "assistant-selection" }
+            > => attachment.type === "assistant-selection",
+          );
           const displayedUserMessage = deriveDisplayedUserMessageState(row.message.text, {
-            hideImageOnlyBootstrapPrompt: userImages.length > 0,
+            hideImageOnlyBootstrapPrompt: userImages.length > 0 || assistantSelections.length > 0,
           });
+          const renderedAssistantSelections =
+            assistantSelections.length > 0
+              ? assistantSelections
+              : displayedUserMessage.assistantSelections.map((selection, index) => ({
+                  type: "assistant-selection" as const,
+                  id: `fallback-selection-${row.message.id}-${index}`,
+                  assistantMessageId: selection.assistantMessageId,
+                  text: selection.text,
+                }));
           const terminalContexts = displayedUserMessage.contexts;
           const showUserText =
             displayedUserMessage.visibleText.trim().length > 0 || terminalContexts.length > 0;
@@ -546,6 +571,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             <div className="flex w-full justify-end">
               <div className="group flex max-w-[80%] flex-col items-end gap-px">
                 {/* Keep user-message chrome outside the bubble so the message reads as one simple block. */}
+                {renderedAssistantSelections.length > 0 && (
+                  <div className="mb-1 flex max-w-[240px] flex-wrap justify-end gap-1.5 self-end">
+                    <AssistantSelectionsSummaryChip selections={renderedAssistantSelections} />
+                  </div>
+                )}
                 {userImages.length > 0 && (
                   <div
                     className={cn(
@@ -553,24 +583,22 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       showUserText && "mb-1",
                     )}
                   >
-                    {userImages.map(
-                      (image: NonNullable<TimelineMessage["attachments"]>[number]) => (
-                        <UserImageAttachmentThumbnail
-                          key={image.id}
-                          image={image}
-                          userImages={userImages}
-                          onImageExpand={onImageExpand}
-                          onTimelineImageLoad={onTimelineImageLoad}
-                          resolvedTheme={resolvedTheme}
-                        />
-                      ),
-                    )}
+                    {userImages.map((image) => (
+                      <UserImageAttachmentThumbnail
+                        key={image.id}
+                        image={image}
+                        userImages={userImages}
+                        onImageExpand={onImageExpand}
+                        onTimelineImageLoad={onTimelineImageLoad}
+                        resolvedTheme={resolvedTheme}
+                      />
+                    ))}
                   </div>
                 )}
                 {showUserText && (
                   <div
                     className={cn(
-                      "w-max max-w-full min-w-0 self-end rounded-xl border border-border/70 bg-secondary px-3",
+                      "w-max max-w-full min-w-0 self-end rounded-lg border border-border/70 bg-secondary px-3",
                       bubbleIsChipOnly ? "py-0.5" : "pt-[3px] pb-[5px]",
                     )}
                   >
@@ -715,12 +743,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 </div>
               )}
               <div className="min-w-0 px-1 py-0.5">
-                <ChatMarkdown
-                  text={messageText}
-                  cwd={markdownCwd}
-                  isStreaming={Boolean(row.message.streaming)}
-                  style={chatTypographyStyle}
-                />
+                <div data-assistant-message-id={row.message.id}>
+                  <ChatMarkdown
+                    text={messageText}
+                    cwd={markdownCwd}
+                    isStreaming={Boolean(row.message.streaming)}
+                    style={chatTypographyStyle}
+                  />
+                </div>
                 {visibleRenderableInlineToolEntries.length > 0 && (
                   <div className="mt-2.5">
                     <div className="space-y-px">
@@ -1197,8 +1227,10 @@ const UserMessageInlineSkillChip = memo(function UserMessageInlineSkillChip(prop
 });
 
 const UserImageAttachmentThumbnail = memo(function UserImageAttachmentThumbnail(props: {
-  image: NonNullable<TimelineMessage["attachments"]>[number];
-  userImages: NonNullable<TimelineMessage["attachments"]>;
+  image: Extract<NonNullable<TimelineMessage["attachments"]>[number], { type: "image" }>;
+  userImages: Array<
+    Extract<NonNullable<TimelineMessage["attachments"]>[number], { type: "image" }>
+  >;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onTimelineImageLoad: () => void;
   resolvedTheme: "light" | "dark";

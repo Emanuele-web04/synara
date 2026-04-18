@@ -1438,6 +1438,9 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           input.attachments ?? [],
           (attachment) =>
             Effect.gen(function* () {
+              if (attachment.type !== "image") {
+                return null;
+              }
               const attachmentPath = resolveAttachmentPath({
                 attachmentsDir: serverConfig.attachmentsDir,
                 attachment,
@@ -1485,7 +1488,9 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           ...(input.interactionMode !== undefined
             ? { interactionMode: input.interactionMode }
             : {}),
-          ...(codexAttachments.length > 0 ? { attachments: codexAttachments } : {}),
+          ...(codexAttachments.length > 0
+            ? { attachments: codexAttachments.filter((attachment) => attachment !== null) }
+            : {}),
         };
 
         return yield* Effect.tryPromise({
@@ -1505,6 +1510,9 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           input.attachments ?? [],
           (attachment) =>
             Effect.gen(function* () {
+              if (attachment.type !== "image") {
+                return null;
+              }
               const attachmentPath = resolveAttachmentPath({
                 attachmentsDir: serverConfig.attachmentsDir,
                 attachment,
@@ -1552,7 +1560,9 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           ...(input.interactionMode !== undefined
             ? { interactionMode: input.interactionMode }
             : {}),
-          ...(codexAttachments.length > 0 ? { attachments: codexAttachments } : {}),
+          ...(codexAttachments.length > 0
+            ? { attachments: codexAttachments.filter((attachment) => attachment !== null) }
+            : {}),
         };
 
         return yield* Effect.tryPromise({

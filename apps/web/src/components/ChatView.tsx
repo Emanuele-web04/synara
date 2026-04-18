@@ -2,7 +2,7 @@ import {
   type ApprovalRequestId,
   DEFAULT_MODEL_BY_PROVIDER,
   type ClaudeCodeEffort,
-  type MessageId,
+  MessageId,
   type ModelSelection,
   type ProjectScript,
   type ModelSlug,
@@ -15,7 +15,6 @@ import {
   type ProviderPluginDescriptor,
   type ProviderSkillDescriptor,
   type ProviderSkillReference,
-  PROVIDER_DISPLAY_NAMES,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   type ResolvedKeybindingsConfig,
@@ -203,6 +202,7 @@ import { resolveTerminalNewAction } from "../lib/terminalNewAction";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import {
   type ComposerImageAttachment,
+  type ComposerAssistantSelectionAttachment,
   type DraftThreadEnvMode,
   type PersistedComposerImageAttachment,
   type QueuedComposerChatTurn,
@@ -221,6 +221,13 @@ import {
   type TerminalContextDraft,
   type TerminalContextSelection,
 } from "../lib/terminalContext";
+import {
+  appendAssistantSelectionsToPrompt,
+  createAssistantSelectionAttachment,
+  formatAssistantSelectionQueuePreview,
+  formatAssistantSelectionTitleSeed,
+  getAssistantSelectionValidationError,
+} from "../lib/assistantSelections";
 import {
   deriveContextWindowSelectionStatus,
   deriveCumulativeCostUsd,
@@ -251,7 +258,8 @@ import { ComposerPendingUserInputPanel } from "./chat/ComposerPendingUserInputPa
 import { ComposerPlanFollowUpBanner } from "./chat/ComposerPlanFollowUpBanner";
 import { ComposerVoiceButton } from "./chat/ComposerVoiceButton";
 import { ComposerVoiceRecorderBar } from "./chat/ComposerVoiceRecorderBar";
-import { ComposerImageAttachmentChip } from "./chat/ComposerImageAttachmentChip";
+import { ComposerReferenceAttachments } from "./chat/ComposerReferenceAttachments";
+import { TranscriptSelectionAction } from "./chat/TranscriptSelectionAction";
 import { ActivePlanCard } from "./chat/ActivePlanCard";
 import { useChatAutoScrollController } from "./chat/useChatAutoScrollController";
 import {
@@ -301,9 +309,21 @@ import {
 } from "../lib/threadEnvironment";
 import { buildModelSelection, buildNextProviderOptions } from "../providerModelOptions";
 import { waitForRecoverableProjectForDuplicateCreate } from "../lib/projectCreateRecovery";
+import {
+  readTranscriptAssistantSelection,
+  resolveTranscriptSelectionActionLayout,
+  type TranscriptAssistantSelection,
+} from "./chat/chatSelectionActions";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
+
+interface PendingTranscriptSelectionAction {
+  selection: TranscriptAssistantSelection;
+  left: number;
+  top: number;
+  placement: "top" | "bottom";
+}
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_MESSAGES: ChatMessage[] = [];
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
@@ -360,6 +380,7 @@ function formatOutgoingPrompt(params: {
 function buildQueuedComposerPreviewText(input: {
   trimmedPrompt: string;
   images: ReadonlyArray<ComposerImageAttachment>;
+  assistantSelections: ReadonlyArray<{ id: string }>;
   terminalContexts: ReadonlyArray<TerminalContextDraft>;
 }): string {
   if (input.trimmedPrompt.length > 0) {
@@ -368,6 +389,9 @@ function buildQueuedComposerPreviewText(input: {
   const firstImage = input.images[0];
   if (firstImage) {
     return `Image: ${firstImage.name}`;
+  }
+  if (input.assistantSelections.length > 0) {
+    return formatAssistantSelectionQueuePreview(input.assistantSelections.length);
   }
   const firstTerminalContext = input.terminalContexts[0];
   if (firstTerminalContext) {
@@ -645,6 +669,7 @@ export default function ChatView({
   const composerDraft = useComposerThreadDraft(threadId);
   const prompt = composerDraft.prompt;
   const composerImages = composerDraft.images;
+  const composerAssistantSelections = composerDraft.assistantSelections;
   const composerTerminalContexts = composerDraft.terminalContexts;
   const queuedComposerTurns = composerDraft.queuedTurns;
   const {
@@ -661,9 +686,10 @@ export default function ChatView({
       deriveComposerSendState({
         prompt,
         imageCount: composerImages.length,
+        assistantSelectionCount: composerAssistantSelections.length,
         terminalContexts: composerTerminalContexts,
       }),
-    [composerImages.length, composerTerminalContexts, prompt],
+    [composerAssistantSelections.length, composerImages.length, composerTerminalContexts, prompt],
   );
   const nonPersistedComposerImageIds = composerDraft.nonPersistedImageIds;
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
@@ -683,6 +709,12 @@ export default function ChatView({
   const addComposerDraftImage = useComposerDraftStore((store) => store.addImage);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
   const removeComposerDraftImage = useComposerDraftStore((store) => store.removeImage);
+  const addComposerDraftAssistantSelection = useComposerDraftStore(
+    (store) => store.addAssistantSelection,
+  );
+  const clearComposerDraftAssistantSelections = useComposerDraftStore(
+    (store) => store.clearAssistantSelections,
+  );
   const insertComposerDraftTerminalContext = useComposerDraftStore(
     (store) => store.insertTerminalContext,
   );
@@ -725,6 +757,9 @@ export default function ChatView({
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
   const optimisticUserMessagesRef = useRef(optimisticUserMessages);
   optimisticUserMessagesRef.current = optimisticUserMessages;
+  const composerAssistantSelectionsRef = useRef<ComposerAssistantSelectionAttachment[]>(
+    composerAssistantSelections,
+  );
   const composerTerminalContextsRef = useRef<TerminalContextDraft[]>(composerTerminalContexts);
   const [localDraftErrorsByThreadId, setLocalDraftErrorsByThreadId] = useState<
     Record<ThreadId, string | null>
@@ -778,11 +813,14 @@ export default function ChatView({
   );
   const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
   const [isTraitsPickerOpen, setIsTraitsPickerOpen] = useState(false);
+  const [pendingTranscriptSelectionAction, setPendingTranscriptSelectionAction] =
+    useState<PendingTranscriptSelectionAction | null>(null);
 
   useEffect(() => {
     setComposerCommandPicker(null);
     setIsModelPickerOpen(false);
     setIsTraitsPickerOpen(false);
+    setPendingTranscriptSelectionAction(null);
   }, [threadId]);
   useEffect(() => {
     // Thread-bound handoff dialog state is reset by the dedicated hook.
@@ -851,6 +889,11 @@ export default function ChatView({
     },
     [addComposerDraftImages, threadId],
   );
+  const addComposerAssistantSelectionToDraft = useCallback(
+    (selection: ComposerAssistantSelectionAttachment) =>
+      addComposerDraftAssistantSelection(threadId, selection),
+    [addComposerDraftAssistantSelection, threadId],
+  );
   const addComposerTerminalContextsToDraft = useCallback(
     (contexts: TerminalContextDraft[]) => {
       addComposerDraftTerminalContexts(threadId, contexts);
@@ -863,6 +906,9 @@ export default function ChatView({
     },
     [removeComposerDraftImage, threadId],
   );
+  const clearComposerAssistantSelectionsFromDraft = useCallback(() => {
+    clearComposerDraftAssistantSelections(threadId);
+  }, [clearComposerDraftAssistantSelections, threadId]);
   const removeComposerTerminalContextFromDraft = useCallback(
     (contextId: string) => {
       const contextIndex = composerTerminalContexts.findIndex(
@@ -2315,6 +2361,81 @@ export default function ChatView({
     },
     [activeThread, composerCursor, composerTerminalContexts, insertComposerDraftTerminalContext],
   );
+  const addAssistantSelectionFromTranscript = useCallback(
+    (input: { clientX: number; clientY: number; container: HTMLDivElement | null }) => {
+      if (
+        !activeThread ||
+        !input.container ||
+        pendingUserInputs.length > 0 ||
+        isComposerApprovalState
+      ) {
+        setPendingTranscriptSelectionAction(null);
+        return;
+      }
+      const selectionState = readTranscriptAssistantSelection({ container: input.container });
+      if (!selectionState) {
+        setPendingTranscriptSelectionAction(null);
+        return;
+      }
+      if (
+        composerImagesRef.current.length + composerAssistantSelectionsRef.current.length >=
+        PROVIDER_SEND_TURN_MAX_ATTACHMENTS
+      ) {
+        setPendingTranscriptSelectionAction(null);
+        return;
+      }
+
+      const layout = resolveTranscriptSelectionActionLayout({
+        selectionRect: selectionState.selectionRect,
+        pointer: { x: input.clientX, y: input.clientY },
+      });
+      setPendingTranscriptSelectionAction({
+        selection: selectionState.selection,
+        left: layout.left,
+        top: layout.top,
+        placement: layout.placement,
+      });
+    },
+    [activeThread, isComposerApprovalState, pendingUserInputs.length],
+  );
+  const commitTranscriptAssistantSelection = useCallback(() => {
+    const pendingSelection = pendingTranscriptSelectionAction;
+    if (!pendingSelection) {
+      return;
+    }
+    if (
+      composerImagesRef.current.length + composerAssistantSelectionsRef.current.length >=
+      PROVIDER_SEND_TURN_MAX_ATTACHMENTS
+    ) {
+      setPendingTranscriptSelectionAction(null);
+      toastManager.add({
+        type: "warning",
+        title: `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} references per message.`,
+      });
+      return;
+    }
+    const nextSelection = createAssistantSelectionAttachment(pendingSelection.selection);
+    if (!nextSelection) {
+      setPendingTranscriptSelectionAction(null);
+      if (getAssistantSelectionValidationError(pendingSelection.selection) === "too-long") {
+        toastManager.add({
+          type: "warning",
+          title: "Selections can be up to 4,000 characters.",
+        });
+      }
+      return;
+    }
+    const inserted = addComposerAssistantSelectionToDraft(nextSelection);
+    setPendingTranscriptSelectionAction(null);
+    if (inserted) {
+      window.getSelection()?.removeAllRanges();
+      scheduleComposerFocus();
+    }
+  }, [
+    addComposerAssistantSelectionToDraft,
+    pendingTranscriptSelectionAction,
+    scheduleComposerFocus,
+  ]);
   const setTerminalOpen = useCallback(
     (open: boolean) => {
       if (!activeThreadId) return;
@@ -3078,15 +3199,15 @@ export default function ChatView({
     forceStickToBottom,
     onTimelineHeightChange,
     onComposerHeightChange,
-    onMessagesClickCapture,
-    onMessagesPointerCancel,
-    onMessagesPointerDown,
-    onMessagesPointerUp,
-    onMessagesScroll,
-    onMessagesTouchEnd,
-    onMessagesTouchMove,
-    onMessagesTouchStart,
-    onMessagesWheel,
+    onMessagesClickCapture: onMessagesClickCaptureBase,
+    onMessagesPointerCancel: onMessagesPointerCancelBase,
+    onMessagesPointerDown: onMessagesPointerDownBase,
+    onMessagesPointerUp: onMessagesPointerUpBase,
+    onMessagesScroll: onMessagesScrollBase,
+    onMessagesTouchEnd: onMessagesTouchEndBase,
+    onMessagesTouchMove: onMessagesTouchMoveBase,
+    onMessagesTouchStart: onMessagesTouchStartBase,
+    onMessagesWheel: onMessagesWheelBase,
   } = useChatAutoScrollController({
     threadId: activeThread?.id ?? null,
     isStreaming: isWorking,
@@ -3169,6 +3290,10 @@ export default function ChatView({
   useEffect(() => {
     composerImagesRef.current = composerImages;
   }, [composerImages]);
+
+  useEffect(() => {
+    composerAssistantSelectionsRef.current = composerAssistantSelections;
+  }, [composerAssistantSelections]);
 
   useEffect(() => {
     composerTerminalContextsRef.current = composerTerminalContexts;
@@ -3952,7 +4077,8 @@ export default function ChatView({
     }
 
     const nextImages: ComposerImageAttachment[] = [];
-    let nextImageCount = composerImagesRef.current.length;
+    let nextAttachmentCount =
+      composerImagesRef.current.length + composerAssistantSelectionsRef.current.length;
     let error: string | null = null;
     for (const file of files) {
       if (!file.type.startsWith("image/")) {
@@ -3963,8 +4089,8 @@ export default function ChatView({
         error = `'${file.name}' exceeds the ${IMAGE_SIZE_LIMIT_LABEL} attachment limit.`;
         continue;
       }
-      if (nextImageCount >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
-        error = `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} images per message.`;
+      if (nextAttachmentCount >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
+        error = `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} references per message.`;
         break;
       }
 
@@ -3978,7 +4104,7 @@ export default function ChatView({
         previewUrl,
         file,
       });
-      nextImageCount += 1;
+      nextAttachmentCount += 1;
     }
 
     if (nextImages.length === 1 && nextImages[0]) {
@@ -4144,6 +4270,8 @@ export default function ChatView({
       const nextPrompt = queuedTurn.kind === "chat" ? queuedTurn.prompt : queuedTurn.text;
       const restoredImages =
         queuedTurn.kind === "chat" ? queuedTurn.images.map(cloneComposerImageForRetry) : [];
+      const restoredAssistantSelections =
+        queuedTurn.kind === "chat" ? queuedTurn.assistantSelections : [];
       promptRef.current = nextPrompt;
       clearComposerDraftContent(activeThread.id);
       setComposerDraftPrompt(activeThread.id, nextPrompt);
@@ -4156,6 +4284,9 @@ export default function ChatView({
       if (queuedTurn.kind === "chat") {
         if (restoredImages.length > 0) {
           addComposerImagesToDraft(restoredImages);
+        }
+        for (const selection of restoredAssistantSelections) {
+          addComposerAssistantSelectionToDraft(selection);
         }
         if (queuedTurn.terminalContexts.length > 0) {
           addComposerTerminalContextsToDraft(queuedTurn.terminalContexts);
@@ -4175,6 +4306,7 @@ export default function ChatView({
     },
     [
       activeThread,
+      addComposerAssistantSelectionToDraft,
       addComposerImagesToDraft,
       addComposerTerminalContextsToDraft,
       clearComposerDraftContent,
@@ -4221,6 +4353,8 @@ export default function ChatView({
     const promptForSend =
       queuedChatTurn?.prompt ?? liveComposerSnapshot?.value ?? promptRef.current;
     const composerImagesForSend = queuedChatTurn?.images ?? composerImages;
+    const composerAssistantSelectionsForSend =
+      queuedChatTurn?.assistantSelections ?? composerAssistantSelections;
     const composerTerminalContextsForSend =
       queuedChatTurn?.terminalContexts ?? composerTerminalContexts;
     const selectedComposerSkillsForSend = queuedChatTurn?.skills ?? selectedComposerSkills;
@@ -4243,6 +4377,7 @@ export default function ChatView({
     } = deriveComposerSendState({
       prompt: promptForSend,
       imageCount: composerImagesForSend.length,
+      assistantSelectionCount: composerAssistantSelectionsForSend.length,
       terminalContexts: composerTerminalContextsForSend,
     });
     if (showPlanFollowUpPrompt && activeProposedPlan) {
@@ -4275,7 +4410,11 @@ export default function ChatView({
         dispatchMode,
       });
     }
-    if (composerImagesForSend.length === 0 && sendableComposerTerminalContexts.length === 0) {
+    if (
+      composerImagesForSend.length === 0 &&
+      composerAssistantSelectionsForSend.length === 0 &&
+      sendableComposerTerminalContexts.length === 0
+    ) {
       const handledSlashCommand = await handleStandaloneSlashCommand(trimmed);
       if (handledSlashCommand) {
         return true;
@@ -4317,10 +4456,12 @@ export default function ChatView({
         previewText: buildQueuedComposerPreviewText({
           trimmedPrompt: trimmed,
           images: queuedImagesForPersistence,
+          assistantSelections: composerAssistantSelectionsForSend,
           terminalContexts: sendableComposerTerminalContexts,
         }),
         prompt: promptForSend,
         images: queuedImagesForPersistence,
+        assistantSelections: composerAssistantSelectionsForSend,
         terminalContexts: sendableComposerTerminalContexts,
         skills: selectedComposerSkillsForSend,
         mentions: selectedComposerMentionsForSend,
@@ -4444,11 +4585,12 @@ export default function ChatView({
     beginLocalDispatch({ preparingWorktree: Boolean(baseBranchForWorktree) });
 
     const composerImagesSnapshot = [...composerImagesForSend];
+    const composerAssistantSelectionsSnapshot = [...composerAssistantSelectionsForSend];
     const composerTerminalContextsSnapshot = [...sendableComposerTerminalContexts];
     const composerSkillsSnapshot = [...selectedComposerSkillsForSend];
     const composerMentionsSnapshot = [...selectedComposerMentionsForSend];
     const messageTextForSend = appendTerminalContextsToPrompt(
-      promptForSend,
+      appendAssistantSelectionsToPrompt(promptForSend, composerAssistantSelectionsSnapshot),
       composerTerminalContextsSnapshot,
     );
     const messageIdForSend = newMessageId();
@@ -4467,23 +4609,33 @@ export default function ChatView({
       existingMentions: selectedComposerMentionsForSend,
       providerPlugins,
     });
-    const turnAttachmentsPromise = Promise.all(
-      composerImagesSnapshot.map(async (image) => ({
+    const turnAttachmentsPromise = Promise.all([
+      ...composerAssistantSelectionsSnapshot.map((selection) =>
+        Promise.resolve({
+          type: "assistant-selection" as const,
+          assistantMessageId: MessageId.makeUnsafe(selection.assistantMessageId),
+          text: selection.text,
+        }),
+      ),
+      ...composerImagesSnapshot.map(async (image) => ({
         type: "image" as const,
         name: image.name,
         mimeType: image.mimeType,
         sizeBytes: image.sizeBytes,
         dataUrl: await readFileAsDataUrl(image.file),
       })),
-    );
-    const optimisticAttachments = composerImagesSnapshot.map((image) => ({
-      type: "image" as const,
-      id: image.id,
-      name: image.name,
-      mimeType: image.mimeType,
-      sizeBytes: image.sizeBytes,
-      previewUrl: image.previewUrl,
-    }));
+    ]);
+    const optimisticAttachments = [
+      ...composerAssistantSelectionsSnapshot,
+      ...composerImagesSnapshot.map((image) => ({
+        type: "image" as const,
+        id: image.id,
+        name: image.name,
+        mimeType: image.mimeType,
+        sizeBytes: image.sizeBytes,
+        previewUrl: image.previewUrl,
+      })),
+    ];
     setOptimisticUserMessages((existing) => [
       ...existing,
       {
@@ -4567,6 +4719,8 @@ export default function ChatView({
       if (!titleSeed) {
         if (firstComposerImageName) {
           titleSeed = `Image: ${firstComposerImageName}`;
+        } else if (composerAssistantSelectionsSnapshot.length > 0) {
+          titleSeed = formatAssistantSelectionTitleSeed(composerAssistantSelectionsSnapshot.length);
         } else if (composerTerminalContextsSnapshot.length > 0) {
           titleSeed = formatTerminalContextLabel(composerTerminalContextsSnapshot[0]!);
         } else {
@@ -4687,6 +4841,7 @@ export default function ChatView({
         !turnStartSucceeded &&
         promptRef.current.length === 0 &&
         composerImagesRef.current.length === 0 &&
+        composerAssistantSelectionsRef.current.length === 0 &&
         composerTerminalContextsRef.current.length === 0
       ) {
         setOptimisticUserMessages((existing) => {
@@ -4701,6 +4856,9 @@ export default function ChatView({
         setPrompt(promptForSend);
         setComposerCursor(collapseExpandedComposerCursor(promptForSend, promptForSend.length));
         addComposerImagesToDraft(composerImagesSnapshot.map(cloneComposerImageForRetry));
+        for (const selection of composerAssistantSelectionsSnapshot) {
+          addComposerAssistantSelectionToDraft(selection);
+        }
         addComposerTerminalContextsToDraft(composerTerminalContextsSnapshot);
         setSelectedComposerSkills(composerSkillsSnapshot);
         setSelectedComposerMentions(composerMentionsSnapshot);
@@ -5887,6 +6045,110 @@ export default function ChatView({
   const onScrollToBottom = useCallback(() => {
     forceStickToBottom("smooth");
   }, [forceStickToBottom]);
+  const dismissTranscriptSelectionAction = useCallback(() => {
+    setPendingTranscriptSelectionAction(null);
+  }, []);
+  const onMessagesClickCapture = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      dismissTranscriptSelectionAction();
+      onMessagesClickCaptureBase(event);
+    },
+    [dismissTranscriptSelectionAction, onMessagesClickCaptureBase],
+  );
+  const onMessagesPointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      dismissTranscriptSelectionAction();
+      onMessagesPointerDownBase(event);
+    },
+    [dismissTranscriptSelectionAction, onMessagesPointerDownBase],
+  );
+  const onMessagesPointerUp = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      onMessagesPointerUpBase(event);
+    },
+    [onMessagesPointerUpBase],
+  );
+  const onMessagesPointerCancel = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      dismissTranscriptSelectionAction();
+      onMessagesPointerCancelBase(event);
+    },
+    [dismissTranscriptSelectionAction, onMessagesPointerCancelBase],
+  );
+  const onMessagesScroll = useCallback(() => {
+    dismissTranscriptSelectionAction();
+    onMessagesScrollBase();
+  }, [dismissTranscriptSelectionAction, onMessagesScrollBase]);
+  const onMessagesWheel = useCallback(
+    (event: React.WheelEvent<HTMLDivElement>) => {
+      dismissTranscriptSelectionAction();
+      onMessagesWheelBase(event);
+    },
+    [dismissTranscriptSelectionAction, onMessagesWheelBase],
+  );
+  const onMessagesTouchStart = useCallback(
+    (event: React.TouchEvent<HTMLDivElement>) => {
+      dismissTranscriptSelectionAction();
+      onMessagesTouchStartBase(event);
+    },
+    [dismissTranscriptSelectionAction, onMessagesTouchStartBase],
+  );
+  const onMessagesTouchMove = useCallback(
+    (event: React.TouchEvent<HTMLDivElement>) => {
+      dismissTranscriptSelectionAction();
+      onMessagesTouchMoveBase(event);
+    },
+    [dismissTranscriptSelectionAction, onMessagesTouchMoveBase],
+  );
+  const onMessagesTouchEnd = useCallback(
+    (event: React.TouchEvent<HTMLDivElement>) => {
+      onMessagesTouchEndBase(event);
+    },
+    [onMessagesTouchEndBase],
+  );
+  const onMessagesMouseUp = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      const container = event.currentTarget;
+      const clientX = event.clientX;
+      const clientY = event.clientY;
+      window.requestAnimationFrame(() => {
+        void addAssistantSelectionFromTranscript({
+          clientX,
+          clientY,
+          container,
+        });
+      });
+    },
+    [addAssistantSelectionFromTranscript],
+  );
+  useEffect(() => {
+    if (!pendingTranscriptSelectionAction) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        target.closest("[data-transcript-selection-action='true']")
+      ) {
+        return;
+      }
+      setPendingTranscriptSelectionAction(null);
+    };
+    const handleWindowChange = () => {
+      setPendingTranscriptSelectionAction(null);
+    };
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("resize", handleWindowChange);
+    document.addEventListener("selectionchange", handleWindowChange);
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("resize", handleWindowChange);
+      document.removeEventListener("selectionchange", handleWindowChange);
+    };
+  }, [pendingTranscriptSelectionAction]);
   const onOpenTurnDiff = useCallback(
     (turnId: TurnId, filePath?: string) => {
       if (diffEnvironmentPending) {
@@ -6041,6 +6303,8 @@ export default function ChatView({
       : {}),
   };
 
+  const planCardAboveComposer = Boolean(activePlan && !planSidebarOpen);
+
   const composerSection = (
     <>
       {activePlan && !planSidebarOpen ? (
@@ -6063,11 +6327,16 @@ export default function ChatView({
       >
         {queuedComposerTurns.length > 0 ? (
           <div className="mx-auto flex w-11/12 flex-col">
-            {queuedComposerTurns.map((queuedTurn) => (
+            {queuedComposerTurns.map((queuedTurn, queuedTurnIndex) => (
               <div
                 key={queuedTurn.id}
                 data-testid="queued-follow-up-row"
-                className="chat-composer-surface flex items-center gap-2 rounded-t-2xl border border-b-0 border-border/75 bg-card px-2.5 py-2 text-[12px]"
+                className={cn(
+                  "chat-composer-surface flex items-center gap-2 border border-b-0 border-border/75 bg-card px-2.5 py-2 text-[12px]",
+                  queuedTurnIndex === 0 && !planCardAboveComposer
+                    ? "rounded-t-2xl"
+                    : "rounded-none",
+                )}
               >
                 <div className="flex min-w-0 flex-1 items-center gap-1.5">
                   <QueueArrow className="size-3 shrink-0 text-muted-foreground/70" />
@@ -6182,19 +6451,15 @@ export default function ChatView({
 
               {!isComposerApprovalState &&
                 pendingUserInputs.length === 0 &&
-                composerImages.length > 0 && (
-                  <div className="mb-2.5 flex flex-wrap gap-2">
-                    {composerImages.map((image) => (
-                      <ComposerImageAttachmentChip
-                        key={image.id}
-                        image={image}
-                        images={composerImages}
-                        nonPersisted={nonPersistedComposerImageIdSet.has(image.id)}
-                        onExpandImage={setExpandedImage}
-                        onRemoveImage={removeComposerImage}
-                      />
-                    ))}
-                  </div>
+                (composerAssistantSelections.length > 0 || composerImages.length > 0) && (
+                  <ComposerReferenceAttachments
+                    assistantSelections={composerAssistantSelections}
+                    images={composerImages}
+                    nonPersistedImageIdSet={nonPersistedComposerImageIdSet}
+                    onExpandImage={setExpandedImage}
+                    onRemoveAssistantSelections={clearComposerAssistantSelectionsFromDraft}
+                    onRemoveImage={removeComposerImage}
+                  />
                 )}
               <ComposerPromptEditor
                 ref={composerEditorRef}
@@ -6727,6 +6992,7 @@ export default function ChatView({
                 terminalWorkspaceTerminalTabActive={terminalWorkspaceTerminalTabActive}
                 onMessagesScroll={onMessagesScroll}
                 onMessagesClickCapture={onMessagesClickCapture}
+                onMessagesMouseUp={onMessagesMouseUp}
                 onMessagesWheel={onMessagesWheel}
                 onMessagesPointerDown={onMessagesPointerDown}
                 onMessagesPointerUp={onMessagesPointerUp}
@@ -6768,11 +7034,16 @@ export default function ChatView({
                   >
                     {queuedComposerTurns.length > 0 ? (
                       <div className="mx-auto flex w-11/12 flex-col">
-                        {queuedComposerTurns.map((queuedTurn) => (
+                        {queuedComposerTurns.map((queuedTurn, queuedTurnIndex) => (
                           <div
                             key={queuedTurn.id}
                             data-testid="queued-follow-up-row"
-                            className="chat-composer-surface flex items-center gap-2 rounded-t-2xl border border-b-0 border-border/75 bg-card px-2.5 py-2 text-[12px]"
+                            className={cn(
+                              "chat-composer-surface flex items-center gap-2 border border-b-0 border-border/75 bg-card px-2.5 py-2 text-[12px]",
+                              queuedTurnIndex === 0 && !planCardAboveComposer
+                                ? "rounded-t-2xl"
+                                : "rounded-none",
+                            )}
                           >
                             <div className="flex min-w-0 flex-1 items-center gap-1.5">
                               <QueueArrow className="size-3 shrink-0 text-muted-foreground/70" />
@@ -6889,19 +7160,18 @@ export default function ChatView({
 
                           {!isComposerApprovalState &&
                             pendingUserInputs.length === 0 &&
-                            composerImages.length > 0 && (
-                              <div className="mb-2.5 flex flex-wrap gap-2">
-                                {composerImages.map((image) => (
-                                  <ComposerImageAttachmentChip
-                                    key={image.id}
-                                    image={image}
-                                    images={composerImages}
-                                    nonPersisted={nonPersistedComposerImageIdSet.has(image.id)}
-                                    onExpandImage={setExpandedImage}
-                                    onRemoveImage={removeComposerImage}
-                                  />
-                                ))}
-                              </div>
+                            (composerAssistantSelections.length > 0 ||
+                              composerImages.length > 0) && (
+                              <ComposerReferenceAttachments
+                                assistantSelections={composerAssistantSelections}
+                                images={composerImages}
+                                nonPersistedImageIdSet={nonPersistedComposerImageIdSet}
+                                onExpandImage={setExpandedImage}
+                                onRemoveAssistantSelections={
+                                  clearComposerAssistantSelectionsFromDraft
+                                }
+                                onRemoveImage={removeComposerImage}
+                              />
                             )}
                           <ComposerPromptEditor
                             ref={composerEditorRef}
@@ -7376,6 +7646,14 @@ export default function ChatView({
         onOpenChange={setWorktreeHandoffDialogOpen}
         onConfirm={confirmWorktreeHandoff}
       />
+      {pendingTranscriptSelectionAction ? (
+        <TranscriptSelectionAction
+          left={pendingTranscriptSelectionAction.left}
+          top={pendingTranscriptSelectionAction.top}
+          placement={pendingTranscriptSelectionAction.placement}
+          onAddToChat={commitTranscriptAssistantSelection}
+        />
+      ) : null}
 
       {expandedImage && expandedImageItem && (
         <div
