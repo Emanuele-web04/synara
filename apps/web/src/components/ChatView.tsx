@@ -298,11 +298,7 @@ import {
   resolveDiffEnvironmentState,
   resolveThreadEnvironmentMode,
 } from "../lib/threadEnvironment";
-import { waitForRecoverableProjectForDuplicateCreate } from "../lib/projectCreateRecovery";
-import {
-  buildModelSelection,
-  buildNextProviderOptions,
-} from "../providerModelOptions";
+import { buildModelSelection, buildNextProviderOptions } from "../providerModelOptions";
 import { waitForRecoverableProjectForDuplicateCreate } from "../lib/projectCreateRecovery";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
@@ -1183,7 +1179,12 @@ export default function ChatView({
     }
 
     return result;
-  }, [settings, claudeDynamicModelsQuery.data, codexDynamicModelsQuery.data, geminiModelsQuery.data]);
+  }, [
+    settings,
+    claudeDynamicModelsQuery.data,
+    codexDynamicModelsQuery.data,
+    geminiModelsQuery.data,
+  ]);
   const selectedModelForPickerWithCustomFallback = useMemo(() => {
     const currentOptions = modelOptionsByProvider[selectedProvider];
     return currentOptions.some((option) => option.slug === selectedModelForPicker)
@@ -3843,7 +3844,6 @@ export default function ChatView({
         type: "error",
         title: authExpired ? "Sign in to ChatGPT again" : "Couldn't transcribe voice note",
         description: authExpired
-          ? "Voice transcription uses your ChatGPT session in Codex. That session was rejected, so sign in again there and retry."
           ? "Voice transcription uses your ChatGPT session in Codex. That session was rejected, so sign in again there and retry."
           : description,
         ...(authExpired

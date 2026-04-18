@@ -856,13 +856,8 @@ function SettingsRouteView() {
                       {settings.defaultProvider === "claudeAgent"
                         ? PROVIDER_DISPLAY_NAMES.claudeAgent
                         : settings.defaultProvider === "gemini"
-<<<<<<< HEAD
-                          ? "Gemini"
-                          : "Codex"}
-=======
                           ? PROVIDER_DISPLAY_NAMES.gemini
                           : PROVIDER_DISPLAY_NAMES.codex}
->>>>>>> e18c4db9 (Add explicit provider handoff targets)
                     </span>
                   </SelectValue>
                 </SelectTrigger>

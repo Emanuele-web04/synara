@@ -77,6 +77,7 @@ const GEMINI_2_5_CAPABILITIES: ModelCapabilities = {
   supportsFastMode: false,
   supportsThinkingToggle: false,
   promptInjectedEffortLevels: [],
+  contextWindowOptions: [],
 };
 
 type ModelDefinition = {
@@ -292,6 +293,7 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
         supportsFastMode: false,
         supportsThinkingToggle: false,
         promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
       },
     },
     {
@@ -310,6 +312,7 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
         supportsFastMode: false,
         supportsThinkingToggle: false,
         promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
       },
     },
     {
@@ -323,6 +326,7 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
         supportsFastMode: false,
         supportsThinkingToggle: false,
         promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
       },
     },
     {
@@ -336,6 +340,7 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
         supportsFastMode: false,
         supportsThinkingToggle: false,
         promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
       },
     },
     {

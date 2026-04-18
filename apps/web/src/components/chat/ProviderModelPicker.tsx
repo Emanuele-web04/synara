@@ -207,7 +207,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
               value={props.model}
               onValueChange={(value) => handleModelChange(props.lockedProvider!, value)}
             >
-              {modelOptionsByProvider[props.lockedProvider].map((modelOption) => (
+              {props.modelOptionsByProvider[props.lockedProvider].map((modelOption) => (
                 <MenuRadioItem
                   key={`${props.lockedProvider}:${modelOption.slug}`}
                   value={modelOption.slug}
@@ -261,7 +261,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                         value={props.provider === option.value ? props.model : ""}
                         onValueChange={(value) => handleModelChange(option.value, value)}
                       >
-                        {modelOptionsByProvider[option.value].map((modelOption) => (
+                        {props.modelOptionsByProvider[option.value].map((modelOption) => (
                           <MenuRadioItem
                             key={`${option.value}:${modelOption.slug}`}
                             value={modelOption.slug}

@@ -55,8 +55,10 @@ interface SidebarSearchPaletteProps {
   onOpenSettings: () => void;
   onOpenProject: (projectId: string) => void;
   onOpenThread: (threadId: string) => void;
-  onImportThread: (provider: ProviderKind, externalId: string) => Promise<void>;
+  onImportThread: (provider: "codex" | "claudeAgent", externalId: string) => Promise<void>;
 }
+
+type ImportProviderKind = "codex" | "claudeAgent";
 
 function actionHandler(
   actionId: string,
@@ -180,7 +182,7 @@ function HighlightedText(props: { text: string; query: string; className?: strin
 
 export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
   const [query, setQuery] = useState("");
-  const [importProvider, setImportProvider] = useState<ProviderKind>("codex");
+  const [importProvider, setImportProvider] = useState<ImportProviderKind>("codex");
   const [importId, setImportId] = useState("");
   const [importError, setImportError] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);

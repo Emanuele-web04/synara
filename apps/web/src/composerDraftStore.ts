@@ -735,7 +735,8 @@ function normalizeModelSelection(
         ? inferredClaudeContextWindow !== undefined
           ? {
               ...modelOptions?.claudeAgent,
-              contextWindow: modelOptions?.claudeAgent?.contextWindow ?? inferredClaudeContextWindow,
+              contextWindow:
+                modelOptions?.claudeAgent?.contextWindow ?? inferredClaudeContextWindow,
             }
           : modelOptions?.claudeAgent
         : modelOptions?.gemini;

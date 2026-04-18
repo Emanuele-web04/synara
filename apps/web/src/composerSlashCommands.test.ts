@@ -215,6 +215,7 @@ describe("composerSlashCommands", () => {
       getAvailableComposerSlashCommands({
         provider: "gemini",
         supportsFastSlashCommand: false,
+        canOfferCompactCommand: false,
         canOfferReviewCommand: true,
         canOfferForkCommand: true,
       }),

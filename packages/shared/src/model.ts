@@ -55,6 +55,7 @@ export const GEMINI_3_MODEL_CAPABILITIES: ModelCapabilities = {
   supportsFastMode: false,
   supportsThinkingToggle: false,
   promptInjectedEffortLevels: [],
+  contextWindowOptions: [],
 };
 
 export const GEMINI_2_5_MODEL_CAPABILITIES: ModelCapabilities = {
@@ -65,6 +66,7 @@ export const GEMINI_2_5_MODEL_CAPABILITIES: ModelCapabilities = {
   supportsFastMode: false,
   supportsThinkingToggle: false,
   promptInjectedEffortLevels: [],
+  contextWindowOptions: [],
 };
 
 function isGeminiThinkingLevel(value: string): value is GeminiThinkingLevel {
