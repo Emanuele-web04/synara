@@ -223,6 +223,7 @@ const ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS = 6;
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS = 50;
 const ADD_PROJECT_EXISTING_SYNC_ERROR =
   "This folder is already linked, but the existing project has not synced into the sidebar yet. Try again in a moment.";
+const SIDEBAR_UI_STATE_STORAGE_KEY = "t3code:sidebar-ui:v1";
 
 const PROJECT_CONTEXT_MENU_FOLDER_ICON = renderToStaticMarkup(<HiOutlineFolderOpen />);
 const PROJECT_CONTEXT_MENU_EDIT_ICON =
@@ -238,6 +239,57 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function readSidebarUiState(): {
+  chatSectionExpanded: boolean;
+  chatThreadListExpanded: boolean;
+} {
+  if (typeof window === "undefined") {
+    return {
+      chatSectionExpanded: false,
+      chatThreadListExpanded: false,
+    };
+  }
+
+  try {
+    const raw = window.localStorage.getItem(SIDEBAR_UI_STATE_STORAGE_KEY);
+    if (!raw) {
+      return {
+        chatSectionExpanded: false,
+        chatThreadListExpanded: false,
+      };
+    }
+
+    const parsed = JSON.parse(raw) as {
+      chatSectionExpanded?: boolean;
+      chatThreadListExpanded?: boolean;
+    };
+    return {
+      chatSectionExpanded: parsed.chatSectionExpanded === true,
+      chatThreadListExpanded: parsed.chatThreadListExpanded === true,
+    };
+  } catch {
+    return {
+      chatSectionExpanded: false,
+      chatThreadListExpanded: false,
+    };
+  }
+}
+
+function persistSidebarUiState(input: {
+  chatSectionExpanded: boolean;
+  chatThreadListExpanded: boolean;
+}): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(SIDEBAR_UI_STATE_STORAGE_KEY, JSON.stringify(input));
+  } catch {
+    // Ignore storage errors so sidebar rendering keeps working when persistence is unavailable.
+  }
 }
 
 function threadJumpLabelMapsEqual(
@@ -964,8 +1016,12 @@ export default function Sidebar() {
   const [expandedThreadListsByProject, setExpandedThreadListsByProject] = useState<
     ReadonlySet<ProjectId>
   >(() => new Set());
-  const [chatSectionExpanded, setChatSectionExpanded] = useState(true);
-  const [chatThreadListExpanded, setChatThreadListExpanded] = useState(false);
+  const [chatSectionExpanded, setChatSectionExpanded] = useState(
+    () => readSidebarUiState().chatSectionExpanded,
+  );
+  const [chatThreadListExpanded, setChatThreadListExpanded] = useState(
+    () => readSidebarUiState().chatThreadListExpanded,
+  );
   const [expandedSubagentParentIds, setExpandedSubagentParentIds] = useState<ReadonlySet<ThreadId>>(
     () => new Set(),
   );
@@ -3014,6 +3070,13 @@ export default function Sidebar() {
     }
     prunePinnedThreads(sidebarThreads.map((thread) => thread.id));
   }, [prunePinnedThreads, sidebarThreads, threadsHydrated]);
+
+  useEffect(() => {
+    persistSidebarUiState({
+      chatSectionExpanded,
+      chatThreadListExpanded,
+    });
+  }, [chatSectionExpanded, chatThreadListExpanded]);
 
   useEffect(() => {
     if (!activeSidebarThreadId) {
