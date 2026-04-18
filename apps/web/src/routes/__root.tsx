@@ -14,19 +14,27 @@ import {
   useRouterState,
   useSearch,
 } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef } from "react";
-import { QueryClient, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Throttler } from "@tanstack/react-pacer";
 
 import { APP_DISPLAY_NAME } from "../branding";
+import ShortcutsDialog from "../components/ShortcutsDialog";
+import WhatsNewDialog from "../components/WhatsNewDialog";
+import { useWhatsNew } from "../whatsNew/useWhatsNew";
+import { WhatsNewPopoutCard } from "../whatsNew/WhatsNewPopoutCard";
+import { shouldRenderTerminalWorkspace } from "../components/ChatView.logic";
 import { Button } from "../components/ui/button";
 import { AnchoredToastProvider, ToastProvider, toastManager } from "../components/ui/toast";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
+import { isElectron } from "../env";
+import { useFocusedChatContext } from "../focusedChatContext";
+import { isTerminalFocused } from "../lib/terminalFocus";
 import { serverConfigQueryOptions, serverQueryKeys } from "../lib/serverReactQuery";
 import { readNativeApi } from "../nativeApi";
 import { clearPromotedDraftThreads, useComposerDraftStore } from "../composerDraftStore";
 import { useStore } from "../store";
-import { useTerminalStateStore } from "../terminalStateStore";
+import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { terminalActivityFromEvent } from "../terminalActivity";
 import {
   onServerConfigUpdated,
@@ -73,11 +81,106 @@ function RootRouteView() {
     <ToastProvider>
       <AnchoredToastProvider>
         <EventRouter />
+        <GlobalShortcutsDialog />
+        <GlobalWhatsNewSurface />
         <TaskCompletionNotifications />
         <DesktopProjectBootstrap />
         <Outlet />
       </AnchoredToastProvider>
     </ToastProvider>
+  );
+}
+
+function GlobalShortcutsDialog() {
+  const [open, setOpen] = useState(false);
+  const { focusedThreadId, activeProject } = useFocusedChatContext();
+  const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const keybindings = serverConfigQuery.data?.keybindings ?? [];
+  const platform = typeof navigator === "undefined" ? "" : navigator.platform;
+  const activeThreadTerminalState = useTerminalStateStore((state) =>
+    focusedThreadId
+      ? selectThreadTerminalState(state.terminalStateByThreadId, focusedThreadId)
+      : null,
+  );
+  const terminalOpen = activeThreadTerminalState?.terminalOpen ?? false;
+  const terminalWorkspaceOpen = shouldRenderTerminalWorkspace({
+    activeProjectExists: activeProject !== null,
+    presentationMode: activeThreadTerminalState?.presentationMode ?? "drawer",
+    terminalOpen,
+  });
+
+  useEffect(() => {
+    const onMenuAction = window.desktopBridge?.onMenuAction;
+    if (typeof onMenuAction !== "function") {
+      return;
+    }
+
+    const unsubscribe = onMenuAction((action) => {
+      if (action === "show-shortcuts") {
+        setOpen(true);
+      }
+    });
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, []);
+
+  return (
+    <ShortcutsDialog
+      open={open}
+      onOpenChange={setOpen}
+      keybindings={keybindings}
+      projectScripts={activeProject?.kind === "project" ? activeProject.scripts : []}
+      platform={platform}
+      context={{
+        terminalFocus: isTerminalFocused(),
+        terminalOpen,
+        terminalWorkspaceOpen,
+      }}
+      isElectron={isElectron}
+    />
+  );
+}
+
+function GlobalWhatsNewSurface() {
+  // Single mount point per app session. The hook owns the "popout visible" and
+  // "dialog open" booleans and the seen-marker persistence; this component is
+  // just the plumbing that renders them together so they share one entry.
+  const {
+    currentEntry,
+    allEntries,
+    currentVersion,
+    isPopoutVisible,
+    isDialogOpen,
+    openDialog,
+    dismissPopout,
+    onDialogOpenChange,
+  } = useWhatsNew();
+
+  if (!currentEntry) {
+    // Silent-bootstrap or noop — nothing to render on either surface.
+    return null;
+  }
+
+  return (
+    <>
+      {isPopoutVisible && (
+        <WhatsNewPopoutCard
+          entry={currentEntry}
+          currentVersion={currentVersion}
+          onOpen={openDialog}
+          onDismiss={dismissPopout}
+        />
+      )}
+      <WhatsNewDialog
+        open={isDialogOpen}
+        onOpenChange={onDialogOpenChange}
+        currentEntry={currentEntry}
+        allEntries={allEntries}
+        currentVersion={currentVersion}
+      />
+    </>
   );
 }
 

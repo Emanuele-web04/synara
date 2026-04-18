@@ -6,6 +6,7 @@ import {
   type ThreadId as ThreadIdType,
 } from "@t3tools/contracts";
 import { sanitizeBranchFragment } from "@t3tools/shared/git";
+import { isGenericChatThreadTitle } from "@t3tools/shared/chatThreads";
 import { isGenericTerminalThreadTitle } from "@t3tools/shared/terminalThreads";
 import {
   type ChatMessage,
@@ -60,6 +61,21 @@ export function buildLocalDraftThread(
     activities: [],
     proposedPlans: [],
   };
+}
+
+export function resolveActiveThreadTitle(input: {
+  title: string;
+  subagentTitle: string | null;
+  isHomeChat: boolean;
+  isEmpty: boolean;
+}): string {
+  if (input.subagentTitle) {
+    return input.subagentTitle;
+  }
+  if (input.isHomeChat && input.isEmpty && isGenericChatThreadTitle(input.title)) {
+    return "New Chat";
+  }
+  return input.title;
 }
 
 export function revokeBlobPreviewUrl(previewUrl: string | undefined): void {

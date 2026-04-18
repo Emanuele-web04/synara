@@ -20,6 +20,7 @@ import {
   KEY_ARROW_LEFT_COMMAND,
   KEY_ARROW_RIGHT_COMMAND,
   KEY_ARROW_UP_COMMAND,
+  KEY_DOWN_COMMAND,
   KEY_ENTER_COMMAND,
   KEY_TAB_COMMAND,
   COMMAND_PRIORITY_HIGH,
@@ -485,7 +486,7 @@ interface ComposerPromptEditorProps {
     terminalContextIds: string[],
   ) => void;
   onCommandKeyDown?: (
-    key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab",
+    key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab" | "Slash",
     event: KeyboardEvent,
   ) => boolean;
   onPaste: ClipboardEventHandler<HTMLElement>;
@@ -497,7 +498,7 @@ interface ComposerPromptEditorInnerProps extends ComposerPromptEditorProps {
 
 function ComposerCommandKeyPlugin(props: {
   onCommandKeyDown?: (
-    key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab",
+    key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab" | "Slash",
     event: KeyboardEvent,
   ) => boolean;
 }) {
@@ -505,7 +506,7 @@ function ComposerCommandKeyPlugin(props: {
 
   useEffect(() => {
     const handleCommand = (
-      key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab",
+      key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab" | "Slash",
       event: KeyboardEvent | null,
     ): boolean => {
       if (!props.onCommandKeyDown || !event) {
@@ -539,12 +540,19 @@ function ComposerCommandKeyPlugin(props: {
       (event) => handleCommand("Tab", event),
       COMMAND_PRIORITY_HIGH,
     );
+    const unregisterSlash = editor.registerCommand(
+      KEY_DOWN_COMMAND,
+      (event) =>
+        event instanceof KeyboardEvent && event.key === "/" ? handleCommand("Slash", event) : false,
+      COMMAND_PRIORITY_HIGH,
+    );
 
     return () => {
       unregisterArrowDown();
       unregisterArrowUp();
       unregisterEnter();
       unregisterTab();
+      unregisterSlash();
     };
   }, [editor, props]);
 
@@ -927,7 +935,7 @@ function ComposerPromptEditorInner({
           contentEditable={
             <ContentEditable
               className={cn(
-                "font-system-ui block max-h-[200px] min-h-[3.5rem] w-full overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-[length:var(--app-font-size-chat,12px)] leading-relaxed text-foreground focus:outline-none",
+                "font-system-ui block max-h-[200px] min-h-[3rem] w-full overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-[length:var(--app-font-size-chat,12px)] leading-relaxed text-foreground focus:outline-none",
                 className,
               )}
               data-testid="composer-editor"

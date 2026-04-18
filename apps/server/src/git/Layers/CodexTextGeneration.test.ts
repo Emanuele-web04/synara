@@ -38,6 +38,16 @@ function makeFakeCodexBinary(dir: string) {
         "    fi",
         "    continue",
         "  fi",
+        '  if [ "$1" = "--skip-git-repo-check" ]; then',
+        '    seen_skip_git_repo_check="1"',
+        "  fi",
+        '  if [ "$1" = "--config" ]; then',
+        "    shift",
+        '    if [ "$1" = "approval_policy=\\"never\\"" ]; then',
+        '      seen_approval_never="1"',
+        "    fi",
+        "    continue",
+        "  fi",
         '  if [ "$1" = "--output-last-message" ]; then',
         "    shift",
         '    output_path="$1"',
@@ -48,6 +58,14 @@ function makeFakeCodexBinary(dir: string) {
         'if [ "$T3_FAKE_CODEX_REQUIRE_IMAGE" = "1" ] && [ "$seen_image" != "1" ]; then',
         '  printf "%s\\n" "missing --image input" >&2',
         "  exit 2",
+        "fi",
+        'if [ "$T3_FAKE_CODEX_REQUIRE_SKIP_GIT_REPO_CHECK" = "1" ] && [ "$seen_skip_git_repo_check" != "1" ]; then',
+        '  printf "%s\\n" "missing --skip-git-repo-check" >&2',
+        "  exit 9",
+        "fi",
+        'if [ "$T3_FAKE_CODEX_REQUIRE_APPROVAL_NEVER" = "1" ] && [ "$seen_approval_never" != "1" ]; then',
+        '  printf "%s\\n" "missing approval_policy=never" >&2',
+        "  exit 10",
         "fi",
         'if [ -n "$T3_FAKE_CODEX_STDIN_MUST_CONTAIN" ]; then',
         '  printf "%s" "$stdin_content" | grep -F -- "$T3_FAKE_CODEX_STDIN_MUST_CONTAIN" >/dev/null || {',
@@ -106,6 +124,8 @@ function withFakeCodexEnv<A, E, R>(
     stdinMustNotContain?: string;
     requireCodexHome?: boolean;
     requireAuthJson?: boolean;
+    requireSkipGitRepoCheck?: boolean;
+    requireApprovalNever?: boolean;
     codexHomeConfigMustContain?: string;
     codexHomeConfigMustNotContain?: string;
   },
@@ -125,6 +145,8 @@ function withFakeCodexEnv<A, E, R>(
       const previousStdinMustNotContain = process.env.T3_FAKE_CODEX_STDIN_MUST_NOT_CONTAIN;
       const previousRequireCodexHome = process.env.T3_FAKE_CODEX_REQUIRE_CODEX_HOME;
       const previousRequireAuthJson = process.env.T3_FAKE_CODEX_REQUIRE_AUTH_JSON;
+      const previousRequireSkipGitRepoCheck = process.env.T3_FAKE_CODEX_REQUIRE_SKIP_GIT_REPO_CHECK;
+      const previousRequireApprovalNever = process.env.T3_FAKE_CODEX_REQUIRE_APPROVAL_NEVER;
       const previousCodexHomeConfigMustContain =
         process.env.T3_FAKE_CODEX_CODEX_HOME_CONFIG_MUST_CONTAIN;
       const previousCodexHomeConfigMustNotContain =
@@ -176,6 +198,18 @@ function withFakeCodexEnv<A, E, R>(
           delete process.env.T3_FAKE_CODEX_REQUIRE_AUTH_JSON;
         }
 
+        if (input.requireSkipGitRepoCheck) {
+          process.env.T3_FAKE_CODEX_REQUIRE_SKIP_GIT_REPO_CHECK = "1";
+        } else {
+          delete process.env.T3_FAKE_CODEX_REQUIRE_SKIP_GIT_REPO_CHECK;
+        }
+
+        if (input.requireApprovalNever) {
+          process.env.T3_FAKE_CODEX_REQUIRE_APPROVAL_NEVER = "1";
+        } else {
+          delete process.env.T3_FAKE_CODEX_REQUIRE_APPROVAL_NEVER;
+        }
+
         if (input.codexHomeConfigMustContain !== undefined) {
           process.env.T3_FAKE_CODEX_CODEX_HOME_CONFIG_MUST_CONTAIN =
             input.codexHomeConfigMustContain;
@@ -201,6 +235,8 @@ function withFakeCodexEnv<A, E, R>(
         previousStdinMustNotContain,
         previousRequireCodexHome,
         previousRequireAuthJson,
+        previousRequireSkipGitRepoCheck,
+        previousRequireApprovalNever,
         previousCodexHomeConfigMustContain,
         previousCodexHomeConfigMustNotContain,
       };
@@ -256,6 +292,19 @@ function withFakeCodexEnv<A, E, R>(
           delete process.env.T3_FAKE_CODEX_REQUIRE_AUTH_JSON;
         } else {
           process.env.T3_FAKE_CODEX_REQUIRE_AUTH_JSON = previous.previousRequireAuthJson;
+        }
+
+        if (previous.previousRequireSkipGitRepoCheck === undefined) {
+          delete process.env.T3_FAKE_CODEX_REQUIRE_SKIP_GIT_REPO_CHECK;
+        } else {
+          process.env.T3_FAKE_CODEX_REQUIRE_SKIP_GIT_REPO_CHECK =
+            previous.previousRequireSkipGitRepoCheck;
+        }
+
+        if (previous.previousRequireApprovalNever === undefined) {
+          delete process.env.T3_FAKE_CODEX_REQUIRE_APPROVAL_NEVER;
+        } else {
+          process.env.T3_FAKE_CODEX_REQUIRE_APPROVAL_NEVER = previous.previousRequireApprovalNever;
         }
 
         if (previous.previousCodexHomeConfigMustContain === undefined) {
@@ -386,6 +435,8 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
           title: ' "Polish sidebar loading state." ',
         }),
         stdinMustContain: "Never exceed 4 words.",
+        requireSkipGitRepoCheck: true,
+        requireApprovalNever: true,
       },
       Effect.gen(function* () {
         const textGeneration = yield* TextGeneration;

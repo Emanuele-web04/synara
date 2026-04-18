@@ -7,6 +7,7 @@ import {
   describeVoiceRecordingStartError,
   hasServerAcknowledgedLocalDispatch,
   isVoiceAuthExpiredMessage,
+  resolveActiveThreadTitle,
   sanitizeVoiceErrorMessage,
   shouldAutoDeleteTerminalThreadOnLastClose,
   buildExpiredTerminalContextToastCopy,
@@ -17,6 +18,39 @@ import {
 } from "./ChatView.logic";
 
 describe("voice helpers", () => {
+  it("keeps manual titles visible for empty home chats", () => {
+    expect(
+      resolveActiveThreadTitle({
+        title: "Roadmap scratchpad",
+        subagentTitle: null,
+        isHomeChat: true,
+        isEmpty: true,
+      }),
+    ).toBe("Roadmap scratchpad");
+  });
+
+  it("maps untouched empty home chats to the friendly header label", () => {
+    expect(
+      resolveActiveThreadTitle({
+        title: "New thread",
+        subagentTitle: null,
+        isHomeChat: true,
+        isEmpty: true,
+      }),
+    ).toBe("New Chat");
+  });
+
+  it("prefers the resolved subagent label when present", () => {
+    expect(
+      resolveActiveThreadTitle({
+        title: "Ignored raw title",
+        subagentTitle: "Reviewer / Fix follow-up",
+        isHomeChat: false,
+        isEmpty: false,
+      }),
+    ).toBe("Reviewer / Fix follow-up");
+  });
+
   it("appends a transcript to the existing prompt without disturbing spacing", () => {
     expect(appendVoiceTranscriptToPrompt("Hello there   ", "  next line  ")).toBe(
       "Hello there\nnext line",

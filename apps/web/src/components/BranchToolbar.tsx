@@ -5,7 +5,8 @@ import type { ThreadId, RuntimeMode } from "@t3tools/contracts";
 import { deriveAssociatedWorktreeMetadata } from "@t3tools/shared/threadWorkspace";
 import { LuSplit } from "react-icons/lu";
 import { ChevronDownIcon, ChevronRightIcon, ExternalLinkIcon, HandoffIcon } from "~/lib/icons";
-import { LiaUnlockAltSolid, LiaLockSolid } from "react-icons/lia";
+import { FiThumbsUp } from "react-icons/fi";
+import { HiOutlineHandRaised } from "react-icons/hi2";
 import { PiLaptop } from "react-icons/pi";
 import { useCallback, useMemo, useRef, useState } from "react";
 
@@ -39,6 +40,7 @@ function WorktreeGlyph({ className }: { className?: string }) {
 
 interface BranchToolbarProps {
   threadId: ThreadId;
+  className?: string;
   onEnvModeChange: (mode: EnvMode) => void;
   envLocked: boolean;
   runtimeMode?: RuntimeMode;
@@ -56,6 +58,7 @@ interface BranchToolbarProps {
 
 export default function BranchToolbar({
   threadId,
+  className,
   onEnvModeChange,
   envLocked,
   runtimeMode,
@@ -201,7 +204,12 @@ export default function BranchToolbar({
   if (!activeThreadId || !activeProject) return null;
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl items-center justify-between px-3 pb-3 pt-1">
+    <div
+      className={cn(
+        "mx-auto flex w-full max-w-3xl items-center justify-between px-3 pb-3 pt-1",
+        className,
+      )}
+    >
       <div className="flex items-center gap-2">
         {showEnvPicker ? (
           <Popover open={envPickerOpen} onOpenChange={setEnvPickerOpen}>
@@ -378,11 +386,11 @@ export default function BranchToolbar({
         />
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1.5 text-muted-foreground/70">
         {runtimeMode && onRuntimeModeChange ? (
           <button
             type="button"
-            className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-muted-foreground/70 transition-colors hover:text-foreground/80"
+            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[length:var(--app-font-size-ui-xs,10px)] font-normal transition-colors hover:text-foreground/80"
             onClick={() =>
               onRuntimeModeChange(
                 runtimeMode === "full-access" ? "approval-required" : "full-access",
@@ -391,15 +399,17 @@ export default function BranchToolbar({
             title={
               runtimeMode === "full-access"
                 ? "Full access — click to require approvals"
-                : "Supervised — click for full access"
+                : "Ask every action"
             }
           >
             {runtimeMode === "full-access" ? (
-              <LiaUnlockAltSolid className="size-3 -scale-x-100" />
+              <FiThumbsUp className="size-3 shrink-0" />
             ) : (
-              <LiaLockSolid className="size-3" />
+              <HiOutlineHandRaised className="size-3 shrink-0" />
             )}
-            {runtimeMode === "full-access" ? "Full access" : "Supervised"}
+            <span className="leading-none">
+              {runtimeMode === "full-access" ? "Full access" : "Default permissions"}
+            </span>
           </button>
         ) : null}
         {contextWindow ? (

@@ -470,13 +470,13 @@ In Default mode, strongly prefer making reasonable assumptions and executing the
 </collaboration_mode>`;
 
 function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
-  readonly approvalPolicy: "on-request" | "never";
-  readonly sandbox: "workspace-write" | "danger-full-access";
+  readonly approvalPolicy: "untrusted" | "never";
+  readonly sandbox: "read-only" | "danger-full-access";
 } {
   if (runtimeMode === "approval-required") {
     return {
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
+      approvalPolicy: "untrusted",
+      sandbox: "read-only",
     };
   }
 

@@ -85,6 +85,7 @@ interface ChatHeaderProps {
   onToggleBrowser: () => void;
   onCreateHandoff: () => void;
   onNavigateToThread: (threadId: ThreadId) => void;
+  onRenameThread: () => void;
 }
 
 export const ChatHeader = memo(function ChatHeader({
@@ -126,6 +127,7 @@ export const ChatHeader = memo(function ChatHeader({
   onToggleBrowser,
   onCreateHandoff,
   onNavigateToThread,
+  onRenameThread,
 }: ChatHeaderProps) {
   const { isMobile, state } = useSidebar();
   const headerRef = useRef<HTMLDivElement>(null);
@@ -196,6 +198,7 @@ export const ChatHeader = memo(function ChatHeader({
               <h2
                 className="max-w-[clamp(16rem,50vw,40rem)] truncate text-sm font-medium text-foreground"
                 title={activeThreadTitle}
+                onDoubleClick={() => onRenameThread()}
               >
                 {activeThreadTitle}
               </h2>

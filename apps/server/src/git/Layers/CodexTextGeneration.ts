@@ -349,6 +349,9 @@ const makeCodexTextGeneration = Effect.gen(function* () {
           [
             "exec",
             "--ephemeral",
+            "--skip-git-repo-check",
+            "--config",
+            'approval_policy="never"',
             "-s",
             "read-only",
             "--model",

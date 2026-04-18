@@ -1675,6 +1675,31 @@ export const makeGitManager = Effect.gen(function* () {
       };
     });
 
+  const dropStashBySha = (cwd: string, stashSha: string) =>
+    Effect.gen(function* () {
+      const listResult = yield* gitCore.execute({
+        operation: "GitManager.handoffThread.listStashShas",
+        cwd,
+        args: ["stash", "list", "--format=%H"],
+        allowNonZeroExit: true,
+        timeoutMs: 5_000,
+      });
+      if (listResult.code !== 0) return;
+      const index = listResult.stdout
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        .indexOf(stashSha);
+      if (index < 0) return;
+      yield* gitCore.execute({
+        operation: "GitManager.handoffThread.stashDrop",
+        cwd,
+        args: ["stash", "drop", `stash@{${index}}`],
+        allowNonZeroExit: true,
+        timeoutMs: 10_000,
+      });
+    });
+
   const popStash = (cwd: string, stashRef: string | null) =>
     Effect.gen(function* () {
       if (!stashRef) {
@@ -1683,11 +1708,16 @@ export const makeGitManager = Effect.gen(function* () {
           message: null,
         };
       }
+      // `git stash pop` requires a `stash@{N}` reference, but `stashRef` here is the
+      // commit SHA captured via `git rev-parse refs/stash` in `readStashRef`. Apply
+      // the stash by SHA (which `git stash apply` accepts for any stash-shaped
+      // commit) and then drop the matching list entry on success so callers still
+      // observe pop-style semantics.
       const result = yield* gitCore
         .execute({
-          operation: "GitManager.handoffThread.stashPop",
+          operation: "GitManager.handoffThread.stashApply",
           cwd,
-          args: ["stash", "pop", "--index", stashRef],
+          args: ["stash", "apply", "--index", stashRef],
           allowNonZeroExit: true,
           timeoutMs: 30_000,
         })
@@ -1701,6 +1731,7 @@ export const makeGitManager = Effect.gen(function* () {
           ),
         );
       if (result.code === 0) {
+        yield* dropStashBySha(cwd, stashRef).pipe(Effect.catch(() => Effect.void));
         return {
           conflictsDetected: false,
           message: null,

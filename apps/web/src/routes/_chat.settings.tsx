@@ -66,6 +66,7 @@ import {
 } from "../notifications/taskCompletion";
 import { normalizeSettingsSection, SETTINGS_NAV_ITEMS } from "../settingsNavigation";
 import { useStore } from "../store";
+import ReleaseHistoryDialog from "../components/ReleaseHistoryDialog";
 import { createAllThreadsSelector } from "../storeSelectors";
 import { formatRelativeTime } from "../components/Sidebar";
 import { formatWorktreePathForDisplay } from "../worktreeCleanup";
@@ -272,6 +273,7 @@ function SettingsRouteView() {
   const [isOpeningKeybindings, setIsOpeningKeybindings] = useState(false);
   const [isRepairingLocalState, setIsRepairingLocalState] = useState(false);
   const [showRecoveryTools, setShowRecoveryTools] = useState(false);
+  const [releaseHistoryOpen, setReleaseHistoryOpen] = useState(false);
   const [openKeybindingsError, setOpenKeybindingsError] = useState<string | null>(null);
   const [openInstallProviders, setOpenInstallProviders] = useState<Record<ProviderKind, boolean>>({
     codex: Boolean(settings.codexBinaryPath || settings.codexHomePath),
@@ -2027,6 +2029,15 @@ function SettingsRouteView() {
               <code className="text-xs font-medium text-muted-foreground">{APP_VERSION}</code>
             }
           />
+          <SettingsRow
+            title="Release history"
+            description="A running log of every update, newest first. Same notes the post-update dialog shows, kept here so you can revisit them any time."
+            control={
+              <Button size="sm" variant="outline" onClick={() => setReleaseHistoryOpen(true)}>
+                View release history
+              </Button>
+            }
+          />
         </div>
       </SettingsSection>
     </div>
@@ -2117,6 +2128,14 @@ function SettingsRouteView() {
           </div>
         </div>
       </div>
+      {/* Mounted at the route level (outside the scrollable panel) so the
+          dialog portal can overlay the entire settings view without being
+          clipped by the content wrapper's overflow. */}
+      <ReleaseHistoryDialog
+        open={releaseHistoryOpen}
+        onOpenChange={setReleaseHistoryOpen}
+        defaultExpandedVersion={APP_VERSION}
+      />
     </SidebarInset>
   );
 }

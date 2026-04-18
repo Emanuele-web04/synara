@@ -721,6 +721,12 @@ function configureApplicationMenu(): void {
       role: "help",
       submenu: [
         {
+          label: "Keyboard Shortcuts",
+          accelerator: "CmdOrCtrl+/",
+          click: () => dispatchMenuAction("show-shortcuts"),
+        },
+        { type: "separator" },
+        {
           label: "Check for Updates...",
           click: () => handleCheckForUpdatesMenuClick(),
         },

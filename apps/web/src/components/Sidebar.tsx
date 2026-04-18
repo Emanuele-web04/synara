@@ -20,6 +20,7 @@ import { autoAnimate } from "@formkit/auto-animate";
 import { FiGitBranch, FiPlus } from "react-icons/fi";
 import { GoRepoForked } from "react-icons/go";
 import { HiOutlineArchiveBox, HiOutlineCheckCircle, HiOutlineFolderOpen } from "react-icons/hi2";
+import { BsChat } from "react-icons/bs";
 import { TbArrowsDiagonal, TbArrowsDiagonalMinimize2, TbCursorText } from "react-icons/tb";
 import { IoFilter } from "react-icons/io5";
 import { LuMessageSquareDashed, LuSplit } from "react-icons/lu";
@@ -70,7 +71,7 @@ import {
 import { isElectron } from "../env";
 import { APP_VERSION } from "../branding";
 import { showConfirmDialogFallback } from "../confirmDialogFallback";
-import { isMacPlatform, newCommandId, newProjectId, newThreadId } from "../lib/utils";
+import { isMacPlatform, newCommandId, newProjectId, newThreadId, randomUUID } from "../lib/utils";
 import { persistAppStateNow, useStore } from "../store";
 import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
 import {
@@ -95,7 +96,9 @@ import { readNativeApi } from "../nativeApi";
 import { isHomeChatContainerProject, prewarmHomeChatProject } from "../lib/chatProjects";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
-import { type SidebarThreadSummary, type Thread } from "../types";
+import { dispatchThreadRename } from "../lib/threadRename";
+import { quotePosixShellArgument } from "../lib/shellQuote";
+import { DEFAULT_THREAD_TERMINAL_ID, type SidebarThreadSummary, type Thread } from "../types";
 import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
 import { ClaudeAI, OpenAI } from "./Icons";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
@@ -648,20 +651,69 @@ function ProjectSortMenu({
           <div className="px-2 pt-2 pb-1 sm:text-xs font-medium text-muted-foreground">
             Sort threads
           </div>
-          <MenuRadioGroup
-            value={threadSortOrder}
-            onValueChange={(value) => {
-              onThreadSortOrderChange(value as SidebarThreadSortOrder);
-            }}
-          >
-            {(
-              Object.entries(SIDEBAR_THREAD_SORT_LABELS) as Array<[SidebarThreadSortOrder, string]>
-            ).map(([value, label]) => (
-              <MenuRadioItem key={value} value={value} className="min-h-7 py-1 sm:text-xs">
-                {label}
-              </MenuRadioItem>
-            ))}
-          </MenuRadioGroup>
+          <ThreadSortMenuItems
+            threadSortOrder={threadSortOrder}
+            onThreadSortOrderChange={onThreadSortOrderChange}
+          />
+        </MenuGroup>
+      </MenuPopup>
+    </Menu>
+  );
+}
+
+function ThreadSortMenuItems({
+  threadSortOrder,
+  onThreadSortOrderChange,
+}: {
+  threadSortOrder: SidebarThreadSortOrder;
+  onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
+}) {
+  return (
+    <MenuRadioGroup
+      value={threadSortOrder}
+      onValueChange={(value) => {
+        onThreadSortOrderChange(value as SidebarThreadSortOrder);
+      }}
+    >
+      {(Object.entries(SIDEBAR_THREAD_SORT_LABELS) as Array<[SidebarThreadSortOrder, string]>).map(
+        ([value, label]) => (
+          <MenuRadioItem key={value} value={value} className="min-h-7 py-1 sm:text-xs">
+            {label}
+          </MenuRadioItem>
+        ),
+      )}
+    </MenuRadioGroup>
+  );
+}
+
+function ChatSortMenu({
+  threadSortOrder,
+  onThreadSortOrderChange,
+}: {
+  threadSortOrder: SidebarThreadSortOrder;
+  onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
+}) {
+  return (
+    <Menu>
+      <Tooltip>
+        <TooltipTrigger
+          render={<MenuTrigger className="sidebar-icon-button inline-flex size-5 cursor-pointer" />}
+        >
+          <IoFilter className="size-3.5" />
+        </TooltipTrigger>
+        <TooltipPopup side="top">Sort chats</TooltipPopup>
+      </Tooltip>
+      <MenuPopup
+        align="end"
+        side="bottom"
+        className="min-w-44 rounded-lg border-border bg-popover shadow-lg"
+      >
+        <MenuGroup>
+          <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">Sort chats</div>
+          <ThreadSortMenuItems
+            threadSortOrder={threadSortOrder}
+            onThreadSortOrderChange={onThreadSortOrderChange}
+          />
         </MenuGroup>
       </MenuPopup>
     </Menu>
@@ -912,6 +964,8 @@ export default function Sidebar() {
   const [expandedThreadListsByProject, setExpandedThreadListsByProject] = useState<
     ReadonlySet<ProjectId>
   >(() => new Set());
+  const [chatSectionExpanded, setChatSectionExpanded] = useState(true);
+  const [chatThreadListExpanded, setChatThreadListExpanded] = useState(false);
   const [expandedSubagentParentIds, setExpandedSubagentParentIds] = useState<ReadonlySet<ThreadId>>(
     () => new Set(),
   );
@@ -1675,34 +1729,27 @@ export default function Sidebar() {
         });
       };
 
-      const trimmed = newTitle.trim();
-      if (trimmed.length === 0) {
-        toastManager.add({ type: "warning", title: "Thread title cannot be empty" });
-        finishRename();
-        return;
-      }
-      if (trimmed === originalTitle) {
-        finishRename();
-        return;
-      }
-      const api = readNativeApi();
-      if (!api) {
-        finishRename();
-        return;
-      }
-      try {
-        await api.orchestration.dispatchCommand({
-          type: "thread.meta.update",
-          commandId: newCommandId(),
-          threadId,
-          title: trimmed,
-        });
-      } catch (error) {
+      const outcome = await dispatchThreadRename({
+        threadId,
+        newTitle,
+        unchangedTitles: [originalTitle],
+      }).catch((error) => {
         toastManager.add({
           type: "error",
           title: "Failed to rename thread",
           description: error instanceof Error ? error.message : "An error occurred.",
         });
+        return null;
+      });
+
+      if (outcome === "empty") {
+        toastManager.add({ type: "warning", title: "Thread title cannot be empty" });
+        finishRename();
+        return;
+      }
+      if (outcome === "unchanged" || outcome === "unavailable" || outcome === null) {
+        finishRename();
+        return;
       }
       finishRename();
     },
@@ -2275,6 +2322,9 @@ export default function Sidebar() {
           { id: "mark-unread", label: "Mark unread" },
           ...(handoffLabel ? [{ id: "handoff", label: handoffLabel }] : []),
           { id: "copy-path", label: "Copy Path" },
+          ...(threadWorkspacePath
+            ? [{ id: "open-path-in-terminal", label: "Open Path in Terminal" }]
+            : []),
           { id: "copy-thread-id", label: "Copy Thread ID" },
           ...(options?.extraItems ?? []),
           { id: "archive", label: "Archive" },
@@ -2314,6 +2364,95 @@ export default function Sidebar() {
         copyPathToClipboard(threadWorkspacePath, { path: threadWorkspacePath });
         return;
       }
+      if (clicked === "open-path-in-terminal") {
+        if (!threadWorkspacePath) {
+          toastManager.add({
+            type: "error",
+            title: "Path unavailable",
+            description: "This thread does not have a workspace path to open.",
+          });
+          return;
+        }
+        await navigate({ to: "/$threadId", params: { threadId } });
+        const terminalStore = useTerminalStateStore.getState();
+        const currentTerminalState = selectThreadTerminalState(
+          terminalStore.terminalStateByThreadId,
+          threadId,
+        );
+
+        // Reuse the active terminal when one is already open and idle so that
+        // repeatedly invoking "Open Path in Terminal" doesn't pile up tabs.
+        // Only spawn a fresh tab when there is no terminal yet, the active id
+        // is stale (no longer in the layout), or the active terminal is busy
+        // running a subprocess.
+        const candidateBaseTerminalId =
+          currentTerminalState.activeTerminalId ||
+          currentTerminalState.terminalIds[0] ||
+          DEFAULT_THREAD_TERMINAL_ID;
+        const baseTerminalAvailable =
+          currentTerminalState.terminalOpen &&
+          currentTerminalState.terminalIds.includes(candidateBaseTerminalId) &&
+          !currentTerminalState.runningTerminalIds.includes(candidateBaseTerminalId);
+        const shouldCreateNewTerminal = !baseTerminalAvailable;
+        const targetTerminalId = shouldCreateNewTerminal
+          ? `terminal-${randomUUID()}`
+          : candidateBaseTerminalId;
+
+        const previousTerminalOpen = currentTerminalState.terminalOpen;
+        const previousPresentationMode = currentTerminalState.presentationMode;
+        const previousActiveTerminalId = currentTerminalState.activeTerminalId;
+
+        terminalStore.setTerminalPresentationMode(threadId, "drawer");
+        terminalStore.setTerminalOpen(threadId, true);
+        if (shouldCreateNewTerminal) {
+          terminalStore.newTerminal(threadId, targetTerminalId);
+        } else {
+          terminalStore.setActiveTerminal(threadId, targetTerminalId);
+        }
+
+        const cdCommand = `cd ${quotePosixShellArgument(threadWorkspacePath)}\r`;
+        try {
+          if (shouldCreateNewTerminal) {
+            // A brand new PTY needs an explicit cwd so that the shell's first
+            // prompt already shows the workspace path. The follow-up `cd` write
+            // makes the navigation visible in the scrollback (it's effectively
+            // a no-op since the shell is already there, but it matches the
+            // user-typed-it experience).
+            await api.terminal.open({
+              threadId,
+              terminalId: targetTerminalId,
+              cwd: threadWorkspacePath,
+            });
+          }
+          // For existing PTYs we deliberately skip api.terminal.open: the
+          // server would otherwise tear down and respawn the shell whenever
+          // the requested cwd differs from the session's recorded cwd, which
+          // would silently kill any state the user already has set up (env
+          // vars, shell history, etc.). Writing `cd` instead navigates in
+          // place inside the live shell.
+          await api.terminal.write({
+            threadId,
+            terminalId: targetTerminalId,
+            data: cdCommand,
+          });
+        } catch (error) {
+          if (shouldCreateNewTerminal) {
+            terminalStore.closeTerminal(threadId, targetTerminalId);
+          }
+          terminalStore.setTerminalPresentationMode(threadId, previousPresentationMode);
+          terminalStore.setTerminalOpen(threadId, previousTerminalOpen);
+          if (previousActiveTerminalId) {
+            terminalStore.setActiveTerminal(threadId, previousActiveTerminalId);
+          }
+          toastManager.add({
+            type: "error",
+            title: "Unable to open terminal",
+            description:
+              error instanceof Error ? error.message : "The terminal could not be opened.",
+          });
+        }
+        return;
+      }
       if (clicked === "copy-thread-id") {
         copyThreadIdToClipboard(threadId, { threadId });
         return;
@@ -2336,6 +2475,7 @@ export default function Sidebar() {
       copyThreadIdToClipboard,
       handoffThread,
       markThreadUnread,
+      navigate,
       pinnedThreadIdSet,
       projectCwdById,
       sidebarThreadSummaryById,
@@ -2811,20 +2951,50 @@ export default function Sidebar() {
     () => new Set(chatProjects.map((project) => project.id)),
     [chatProjects],
   );
-  const visibleChatThreads = useMemo(
+  const visibleChatThreadRows = useMemo(
     () =>
-      sortThreadsForSidebar(
-        sidebarDisplayThreads.filter(
-          (thread) =>
-            chatProjectIds.has(thread.projectId) && !thread.parentThreadId && !thread.archivedAt,
+      buildProjectThreadTree({
+        threads: sortThreadsForSidebar(
+          sidebarDisplayThreads.filter(
+            (thread) => chatProjectIds.has(thread.projectId) && !thread.archivedAt,
+          ),
+          appSettings.sidebarThreadSortOrder,
         ),
-        appSettings.sidebarThreadSortOrder,
-      ),
-    [appSettings.sidebarThreadSortOrder, chatProjectIds, sidebarDisplayThreads],
+        expandedParentThreadIds: expandedSubagentParentIds,
+      }),
+    [
+      appSettings.sidebarThreadSortOrder,
+      chatProjectIds,
+      expandedSubagentParentIds,
+      sidebarDisplayThreads,
+    ],
   );
   const visibleChatThreadIds = useMemo(
-    () => visibleChatThreads.map((thread) => thread.id),
-    [visibleChatThreads],
+    () => visibleChatThreadRows.map((row) => row.thread.id),
+    [visibleChatThreadRows],
+  );
+  const visibleChatPreviewEntries = useMemo(
+    () =>
+      visibleChatThreadRows.map((row) => ({
+        rowId: row.thread.id,
+        rootRowId: row.rootThreadId,
+        row,
+      })),
+    [visibleChatThreadRows],
+  );
+  const activeChatPreviewEntry =
+    activeSidebarThreadId === undefined
+      ? null
+      : (visibleChatPreviewEntries.find((entry) => entry.rowId === activeSidebarThreadId) ?? null);
+  const { hasHiddenEntries: hasHiddenChatThreads, visibleEntries: renderedChatEntries } = useMemo(
+    () =>
+      getVisibleSidebarEntriesForPreview({
+        entries: visibleChatPreviewEntries,
+        activeEntryId: activeChatPreviewEntry?.rowId,
+        isExpanded: chatThreadListExpanded,
+        previewLimit: THREAD_PREVIEW_LIMIT,
+      }),
+    [activeChatPreviewEntry?.rowId, chatThreadListExpanded, visibleChatPreviewEntries],
   );
   const standardProjects = useMemo(
     () =>
@@ -3247,6 +3417,14 @@ export default function Sidebar() {
                 {thread.title}
               </TooltipPopup>
             </Tooltip>
+            {!isSubagentThread && threadStatus?.label === "Pending Approval" ? (
+              <span
+                aria-label="Pending approval"
+                className={cn("shrink-0 text-[10px] font-medium", threadStatus.colorClass)}
+              >
+                Pending
+              </span>
+            ) : null}
           </div>
           <div className="ml-auto flex shrink-0 items-center gap-1.5 pr-1">
             {projectLabel ? (
@@ -3556,6 +3734,14 @@ export default function Sidebar() {
                 )}
               </span>
             )}
+            {!isSubagentThread && threadStatus?.label === "Pending Approval" ? (
+              <span
+                aria-label="Pending approval"
+                className={cn("shrink-0 text-[10px] font-medium", threadStatus.colorClass)}
+              >
+                Pending
+              </span>
+            ) : null}
           </div>
           <div className="ml-auto flex shrink-0 items-center gap-1.5 pr-1">
             {canToggleSubagents ? (
@@ -3658,8 +3844,14 @@ export default function Sidebar() {
     );
   }
 
-  function renderChatItem(thread: (typeof visibleChatThreads)[number]) {
-    return renderThreadRow(thread, visibleChatThreadIds, 0, 0, false);
+  function renderChatItem(row: (typeof visibleChatThreadRows)[number]) {
+    return renderThreadRow(
+      row.thread,
+      visibleChatThreadIds,
+      row.depth,
+      row.childCount,
+      row.isExpanded,
+    );
   }
 
   function renderProjectItem(
@@ -4855,6 +5047,11 @@ export default function Sidebar() {
               <SidebarGroup className="px-1.5 py-1.5">
                 {pinnedThreads.length > 0 ? (
                   <>
+                    <div className="my-1 flex items-center justify-between px-2 py-1">
+                      <span className="text-[length:var(--app-font-size-ui,12px)] font-normal tracking-tight text-muted-foreground/58">
+                        Pinned
+                      </span>
+                    </div>
                     <div className="flex flex-col gap-0.5">
                       {pinnedThreads.map((thread) => renderPinnedThreadRow(thread))}
                     </div>
@@ -4863,7 +5060,7 @@ export default function Sidebar() {
                 ) : (
                   <div className="-mx-1.5 my-1 h-px bg-border" />
                 )}
-                <div className="my-2 flex items-center justify-between px-2 py-2">
+                <div className="my-1 flex items-center justify-between px-2 py-1">
                   <span className="text-[length:var(--app-font-size-ui,12px)] font-normal tracking-tight text-muted-foreground/58">
                     Threads
                   </span>
@@ -5063,40 +5260,104 @@ export default function Sidebar() {
 
       <SidebarSeparator />
       <SidebarFooter className="gap-2 p-2 font-system-ui">
-        <div className="rounded-2xl bg-sidebar-accent/25 ">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <span className="px-2 text-[length:var(--app-font-size-ui,12px)] font-normal tracking-tight text-muted-foreground/58">
-              Chats
-            </span>
-            <div className="flex items-center pr-1.5 gap-1.5">
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <button
-                      type="button"
-                      aria-label="Open new chat home"
-                      data-testid="new-chat-button"
-                      className="sidebar-icon-button inline-flex size-5 cursor-pointer"
-                      onClick={() => void handleCreateHomeChat()}
-                    >
-                      <SquarePenIcon className="size-3.5" />
-                    </button>
-                  }
+        {!isOnSettings ? (
+          <div className="group/collapsible">
+            <div className="group/project-header relative">
+              <SidebarMenuButton
+                size="sm"
+                className="h-7.5 gap-2 rounded-lg px-2 py-0.5 text-left text-[length:var(--app-font-size-ui,12px)] font-normal hover:bg-accent/55 group-hover/project-header:bg-accent/55 group-hover/project-header:text-sidebar-accent-foreground cursor-pointer"
+                onClick={() => setChatSectionExpanded((current) => !current)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" && event.key !== " ") return;
+                  event.preventDefault();
+                  setChatSectionExpanded((current) => !current);
+                }}
+              >
+                <span className="relative inline-flex size-4 shrink-0 items-center justify-center text-muted-foreground/72">
+                  <BsChat className="size-3.5" />
+                </span>
+                <div className="flex min-w-0 flex-1 items-baseline gap-2 overflow-hidden">
+                  <span className="truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72">
+                    Chats
+                  </span>
+                </div>
+              </SidebarMenuButton>
+              <div className="absolute top-1 right-1.5 flex items-center gap-1.5">
+                <ChatSortMenu
+                  threadSortOrder={appSettings.sidebarThreadSortOrder}
+                  onThreadSortOrderChange={(sortOrder) => {
+                    updateSettings({ sidebarThreadSortOrder: sortOrder });
+                  }}
                 />
-                <TooltipPopup side="top">New chat</TooltipPopup>
-              </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        type="button"
+                        aria-label="Open new chat home"
+                        className="sidebar-icon-button inline-flex size-5 cursor-pointer"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          void handleCreateHomeChat();
+                        }}
+                      />
+                    }
+                  >
+                    <SquarePenIcon className="size-3.5" />
+                  </TooltipTrigger>
+                  <TooltipPopup side="top">New chat</TooltipPopup>
+                </Tooltip>
+              </div>
+            </div>
+
+            <div
+              className={cn(
+                "grid pt-1 transition-[grid-template-rows,opacity] duration-220 ease-out",
+                chatSectionExpanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
+              )}
+            >
+              <div className="min-h-0 overflow-hidden">
+                <SidebarMenu
+                  className={cn(
+                    "gap-1 transition-transform duration-220 ease-out",
+                    chatSectionExpanded ? "translate-y-0" : "-translate-y-1 pointer-events-none",
+                  )}
+                >
+                  {visibleChatThreadRows.length > 0 ? (
+                    renderedChatEntries.map((entry) => renderChatItem(entry.row))
+                  ) : (
+                    <div className="px-2 py-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/48">
+                      No chats yet
+                    </div>
+                  )}
+                  {hasHiddenChatThreads && !chatThreadListExpanded ? (
+                    <SidebarMenuItem className="w-full">
+                      <SidebarMenuButton
+                        size="sm"
+                        className="h-7 w-full justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
+                        onClick={() => setChatThreadListExpanded(true)}
+                      >
+                        <span>Show more</span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  ) : null}
+                  {hasHiddenChatThreads && chatThreadListExpanded ? (
+                    <SidebarMenuItem className="w-full">
+                      <SidebarMenuButton
+                        size="sm"
+                        className="h-7 w-full justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
+                        onClick={() => setChatThreadListExpanded(false)}
+                      >
+                        <span>Show less</span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  ) : null}
+                </SidebarMenu>
+              </div>
             </div>
           </div>
-          {visibleChatThreads.length > 0 ? (
-            <SidebarMenu className="gap-1">
-              {visibleChatThreads.map((thread) => renderChatItem(thread))}
-            </SidebarMenu>
-          ) : (
-            <div className="px-2 py-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/48">
-              No chats yet
-            </div>
-          )}
-        </div>
+        ) : null}
         <SidebarMenu>
           <SidebarMenuItem>
             <div className="flex items-center gap-2">

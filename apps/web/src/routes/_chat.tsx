@@ -1,8 +1,10 @@
 import { type ResolvedKeybindingsConfig } from "@t3tools/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { Outlet, createFileRoute, useLocation, useNavigate } from "@tanstack/react-router";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
+import ShortcutsDialog from "../components/ShortcutsDialog";
+import { shouldRenderTerminalWorkspace } from "../components/ChatView.logic";
 import ThreadSidebar from "../components/Sidebar";
 import { isElectron } from "../env";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
@@ -34,6 +36,7 @@ function ChatRouteGlobalShortcuts() {
   const navigate = useNavigate();
   const pathname = useLocation({ select: (location) => location.pathname });
   const { toggleSidebar } = useSidebar();
+  const [shortcutsDialogOpen, setShortcutsDialogOpen] = useState(false);
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
   const selectedThreadIdsSize = useThreadSelectionStore((state) => state.selectedThreadIds.size);
   const {
@@ -52,16 +55,24 @@ function ChatRouteGlobalShortcuts() {
   useDisposableThreadLifecycle(activeContextThreadId);
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
-  const terminalOpen = useTerminalStateStore((state) =>
+  const platform = typeof navigator === "undefined" ? "" : navigator.platform;
+  const activeThreadTerminalState = useTerminalStateStore((state) =>
     activeContextThreadId
-      ? selectThreadTerminalState(state.terminalStateByThreadId, activeContextThreadId).terminalOpen
-      : false,
+      ? selectThreadTerminalState(state.terminalStateByThreadId, activeContextThreadId)
+      : null,
   );
+  const terminalOpen = activeThreadTerminalState?.terminalOpen ?? false;
   const allowProjectFallback = pathname !== "/";
   const activeProject =
     activeProjectId !== null
       ? (projects.find((project) => project.id === activeProjectId) ?? null)
       : null;
+  const activeProjectScripts = activeProject?.kind === "project" ? activeProject.scripts : [];
+  const terminalWorkspaceOpen = shouldRenderTerminalWorkspace({
+    activeProjectExists: activeProject !== null,
+    presentationMode: activeThreadTerminalState?.presentationMode ?? "drawer",
+    terminalOpen,
+  });
   const currentProjectId = resolveCurrentProjectTargetId(projects, activeProject?.id ?? null);
   const latestUsableProjectId = resolveLatestProjectTargetId(projects, latestProjectId);
 
@@ -81,6 +92,24 @@ function ChatRouteGlobalShortcuts() {
   useEffect(() => {
     const onWindowKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
+      const shortcutContext = {
+        terminalFocus: isTerminalFocused(),
+        terminalOpen,
+        terminalWorkspaceOpen,
+      };
+
+      const isShortcutsHelpShortcut =
+        (event.metaKey || event.ctrlKey) &&
+        !event.shiftKey &&
+        !event.altKey &&
+        !event.repeat &&
+        (event.key === "/" || event.code === "Slash");
+      if (isShortcutsHelpShortcut) {
+        event.preventDefault();
+        event.stopPropagation();
+        setShortcutsDialogOpen(true);
+        return;
+      }
 
       if (event.key === "Escape" && selectedThreadIdsSize > 0) {
         event.preventDefault();
@@ -88,12 +117,7 @@ function ChatRouteGlobalShortcuts() {
         return;
       }
 
-      const command = resolveShortcutCommand(event, keybindings, {
-        context: {
-          terminalFocus: isTerminalFocused(),
-          terminalOpen,
-        },
-      });
+      const command = resolveShortcutCommand(event, keybindings, { context: shortcutContext });
       if (command === "sidebar.toggle") {
         if (!isElectron) return;
         event.preventDefault();
@@ -191,6 +215,7 @@ function ChatRouteGlobalShortcuts() {
     projects,
     selectedThreadIdsSize,
     terminalOpen,
+    terminalWorkspaceOpen,
     toggleSidebar,
   ]);
 
@@ -214,7 +239,21 @@ function ChatRouteGlobalShortcuts() {
     };
   }, [navigate, toggleSidebar]);
 
-  return null;
+  return (
+    <ShortcutsDialog
+      open={shortcutsDialogOpen}
+      onOpenChange={setShortcutsDialogOpen}
+      keybindings={keybindings}
+      projectScripts={activeProjectScripts}
+      platform={platform}
+      context={{
+        terminalFocus: isTerminalFocused(),
+        terminalOpen,
+        terminalWorkspaceOpen,
+      }}
+      isElectron={isElectron}
+    />
+  );
 }
 
 const SIDEBAR_GAP_CLASS = {

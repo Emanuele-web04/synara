@@ -86,6 +86,24 @@ function adaptIcon(Component: TablerIcon): LucideIcon {
 export const AppsIcon: LucideIcon = (props) => (
   <RiApps2Line className={props.className} style={props.style} />
 );
+export const QueueArrow: LucideIcon = (props) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.5}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+    {...props}
+  >
+    <path d="M3.75 5.75V15.25C3.75 16.3546 4.64543 17.25 5.75 17.25H19.25" />
+    <path d="M18 19V15.5L20.25 17.25L18 19Z" />
+    <path d="M8.25 7.25H16.75" />
+    <path d="M8.25 12.25H13.25" />
+  </svg>
+);
 export const ArrowLeftIcon = adaptIcon(IconArrowLeft);
 export const BellIcon = adaptIcon(IconBell);
 export const ArrowRightIcon = adaptIcon(IconArrowRight);
