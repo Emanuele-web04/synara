@@ -1977,11 +1977,21 @@ export default function ChatView({
           normalizeProviderStatusForLocalConfig({
             provider: status.provider,
             status,
-            customBinaryPath: status.provider === "gemini" ? settings.geminiBinaryPath : null,
+            customBinaryPath:
+              status.provider === "codex"
+                ? settings.codexBinaryPath
+                : status.provider === "claudeAgent"
+                  ? settings.claudeBinaryPath
+                  : settings.geminiBinaryPath,
           }),
         )
         .flatMap((status) => (status ? [status] : [])),
-    [serverConfigQuery.data?.providers, settings.geminiBinaryPath],
+    [
+      serverConfigQuery.data?.providers,
+      settings.claudeBinaryPath,
+      settings.codexBinaryPath,
+      settings.geminiBinaryPath,
+    ],
   );
   const handoffBadgeLabel = useMemo(
     () => (activeThread ? resolveThreadHandoffBadgeLabel(activeThread) : null),

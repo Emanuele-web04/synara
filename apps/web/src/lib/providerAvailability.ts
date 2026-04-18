@@ -23,7 +23,7 @@ export function normalizeProviderStatusForLocalConfig(input: {
   }
 
   const customBinaryPath = trimOrNull(input.customBinaryPath);
-  if (input.provider !== "gemini" || !customBinaryPath) {
+  if (!customBinaryPath) {
     return status;
   }
 
@@ -35,8 +35,7 @@ export function normalizeProviderStatusForLocalConfig(input: {
     ...status,
     available: true,
     status: "warning",
-    message:
-      "Gemini uses a custom local binary path in this app. Availability will be confirmed when you start a Gemini session.",
+    message: `${PROVIDER_DISPLAY_NAMES[input.provider]} uses a custom local binary path in this app. Availability will be confirmed when you start a session.`,
   };
 }
 

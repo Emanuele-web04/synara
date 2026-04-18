@@ -184,7 +184,12 @@ function ChatRouteGlobalShortcuts() {
         const normalizedStatus = normalizeProviderStatusForLocalConfig({
           provider,
           status: providerStatuses.find((entry) => entry.provider === provider) ?? null,
-          customBinaryPath: provider === "gemini" ? appSettings.geminiBinaryPath : null,
+          customBinaryPath:
+            provider === "codex"
+              ? appSettings.codexBinaryPath
+              : provider === "claudeAgent"
+                ? appSettings.claudeBinaryPath
+                : appSettings.geminiBinaryPath,
         });
         if (!isProviderUsable(normalizedStatus)) {
           event.preventDefault();
@@ -244,6 +249,8 @@ function ChatRouteGlobalShortcuts() {
     handleNewThread,
     keybindings,
     latestUsableProjectId,
+    appSettings.claudeBinaryPath,
+    appSettings.codexBinaryPath,
     appSettings.geminiBinaryPath,
     providerStatuses,
     projects,

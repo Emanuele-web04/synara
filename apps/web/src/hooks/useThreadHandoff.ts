@@ -54,7 +54,12 @@ export function useThreadHandoff() {
         status:
           serverConfigQuery.data?.providers.find((entry) => entry.provider === targetProvider) ??
           null,
-        customBinaryPath: targetProvider === "gemini" ? settings.geminiBinaryPath : null,
+        customBinaryPath:
+          targetProvider === "codex"
+            ? settings.codexBinaryPath
+            : targetProvider === "claudeAgent"
+              ? settings.claudeBinaryPath
+              : settings.geminiBinaryPath,
       });
       if (!isProviderUsable(targetStatus)) {
         throw new Error("This provider is not available yet.");
@@ -107,6 +112,8 @@ export function useThreadHandoff() {
       navigate,
       projects,
       serverConfigQuery.data?.providers,
+      settings.claudeBinaryPath,
+      settings.codexBinaryPath,
       settings.geminiBinaryPath,
       syncServerReadModel,
     ],

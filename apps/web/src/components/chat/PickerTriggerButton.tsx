@@ -26,14 +26,14 @@ export function PickerTriggerButton(
       className={cn(
         "min-w-0 justify-start overflow-hidden whitespace-nowrap px-1.5 [&_svg]:mx-0",
         COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
-        compact ? "max-w-42 shrink-0" : "max-w-48 shrink sm:max-w-56 sm:px-1.5",
+        compact ? "max-w-52 shrink-0" : "max-w-56 shrink sm:max-w-64 sm:px-1.5",
         className,
       )}
     >
       <span
         className={cn(
           "flex min-w-0 w-full items-center gap-2 overflow-hidden",
-          compact ? "max-w-36" : undefined,
+          compact ? "max-w-44" : undefined,
         )}
       >
         <span className="inline-flex size-3.5 shrink-0 items-center justify-center">{icon}</span>

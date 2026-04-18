@@ -33,6 +33,27 @@ describe("normalizeProviderStatusForLocalConfig", () => {
     });
   });
 
+  it("applies the same custom-path fallback to Claude", () => {
+    expect(
+      normalizeProviderStatusForLocalConfig({
+        provider: "claudeAgent",
+        status: {
+          ...BASE_STATUS,
+          provider: "claudeAgent",
+          message: "Claude Code CLI (`claude`) is not installed or not on PATH.",
+        },
+        customBinaryPath: "/opt/homebrew/bin/claude",
+      }),
+    ).toEqual({
+      ...BASE_STATUS,
+      provider: "claudeAgent",
+      available: true,
+      status: "warning",
+      message:
+        "Claude uses a custom local binary path in this app. Availability will be confirmed when you start a session.",
+    });
+  });
+
   it("preserves authenticated and unauthenticated statuses", () => {
     expect(
       normalizeProviderStatusForLocalConfig({
