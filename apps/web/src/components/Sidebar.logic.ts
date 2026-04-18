@@ -6,6 +6,7 @@ import type { KeybindingCommand } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "../appSettings";
 import type { ChatMessage, Project, SidebarThreadSummary, Thread } from "../types";
 import { cn } from "../lib/utils";
+import { isDuplicateProjectCreateError } from "../lib/projectCreateRecovery";
 import { workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
 import {
   hasLiveLatestTurn,
@@ -13,6 +14,11 @@ import {
   hasActionableProposedPlan,
   isLatestTurnSettled,
 } from "../session-logic";
+
+export {
+  extractDuplicateProjectCreateProjectId,
+  isDuplicateProjectCreateError,
+} from "../lib/projectCreateRecovery";
 
 export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
 export const SIDEBAR_THREAD_PREWARM_LIMIT = 10;
@@ -30,8 +36,6 @@ type SidebarThreadSortInput = {
   messages?: ReadonlyArray<Pick<ChatMessage, "role" | "createdAt">> | undefined;
 };
 
-const DUPLICATE_PROJECT_CREATE_ERROR_PREFIX =
-  "Orchestration command invariant failed (project.create): Project '";
 const THREAD_JUMP_COMMANDS = [
   "thread.jump.1",
   "thread.jump.2",
@@ -238,25 +242,6 @@ export function findWorkspaceRootMatch<T>(
   getWorkspaceRoot: (item: T) => string,
 ): T | undefined {
   return items.find((item) => workspaceRootsEqual(getWorkspaceRoot(item), targetWorkspaceRoot));
-}
-
-// Detects duplicate workspace-root failures so the UI can add a human explanation.
-export function isDuplicateProjectCreateError(message: string): boolean {
-  if (!message.startsWith(DUPLICATE_PROJECT_CREATE_ERROR_PREFIX)) {
-    return false;
-  }
-
-  const duplicateMarkerIndex = message.indexOf("' already uses workspace root '");
-  return duplicateMarkerIndex > DUPLICATE_PROJECT_CREATE_ERROR_PREFIX.length;
-}
-
-export function extractDuplicateProjectCreateProjectId(message: string): string | null {
-  if (!isDuplicateProjectCreateError(message)) {
-    return null;
-  }
-
-  const duplicateMarkerIndex = message.indexOf("' already uses workspace root '");
-  return message.slice(DUPLICATE_PROJECT_CREATE_ERROR_PREFIX.length, duplicateMarkerIndex) || null;
 }
 
 // Translates low-level add-project failures into a short explanation without

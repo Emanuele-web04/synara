@@ -1852,7 +1852,10 @@ export default function Sidebar() {
   const deleteThread = useCallback(
     async (
       threadId: ThreadId,
-      opts: { deletedThreadIds?: ReadonlySet<ThreadId> } = {},
+      opts: {
+        deletedThreadIds?: ReadonlySet<ThreadId>;
+        worktreeCleanupMode?: "prompt" | "skip";
+      } = {},
     ): Promise<void> => {
       const api = readNativeApi();
       if (!api) return;
@@ -1874,7 +1877,9 @@ export default function Sidebar() {
         ? formatWorktreePathForDisplay(orphanedWorktreePath)
         : null;
       const canDeleteWorktree = orphanedWorktreePath !== null && threadProject !== undefined;
+      const worktreeCleanupMode = opts.worktreeCleanupMode ?? "prompt";
       const shouldDeleteWorktree =
+        worktreeCleanupMode === "prompt" &&
         canDeleteWorktree &&
         (await api.dialogs.confirm(
           [
@@ -2267,42 +2272,67 @@ export default function Sidebar() {
    * A single `deletedThreadIds` set is passed through so orphan-worktree
    * detection treats the whole batch as "going away" at once.
    */
-  const deleteAllThreadsInProject = useCallback(
-    async (projectId: ProjectId): Promise<void> => {
+  const deleteProjectThreads = useCallback(
+    async (
+      projectId: ProjectId,
+      options?: {
+        confirmMessage?: string | null;
+        showEmptyToast?: boolean;
+        showResultToast?: boolean;
+        worktreeCleanupMode?: "prompt" | "skip";
+      },
+    ): Promise<{
+      deletedCount: number;
+      failureCount: number;
+      totalCount: number;
+      projectName: string;
+    } | null> => {
       const api = readNativeApi();
-      if (!api) return;
+      if (!api) return null;
       const project = projectById.get(projectId);
-      if (!project) return;
+      if (!project) return null;
 
       const projectThreads = sidebarThreads.filter((thread) => thread.projectId === projectId);
       if (projectThreads.length === 0) {
-        toastManager.add({
-          type: "info",
-          title: "Nothing to delete",
-          description: `"${project.name}" has no threads to delete.`,
-        });
-        return;
+        if (options?.showEmptyToast ?? true) {
+          toastManager.add({
+            type: "info",
+            title: "Nothing to delete",
+            description: `"${project.name}" has no threads to delete.`,
+          });
+        }
+        return {
+          deletedCount: 0,
+          failureCount: 0,
+          totalCount: 0,
+          projectName: project.name,
+        };
       }
 
-      // Bulk delete always confirms — wiping every thread in a folder is
-      // unrecoverable, so we bypass `appSettings.confirmThreadDelete` (which is
-      // scoped to single-thread deletion from the thread-level menu).
-      const count = projectThreads.length;
-      const deleteConfirmationMessage = [
-        `Delete ${count} thread${count === 1 ? "" : "s"} in "${project.name}"?`,
-        "This permanently clears conversation history for these threads.",
-      ].join("\n");
-      const deleteConfirmed = api
-        ? await api.dialogs.confirm(deleteConfirmationMessage)
-        : await showConfirmDialogFallback(deleteConfirmationMessage);
-      if (!deleteConfirmed) return;
+      const deleteConfirmationMessage =
+        options?.confirmMessage === undefined
+          ? [
+              `Delete ${projectThreads.length} thread${projectThreads.length === 1 ? "" : "s"} in "${project.name}"?`,
+              "This permanently clears conversation history for these threads.",
+            ].join("\n")
+          : options.confirmMessage;
+      if (deleteConfirmationMessage !== null) {
+        // Bulk delete always confirms unless a caller already collected a higher-level confirmation.
+        const deleteConfirmed = await api.dialogs.confirm(deleteConfirmationMessage);
+        if (!deleteConfirmed) return null;
+      }
 
       const deletedIds = new Set<ThreadId>(projectThreads.map((thread) => thread.id));
       let deletedCount = 0;
       let failureCount = 0;
       for (const thread of projectThreads) {
         try {
-          await deleteThread(thread.id, { deletedThreadIds: deletedIds });
+          await deleteThread(thread.id, {
+            deletedThreadIds: deletedIds,
+            ...(options?.worktreeCleanupMode
+              ? { worktreeCleanupMode: options.worktreeCleanupMode }
+              : {}),
+          });
           deletedCount += 1;
         } catch (error) {
           failureCount += 1;
@@ -2316,24 +2346,40 @@ export default function Sidebar() {
 
       removeFromSelection([...deletedIds]);
 
-      if (deletedCount > 0) {
-        toastManager.add({
-          type: failureCount > 0 ? "warning" : "success",
-          title: deletedCount === 1 ? "Thread deleted" : `Deleted ${deletedCount} threads`,
-          description:
-            failureCount > 0
-              ? `Failed to delete ${failureCount} thread${failureCount === 1 ? "" : "s"}.`
-              : `"${project.name}" cleared.`,
-        });
-      } else if (failureCount > 0) {
-        toastManager.add({
-          type: "error",
-          title: "Failed to delete threads",
-          description: `Could not delete ${failureCount} thread${failureCount === 1 ? "" : "s"} in "${project.name}".`,
-        });
+      if (options?.showResultToast ?? true) {
+        if (deletedCount > 0) {
+          toastManager.add({
+            type: failureCount > 0 ? "warning" : "success",
+            title: deletedCount === 1 ? "Thread deleted" : `Deleted ${deletedCount} threads`,
+            description:
+              failureCount > 0
+                ? `Failed to delete ${failureCount} thread${failureCount === 1 ? "" : "s"}.`
+                : `"${project.name}" cleared.`,
+          });
+        } else if (failureCount > 0) {
+          toastManager.add({
+            type: "error",
+            title: "Failed to delete threads",
+            description: `Could not delete ${failureCount} thread${failureCount === 1 ? "" : "s"} in "${project.name}".`,
+          });
+        }
       }
+
+      return {
+        deletedCount,
+        failureCount,
+        totalCount: projectThreads.length,
+        projectName: project.name,
+      };
     },
     [deleteThread, projectById, removeFromSelection, sidebarThreads],
+  );
+
+  const deleteAllThreadsInProject = useCallback(
+    async (projectId: ProjectId): Promise<void> => {
+      await deleteProjectThreads(projectId);
+    },
+    [deleteProjectThreads],
   );
 
   const handleThreadContextMenu = useCallback(
@@ -2846,25 +2892,50 @@ export default function Sidebar() {
       if (clicked !== "delete") return;
 
       const projectThreads = sidebarThreads.filter((thread) => thread.projectId === projectId);
-      if (projectThreads.length > 0) {
-        toastManager.add({
-          type: "warning",
-          title: "Project is not empty",
-          description: "Delete all threads in this project before removing it.",
-        });
-        return;
-      }
-
-      const confirmed = await api.dialogs.confirm(`Remove project "${project.name}"?`);
+      const confirmed = await api.dialogs.confirm(
+        projectThreads.length > 0
+          ? [
+              `Remove project "${project.name}"?`,
+              `This will delete ${projectThreads.length} thread${projectThreads.length === 1 ? "" : "s"} in this folder and remove the project.`,
+            ].join("\n")
+          : `Remove project "${project.name}"?`,
+      );
       if (!confirmed) return;
 
       try {
+        // `project.delete` refuses non-empty folders, so `Remove` clears threads first.
+        const deletionResult = await deleteProjectThreads(projectId, {
+          confirmMessage: null,
+          showEmptyToast: false,
+          showResultToast: false,
+          worktreeCleanupMode: "skip",
+        });
+        if (deletionResult === null) {
+          return;
+        }
+        if (deletionResult.failureCount > 0) {
+          toastManager.add({
+            type: "error",
+            title: `Failed to remove "${project.name}"`,
+            description: `Could not delete ${deletionResult.failureCount} thread${deletionResult.failureCount === 1 ? "" : "s"} in "${project.name}".`,
+          });
+          return;
+        }
+
         await api.orchestration.dispatchCommand({
           type: "project.delete",
           commandId: newCommandId(),
           projectId,
         });
         clearProjectDraftThreads(projectId);
+        toastManager.add({
+          type: "success",
+          title: `Removed "${project.name}"`,
+          description:
+            deletionResult.deletedCount > 0
+              ? `Deleted ${deletionResult.deletedCount} thread${deletionResult.deletedCount === 1 ? "" : "s"} and removed the project.`
+              : "Project removed.",
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error removing project.";
         console.error("Failed to remove project", { projectId, error });
@@ -2879,6 +2950,7 @@ export default function Sidebar() {
       archiveAllThreadsInProject,
       clearProjectDraftThreads,
       copyPathToClipboard,
+      deleteProjectThreads,
       deleteAllThreadsInProject,
       projects,
       sidebarThreads,

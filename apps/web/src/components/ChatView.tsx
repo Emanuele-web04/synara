@@ -294,6 +294,7 @@ import {
   resolveThreadEnvironmentMode,
 } from "../lib/threadEnvironment";
 import { buildNextProviderOptions } from "../providerModelOptions";
+import { waitForRecoverableProjectForDuplicateCreate } from "../lib/projectCreateRecovery";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
@@ -4302,21 +4303,46 @@ export default function ChatView({
       if (firstSendTarget.kind === "create-project") {
         const projectId = newProjectId();
         const createdAt = new Date().toISOString();
-        await api.orchestration.dispatchCommand({
-          type: "project.create",
-          commandId: newCommandId(),
-          projectId,
-          kind: "project",
-          title: firstSendTarget.creation.title,
-          workspaceRoot: firstSendTarget.creation.workspaceRoot,
-          defaultModelSelection: firstSendTarget.creation.defaultModelSelection,
-          createdAt,
-        });
-        targetProjectIdForSend = projectId;
-        targetProjectKindForSend = "project";
-        targetProjectCwdForSend = firstSendTarget.creation.workspaceRoot;
-        targetProjectScriptsForSend = [];
-        targetProjectDefaultModelSelectionForSend = firstSendTarget.creation.defaultModelSelection;
+        try {
+          await api.orchestration.dispatchCommand({
+            type: "project.create",
+            commandId: newCommandId(),
+            projectId,
+            kind: "project",
+            title: firstSendTarget.creation.title,
+            workspaceRoot: firstSendTarget.creation.workspaceRoot,
+            defaultModelSelection: firstSendTarget.creation.defaultModelSelection,
+            createdAt,
+          });
+          targetProjectIdForSend = projectId;
+          targetProjectKindForSend = "project";
+          targetProjectCwdForSend = firstSendTarget.creation.workspaceRoot;
+          targetProjectScriptsForSend = [];
+          targetProjectDefaultModelSelectionForSend =
+            firstSendTarget.creation.defaultModelSelection;
+        } catch (error) {
+          const description =
+            error instanceof Error ? error.message : "Failed to create the selected project.";
+          // If the server already knows this workspace root, reuse that project and continue.
+          const { snapshot, project: recoveredProject } =
+            await waitForRecoverableProjectForDuplicateCreate({
+              message: description,
+              workspaceRoot: firstSendTarget.creation.workspaceRoot,
+              loadSnapshot: () => api.orchestration.getSnapshot().catch(() => null),
+            });
+          if (!snapshot || !recoveredProject) {
+            throw error;
+          }
+
+          syncServerReadModel(snapshot);
+          targetProjectIdForSend = recoveredProject.id;
+          targetProjectKindForSend = "project";
+          targetProjectCwdForSend = recoveredProject.workspaceRoot;
+          targetProjectScriptsForSend = [...recoveredProject.scripts];
+          targetProjectDefaultModelSelectionForSend =
+            recoveredProject.defaultModelSelection ??
+            firstSendTarget.creation.defaultModelSelection;
+        }
       }
 
       clearProjectDraftThreadId(targetProjectIdForSend);
