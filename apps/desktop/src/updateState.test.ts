@@ -5,6 +5,7 @@ import {
   getCanRetryAfterDownloadFailure,
   getAutoUpdateDisabledReason,
   nextStatusAfterDownloadFailure,
+  shouldCheckForUpdatesOnForeground,
   shouldBroadcastDownloadProgress,
 } from "./updateState";
 
@@ -170,5 +171,51 @@ describe("getCanRetryAfterDownloadFailure", () => {
         availableVersion: null,
       }),
     ).toBe(false);
+  });
+});
+
+describe("shouldCheckForUpdatesOnForeground", () => {
+  it("returns false when the app was not backgrounded first", () => {
+    expect(
+      shouldCheckForUpdatesOnForeground({
+        checkedAt: "2026-03-04T00:00:00.000Z",
+        backgroundedAtMs: null,
+        foregroundedAtMs: Date.parse("2026-03-04T00:05:00.000Z"),
+        minIntervalMs: 5 * 60 * 1000,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true after foregrounding when no previous check exists", () => {
+    expect(
+      shouldCheckForUpdatesOnForeground({
+        checkedAt: null,
+        backgroundedAtMs: Date.parse("2026-03-04T00:00:00.000Z"),
+        foregroundedAtMs: Date.parse("2026-03-04T00:05:00.000Z"),
+        minIntervalMs: 5 * 60 * 1000,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false when the last check is still within the foreground cooldown", () => {
+    expect(
+      shouldCheckForUpdatesOnForeground({
+        checkedAt: "2026-03-04T00:03:00.000Z",
+        backgroundedAtMs: Date.parse("2026-03-04T00:04:00.000Z"),
+        foregroundedAtMs: Date.parse("2026-03-04T00:06:00.000Z"),
+        minIntervalMs: 5 * 60 * 1000,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true when the last check is older than the foreground cooldown", () => {
+    expect(
+      shouldCheckForUpdatesOnForeground({
+        checkedAt: "2026-03-04T00:00:00.000Z",
+        backgroundedAtMs: Date.parse("2026-03-04T00:04:00.000Z"),
+        foregroundedAtMs: Date.parse("2026-03-04T00:06:00.000Z"),
+        minIntervalMs: 5 * 60 * 1000,
+      }),
+    ).toBe(true);
   });
 });

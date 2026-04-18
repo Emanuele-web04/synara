@@ -40,7 +40,11 @@ import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness"
 import { showDesktopConfirmDialog } from "./confirmDialog";
 import { shouldAllowMediaPermissionRequest } from "./mediaPermissions";
 import { syncShellEnvironment } from "./syncShellEnvironment";
-import { getAutoUpdateDisabledReason, shouldBroadcastDownloadProgress } from "./updateState";
+import {
+  getAutoUpdateDisabledReason,
+  shouldBroadcastDownloadProgress,
+  shouldCheckForUpdatesOnForeground,
+} from "./updateState";
 import { registerDesktopVoiceTranscriptionHandler } from "./voiceTranscription";
 import {
   createInitialDesktopUpdateState,
@@ -104,6 +108,7 @@ const LOG_FILE_MAX_FILES = 10;
 const APP_RUN_ID = Crypto.randomBytes(6).toString("hex");
 const AUTO_UPDATE_STARTUP_DELAY_MS = 15_000;
 const AUTO_UPDATE_POLL_INTERVAL_MS = 4 * 60 * 60 * 1000;
+const AUTO_UPDATE_FOREGROUND_RECHECK_MIN_INTERVAL_MS = 5 * 60 * 1000;
 const DESKTOP_UPDATE_CHANNEL = "latest";
 const DESKTOP_UPDATE_ALLOW_PRERELEASE = false;
 
@@ -351,6 +356,8 @@ let updateCheckInFlight = false;
 let updateDownloadInFlight = false;
 let updaterConfigured = false;
 let updateState: DesktopUpdateState = initialUpdateState();
+let updateBackgroundedAtMs: number | null = null;
+let updateBackgroundBlurTimer: ReturnType<typeof setTimeout> | null = null;
 
 function resolveUpdaterErrorContext(): DesktopUpdateErrorContext {
   if (updateDownloadInFlight) return "download";
@@ -919,6 +926,48 @@ function shouldEnableAutoUpdates(): boolean {
       hasUpdateFeedConfig,
     }) === null
   );
+}
+
+function shouldTriggerForegroundUpdateCheck(foregroundedAtMs: number): boolean {
+  return shouldCheckForUpdatesOnForeground({
+    checkedAt: updateState.checkedAt,
+    backgroundedAtMs: updateBackgroundedAtMs,
+    foregroundedAtMs,
+    minIntervalMs: AUTO_UPDATE_FOREGROUND_RECHECK_MIN_INTERVAL_MS,
+  });
+}
+
+function clearUpdateBackgroundBlurTimer(): void {
+  if (updateBackgroundBlurTimer) {
+    clearTimeout(updateBackgroundBlurTimer);
+    updateBackgroundBlurTimer = null;
+  }
+}
+
+function isDesktopAppForegrounded(): boolean {
+  return BrowserWindow.getAllWindows().some((window) => !window.isDestroyed() && window.isFocused());
+}
+
+function markDesktopAppBackgrounded(): void {
+  clearUpdateBackgroundBlurTimer();
+  updateBackgroundBlurTimer = setTimeout(() => {
+    updateBackgroundBlurTimer = null;
+    if (isDesktopAppForegrounded()) {
+      return;
+    }
+    updateBackgroundedAtMs = Date.now();
+  }, 0);
+}
+
+function handleDesktopAppForegrounded(): void {
+  clearUpdateBackgroundBlurTimer();
+  clearUnreadNotificationBadge();
+  const foregroundedAtMs = Date.now();
+  if (!shouldTriggerForegroundUpdateCheck(foregroundedAtMs)) {
+    return;
+  }
+  updateBackgroundedAtMs = null;
+  void checkForUpdates("foreground");
 }
 
 async function checkForUpdates(reason: string): Promise<void> {
@@ -1596,9 +1645,6 @@ function createWindow(): BrowserWindow {
   window.once("ready-to-show", () => {
     window.show();
   });
-  window.on("focus", () => {
-    clearUnreadNotificationBadge();
-  });
 
   if (isDevelopment) {
     void window.loadURL(process.env.VITE_DEV_SERVER_URL as string);
@@ -1714,6 +1760,7 @@ async function bootstrap(): Promise<void> {
 app.on("before-quit", () => {
   isQuitting = true;
   writeDesktopLogHeader("before-quit received");
+  clearUpdateBackgroundBlurTimer();
   clearUpdatePollTimer();
   cancelBackendReadinessWait();
   stopBackend();
@@ -1734,8 +1781,16 @@ app
       handleFatalStartupError("bootstrap", error);
     });
 
+    app.on("browser-window-blur", () => {
+      markDesktopAppBackgrounded();
+    });
+
+    app.on("browser-window-focus", () => {
+      handleDesktopAppForegrounded();
+    });
+
     app.on("activate", () => {
-      clearUnreadNotificationBadge();
+      handleDesktopAppForegrounded();
       if (BrowserWindow.getAllWindows().length === 0) {
         mainWindow = createWindow();
       }
@@ -1756,6 +1811,7 @@ if (process.platform !== "win32") {
     if (isQuitting) return;
     isQuitting = true;
     writeDesktopLogHeader("SIGINT received");
+    clearUpdateBackgroundBlurTimer();
     clearUpdatePollTimer();
     cancelBackendReadinessWait();
     stopBackend();

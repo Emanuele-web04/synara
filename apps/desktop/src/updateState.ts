@@ -28,6 +28,29 @@ export function getCanRetryAfterDownloadFailure(currentState: DesktopUpdateState
   return currentState.availableVersion !== null;
 }
 
+export function shouldCheckForUpdatesOnForeground(args: {
+  checkedAt: string | null;
+  backgroundedAtMs: number | null;
+  foregroundedAtMs: number;
+  minIntervalMs: number;
+}): boolean {
+  const { checkedAt, backgroundedAtMs, foregroundedAtMs, minIntervalMs } = args;
+  if (backgroundedAtMs === null || foregroundedAtMs <= backgroundedAtMs) {
+    return false;
+  }
+
+  if (checkedAt === null) {
+    return true;
+  }
+
+  const lastCheckedAtMs = Date.parse(checkedAt);
+  if (!Number.isFinite(lastCheckedAtMs)) {
+    return true;
+  }
+
+  return foregroundedAtMs - lastCheckedAtMs >= minIntervalMs;
+}
+
 export function getAutoUpdateDisabledReason(args: {
   isDevelopment: boolean;
   isPackaged: boolean;
