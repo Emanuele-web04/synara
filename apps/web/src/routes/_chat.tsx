@@ -63,8 +63,8 @@ function ChatRouteGlobalShortcuts() {
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
   const platform = typeof navigator === "undefined" ? "" : navigator.platform;
-  const activeThreadTerminalState = useTerminalStateStore((state) =>
   const providerStatuses = serverConfigQuery.data?.providers ?? [];
+  const activeThreadTerminalState = useTerminalStateStore((state) =>
     activeContextThreadId
       ? selectThreadTerminalState(state.terminalStateByThreadId, activeContextThreadId)
       : null,
