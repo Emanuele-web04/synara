@@ -106,7 +106,7 @@ describe("buildShortcutSheetSections", () => {
 
     expect(
       sections[0]?.entries.some(
-        (entry) => entry.label === "New chat" && entry.shortcutLabel === "⌘⌥N",
+        (entry) => entry.label === "New chat" && entry.shortcutLabel === "⌥⌘N",
       ),
     ).toBe(true);
   });
