@@ -6,6 +6,7 @@ import {
   type GeminiThinkingLevel,
   type ModelSlug,
   ModelSelection,
+  OrchestrationThreadPullRequest,
   ProjectId,
   ProviderMentionReference,
   ProviderInteractionMode,
@@ -243,6 +244,7 @@ const PersistedDraftThreadState = Schema.Struct({
   entryPoint: DraftThreadEntryPointSchema.pipe(Schema.withDecodingDefault(() => "chat")),
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
+  lastKnownPr: Schema.optionalKey(Schema.NullOr(OrchestrationThreadPullRequest)),
   envMode: DraftThreadEnvModeSchema,
   isTemporary: Schema.optionalKey(Schema.Boolean),
 });
@@ -285,6 +287,7 @@ export interface DraftThreadState {
   entryPoint: ThreadPrimarySurface;
   branch: string | null;
   worktreePath: string | null;
+  lastKnownPr?: OrchestrationThreadPullRequest | null;
   envMode: DraftThreadEnvMode;
   isTemporary?: boolean;
 }
@@ -310,6 +313,7 @@ export interface ComposerDraftStoreState {
     options?: {
       branch?: string | null;
       worktreePath?: string | null;
+      lastKnownPr?: OrchestrationThreadPullRequest | null;
       createdAt?: string;
       envMode?: DraftThreadEnvMode;
       runtimeMode?: RuntimeMode;
@@ -323,6 +327,7 @@ export interface ComposerDraftStoreState {
     options: {
       branch?: string | null;
       worktreePath?: string | null;
+      lastKnownPr?: OrchestrationThreadPullRequest | null;
       projectId?: ProjectId;
       createdAt?: string;
       envMode?: DraftThreadEnvMode;
@@ -1215,6 +1220,19 @@ function normalizePersistedDraftThreads(
       const createdAt = candidateDraftThread.createdAt;
       const branch = candidateDraftThread.branch;
       const worktreePath = candidateDraftThread.worktreePath;
+      let lastKnownPr: OrchestrationThreadPullRequest | null = null;
+      if (
+        candidateDraftThread.lastKnownPr &&
+        typeof candidateDraftThread.lastKnownPr === "object"
+      ) {
+        try {
+          lastKnownPr = Schema.decodeUnknownSync(OrchestrationThreadPullRequest)(
+            candidateDraftThread.lastKnownPr,
+          );
+        } catch {
+          lastKnownPr = null;
+        }
+      }
       const normalizedWorktreePath = typeof worktreePath === "string" ? worktreePath : null;
       const isTemporary = candidateDraftThread.isTemporary === true ? true : undefined;
       if (typeof projectId !== "string" || projectId.length === 0) {
@@ -1239,6 +1257,7 @@ function normalizePersistedDraftThreads(
         entryPoint: normalizeDraftThreadEntryPoint(candidateDraftThread.entryPoint),
         branch: typeof branch === "string" ? branch : null,
         worktreePath: normalizedWorktreePath,
+        ...(lastKnownPr ? { lastKnownPr } : {}),
         envMode: normalizeDraftThreadEnvMode(candidateDraftThread.envMode, normalizedWorktreePath),
         ...(isTemporary ? { isTemporary: true } : {}),
       };
@@ -1877,6 +1896,10 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
                 ? (existingThread?.branch ?? null)
                 : (options.branch ?? null),
             worktreePath: nextWorktreePath,
+            lastKnownPr:
+              options?.lastKnownPr === undefined
+                ? (existingThread?.lastKnownPr ?? null)
+                : (options.lastKnownPr ?? null),
             envMode:
               options?.envMode ??
               (nextWorktreePath ? "worktree" : (existingThread?.envMode ?? "local")),
@@ -1892,6 +1915,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             existingThread.entryPoint === nextDraftThread.entryPoint &&
             existingThread.branch === nextDraftThread.branch &&
             existingThread.worktreePath === nextDraftThread.worktreePath &&
+            Equal.equals(existingThread.lastKnownPr ?? null, nextDraftThread.lastKnownPr ?? null) &&
             existingThread.envMode === nextDraftThread.envMode &&
             (existingThread.isTemporary === true) === (nextDraftThread.isTemporary === true);
           if (hasSameProjectMapping && hasSameDraftThread) {
@@ -1963,6 +1987,10 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             entryPoint: nextEntryPoint,
             branch: options.branch === undefined ? existing.branch : (options.branch ?? null),
             worktreePath: nextWorktreePath,
+            lastKnownPr:
+              options.lastKnownPr === undefined
+                ? (existing.lastKnownPr ?? null)
+                : (options.lastKnownPr ?? null),
             envMode:
               options.envMode ?? (nextWorktreePath ? "worktree" : (existing.envMode ?? "local")),
             ...(nextIsTemporary ? { isTemporary: true } : {}),
@@ -1975,6 +2003,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             nextDraftThread.entryPoint === existing.entryPoint &&
             nextDraftThread.branch === existing.branch &&
             nextDraftThread.worktreePath === existing.worktreePath &&
+            Equal.equals(nextDraftThread.lastKnownPr ?? null, existing.lastKnownPr ?? null) &&
             nextDraftThread.envMode === existing.envMode &&
             (nextDraftThread.isTemporary === true) === (existing.isTemporary === true);
           if (isUnchanged) {

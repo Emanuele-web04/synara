@@ -72,7 +72,22 @@ describe("deriveReadableToolTitle", () => {
           },
         },
       }),
-    ).toBe("mcp xcodebuildmcp list sims");
+    ).toBe("Xcodebuildmcp: List Sims");
+  });
+
+  it("formats MCP identifiers into readable tool names", () => {
+    expect(
+      deriveReadableToolTitle({
+        title: "MCP tool call",
+        fallbackLabel: "MCP tool call",
+        itemType: "mcp_tool_call",
+        payload: {
+          data: {
+            toolName: "mcp__codex_apps__github_fetch_pr",
+          },
+        },
+      }),
+    ).toBe("Codex Apps: Github Fetch Pr");
   });
 });
 

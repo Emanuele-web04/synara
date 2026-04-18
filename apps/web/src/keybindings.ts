@@ -69,6 +69,11 @@ const whenThreadJumpAvailable = whenAnd(
 
 export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
   {
+    command: "sidebar.addProject",
+    shortcut: commandShortcut("o", { shiftKey: true }),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
     command: "sidebar.importThread",
     shortcut: commandShortcut("i"),
     whenAst: whenNotTerminalFocus,

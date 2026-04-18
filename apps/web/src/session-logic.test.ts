@@ -989,6 +989,33 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
+  it("uses MCP tool names from preserved payload data", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "mcp-progress",
+        kind: "tool.updated",
+        summary: "mcp__codex_apps__github_fetch_pr",
+        payload: {
+          itemType: "mcp_tool_call",
+          title: "MCP tool call",
+          detail: "Fetching PR details",
+          data: {
+            toolName: "mcp__codex_apps__github_fetch_pr",
+            summary: "Fetching PR details",
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry).toMatchObject({
+      id: "mcp-progress",
+      itemType: "mcp_tool_call",
+      toolTitle: "Codex Apps: Github Fetch Pr",
+      detail: "Fetching PR details",
+    });
+  });
+
   it("uses present-tense command headings while the command is still running", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

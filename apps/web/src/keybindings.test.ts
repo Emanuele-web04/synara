@@ -135,7 +135,12 @@ const DEFAULT_BINDINGS = compile([
   },
   {
     shortcut: modShortcut("o", { shiftKey: true }),
-    command: "chat.new",
+    command: "sidebar.addProject",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
+  {
+    shortcut: modShortcut("i"),
+    command: "sidebar.importThread",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
   {
@@ -595,6 +600,10 @@ describe("shortcutLabelForCommand", () => {
   });
 
   it("returns labels for non-terminal commands", () => {
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "sidebar.addProject", "MacIntel"),
+      "⇧⌘O",
+    );
     assert.strictEqual(shortcutLabelForCommand(DEFAULT_BINDINGS, "chat.new", "MacIntel"), "⌘N");
     assert.strictEqual(
       shortcutLabelForCommand(DEFAULT_BINDINGS, "chat.newLatestProject", "MacIntel"),
@@ -696,6 +705,23 @@ describe("chat/editor shortcuts", () => {
         context: { terminalFocus: false },
       }),
       "chat.newLatestProject",
+    );
+  });
+
+  it("resolves sidebar.addProject shortcut", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "o", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "sidebar.addProject",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "o", ctrlKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "Linux",
+        context: { terminalFocus: false },
+      }),
+      "sidebar.addProject",
     );
   });
 

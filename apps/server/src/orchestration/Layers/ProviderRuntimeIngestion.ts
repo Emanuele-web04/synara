@@ -34,6 +34,12 @@ import {
   type ProviderRuntimeIngestionShape,
 } from "../Services/ProviderRuntimeIngestion.ts";
 
+// FILE: ProviderRuntimeIngestion.ts
+// Purpose: Projects provider runtime events into orchestration read-model updates and thread activity.
+// Layer: Server orchestration ingestion
+// Exports: ProviderRuntimeIngestionLive
+// Depends on: ProviderRuntimeEvent contracts, OrchestrationEngine, Projection repositories
+
 const providerTurnKey = (threadId: ThreadId, turnId: TurnId) => `${threadId}:${turnId}`;
 const providerCommandId = (event: ProviderRuntimeEvent, tag: string): CommandId =>
   CommandId.makeUnsafe(`provider:${event.eventId}:${tag}:${crypto.randomUUID()}`);
@@ -80,6 +86,25 @@ function sameId(left: string | null | undefined, right: string | null | undefine
 
 function truncateDetail(value: string, limit = 180): string {
   return value.length > limit ? `${value.slice(0, limit - 3)}...` : value;
+}
+
+// Keep MCP progress payloads available to the web timeline so it can render the specific tool call.
+function buildToolProgressActivityPayload(
+  event: Extract<ProviderRuntimeEvent, { type: "tool.progress" }>,
+) {
+  return {
+    itemType: "mcp_tool_call" as const,
+    title: "MCP tool call",
+    ...(event.payload.summary ? { detail: truncateDetail(event.payload.summary) } : {}),
+    data: {
+      ...(event.payload.toolUseId ? { toolUseId: event.payload.toolUseId } : {}),
+      ...(event.payload.toolName ? { toolName: event.payload.toolName } : {}),
+      ...(event.payload.summary ? { summary: event.payload.summary } : {}),
+      ...(event.payload.elapsedSeconds !== undefined
+        ? { elapsedSeconds: event.payload.elapsedSeconds }
+        : {}),
+    },
+  };
 }
 
 function normalizeProposedPlanMarkdown(planMarkdown: string | undefined): string | undefined {
@@ -602,7 +627,10 @@ function runtimeEventToActivities(
           summary: event.payload.title ?? "Tool",
           payload: {
             itemType: event.payload.itemType,
+            ...(event.payload.status ? { status: event.payload.status } : {}),
+            ...(event.payload.title ? { title: event.payload.title } : {}),
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+            ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -623,8 +651,26 @@ function runtimeEventToActivities(
           summary: `${event.payload.title ?? "Tool"} started`,
           payload: {
             itemType: event.payload.itemType,
+            ...(event.payload.status ? { status: event.payload.status } : {}),
+            ...(event.payload.title ? { title: event.payload.title } : {}),
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+            ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
           },
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
+    case "tool.progress": {
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "tool",
+          kind: "tool.updated",
+          summary: event.payload.toolName ?? event.payload.summary ?? "MCP tool call",
+          payload: buildToolProgressActivityPayload(event),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },

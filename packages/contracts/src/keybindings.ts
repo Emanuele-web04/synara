@@ -10,6 +10,7 @@ export const MAX_KEYBINDINGS_COUNT = 256;
 const STATIC_KEYBINDING_COMMANDS = [
   "sidebar.toggle",
   "sidebar.search",
+  "sidebar.addProject",
   "sidebar.importThread",
   "terminal.toggle",
   "terminal.split",

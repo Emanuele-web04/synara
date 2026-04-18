@@ -161,6 +161,7 @@ export function useHandleNewThread() {
           envMode: creationState.envMode,
           branch: creationState.branch,
           worktreePath: creationState.worktreePath,
+          lastKnownPr: creationState.lastKnownPr,
           createdAt: new Date().toISOString(),
         });
       };

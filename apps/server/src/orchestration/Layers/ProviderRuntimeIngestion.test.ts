@@ -714,6 +714,61 @@ describe("ProviderRuntimeIngestion", () => {
     expect(message?.streaming).toBe(false);
   });
 
+  it("projects MCP tool progress into thread activity with preserved tool metadata", async () => {
+    const harness = await createHarness();
+
+    harness.setProviderSession({
+      threadId: asThreadId("thread-1"),
+      provider: "codex",
+      status: "running",
+      runtimeMode: "approval-required",
+      createdAt: "2026-03-01T10:00:00.000Z",
+      updatedAt: "2026-03-01T10:00:00.000Z",
+      activeTurnId: asTurnId("turn-1"),
+    });
+
+    harness.emit({
+      type: "tool.progress",
+      eventId: asEventId("evt-mcp-progress"),
+      provider: "codex",
+      createdAt: "2026-03-01T10:00:01.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-1"),
+      payload: {
+        toolUseId: "tool-1",
+        toolName: "mcp__codex_apps__github_fetch_pr",
+        summary: "Fetching PR details",
+        elapsedSeconds: 1.2,
+      },
+    } as ProviderRuntimeEvent);
+
+    const thread = await waitForThread(harness.engine, (candidate) =>
+      candidate.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-mcp-progress",
+      ),
+    );
+
+    const activity = thread.activities.find(
+      (candidate: ProviderRuntimeTestActivity) => candidate.id === "evt-mcp-progress",
+    );
+    expect(activity).toMatchObject({
+      kind: "tool.updated",
+      tone: "tool",
+      summary: "mcp__codex_apps__github_fetch_pr",
+      payload: {
+        itemType: "mcp_tool_call",
+        title: "MCP tool call",
+        detail: "Fetching PR details",
+        data: {
+          toolUseId: "tool-1",
+          toolName: "mcp__codex_apps__github_fetch_pr",
+          summary: "Fetching PR details",
+          elapsedSeconds: 1.2,
+        },
+      },
+    });
+  });
+
   it("uses assistant item completion detail when no assistant deltas were streamed", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

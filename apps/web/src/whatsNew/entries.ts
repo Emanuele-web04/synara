@@ -22,6 +22,45 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.0.30",
+    date: "Apr 18",
+    features: [
+      {
+        id: "chats-are-now-available",
+        title: "💬 Chats are now available!",
+        description: "Write without a selected project, or create threads from there.",
+      },
+      {
+        id: "new-shortcuts",
+        title: "⌨️ New shortcuts",
+        description:
+          "Quickly open a new chat or jump to your latest project thread with dedicated shortcuts.",
+      },
+      {
+        id: "claude-1m-context",
+        title: "🧠 Claude 1M context support",
+        description:
+          "Take full advantage of Claude's 1M-token context window for long conversations and large codebases.",
+      },
+      {
+        id: "bulk-thread-actions",
+        title: "📁 Bulk thread actions",
+        description: "Select multiple threads at once and act on them together.",
+      },
+      {
+        id: "cleaner-reasoning-picker",
+        title: "✨ Cleaner reasoning picker order",
+        description:
+          "The reasoning picker has been reordered to make the most common choices quicker to reach.",
+      },
+      {
+        id: "polished-ui-ux",
+        title: "💻 New polished UI/UX",
+        description: "A round of visual and interaction polish across the app.",
+      },
+    ],
+  },
+  {
     version: "0.0.29",
     date: "Apr 18",
     features: [

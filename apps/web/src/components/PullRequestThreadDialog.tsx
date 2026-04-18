@@ -27,7 +27,11 @@ interface PullRequestThreadDialogProps {
   cwd: string | null;
   initialReference: string | null;
   onOpenChange: (open: boolean) => void;
-  onPrepared: (input: { branch: string; worktreePath: string | null }) => Promise<void> | void;
+  onPrepared: (input: {
+    branch: string;
+    worktreePath: string | null;
+    pullRequest: NonNullable<GitResolvePullRequestResult["pullRequest"]>;
+  }) => Promise<void> | void;
 }
 
 export function PullRequestThreadDialog({
@@ -134,6 +138,7 @@ export function PullRequestThreadDialog({
         await onPrepared({
           branch: result.branch,
           worktreePath: result.worktreePath,
+          pullRequest: resolvedPullRequest,
         });
         onOpenChange(false);
       } finally {

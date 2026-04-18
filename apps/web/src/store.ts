@@ -307,6 +307,7 @@ function threadShellsEqual(left: ThreadShell | undefined, right: ThreadShell): b
     (left.subagentNickname ?? null) === (right.subagentNickname ?? null) &&
     (left.subagentRole ?? null) === (right.subagentRole ?? null) &&
     (left.forkSourceThreadId ?? null) === (right.forkSourceThreadId ?? null) &&
+    deepEqualJson(left.lastKnownPr ?? null, right.lastKnownPr ?? null) &&
     (left.handoff ?? null) === (right.handoff ?? null) &&
     left.latestUserMessageAt === right.latestUserMessageAt &&
     left.hasPendingApprovals === right.hasPendingApprovals &&
@@ -348,6 +349,7 @@ function toThreadShell(thread: Thread): ThreadShell {
     subagentNickname: thread.subagentNickname ?? null,
     subagentRole: thread.subagentRole ?? null,
     forkSourceThreadId: thread.forkSourceThreadId ?? null,
+    lastKnownPr: thread.lastKnownPr ?? null,
     handoff: thread.handoff ?? null,
     ...(thread.latestUserMessageAt !== undefined
       ? { latestUserMessageAt: thread.latestUserMessageAt }
@@ -879,6 +881,26 @@ function hasLiveAssistantIntro(previousThread: Thread | undefined): boolean {
   );
 }
 
+function shouldPreserveRunningTurn(
+  previousThread: Thread | undefined,
+  incoming: ReadModelThread,
+): boolean {
+  if (!hasLiveAssistantIntro(previousThread)) {
+    return false;
+  }
+  const previousTurnId = previousThread?.latestTurn?.turnId;
+  if (!previousTurnId) {
+    return false;
+  }
+  if (incoming.latestTurn?.turnId !== previousTurnId) {
+    return true;
+  }
+  if (incoming.latestTurn.completedAt) {
+    return false;
+  }
+  return true;
+}
+
 function readModelSessionFromThreadSession(
   previousSession: ThreadSession,
   previousThread: Thread | undefined,
@@ -999,7 +1021,7 @@ function mergeReadModelThreadDetailWithLiveHotPath(
     return incoming;
   }
 
-  const preserveRunningTurn = hasLiveAssistantIntro(previousThread);
+  const preserveRunningTurn = shouldPreserveRunningTurn(previousThread, incoming);
   const messages = mergeReadModelMessagesWithLiveHotPath(incoming.messages, previousThread);
   const session = mergeReadModelSessionWithLiveHotPath(incoming.session, previousThread, {
     preserveRunningTurn,
@@ -1057,7 +1079,8 @@ function normalizeTurnDiffFiles(
   incoming: ReadonlyArray<Thread["turnDiffSummaries"][number]["files"][number]>,
   previous: Thread["turnDiffSummaries"][number]["files"] | undefined,
 ): Thread["turnDiffSummaries"][number]["files"] {
-  const nextFiles = incoming.map((file, index) => {
+  const mergedIncoming = mergeTurnDiffFilesByPath(incoming);
+  const nextFiles = mergedIncoming.map((file, index) => {
     const existing = previous?.[index];
     if (
       existing &&
@@ -1071,6 +1094,26 @@ function normalizeTurnDiffFiles(
     return file;
   });
   return arraysShallowEqual(previous, nextFiles) ? previous : nextFiles;
+}
+
+function mergeTurnDiffFilesByPath(
+  files: ReadonlyArray<Thread["turnDiffSummaries"][number]["files"][number]>,
+): Thread["turnDiffSummaries"][number]["files"] {
+  const filesByPath = new Map<string, Thread["turnDiffSummaries"][number]["files"][number]>();
+  for (const file of files) {
+    const existing = filesByPath.get(file.path);
+    if (!existing) {
+      filesByPath.set(file.path, file);
+      continue;
+    }
+    filesByPath.set(file.path, {
+      path: file.path,
+      kind: existing.kind,
+      additions: (existing.additions ?? 0) + (file.additions ?? 0),
+      deletions: (existing.deletions ?? 0) + (file.deletions ?? 0),
+    });
+  }
+  return Array.from(filesByPath.values());
 }
 
 function normalizeTurnDiffSummaries(
@@ -1228,6 +1271,12 @@ function normalizeThreadFromReadModel(
     previous?.handoff && incoming.handoff && deepEqualJson(previous.handoff, incoming.handoff)
       ? previous.handoff
       : (incoming.handoff ?? null);
+  const lastKnownPr =
+    previous?.lastKnownPr &&
+    incoming.lastKnownPr &&
+    deepEqualJson(previous.lastKnownPr, incoming.lastKnownPr)
+      ? previous.lastKnownPr
+      : (incoming.lastKnownPr ?? null);
   const turnDiffSummaries = normalizeTurnDiffSummaries(
     incoming.checkpoints,
     previous?.turnDiffSummaries,
@@ -1287,6 +1336,7 @@ function normalizeThreadFromReadModel(
     previous.hasPendingUserInput === resolvedHasPendingUserInput &&
     previous.hasActionableProposedPlan === resolvedHasActionableProposedPlan &&
     (previous.forkSourceThreadId ?? null) === (incoming.forkSourceThreadId ?? null) &&
+    deepEqualJson(previous.lastKnownPr ?? null, lastKnownPr) &&
     (previous.handoff ?? null) === handoff &&
     previous.turnDiffSummaries === turnDiffSummaries &&
     previous.activities === activities
@@ -1323,6 +1373,7 @@ function normalizeThreadFromReadModel(
     associatedWorktreeBranch: incoming.associatedWorktreeBranch ?? null,
     associatedWorktreeRef: incoming.associatedWorktreeRef ?? null,
     forkSourceThreadId: incoming.forkSourceThreadId ?? null,
+    lastKnownPr,
     handoff,
     ...(resolvedLatestUserMessageAt !== undefined
       ? { latestUserMessageAt: resolvedLatestUserMessageAt }
@@ -1356,6 +1407,12 @@ function normalizeThreadShellSnapshot(
     previous?.handoff && incoming.handoff && deepEqualJson(previous.handoff, incoming.handoff)
       ? previous.handoff
       : (incoming.handoff ?? null);
+  const lastKnownPr =
+    previous?.lastKnownPr &&
+    incoming.lastKnownPr &&
+    deepEqualJson(previous.lastKnownPr, incoming.lastKnownPr)
+      ? previous.lastKnownPr
+      : (incoming.lastKnownPr ?? null);
   const error = normalizeThreadErrorMessage(incoming.session?.lastError);
   const lastVisitedAt = previous?.lastVisitedAt ?? incoming.updatedAt;
   const resolvedBranch = resolveThreadBranchRegressionGuard({
@@ -1385,6 +1442,7 @@ function normalizeThreadShellSnapshot(
     subagentNickname: incoming.subagentNickname ?? null,
     subagentRole: incoming.subagentRole ?? null,
     forkSourceThreadId: incoming.forkSourceThreadId ?? null,
+    lastKnownPr,
     handoff,
     ...(incoming.latestUserMessageAt !== undefined
       ? { latestUserMessageAt: incoming.latestUserMessageAt ?? null }
@@ -1624,6 +1682,7 @@ function sidebarThreadSummariesEqual(
     left.hasActionableProposedPlan === right.hasActionableProposedPlan &&
     left.hasLiveTailWork === right.hasLiveTailWork &&
     (left.forkSourceThreadId ?? null) === (right.forkSourceThreadId ?? null) &&
+    deepEqualJson(left.lastKnownPr ?? null, right.lastKnownPr ?? null) &&
     (left.handoff ?? null) === (right.handoff ?? null)
   );
 }
@@ -1660,6 +1719,7 @@ function buildSidebarThreadSummary(
     hasActionableProposedPlan: metadata.hasActionableProposedPlan,
     hasLiveTailWork: metadata.hasLiveTailWork,
     forkSourceThreadId: thread.forkSourceThreadId ?? null,
+    lastKnownPr: thread.lastKnownPr ?? null,
     handoff: thread.handoff ?? null,
   };
   if (previous && sidebarThreadSummariesEqual(previous, nextSummary)) {
@@ -2554,6 +2614,8 @@ function applyOrchestrationEvent(
               (event.payload.subagentNickname ?? null) === (thread.subagentNickname ?? null)) &&
             (event.payload.subagentRole === undefined ||
               (event.payload.subagentRole ?? null) === (thread.subagentRole ?? null)) &&
+            (event.payload.lastKnownPr === undefined ||
+              deepEqualJson(event.payload.lastKnownPr ?? null, thread.lastKnownPr ?? null)) &&
             (event.payload.handoff === undefined ||
               (event.payload.handoff ?? null) === (thread.handoff ?? null)) &&
             nextUpdatedAt === thread.updatedAt
@@ -2588,6 +2650,9 @@ function applyOrchestrationEvent(
               : {}),
             ...(event.payload.subagentRole !== undefined
               ? { subagentRole: event.payload.subagentRole }
+              : {}),
+            ...(event.payload.lastKnownPr !== undefined
+              ? { lastKnownPr: event.payload.lastKnownPr }
               : {}),
             ...(event.payload.handoff !== undefined ? { handoff: event.payload.handoff } : {}),
             updatedAt: nextUpdatedAt,

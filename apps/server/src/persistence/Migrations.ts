@@ -41,6 +41,7 @@ import Migration0025 from "./Migrations/025_ProjectionThreadsSubagents.ts";
 import Migration0026 from "./Migrations/026_ProjectionThreadShellSummary.ts";
 import Migration0027 from "./Migrations/027_BackfillProjectionThreadShellSummary.ts";
 import Migration0028 from "./Migrations/028_ProjectionProjectsKind.ts";
+import Migration0029 from "./Migrations/029_ProjectionThreadsLastKnownPr.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -81,6 +82,7 @@ export const migrationEntries = [
   [26, "ProjectionThreadShellSummary", Migration0026],
   [27, "BackfillProjectionThreadShellSummary", Migration0027],
   [28, "ProjectionProjectsKind", Migration0028],
+  [29, "ProjectionThreadsLastKnownPr", Migration0029],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

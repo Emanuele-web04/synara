@@ -15,13 +15,21 @@ export function parseTurnDiffFilesFromUnifiedDiff(
   }
 
   const parsedPatches = parsePatchFiles(normalized);
-  const files = parsedPatches.flatMap((patch) =>
-    patch.files.map((file) => ({
-      path: file.name,
-      additions: file.hunks.reduce((total, hunk) => total + hunk.additionLines, 0),
-      deletions: file.hunks.reduce((total, hunk) => total + hunk.deletionLines, 0),
-    })),
-  );
+  const filesByPath = new Map<string, TurnDiffFileSummary>();
+  for (const patch of parsedPatches) {
+    for (const file of patch.files) {
+      const additions = file.hunks.reduce((total, hunk) => total + hunk.additionLines, 0);
+      const deletions = file.hunks.reduce((total, hunk) => total + hunk.deletionLines, 0);
+      const existing = filesByPath.get(file.name);
+      filesByPath.set(file.name, {
+        path: file.name,
+        additions: (existing?.additions ?? 0) + additions,
+        deletions: (existing?.deletions ?? 0) + deletions,
+      });
+    }
+  }
 
-  return files.toSorted((left, right) => left.path.localeCompare(right.path));
+  return Array.from(filesByPath.values()).toSorted((left, right) =>
+    left.path.localeCompare(right.path),
+  );
 }

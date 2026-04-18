@@ -65,4 +65,29 @@ describe("parseTurnDiffFilesFromUnifiedDiff", () => {
       { path: "a.txt", additions: 2, deletions: 1 },
     ]);
   });
+
+  it("merges duplicate entries for the same file path", () => {
+    const diff = [
+      "diff --git a/CLAUDE.md b/CLAUDE.md",
+      "index 1111111..2222222 100644",
+      "--- a/CLAUDE.md",
+      "+++ b/CLAUDE.md",
+      "@@ -1 +1,2 @@",
+      "-one",
+      "+one updated",
+      "+two",
+      "diff --git a/CLAUDE.md b/CLAUDE.md",
+      "index 2222222..3333333 100644",
+      "--- a/CLAUDE.md",
+      "+++ b/CLAUDE.md",
+      "@@ -4,2 +5,0 @@",
+      "-three",
+      "-four",
+      "",
+    ].join("\n");
+
+    expect(parseTurnDiffFilesFromUnifiedDiff(diff)).toEqual([
+      { path: "CLAUDE.md", additions: 2, deletions: 3 },
+    ]);
+  });
 });

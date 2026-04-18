@@ -6,6 +6,7 @@
 import {
   DEFAULT_RUNTIME_MODE,
   type ModelSelection,
+  type OrchestrationThreadPullRequest,
   type ProjectId,
   type ProviderInteractionMode,
   type ProviderKind,
@@ -37,6 +38,7 @@ interface ActiveThreadSnapshot {
   runtimeMode: RuntimeMode;
   interactionMode: ProviderInteractionMode;
   envMode?: ThreadEnvironmentMode | undefined;
+  lastKnownPr?: OrchestrationThreadPullRequest | null;
 }
 
 export interface DraftReusePlanStored {
@@ -72,6 +74,7 @@ export interface TerminalThreadCreationState {
   branch: string | null;
   envMode: DraftThreadEnvMode;
   interactionMode: ProviderInteractionMode;
+  lastKnownPr: OrchestrationThreadPullRequest | null;
   modelSelection: ModelSelection;
   runtimeMode: RuntimeMode;
   worktreePath: string | null;
@@ -86,6 +89,7 @@ export function createActiveThreadSnapshot(
         projectId: ProjectId;
         runtimeMode: RuntimeMode;
         envMode?: ThreadEnvironmentMode | undefined;
+        lastKnownPr?: OrchestrationThreadPullRequest | null;
       }
     | null
     | undefined,
@@ -100,6 +104,7 @@ export function createActiveThreadSnapshot(
     runtimeMode: activeThread.runtimeMode,
     interactionMode: activeThread.interactionMode,
     envMode: activeThread.envMode,
+    lastKnownPr: activeThread.lastKnownPr ?? null,
   };
 }
 
@@ -119,6 +124,7 @@ export function createActiveDraftThreadSnapshot(
     entryPoint: activeDraftThread.entryPoint,
     branch: activeDraftThread.branch,
     worktreePath: activeDraftThread.worktreePath,
+    lastKnownPr: activeDraftThread.lastKnownPr ?? null,
     envMode: activeDraftThread.envMode,
     ...(activeDraftThread.isTemporary ? { isTemporary: true } : {}),
   };
@@ -268,6 +274,15 @@ export function resolveTerminalThreadCreationState(
         ? input.activeThread.interactionMode
         : null) ??
       DEFAULT_INTERACTION_MODE,
+    lastKnownPr:
+      input.draftThread?.lastKnownPr ??
+      (input.activeThread?.projectId === input.projectId
+        ? (input.activeThread.lastKnownPr ?? null)
+        : null) ??
+      (input.activeDraftThread?.projectId === input.projectId
+        ? (input.activeDraftThread.lastKnownPr ?? null)
+        : null) ??
+      null,
     envMode: hasExplicitEnvModeOverride
       ? (explicitEnvMode ?? "local")
       : (inheritedEnvMode ?? "local"),

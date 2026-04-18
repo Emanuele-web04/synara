@@ -346,6 +346,7 @@ export function useComposerSlashCommands(input: {
           envMode: activeThread.envMode ?? (activeThread.worktreePath ? "worktree" : "local"),
           branch: activeThread.branch,
           worktreePath: activeThread.worktreePath,
+          lastKnownPr: activeThread.lastKnownPr ?? null,
           ...associatedWorktree,
           createdAt,
         });

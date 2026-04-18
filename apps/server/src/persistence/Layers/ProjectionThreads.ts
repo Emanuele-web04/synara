@@ -11,11 +11,12 @@ import {
   ProjectionThreadRepository,
   type ProjectionThreadRepositoryShape,
 } from "../Services/ProjectionThreads.ts";
-import { ModelSelection, ThreadHandoff } from "@t3tools/contracts";
+import { ModelSelection, OrchestrationThreadPullRequest, ThreadHandoff } from "@t3tools/contracts";
 
 const ProjectionThreadDbRow = ProjectionThread.mapFields(
   Struct.assign({
     handoff: Schema.NullOr(Schema.fromJsonString(ThreadHandoff)),
+    lastKnownPr: Schema.NullOr(Schema.fromJsonString(OrchestrationThreadPullRequest)),
     modelSelection: Schema.fromJsonString(ModelSelection),
   }),
 );
@@ -46,6 +47,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           subagent_nickname,
           subagent_role,
           fork_source_thread_id,
+          last_known_pr_json,
           latest_turn_id,
           handoff_json,
           latest_user_message_at,
@@ -75,6 +77,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.subagentNickname ?? null},
           ${row.subagentRole ?? null},
           ${row.forkSourceThreadId ?? null},
+          ${row.lastKnownPr === null ? null : JSON.stringify(row.lastKnownPr)},
           ${row.latestTurnId},
           ${row.handoff === null ? null : JSON.stringify(row.handoff)},
           ${row.latestUserMessageAt},
@@ -104,6 +107,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           subagent_nickname = excluded.subagent_nickname,
           subagent_role = excluded.subagent_role,
           fork_source_thread_id = excluded.fork_source_thread_id,
+          last_known_pr_json = excluded.last_known_pr_json,
           latest_turn_id = excluded.latest_turn_id,
           handoff_json = excluded.handoff_json,
           latest_user_message_at = excluded.latest_user_message_at,
@@ -140,6 +144,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           subagent_nickname AS "subagentNickname",
           subagent_role AS "subagentRole",
           fork_source_thread_id AS "forkSourceThreadId",
+          last_known_pr_json AS "lastKnownPr",
           latest_turn_id AS "latestTurnId",
           handoff_json AS "handoff",
           latest_user_message_at AS "latestUserMessageAt",
@@ -178,6 +183,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           subagent_nickname AS "subagentNickname",
           subagent_role AS "subagentRole",
           fork_source_thread_id AS "forkSourceThreadId",
+          last_known_pr_json AS "lastKnownPr",
           latest_turn_id AS "latestTurnId",
           handoff_json AS "handoff",
           latest_user_message_at AS "latestUserMessageAt",

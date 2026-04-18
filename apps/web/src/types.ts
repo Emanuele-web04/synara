@@ -6,6 +6,7 @@ import type {
   ModelSelection,
   OrchestrationMessageSource,
   OrchestrationLatestTurn,
+  OrchestrationThreadPullRequest,
   OrchestrationProposedPlanId,
   OrchestrationSessionStatus,
   OrchestrationThreadActivity,
@@ -169,6 +170,7 @@ export interface Thread extends ThreadWorkspaceState {
   subagentRole?: string | null;
   forkSourceThreadId?: ThreadId | null;
   handoff?: ThreadHandoff | null;
+  lastKnownPr?: OrchestrationThreadPullRequest | null;
   latestUserMessageAt?: string | null;
   hasPendingApprovals?: boolean;
   hasPendingUserInput?: boolean;
@@ -195,6 +197,7 @@ export interface ThreadShell extends ThreadWorkspaceState {
   subagentRole?: string | null;
   forkSourceThreadId?: ThreadId | null;
   handoff?: ThreadHandoff | null;
+  lastKnownPr?: OrchestrationThreadPullRequest | null;
   latestUserMessageAt?: string | null;
   hasPendingApprovals?: boolean;
   hasPendingUserInput?: boolean;
@@ -233,6 +236,7 @@ export interface SidebarThreadSummary {
   hasLiveTailWork: boolean;
   forkSourceThreadId?: ThreadId | null;
   handoff?: ThreadHandoff | null;
+  lastKnownPr?: OrchestrationThreadPullRequest | null;
 }
 
 export interface ThreadSession {

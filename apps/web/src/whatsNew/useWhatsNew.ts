@@ -20,7 +20,7 @@ import {
   type WhatsNewState,
 } from "./logic";
 
-const WHATS_NEW_STORAGE_KEY = "t3code:whats-new:v1";
+const WHATS_NEW_STORAGE_KEY = "dpcode:whats-new:v1";
 
 // Using an Option<string> via Schema.NullOr keeps the "never seen" sentinel
 // explicit on disk. Omitting the field (undefined) would round-trip poorly

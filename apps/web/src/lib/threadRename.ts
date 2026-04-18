@@ -9,6 +9,7 @@
 
 import {
   type ModelSelection,
+  type OrchestrationThreadPullRequest,
   type ProjectId,
   type ProviderInteractionMode,
   type RuntimeMode,
@@ -33,6 +34,7 @@ export async function dispatchThreadRename(input: {
         envMode: DraftThreadEnvMode;
         branch: string | null;
         worktreePath: string | null;
+        lastKnownPr?: OrchestrationThreadPullRequest | null;
         createdAt: string;
       }
     | undefined;
@@ -63,6 +65,9 @@ export async function dispatchThreadRename(input: {
       envMode: input.createIfMissing.envMode,
       branch: input.createIfMissing.branch,
       worktreePath: input.createIfMissing.worktreePath,
+      ...(input.createIfMissing.lastKnownPr !== undefined
+        ? { lastKnownPr: input.createIfMissing.lastKnownPr }
+        : {}),
       createdAt: input.createIfMissing.createdAt,
     });
   } else {

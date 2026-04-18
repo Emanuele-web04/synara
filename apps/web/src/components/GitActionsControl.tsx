@@ -68,7 +68,7 @@ import {
   gitStatusQueryOptions,
   invalidateGitQueries,
 } from "~/lib/gitReactQuery";
-import { randomUUID } from "~/lib/utils";
+import { newCommandId, randomUUID } from "~/lib/utils";
 import { resolvePathLinkTarget } from "~/terminal-links";
 import { readNativeApi } from "~/nativeApi";
 import { createThreadSelector } from "~/storeSelectors";
@@ -340,6 +340,31 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
     }),
   );
   const pullMutation = useMutation(gitPullMutationOptions({ cwd: gitCwd, queryClient }));
+  const persistThreadPr = useCallback(
+    async (pr: {
+      number: number;
+      title: string;
+      url: string;
+      baseBranch: string;
+      headBranch: string;
+      state: "open" | "closed" | "merged";
+    }) => {
+      if (!activeThreadId) {
+        return;
+      }
+      const api = readNativeApi();
+      if (!api) {
+        return;
+      }
+      await api.orchestration.dispatchCommand({
+        type: "thread.meta.update",
+        commandId: newCommandId(),
+        threadId: activeThreadId,
+        lastKnownPr: pr,
+      });
+    },
+    [activeThreadId],
+  );
 
   const isRunStackedActionRunning =
     useIsMutating({ mutationKey: gitMutationKeys.runStackedAction(gitCwd) }) > 0;
@@ -621,6 +646,28 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
         const result = await promise;
         activeGitActionProgressRef.current = null;
         const resultToast = summarizeGitResult(result);
+        const persistedPr =
+          result.pr.status === "created" || result.pr.status === "opened_existing"
+            ? result.pr.number &&
+              result.pr.title &&
+              result.pr.url &&
+              result.pr.baseBranch &&
+              result.pr.headBranch
+              ? {
+                  number: result.pr.number,
+                  title: result.pr.title,
+                  url: result.pr.url,
+                  baseBranch: result.pr.baseBranch,
+                  headBranch: result.pr.headBranch,
+                  state: "open" as const,
+                }
+              : null
+            : actionStatus?.pr?.state === "open"
+              ? actionStatus.pr
+              : null;
+        if (persistedPr) {
+          void persistThreadPr(persistedPr).catch(() => undefined);
+        }
 
         const existingOpenPrUrl =
           actionStatus?.pr?.state === "open" ? actionStatus.pr.url : undefined;

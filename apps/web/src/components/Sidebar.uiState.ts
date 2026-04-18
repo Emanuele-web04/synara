@@ -1,0 +1,78 @@
+import { normalizeWorkspaceRootForComparison } from "@t3tools/shared/threadWorkspace";
+
+const SIDEBAR_UI_STATE_STORAGE_KEY = "t3code:sidebar-ui:v1";
+
+export type SidebarUiState = {
+  chatSectionExpanded: boolean;
+  chatThreadListExpanded: boolean;
+  expandedProjectThreadListCwds: string[];
+};
+
+const DEFAULT_SIDEBAR_UI_STATE: SidebarUiState = {
+  chatSectionExpanded: false,
+  chatThreadListExpanded: false,
+  expandedProjectThreadListCwds: [],
+};
+
+export function normalizeSidebarProjectThreadListCwd(cwd: string): string {
+  return normalizeWorkspaceRootForComparison(cwd);
+}
+
+export function readSidebarUiState(): SidebarUiState {
+  if (typeof window === "undefined") {
+    return DEFAULT_SIDEBAR_UI_STATE;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(SIDEBAR_UI_STATE_STORAGE_KEY);
+    if (!raw) {
+      return DEFAULT_SIDEBAR_UI_STATE;
+    }
+
+    const parsed = JSON.parse(raw) as {
+      chatSectionExpanded?: boolean;
+      chatThreadListExpanded?: boolean;
+      expandedProjectThreadListCwds?: string[];
+    };
+
+    return {
+      chatSectionExpanded: parsed.chatSectionExpanded === true,
+      chatThreadListExpanded: parsed.chatThreadListExpanded === true,
+      expandedProjectThreadListCwds: [
+        ...new Set(
+          (parsed.expandedProjectThreadListCwds ?? [])
+            .filter((cwd): cwd is string => typeof cwd === "string")
+            .map((cwd) => normalizeSidebarProjectThreadListCwd(cwd))
+            .filter((cwd) => cwd.length > 0),
+        ),
+      ],
+    };
+  } catch {
+    return DEFAULT_SIDEBAR_UI_STATE;
+  }
+}
+
+export function persistSidebarUiState(input: SidebarUiState): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(
+      SIDEBAR_UI_STATE_STORAGE_KEY,
+      JSON.stringify({
+        chatSectionExpanded: input.chatSectionExpanded,
+        chatThreadListExpanded: input.chatThreadListExpanded,
+        expandedProjectThreadListCwds: [
+          ...new Set(
+            input.expandedProjectThreadListCwds
+              .map((cwd) => normalizeSidebarProjectThreadListCwd(cwd))
+              .filter((cwd) => cwd.length > 0),
+          ),
+        ],
+      }),
+    );
+  } catch {
+    // Ignore storage errors so sidebar rendering keeps working when persistence is unavailable.
+  }
+}

@@ -47,6 +47,11 @@ interface ShortcutDefinition {
 
 const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
   {
+    command: "sidebar.addProject",
+    label: "Add project",
+    description: "Open the folder picker to import a local project into the sidebar.",
+  },
+  {
     command: "sidebar.search",
     label: "Search projects and threads",
     description: "Open the sidebar search palette from anywhere in the app.",

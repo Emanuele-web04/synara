@@ -823,6 +823,30 @@ describe("store pure functions", () => {
     });
   });
 
+  it("deduplicates duplicate checkpoint file paths in live turn diff events", () => {
+    const initialState = makeState(makeThread());
+
+    const next = applyOrchestrationEvents(initialState, [
+      makeDomainEvent("thread.turn-diff-completed", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        turnId: TurnId.makeUnsafe("turn-1"),
+        completedAt: "2026-02-27T00:02:00.000Z",
+        status: "ready",
+        files: [
+          { path: "CLAUDE.md", kind: "modified", additions: 1, deletions: 0 },
+          { path: "CLAUDE.md", kind: "modified", additions: 0, deletions: 2 },
+        ],
+        checkpointRef: CheckpointRef.makeUnsafe("checkpoint-1"),
+        assistantMessageId: MessageId.makeUnsafe("assistant-message"),
+        checkpointTurnCount: 1,
+      }),
+    ]);
+
+    expect(next.threads[0]?.turnDiffSummaries[0]?.files).toEqual([
+      { path: "CLAUDE.md", kind: "modified", additions: 1, deletions: 2 },
+    ]);
+  });
+
   it("cleans thread state on revert and clears pending proposed plans", () => {
     const initialState = makeState(
       makeThread({
@@ -1288,6 +1312,115 @@ describe("store read model sync", () => {
     expect(nextThread?.latestTurn?.completedAt).toBeNull();
     expect(nextThread?.session?.orchestrationStatus).toBe("running");
     expect(nextThread?.session?.activeTurnId).toBe(turnId);
+  });
+
+  it("stops preserving a live assistant intro once the read model settles the same turn", () => {
+    const threadId = ThreadId.makeUnsafe("thread-hot-path-settled");
+    const turnId = TurnId.makeUnsafe("turn-hot-path-settled");
+    const assistantId = MessageId.makeUnsafe("assistant-hot-path-settled");
+    const liveState = makeState(
+      makeThread({
+        id: threadId,
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        session: {
+          provider: "codex",
+          status: "running",
+          orchestrationStatus: "running",
+          activeTurnId: turnId,
+          createdAt: "2026-02-27T00:00:00.000Z",
+          updatedAt: "2026-02-27T00:00:02.000Z",
+        },
+        latestTurn: {
+          turnId,
+          state: "running",
+          requestedAt: "2026-02-27T00:00:00.000Z",
+          startedAt: "2026-02-27T00:00:00.000Z",
+          completedAt: null,
+          assistantMessageId: assistantId,
+        },
+        messages: [
+          {
+            id: MessageId.makeUnsafe("user-hot-path-settled"),
+            role: "user",
+            text: "/review",
+            turnId,
+            createdAt: "2026-02-27T00:00:00.000Z",
+            streaming: false,
+          },
+          {
+            id: assistantId,
+            role: "assistant",
+            text: "Reviewing current changes.",
+            turnId,
+            createdAt: "2026-02-27T00:00:01.000Z",
+            streaming: false,
+            source: "native",
+          },
+        ],
+      }),
+    );
+
+    const completedAt = "2026-02-27T00:00:05.000Z";
+    const next = syncServerThreadDetailHotPath(
+      liveState,
+      makeReadModelThread({
+        id: threadId,
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        latestTurn: {
+          turnId,
+          state: "completed",
+          requestedAt: "2026-02-27T00:00:00.000Z",
+          startedAt: "2026-02-27T00:00:00.000Z",
+          completedAt,
+          assistantMessageId: assistantId,
+        },
+        updatedAt: completedAt,
+        messages: [
+          {
+            id: MessageId.makeUnsafe("user-hot-path-settled"),
+            role: "user",
+            text: "/review",
+            turnId,
+            streaming: false,
+            source: "native",
+            createdAt: "2026-02-27T00:00:00.000Z",
+            updatedAt: "2026-02-27T00:00:00.000Z",
+            attachments: [],
+          },
+          {
+            id: assistantId,
+            role: "assistant",
+            text: "Review complete.",
+            turnId,
+            streaming: false,
+            source: "native",
+            createdAt: "2026-02-27T00:00:01.000Z",
+            updatedAt: completedAt,
+            attachments: [],
+          },
+        ],
+        session: {
+          threadId,
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: completedAt,
+        },
+      }),
+    );
+
+    expect(next.threadTurnStateById?.[threadId]?.latestTurn?.state).toBe("completed");
+    expect(next.threadTurnStateById?.[threadId]?.latestTurn?.completedAt).toBe(completedAt);
+    expect(next.threadSessionById?.[threadId]?.orchestrationStatus).toBe("ready");
+    expect(next.threadSessionById?.[threadId]?.activeTurnId).toBeUndefined();
   });
 
   it("updates sidebar summaries during hot-path thread detail syncs", () => {

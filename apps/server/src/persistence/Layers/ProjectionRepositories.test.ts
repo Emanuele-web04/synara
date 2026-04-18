@@ -89,6 +89,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         associatedWorktreePath: null,
         associatedWorktreeBranch: null,
         associatedWorktreeRef: null,
+        lastKnownPr: null,
         latestTurnId: null,
         handoff: null,
         latestUserMessageAt: null,

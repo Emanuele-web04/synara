@@ -144,6 +144,7 @@ import {
   DEFAULT_THREAD_TERMINAL_ID,
   MAX_TERMINALS_PER_GROUP,
   type ChatMessage,
+  type Thread,
   type TurnDiffSummary,
 } from "../types";
 import { useTheme } from "../hooks/useTheme";
@@ -1009,14 +1010,25 @@ export default function ChatView({
   }, []);
 
   const openOrReuseProjectDraftThread = useCallback(
-    async (input: { branch: string; worktreePath: string | null; envMode: DraftThreadEnvMode }) => {
+    async (input: {
+      branch: string;
+      worktreePath: string | null;
+      envMode: DraftThreadEnvMode;
+      lastKnownPr?: Thread["lastKnownPr"];
+    }) => {
       if (!activeProject) {
         throw new Error("No active project is available for this pull request.");
       }
+      const draftThreadContext = {
+        branch: input.branch,
+        worktreePath: input.worktreePath,
+        envMode: input.envMode,
+        ...(input.lastKnownPr !== undefined ? { lastKnownPr: input.lastKnownPr } : {}),
+      };
       const storedDraftThread = getDraftThreadByProjectId(activeProject.id);
       if (storedDraftThread) {
-        setDraftThreadContext(storedDraftThread.threadId, input);
-        setProjectDraftThreadId(activeProject.id, storedDraftThread.threadId, input);
+        setDraftThreadContext(storedDraftThread.threadId, draftThreadContext);
+        setProjectDraftThreadId(activeProject.id, storedDraftThread.threadId, draftThreadContext);
         if (storedDraftThread.threadId !== threadId) {
           await navigate({
             to: "/$threadId",
@@ -1032,18 +1044,18 @@ export default function ChatView({
         activeDraftThread?.projectId === activeProject.id &&
         activeDraftThread.entryPoint === "chat"
       ) {
-        setDraftThreadContext(threadId, input);
-        setProjectDraftThreadId(activeProject.id, threadId, input);
+        setDraftThreadContext(threadId, draftThreadContext);
+        setProjectDraftThreadId(activeProject.id, threadId, draftThreadContext);
         return;
       }
 
       clearProjectDraftThreadId(activeProject.id);
       const nextThreadId = newThreadId();
       setProjectDraftThreadId(activeProject.id, nextThreadId, {
+        ...draftThreadContext,
         createdAt: new Date().toISOString(),
         runtimeMode: DEFAULT_RUNTIME_MODE,
         interactionMode: DEFAULT_INTERACTION_MODE,
-        ...input,
       });
       await navigate({
         to: "/$threadId",
@@ -1064,11 +1076,16 @@ export default function ChatView({
   );
 
   const handlePreparedPullRequestThread = useCallback(
-    async (input: { branch: string; worktreePath: string | null }) => {
+    async (input: {
+      branch: string;
+      worktreePath: string | null;
+      pullRequest: NonNullable<Thread["lastKnownPr"]>;
+    }) => {
       await openOrReuseProjectDraftThread({
         branch: input.branch,
         worktreePath: input.worktreePath,
         envMode: input.worktreePath ? "worktree" : "local",
+        lastKnownPr: input.pullRequest,
       });
     },
     [openOrReuseProjectDraftThread],
@@ -4579,6 +4596,7 @@ export default function ChatView({
           envMode: nextThreadEnvMode,
           branch: nextThreadBranch,
           worktreePath: nextThreadWorktreePath,
+          lastKnownPr: activeThread.lastKnownPr ?? null,
           createdAt: activeThread.createdAt,
         });
         if (targetProjectKindForSend === "chat") {
@@ -5113,6 +5131,7 @@ export default function ChatView({
         envMode: activeThread.envMode ?? (activeThread.worktreePath ? "worktree" : "local"),
         branch: activeThread.branch,
         worktreePath: activeThread.worktreePath,
+        lastKnownPr: activeThread.lastKnownPr ?? null,
         associatedWorktreePath: activeThreadAssociatedWorktree.associatedWorktreePath,
         associatedWorktreeBranch: activeThreadAssociatedWorktree.associatedWorktreeBranch,
         associatedWorktreeRef: activeThreadAssociatedWorktree.associatedWorktreeRef,
@@ -5979,6 +5998,9 @@ export default function ChatView({
             envMode: activeThread.envMode ?? "local",
             branch: activeThread.branch,
             worktreePath: activeThread.worktreePath,
+            ...(activeThread.lastKnownPr !== undefined
+              ? { lastKnownPr: activeThread.lastKnownPr }
+              : {}),
             createdAt: activeThread.createdAt,
           }
         : undefined,

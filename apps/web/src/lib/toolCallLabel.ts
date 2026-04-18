@@ -10,6 +10,26 @@ export function normalizeCompactToolLabel(value: string): string {
   return value.replace(/\s+(?:complete|completed|done|finished|success|succeeded)\s*$/i, "").trim();
 }
 
+// Turns internal MCP identifiers into readable inline labels for timeline rows.
+function humanizeMcpToolIdentifier(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("mcp__")) {
+    return null;
+  }
+
+  const [, server, tool, ...rest] = trimmed.split("__");
+  const normalizedServer = humanizeMcpToken(server);
+  const normalizedTool = [tool, ...rest]
+    .map((part) => humanizeMcpToken(part))
+    .filter((part) => part.length > 0)
+    .join(" ");
+
+  if (!normalizedServer || !normalizedTool) {
+    return null;
+  }
+  return `${normalizedServer}: ${normalizedTool}`;
+}
+
 export interface ReadableToolTitleInput {
   readonly title?: string | null;
   readonly fallbackLabel: string;
@@ -102,6 +122,10 @@ function normalizeToolDescriptor(value: string | null): string | null {
   if (!value) {
     return null;
   }
+  const mcpIdentifier = humanizeMcpToolIdentifier(value);
+  if (mcpIdentifier) {
+    return mcpIdentifier;
+  }
   const normalized = value.replace(/[_-]/g, " ").replace(/\s+/g, " ").trim();
   if (!normalized) {
     return null;
@@ -118,6 +142,30 @@ function normalizeToolDescriptor(value: string | null): string | null {
     return null;
   }
   return collapsed.length > 64 ? `${collapsed.slice(0, 61).trimEnd()}...` : collapsed;
+}
+
+function humanizeMcpToken(value: string | undefined): string {
+  if (!value) {
+    return "";
+  }
+  const normalized = value
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) {
+    return "";
+  }
+
+  return normalized
+    .split(" ")
+    .map((token) => {
+      const lower = token.toLowerCase();
+      if (lower === "mcp") return "MCP";
+      if (token.toUpperCase() === token && token.length <= 5) return token;
+      return `${lower.charAt(0).toUpperCase()}${lower.slice(1)}`;
+    })
+    .join(" ");
 }
 
 function extractToolDescriptorFromPayload(

@@ -279,6 +279,7 @@ export function projectEvent(
             subagentNickname: payload.subagentNickname,
             subagentRole: payload.subagentRole,
             forkSourceThreadId: payload.forkSourceThreadId,
+            lastKnownPr: payload.lastKnownPr ?? null,
             latestTurn: null,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
@@ -372,6 +373,7 @@ export function projectEvent(
               ? { subagentNickname: payload.subagentNickname }
               : {}),
             ...(payload.subagentRole !== undefined ? { subagentRole: payload.subagentRole } : {}),
+            ...(payload.lastKnownPr !== undefined ? { lastKnownPr: payload.lastKnownPr } : {}),
             ...(payload.handoff !== undefined ? { handoff: payload.handoff } : {}),
             updatedAt: payload.updatedAt,
           }),
