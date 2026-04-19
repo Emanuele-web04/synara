@@ -7,7 +7,7 @@
 
 import { type KeyboardEvent } from "react";
 
-import { RocketIcon, XIcon } from "~/lib/icons";
+import { ArrowUpIcon, XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
 import type { WhatsNewEntry } from "./logic";
@@ -115,7 +115,7 @@ export function WhatsNewPopoutCard({
               className="flex h-full w-full items-center justify-center bg-[radial-gradient(120%_140%_at_10%_0%,color-mix(in_srgb,var(--color-primary)_38%,transparent)_0%,transparent_60%),radial-gradient(100%_120%_at_100%_100%,color-mix(in_srgb,var(--color-primary)_22%,transparent)_0%,transparent_70%)]"
             >
               <span className="inline-flex size-9 items-center justify-center rounded-full bg-background/60 text-primary shadow-sm ring-1 ring-white/10 backdrop-blur">
-                <RocketIcon className="size-4" />
+                <ArrowUpIcon className="size-4" />
               </span>
             </div>
           )}

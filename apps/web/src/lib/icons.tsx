@@ -12,6 +12,7 @@ import {
   IconArrowDown,
   IconArrowLeft,
   IconArrowRight,
+  IconArrowUp,
   IconArrowsUpDown,
   IconBell,
   IconBolt,
@@ -109,6 +110,7 @@ export const ArrowLeftIcon = adaptIcon(IconArrowLeft);
 export const BellIcon = adaptIcon(IconBell);
 export const ArrowRightIcon = adaptIcon(IconArrowRight);
 export const ArrowDownIcon = adaptIcon(IconArrowDown);
+export const ArrowUpIcon = adaptIcon(IconArrowUp);
 export const ArrowUpDownIcon = adaptIcon(IconArrowsUpDown);
 export const BotIcon = adaptIcon(IconRobot);
 export const BugIcon = adaptIcon(IconBug);

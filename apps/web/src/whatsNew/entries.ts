@@ -22,6 +22,42 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.0.31",
+    date: "Apr 19",
+    features: [
+      {
+        id: "gemini-provider-support",
+        title: "♊ Gemini support is here",
+        description:
+          "Use Gemini alongside Codex and Claude Agent, with provider-aware models and handoff support built into the app.",
+      },
+      {
+        id: "custom-provider-binaries",
+        title: "🛠️ Custom binary paths for every provider",
+        description:
+          "Point DP Code at your own Codex, Claude, or Gemini binary when your setup lives outside the default install path.",
+      },
+      {
+        id: "assistant-selections-as-context",
+        title: "📎 Reuse assistant replies as attachments",
+        description:
+          "Select parts of an assistant response and send them back as structured context in your next prompt.",
+      },
+      {
+        id: "stronger-thread-continuity",
+        title: "🧵 Better thread continuity",
+        description:
+          "The app now remembers your last open thread, carries pull request context into draft threads, and keeps sidebar state more stable.",
+      },
+      {
+        id: "stability-and-update-polish",
+        title: "🩹 Smoother recovery and update checks",
+        description:
+          "Project creation recovery, foreground update checks, and a few rough edges around long messages and download state have been tightened up.",
+      },
+    ],
+  },
+  {
     version: "0.0.30",
     date: "Apr 18",
     features: [
