@@ -22,6 +22,30 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.0.32",
+    date: "Apr 19",
+    features: [
+      {
+        id: "steering-conversation-label",
+        title: "↪︎ Steering messages are clearly marked",
+        description:
+          "Messages sent with steering now keep a lightweight 'Steering conversation' label above the bubble, even after the app reconciles with the server.",
+      },
+      {
+        id: "calmer-foreground-update-checks",
+        title: "🚦 Less aggressive background return checks",
+        description:
+          "Desktop update checks now wait for a real background return instead of reacting to every tiny blur/focus bounce.",
+      },
+      {
+        id: "update-check-timeout-recovery",
+        title: "🛟 No more stuck checking state",
+        description:
+          "If the updater never answers, DP Code now times out and recovers instead of hanging on a permanent Checking status.",
+      },
+    ],
+  },
+  {
     version: "0.0.31",
     date: "Apr 19",
     features: [

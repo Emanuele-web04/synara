@@ -32,6 +32,7 @@ import {
   GlobeIcon,
   HammerIcon,
   type LucideIcon,
+  QueueArrow,
   SquarePenIcon,
   TerminalIcon,
   Undo2Icon,
@@ -138,6 +139,31 @@ const AGENT_COLOR_STYLES: Record<string, { bg: string; text: string }> = {
   amber: DEFAULT_AGENT_COLOR,
   orange: { bg: "rgb(249 115 22 / 0.15)", text: "rgb(249 115 22)" },
 };
+
+// Keeps the steer marker visually attached to the whole sent-message stack.
+function UserDispatchModeChip({
+  dispatchMode,
+  hasLeadingMedia,
+}: {
+  dispatchMode: TimelineMessage["dispatchMode"];
+  hasLeadingMedia: boolean;
+}) {
+  if (dispatchMode !== "steer") {
+    return null;
+  }
+
+  return (
+    <div
+      className={cn(
+        "inline-flex items-center gap-1.5 self-end px-0 text-[11px] font-normal tracking-[0.01em] text-muted-foreground/78",
+        hasLeadingMedia ? "mb-3" : "mb-1.5",
+      )}
+    >
+      <QueueArrow className="size-3 shrink-0 text-muted-foreground/75" />
+      <span>Steering conversation</span>
+    </div>
+  );
+}
 
 function basename(value: string): string {
   const slash = Math.max(value.lastIndexOf("/"), value.lastIndexOf("\\"));
@@ -580,10 +606,15 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             terminalContexts.length === 0 &&
             hasOnlyInlineSkillChips(userMessagePreview.text);
           const canRevertAgentWork = typeof row.revertTurnCount === "number";
+          const hasLeadingMedia = renderedAssistantSelections.length > 0 || userImages.length > 0;
           return (
             <div className="flex w-full justify-end">
               <div className="group flex max-w-[80%] flex-col items-end gap-px">
                 {/* Keep user-message chrome outside the bubble so the message reads as one simple block. */}
+                <UserDispatchModeChip
+                  dispatchMode={row.message.dispatchMode}
+                  hasLeadingMedia={hasLeadingMedia}
+                />
                 {renderedAssistantSelections.length > 0 && (
                   <div className="mb-1 flex max-w-[240px] flex-wrap justify-end gap-1.5 self-end">
                     <AssistantSelectionsSummaryChip selections={renderedAssistantSelections} />

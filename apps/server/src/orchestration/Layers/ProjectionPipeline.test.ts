@@ -2270,4 +2270,48 @@ it.layer(
       ]);
     }),
   );
+
+  it.effect("projects steer dispatch mode onto the triggering user message", () =>
+    Effect.gen(function* () {
+      const eventStore = yield* OrchestrationEventStore;
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.makeUnsafe("thread-steer-chip");
+      const messageId = MessageId.makeUnsafe("message-steer-chip");
+      const createdAt = "2026-02-27T11:00:00.000Z";
+
+      yield* eventStore.append({
+        type: "thread.message-sent",
+        eventId: EventId.makeUnsafe("evt-steer-chip-1"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: createdAt,
+        commandId: CommandId.makeUnsafe("cmd-steer-chip-1"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-steer-chip-1"),
+        metadata: {},
+        payload: {
+          threadId,
+          messageId,
+          role: "user",
+          text: "hello",
+          dispatchMode: "steer",
+          turnId: null,
+          streaming: false,
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+
+      yield* projectionPipeline.bootstrap;
+
+      const rows = yield* sql<{ readonly dispatchMode: string | null }>`
+        SELECT dispatch_mode AS "dispatchMode"
+        FROM projection_thread_messages
+        WHERE message_id = ${messageId}
+      `;
+
+      assert.deepEqual(rows, [{ dispatchMode: "steer" }]);
+    }),
+  );
 });

@@ -721,6 +721,7 @@ function normalizeChatMessage(
     previous &&
     previous.role === incoming.role &&
     previous.text === incoming.text &&
+    previous.dispatchMode === incoming.dispatchMode &&
     previous.turnId === incoming.turnId &&
     previous.createdAt === incoming.createdAt &&
     previous.streaming === incoming.streaming &&
@@ -735,6 +736,7 @@ function normalizeChatMessage(
     id: incoming.id,
     role: incoming.role,
     text: incoming.text,
+    ...(incoming.dispatchMode ? { dispatchMode: incoming.dispatchMode } : {}),
     turnId: incoming.turnId,
     createdAt: incoming.createdAt,
     streaming: incoming.streaming,
@@ -785,6 +787,7 @@ function readModelMessageFromChatMessage(
     id: message.id,
     role: message.role,
     text: message.text,
+    ...(message.dispatchMode ? { dispatchMode: message.dispatchMode } : {}),
     turnId: message.turnId ?? null,
     streaming: message.streaming,
     source: message.source ?? "native",
@@ -855,6 +858,7 @@ function mergeReadModelMessagesWithLiveHotPath(
     mergedById.set(incomingMessage.id, {
       ...incomingMessage,
       text: previousMessage.text,
+      dispatchMode: previousMessage.dispatchMode ?? incomingMessage.dispatchMode,
       turnId: previousMessage.turnId ?? incomingMessage.turnId ?? null,
       source: previousMessage.source ?? incomingMessage.source ?? "native",
       streaming: previousMessage.streaming,
@@ -2419,6 +2423,10 @@ function mergeStreamingMessage(
     : (incomingMessage.completedAt ?? existingMessage.completedAt);
   const nextTurnId =
     incomingMessage.turnId !== undefined ? incomingMessage.turnId : existingMessage.turnId;
+  const nextDispatchMode =
+    incomingMessage.dispatchMode !== undefined
+      ? incomingMessage.dispatchMode
+      : existingMessage.dispatchMode;
   const nextSource = incomingMessage.source ?? existingMessage.source;
 
   if (
@@ -2427,6 +2435,7 @@ function mergeStreamingMessage(
     existingMessage.attachments === nextAttachments &&
     existingMessage.completedAt === nextCompletedAt &&
     existingMessage.turnId === nextTurnId &&
+    existingMessage.dispatchMode === nextDispatchMode &&
     existingMessage.source === nextSource
   ) {
     return null;
@@ -2438,6 +2447,7 @@ function mergeStreamingMessage(
     streaming: incomingMessage.streaming,
     ...(nextAttachments ? { attachments: nextAttachments } : {}),
     ...(nextTurnId !== undefined ? { turnId: nextTurnId } : {}),
+    ...(nextDispatchMode !== undefined ? { dispatchMode: nextDispatchMode } : {}),
     ...(nextSource !== undefined ? { source: nextSource } : {}),
     ...(nextCompletedAt !== undefined ? { completedAt: nextCompletedAt } : {}),
   };
@@ -2450,6 +2460,7 @@ function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEve
       id: payload.messageId,
       role: payload.role,
       text: payload.text,
+      dispatchMode: payload.dispatchMode,
       turnId: payload.turnId,
       attachments: payload.attachments ?? [],
       streaming: payload.streaming,

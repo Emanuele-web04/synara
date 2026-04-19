@@ -24,6 +24,9 @@ const USER_ATTACHMENT_THUMBNAIL_GAP_PX = 8;
 const USER_ATTACHMENT_THUMBNAILS_PER_ROW = 4;
 const USER_ATTACHMENT_ROW_MARGIN_BOTTOM_PX = 4;
 const USER_MESSAGE_TOGGLE_HEIGHT_PX = 20;
+const USER_DISPATCH_CHIP_HEIGHT_PX = 24;
+const USER_DISPATCH_CHIP_MARGIN_BOTTOM_PX = 6;
+const USER_DISPATCH_CHIP_WITH_MEDIA_MARGIN_BOTTOM_PX = 12;
 const USER_BUBBLE_WIDTH_RATIO = 0.8;
 const USER_BUBBLE_HORIZONTAL_PADDING_PX = 32;
 const ASSISTANT_MESSAGE_HORIZONTAL_PADDING_PX = 8;
@@ -56,6 +59,7 @@ interface TimelineMessageHeightInput {
   role: "user" | "assistant" | "system";
   text: string;
   attachments?: ReadonlyArray<{ id: string; type?: "image" | "assistant-selection" }>;
+  dispatchMode?: "queue" | "steer";
   diffSummaryFiles?: ReadonlyArray<TurnDiffFileChange>;
   diffSummaryAllDirectoriesExpanded?: boolean;
   inlineToolEntries?: ReadonlyArray<TimelineWorkEntryHeightInput>;
@@ -312,8 +316,21 @@ export function estimateTimelineMessageHeight(
           assistantSelectionHeight +
           (renderedText.length > 0 ? USER_ATTACHMENT_ROW_MARGIN_BOTTOM_PX : 0)
         : 0;
+    const dispatchChipHeight =
+      message.dispatchMode === "steer"
+        ? USER_DISPATCH_CHIP_HEIGHT_PX +
+          (imageAttachmentCount > 0 || assistantSelectionCount > 0
+            ? USER_DISPATCH_CHIP_WITH_MEDIA_MARGIN_BOTTOM_PX
+            : USER_DISPATCH_CHIP_MARGIN_BOTTOM_PX)
+        : 0;
     const toggleHeight = userMessagePreview.collapsible ? USER_MESSAGE_TOGGLE_HEIGHT_PX : 0;
-    return USER_BASE_HEIGHT_PX + estimatedLines * lineHeightPx + attachmentHeight + toggleHeight;
+    return (
+      USER_BASE_HEIGHT_PX +
+      estimatedLines * lineHeightPx +
+      attachmentHeight +
+      dispatchChipHeight +
+      toggleHeight
+    );
   }
 
   // `system` messages are not rendered in the chat timeline, but keep a stable

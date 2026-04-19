@@ -5,6 +5,7 @@ import {
   ChatAttachment,
   ProviderMentionReference,
   ProviderSkillReference,
+  TurnDispatchMode,
 } from "@t3tools/contracts";
 
 import { toPersistenceSqlError } from "../Errors.ts";
@@ -22,6 +23,7 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
     attachments: Schema.NullOr(Schema.fromJsonString(Schema.Array(ChatAttachment))),
     skills: Schema.NullOr(Schema.fromJsonString(Schema.Array(ProviderSkillReference))),
     mentions: Schema.NullOr(Schema.fromJsonString(Schema.Array(ProviderMentionReference))),
+    dispatchMode: Schema.NullOr(TurnDispatchMode),
   }),
 );
 
@@ -45,6 +47,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           attachments_json,
           skills_json,
           mentions_json,
+          dispatch_mode,
           is_streaming,
           source,
           created_at,
@@ -80,6 +83,14 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
               WHERE message_id = ${row.messageId}
             )
           ),
+          COALESCE(
+            ${row.dispatchMode ?? null},
+            (
+              SELECT dispatch_mode
+              FROM projection_thread_messages
+              WHERE message_id = ${row.messageId}
+            )
+          ),
           ${row.isStreaming ? 1 : 0},
           ${row.source},
           ${row.createdAt},
@@ -103,6 +114,10 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
             excluded.mentions_json,
             projection_thread_messages.mentions_json
           ),
+          dispatch_mode = COALESCE(
+            excluded.dispatch_mode,
+            projection_thread_messages.dispatch_mode
+          ),
           is_streaming = excluded.is_streaming,
           source = excluded.source,
           created_at = excluded.created_at,
@@ -125,6 +140,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           attachments_json AS "attachments",
           skills_json AS "skills",
           mentions_json AS "mentions",
+          dispatch_mode AS "dispatchMode",
           is_streaming AS "isStreaming",
           source,
           created_at AS "createdAt",
@@ -168,6 +184,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           ...(row.attachments !== null ? { attachments: row.attachments } : {}),
           ...(row.skills !== null ? { skills: row.skills } : {}),
           ...(row.mentions !== null ? { mentions: row.mentions } : {}),
+          ...(row.dispatchMode ? { dispatchMode: row.dispatchMode } : {}),
         })),
       ),
     );

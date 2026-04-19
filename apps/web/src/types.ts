@@ -5,6 +5,7 @@
 import type {
   ModelSelection,
   OrchestrationMessageSource,
+  TurnDispatchMode,
   OrchestrationLatestTurn,
   OrchestrationThreadPullRequest,
   OrchestrationProposedPlanId,
@@ -86,6 +87,7 @@ export interface ChatMessage {
   role: "user" | "assistant" | "system";
   text: string;
   attachments?: ChatAttachment[];
+  dispatchMode?: TurnDispatchMode;
   turnId?: TurnId | null;
   createdAt: string;
   completedAt?: string | undefined;
