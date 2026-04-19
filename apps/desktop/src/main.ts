@@ -109,6 +109,8 @@ const APP_RUN_ID = Crypto.randomBytes(6).toString("hex");
 const AUTO_UPDATE_STARTUP_DELAY_MS = 15_000;
 const AUTO_UPDATE_POLL_INTERVAL_MS = 4 * 60 * 60 * 1000;
 const AUTO_UPDATE_FOREGROUND_RECHECK_MIN_INTERVAL_MS = 5 * 60 * 1000;
+const AUTO_UPDATE_FOREGROUND_RECHECK_MIN_BACKGROUND_MS = 30 * 1000;
+const AUTO_UPDATE_CHECK_TIMEOUT_MS = 45 * 1000;
 const DESKTOP_UPDATE_CHANNEL = "latest";
 const DESKTOP_UPDATE_ALLOW_PRERELEASE = false;
 
@@ -358,6 +360,7 @@ let updaterConfigured = false;
 let updateState: DesktopUpdateState = initialUpdateState();
 let updateBackgroundedAtMs: number | null = null;
 let updateBackgroundBlurTimer: ReturnType<typeof setTimeout> | null = null;
+let updateCheckTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
 
 function resolveUpdaterErrorContext(): DesktopUpdateErrorContext {
   if (updateDownloadInFlight) return "download";
@@ -928,20 +931,39 @@ function shouldEnableAutoUpdates(): boolean {
   );
 }
 
-function shouldTriggerForegroundUpdateCheck(foregroundedAtMs: number): boolean {
-  return shouldCheckForUpdatesOnForeground({
-    checkedAt: updateState.checkedAt,
-    backgroundedAtMs: updateBackgroundedAtMs,
-    foregroundedAtMs,
-    minIntervalMs: AUTO_UPDATE_FOREGROUND_RECHECK_MIN_INTERVAL_MS,
-  });
-}
-
 function clearUpdateBackgroundBlurTimer(): void {
   if (updateBackgroundBlurTimer) {
     clearTimeout(updateBackgroundBlurTimer);
     updateBackgroundBlurTimer = null;
   }
+}
+
+// Fail closed if electron-updater never emits a terminal check outcome.
+function clearUpdateCheckTimeoutTimer(): void {
+  if (updateCheckTimeoutTimer) {
+    clearTimeout(updateCheckTimeoutTimer);
+    updateCheckTimeoutTimer = null;
+  }
+}
+
+function armUpdateCheckTimeout(reason: string): void {
+  clearUpdateCheckTimeoutTimer();
+  updateCheckTimeoutTimer = setTimeout(() => {
+    updateCheckTimeoutTimer = null;
+    if (updateState.status !== "checking") {
+      return;
+    }
+    updateCheckInFlight = false;
+    setUpdateState(
+      reduceDesktopUpdateStateOnCheckFailure(
+        updateState,
+        "Timed out while checking for updates. Try again.",
+        new Date().toISOString(),
+      ),
+    );
+    console.error(`[desktop-updater] Update check timed out (${reason}).`);
+  }, AUTO_UPDATE_CHECK_TIMEOUT_MS);
+  updateCheckTimeoutTimer.unref();
 }
 
 function isDesktopAppForegrounded(): boolean {
@@ -965,16 +987,28 @@ function handleDesktopAppForegrounded(): void {
   clearUpdateBackgroundBlurTimer();
   clearUnreadNotificationBadge();
   const foregroundedAtMs = Date.now();
-  if (!shouldTriggerForegroundUpdateCheck(foregroundedAtMs)) {
+  const backgroundedAtMs = updateBackgroundedAtMs;
+  updateBackgroundedAtMs = null;
+  const shouldCheck = shouldCheckForUpdatesOnForeground({
+    checkedAt: updateState.checkedAt,
+    backgroundedAtMs,
+    foregroundedAtMs,
+    minBackgroundDurationMs: AUTO_UPDATE_FOREGROUND_RECHECK_MIN_BACKGROUND_MS,
+    minIntervalMs: AUTO_UPDATE_FOREGROUND_RECHECK_MIN_INTERVAL_MS,
+  });
+  if (!shouldCheck) {
     return;
   }
-  updateBackgroundedAtMs = null;
   void checkForUpdates("foreground");
 }
 
 async function checkForUpdates(reason: string): Promise<void> {
   if (isQuitting || !updaterConfigured || updateCheckInFlight) return;
-  if (updateState.status === "downloading" || updateState.status === "downloaded") {
+  if (
+    updateState.status === "checking" ||
+    updateState.status === "downloading" ||
+    updateState.status === "downloaded"
+  ) {
     console.info(
       `[desktop-updater] Skipping update check (${reason}) while status=${updateState.status}.`,
     );
@@ -982,11 +1016,13 @@ async function checkForUpdates(reason: string): Promise<void> {
   }
   updateCheckInFlight = true;
   setUpdateState(reduceDesktopUpdateStateOnCheckStart(updateState, new Date().toISOString()));
+  armUpdateCheckTimeout(reason);
   console.info(`[desktop-updater] Checking for updates (${reason})...`);
 
   try {
     await autoUpdater.checkForUpdates();
   } catch (error: unknown) {
+    clearUpdateCheckTimeoutTimer();
     const message = error instanceof Error ? error.message : String(error);
     setUpdateState(
       reduceDesktopUpdateStateOnCheckFailure(updateState, message, new Date().toISOString()),
@@ -1087,6 +1123,7 @@ function configureAutoUpdater(): void {
     console.info("[desktop-updater] Looking for updates...");
   });
   autoUpdater.on("update-available", (info) => {
+    clearUpdateCheckTimeoutTimer();
     setUpdateState(
       reduceDesktopUpdateStateOnUpdateAvailable(
         updateState,
@@ -1098,11 +1135,13 @@ function configureAutoUpdater(): void {
     console.info(`[desktop-updater] Update available: ${info.version}`);
   });
   autoUpdater.on("update-not-available", () => {
+    clearUpdateCheckTimeoutTimer();
     setUpdateState(reduceDesktopUpdateStateOnNoUpdate(updateState, new Date().toISOString()));
     lastLoggedDownloadMilestone = -1;
     console.info("[desktop-updater] No updates available.");
   });
   autoUpdater.on("error", (error) => {
+    clearUpdateCheckTimeoutTimer();
     const message = formatErrorMessage(error);
     if (!updateCheckInFlight && !updateDownloadInFlight) {
       setUpdateState({
@@ -1763,6 +1802,7 @@ app.on("before-quit", () => {
   isQuitting = true;
   writeDesktopLogHeader("before-quit received");
   clearUpdateBackgroundBlurTimer();
+  clearUpdateCheckTimeoutTimer();
   clearUpdatePollTimer();
   cancelBackendReadinessWait();
   stopBackend();
@@ -1814,6 +1854,7 @@ if (process.platform !== "win32") {
     isQuitting = true;
     writeDesktopLogHeader("SIGINT received");
     clearUpdateBackgroundBlurTimer();
+    clearUpdateCheckTimeoutTimer();
     clearUpdatePollTimer();
     cancelBackendReadinessWait();
     stopBackend();
@@ -1825,6 +1866,7 @@ if (process.platform !== "win32") {
     if (isQuitting) return;
     isQuitting = true;
     writeDesktopLogHeader("SIGTERM received");
+    clearUpdateCheckTimeoutTimer();
     clearUpdatePollTimer();
     cancelBackendReadinessWait();
     stopBackend();

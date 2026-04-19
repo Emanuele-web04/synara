@@ -18,8 +18,10 @@ import {
   getProjectSortTimestamp,
   hasUnseenCompletion,
   isDuplicateProjectCreateError,
+  pruneExpandedProjectThreadListsForCollapsedProjects,
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadEnvMode,
+  resolveSidebarRestorableThreadRoute,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
   shouldPrunePinnedThreads,
@@ -107,6 +109,63 @@ describe("resolveSidebarNewThreadEnvMode", () => {
         defaultEnvMode: "worktree",
       }),
     ).toBe("local");
+  });
+});
+
+describe("resolveSidebarRestorableThreadRoute", () => {
+  it("returns the last thread route when the thread still exists", () => {
+    expect(
+      resolveSidebarRestorableThreadRoute({
+        lastThreadRoute: {
+          threadId: "thread-123",
+          splitViewId: "split-456",
+        },
+        availableThreadIds: new Set(["thread-123", "thread-789"]),
+      }),
+    ).toEqual({
+      threadId: "thread-123",
+      splitViewId: "split-456",
+    });
+  });
+
+  it("returns null when the remembered thread no longer exists", () => {
+    expect(
+      resolveSidebarRestorableThreadRoute({
+        lastThreadRoute: {
+          threadId: "thread-123",
+        },
+        availableThreadIds: new Set(["thread-789"]),
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("pruneExpandedProjectThreadListsForCollapsedProjects", () => {
+  it("clears remembered show-more state when a project is collapsed", () => {
+    const current = new Set(["/Users/tester/Code/one", "/Users/tester/Code/two"]);
+
+    const next = pruneExpandedProjectThreadListsForCollapsedProjects({
+      expandedProjectThreadListCwds: current,
+      projects: [
+        { cwd: "/Users/tester/Code/one", expanded: false },
+        { cwd: "/Users/tester/Code/two", expanded: true },
+      ],
+      normalizeProjectCwd: (cwd) => cwd.replace(/\/+$/, ""),
+    });
+
+    expect([...next]).toEqual(["/Users/tester/Code/two"]);
+  });
+
+  it("preserves the existing set when no collapsed project needs pruning", () => {
+    const current = new Set(["/Users/tester/Code/one"]);
+
+    const next = pruneExpandedProjectThreadListsForCollapsedProjects({
+      expandedProjectThreadListCwds: current,
+      projects: [{ cwd: "/Users/tester/Code/one", expanded: true }],
+      normalizeProjectCwd: (cwd) => cwd.replace(/\/+$/, ""),
+    });
+
+    expect(next).toBe(current);
   });
 });
 

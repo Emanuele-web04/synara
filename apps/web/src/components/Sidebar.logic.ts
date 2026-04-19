@@ -23,6 +23,10 @@ export {
 export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
 export const SIDEBAR_THREAD_PREWARM_LIMIT = 10;
 export type SidebarNewThreadEnvMode = "local" | "worktree";
+export type SidebarLastThreadRoute = {
+  threadId: string;
+  splitViewId?: string | undefined;
+};
 type SidebarProject = {
   id: string;
   name: string;
@@ -100,6 +104,52 @@ export function resolveSidebarNewThreadEnvMode(input: {
   defaultEnvMode: SidebarNewThreadEnvMode;
 }): SidebarNewThreadEnvMode {
   return input.requestedEnvMode ?? input.defaultEnvMode;
+}
+
+// Reuses the last visited thread route when leaving special views like settings.
+export function resolveSidebarRestorableThreadRoute(input: {
+  lastThreadRoute: SidebarLastThreadRoute | null;
+  availableThreadIds: ReadonlySet<string>;
+}): SidebarLastThreadRoute | null {
+  const { lastThreadRoute, availableThreadIds } = input;
+  if (!lastThreadRoute) {
+    return null;
+  }
+
+  return availableThreadIds.has(lastThreadRoute.threadId) ? lastThreadRoute : null;
+}
+
+// Drops remembered "show more" state for projects that are currently collapsed.
+export function pruneExpandedProjectThreadListsForCollapsedProjects<
+  T extends Pick<Project, "cwd" | "expanded">,
+>(input: {
+  expandedProjectThreadListCwds: ReadonlySet<string>;
+  projects: readonly T[];
+  normalizeProjectCwd: (cwd: string) => string;
+}): ReadonlySet<string> {
+  const { expandedProjectThreadListCwds, normalizeProjectCwd, projects } = input;
+  const collapsedProjectCwds = new Set(
+    projects
+      .filter((project) => !project.expanded)
+      .map((project) => normalizeProjectCwd(project.cwd))
+      .filter((cwd) => cwd.length > 0),
+  );
+
+  if (collapsedProjectCwds.size === 0) {
+    return expandedProjectThreadListCwds;
+  }
+
+  let changed = false;
+  const nextExpandedProjectThreadListCwds = new Set<string>();
+  for (const cwd of expandedProjectThreadListCwds) {
+    if (collapsedProjectCwds.has(cwd)) {
+      changed = true;
+      continue;
+    }
+    nextExpandedProjectThreadListCwds.add(cwd);
+  }
+
+  return changed ? nextExpandedProjectThreadListCwds : expandedProjectThreadListCwds;
 }
 
 export function resolveThreadRowClassName(input: {

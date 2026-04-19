@@ -611,7 +611,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 {showUserText && (
                   <div
                     className={cn(
-                      "w-max max-w-full min-w-0 self-end rounded-lg border border-border/70 bg-secondary px-3",
+                      "w-max max-w-full min-w-0 self-end rounded-lg bg-secondary px-3",
                       bubbleIsChipOnly ? "py-0.5" : "pt-[3px] pb-[5px]",
                     )}
                   >

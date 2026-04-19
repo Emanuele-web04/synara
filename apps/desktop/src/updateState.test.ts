@@ -181,6 +181,7 @@ describe("shouldCheckForUpdatesOnForeground", () => {
         checkedAt: "2026-03-04T00:00:00.000Z",
         backgroundedAtMs: null,
         foregroundedAtMs: Date.parse("2026-03-04T00:05:00.000Z"),
+        minBackgroundDurationMs: 30_000,
         minIntervalMs: 5 * 60 * 1000,
       }),
     ).toBe(false);
@@ -192,9 +193,22 @@ describe("shouldCheckForUpdatesOnForeground", () => {
         checkedAt: null,
         backgroundedAtMs: Date.parse("2026-03-04T00:00:00.000Z"),
         foregroundedAtMs: Date.parse("2026-03-04T00:05:00.000Z"),
+        minBackgroundDurationMs: 30_000,
         minIntervalMs: 5 * 60 * 1000,
       }),
     ).toBe(true);
+  });
+
+  it("returns false when the app was backgrounded too briefly", () => {
+    expect(
+      shouldCheckForUpdatesOnForeground({
+        checkedAt: "2026-03-04T00:00:00.000Z",
+        backgroundedAtMs: Date.parse("2026-03-04T00:04:45.000Z"),
+        foregroundedAtMs: Date.parse("2026-03-04T00:05:00.000Z"),
+        minBackgroundDurationMs: 30_000,
+        minIntervalMs: 5 * 60 * 1000,
+      }),
+    ).toBe(false);
   });
 
   it("returns false when the last check is still within the foreground cooldown", () => {
@@ -203,6 +217,7 @@ describe("shouldCheckForUpdatesOnForeground", () => {
         checkedAt: "2026-03-04T00:03:00.000Z",
         backgroundedAtMs: Date.parse("2026-03-04T00:04:00.000Z"),
         foregroundedAtMs: Date.parse("2026-03-04T00:06:00.000Z"),
+        minBackgroundDurationMs: 30_000,
         minIntervalMs: 5 * 60 * 1000,
       }),
     ).toBe(false);
@@ -214,6 +229,7 @@ describe("shouldCheckForUpdatesOnForeground", () => {
         checkedAt: "2026-03-04T00:00:00.000Z",
         backgroundedAtMs: Date.parse("2026-03-04T00:04:00.000Z"),
         foregroundedAtMs: Date.parse("2026-03-04T00:06:00.000Z"),
+        minBackgroundDurationMs: 30_000,
         minIntervalMs: 5 * 60 * 1000,
       }),
     ).toBe(true);
