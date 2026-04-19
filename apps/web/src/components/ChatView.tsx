@@ -173,6 +173,7 @@ import {
 import { Button } from "./ui/button";
 import { Separator } from "./ui/separator";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
+import { terminalRuntimeRegistry } from "./terminal/terminalRuntimeRegistry";
 import { cn, isMacPlatform, randomUUID } from "~/lib/utils";
 import { toastManager } from "./ui/toast";
 import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
@@ -2529,6 +2530,7 @@ export default function ChatView({
       if (!confirmed) {
         return;
       }
+      terminalRuntimeRegistry.disposeTerminal(activeThreadId, terminalId);
       const fallbackExitWrite = () =>
         api.terminal
           .write({ threadId: activeThreadId, terminalId, data: "exit\n" })

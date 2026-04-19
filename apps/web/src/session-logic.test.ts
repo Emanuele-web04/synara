@@ -381,6 +381,38 @@ describe("deriveActivePlanState", () => {
 
     expect(deriveActivePlanState(activities, TurnId.makeUnsafe("turn-2"))).toBeNull();
   });
+
+  it("does not revive an unfinished prior-turn plan once that turn has completed", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "unfinished-plan-from-turn-1",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "turn.plan.updated",
+        summary: "Plan updated",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          plan: [
+            { step: "Inspect theme implementation", status: "pending" },
+            { step: "Patch token plumbing", status: "pending" },
+          ],
+        },
+      }),
+      makeActivity({
+        id: "turn-1-completed",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "turn.completed",
+        summary: "Turn completed",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          state: "completed",
+        },
+      }),
+    ];
+
+    expect(deriveActivePlanState(activities, TurnId.makeUnsafe("turn-2"))).toBeNull();
+  });
 });
 
 describe("deriveActiveBackgroundTasksState", () => {

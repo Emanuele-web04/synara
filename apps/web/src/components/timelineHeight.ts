@@ -8,6 +8,7 @@ import { DEFAULT_CHAT_FONT_SIZE_PX, normalizeChatFontSizePx } from "../appSettin
 import { deriveDisplayedUserMessageState } from "../lib/terminalContext";
 import { buildTurnDiffTree, type TurnDiffTreeNode } from "../lib/turnDiffTree";
 import { buildInlineTerminalContextText } from "./chat/userMessageTerminalContexts";
+import { deriveUserMessagePreviewState } from "./chat/userMessagePreview";
 import {
   getChatTranscriptAssistantCharWidthPx,
   getChatTranscriptLineHeightPx,
@@ -22,6 +23,7 @@ const USER_ATTACHMENT_THUMBNAIL_SIZE_PX = 60;
 const USER_ATTACHMENT_THUMBNAIL_GAP_PX = 8;
 const USER_ATTACHMENT_THUMBNAILS_PER_ROW = 4;
 const USER_ATTACHMENT_ROW_MARGIN_BOTTOM_PX = 4;
+const USER_MESSAGE_TOGGLE_HEIGHT_PX = 20;
 const USER_BUBBLE_WIDTH_RATIO = 0.8;
 const USER_BUBBLE_HORIZONTAL_PADDING_PX = 32;
 const ASSISTANT_MESSAGE_HORIZONTAL_PADDING_PX = 8;
@@ -282,15 +284,13 @@ export function estimateTimelineMessageHeight(
     const displayedUserMessage = deriveDisplayedUserMessageState(message.text, {
       hideImageOnlyBootstrapPrompt: (message.attachments?.length ?? 0) > 0,
     });
+    const userMessagePreview = deriveUserMessagePreviewState(displayedUserMessage.visibleText);
     const renderedText =
       displayedUserMessage.contexts.length > 0
-        ? [
-            buildInlineTerminalContextText(displayedUserMessage.contexts),
-            displayedUserMessage.visibleText,
-          ]
+        ? [buildInlineTerminalContextText(displayedUserMessage.contexts), userMessagePreview.text]
             .filter((part) => part.length > 0)
             .join(" ")
-        : displayedUserMessage.visibleText;
+        : userMessagePreview.text;
     const estimatedLines =
       renderedText.length > 0 ? estimateWrappedLineCount(renderedText, charsPerLine) : 0;
     const imageAttachmentCount =
@@ -312,7 +312,8 @@ export function estimateTimelineMessageHeight(
           assistantSelectionHeight +
           (renderedText.length > 0 ? USER_ATTACHMENT_ROW_MARGIN_BOTTOM_PX : 0)
         : 0;
-    return USER_BASE_HEIGHT_PX + estimatedLines * lineHeightPx + attachmentHeight;
+    const toggleHeight = userMessagePreview.collapsible ? USER_MESSAGE_TOGGLE_HEIGHT_PX : 0;
+    return USER_BASE_HEIGHT_PX + estimatedLines * lineHeightPx + attachmentHeight + toggleHeight;
   }
 
   // `system` messages are not rendered in the chat timeline, but keep a stable

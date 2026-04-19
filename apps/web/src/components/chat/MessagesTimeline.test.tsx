@@ -2,6 +2,7 @@ import { MessageId, TurnId } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { formatShortTimestamp } from "../../timestampFormat";
+import { COLLAPSED_USER_MESSAGE_MAX_CHARS } from "./userMessagePreview";
 
 function matchMedia() {
   return {
@@ -138,6 +139,53 @@ describe("MessagesTimeline", () => {
       "inline-block max-w-full min-w-0 whitespace-pre-wrap break-words font-system-ui",
     );
     expect(markup).not.toContain("<pre");
+  });
+
+  it("collapses long user messages at the 600-char message budget and renders a separate Show more button", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const hiddenTail = "TAIL_SHOULD_STAY_HIDDEN";
+    const longText = `${"a".repeat(COLLAPSED_USER_MESSAGE_MAX_CHARS)}${hiddenTail}`;
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        scrollContainer={null}
+        timelineEntries={[
+          {
+            id: "entry-long-user-message",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-long-user"),
+              role: "user",
+              text: longText,
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("Show more");
+    expect(markup).not.toContain(hiddenTail);
   });
 
   it("renders inline terminal labels with the composer chip UI", async () => {

@@ -110,6 +110,7 @@ import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
 import { ThreadRunningSpinner } from "./ThreadRunningSpinner";
 import { RenameThreadDialog } from "./RenameThreadDialog";
+import { terminalRuntimeRegistry } from "./terminal/terminalRuntimeRegistry";
 import { SidebarSearchPalette } from "./SidebarSearchPalette";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
@@ -1027,6 +1028,9 @@ export default function Sidebar() {
   const [chatThreadListExpanded, setChatThreadListExpanded] = useState(
     () => readSidebarUiState().chatThreadListExpanded,
   );
+  const [lastThreadRoute, setLastThreadRoute] = useState(
+    () => readSidebarUiState().lastThreadRoute,
+  );
   const [expandedSubagentParentIds, setExpandedSubagentParentIds] = useState<ReadonlySet<ThreadId>>(
     () => new Set(),
   );
@@ -1507,9 +1511,32 @@ export default function Sidebar() {
         navigateToWorkspace(routeWorkspaceId ?? fallbackWorkspaceId);
         return;
       }
+
+      if (lastThreadRoute) {
+        const restorableThread = sidebarThreadSummaryById[lastThreadRoute.threadId] ?? null;
+        if (restorableThread) {
+          void navigate({
+            to: "/$threadId",
+            params: { threadId: ThreadId.makeUnsafe(lastThreadRoute.threadId) },
+            search: () => ({
+              splitViewId: lastThreadRoute.splitViewId,
+            }),
+          });
+          return;
+        }
+      }
+
       void handleNewChat({ fresh: true });
     },
-    [handleNewChat, navigateToWorkspace, routeWorkspaceId, workspacePages],
+    [
+      handleNewChat,
+      lastThreadRoute,
+      navigate,
+      navigateToWorkspace,
+      routeWorkspaceId,
+      sidebarThreadSummaryById,
+      workspacePages,
+    ],
   );
 
   const handleCreateWorkspace = useCallback(() => {
@@ -1553,6 +1580,7 @@ export default function Sidebar() {
       );
 
       if (api && typeof api.terminal.close === "function") {
+        terminalRuntimeRegistry.disposeThread(workspaceThread);
         await Promise.allSettled(
           terminalState.terminalIds.map((terminalId) =>
             api.terminal.close({
@@ -1960,6 +1988,7 @@ export default function Sidebar() {
       }
 
       try {
+        terminalRuntimeRegistry.disposeThread(threadId);
         await api.terminal.close({ threadId, deleteHistory: true });
       } catch {
         // Terminal may already be closed
@@ -3213,8 +3242,29 @@ export default function Sidebar() {
       chatSectionExpanded,
       chatThreadListExpanded,
       expandedProjectThreadListCwds: [...expandedThreadListsByProject],
+      lastThreadRoute,
     });
-  }, [chatSectionExpanded, chatThreadListExpanded, expandedThreadListsByProject]);
+  }, [chatSectionExpanded, chatThreadListExpanded, expandedThreadListsByProject, lastThreadRoute]);
+
+  useEffect(() => {
+    if (isOnWorkspace || isOnSettings || routeThreadId === null) {
+      return;
+    }
+
+    const nextLastThreadRoute = {
+      threadId: routeThreadId,
+      ...(routeSearch.splitViewId ? { splitViewId: routeSearch.splitViewId } : {}),
+    };
+    setLastThreadRoute((current) => {
+      if (
+        current?.threadId === nextLastThreadRoute.threadId &&
+        current?.splitViewId === nextLastThreadRoute.splitViewId
+      ) {
+        return current;
+      }
+      return nextLastThreadRoute;
+    });
+  }, [isOnSettings, isOnWorkspace, routeSearch.splitViewId, routeThreadId]);
 
   useEffect(() => {
     if (!activeSidebarThreadId) {

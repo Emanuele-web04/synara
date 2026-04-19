@@ -93,6 +93,7 @@ import {
   resolveSubagentPresentation,
 } from "../../lib/subagentPresentation";
 import { RiRobot3Line } from "react-icons/ri";
+import { deriveUserMessagePreviewState } from "./userMessagePreview";
 
 const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
 const MAX_VISIBLE_INLINE_TOOL_ENTRIES = 4;
@@ -212,6 +213,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const [expandedFileChangesByMessageId, setExpandedFileChangesByMessageId] = useState<
     Record<string, boolean>
   >({});
+  const [expandedUserMessagesById, setExpandedUserMessagesById] = useState<Record<string, boolean>>(
+    {},
+  );
 
   useLayoutEffect(() => {
     const timelineRoot = timelineRootRef.current;
@@ -398,6 +402,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     if (timelineWidthPx === null) return;
     scheduleVirtualizerMeasure();
   }, [scheduleVirtualizerMeasure, timelineWidthPx]);
+  useEffect(() => {
+    scheduleVirtualizerMeasure();
+  }, [expandedUserMessagesById, scheduleVirtualizerMeasure]);
   useLayoutEffect(() => {
     if (!scrollContainer || typeof ResizeObserver === "undefined") return;
 
@@ -560,12 +567,18 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   text: selection.text,
                 }));
           const terminalContexts = displayedUserMessage.contexts;
+          const userMessagePreview = deriveUserMessagePreviewState(
+            displayedUserMessage.visibleText,
+            {
+              expanded: expandedUserMessagesById[row.message.id] ?? false,
+            },
+          );
           const showUserText =
-            displayedUserMessage.visibleText.trim().length > 0 || terminalContexts.length > 0;
+            userMessagePreview.text.trim().length > 0 || terminalContexts.length > 0;
           const bubbleIsChipOnly =
             showUserText &&
             terminalContexts.length === 0 &&
-            hasOnlyInlineSkillChips(displayedUserMessage.visibleText);
+            hasOnlyInlineSkillChips(userMessagePreview.text);
           const canRevertAgentWork = typeof row.revertTurnCount === "number";
           return (
             <div className="flex w-full justify-end">
@@ -603,11 +616,28 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     )}
                   >
                     <UserMessageBody
-                      text={displayedUserMessage.visibleText}
+                      text={userMessagePreview.text}
                       terminalContexts={terminalContexts}
                       chatTypographyStyle={chatTypographyStyle}
                     />
                   </div>
+                )}
+                {userMessagePreview.collapsible && (
+                  <button
+                    type="button"
+                    className="pr-0.5 text-right text-muted-foreground/55 transition-colors duration-150 hover:text-foreground/72"
+                    style={{ fontSize: `${normalizedChatFontSizePx}px` }}
+                    onClick={() => {
+                      setExpandedUserMessagesById((previous) => ({
+                        ...previous,
+                        [row.message.id]: !(previous[row.message.id] ?? false),
+                      }));
+                    }}
+                  >
+                    {(expandedUserMessagesById[row.message.id] ?? false)
+                      ? "Show less"
+                      : "Show more"}
+                  </button>
                 )}
                 <div className="flex items-center justify-end gap-1.5 pr-0.5">
                   <div className="flex items-center gap-1 opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover:opacity-100">

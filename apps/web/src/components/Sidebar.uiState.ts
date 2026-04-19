@@ -6,12 +6,17 @@ export type SidebarUiState = {
   chatSectionExpanded: boolean;
   chatThreadListExpanded: boolean;
   expandedProjectThreadListCwds: string[];
+  lastThreadRoute: {
+    threadId: string;
+    splitViewId?: string | undefined;
+  } | null;
 };
 
 const DEFAULT_SIDEBAR_UI_STATE: SidebarUiState = {
   chatSectionExpanded: false,
   chatThreadListExpanded: false,
   expandedProjectThreadListCwds: [],
+  lastThreadRoute: null,
 };
 
 export function normalizeSidebarProjectThreadListCwd(cwd: string): string {
@@ -33,7 +38,24 @@ export function readSidebarUiState(): SidebarUiState {
       chatSectionExpanded?: boolean;
       chatThreadListExpanded?: boolean;
       expandedProjectThreadListCwds?: string[];
+      lastThreadRoute?: {
+        threadId?: unknown;
+        splitViewId?: unknown;
+      } | null;
     };
+
+    const lastThreadRoute =
+      parsed.lastThreadRoute &&
+      typeof parsed.lastThreadRoute.threadId === "string" &&
+      parsed.lastThreadRoute.threadId.length > 0
+        ? {
+            threadId: parsed.lastThreadRoute.threadId,
+            ...(typeof parsed.lastThreadRoute.splitViewId === "string" &&
+            parsed.lastThreadRoute.splitViewId.length > 0
+              ? { splitViewId: parsed.lastThreadRoute.splitViewId }
+              : {}),
+          }
+        : null;
 
     return {
       chatSectionExpanded: parsed.chatSectionExpanded === true,
@@ -46,6 +68,7 @@ export function readSidebarUiState(): SidebarUiState {
             .filter((cwd) => cwd.length > 0),
         ),
       ],
+      lastThreadRoute,
     };
   } catch {
     return DEFAULT_SIDEBAR_UI_STATE;
@@ -70,6 +93,14 @@ export function persistSidebarUiState(input: SidebarUiState): void {
               .filter((cwd) => cwd.length > 0),
           ),
         ],
+        lastThreadRoute: input.lastThreadRoute
+          ? {
+              threadId: input.lastThreadRoute.threadId,
+              ...(input.lastThreadRoute.splitViewId
+                ? { splitViewId: input.lastThreadRoute.splitViewId }
+                : {}),
+            }
+          : null,
       }),
     );
   } catch {

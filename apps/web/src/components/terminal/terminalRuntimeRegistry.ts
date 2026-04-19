@@ -19,6 +19,7 @@ import type {
   TerminalRuntimeEntry,
   TerminalRuntimeViewState,
 } from "./terminalRuntimeTypes";
+import { buildTerminalRuntimeKey } from "./terminalRuntimeTypes";
 
 export { buildTerminalRuntimeKey, type TerminalRuntimeCallbacks } from "./terminalRuntimeTypes";
 
@@ -70,6 +71,18 @@ class TerminalRuntimeRegistry {
     if (!entry) return;
     disposeRuntimeEntry(entry);
     this.entries.delete(runtimeKey);
+  }
+
+  disposeTerminal(threadId: string, terminalId: string): void {
+    this.dispose(buildTerminalRuntimeKey(threadId, terminalId));
+  }
+
+  disposeThread(threadId: string): void {
+    for (const runtimeKey of [...this.entries.keys()]) {
+      if (runtimeKey.startsWith(`${threadId}::`)) {
+        this.dispose(runtimeKey);
+      }
+    }
   }
 
   focus(runtimeKey: string): void {
