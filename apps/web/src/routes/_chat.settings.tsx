@@ -38,6 +38,7 @@ import {
 } from "../components/ui/select";
 import { Switch } from "../components/ui/switch";
 import { toastManager } from "../components/ui/toast";
+import { ThemePackEditor } from "../components/ThemePackEditor";
 import { SidebarHeaderTrigger, SidebarInset } from "../components/ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
@@ -264,7 +265,7 @@ function SettingsRouteView() {
   const activeSection = normalizeSettingsSection(routeSearch.section);
   const activeSectionItem = SETTINGS_NAV_ITEMS.find((item) => item.id === activeSection)!;
 
-  const { theme, setTheme } = useTheme();
+  const { isDefaultActiveTheme, resetAllThemes, resolvedTheme, theme, setTheme } = useTheme();
   const { settings, defaults, updateSettings, resetSettings } = useAppSettings();
   const queryClient = useQueryClient();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
@@ -390,6 +391,7 @@ function SettingsRouteView() {
 
   const changedSettingLabels = [
     ...(theme !== "system" ? ["Theme"] : []),
+    ...(!isDefaultActiveTheme ? [`${resolvedTheme === "dark" ? "Dark" : "Light"} theme pack`] : []),
     ...(settings.defaultProvider !== defaults.defaultProvider ? ["Default provider"] : []),
     ...(settings.defaultThreadEnvMode !== defaults.defaultThreadEnvMode ? ["New thread mode"] : []),
     ...(settings.sidebarSide !== defaults.sidebarSide ? ["Sidebar position"] : []),
@@ -535,6 +537,7 @@ function SettingsRouteView() {
     if (!confirmed) return;
 
     setTheme("system");
+    resetAllThemes();
     resetSettings();
     setOpenInstallProviders({
       codex: false,
@@ -1098,9 +1101,14 @@ function SettingsRouteView() {
             }
           />
 
+          <div className="space-y-3 pt-1">
+            <ThemePackEditor variant="dark" />
+            <ThemePackEditor variant="light" />
+          </div>
+
           <SettingsRow
             title="UI font"
-            description="Set a custom font for the interface. Leave empty for the default system font."
+            description="Set a custom font for the interface. Leave empty to use the active theme's UI font."
             resetAction={
               settings.uiFontFamily !== defaults.uiFontFamily ? (
                 <SettingResetButton
@@ -1123,7 +1131,7 @@ function SettingsRouteView() {
 
           <SettingsRow
             title="Code font"
-            description="Set a custom font for code blocks and inline code in chat. Leave empty for the default coding font."
+            description="Set a custom font for code blocks and inline code in chat. Leave empty to use the active theme's code font."
             resetAction={
               settings.chatCodeFontFamily !== defaults.chatCodeFontFamily ? (
                 <SettingResetButton

@@ -60,8 +60,8 @@ export const ComposerExtrasMenu = memo(function ComposerExtrasMenu(props: {
           render={
             <Button
               size="icon-sm"
-              variant="ghost"
-              className="shrink-0 rounded-md text-muted-foreground/70 hover:text-foreground/80"
+              variant="chrome"
+              className="shrink-0 rounded-md"
               aria-label="Composer extras"
             />
           }

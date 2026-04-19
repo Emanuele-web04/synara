@@ -304,9 +304,8 @@ const SIDEBAR_GAP_CLASS = {
 } as const;
 
 const SIDEBAR_INNER_CLASS = {
-  left: "border-r border-border bg-background/70 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] backdrop-blur-lg backdrop-saturate-150 dark:border-white/[0.06] dark:bg-background/70 dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]",
-  right:
-    "border-l border-border bg-background/70 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] backdrop-blur-lg backdrop-saturate-150 dark:border-white/[0.06] dark:bg-background/70 dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]",
+  left: "app-sidebar-surface border-r border-border",
+  right: "app-sidebar-surface border-l border-border",
 } as const;
 
 function ChatRouteLayout() {
