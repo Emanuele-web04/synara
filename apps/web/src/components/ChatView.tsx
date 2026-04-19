@@ -29,6 +29,7 @@ import {
 } from "@t3tools/contracts";
 import {
   applyClaudePromptEffortPrefix,
+  formatModelDisplayName,
   getModelCapabilities,
   normalizeModelSlug,
 } from "@t3tools/shared/model";
@@ -446,6 +447,9 @@ function mergeDynamicModelOptions(input: {
     }
 
     const normalizedSlug = normalizeDynamicModelSlug(input.provider, dynamicModel.slug);
+    const rawSlug = dynamicModel.slug.trim().toLowerCase();
+    const displayNameFallback =
+      formatModelDisplayName(normalizedSlug) ?? formatModelSlug(normalizedSlug);
     if (dynamicNormalizedSlugs.has(normalizedSlug)) {
       continue;
     }
@@ -454,8 +458,11 @@ function mergeDynamicModelOptions(input: {
       slug: normalizedSlug,
       name:
         staticNameBySlug.get(normalizedSlug) ??
-        dynamicModel.name ??
-        formatModelSlug(normalizedSlug),
+        (rawName.length > 0 &&
+        rawName.toLowerCase() !== rawSlug &&
+        rawName.toLowerCase() !== normalizedSlug.toLowerCase()
+          ? rawName
+          : displayNameFallback),
     });
   }
 
