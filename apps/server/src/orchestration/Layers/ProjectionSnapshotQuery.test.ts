@@ -307,6 +307,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           subagentNickname: null,
           subagentRole: null,
           forkSourceThreadId: null,
+          lastKnownPr: null,
           latestUserMessageAt: "2026-02-24T00:00:03.500Z",
           hasPendingApprovals: true,
           hasPendingUserInput: true,
@@ -746,6 +747,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           subagentNickname: null,
           subagentRole: null,
           forkSourceThreadId: null,
+          lastKnownPr: null,
           latestTurn: {
             turnId: asTurnId("turn-shell"),
             state: "completed",

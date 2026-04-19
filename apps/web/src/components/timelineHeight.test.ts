@@ -32,7 +32,7 @@ describe("estimateTimelineMessageHeight", () => {
       estimateTimelineMessageHeight({
         role: "user",
         text: "hello",
-        attachments: [{ id: "1" }],
+        attachments: [{ id: "1", type: "image" }],
       }),
     ).toBe(180);
 
@@ -40,7 +40,10 @@ describe("estimateTimelineMessageHeight", () => {
       estimateTimelineMessageHeight({
         role: "user",
         text: "hello",
-        attachments: [{ id: "1" }, { id: "2" }],
+        attachments: [
+          { id: "1", type: "image" },
+          { id: "2", type: "image" },
+        ],
       }),
     ).toBe(180);
   });
@@ -50,7 +53,11 @@ describe("estimateTimelineMessageHeight", () => {
       estimateTimelineMessageHeight({
         role: "user",
         text: "hello",
-        attachments: [{ id: "1" }, { id: "2" }, { id: "3" }],
+        attachments: [
+          { id: "1", type: "image" },
+          { id: "2", type: "image" },
+          { id: "3", type: "image" },
+        ],
       }),
     ).toBe(180);
 
@@ -58,18 +65,23 @@ describe("estimateTimelineMessageHeight", () => {
       estimateTimelineMessageHeight({
         role: "user",
         text: "hello",
-        attachments: [{ id: "1" }, { id: "2" }, { id: "3" }, { id: "4" }],
+        attachments: [
+          { id: "1", type: "image" },
+          { id: "2", type: "image" },
+          { id: "3", type: "image" },
+          { id: "4", type: "image" },
+        ],
       }),
     ).toBe(180);
   });
 
-  it("does not cap long user message estimates", () => {
+  it("caps long user message estimates to the collapsed preview", () => {
     expect(
       estimateTimelineMessageHeight({
         role: "user",
         text: "a".repeat(56 * 120),
       }),
-    ).toBe(2496);
+    ).toBe(336);
   });
 
   it("counts explicit newlines for user message estimates", () => {

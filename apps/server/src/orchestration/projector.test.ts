@@ -93,6 +93,7 @@ describe("orchestration projector", () => {
         subagentNickname: null,
         subagentRole: null,
         forkSourceThreadId: null,
+        lastKnownPr: null,
         latestTurn: null,
         createdAt: now,
         updatedAt: now,
