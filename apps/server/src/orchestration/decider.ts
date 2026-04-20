@@ -702,8 +702,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         ...(command.reviewTarget !== undefined ? { reviewTarget: command.reviewTarget } : {}),
         assistantDeliveryMode: command.assistantDeliveryMode ?? DEFAULT_ASSISTANT_DELIVERY_MODE,
         dispatchMode,
-        runtimeMode: targetThread.runtimeMode,
-        interactionMode: targetThread.interactionMode,
+        runtimeMode: command.runtimeMode,
+        interactionMode: command.interactionMode,
         ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
         createdAt: command.createdAt,
       } as const;

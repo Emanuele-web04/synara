@@ -20,7 +20,7 @@ import { isScrollContainerNearBottom } from "../../chat-scroll";
 
 interface UseChatAutoScrollControllerOptions {
   threadId: string | null;
-  isStreaming: boolean;
+  followLiveOutput: boolean;
   messageCount: number;
 }
 
@@ -30,7 +30,7 @@ interface UseChatAutoScrollControllerResult {
   setMessagesBottomAnchorRef: (element: HTMLDivElement | null) => void;
   setMessagesScrollContainerRef: (element: HTMLDivElement | null) => void;
   forceStickToBottom: (behavior?: ScrollBehavior) => void;
-  onTimelineHeightChange: () => void;
+  onLiveContentHeightChange: () => void;
   onComposerHeightChange: (previousHeight: number, nextHeight: number) => void;
   onMessagesClickCapture: (event: MouseEvent<HTMLDivElement>) => void;
   onMessagesPointerCancel: (event: PointerEvent<HTMLDivElement>) => void;
@@ -145,10 +145,13 @@ export function useChatAutoScrollController(
     ],
   );
 
-  const onTimelineHeightChange = useCallback(() => {
+  // Only follow transcript height growth while assistant text is actively streaming.
+  // Buffering and tool-only activity should not keep re-sticking the viewport.
+  const onLiveContentHeightChange = useCallback(() => {
+    if (!options.followLiveOutput) return;
     if (!shouldAutoScrollRef.current) return;
     scheduleStickToBottom();
-  }, [scheduleStickToBottom]);
+  }, [options.followLiveOutput, scheduleStickToBottom]);
 
   const onComposerHeightChange = useCallback(
     (previousHeight: number, nextHeight: number) => {
@@ -342,10 +345,10 @@ export function useChatAutoScrollController(
   }, [options.messageCount, scheduleStickToBottom]);
 
   useEffect(() => {
-    if (!options.isStreaming) return;
+    if (!options.followLiveOutput) return;
     if (!shouldAutoScrollRef.current) return;
     scheduleStickToBottom();
-  }, [options.isStreaming, scheduleStickToBottom]);
+  }, [options.followLiveOutput, scheduleStickToBottom]);
 
   return {
     messagesScrollElement,
@@ -353,7 +356,7 @@ export function useChatAutoScrollController(
     setMessagesBottomAnchorRef,
     setMessagesScrollContainerRef,
     forceStickToBottom,
-    onTimelineHeightChange,
+    onLiveContentHeightChange,
     onComposerHeightChange,
     onMessagesClickCapture,
     onMessagesPointerCancel,

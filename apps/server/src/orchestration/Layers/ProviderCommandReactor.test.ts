@@ -337,6 +337,101 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.runtimeMode).toBe("approval-required");
   });
 
+  it("uses the runtime mode requested by thread.turn.start when starting the provider session", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-runtime-full-access"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-runtime-full-access"),
+          role: "user",
+          text: "what permissions do you have",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "full-access",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      runtimeMode: "full-access",
+    });
+  });
+
+  it("does not pass the Home chat container workspace root through as provider cwd", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-home-project-create"),
+        projectId: asProjectId("project-home"),
+        kind: "chat",
+        title: "Home",
+        workspaceRoot: "/Users/tester",
+        defaultModelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-home-thread-create"),
+        threadId: ThreadId.makeUnsafe("thread-home"),
+        projectId: asProjectId("project-home"),
+        title: "Home thread",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-home-turn-start"),
+        threadId: ThreadId.makeUnsafe("thread-home"),
+        message: {
+          messageId: asMessageId("user-message-home-1"),
+          role: "user",
+          text: "hello from home chat",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5-codex",
+      },
+      runtimeMode: "approval-required",
+    });
+    expect(harness.startSession.mock.calls[0]?.[1]).not.toHaveProperty("cwd");
+  });
+
   it("renames a generic first-turn thread title using text generation", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
@@ -743,6 +838,59 @@ describe("ProviderCommandReactor", () => {
         model: "claude-sonnet-4-6",
         options: {
           effort: "max",
+        },
+      },
+    });
+  });
+
+  it("forwards codex effort options through session start and turn send", async () => {
+    const harness = await createHarness({
+      threadModelSelection: { provider: "codex", model: "gpt-5-codex" },
+    });
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-codex-effort"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-codex-effort"),
+          role: "user",
+          text: "hello with codex effort",
+          attachments: [],
+        },
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+          options: {
+            reasoningEffort: "high",
+          },
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5-codex",
+        options: {
+          reasoningEffort: "high",
+        },
+      },
+    });
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5-codex",
+        options: {
+          reasoningEffort: "high",
         },
       },
     });
@@ -1189,9 +1337,9 @@ describe("ProviderCommandReactor", () => {
     expect(harness.stopSession.mock.calls.length).toBe(0);
     expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
       threadId: ThreadId.makeUnsafe("thread-1"),
-      resumeCursor: { opaque: "resume-1" },
       runtimeMode: "approval-required",
     });
+    expect(harness.startSession.mock.calls[1]?.[1]).not.toHaveProperty("resumeCursor");
     expect(harness.sendTurn.mock.calls[1]?.[0]).toMatchObject({
       threadId: ThreadId.makeUnsafe("thread-1"),
     });
@@ -1386,6 +1534,48 @@ describe("ProviderCommandReactor", () => {
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.runtimeMode).toBe("full-access");
+  });
+
+  it("restarts without a resume cursor when the runtime mode changes", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-runtime-bootstrap"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-runtime-bootstrap"),
+          role: "user",
+          text: "first",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "full-access",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.runtime-mode.set",
+        commandId: CommandId.makeUnsafe("cmd-runtime-mode-set-no-resume"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 2);
+    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      runtimeMode: "approval-required",
+    });
+    expect(harness.startSession.mock.calls[1]?.[1]).not.toHaveProperty("resumeCursor");
   });
 
   it("starts a fresh session when only projected session state exists", async () => {

@@ -112,6 +112,82 @@ describe("detectComposerTrigger", () => {
     expect(trigger?.kind).toBe("mention");
     expect(trigger?.query).toBe("");
   });
+
+  it('detects an unclosed quoted @"..." mention so paths with spaces stay editable', () => {
+    const text = 'Look at @"/Users/John Smith/Docs';
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "mention",
+      query: "/Users/John Smith/Docs",
+      rangeStart: "Look at ".length,
+      rangeEnd: text.length,
+    });
+  });
+
+  it("keeps the trigger active while cursor is inside an unclosed quoted mention mid-word", () => {
+    const text = 'Look at @"/Users/John Smith/Do and more';
+    const cursor = 'Look at @"/Users/John Smith/Do'.length;
+    const trigger = detectComposerTrigger(text, cursor);
+
+    expect(trigger).toEqual({
+      kind: "mention",
+      query: "/Users/John Smith/Do",
+      rangeStart: "Look at ".length,
+      rangeEnd: cursor,
+    });
+  });
+
+  it('does not treat a closed @"..." mention as still active', () => {
+    const text = 'Look at @"/Users/John Smith/Docs" and more';
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toBeNull();
+  });
+
+  it("prefers a later unquoted mention over an earlier closed quoted mention", () => {
+    const text = 'Look at @"/Users/John Smith/Docs" @sr';
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "mention",
+      query: "sr",
+      rangeStart: text.length - 3,
+      rangeEnd: text.length,
+    });
+  });
+
+  it("anchors the trigger to the last @ so adjacent mentions do not clobber each other", () => {
+    // User typed @bar directly after the @foo chip without a separating space.
+    const text = "@foo@bar";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "mention",
+      query: "bar",
+      rangeStart: "@foo".length,
+      rangeEnd: text.length,
+    });
+  });
+
+  it("still opens the picker with an empty query when a lone @ follows an existing chip", () => {
+    const text = "@foo@";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "mention",
+      query: "",
+      rangeStart: "@foo".length,
+      rangeEnd: text.length,
+    });
+  });
+
+  it("does not treat an email like user@host as a mention trigger", () => {
+    const text = "email me at user@host.com";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toBeNull();
+  });
 });
 
 describe("replaceTextRange", () => {

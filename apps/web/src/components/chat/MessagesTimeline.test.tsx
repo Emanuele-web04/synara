@@ -45,6 +45,52 @@ beforeAll(() => {
 });
 
 describe("MessagesTimeline", () => {
+  it("keeps small transcripts on the simple non-virtualized path", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        scrollContainer={null}
+        timelineEntries={[
+          {
+            id: "entry-1",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("assistant-message-1"),
+              role: "assistant",
+              text: "stable transcript body",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).not.toContain('data-index="0"');
+    expect(markup).not.toContain('class="relative" style="height:');
+    expect(markup).toContain('data-timeline-row-kind="message"');
+  });
+
   it("renders user message metadata outside the bubble shell", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(

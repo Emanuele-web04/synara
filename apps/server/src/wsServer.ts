@@ -64,7 +64,11 @@ import { resolveThreadWorkspaceCwd } from "./checkpointing/Utils.ts";
 import { GitManager } from "./git/Services/GitManager.ts";
 import { TerminalManager } from "./terminal/Services/Manager.ts";
 import { Keybindings } from "./keybindings";
-import { listWorkspaceDirectories, searchWorkspaceEntries } from "./workspaceEntries";
+import {
+  listWorkspaceDirectories,
+  searchLocalEntries,
+  searchWorkspaceEntries,
+} from "./workspaceEntries";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReactor";
@@ -1742,6 +1746,17 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           catch: (cause) =>
             new RouteRequestError({
               message: `Failed to list workspace directories: ${String(cause)}`,
+            }),
+        });
+      }
+
+      case WS_METHODS.projectsSearchLocalEntries: {
+        const body = stripRequestTag(request.body);
+        return yield* Effect.tryPromise({
+          try: () => searchLocalEntries(body),
+          catch: (cause) =>
+            new RouteRequestError({
+              message: `Failed to search local entries: ${String(cause)}`,
             }),
         });
       }

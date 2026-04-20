@@ -313,6 +313,7 @@ const make = Effect.gen(function* () {
     options?: {
       readonly modelSelection?: ModelSelection;
       readonly providerOptions?: ProviderStartOptions;
+      readonly runtimeMode?: RuntimeMode;
     },
   ) {
     const readModel = yield* orchestrationEngine.getReadModel();
@@ -321,7 +322,7 @@ const make = Effect.gen(function* () {
       return yield* Effect.die(new Error(`Thread '${threadId}' was not found in read model.`));
     }
 
-    const desiredRuntimeMode = thread.runtimeMode;
+    const desiredRuntimeMode = options?.runtimeMode ?? thread.runtimeMode;
     const currentProvider: ProviderKind | undefined = Schema.is(ProviderKind)(
       thread.session?.providerName,
     )
@@ -427,7 +428,7 @@ const make = Effect.gen(function* () {
       }
 
       const resumeCursor =
-        providerChanged || shouldRestartForModelChange
+        providerChanged || shouldRestartForModelChange || runtimeModeChanged
           ? undefined
           : (activeSession?.resumeCursor ?? undefined);
       yield* Effect.logInfo("provider command reactor restarting provider session", {
@@ -503,6 +504,7 @@ const make = Effect.gen(function* () {
     readonly reviewTarget?: ProviderReviewTarget;
     readonly modelSelection?: ModelSelection;
     readonly providerOptions?: ProviderStartOptions;
+    readonly runtimeMode?: RuntimeMode;
     readonly interactionMode?: "default" | "plan";
     readonly dispatchMode?: "queue" | "steer";
     readonly createdAt: string;
@@ -514,6 +516,7 @@ const make = Effect.gen(function* () {
     yield* ensureSessionForThread(input.threadId, input.createdAt, {
       ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
       ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
+      ...(input.runtimeMode !== undefined ? { runtimeMode: input.runtimeMode } : {}),
     });
     if (input.providerOptions !== undefined) {
       threadProviderOptions.set(input.threadId, input.providerOptions);
@@ -794,6 +797,7 @@ const make = Effect.gen(function* () {
       ...(event.payload.providerOptions !== undefined
         ? { providerOptions: event.payload.providerOptions }
         : {}),
+      ...(event.payload.runtimeMode !== undefined ? { runtimeMode: event.payload.runtimeMode } : {}),
       ...(event.payload.reviewTarget !== undefined
         ? { reviewTarget: event.payload.reviewTarget }
         : {}),

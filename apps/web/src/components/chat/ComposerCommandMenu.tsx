@@ -36,7 +36,7 @@ import {
   CommandList,
   CommandSeparator,
 } from "../ui/command";
-import { VscodeEntryIcon } from "./VscodeEntryIcon";
+import { FileEntryIcon } from "./FileEntryIcon";
 
 function SkillCubeIcon(props: { className?: string }) {
   return (
@@ -112,12 +112,22 @@ function commandMenuTrailingMeta(item: ComposerCommandItem): string | null {
     return "Plugin";
   }
 
+  if (item.type === "local-root") {
+    return "Local";
+  }
+
   if (item.type === "skill") {
     return formatSkillScope(item.skill.scope);
   }
 
   if (item.type === "slash-command" || item.type === "provider-native-command") {
     return `/${item.command}`;
+  }
+
+  // Right-align the parent path so many same-named entries (e.g. worktrees) stay
+  // distinguishable without crowding the name column.
+  if (item.type === "path") {
+    return item.description.length > 0 ? item.description : null;
   }
 
   return null;
@@ -132,7 +142,7 @@ function commandMenuSecondaryText(item: ComposerCommandItem): string | null {
     return item.description;
   }
 
-  if (item.type === "plugin" || item.type === "skill") {
+  if (item.type === "plugin" || item.type === "skill" || item.type === "local-root") {
     return item.description;
   }
 
@@ -145,6 +155,12 @@ export type ComposerCommandItem =
       type: "path";
       path: string;
       pathKind: ProjectEntry["kind"];
+      label: string;
+      description: string;
+    }
+  | {
+      id: string;
+      type: "local-root";
       label: string;
       description: string;
     }
@@ -315,7 +331,7 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
           <p className="px-2 py-1.5 text-muted-foreground/50 text-[11px]">
             {props.isLoading
               ? props.triggerKind === "mention"
-                ? "Searching workspace files..."
+                ? "Searching mentions..."
                 : "Loading commands..."
               : (props.emptyStateText ??
                 (props.triggerKind === "mention"
@@ -360,11 +376,14 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
       }}
     >
       {props.item.type === "path" ? (
-        <VscodeEntryIcon
+        <FileEntryIcon
           pathValue={props.item.path}
           kind={props.item.pathKind}
           theme={props.resolvedTheme}
         />
+      ) : null}
+      {props.item.type === "local-root" ? (
+        <TbDeviceLaptop className="size-3.5 text-muted-foreground/60" />
       ) : null}
       {props.item.type === "fork-target" ? (
         props.item.target === "local" ? (

@@ -2,7 +2,7 @@
 // Keeps search local and deterministic so the palette can rank title hits above
 // message-content hits while still surfacing a useful snippet for chat matches.
 import type { ProviderKind } from "@t3tools/contracts";
-import { basenameOfPath } from "../vscode-icons";
+import { basenameOfPath } from "../file-icons";
 
 export interface SidebarSearchAction {
   id: string;

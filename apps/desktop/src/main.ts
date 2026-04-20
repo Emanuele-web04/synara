@@ -93,6 +93,7 @@ const LOG_DIR = Path.join(STATE_DIR, "logs");
 const LOG_FILE_MAX_BYTES = 10 * 1024 * 1024;
 const LOG_FILE_MAX_FILES = 10;
 const APP_RUN_ID = Crypto.randomBytes(6).toString("hex");
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
 const AUTO_UPDATE_STARTUP_DELAY_MS = 15_000;
 const AUTO_UPDATE_POLL_INTERVAL_MS = 4 * 60 * 60 * 1000;
 const AUTO_UPDATE_FOREGROUND_RECHECK_MIN_INTERVAL_MS = 5 * 60 * 1000;
@@ -861,6 +862,21 @@ function clearUnreadNotificationBadge(): void {
   syncUnreadNotificationBadge();
 }
 
+// Reuse the existing desktop window when the app is launched again so users
+// don't end up with multiple packaged instances racing the same local state.
+function focusMainWindow(): void {
+  if (!mainWindow) {
+    return;
+  }
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+  if (!mainWindow.isVisible()) {
+    mainWindow.show();
+  }
+  mainWindow.focus();
+}
+
 // Show a native OS notification and refocus the app window when the alert is clicked.
 function showDesktopNotification(input: {
   title: string;
@@ -888,16 +904,10 @@ function showDesktopNotification(input: {
 
   notification.on("click", () => {
     clearUnreadNotificationBadge();
+    focusMainWindow();
     if (!mainWindow) {
       return;
     }
-    if (mainWindow.isMinimized()) {
-      mainWindow.restore();
-    }
-    if (!mainWindow.isVisible()) {
-      mainWindow.show();
-    }
-    mainWindow.focus();
     if (threadId.length > 0) {
       mainWindow.webContents.send(MENU_ACTION_CHANNEL, `notification-open-thread:${threadId}`);
     }
@@ -1782,6 +1792,14 @@ app.setPath("userData", resolveUserDataPath());
 
 configureAppIdentity();
 
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    focusMainWindow();
+  });
+}
+
 async function bootstrap(): Promise<void> {
   writeDesktopLogHeader("bootstrap start");
   backendPort = await Effect.service(NetService).pipe(
@@ -1854,37 +1872,41 @@ app.on("before-quit", () => {
   restoreStdIoCapture?.();
 });
 
-app
-  .whenReady()
-  .then(() => {
-    writeDesktopLogHeader("app ready");
-    configureAppIdentity();
-    configureMediaPermissions();
-    configureApplicationMenu();
-    registerDesktopProtocol();
-    configureAutoUpdater();
-    void bootstrap().catch((error) => {
-      handleFatalStartupError("bootstrap", error);
-    });
+if (hasSingleInstanceLock) {
+  app
+    .whenReady()
+    .then(() => {
+      writeDesktopLogHeader("app ready");
+      configureAppIdentity();
+      configureMediaPermissions();
+      configureApplicationMenu();
+      registerDesktopProtocol();
+      configureAutoUpdater();
+      void bootstrap().catch((error) => {
+        handleFatalStartupError("bootstrap", error);
+      });
 
-    app.on("browser-window-blur", () => {
-      markDesktopAppBackgrounded();
-    });
+      app.on("browser-window-blur", () => {
+        markDesktopAppBackgrounded();
+      });
 
-    app.on("browser-window-focus", () => {
-      handleDesktopAppForegrounded();
-    });
+      app.on("browser-window-focus", () => {
+        handleDesktopAppForegrounded();
+      });
 
-    app.on("activate", () => {
-      handleDesktopAppForegrounded();
-      if (BrowserWindow.getAllWindows().length === 0) {
-        mainWindow = createWindow();
-      }
+      app.on("activate", () => {
+        handleDesktopAppForegrounded();
+        if (BrowserWindow.getAllWindows().length === 0) {
+          mainWindow = createWindow();
+          return;
+        }
+        focusMainWindow();
+      });
+    })
+    .catch((error) => {
+      handleFatalStartupError("whenReady", error);
     });
-  })
-  .catch((error) => {
-    handleFatalStartupError("whenReady", error);
-  });
+}
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {

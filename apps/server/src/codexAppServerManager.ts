@@ -1,6 +1,9 @@
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import readline from "node:readline";
 
 import {
@@ -504,9 +507,9 @@ In Default mode, strongly prefer making reasonable assumptions and executing the
 </collaboration_mode>${CODEX_BROWSER_TOOL_ROUTING_INSTRUCTIONS}`;
 
 function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
-  readonly approvalPolicy: "untrusted" | "never";
-  readonly sandbox: "read-only" | "danger-full-access";
-} {
+  readonly approvalPolicy: "untrusted";
+  readonly sandbox: "read-only";
+} | null {
   if (runtimeMode === "approval-required") {
     return {
       approvalPolicy: "untrusted",
@@ -514,10 +517,14 @@ function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
     };
   }
 
-  return {
-    approvalPolicy: "never",
-    sandbox: "danger-full-access",
-  };
+  return null;
+}
+
+function ensureIsolatedScratchWorkspace(threadId: ThreadId): string {
+  const workspaceRoot = path.join(tmpdir(), "dpcode-codex-workspaces");
+  const workspaceDir = path.join(workspaceRoot, String(threadId));
+  mkdirSync(workspaceDir, { recursive: true });
+  return workspaceDir;
 }
 
 export function resolveCodexModelForAccount(
@@ -697,7 +704,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     let context: CodexSessionContext | undefined;
 
     try {
-      const resolvedCwd = input.cwd ?? process.cwd();
+      const resolvedCwd = input.cwd ?? ensureIsolatedScratchWorkspace(threadId);
 
       const session: ProviderSession = {
         provider: "codex",
@@ -781,8 +788,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const sessionOverrides = {
         model: normalizedModel ?? null,
         ...(input.serviceTier !== undefined ? { serviceTier: input.serviceTier } : {}),
-        cwd: input.cwd ?? null,
-        ...mapCodexRuntimeMode(input.runtimeMode ?? "full-access"),
+        cwd: resolvedCwd,
+        ...(mapCodexRuntimeMode(input.runtimeMode ?? "full-access") ?? {}),
       };
 
       const threadStartParams = {
@@ -1299,7 +1306,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         throw new Error("Provider fork is missing the source thread resume id.");
       }
 
-      const resolvedCwd = input.cwd ?? process.cwd();
+      const resolvedCwd = input.cwd ?? ensureIsolatedScratchWorkspace(threadId);
       const session: ProviderSession = {
         provider: "codex",
         status: "connecting",
@@ -1382,8 +1389,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ...(input.modelSelection?.provider === "codex" && input.modelSelection.options?.fastMode
           ? { serviceTier: "fast" as const }
           : {}),
-        ...(input.cwd ? { cwd: input.cwd } : {}),
-        ...mapCodexRuntimeMode(input.runtimeMode),
+        cwd: resolvedCwd,
+        ...(mapCodexRuntimeMode(input.runtimeMode) ?? {}),
       };
 
       this.emitLifecycleEvent(

@@ -32,6 +32,7 @@ interface ChatTranscriptPaneProps {
   hasMessages: boolean;
   isRevertingCheckpoint: boolean;
   isWorking: boolean;
+  followLiveOutput: boolean;
   markdownCwd: string | undefined;
   messagesScrollElement: HTMLDivElement | null;
   onExpandTimelineImage: (preview: ExpandedImagePreview) => void;
@@ -49,7 +50,7 @@ interface ChatTranscriptPaneProps {
   onOpenThread: (threadId: ThreadId) => void;
   onRevertUserMessage: (messageId: MessageId) => void;
   onScrollToBottom: () => void;
-  onTimelineHeightChange: () => void;
+  onLiveContentHeightChange: () => void;
   onToggleWorkGroup: (groupId: string) => void;
   resolvedTheme: "light" | "dark";
   revertTurnCountByUserMessageId: Map<MessageId, number>;
@@ -75,6 +76,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   hasMessages,
   isRevertingCheckpoint,
   isWorking,
+  followLiveOutput,
   markdownCwd,
   messagesScrollElement,
   onExpandTimelineImage,
@@ -92,7 +94,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   onOpenThread,
   onRevertUserMessage,
   onScrollToBottom,
-  onTimelineHeightChange,
+  onLiveContentHeightChange,
   onToggleWorkGroup,
   resolvedTheme,
   revertTurnCountByUserMessageId,
@@ -148,7 +150,8 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
             onRevertUserMessage={onRevertUserMessage}
             isRevertingCheckpoint={isRevertingCheckpoint}
             onImageExpand={onExpandTimelineImage}
-            onTimelineHeightChange={onTimelineHeightChange}
+            followLiveOutput={followLiveOutput}
+            onLiveContentHeightChange={onLiveContentHeightChange}
             markdownCwd={markdownCwd}
             resolvedTheme={resolvedTheme}
             chatFontSizePx={chatFontSizePx}

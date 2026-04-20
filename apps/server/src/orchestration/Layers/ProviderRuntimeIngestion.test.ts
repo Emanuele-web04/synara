@@ -2793,6 +2793,7 @@ describe("ProviderRuntimeIngestion", () => {
     const thread = await waitForThread(
       harness.engine,
       (entry) =>
+        entry.runtimeMode === "approval-required" &&
         entry.activities.some(
           (activity: ProviderRuntimeTestActivity) => activity.kind === "user-input.requested",
         ) &&
@@ -2817,6 +2818,7 @@ describe("ProviderRuntimeIngestion", () => {
     expect(resolvedPayload?.answers).toEqual({
       sandbox_mode: "workspace-write",
     });
+    expect(thread.runtimeMode).toBe("approval-required");
   });
 
   it("creates and routes subagent runtime events into child threads", async () => {

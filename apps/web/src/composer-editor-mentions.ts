@@ -3,6 +3,10 @@ import {
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
   type TerminalContextDraft,
 } from "./lib/terminalContext";
+import {
+  createComposerMentionTokenRegex,
+  extractComposerMentionPath,
+} from "./lib/composerMentions";
 import { resolveAgentAlias } from "@t3tools/contracts";
 
 export type ComposerPromptSegment =
@@ -30,9 +34,7 @@ export type ComposerPromptSegment =
       color: string;
     };
 
-const MENTION_TOKEN_REGEX = /(^|\s)@([^\s@]+)(?=\s)/g;
 const SKILL_TOKEN_REGEX = /(^|\s)([$/])([a-zA-Z][a-zA-Z0-9_:-]*)(?=\s)/g;
-const DISPLAY_MENTION_TOKEN_REGEX = /(^|\s)@([^\s@]+)(?=\s|$)/g;
 const DISPLAY_SKILL_TOKEN_REGEX = /(^|\s)([$/])([a-zA-Z][a-zA-Z0-9_:-]*)(?=\s|$)/g;
 
 // Agent mention chip: @alias(
@@ -72,9 +74,9 @@ function collectInlineTokenMatches(
   },
 ): InlineTokenMatch[] {
   const matches: InlineTokenMatch[] = [];
-  const mentionRegex = options.includeTrailingTokenAtEnd
-    ? DISPLAY_MENTION_TOKEN_REGEX
-    : MENTION_TOKEN_REGEX;
+  const mentionRegex = createComposerMentionTokenRegex({
+    includeTrailingTokenAtEnd: options.includeTrailingTokenAtEnd,
+  });
   const skillRegex = options.includeTrailingTokenAtEnd
     ? DISPLAY_SKILL_TOKEN_REGEX
     : SKILL_TOKEN_REGEX;
@@ -115,7 +117,7 @@ function collectInlineTokenMatches(
   for (const match of text.matchAll(mentionRegex)) {
     const fullMatch = match[0];
     const prefix = match[1] ?? "";
-    const path = match[2] ?? "";
+    const path = extractComposerMentionPath(match);
     const matchIndex = match.index ?? 0;
     const start = matchIndex + prefix.length;
     const end = start + fullMatch.length - prefix.length;
