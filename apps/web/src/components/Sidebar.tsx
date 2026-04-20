@@ -3712,7 +3712,14 @@ export default function Sidebar() {
                 togglePinnedThread(thread.id);
               }}
             />
-            {threadStatus?.pulse ? <ThreadRunningSpinner presentation="inline" /> : null}
+            {threadStatus?.label === "Completed" ? (
+              <HiOutlineCheckCircle
+                aria-hidden="true"
+                className={cn("size-3.5 shrink-0", threadStatus.colorClass)}
+              />
+            ) : threadStatus?.pulse ? (
+              <ThreadRunningSpinner presentation="inline" />
+            ) : null}
           </div>
           {threadEntryPoint === "terminal" ? (
             <TerminalIcon aria-hidden="true" className="size-3.5 shrink-0 text-teal-600/85" />

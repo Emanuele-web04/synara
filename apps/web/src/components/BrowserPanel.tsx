@@ -790,12 +790,12 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
       {/* Keep the browser chrome interactive inside Electron's draggable titlebar. */}
       <div className="relative flex min-w-0 flex-1 items-center gap-2 [-webkit-app-region:no-drag]">
         <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
-                <Button
-                  type="button"
-                  ref={copyScreenshotButtonRef}
-                  variant="ghost"
-                  size="icon-sm"
-                  className="size-7 shrink-0"
+          <Button
+            type="button"
+            ref={copyScreenshotButtonRef}
+            variant="ghost"
+            size="icon-sm"
+            className="size-7 shrink-0"
             disabled={!activeTab?.canGoBack}
             onClick={() => {
               if (!api || !activeTab) return;

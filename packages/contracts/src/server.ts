@@ -40,6 +40,8 @@ export const ServerProviderStatus = Schema.Struct({
   status: ServerProviderStatusState,
   available: Schema.Boolean,
   authStatus: ServerProviderAuthStatus,
+  authType: Schema.optional(TrimmedNonEmptyString),
+  authLabel: Schema.optional(TrimmedNonEmptyString),
   voiceTranscriptionAvailable: Schema.optional(Schema.Boolean),
   checkedAt: IsoDateTime,
   message: Schema.optional(TrimmedNonEmptyString),

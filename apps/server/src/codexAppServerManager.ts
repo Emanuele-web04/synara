@@ -2056,6 +2056,19 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       return;
     }
 
+    if (notification.method === "turn/aborted") {
+      if (isChildConversation) {
+        return;
+      }
+      context.collabReceiverTurns.clear();
+      this.updateSession(context, {
+        status: "ready",
+        activeTurnId: undefined,
+        lastError: undefined,
+      });
+      return;
+    }
+
     if (notification.method === "error") {
       if (isChildConversation) {
         return;
