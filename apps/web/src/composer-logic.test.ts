@@ -156,6 +156,38 @@ describe("detectComposerTrigger", () => {
       rangeEnd: text.length,
     });
   });
+
+  it("anchors the trigger to the last @ so adjacent mentions do not clobber each other", () => {
+    // User typed @bar directly after the @foo chip without a separating space.
+    const text = "@foo@bar";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "mention",
+      query: "bar",
+      rangeStart: "@foo".length,
+      rangeEnd: text.length,
+    });
+  });
+
+  it("still opens the picker with an empty query when a lone @ follows an existing chip", () => {
+    const text = "@foo@";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "mention",
+      query: "",
+      rangeStart: "@foo".length,
+      rangeEnd: text.length,
+    });
+  });
+
+  it("does not treat an email like user@host as a mention trigger", () => {
+    const text = "email me at user@host.com";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toBeNull();
+  });
 });
 
 describe("replaceTextRange", () => {

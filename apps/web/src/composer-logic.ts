@@ -321,14 +321,22 @@ export function detectComposerTrigger(text: string, cursorInput: number): Compos
     return null;
   }
 
-  if (!/^@[^()\s]*$/.test(token)) {
+  // Support adjacent mentions like `@foo@bar` by anchoring the active trigger
+  // to the last `@` within the whitespace-bounded word. Without this, a chain
+  // like `@foo@b` would expose the whole chain as the replacement range, so
+  // picking an item would clobber the earlier chip. Emails like `user@host`
+  // stay unaffected because the enclosing word doesn't start with `@`.
+  const lastAtInToken = token.lastIndexOf("@");
+  const mentionStart = tokenStart + lastAtInToken;
+  const mentionToken = token.slice(lastAtInToken);
+  if (!/^@[^()\s@]*$/.test(mentionToken)) {
     return null;
   }
 
   return {
     kind: "mention",
-    query: token.slice(1),
-    rangeStart: tokenStart,
+    query: mentionToken.slice(1),
+    rangeStart: mentionStart,
     rangeEnd: cursor,
   };
 }

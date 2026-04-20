@@ -100,6 +100,10 @@ import {
   replaceTextRange,
   stripComposerTriggerText,
 } from "../composer-logic";
+import {
+  ensureLeadingSpaceForReplacement,
+  extendReplacementRangeForTrailingSpace,
+} from "../composerTriggerInsertion";
 import { createProjectSelector, createThreadSelector } from "../storeSelectors";
 import {
   canOfferForkSlashCommand,
@@ -591,17 +595,6 @@ const providerMentionReferencesEqual = (
   left.every(
     (mention, index) => mention.path === right[index]?.path && mention.name === right[index]?.name,
   );
-
-const extendReplacementRangeForTrailingSpace = (
-  text: string,
-  rangeEnd: number,
-  replacement: string,
-): number => {
-  if (!replacement.endsWith(" ")) {
-    return rangeEnd;
-  }
-  return text[rangeEnd] === " " ? rangeEnd + 1 : rangeEnd;
-};
 
 const syncTerminalContextsByIds = (
   contexts: ReadonlyArray<TerminalContextDraft>,
@@ -5611,25 +5604,62 @@ export default function ChatView({
     };
   }, [readComposerSnapshot]);
 
-  // Replaces the active `@...` token with a completed absolute folder mention.
-  const handleSelectLocalDirectoryMention = useCallback(
-    (absolutePath: string) => {
-      const { snapshot, trigger } = resolveActiveComposerTrigger();
-      if (!trigger) return;
-      const replacement = `${formatComposerMentionToken(absolutePath)} `;
+  // Shared insertion path for picker selections (mentions, plugins, skills,
+  // agents, provider-native commands, local folders). Guarantees the replacement
+  // is flanked by a leading space when landing next to a non-whitespace char and
+  // absorbs an existing trailing space so we don't end up with double spaces.
+  const applyComposerTriggerReplacement = useCallback(
+    (params: {
+      snapshot: { value: string };
+      trigger: ComposerTrigger;
+      base: string;
+      cursorOffset?: number;
+      onApplied?: () => void;
+    }): number | false => {
+      const { snapshot, trigger, base, cursorOffset, onApplied } = params;
+      const replacement = ensureLeadingSpaceForReplacement(
+        snapshot.value,
+        trigger.rangeStart,
+        base,
+      );
       const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
         snapshot.value,
         trigger.rangeEnd,
         replacement,
       );
-      const applied = applyPromptReplacement(trigger.rangeStart, replacementRangeEnd, replacement, {
+      const options: { expectedText: string; cursorOffset?: number } = {
         expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd),
-      });
+      };
+      if (cursorOffset !== undefined) {
+        options.cursorOffset = cursorOffset;
+      }
+      const applied = applyPromptReplacement(
+        trigger.rangeStart,
+        replacementRangeEnd,
+        replacement,
+        options,
+      );
       if (applied !== false) {
+        onApplied?.();
         setComposerHighlightedItemId(null);
       }
+      return applied;
     },
-    [applyPromptReplacement, resolveActiveComposerTrigger],
+    [applyPromptReplacement],
+  );
+
+  // Replaces the active `@...` token with a completed absolute folder mention.
+  const handleSelectLocalDirectoryMention = useCallback(
+    (absolutePath: string) => {
+      const { snapshot, trigger } = resolveActiveComposerTrigger();
+      if (!trigger) return;
+      applyComposerTriggerReplacement({
+        snapshot,
+        trigger,
+        base: `${formatComposerMentionToken(absolutePath)} `,
+      });
+    },
+    [applyComposerTriggerReplacement, resolveActiveComposerTrigger],
   );
 
   // Rewrites the active `@...` mention to an absolute folder path with a trailing separator
@@ -5644,17 +5674,12 @@ export default function ChatView({
       const withTrailingSeparator = absolutePath.endsWith(separator)
         ? absolutePath
         : `${absolutePath}${separator}`;
-      const replacement = /\s/.test(withTrailingSeparator)
+      const base = /\s/.test(withTrailingSeparator)
         ? `@"${withTrailingSeparator}`
         : `@${withTrailingSeparator}`;
-      const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, replacement, {
-        expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
-      });
-      if (applied !== false) {
-        setComposerHighlightedItemId(null);
-      }
+      applyComposerTriggerReplacement({ snapshot, trigger, base });
     },
-    [applyPromptReplacement, resolveActiveComposerTrigger],
+    [applyComposerTriggerReplacement, resolveActiveComposerTrigger],
   );
 
   const setComposerPromptValue = useCallback(
@@ -5685,7 +5710,6 @@ export default function ChatView({
     () => ({
       resolveActiveComposerTrigger,
       applyPromptReplacement,
-      extendReplacementRangeForTrailingSpace,
       clearComposerSlashDraft,
       setComposerPromptValue,
       scheduleComposerFocus,
@@ -5780,21 +5804,11 @@ export default function ChatView({
       const { snapshot, trigger } = resolveActiveComposerTrigger();
       if (!trigger) return;
       if (item.type === "path") {
-        const replacement = `${formatComposerMentionToken(item.path)} `;
-        const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
-          snapshot.value,
-          trigger.rangeEnd,
-          replacement,
-        );
-        const applied = applyPromptReplacement(
-          trigger.rangeStart,
-          replacementRangeEnd,
-          replacement,
-          { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
-        );
-        if (applied !== false) {
-          setComposerHighlightedItemId(null);
-        }
+        applyComposerTriggerReplacement({
+          snapshot,
+          trigger,
+          base: `${formatComposerMentionToken(item.path)} `,
+        });
         return;
       }
       if (item.type === "local-root") {
@@ -5812,101 +5826,68 @@ export default function ChatView({
           scheduleComposerFocus();
           return;
         }
-        const replacement = `/${item.command} `;
-        const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
-          snapshot.value,
-          trigger.rangeEnd,
-          replacement,
-        );
-        const applied = applyPromptReplacement(
-          trigger.rangeStart,
-          replacementRangeEnd,
-          replacement,
-          { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
-        );
-        if (applied !== false) {
-          setComposerHighlightedItemId(null);
-        }
+        applyComposerTriggerReplacement({
+          snapshot,
+          trigger,
+          base: `/${item.command} `,
+        });
         return;
       }
       if (item.type === "skill") {
-        const replacement = `${skillMentionPrefix(selectedProvider)}${item.skill.name} `;
-        const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
-          snapshot.value,
-          trigger.rangeEnd,
-          replacement,
-        );
-        const applied = applyPromptReplacement(
-          trigger.rangeStart,
-          replacementRangeEnd,
-          replacement,
-          { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
-        );
-        if (applied !== false) {
-          setSelectedComposerSkills((existing) => {
-            const nextSkill = {
-              name: item.skill.name,
-              path: item.skill.path,
-            } satisfies ProviderSkillReference;
-            return existing.some(
-              (skill) => skill.name === nextSkill.name && skill.path === nextSkill.path,
-            )
-              ? existing
-              : [...existing, nextSkill];
-          });
-          setComposerHighlightedItemId(null);
-        }
+        applyComposerTriggerReplacement({
+          snapshot,
+          trigger,
+          base: `${skillMentionPrefix(selectedProvider)}${item.skill.name} `,
+          onApplied: () => {
+            setSelectedComposerSkills((existing) => {
+              const nextSkill = {
+                name: item.skill.name,
+                path: item.skill.path,
+              } satisfies ProviderSkillReference;
+              return existing.some(
+                (skill) => skill.name === nextSkill.name && skill.path === nextSkill.path,
+              )
+                ? existing
+                : [...existing, nextSkill];
+            });
+          },
+        });
         return;
       }
       if (item.type === "plugin") {
-        const replacement = `@${item.plugin.name} `;
-        const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
-          snapshot.value,
-          trigger.rangeEnd,
-          replacement,
-        );
-        const applied = applyPromptReplacement(
-          trigger.rangeStart,
-          replacementRangeEnd,
-          replacement,
-          { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
-        );
-        if (applied !== false) {
-          setSelectedComposerMentions((existing) => {
-            const nextMention = item.mention;
-            const nextWithoutSameName = existing.filter(
-              (mention) => mention.name !== nextMention.name,
-            );
-            return [...nextWithoutSameName, nextMention];
-          });
-          setComposerHighlightedItemId(null);
-        }
+        applyComposerTriggerReplacement({
+          snapshot,
+          trigger,
+          base: `@${item.plugin.name} `,
+          onApplied: () => {
+            setSelectedComposerMentions((existing) => {
+              const nextMention = item.mention;
+              const nextWithoutSameName = existing.filter(
+                (mention) => mention.name !== nextMention.name,
+              );
+              return [...nextWithoutSameName, nextMention];
+            });
+          },
+        });
         return;
       }
       if (item.type === "model") {
         onProviderModelSelect(item.provider, item.model);
-        const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
-          expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
-        });
-        if (applied !== false) {
-          setComposerHighlightedItemId(null);
-        }
+        applyComposerTriggerReplacement({ snapshot, trigger, base: "" });
         return;
       }
       if (item.type === "agent") {
-        // Insert @alias() and position cursor inside parentheses
-        const replacement = `@${item.alias}()`;
-        const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, replacement, {
-          expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
-          cursorOffset: -1, // Move cursor back 1 to be inside the parentheses
+        // Insert @alias() and position cursor inside the parentheses.
+        applyComposerTriggerReplacement({
+          snapshot,
+          trigger,
+          base: `@${item.alias}()`,
+          cursorOffset: -1,
         });
-        if (applied !== false) {
-          setComposerHighlightedItemId(null);
-        }
       }
     },
     [
-      applyPromptReplacement,
+      applyComposerTriggerReplacement,
       scheduleComposerFocus,
       handleForkTargetSelection,
       handleNavigateLocalFolder,

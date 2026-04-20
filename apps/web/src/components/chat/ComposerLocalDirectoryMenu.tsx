@@ -22,7 +22,14 @@ import { projectSearchLocalEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { readNativeApi } from "~/nativeApi";
 import { cn } from "~/lib/utils";
 import { FolderClosed } from "../FolderClosed";
-import { Command, CommandGroup, CommandItem, CommandList, CommandSeparator } from "../ui/command";
+import {
+  Command,
+  CommandGroup,
+  CommandGroupLabel,
+  CommandItem,
+  CommandList,
+  CommandSeparator,
+} from "../ui/command";
 
 type EntriesByPath = Record<string, readonly ProjectFileSystemEntry[] | undefined>;
 
@@ -380,8 +387,7 @@ export const ComposerLocalDirectoryMenu = memo(function ComposerLocalDirectoryMe
 
   const entryRowStartIndex = currentFolderRow ? 1 : 0;
   const searchRowStartIndex = entryRowStartIndex + folders.length + files.length;
-  const isSearchPending =
-    shouldRunFuzzySearch && searchQuery.isFetching && searchRows.length === 0;
+  const isSearchPending = shouldRunFuzzySearch && searchQuery.isFetching && searchRows.length === 0;
 
   return (
     <Command autoHighlight={false} mode="none">
@@ -472,7 +478,10 @@ export const ComposerLocalDirectoryMenu = memo(function ComposerLocalDirectoryMe
                 {folders.length > 0 || files.length > 0 ? (
                   <CommandSeparator className="my-0.5" />
                 ) : null}
-                <CommandGroup heading="Matches deeper">
+                <CommandGroup>
+                  <CommandGroupLabel className="px-2 pt-1.5 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/55">
+                    Matches deeper
+                  </CommandGroupLabel>
                   {searchRows.map((entry, searchIndex) => {
                     const absoluteIndex = searchRowStartIndex + searchIndex;
                     return (
@@ -501,7 +510,9 @@ export const ComposerLocalDirectoryMenu = memo(function ComposerLocalDirectoryMe
         ) : errorMessage ? (
           <p className="px-2 py-1.5 text-destructive/80 text-[11px]">{errorMessage}</p>
         ) : isSearchPending ? (
-          <p className="px-2 py-1.5 text-muted-foreground/50 text-[11px]">Searching nested files…</p>
+          <p className="px-2 py-1.5 text-muted-foreground/50 text-[11px]">
+            Searching nested files…
+          </p>
         ) : visibleCount === 0 ? (
           <p className="px-2 py-1.5 text-muted-foreground/50 text-[11px]">
             {filter.trim().length > 0 ? "No matches." : "No files or folders here."}

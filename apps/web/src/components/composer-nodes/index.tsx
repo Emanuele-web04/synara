@@ -26,11 +26,10 @@ import {
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
   type TerminalContextDraft,
 } from "~/lib/terminalContext";
-import { basenameOfPath, getVscodeIconUrlForEntry, inferEntryKindFromPath } from "~/vscode-icons";
+import { basenameOfPath } from "~/file-icons";
 import {
-  COMPOSER_INLINE_CHIP_CLASS_NAME,
-  COMPOSER_INLINE_CHIP_ICON_CLASS_NAME,
   COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME,
+  COMPOSER_INLINE_MENTION_CHIP_CLASS_NAME,
   COMPOSER_INLINE_SKILL_CHIP_ICON_SVG,
   COMPOSER_INLINE_SKILL_CHIP_CLASS_NAME,
   COMPOSER_INLINE_SKILL_CHIP_ICON_CLASS_NAME,
@@ -39,6 +38,7 @@ import {
   formatComposerSkillChipLabel,
 } from "../composerInlineChip";
 import { ComposerPendingTerminalContextChip } from "../chat/ComposerPendingTerminalContexts";
+import { createMentionChipIconElement } from "../chat/MentionChipIcon";
 
 // ── Serialized Types ──────────────────────────────────────────────────
 
@@ -90,13 +90,7 @@ function renderMentionChipDom(container: HTMLElement, pathValue: string): void {
   container.style.setProperty("user-select", "none");
   container.style.setProperty("-webkit-user-select", "none");
 
-  const theme = resolvedThemeFromDocument();
-  const icon = document.createElement("img");
-  icon.alt = "";
-  icon.ariaHidden = "true";
-  icon.className = COMPOSER_INLINE_CHIP_ICON_CLASS_NAME;
-  icon.loading = "lazy";
-  icon.src = getVscodeIconUrlForEntry(pathValue, inferEntryKindFromPath(pathValue), theme);
+  const icon = createMentionChipIconElement(pathValue, resolvedThemeFromDocument());
 
   const label = document.createElement("span");
   label.className = COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME;
@@ -193,7 +187,7 @@ export class ComposerMentionNode extends TextNode {
 
   override createDOM(_config: EditorConfig): HTMLElement {
     const dom = document.createElement("span");
-    dom.className = COMPOSER_INLINE_CHIP_CLASS_NAME;
+    dom.className = COMPOSER_INLINE_MENTION_CHIP_CLASS_NAME;
     dom.contentEditable = "false";
     dom.setAttribute("spellcheck", "false");
     renderMentionChipDom(dom, this.__path);

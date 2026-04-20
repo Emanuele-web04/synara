@@ -14,6 +14,7 @@ import { newCommandId, newMessageId, newThreadId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import type { Project, Thread } from "../types";
 import type { ComposerTrigger } from "../composer-logic";
+import { extendReplacementRangeForTrailingSpace } from "../composerTriggerInsertion";
 import {
   buildSlashReviewComposerPrompt,
   buildSubagentsPrompt,
@@ -82,11 +83,6 @@ export function useComposerSlashCommands(input: {
       replacement: string,
       options?: { expectedText?: string; cursorOffset?: number },
     ) => number | false;
-    extendReplacementRangeForTrailingSpace: (
-      text: string,
-      rangeEnd: number,
-      replacement: string,
-    ) => number;
     clearComposerSlashDraft: () => void;
     setComposerPromptValue: (nextPrompt: string) => void;
     scheduleComposerFocus: () => void;
@@ -617,7 +613,7 @@ export function useComposerSlashCommands(input: {
 
       if (item.command === "model") {
         const replacement = "/model ";
-        const replacementRangeEnd = editorActions.extendReplacementRangeForTrailingSpace(
+        const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
           snapshot.value,
           trigger.rangeEnd,
           replacement,
@@ -716,7 +712,7 @@ export function useComposerSlashCommands(input: {
         }
         if (supportsTextNativeReviewCommand) {
           const replacement = "/review";
-          const replacementRangeEnd = editorActions.extendReplacementRangeForTrailingSpace(
+          const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
             snapshot.value,
             trigger.rangeEnd,
             replacement,

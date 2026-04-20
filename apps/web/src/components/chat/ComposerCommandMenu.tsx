@@ -36,7 +36,7 @@ import {
   CommandList,
   CommandSeparator,
 } from "../ui/command";
-import { VscodeEntryIcon } from "./VscodeEntryIcon";
+import { FileEntryIcon } from "./FileEntryIcon";
 
 function SkillCubeIcon(props: { className?: string }) {
   return (
@@ -376,7 +376,7 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
       }}
     >
       {props.item.type === "path" ? (
-        <VscodeEntryIcon
+        <FileEntryIcon
           pathValue={props.item.path}
           kind={props.item.pathKind}
           theme={props.resolvedTheme}

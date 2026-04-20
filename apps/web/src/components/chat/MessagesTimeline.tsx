@@ -44,7 +44,8 @@ import { estimateTimelineMessageHeight, estimateTimelineWorkGroupHeight } from "
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { DiffStatLabel } from "./DiffStatLabel";
-import { VscodeEntryIcon } from "./VscodeEntryIcon";
+import { FileEntryIcon } from "./FileEntryIcon";
+import { MentionChipIcon } from "./MentionChipIcon";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { AssistantSelectionsSummaryChip } from "./AssistantSelectionsSummaryChip";
 import {
@@ -79,11 +80,13 @@ import {
   COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME,
   COMPOSER_INLINE_AGENT_CHIP_CLASS_NAME,
   COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME,
+  COMPOSER_INLINE_MENTION_CHIP_CLASS_NAME,
   COMPOSER_INLINE_SKILL_CHIP_CLASS_NAME,
   COMPOSER_INLINE_SKILL_CHIP_ICON_CLASS_NAME,
   COMPOSER_INLINE_SKILL_CHIP_ICON_SVG,
   formatComposerSkillChipLabel,
 } from "../composerInlineChip";
+import { basenameOfPath } from "../../file-icons";
 import { getChatTranscriptLineHeightPx, getChatTranscriptTextStyle } from "./chatTypography";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { getAppTypographyScale } from "../../lib/appTypography";
@@ -650,6 +653,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       text={userMessagePreview.text}
                       terminalContexts={terminalContexts}
                       chatTypographyStyle={chatTypographyStyle}
+                      resolvedTheme={resolvedTheme}
                     />
                   </div>
                 )}
@@ -963,7 +967,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                                 className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-muted/60"
                                 onClick={() => onOpenTurnDiff(turnSummary.turnId, file.path)}
                               >
-                                <VscodeEntryIcon
+                                <FileEntryIcon
                                   pathValue={file.path}
                                   kind="file"
                                   theme={resolvedTheme}
@@ -1318,7 +1322,7 @@ const UserImageAttachmentThumbnail = memo(function UserImageAttachmentThumbnail(
         />
       ) : (
         <div className="flex size-full items-center justify-center">
-          <VscodeEntryIcon
+          <FileEntryIcon
             pathValue={props.image.name}
             kind="file"
             theme={props.resolvedTheme}
@@ -1331,7 +1335,11 @@ const UserImageAttachmentThumbnail = memo(function UserImageAttachmentThumbnail(
 });
 
 // Renders read-only user text with the same inline skill pill treatment as the composer.
-function renderUserMessageInlineText(text: string, keyPrefix: string): ReactNode[] {
+function renderUserMessageInlineText(
+  text: string,
+  keyPrefix: string,
+  resolvedTheme: "light" | "dark",
+): ReactNode[] {
   return splitPromptIntoDisplaySegments(text).flatMap((segment, index) => {
     const key = `${keyPrefix}:${index}`;
     if (segment.type === "text") {
@@ -1341,7 +1349,13 @@ function renderUserMessageInlineText(text: string, keyPrefix: string): ReactNode
       return [<UserMessageInlineSkillChip key={`${key}:skill`} skillName={segment.name} />];
     }
     if (segment.type === "mention") {
-      return [<span key={`${key}:mention`}>{`@${segment.path}`}</span>];
+      return [
+        <UserMessageInlineMentionChip
+          key={`${key}:mention`}
+          path={segment.path}
+          resolvedTheme={resolvedTheme}
+        />,
+      ];
     }
     if (segment.type === "agent-mention") {
       return [
@@ -1355,6 +1369,19 @@ function renderUserMessageInlineText(text: string, keyPrefix: string): ReactNode
     return [];
   });
 }
+
+const UserMessageInlineMentionChip = memo(function UserMessageInlineMentionChip(props: {
+  path: string;
+  resolvedTheme: "light" | "dark";
+}) {
+  const label = basenameOfPath(props.path);
+  return (
+    <span className={COMPOSER_INLINE_MENTION_CHIP_CLASS_NAME} title={props.path}>
+      <MentionChipIcon path={props.path} theme={props.resolvedTheme} />
+      <span className={COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME}>{label}</span>
+    </span>
+  );
+});
 
 function hasOnlyInlineSkillChips(text: string): boolean {
   const segments = splitPromptIntoDisplaySegments(text);
@@ -1378,6 +1405,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
   text: string;
   terminalContexts: ParsedTerminalContextEntry[];
   chatTypographyStyle: CSSProperties;
+  resolvedTheme: "light" | "dark";
 }) {
   if (props.terminalContexts.length > 0) {
     const hasEmbeddedInlineLabels = textContainsInlineTerminalContextLabels(
@@ -1402,6 +1430,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
             ...renderUserMessageInlineText(
               props.text.slice(cursor, matchIndex),
               `user-terminal-context-inline-before:${context.header}:${cursor}`,
+              props.resolvedTheme,
             ),
           );
         }
@@ -1420,6 +1449,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
             ...renderUserMessageInlineText(
               props.text.slice(cursor),
               `user-message-terminal-context-inline-rest:${cursor}`,
+              props.resolvedTheme,
             ),
           );
         }
@@ -1451,7 +1481,11 @@ const UserMessageBody = memo(function UserMessageBody(props: {
 
     if (props.text.length > 0) {
       inlineNodes.push(
-        ...renderUserMessageInlineText(props.text, "user-message-terminal-context-inline-text"),
+        ...renderUserMessageInlineText(
+          props.text,
+          "user-message-terminal-context-inline-text",
+          props.resolvedTheme,
+        ),
       );
     } else if (inlinePrefix.length === 0) {
       return null;
@@ -1477,7 +1511,11 @@ const UserMessageBody = memo(function UserMessageBody(props: {
         className="flex max-w-full min-w-0 items-center leading-none text-foreground [&>span]:translate-y-0"
         style={props.chatTypographyStyle}
       >
-        {renderUserMessageInlineText(props.text, "user-message-inline-chip-only")}
+        {renderUserMessageInlineText(
+          props.text,
+          "user-message-inline-chip-only",
+          props.resolvedTheme,
+        )}
       </div>
     );
   }
@@ -1487,7 +1525,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
       className="inline-block max-w-full min-w-0 whitespace-pre-wrap break-words font-system-ui text-foreground"
       style={props.chatTypographyStyle}
     >
-      {renderUserMessageInlineText(props.text, "user-message-inline")}
+      {renderUserMessageInlineText(props.text, "user-message-inline", props.resolvedTheme)}
     </div>
   );
 });

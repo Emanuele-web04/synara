@@ -12,13 +12,14 @@ import {
   buildCommandSearchBlob,
   buildPluginSearchBlob,
   buildSkillSearchBlob,
+  isInstalledProviderPlugin,
   normalizeProviderDiscoveryText,
 } from "~/lib/providerDiscovery";
 import {
   LOCAL_FOLDER_MENTION_NAME,
   matchesLocalFolderMentionShortcut,
 } from "~/lib/localFolderMentions";
-import { basenameOfPath } from "../vscode-icons";
+import { basenameOfPath } from "../file-icons";
 import type { ComposerTrigger } from "../composer-logic";
 import {
   filterComposerSlashCommands,
@@ -117,6 +118,7 @@ export function useComposerCommandMenuItems(input: {
       })();
 
       const pluginItems = providerPlugins
+        .filter(({ plugin }) => isInstalledProviderPlugin(plugin))
         .filter(({ plugin }) => {
           if (!query) return true;
           return buildPluginSearchBlob(plugin).includes(query);
