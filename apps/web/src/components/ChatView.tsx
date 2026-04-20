@@ -6864,9 +6864,6 @@ export default function ChatView({
           </div>
         </div>
       </form>
-      {isGitRepo && isCenteredEmptyLanding ? (
-        <BranchToolbar className="mt-1" {...branchToolbarProps} />
-      ) : null}
       {isEmptyChatLanding ? (
         <div className="mt-2 flex w-full items-center justify-start px-3">
           <ProjectPicker
