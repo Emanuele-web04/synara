@@ -1453,9 +1453,8 @@ export default function ChatView({
   // real assistant text growth as "follow output" for transcript auto-scroll.
   const hasStreamingAssistantText = useMemo(
     () =>
-      activeThread?.messages.some(
-        (message) => message.role === "assistant" && message.streaming,
-      ) ?? false,
+      activeThread?.messages.some((message) => message.role === "assistant" && message.streaming) ??
+      false,
     [activeThread?.messages],
   );
   const activeTurnLayoutLive = isWorking || !latestTurnSettled;
@@ -6314,12 +6313,17 @@ export default function ChatView({
   };
 
   const accessModeToggleButton =
-    !showPlanFollowUpPrompt && !activePendingProgress && !isVoiceRecording && !isVoiceTranscribing ? (
+    !showPlanFollowUpPrompt &&
+    !activePendingProgress &&
+    !isVoiceRecording &&
+    !isVoiceTranscribing ? (
       <button
         type="button"
         className="inline-flex h-7 shrink-0 self-center items-center gap-1 rounded px-1.5 py-0.5 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-muted-foreground/70 transition-colors hover:text-foreground/80 disabled:opacity-50 sm:h-8"
         onClick={() =>
-          handleRuntimeModeChange(runtimeMode === "full-access" ? "approval-required" : "full-access")
+          handleRuntimeModeChange(
+            runtimeMode === "full-access" ? "approval-required" : "full-access",
+          )
         }
         disabled={isConnecting || isSendBusy || phase === "running"}
         title={

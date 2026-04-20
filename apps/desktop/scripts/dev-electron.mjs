@@ -56,11 +56,9 @@ function listStaleComputerUsePids() {
     return [];
   }
 
-  const result = spawnSync(
-    "pgrep",
-    ["-fal", "DP Code \\(Dev\\).*(computerUseMcp\\.mjs mcp)"],
-    { encoding: "utf8" },
-  );
+  const result = spawnSync("pgrep", ["-fal", "DP Code \\(Dev\\).*(computerUseMcp\\.mjs mcp)"], {
+    encoding: "utf8",
+  });
   const output = typeof result.stdout === "string" ? result.stdout.trim() : "";
   if (!output) {
     return [];

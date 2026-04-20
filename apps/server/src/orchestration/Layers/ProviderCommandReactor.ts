@@ -797,7 +797,9 @@ const make = Effect.gen(function* () {
       ...(event.payload.providerOptions !== undefined
         ? { providerOptions: event.payload.providerOptions }
         : {}),
-      ...(event.payload.runtimeMode !== undefined ? { runtimeMode: event.payload.runtimeMode } : {}),
+      ...(event.payload.runtimeMode !== undefined
+        ? { runtimeMode: event.payload.runtimeMode }
+        : {}),
       ...(event.payload.reviewTarget !== undefined
         ? { reviewTarget: event.payload.reviewTarget }
         : {}),
