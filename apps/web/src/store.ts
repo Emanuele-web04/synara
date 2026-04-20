@@ -2734,36 +2734,9 @@ function applyOrchestrationEvent(
       );
 
     case "thread.turn-interrupt-requested": {
-      if (event.payload.turnId === undefined) {
-        return state;
-      }
-      return applyThreadUpdate(
-        state,
-        event.payload.threadId,
-        (thread) => {
-          const latestTurn = thread.latestTurn;
-          if (latestTurn === null || latestTurn.turnId !== event.payload.turnId) {
-            return thread;
-          }
-          return {
-            ...thread,
-            latestTurn: buildLatestTurn({
-              previous: latestTurn,
-              turnId: latestTurn.turnId,
-              state: "interrupted",
-              requestedAt: latestTurn.requestedAt,
-              startedAt: latestTurn.startedAt ?? event.payload.createdAt,
-              completedAt: latestTurn.completedAt ?? event.payload.createdAt,
-              assistantMessageId: latestTurn.assistantMessageId,
-            }),
-            updatedAt:
-              (thread.updatedAt ?? thread.createdAt) > event.occurredAt
-                ? thread.updatedAt
-                : event.occurredAt,
-          };
-        },
-        options,
-      );
+      // Interrupt requests are best-effort and can fail or time out. Keep the
+      // latest-turn clock/state live until the provider confirms a terminal event.
+      return state;
     }
 
     case "thread.session-stop-requested":

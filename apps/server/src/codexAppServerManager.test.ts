@@ -41,6 +41,7 @@ function createSendTurnHarness() {
     },
     collabReceiverTurns: new Map(),
     collabReceiverParents: new Map(),
+    reviewTurnIds: new Set<string>(),
   };
 
   const requireSession = vi
@@ -81,6 +82,7 @@ function createThreadControlHarness() {
     },
     collabReceiverTurns: new Map(),
     collabReceiverParents: new Map(),
+    reviewTurnIds: new Set<string>(),
   };
 
   const requireSession = vi
@@ -128,6 +130,7 @@ function createPendingUserInputHarness() {
     ]),
     collabReceiverTurns: new Map(),
     collabReceiverParents: new Map(),
+    reviewTurnIds: new Set<string>(),
   };
 
   const requireSession = vi
@@ -170,6 +173,7 @@ function createCollabNotificationHarness() {
     pendingUserInputs: new Map(),
     collabReceiverTurns: new Map<string, string>(),
     collabReceiverParents: new Map<string, string>(),
+    reviewTurnIds: new Set<string>(),
     nextRequestId: 1,
     stopping: false,
   };
@@ -196,6 +200,7 @@ function createProcessOutputHarness() {
       createdAt: "2026-02-10T00:00:00.000Z",
       updatedAt: "2026-02-10T00:00:00.000Z",
     },
+    reviewTurnIds: new Set<string>(),
     stopping: false,
   };
   const emitEvent = vi
@@ -1566,6 +1571,75 @@ describe("thread checkpoint control", () => {
     });
   });
 
+  it("retries review interrupt with the latest review turn from thread/read after timeout", async () => {
+    const { manager, context, sendRequest, updateSession } = createThreadControlHarness();
+    context.session.status = "running";
+    context.session.activeTurnId = "turn_review_old";
+    context.reviewTurnIds.add("turn_review_old");
+
+    sendRequest
+      .mockRejectedValueOnce(new Error("Timed out waiting for turn/interrupt."))
+      .mockResolvedValueOnce({
+        thread: {
+          id: "thread_1",
+          turns: [
+            {
+              id: "turn_review_new",
+              items: [{ type: "enteredReviewMode" }],
+            },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({});
+
+    await manager.interruptTurn(asThreadId("thread_1"));
+
+    expect(sendRequest).toHaveBeenNthCalledWith(1, context, "turn/interrupt", {
+      threadId: "thread_1",
+      turnId: "turn_review_old",
+    });
+    expect(sendRequest).toHaveBeenNthCalledWith(2, context, "thread/read", {
+      threadId: "thread_1",
+      includeTurns: true,
+    });
+    expect(sendRequest).toHaveBeenNthCalledWith(3, context, "turn/interrupt", {
+      threadId: "thread_1",
+      turnId: "turn_review_new",
+    });
+    expect(updateSession).toHaveBeenCalledWith(context, {
+      activeTurnId: "turn_review_new",
+    });
+  });
+
+  it("settles review interrupt when thread/read already shows exited review mode", async () => {
+    const { manager, context, sendRequest, updateSession } = createThreadControlHarness();
+    context.session.status = "running";
+    context.session.activeTurnId = "turn_review_old";
+    context.reviewTurnIds.add("turn_review_old");
+
+    sendRequest
+      .mockRejectedValueOnce(new Error("Timed out waiting for turn/interrupt."))
+      .mockResolvedValueOnce({
+        thread: {
+          id: "thread_1",
+          turns: [
+            {
+              id: "turn_review_old",
+              items: [{ type: "enteredReviewMode" }, { type: "exitedReviewMode" }],
+            },
+          ],
+        },
+      });
+
+    await manager.interruptTurn(asThreadId("thread_1"));
+
+    expect(updateSession).toHaveBeenCalledWith(context, {
+      status: "ready",
+      activeTurnId: undefined,
+      lastError: undefined,
+    });
+  });
+
   it("emits compaction progress before waiting for thread/compact/start", async () => {
     const { manager, context, sendRequest, updateSession, emitEvent } =
       createThreadControlHarness();
@@ -1970,6 +2044,49 @@ describe("collab child conversation routing", () => {
 });
 
 describe("handleServerNotification error normalization", () => {
+  it("settles native review when review mode exits", () => {
+    const { manager, context, updateSession, emitEvent } = createCollabNotificationHarness();
+    context.reviewTurnIds.add("turn_parent");
+    context.reviewTurnIds.add("turn_child");
+    context.session.activeTurnId = "turn_child";
+
+    (
+      manager as unknown as {
+        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
+      }
+    ).handleServerNotification(context, {
+      method: "item/completed",
+      params: {
+        item: {
+          type: "exitedReviewMode",
+          id: "turn_parent",
+          review: "The working tree is clean.",
+        },
+        threadId: "provider_parent",
+      },
+    });
+
+    expect(updateSession).toHaveBeenCalledWith(context, {
+      status: "ready",
+      activeTurnId: undefined,
+      lastError: undefined,
+    });
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "notification",
+        method: "turn/completed",
+        turnId: "turn_child",
+        threadId: "thread_1",
+        payload: {
+          turn: {
+            id: "turn_child",
+            status: "completed",
+          },
+        },
+      }),
+    );
+  });
+
   it("clears the running session turn when Codex aborts a turn", () => {
     const { manager, context, updateSession } = createCollabNotificationHarness();
 

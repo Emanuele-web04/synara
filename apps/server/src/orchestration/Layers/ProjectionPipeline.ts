@@ -1102,39 +1102,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
         }
 
         case "thread.turn-interrupt-requested": {
-          if (event.payload.turnId === undefined) {
-            return;
-          }
-          const existingTurn = yield* projectionTurnRepository.getByTurnId({
-            threadId: event.payload.threadId,
-            turnId: event.payload.turnId,
-          });
-          if (Option.isSome(existingTurn)) {
-            yield* projectionTurnRepository.upsertByTurnId({
-              ...existingTurn.value,
-              state: "interrupted",
-              completedAt: existingTurn.value.completedAt ?? event.payload.createdAt,
-              startedAt: existingTurn.value.startedAt ?? event.payload.createdAt,
-              requestedAt: existingTurn.value.requestedAt ?? event.payload.createdAt,
-            });
-            return;
-          }
-          yield* projectionTurnRepository.upsertByTurnId({
-            turnId: event.payload.turnId,
-            threadId: event.payload.threadId,
-            pendingMessageId: null,
-            sourceProposedPlanThreadId: null,
-            sourceProposedPlanId: null,
-            assistantMessageId: null,
-            state: "interrupted",
-            requestedAt: event.payload.createdAt,
-            startedAt: event.payload.createdAt,
-            completedAt: event.payload.createdAt,
-            checkpointTurnCount: null,
-            checkpointRef: null,
-            checkpointStatus: null,
-            checkpointFiles: [],
-          });
+          // An interrupt request is only intent, not confirmation. The provider
+          // can still reject it or time out, so we keep the persisted turn state
+          // unchanged until a terminal runtime event arrives.
           return;
         }
 

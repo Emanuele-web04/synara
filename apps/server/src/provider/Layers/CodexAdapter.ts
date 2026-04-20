@@ -271,6 +271,7 @@ function itemDetail(
     asString(item.command),
     asString(item.title),
     asString(item.summary),
+    asString(item.review),
     asString(item.text),
     asString(item.path),
     asString(item.prompt),
@@ -579,6 +580,9 @@ function mapItemLifecycle(
     return undefined;
   }
 
+  const canonicalItemType =
+    lifecycle === "item.completed" && itemType === "review_exited" ? "assistant_message" : itemType;
+
   const detail = itemDetail(source, payload ?? {});
   const status =
     lifecycle === "item.started"
@@ -591,9 +595,9 @@ function mapItemLifecycle(
     ...runtimeEventBase(event, canonicalThreadId),
     type: lifecycle,
     payload: {
-      itemType,
+      itemType: canonicalItemType,
       ...(status ? { status } : {}),
-      ...(itemTitle(itemType) ? { title: itemTitle(itemType) } : {}),
+      ...(itemTitle(canonicalItemType) ? { title: itemTitle(canonicalItemType) } : {}),
       ...(detail ? { detail } : {}),
       ...(event.payload !== undefined ? { data: event.payload } : {}),
     },

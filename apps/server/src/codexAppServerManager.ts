@@ -98,6 +98,7 @@ interface CodexSessionContext {
   pendingUserInputs: Map<ApprovalRequestId, PendingUserInputRequest>;
   collabReceiverTurns: Map<string, TurnId>;
   collabReceiverParents: Map<string, string>;
+  reviewTurnIds: Set<TurnId>;
   nextRequestId: number;
   stopping: boolean;
   discovery?: boolean;
@@ -741,6 +742,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         pendingUserInputs: new Map(),
         collabReceiverTurns: new Map(),
         collabReceiverParents: new Map(),
+        reviewTurnIds: new Set(),
         nextRequestId: 1,
         stopping: false,
       };
@@ -1134,6 +1136,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       throw new Error("review/start response did not include a turn id.");
     }
     const turnId = TurnId.makeUnsafe(turnIdRaw);
+    context.reviewTurnIds.add(turnId);
+    console.log("[codex-review] review/start acknowledged", {
+      threadId: context.session.threadId,
+      providerThreadId,
+      turnId,
+      target: input.target.type,
+    });
 
     this.updateSession(context, {
       status: "running",
@@ -1168,13 +1177,85 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         resumeCursor: context.session.resumeCursor,
       });
     if (!effectiveTurnId || !providerThreadId) {
+      console.log("[codex-review] turn/interrupt skipped", {
+        threadId,
+        requestedTurnId: turnId ?? null,
+        activeTurnId: context.session.activeTurnId ?? null,
+        providerThreadId: providerThreadId ?? null,
+      });
       return;
     }
 
-    await this.sendRequest(context, "turn/interrupt", {
-      threadId: providerThreadId,
+    console.log("[codex-review] turn/interrupt requested", {
+      threadId,
+      providerThreadId,
       turnId: effectiveTurnId,
+      isTrackedReviewTurn: context.reviewTurnIds.has(effectiveTurnId),
     });
+    try {
+      await this.sendRequest(context, "turn/interrupt", {
+        threadId: providerThreadId,
+        turnId: effectiveTurnId,
+      });
+      console.log("[codex-review] turn/interrupt acknowledged", {
+        threadId,
+        providerThreadId,
+        turnId: effectiveTurnId,
+      });
+    } catch (error) {
+      console.log("[codex-review] turn/interrupt failed", {
+        threadId,
+        providerThreadId,
+        turnId: effectiveTurnId,
+        isTrackedReviewTurn: context.reviewTurnIds.has(effectiveTurnId),
+        error: error instanceof Error ? error.message : String(error),
+      });
+      if (!context.reviewTurnIds.has(effectiveTurnId) || !this.isTurnInterruptTimeout(error)) {
+        throw error;
+      }
+
+      const snapshot = await this.readThread(threadId);
+      const latestReviewTurnId = this.findLatestReviewTurnId(snapshot);
+      console.log("[codex-review] review interrupt recovery snapshot", {
+        threadId,
+        currentTurnId: effectiveTurnId,
+        latestReviewTurnId: latestReviewTurnId ?? null,
+        latestReviewTurnExited:
+          latestReviewTurnId ? this.isExitedReviewTurn(snapshot, latestReviewTurnId) : false,
+        snapshotTurnIds: snapshot.turns.map((turn) => String(turn.id)),
+      });
+
+      if (latestReviewTurnId && this.isExitedReviewTurn(snapshot, latestReviewTurnId)) {
+        console.log("[codex-review] settling review from thread/read exitedReviewMode", {
+          threadId,
+          turnId: latestReviewTurnId,
+        });
+        this.settleTrackedReview(context, {
+          completedTurnId: latestReviewTurnId,
+          reason: "review exited via thread/read",
+        });
+        return;
+      }
+
+      if (latestReviewTurnId && latestReviewTurnId !== effectiveTurnId) {
+        console.log("[codex-review] retrying turn/interrupt with refreshed review turn", {
+          threadId,
+          previousTurnId: effectiveTurnId,
+          nextTurnId: latestReviewTurnId,
+        });
+        await this.sendRequest(context, "turn/interrupt", {
+          threadId: providerThreadId,
+          turnId: latestReviewTurnId,
+        });
+        context.reviewTurnIds.add(latestReviewTurnId);
+        this.updateSession(context, {
+          activeTurnId: latestReviewTurnId,
+        });
+        return;
+      }
+
+      throw error;
+    }
   }
 
   async readThread(threadId: ThreadId): Promise<CodexThreadSnapshot> {
@@ -1270,6 +1351,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         pendingUserInputs: new Map(),
         collabReceiverTurns: new Map(),
         collabReceiverParents: new Map(),
+        reviewTurnIds: new Set(),
         nextRequestId: 1,
         stopping: false,
       };
@@ -1819,6 +1901,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       pendingUserInputs: new Map(),
       collabReceiverTurns: new Map(),
       collabReceiverParents: new Map(),
+      reviewTurnIds: new Set(),
       nextRequestId: 1,
       stopping: false,
       discovery: true,
@@ -2029,6 +2112,18 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         return;
       }
       const turnId = toTurnId(this.readString(this.readObject(notification.params)?.turn, "id"));
+      if (
+        turnId !== undefined &&
+        context.session.activeTurnId !== undefined &&
+        context.reviewTurnIds.has(context.session.activeTurnId)
+      ) {
+        context.reviewTurnIds.add(turnId);
+        console.log("[codex-review] extending tracked review turn set on turn/started", {
+          threadId: context.session.threadId,
+          previousTurnId: context.session.activeTurnId,
+          nextTurnId: turnId,
+        });
+      }
       this.updateSession(context, {
         status: "running",
         activeTurnId: turnId,
@@ -2041,6 +2136,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         return;
       }
       context.collabReceiverTurns.clear();
+      if (rawRoute.turnId) {
+        context.reviewTurnIds.delete(rawRoute.turnId);
+      }
       const turn = this.readObject(notification.params, "turn");
       const status = this.readString(turn, "status");
       const errorMessageRaw = this.readString(this.readObject(turn, "error"), "message");
@@ -2061,10 +2159,60 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         return;
       }
       context.collabReceiverTurns.clear();
+      if (rawRoute.turnId) {
+        context.reviewTurnIds.delete(rawRoute.turnId);
+      }
       this.updateSession(context, {
         status: "ready",
         activeTurnId: undefined,
         lastError: undefined,
+      });
+      return;
+    }
+
+    if (this.isExitedReviewModeNotification(notification)) {
+      if (isChildConversation) {
+        return;
+      }
+      const item = this.readObject(notification.params, "item");
+      const reviewTurnId = toTurnId(this.readString(item, "id")) ?? rawRoute.turnId;
+      const reviewTurnTracked =
+        reviewTurnId !== undefined ? context.reviewTurnIds.has(reviewTurnId) : false;
+      const activeTurnTracked =
+        context.session.activeTurnId !== undefined &&
+        context.reviewTurnIds.has(context.session.activeTurnId);
+      console.log("[codex-review] exitedReviewMode notification", {
+        threadId: context.session.threadId,
+        reviewTurnId: reviewTurnId ?? null,
+        activeTurnId: context.session.activeTurnId ?? null,
+        reviewTurnTracked,
+        activeTurnTracked,
+      });
+      if (
+        reviewTurnId !== undefined &&
+        context.session.activeTurnId !== undefined &&
+        reviewTurnId !== context.session.activeTurnId &&
+        !reviewTurnTracked &&
+        !activeTurnTracked
+      ) {
+        console.log("[codex-review] exitedReviewMode ignored due to turn mismatch", {
+          threadId: context.session.threadId,
+          reviewTurnId,
+          activeTurnId: context.session.activeTurnId,
+        });
+        return;
+      }
+      // `review/start` can emit the final review result via `exitedReviewMode`
+      // before the terminal `turn/completed` notification arrives. If that
+      // completion never shows up, settle the session here instead of leaving
+      // native review stuck in "running" forever.
+      console.log("[codex-review] settling review from exitedReviewMode notification", {
+        threadId: context.session.threadId,
+        reviewTurnId: reviewTurnId ?? null,
+      });
+      this.settleTrackedReview(context, {
+        completedTurnId: reviewTurnId,
+        reason: "review exited via exitedReviewMode",
       });
       return;
     }
@@ -2261,6 +2409,51 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   private emitEvent(event: ProviderEvent): void {
     this.emit("event", event);
+  }
+
+  private settleTrackedReview(
+    context: CodexSessionContext,
+    input: {
+      readonly completedTurnId?: TurnId;
+      readonly reason: string;
+    },
+  ): void {
+    const terminalTurnId =
+      context.session.activeTurnId !== undefined &&
+      context.reviewTurnIds.has(context.session.activeTurnId)
+        ? context.session.activeTurnId
+        : input.completedTurnId !== undefined && context.reviewTurnIds.has(input.completedTurnId)
+          ? input.completedTurnId
+          : context.reviewTurnIds.values().next().value;
+
+    this.updateSession(context, {
+      status: "ready",
+      activeTurnId: undefined,
+      lastError: undefined,
+    });
+
+    context.reviewTurnIds.clear();
+
+    if (!terminalTurnId) {
+      return;
+    }
+
+    this.emitEvent({
+      id: EventId.makeUnsafe(randomUUID()),
+      kind: "notification",
+      provider: "codex",
+      threadId: context.session.threadId,
+      createdAt: new Date().toISOString(),
+      method: "turn/completed",
+      turnId: terminalTurnId,
+      message: input.reason,
+      payload: {
+        turn: {
+          id: terminalTurnId,
+          status: "completed",
+        },
+      },
+    });
   }
 
   private assertSupportedCodexCliVersion(input: {
@@ -2521,6 +2714,56 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
     const candidate = (value as Record<string, unknown>)[key];
     return typeof candidate === "boolean" ? candidate : undefined;
+  }
+
+  private isExitedReviewModeNotification(notification: JsonRpcNotification): boolean {
+    if (notification.method !== "item/completed") {
+      return false;
+    }
+    const item = this.readObject(notification.params, "item");
+    const itemType = this.readString(item, "type") ?? this.readString(item, "kind");
+    return itemType === "exitedReviewMode";
+  }
+
+  private isTurnInterruptTimeout(error: unknown): boolean {
+    return error instanceof Error && error.message.includes("Timed out waiting for turn/interrupt");
+  }
+
+  private normalizeItemType(raw: unknown): string {
+    if (typeof raw !== "string") return "";
+    return raw
+      .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+      .replace(/[._/-]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+  }
+
+  private turnHasReviewItem(
+    turn: CodexThreadTurnSnapshot,
+    itemType: "entered" | "exited",
+  ): boolean {
+    return turn.items.some((item) => {
+      const record = this.readObject(item);
+      const normalized = this.normalizeItemType(
+        this.readString(record, "type") ?? this.readString(record, "kind"),
+      );
+      return itemType === "entered"
+        ? normalized.includes("entered review mode")
+        : normalized.includes("exited review mode");
+    });
+  }
+
+  private findLatestReviewTurnId(snapshot: CodexThreadSnapshot): TurnId | undefined {
+    const latestReviewTurn = [...snapshot.turns]
+      .reverse()
+      .find((turn) => this.turnHasReviewItem(turn, "entered"));
+    return latestReviewTurn?.id;
+  }
+
+  private isExitedReviewTurn(snapshot: CodexThreadSnapshot, turnId: TurnId): boolean {
+    const turn = snapshot.turns.find((entry) => entry.id === turnId);
+    return turn ? this.turnHasReviewItem(turn, "exited") : false;
   }
 
   private parseSkillDescriptor(skill: unknown): ProviderSkillDescriptor | undefined {

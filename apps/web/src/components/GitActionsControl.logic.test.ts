@@ -9,6 +9,7 @@ import {
   resolveDefaultBranchActionDialogCopy,
   resolveLiveThreadBranchUpdate,
   resolveQuickAction,
+  shouldOfferCreateBranchPrompt,
   summarizeGitResult,
 } from "./GitActionsControl.logic";
 
@@ -252,15 +253,20 @@ describe("when: branch is clean, ahead, and has no open PR", () => {
 });
 
 describe("when: branch is clean, up to date, and has no open PR", () => {
-  it("resolveQuickAction returns disabled no-action state", () => {
+  it("resolveQuickAction offers creating a PR on a published feature branch", () => {
     const quick = resolveQuickAction(
       status({ aheadCount: 0, behindCount: 0, hasWorkingTreeChanges: false, pr: null }),
       false,
     );
-    assert.deepInclude(quick, { kind: "show_hint", label: "Commit", disabled: true });
+    assert.deepInclude(quick, {
+      kind: "run_action",
+      action: "create_pr",
+      label: "Create PR",
+      disabled: false,
+    });
   });
 
-  it("buildMenuItems disables commit, push, and create PR", () => {
+  it("buildMenuItems enables create PR for a published feature branch", () => {
     const items = buildMenuItems(status({ aheadCount: 0, behindCount: 0, pr: null }), false);
     assert.deepEqual(items, [
       {
@@ -282,7 +288,7 @@ describe("when: branch is clean, up to date, and has no open PR", () => {
       {
         id: "pr",
         label: "Create PR",
-        disabled: true,
+        disabled: false,
         icon: "pr",
         kind: "open_dialog",
         dialogAction: "create_pr",
@@ -365,7 +371,23 @@ describe("when: working tree has local changes", () => {
     });
   });
 
-  it("resolveQuickAction keeps create-branch visible for unpushed worktree branches after rename", () => {
+  it("resolveQuickAction only shows create-branch for temporary worktree branches", () => {
+    const quick = resolveQuickAction(
+      status({ branch: "worktree/semantic-name", hasUpstream: false }),
+      false,
+      false,
+      true,
+      false,
+    );
+    assert.deepInclude(quick, {
+      kind: "show_hint",
+      label: "Push",
+      hint: "No local commits to push.",
+      disabled: true,
+    });
+  });
+
+  it("resolveQuickAction can keep create-branch visible while a temporary thread branch lags behind checkout", () => {
     const quick = resolveQuickAction(
       status({ branch: "worktree/semantic-name", hasUpstream: false }),
       false,
@@ -525,6 +547,41 @@ describe("when: on default branch without open PR", () => {
         id: "pr",
         label: "Create PR",
         disabled: false,
+        icon: "pr",
+        kind: "open_dialog",
+        dialogAction: "create_pr",
+      },
+    ]);
+  });
+
+  it("does not enable create PR on a clean default branch with nothing new to publish", () => {
+    const items = buildMenuItems(
+      status({ branch: "main", aheadCount: 0, behindCount: 0, pr: null }),
+      false,
+      true,
+      true,
+    );
+    assert.deepEqual(items, [
+      {
+        id: "commit",
+        label: "Commit",
+        disabled: true,
+        icon: "commit",
+        kind: "open_dialog",
+        dialogAction: "commit",
+      },
+      {
+        id: "push",
+        label: "Commit & push",
+        disabled: true,
+        icon: "push",
+        kind: "open_dialog",
+        dialogAction: "commit_push",
+      },
+      {
+        id: "pr",
+        label: "Create PR",
+        disabled: true,
         icon: "pr",
         kind: "open_dialog",
         dialogAction: "create_pr",
@@ -1153,5 +1210,33 @@ describe("resolveLiveThreadBranchUpdate", () => {
     });
 
     assert.deepEqual(update, { branch: "feature/new" });
+  });
+});
+
+describe("shouldOfferCreateBranchPrompt", () => {
+  it("keeps the create-branch prompt visible while the thread still points at a temp worktree branch", () => {
+    assert.isTrue(
+      shouldOfferCreateBranchPrompt({
+        activeThreadBranch: "dpcode/deadbeef",
+        activeWorktreePath: "/tmp/project/.worktrees/feature-test",
+        gitStatus: {
+          branch: "feature/test",
+          hasUpstream: false,
+        },
+      }),
+    );
+  });
+
+  it("hides the create-branch prompt once the thread branch is semantic", () => {
+    assert.isFalse(
+      shouldOfferCreateBranchPrompt({
+        activeThreadBranch: "feature/test",
+        activeWorktreePath: "/tmp/project/.worktrees/feature-test",
+        gitStatus: {
+          branch: "feature/test",
+          hasUpstream: false,
+        },
+      }),
+    );
   });
 });

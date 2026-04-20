@@ -653,6 +653,38 @@ describe("store pure functions", () => {
     });
   });
 
+  it("keeps the latest turn running when interrupt is only requested", () => {
+    const initialState = makeState(
+      makeThread({
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("turn-running"),
+          state: "running",
+          requestedAt: "2026-02-27T00:01:00.000Z",
+          startedAt: "2026-02-27T00:01:05.000Z",
+          completedAt: null,
+          assistantMessageId: MessageId.makeUnsafe("assistant-running"),
+        },
+      }),
+    );
+
+    const next = applyOrchestrationEvents(initialState, [
+      makeDomainEvent("thread.turn-interrupt-requested", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        turnId: TurnId.makeUnsafe("turn-running"),
+        createdAt: "2026-02-27T00:02:00.000Z",
+      }),
+    ]);
+
+    expect(next.threads[0]?.latestTurn).toMatchObject({
+      turnId: TurnId.makeUnsafe("turn-running"),
+      state: "running",
+      requestedAt: "2026-02-27T00:01:00.000Z",
+      startedAt: "2026-02-27T00:01:05.000Z",
+      completedAt: null,
+      assistantMessageId: MessageId.makeUnsafe("assistant-running"),
+    });
+  });
+
   it("keeps pending proposed-plan linkage across live turn updates", () => {
     const sourceProposedPlan = {
       threadId: ThreadId.makeUnsafe("thread-source"),

@@ -1641,7 +1641,6 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       `;
         assert.deepEqual(turnRows, [
           { turnId: "turn-completed", checkpointTurnCount: 1, status: "completed" },
-          { turnId: "turn-interrupted", checkpointTurnCount: null, status: "interrupted" },
         ]);
       }),
   );

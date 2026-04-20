@@ -30,6 +30,7 @@ import {
   resolveLiveThreadBranchUpdate,
   resolveDefaultBranchActionDialogCopy,
   resolveQuickAction,
+  shouldOfferCreateBranchPrompt,
   summarizeGitResult,
 } from "./GitActionsControl.logic";
 import { useAppSettings } from "~/appSettings";
@@ -271,6 +272,7 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
   const activeThread = useStore(
     useMemo(() => createThreadSelector(activeThreadId), [activeThreadId]),
   );
+  const setThreadWorkspaceAction = useStore((store) => store.setThreadWorkspace);
   const threadToastData = useMemo(
     () => (activeThreadId ? { threadId: activeThreadId } : undefined),
     [activeThreadId],
@@ -377,11 +379,17 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
     return current?.isDefault ?? (branchName === "main" || branchName === "master");
   }, [branchList?.branches, gitStatusForActions?.branch]);
   const shouldOfferCreateBranch = useMemo(() => {
-    if (!activeThread?.worktreePath || !gitStatusForActions?.branch) {
-      return false;
-    }
-    return !gitStatusForActions.hasUpstream;
-  }, [activeThread?.worktreePath, gitStatusForActions?.branch, gitStatusForActions?.hasUpstream]);
+    return shouldOfferCreateBranchPrompt({
+      activeThreadBranch: activeThread?.branch ?? null,
+      activeWorktreePath: activeThread?.worktreePath ?? null,
+      gitStatus: gitStatusForActions
+        ? {
+            branch: gitStatusForActions.branch,
+            hasUpstream: gitStatusForActions.hasUpstream,
+          }
+        : null,
+    });
+  }, [activeThread?.branch, activeThread?.worktreePath, gitStatusForActions]);
   const currentBranchName =
     gitStatusForActions?.branch ?? currentBranch ?? activeThread?.branch ?? null;
   const suggestedCreateBranchName = useMemo(
@@ -891,6 +899,24 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
       try {
         await api.git.createBranch({ cwd: gitCwd, branch: trimmedName });
         await api.git.checkout({ cwd: gitCwd, branch: trimmedName });
+        if (activeThreadId) {
+          void api.orchestration
+            .dispatchCommand({
+              type: "thread.meta.update",
+              commandId: newCommandId(),
+              threadId: activeThreadId,
+              branch: trimmedName,
+              worktreePath: activeThread?.worktreePath ?? null,
+              associatedWorktreeBranch: trimmedName,
+              associatedWorktreeRef: trimmedName,
+            })
+            .catch(() => undefined);
+          setThreadWorkspaceAction(activeThreadId, {
+            branch: trimmedName,
+            associatedWorktreeBranch: trimmedName,
+            associatedWorktreeRef: trimmedName,
+          });
+        }
         await invalidateGitQueries(queryClient);
 
         toastManager.update(toastId, {
@@ -908,7 +934,15 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
         });
       }
     },
-    [gitCwd, normalizedCurrentBranchName, queryClient, threadToastData],
+    [
+      activeThread?.worktreePath,
+      activeThreadId,
+      gitCwd,
+      normalizedCurrentBranchName,
+      queryClient,
+      setThreadWorkspaceAction,
+      threadToastData,
+    ],
   );
 
   const openDialogForMenuItem = useCallback(

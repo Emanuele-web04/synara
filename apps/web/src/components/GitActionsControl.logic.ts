@@ -160,9 +160,9 @@ export function buildMenuItems(
     hasBranch &&
     !hasChanges &&
     !hasOpenPr &&
-    gitStatus.aheadCount > 0 &&
     !isBehind &&
-    (gitStatus.hasUpstream || canPushWithoutUpstream);
+    ((!isDefaultBranch && gitStatus.hasUpstream) ||
+      (gitStatus.aheadCount > 0 && (gitStatus.hasUpstream || canPushWithoutUpstream)));
   const canOpenPr = !isBusy && hasOpenPr;
 
   return [
@@ -342,12 +342,38 @@ export function resolveQuickAction(
     return { label: "View PR", disabled: false, kind: "open_pr" };
   }
 
+  if (!isDefaultBranch) {
+    return {
+      label: "Create PR",
+      disabled: false,
+      kind: "run_action",
+      action: "create_pr",
+    };
+  }
+
   return {
     label: "Commit",
     disabled: true,
     kind: "show_hint",
     hint: "Branch is up to date. No action needed.",
   };
+}
+
+export function shouldOfferCreateBranchPrompt(input: {
+  activeThreadBranch: string | null;
+  activeWorktreePath: string | null;
+  gitStatus: Pick<GitStatusResult, "branch" | "hasUpstream"> | null;
+}): boolean {
+  if (
+    !input.activeWorktreePath ||
+    !input.activeThreadBranch ||
+    !input.gitStatus?.branch ||
+    input.gitStatus.hasUpstream
+  ) {
+    return false;
+  }
+
+  return isTemporaryWorktreeBranch(input.activeThreadBranch);
 }
 
 export function requiresDefaultBranchConfirmation(
