@@ -12,12 +12,12 @@ import { PlusIcon, XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { FolderClosed } from "../FolderClosed";
 import { PickerTriggerButton } from "./PickerTriggerButton";
+import { PickerPanelShell } from "./PickerPanelShell";
 import {
   Combobox,
   ComboboxEmpty,
   ComboboxGroup,
   ComboboxGroupLabel,
-  ComboboxInput,
   ComboboxItem,
   ComboboxList,
   ComboboxPopup,
@@ -224,7 +224,20 @@ export const ProjectPicker = memo(function ProjectPicker({
     void api.projects
       .listDirectories({ cwd: homeDir })
       .then((result) => {
-        setDirectoryEntries(result.entries);
+        setDirectoryEntries(
+          result.entries.flatMap((entry) =>
+            entry.kind === "directory"
+              ? [
+                  {
+                    path: entry.path,
+                    name: entry.name,
+                    hasChildren: entry.hasChildren ?? false,
+                    ...(entry.parentPath ? { parentPath: entry.parentPath } : {}),
+                  } satisfies ProjectDirectoryEntry,
+                ]
+              : [],
+          ),
+        );
       })
       .catch((error) => {
         setErrorMessage(error instanceof Error ? error.message : "Unable to load folders.");
@@ -271,118 +284,116 @@ export const ProjectPicker = memo(function ProjectPicker({
           <PickerTriggerButton icon={<FolderClosed className="size-3.5" />} label={triggerLabel} />
         }
       />
-      <ComboboxPopup align={align} side={side} className="w-72">
-        <div className="border-b p-1">
-          <ComboboxInput
-            className="rounded-md border-border/60 bg-background shadow-none before:hidden has-focus-visible:border-neutral-500/15 has-focus-visible:ring-0 [&_input]:font-sans"
-            inputClassName="ring-0"
-            placeholder="Search projects"
-            showTrigger={false}
-            size="sm"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-          />
-        </div>
-        <ComboboxEmpty>
-          {isLoadingDirectories
-            ? "Loading folders…"
-            : activeFolderOptions.length === 0 && macFolderOptions.length === 0
-              ? "No folders found"
-              : "No matches"}
-        </ComboboxEmpty>
-        <ComboboxList className="max-h-64">
-          {filteredActiveFolderOptions.length > 0 ? (
-            <ComboboxGroup>
-              <ComboboxGroupLabel>Active folders</ComboboxGroupLabel>
-              {filteredActiveFolderOptions.map((folder, index) => (
-                <ComboboxItem
-                  hideIndicator={folder.cwd !== selectedWorkspaceRoot}
-                  key={folder.cwd}
-                  index={index}
-                  value={folder.cwd}
+      <ComboboxPopup align={align} side={side} className="p-0">
+        <PickerPanelShell
+          searchPlaceholder="Search projects"
+          query={query}
+          onQueryChange={setQuery}
+          footer={
+            <>
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={() => void handleAddNewProject()}
+                disabled={isPicking}
+              >
+                <PlusIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
+                <span className="truncate">
+                  {isPicking ? "Opening folder picker…" : "Add new project"}
+                </span>
+              </button>
+              {showResetToHome ? (
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm transition-colors hover:bg-accent"
                   onClick={() => {
-                    onSelectWorkspaceRoot?.(folder.cwd);
+                    onResetToHome?.();
                     setOpen(false);
                   }}
-                  className={cn(
-                    folder.cwd === selectedWorkspaceRoot && "bg-accent/40 text-accent-foreground",
-                  )}
                 >
-                  <div className="flex min-w-0 items-center gap-2">
-                    <FolderClosed className="size-3.5 shrink-0 text-muted-foreground/70" />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex min-w-0 items-baseline gap-1.5">
-                        <span className="min-w-0 truncate">{folder.primaryLabel}</span>
-                        {folder.secondaryLabel ? (
-                          <span className="min-w-0 truncate text-muted-foreground/60 text-xs">
-                            {folder.secondaryLabel}
-                          </span>
-                        ) : null}
+                  <XIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
+                  <span className="truncate">Don&apos;t work in a project</span>
+                </button>
+              ) : null}
+              {errorMessage ? (
+                <div className="px-2 pb-1 text-destructive text-xs">{errorMessage}</div>
+              ) : null}
+            </>
+          }
+        >
+          <ComboboxEmpty>
+            {isLoadingDirectories
+              ? "Loading folders…"
+              : activeFolderOptions.length === 0 && macFolderOptions.length === 0
+                ? "No folders found"
+                : "No matches"}
+          </ComboboxEmpty>
+          <ComboboxList className="max-h-64">
+            {filteredActiveFolderOptions.length > 0 ? (
+              <ComboboxGroup>
+                <ComboboxGroupLabel>Active folders</ComboboxGroupLabel>
+                {filteredActiveFolderOptions.map((folder, index) => (
+                  <ComboboxItem
+                    hideIndicator={folder.cwd !== selectedWorkspaceRoot}
+                    key={folder.cwd}
+                    index={index}
+                    value={folder.cwd}
+                    onClick={() => {
+                      onSelectWorkspaceRoot?.(folder.cwd);
+                      setOpen(false);
+                    }}
+                    className={cn(
+                      folder.cwd === selectedWorkspaceRoot && "bg-accent/40 text-accent-foreground",
+                    )}
+                  >
+                    <div className="flex min-w-0 items-center gap-2">
+                      <FolderClosed className="size-3.5 shrink-0 text-muted-foreground/70" />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex min-w-0 items-baseline gap-1.5">
+                          <span className="min-w-0 truncate">{folder.primaryLabel}</span>
+                          {folder.secondaryLabel ? (
+                            <span className="min-w-0 truncate text-muted-foreground/60 text-xs">
+                              {folder.secondaryLabel}
+                            </span>
+                          ) : null}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                </ComboboxItem>
-              ))}
-            </ComboboxGroup>
-          ) : null}
-          {filteredActiveFolderOptions.length > 0 && filteredMacFolderOptions.length > 0 ? (
-            <ComboboxSeparator />
-          ) : null}
-          {filteredMacFolderOptions.length > 0 ? (
-            <ComboboxGroup>
-              <ComboboxGroupLabel>Folders on this Mac</ComboboxGroupLabel>
-              {filteredMacFolderOptions.map(({ absolutePath, entry }, index) => (
-                <ComboboxItem
-                  hideIndicator={absolutePath !== selectedWorkspaceRoot}
-                  key={absolutePath}
-                  index={filteredActiveFolderOptions.length + index}
-                  value={absolutePath}
-                  onClick={() => {
-                    onSelectWorkspaceRoot?.(absolutePath);
-                    setOpen(false);
-                  }}
-                  className={cn(
-                    absolutePath === selectedWorkspaceRoot && "bg-accent/40 text-accent-foreground",
-                  )}
-                >
-                  <div className="flex min-w-0 items-center gap-2">
-                    <FolderClosed className="size-3.5 shrink-0 text-muted-foreground/70" />
-                    <span className="truncate">{entry.name}</span>
-                  </div>
-                </ComboboxItem>
-              ))}
-            </ComboboxGroup>
-          ) : null}
-        </ComboboxList>
-        <div className="border-t p-1">
-          <button
-            type="button"
-            className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
-            onClick={() => void handleAddNewProject()}
-            disabled={isPicking}
-          >
-            <PlusIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
-            <span className="truncate">
-              {isPicking ? "Opening folder picker…" : "Add new project"}
-            </span>
-          </button>
-          {showResetToHome ? (
-            <button
-              type="button"
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm transition-colors hover:bg-accent"
-              onClick={() => {
-                onResetToHome?.();
-                setOpen(false);
-              }}
-            >
-              <XIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
-              <span className="truncate">Don&apos;t work in a project</span>
-            </button>
-          ) : null}
-          {errorMessage ? (
-            <div className="px-2 pb-1 text-destructive text-xs">{errorMessage}</div>
-          ) : null}
-        </div>
+                  </ComboboxItem>
+                ))}
+              </ComboboxGroup>
+            ) : null}
+            {filteredActiveFolderOptions.length > 0 && filteredMacFolderOptions.length > 0 ? (
+              <ComboboxSeparator />
+            ) : null}
+            {filteredMacFolderOptions.length > 0 ? (
+              <ComboboxGroup>
+                <ComboboxGroupLabel>Folders on this Mac</ComboboxGroupLabel>
+                {filteredMacFolderOptions.map(({ absolutePath, entry }, index) => (
+                  <ComboboxItem
+                    hideIndicator={absolutePath !== selectedWorkspaceRoot}
+                    key={absolutePath}
+                    index={filteredActiveFolderOptions.length + index}
+                    value={absolutePath}
+                    onClick={() => {
+                      onSelectWorkspaceRoot?.(absolutePath);
+                      setOpen(false);
+                    }}
+                    className={cn(
+                      absolutePath === selectedWorkspaceRoot &&
+                        "bg-accent/40 text-accent-foreground",
+                    )}
+                  >
+                    <div className="flex min-w-0 items-center gap-2">
+                      <FolderClosed className="size-3.5 shrink-0 text-muted-foreground/70" />
+                      <span className="truncate">{entry.name}</span>
+                    </div>
+                  </ComboboxItem>
+                ))}
+              </ComboboxGroup>
+            ) : null}
+          </ComboboxList>
+        </PickerPanelShell>
       </ComboboxPopup>
     </Combobox>
   );

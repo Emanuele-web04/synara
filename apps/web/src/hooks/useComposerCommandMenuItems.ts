@@ -14,6 +14,10 @@ import {
   buildSkillSearchBlob,
   normalizeProviderDiscoveryText,
 } from "~/lib/providerDiscovery";
+import {
+  LOCAL_FOLDER_MENTION_NAME,
+  matchesLocalFolderMentionShortcut,
+} from "~/lib/localFolderMentions";
 import { basenameOfPath } from "../vscode-icons";
 import type { ComposerTrigger } from "../composer-logic";
 import {
@@ -125,6 +129,17 @@ export function useComposerCommandMenuItems(input: {
           label: plugin.interface?.displayName ?? plugin.name,
           description: plugin.interface?.shortDescription ?? plugin.source.path,
         }));
+      const localRootItems =
+        matchesLocalFolderMentionShortcut(composerTrigger.query) && composerTrigger.query !== "/"
+          ? [
+              {
+                id: "local-root",
+                type: "local-root" as const,
+                label: `@${LOCAL_FOLDER_MENTION_NAME}`,
+                description: "Browse folders on this computer",
+              },
+            ]
+          : [];
       const pathItems = workspaceEntries.map((entry) => ({
         id: `path:${entry.kind}:${entry.path}`,
         type: "path" as const,
@@ -133,8 +148,8 @@ export function useComposerCommandMenuItems(input: {
         label: basenameOfPath(entry.path),
         description: entry.parentPath ?? "",
       }));
-      // Show agents first, then plugins, then paths
-      return [...agentItems, ...pluginItems, ...pathItems];
+      // Show agents first, then plugins/local browsing, then workspace paths.
+      return [...agentItems, ...pluginItems, ...localRootItems, ...pathItems];
     }
 
     if (composerTrigger.kind === "slash-command") {

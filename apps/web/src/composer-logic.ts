@@ -300,6 +300,23 @@ export function detectComposerTrigger(text: string, cursorInput: number): Compos
       rangeEnd: cursor,
     };
   }
+
+  // An unclosed `@"..."` mention spans whitespace, so a pure whitespace-bounded
+  // token won't catch it. Look back on the line for the last `@"` that hasn't
+  // been closed yet and treat everything after it as the active mention query.
+  const quotedMentionStart = linePrefix.lastIndexOf('@"');
+  if (quotedMentionStart !== -1) {
+    const afterOpen = linePrefix.slice(quotedMentionStart + 2);
+    if (!afterOpen.includes("@") && !afterOpen.includes('"')) {
+      return {
+        kind: "mention",
+        query: afterOpen,
+        rangeStart: lineStart + quotedMentionStart,
+        rangeEnd: cursor,
+      };
+    }
+  }
+
   if (!token.startsWith("@")) {
     return null;
   }

@@ -66,6 +66,11 @@ import {
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
 import {
+  formatComposerMentionToken,
+  createComposerMentionTokenRegex,
+} from "~/lib/composerMentions";
+import { getLocalFolderBrowseRootPath, isLocalFolderMentionQuery } from "~/lib/localFolderMentions";
+import {
   isProviderUsable,
   normalizeProviderStatusForLocalConfig,
   providerUnavailableReason,
@@ -250,6 +255,10 @@ import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
 import { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { AVAILABLE_PROVIDER_OPTIONS, ProviderModelPicker } from "./chat/ProviderModelPicker";
 import { ComposerCommandItem, ComposerCommandMenu } from "./chat/ComposerCommandMenu";
+import {
+  ComposerLocalDirectoryMenu,
+  type ComposerLocalDirectoryMenuHandle,
+} from "./chat/ComposerLocalDirectoryMenu";
 import { ComposerPendingApprovalActions } from "./chat/ComposerPendingApprovalActions";
 import { ComposerExtrasMenu } from "./chat/ComposerExtrasMenu";
 import { ComposerPendingApprovalPanel } from "./chat/ComposerPendingApprovalPanel";
@@ -487,10 +496,14 @@ function promptIncludesSkillMention(prompt: string, skillName: string, provider:
   return pattern.test(prompt);
 }
 
+const PROMPT_MENTION_NAME_REGEX = createComposerMentionTokenRegex({
+  includeTrailingTokenAtEnd: true,
+});
+
 function collectPromptMentionNames(prompt: string): string[] {
   const names: string[] = [];
-  for (const match of prompt.matchAll(/(^|\s)@([^\s@]+)(?=\s|$)/g)) {
-    const mentionName = (match[2] ?? "").trim();
+  for (const match of prompt.matchAll(PROMPT_MENTION_NAME_REGEX)) {
+    const mentionName = (match[2] ?? match[3] ?? "").trim();
     if (mentionName.length > 0) {
       names.push(mentionName);
     }
@@ -820,6 +833,7 @@ export default function ChatView({
   const queuedComposerTurnsRef = useRef<QueuedComposerTurn[]>([]);
   const autoDispatchingQueuedTurnRef = useRef(false);
   const activeComposerMenuItemRef = useRef<ComposerCommandItem | null>(null);
+  const localDirectoryMenuRef = useRef<ComposerLocalDirectoryMenuHandle | null>(null);
   const attachmentPreviewHandoffByMessageIdRef = useRef<Record<string, string[]>>({});
   const attachmentPreviewHandoffTimeoutByMessageIdRef = useRef<Record<string, number>>({});
   const sendInFlightRef = useRef(false);
@@ -1767,6 +1781,17 @@ export default function ChatView({
   const composerTriggerKind = composerTrigger?.kind ?? null;
   const mentionTriggerQuery = composerTrigger?.kind === "mention" ? composerTrigger.query : "";
   const isMentionTrigger = composerTriggerKind === "mention";
+  const platform = typeof navigator === "undefined" ? "" : navigator.platform;
+  const branchesQuery = useQuery(gitBranchesQueryOptions(gitBranchSourceCwd));
+  const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const localFolderBrowseRootPath = getLocalFolderBrowseRootPath(
+    serverConfigQuery.data?.homeDir ?? null,
+    isMacPlatform(platform),
+  );
+  const isLocalFolderBrowserOpen =
+    composerCommandPicker === null &&
+    isMentionTrigger &&
+    isLocalFolderMentionQuery(mentionTriggerQuery);
   const skillTriggerQuery = composerTrigger?.kind === "skill" ? composerTrigger.query : "";
   const isSkillTrigger = composerTriggerKind === "skill";
   const [debouncedPathQuery, composerPathQueryDebouncer] = useDebouncedValue(
@@ -1775,8 +1800,6 @@ export default function ChatView({
     (debouncerState) => ({ isPending: debouncerState.isPending }),
   );
   const effectiveMentionQuery = mentionTriggerQuery.length > 0 ? debouncedPathQuery : "";
-  const branchesQuery = useQuery(gitBranchesQueryOptions(gitBranchSourceCwd));
-  const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const composerSkillCwd = resolveProviderDiscoveryCwd({
     activeThreadWorktreePath: resolvedThreadWorktreePath,
     activeProjectCwd: activeProject?.cwd ?? null,
@@ -1826,7 +1849,7 @@ export default function ChatView({
     projectSearchEntriesQueryOptions({
       cwd: gitCwd,
       query: effectiveMentionQuery,
-      enabled: isMentionTrigger,
+      enabled: isMentionTrigger && !isLocalFolderBrowserOpen,
       limit: 80,
     }),
   );
@@ -5588,6 +5611,52 @@ export default function ChatView({
     };
   }, [readComposerSnapshot]);
 
+  // Replaces the active `@...` token with a completed absolute folder mention.
+  const handleSelectLocalDirectoryMention = useCallback(
+    (absolutePath: string) => {
+      const { snapshot, trigger } = resolveActiveComposerTrigger();
+      if (!trigger) return;
+      const replacement = `${formatComposerMentionToken(absolutePath)} `;
+      const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
+        snapshot.value,
+        trigger.rangeEnd,
+        replacement,
+      );
+      const applied = applyPromptReplacement(trigger.rangeStart, replacementRangeEnd, replacement, {
+        expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd),
+      });
+      if (applied !== false) {
+        setComposerHighlightedItemId(null);
+      }
+    },
+    [applyPromptReplacement, resolveActiveComposerTrigger],
+  );
+
+  // Rewrites the active `@...` mention to an absolute folder path with a trailing separator
+  // so the local-folder picker stays open and the user can keep browsing by clicking or typing.
+  // Paths with whitespace are written as an unclosed `@"...` so detectComposerTrigger keeps
+  // matching and the picker stays open while the user descends into folders with spaces.
+  const handleNavigateLocalFolder = useCallback(
+    (absolutePath: string) => {
+      const { snapshot, trigger } = resolveActiveComposerTrigger();
+      if (!trigger) return;
+      const separator = absolutePath.includes("\\") ? "\\" : "/";
+      const withTrailingSeparator = absolutePath.endsWith(separator)
+        ? absolutePath
+        : `${absolutePath}${separator}`;
+      const replacement = /\s/.test(withTrailingSeparator)
+        ? `@"${withTrailingSeparator}`
+        : `@${withTrailingSeparator}`;
+      const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, replacement, {
+        expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+      });
+      if (applied !== false) {
+        setComposerHighlightedItemId(null);
+      }
+    },
+    [applyPromptReplacement, resolveActiveComposerTrigger],
+  );
+
   const setComposerPromptValue = useCallback(
     (nextPrompt: string) => {
       promptRef.current = nextPrompt;
@@ -5711,7 +5780,7 @@ export default function ChatView({
       const { snapshot, trigger } = resolveActiveComposerTrigger();
       if (!trigger) return;
       if (item.type === "path") {
-        const replacement = `@${item.path} `;
+        const replacement = `${formatComposerMentionToken(item.path)} `;
         const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
           snapshot.value,
           trigger.rangeEnd,
@@ -5726,6 +5795,10 @@ export default function ChatView({
         if (applied !== false) {
           setComposerHighlightedItemId(null);
         }
+        return;
+      }
+      if (item.type === "local-root") {
+        handleNavigateLocalFolder(localFolderBrowseRootPath ?? "/");
         return;
       }
       if (item.type === "slash-command") {
@@ -5836,10 +5909,12 @@ export default function ChatView({
       applyPromptReplacement,
       scheduleComposerFocus,
       handleForkTargetSelection,
+      handleNavigateLocalFolder,
       handleReviewTargetSelection,
       handleSlashCommandSelection,
       onProviderModelSelect,
       setComposerCommandPicker,
+      localFolderBrowseRootPath,
       selectedProvider,
       setSelectedComposerMentions,
       setSelectedComposerSkills,
@@ -5949,6 +6024,21 @@ export default function ChatView({
 
     const { trigger } = resolveActiveComposerTrigger();
     const menuIsActive = composerMenuOpenRef.current || trigger !== null;
+
+    if (menuIsActive && isLocalFolderBrowserOpen) {
+      if (key === "ArrowDown") {
+        localDirectoryMenuRef.current?.moveHighlight("down");
+        return true;
+      }
+      if (key === "ArrowUp") {
+        localDirectoryMenuRef.current?.moveHighlight("up");
+        return true;
+      }
+      if (key === "Enter" || key === "Tab") {
+        localDirectoryMenuRef.current?.activateHighlighted();
+        return true;
+      }
+    }
 
     if (menuIsActive) {
       const currentItems = composerMenuItemsRef.current;
@@ -6272,19 +6362,32 @@ export default function ChatView({
             <div className={cn("relative px-3.5 pb-1 pt-3")}>
               {composerMenuOpen && !isComposerApprovalState && (
                 <div className="absolute inset-x-0 bottom-full z-20 mb-2 px-1">
-                  <ComposerCommandMenu
-                    items={composerMenuItems}
-                    resolvedTheme={resolvedTheme}
-                    isLoading={isComposerMenuLoading}
-                    triggerKind={
-                      composerCommandPicker !== null
-                        ? "slash-command"
-                        : effectiveComposerTriggerKind
-                    }
-                    activeItemId={activeComposerMenuItem?.id ?? null}
-                    onHighlightedItemChange={onComposerMenuItemHighlighted}
-                    onSelect={onSelectComposerItem}
-                  />
+                  {isLocalFolderBrowserOpen ? (
+                    <ComposerLocalDirectoryMenu
+                      mentionQuery={mentionTriggerQuery}
+                      rootLabel={localFolderBrowseRootPath ?? "Local folders unavailable"}
+                      homeDir={serverConfigQuery.data?.homeDir ?? null}
+                      onSelectEntry={(absolutePath) =>
+                        handleSelectLocalDirectoryMention(absolutePath)
+                      }
+                      onNavigateFolder={handleNavigateLocalFolder}
+                      handleRef={localDirectoryMenuRef}
+                    />
+                  ) : (
+                    <ComposerCommandMenu
+                      items={composerMenuItems}
+                      resolvedTheme={resolvedTheme}
+                      isLoading={isComposerMenuLoading}
+                      triggerKind={
+                        composerCommandPicker !== null
+                          ? "slash-command"
+                          : effectiveComposerTriggerKind
+                      }
+                      activeItemId={activeComposerMenuItem?.id ?? null}
+                      onHighlightedItemChange={onComposerMenuItemHighlighted}
+                      onSelect={onSelectComposerItem}
+                    />
+                  )}
                 </div>
               )}
 
@@ -6981,19 +7084,34 @@ export default function ChatView({
                         <div className={cn("relative px-3.5 pb-1 pt-3")}>
                           {composerMenuOpen && !isComposerApprovalState && (
                             <div className="absolute inset-x-0 bottom-full z-20 mb-2 px-1">
-                              <ComposerCommandMenu
-                                items={composerMenuItems}
-                                resolvedTheme={resolvedTheme}
-                                isLoading={isComposerMenuLoading}
-                                triggerKind={
-                                  composerCommandPicker !== null
-                                    ? "slash-command"
-                                    : effectiveComposerTriggerKind
-                                }
-                                activeItemId={activeComposerMenuItem?.id ?? null}
-                                onHighlightedItemChange={onComposerMenuItemHighlighted}
-                                onSelect={onSelectComposerItem}
-                              />
+                              {isLocalFolderBrowserOpen ? (
+                                <ComposerLocalDirectoryMenu
+                                  mentionQuery={mentionTriggerQuery}
+                                  rootLabel={
+                                    localFolderBrowseRootPath ?? "Local folders unavailable"
+                                  }
+                                  homeDir={serverConfigQuery.data?.homeDir ?? null}
+                                  onSelectEntry={(absolutePath) =>
+                                    handleSelectLocalDirectoryMention(absolutePath)
+                                  }
+                                  onNavigateFolder={handleNavigateLocalFolder}
+                                  handleRef={localDirectoryMenuRef}
+                                />
+                              ) : (
+                                <ComposerCommandMenu
+                                  items={composerMenuItems}
+                                  resolvedTheme={resolvedTheme}
+                                  isLoading={isComposerMenuLoading}
+                                  triggerKind={
+                                    composerCommandPicker !== null
+                                      ? "slash-command"
+                                      : effectiveComposerTriggerKind
+                                  }
+                                  activeItemId={activeComposerMenuItem?.id ?? null}
+                                  onHighlightedItemChange={onComposerMenuItemHighlighted}
+                                  onSelect={onSelectComposerItem}
+                                />
+                              )}
                             </div>
                           )}
 

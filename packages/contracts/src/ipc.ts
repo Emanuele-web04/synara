@@ -32,6 +32,8 @@ import type {
   ProjectListDirectoriesResult,
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
+  ProjectSearchLocalEntriesInput,
+  ProjectSearchLocalEntriesResult,
   ProjectWriteFileInput,
   ProjectWriteFileResult,
 } from "./project";
@@ -265,6 +267,9 @@ export interface NativeApi {
   projects: {
     listDirectories: (input: ProjectListDirectoriesInput) => Promise<ProjectListDirectoriesResult>;
     searchEntries: (input: ProjectSearchEntriesInput) => Promise<ProjectSearchEntriesResult>;
+    searchLocalEntries: (
+      input: ProjectSearchLocalEntriesInput,
+    ) => Promise<ProjectSearchLocalEntriesResult>;
     writeFile: (input: ProjectWriteFileInput) => Promise<ProjectWriteFileResult>;
   };
   shell: {

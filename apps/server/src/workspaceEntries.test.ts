@@ -4,10 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
-import { afterEach, assert, describe, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 
 import * as ProcessRunner from "./processRunner";
-import { searchWorkspaceEntries } from "./workspaceEntries";
+import { listWorkspaceDirectories, searchWorkspaceEntries } from "./workspaceEntries";
 
 const tempDirs: string[] = [];
 
@@ -237,5 +237,28 @@ describe("searchWorkspaceEntries", () => {
     await searchWorkspaceEntries({ cwd, query: "", limit: 200 });
 
     assert.isAtMost(peakReads, 32);
+  });
+});
+
+describe("listWorkspaceDirectories", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const dir of tempDirs.splice(0, tempDirs.length)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("can include files after directories for local recursive browsing", async () => {
+    const cwd = makeTempDir("t3code-workspace-list-directories-");
+    writeFile(cwd, "docs/guide.md", "# guide");
+    writeFile(cwd, "docs/api/reference.txt", "api");
+    writeFile(cwd, "README.md", "root");
+
+    const result = await listWorkspaceDirectories({ cwd, includeFiles: true });
+
+    expect(result.entries).toEqual([
+      { path: "docs", name: "docs", kind: "directory", hasChildren: true },
+      { path: "README.md", name: "README.md", kind: "file" },
+    ]);
   });
 });
