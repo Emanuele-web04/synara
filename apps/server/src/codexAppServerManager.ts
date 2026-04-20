@@ -520,7 +520,7 @@ function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
   return null;
 }
 
-function ensureIsolatedScratchWorkspace(threadId: ThreadId): string {
+export function ensureIsolatedScratchWorkspace(threadId: ThreadId): string {
   const workspaceRoot = path.join(tmpdir(), "dpcode-codex-workspaces");
   const workspaceDir = path.join(workspaceRoot, String(threadId));
   mkdirSync(workspaceDir, { recursive: true });

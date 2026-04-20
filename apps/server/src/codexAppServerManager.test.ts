@@ -12,6 +12,7 @@ import {
   CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
   CodexAppServerManager,
   classifyCodexStderrLine,
+  ensureIsolatedScratchWorkspace,
   isRecoverableThreadResumeError,
   normalizeCodexModelSlug,
   readCodexAccountSnapshot,
@@ -451,19 +452,9 @@ describe("startSession", () => {
     });
   });
 
-  it("uses an isolated scratch workspace when startSession receives no cwd", async () => {
-    const manager = new CodexAppServerManager();
-
-    try {
-      const session = await manager.startSession({
-        threadId: asThreadId("thread-1"),
-        provider: "codex",
-        runtimeMode: "full-access",
-      });
-      expect(session.cwd).toContain(`${path.sep}dpcode-codex-workspaces${path.sep}thread-1`);
-    } finally {
-      manager.stopAll();
-    }
+  it("uses an isolated scratch workspace path when no cwd is provided", () => {
+    const cwd = ensureIsolatedScratchWorkspace(asThreadId("thread-1"));
+    expect(cwd).toContain(`${path.sep}dpcode-codex-workspaces${path.sep}thread-1`);
   });
 
   it("fails fast with an upgrade message when codex is below the minimum supported version", async () => {
