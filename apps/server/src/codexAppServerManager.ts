@@ -1227,8 +1227,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         threadId,
         currentTurnId: effectiveTurnId,
         latestReviewTurnId: latestReviewTurnId ?? null,
-        latestReviewTurnExited:
-          latestReviewTurnId ? this.isExitedReviewTurn(snapshot, latestReviewTurnId) : false,
+        latestReviewTurnExited: latestReviewTurnId
+          ? this.isExitedReviewTurn(snapshot, latestReviewTurnId)
+          : false,
         snapshotTurnIds: snapshot.turns.map((turn) => String(turn.id)),
       });
 
@@ -2217,10 +2218,17 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         threadId: context.session.threadId,
         reviewTurnId: reviewTurnId ?? null,
       });
-      this.settleTrackedReview(context, {
-        completedTurnId: reviewTurnId,
-        reason: "review exited via exitedReviewMode",
-      });
+      this.settleTrackedReview(
+        context,
+        reviewTurnId !== undefined
+          ? {
+              completedTurnId: reviewTurnId,
+              reason: "review exited via exitedReviewMode",
+            }
+          : {
+              reason: "review exited via exitedReviewMode",
+            },
+      );
       return;
     }
 

@@ -1697,7 +1697,8 @@ function prefersCompactWorkEntryRow(workEntry: TimelineWorkEntry): boolean {
     EntryIcon === TerminalIcon ||
     EntryIcon === HammerIcon ||
     EntryIcon === AgentTaskIcon ||
-    EntryIcon === SquarePenIcon
+    EntryIcon === SquarePenIcon ||
+    EntryIcon === SkillCubeIcon
   );
 }
 

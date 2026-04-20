@@ -226,8 +226,8 @@ function toCanonicalItemType(raw: unknown): CanonicalItemType {
   if (type.includes("collab")) return "collab_agent_tool_call";
   if (type.includes("web search")) return "web_search";
   if (type.includes("image")) return "image_view";
-  if (type.includes("review entered")) return "review_entered";
-  if (type.includes("review exited")) return "review_exited";
+  if (type.includes("review entered") || type.includes("entered review")) return "review_entered";
+  if (type.includes("review exited") || type.includes("exited review")) return "review_exited";
   if (type.includes("compact")) return "context_compaction";
   if (type.includes("error")) return "error";
   return "unknown";

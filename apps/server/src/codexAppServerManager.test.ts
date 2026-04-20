@@ -76,6 +76,7 @@ function createThreadControlHarness() {
       threadId: "thread_1",
       runtimeMode: "full-access",
       model: "gpt-5.3-codex",
+      activeTurnId: undefined as string | undefined,
       resumeCursor: { threadId: "thread_1" },
       createdAt: "2026-02-10T00:00:00.000Z",
       updatedAt: "2026-02-10T00:00:00.000Z",
@@ -114,6 +115,7 @@ function createPendingUserInputHarness() {
       threadId: "thread_1",
       runtimeMode: "full-access",
       model: "gpt-5.3-codex",
+      activeTurnId: undefined as string | undefined,
       resumeCursor: { threadId: "thread_1" },
       createdAt: "2026-02-10T00:00:00.000Z",
       updatedAt: "2026-02-10T00:00:00.000Z",
@@ -1459,6 +1461,7 @@ describe("thread checkpoint control", () => {
     });
     expect(result).toEqual({
       threadId: "thread_1",
+      cwd: null,
       turns: [
         {
           id: "turn_1",
@@ -1488,6 +1491,7 @@ describe("thread checkpoint control", () => {
     });
     expect(result).toEqual({
       threadId: "thread_1",
+      cwd: null,
       turns: [
         {
           id: "turn_1",
@@ -1546,6 +1550,7 @@ describe("thread checkpoint control", () => {
     });
     expect(result).toEqual({
       threadId: "thread_1",
+      cwd: null,
       turns: [],
     });
   });

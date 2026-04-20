@@ -45,7 +45,18 @@ export function normalizeWorkspaceRootForComparison(
   const body = withForwardSlashes.slice(prefix.length).replace(/\/+/g, "/");
   const normalized =
     prefix.length > 0 ? `${prefix}${body.replace(/\/+$/g, "")}` : body.replace(/\/+$/g, "");
-  const finalValue = normalized.length > 0 ? normalized : prefix;
+  let finalValue = normalized.length > 0 ? normalized : prefix;
+
+  // macOS commonly surfaces the same temp/workspace location through both
+  // `/var/...` and `/private/var/...` (likewise `/tmp/...` vs `/private/tmp/...`).
+  // Treat those aliases as identical so imported worktree paths still match
+  // their project workspace roots during resume/import flows.
+  if (
+    options?.platform === "darwin" &&
+    (finalValue.startsWith("/private/var/") || finalValue.startsWith("/private/tmp/"))
+  ) {
+    finalValue = finalValue.slice("/private".length);
+  }
 
   if (isLikelyWindowsWorkspaceRoot(trimmed, options?.platform)) {
     return finalValue.toLowerCase();

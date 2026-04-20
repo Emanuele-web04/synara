@@ -583,7 +583,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("Work log");
   });
 
-  it("renders the active compaction label instead of the generic working copy", async () => {
+  it("keeps the generic working copy alongside the active compaction entry", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -624,8 +624,8 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Compacting conversation...");
-    expect(markup).not.toContain("Working for");
-    expect(markup).toContain("h-px flex-1 bg-border");
+    expect(markup).toContain("Working for");
+    expect(markup).not.toContain("h-px flex-1 bg-border");
   });
 
   it("folds work log summaries into the next assistant message footer", async () => {
