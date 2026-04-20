@@ -13,6 +13,7 @@ import {
   type OrchestrationThreadActivity,
   type OrchestrationReadModel,
   type ProviderRuntimeEvent,
+  type RuntimeMode,
 } from "@t3tools/contracts";
 import { Cache, Cause, Duration, Effect, Layer, Option, Ref, Stream } from "effect";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
@@ -82,6 +83,34 @@ function sameId(left: string | null | undefined, right: string | null | undefine
     return false;
   }
   return left === right;
+}
+
+function inferRuntimeModeFromUserInputAnswers(
+  answers: Record<string, unknown> | undefined,
+): RuntimeMode | null {
+  const sandboxMode = typeof answers?.sandbox_mode === "string" ? answers.sandbox_mode : null;
+  const approvalPolicy =
+    typeof answers?.approval_policy === "string" ? answers.approval_policy : null;
+
+  if (sandboxMode === "danger-full-access") {
+    return approvalPolicy === null || approvalPolicy === "never"
+      ? "full-access"
+      : "approval-required";
+  }
+  if (sandboxMode === "read-only" || sandboxMode === "workspace-write") {
+    return "approval-required";
+  }
+  if (approvalPolicy === "never") {
+    return "full-access";
+  }
+  if (
+    approvalPolicy === "untrusted" ||
+    approvalPolicy === "on-failure" ||
+    approvalPolicy === "on-request"
+  ) {
+    return "approval-required";
+  }
+  return null;
 }
 
 function truncateDetail(value: string, limit = 180): string {
@@ -1572,6 +1601,19 @@ const make = Effect.gen(function* () {
               lastError,
               updatedAt: now,
             },
+            createdAt: now,
+          });
+        }
+      }
+
+      if (event.type === "user-input.resolved") {
+        const inferredRuntimeMode = inferRuntimeModeFromUserInputAnswers(event.payload.answers);
+        if (inferredRuntimeMode && inferredRuntimeMode !== thread.runtimeMode) {
+          yield* orchestrationEngine.dispatch({
+            type: "thread.runtime-mode.set",
+            commandId: providerCommandId(event, "thread-runtime-mode-set"),
+            threadId: thread.id,
+            runtimeMode: inferredRuntimeMode,
             createdAt: now,
           });
         }

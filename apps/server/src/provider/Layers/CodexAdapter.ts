@@ -1419,6 +1419,10 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         ...(input.modelSelection?.provider === "codex"
           ? { model: input.modelSelection.model }
           : {}),
+        ...(input.modelSelection?.provider === "codex" &&
+        input.modelSelection.options?.reasoningEffort !== undefined
+          ? { effort: input.modelSelection.options.reasoningEffort }
+          : {}),
         ...(input.modelSelection?.provider === "codex" && input.modelSelection.options?.fastMode
           ? { serviceTier: "fast" }
           : {}),

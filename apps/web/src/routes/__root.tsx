@@ -352,6 +352,7 @@ function EventRouter() {
     }
     return [...nextThreadIds];
   }, [retainedThreadIds, visibleThreadIds]);
+  const workspacePagesRef = useRef(workspacePages);
   const pathnameRef = useRef(pathname);
   const handledBootstrapThreadIdRef = useRef<string | null>(null);
   const visibleThreadIdsRef = useRef(subscribedThreadIds);
@@ -359,6 +360,7 @@ function EventRouter() {
     ((threadIds: readonly ThreadId[]) => Promise<void>) | null
   >(null);
 
+  workspacePagesRef.current = workspacePages;
   pathnameRef.current = pathname;
   visibleThreadIdsRef.current = subscribedThreadIds;
 
@@ -484,7 +486,9 @@ function EventRouter() {
           archivedAt: thread.archivedAt ?? null,
         })),
         draftThreadIds,
-        retainedThreadIds: workspacePages.map((workspace) => workspaceThreadId(workspace.id)),
+        retainedThreadIds: workspacePagesRef.current.map((workspace) =>
+          workspaceThreadId(workspace.id),
+        ),
       });
       removeOrphanedTerminalStates(activeThreadIds);
     };
@@ -737,7 +741,6 @@ function EventRouter() {
     setWorkspaceHomeDir,
     syncServerShellSnapshot,
     syncServerThreadDetailHotPath,
-    workspacePages,
   ]);
 
   useEffect(() => {
@@ -752,6 +755,39 @@ function EventRouter() {
 }
 
 function DesktopProjectBootstrap() {
-  // Desktop hydration runs through EventRouter project + orchestration sync.
+  const syncServerReadModel = useStore((store) => store.syncServerReadModel);
+  const projects = useStore((store) => store.projects);
+  const threadsHydrated = useStore((store) => store.threadsHydrated);
+  const attemptedRecoveryRef = useRef(false);
+
+  useEffect(() => {
+    const api = readNativeApi();
+    if (!api || attemptedRecoveryRef.current || !threadsHydrated || projects.length > 0) {
+      return;
+    }
+
+    attemptedRecoveryRef.current = true;
+
+    // Shell subscriptions should normally hydrate the sidebar. If the desktop
+    // UI comes up empty against a non-empty local database, force one read-model
+    // refresh and fall back to repair only when the snapshot is still empty.
+    void api.orchestration
+      .getSnapshot()
+      .then((snapshot) => {
+        if (snapshot.projects.length > 0 || snapshot.threads.length > 0) {
+          syncServerReadModel(snapshot);
+          return snapshot;
+        }
+        return api.orchestration.repairState().then((repairedSnapshot) => {
+          syncServerReadModel(repairedSnapshot);
+          return repairedSnapshot;
+        });
+      })
+      .catch(() => {
+        attemptedRecoveryRef.current = false;
+      });
+  }, [projects.length, syncServerReadModel, threadsHydrated]);
+
+  // Desktop hydration normally runs through EventRouter project + orchestration sync.
   return null;
 }

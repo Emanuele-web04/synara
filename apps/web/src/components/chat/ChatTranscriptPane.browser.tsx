@@ -38,7 +38,7 @@ function TranscriptPerfHarness(props: { onTranscriptRender: () => void }) {
     messagesScrollElement,
     setMessagesBottomAnchorRef,
     setMessagesScrollContainerRef,
-    onTimelineHeightChange,
+    onLiveContentHeightChange,
     onMessagesClickCapture: onMessagesClickCaptureBase,
     onMessagesPointerCancel: onMessagesPointerCancelBase,
     onMessagesPointerDown: onMessagesPointerDownBase,
@@ -50,7 +50,7 @@ function TranscriptPerfHarness(props: { onTranscriptRender: () => void }) {
     onMessagesWheel: onMessagesWheelBase,
   } = useChatAutoScrollController({
     threadId: "thread-transcript-perf",
-    isStreaming: false,
+    followLiveOutput: false,
     messageCount,
   });
   const {
@@ -110,6 +110,7 @@ function TranscriptPerfHarness(props: { onTranscriptRender: () => void }) {
           hasMessages
           isRevertingCheckpoint={false}
           isWorking={false}
+          followLiveOutput={false}
           markdownCwd={undefined}
           messagesScrollElement={messagesScrollElement}
           onExpandTimelineImage={NOOP}
@@ -127,7 +128,7 @@ function TranscriptPerfHarness(props: { onTranscriptRender: () => void }) {
           onOpenThread={NOOP}
           onRevertUserMessage={NOOP}
           onScrollToBottom={NOOP}
-          onTimelineHeightChange={onTimelineHeightChange}
+          onLiveContentHeightChange={onLiveContentHeightChange}
           onToggleWorkGroup={NOOP}
           resolvedTheme="dark"
           revertTurnCountByUserMessageId={EMPTY_REVERT_COUNTS}

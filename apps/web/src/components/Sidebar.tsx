@@ -1202,7 +1202,7 @@ export default function Sidebar() {
   );
   const threadGitTargets = useMemo(
     () =>
-      sidebarThreads.map((thread) => ({
+      sidebarDisplayThreads.map((thread) => ({
         threadId: thread.id,
         branch: thread.branch,
         lastKnownPr: thread.lastKnownPr ?? null,
@@ -1212,7 +1212,7 @@ export default function Sidebar() {
           worktreePath: thread.worktreePath,
         }),
       })),
-    [projectCwdById, sidebarThreads],
+    [projectCwdById, sidebarDisplayThreads],
   );
   const threadGitStatusCwds = useMemo(
     () => [

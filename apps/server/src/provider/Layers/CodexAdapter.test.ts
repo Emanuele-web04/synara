@@ -208,6 +208,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
           provider: "codex",
           model: "gpt-5.3-codex",
           options: {
+            reasoningEffort: "high",
             fastMode: true,
           },
         },
@@ -218,6 +219,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
         provider: "codex",
         threadId: asThreadId("thread-1"),
         model: "gpt-5.3-codex",
+        effort: "high",
         serviceTier: "fast",
         runtimeMode: "full-access",
       });

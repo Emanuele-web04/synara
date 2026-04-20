@@ -44,7 +44,7 @@ export type MessagesTimelineRow =
       createdAt: string;
       proposedPlan: ProposedPlan;
     }
-  | { kind: "working"; id: string; createdAt: string | null; label?: string | undefined };
+  | { kind: "working"; id: string; createdAt: string | null };
 
 export interface StableMessagesTimelineRowsState {
   byId: Map<string, MessagesTimelineRow>;
@@ -249,14 +249,10 @@ export function deriveMessagesTimelineRows(input: {
   flushPendingWorkGroup();
 
   if (input.isWorking) {
-    const latestWorkEntry = input.timelineEntries
-      .toReversed()
-      .find((entry) => entry.kind === "work");
     nextRows.push({
       kind: "working",
       id: "working-indicator-row",
       createdAt: input.activeTurnStartedAt,
-      ...(latestWorkEntry?.kind === "work" ? { label: latestWorkEntry.entry.label } : {}),
     });
   }
 

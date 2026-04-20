@@ -449,36 +449,17 @@ describe("startSession", () => {
     });
   });
 
-  it("emits session/startFailed when resolving cwd throws before process launch", async () => {
+  it("uses an isolated scratch workspace when startSession receives no cwd", async () => {
     const manager = new CodexAppServerManager();
-    const events: Array<{ method: string; kind: string; message?: string }> = [];
-    manager.on("event", (event) => {
-      events.push({
-        method: event.method,
-        kind: event.kind,
-        ...(event.message ? { message: event.message } : {}),
-      });
-    });
 
-    const processCwd = vi.spyOn(process, "cwd").mockImplementation(() => {
-      throw new Error("cwd missing");
-    });
     try {
-      await expect(
-        manager.startSession({
-          threadId: asThreadId("thread-1"),
-          provider: "codex",
-          runtimeMode: "full-access",
-        }),
-      ).rejects.toThrow("cwd missing");
-      expect(events).toHaveLength(1);
-      expect(events[0]).toEqual({
-        method: "session/startFailed",
-        kind: "error",
-        message: "cwd missing",
+      const session = await manager.startSession({
+        threadId: asThreadId("thread-1"),
+        provider: "codex",
+        runtimeMode: "full-access",
       });
+      expect(session.cwd).toContain(`${path.sep}dpcode-codex-workspaces${path.sep}thread-1`);
     } finally {
-      processCwd.mockRestore();
       manager.stopAll();
     }
   });
@@ -1535,8 +1516,6 @@ describe("thread checkpoint control", () => {
 
     expect(sendRequest).toHaveBeenNthCalledWith(3, expect.anything(), "thread/fork", {
       threadId: "thread_1",
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
     });
     expect(result).toEqual({
       threadId: "thread_2",

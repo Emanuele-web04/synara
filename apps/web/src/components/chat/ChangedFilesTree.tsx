@@ -5,7 +5,7 @@ import { buildTurnDiffTree, type TurnDiffTreeNode } from "../../lib/turnDiffTree
 import { FolderIcon, FolderClosedIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { DiffStatLabel, hasNonZeroStat } from "./DiffStatLabel";
-import { VscodeEntryIcon } from "./VscodeEntryIcon";
+import { FileEntryIcon } from "./FileEntryIcon";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
 
 export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
@@ -97,7 +97,7 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
         onClick={() => onOpenTurnDiff(turnId, node.path)}
       >
         <span aria-hidden="true" className="size-3.5 shrink-0" />
-        <VscodeEntryIcon
+        <FileEntryIcon
           pathValue={node.path}
           kind="file"
           theme={resolvedTheme}
