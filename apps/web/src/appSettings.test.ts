@@ -66,6 +66,17 @@ describe("getAppModelOptions", () => {
       isCustom: true,
     });
   });
+
+  it("formats unknown GPT custom models with a readable label", () => {
+    const options = getAppModelOptions("codex", ["gpt-5.1-codex-max"]);
+
+    expect(options.at(-1)).toEqual({
+      slug: "gpt-5.1-codex-max",
+      name: "GPT-5.1 Codex Max",
+      isCustom: true,
+    });
+  });
+
   it("keeps a saved custom provider model available as an exact slug option", () => {
     const options = getAppModelOptions("claudeAgent", ["claude/custom-opus"], "claude/custom-opus");
 
