@@ -273,6 +273,7 @@ const PanePanelInlineSidebar = (props: {
       <Sidebar
         side="right"
         collapsible="offcanvas"
+        data-native-browser-surface={panel === "browser" ? "true" : undefined}
         className="border-l border-border/50 bg-card text-foreground"
         resizable={{
           minWidth: inlineSidebarMinWidth,
@@ -392,6 +393,7 @@ function SplitPaneEmbeddedPanel(props: {
   return (
     <div
       ref={wrapperRef}
+      data-native-browser-surface={props.panel === "browser" ? "true" : undefined}
       className="relative flex h-full min-h-0 min-w-0 flex-none border-l border-border/50 bg-card text-foreground"
       style={{ width: `${panelWidth}px` } as CSSProperties}
     >

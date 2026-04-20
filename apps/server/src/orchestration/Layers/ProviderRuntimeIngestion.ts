@@ -115,6 +115,10 @@ function normalizeProposedPlanMarkdown(planMarkdown: string | undefined): string
   return trimmed;
 }
 
+function hasRenderableAssistantText(text: string | undefined): boolean {
+  return (text?.trim().length ?? 0) > 0;
+}
+
 function proposedPlanIdForTurn(threadId: ThreadId, turnId: TurnId): string {
   return `plan:${threadId}:turn:${turnId}`;
 }
@@ -1006,7 +1010,7 @@ const make = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const bufferedText = yield* takeBufferedAssistantText(input.messageId);
-      if (bufferedText.length === 0) {
+      if (!hasRenderableAssistantText(bufferedText)) {
         return false;
       }
 
@@ -1095,7 +1099,7 @@ const make = Effect.gen(function* () {
             ? input.fallbackText!
             : "";
 
-      if (text.length > 0) {
+      if (hasRenderableAssistantText(text)) {
         yield* orchestrationEngine.dispatch({
           type: "thread.message.assistant.delta",
           commandId: providerCommandId(input.event, input.finalDeltaCommandTag),

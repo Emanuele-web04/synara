@@ -39,6 +39,10 @@ interface LiveTabRuntime {
   view: WebContentsView;
 }
 
+interface NativeBrowserViewVisibility {
+  setVisible?: (visible: boolean) => void;
+}
+
 interface PendingRuntimeSync {
   threadId: ThreadId;
   tabId: string;
@@ -961,12 +965,14 @@ export class DesktopBrowserManager {
       if (this.attachedBoundsSignature === nextBoundsSignature) {
         return;
       }
+      this.setRuntimeViewHidden(runtime, false);
       runtime.view.setBounds(bounds);
       this.attachedBoundsSignature = nextBoundsSignature;
       return;
     }
 
     this.detachAttachedRuntime();
+    this.setRuntimeViewHidden(runtime, false);
     window.contentView.addChildView(runtime.view);
     runtime.view.setBounds(bounds);
     this.attachedRuntimeKey = runtime.key;
@@ -982,10 +988,19 @@ export class DesktopBrowserManager {
 
     const runtime = this.runtimes.get(this.attachedRuntimeKey);
     if (runtime) {
+      this.setRuntimeViewHidden(runtime, true);
       this.window.contentView.removeChildView(runtime.view);
     }
     this.attachedRuntimeKey = null;
     this.attachedBoundsSignature = null;
+  }
+
+  private setRuntimeViewHidden(runtime: LiveTabRuntime, hidden: boolean): void {
+    const nativeView = runtime.view as typeof runtime.view & NativeBrowserViewVisibility;
+    nativeView.setVisible?.(!hidden);
+    if (hidden) {
+      runtime.view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+    }
   }
 
   private ensureLiveRuntime(threadId: ThreadId, tabId: string): LiveTabRuntime {
