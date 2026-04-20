@@ -203,6 +203,7 @@ export interface CodexThreadTurnSnapshot {
 export interface CodexThreadSnapshot {
   threadId: string;
   turns: CodexThreadTurnSnapshot[];
+  cwd?: string | null;
 }
 
 const CODEX_VERSION_CHECK_TIMEOUT_MS = 4_000;
@@ -227,6 +228,9 @@ const CODEX_DEFAULT_MODEL = "gpt-5.3-codex";
 const CODEX_SPARK_MODEL = "gpt-5.3-codex-spark";
 const CODEX_SPARK_DISABLED_PLAN_TYPES = new Set<CodexPlanType>(["free", "go", "plus"]);
 const CODEX_PROCESS_SHELL_ENV_NAMES = ["PATH", "SSH_AUTH_SOCK"] as const;
+const CODEX_BROWSER_USE_PIPE_PATH =
+  process.platform === "win32" ? String.raw`\\.\pipe\codex-browser-use` : "/tmp/codex-browser-use";
+const NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS = "NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS";
 
 function asObject(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object") {
@@ -273,6 +277,20 @@ export function buildCodexProcessEnv(
       }
     } catch {
       // Keep inherited environment if shell lookup fails.
+    }
+  }
+
+  if (platform !== "win32") {
+    const allowedSockets =
+      effectiveEnv[NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS]
+        ?.split(",")
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0) ?? [];
+    if (!allowedSockets.includes(CODEX_BROWSER_USE_PIPE_PATH)) {
+      effectiveEnv[NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS] = [
+        ...allowedSockets,
+        CODEX_BROWSER_USE_PIPE_PATH,
+      ].join(",");
     }
   }
 
@@ -333,6 +351,21 @@ export function readCodexAccountSnapshot(response: unknown): CodexAccountSnapsho
     sparkEnabled: true,
   };
 }
+
+const CODEX_BROWSER_TOOL_ROUTING_INSTRUCTIONS = `
+
+## Browser tool routing
+
+Prefer the built-in in-app browser for browser work whenever possible.
+
+When the user asks to inspect a page, navigate a site, read what is visible in the browser, take a browser screenshot, or interact with content already open in chat, use the in-app browser path first.
+
+Use \`Computer Use\` only when at least one of these is true:
+- the user explicitly asks to use \`Computer Use\`
+- the task is outside the in-app browser (desktop apps, OS settings, system UI, other app windows)
+- the in-app browser cannot complete the task and a broader desktop fallback is required
+
+Do not choose \`Computer Use\` first for ordinary browser inspection, browser screenshots, or browser navigation when the in-app browser can handle the request.`;
 
 export const CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Plan Mode (Conversational)
 
@@ -454,7 +487,7 @@ plan content should be human and agent digestible. The final plan must be plan-o
 Do not ask "should I proceed?" in the final output. The user can easily switch out of Plan mode and request implementation if you have included a \`<proposed_plan>\` block in your response. Alternatively, they can decide to stay in Plan mode and continue refining the plan.
 
 Only produce at most one \`<proposed_plan>\` block per turn, and only when you are presenting a complete spec.
-</collaboration_mode>`;
+</collaboration_mode>${CODEX_BROWSER_TOOL_ROUTING_INSTRUCTIONS}`;
 
 export const CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Collaboration Mode: Default
 
@@ -467,7 +500,7 @@ Your active mode changes only when new developer instructions with a different \
 The \`request_user_input\` tool is unavailable in Default mode. If you call it while in Default mode, it will return an error.
 
 In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.
-</collaboration_mode>`;
+</collaboration_mode>${CODEX_BROWSER_TOOL_ROUTING_INSTRUCTIONS}`;
 
 function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
   readonly approvalPolicy: "untrusted" | "never";
@@ -505,7 +538,9 @@ export function resolveCodexModelForAccount(
 function killChildTree(child: ChildProcessWithoutNullStreams): void {
   if (process.platform === "win32" && child.pid !== undefined) {
     try {
-      spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+      spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
+        stdio: "ignore",
+      });
       return;
     } catch {
       // fallback to direct kill
@@ -1155,6 +1190,18 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
     const response = await this.sendRequest(context, "thread/read", {
       threadId: providerThreadId,
+      includeTurns: true,
+    });
+    return this.parseThreadSnapshot("thread/read", response);
+  }
+
+  async readExternalThread(input: {
+    externalThreadId: string;
+    cwd?: string;
+  }): Promise<CodexThreadSnapshot> {
+    const context = await this.resolveContextForDiscovery(undefined, input.cwd);
+    const response = await this.sendRequest(context, "thread/read", {
+      threadId: input.externalThreadId,
       includeTurns: true,
     });
     return this.parseThreadSnapshot("thread/read", response);
@@ -1970,7 +2017,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         this.readString(this.readObject(notification.params)?.thread, "id"),
       );
       if (startedThreadId && !isChildConversation) {
-        this.updateSession(context, { resumeCursor: { threadId: startedThreadId } });
+        this.updateSession(context, {
+          resumeCursor: { threadId: startedThreadId },
+        });
       }
       return;
     }
@@ -2235,11 +2284,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   private parseThreadSnapshot(method: string, response: unknown): CodexThreadSnapshot {
     const responseRecord = this.readObject(response);
+    const threadRecord = this.readObject(responseRecord, "thread");
     const threadIdRaw = this.readThreadIdFromResponse(method, responseRecord);
     const turnsRaw =
-      this.readArray(this.readObject(responseRecord, "thread"), "turns") ??
-      this.readArray(responseRecord, "turns") ??
-      [];
+      this.readArray(threadRecord, "turns") ?? this.readArray(responseRecord, "turns") ?? [];
     const turns = turnsRaw.map((turnValue, index) => {
       const turn = this.readObject(turnValue);
       const turnIdRaw = this.readString(turn, "id") ?? `${threadIdRaw}:turn:${index + 1}`;
@@ -2254,6 +2302,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     return {
       threadId: threadIdRaw,
       turns,
+      cwd: this.readString(threadRecord, "cwd") ?? this.readString(responseRecord, "cwd") ?? null,
     };
   }
 
@@ -2485,7 +2534,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
                 ? { displayName: this.readString(display, "displayName") }
                 : {}),
               ...(this.readString(display, "shortDescription")
-                ? { shortDescription: this.readString(display, "shortDescription") }
+                ? {
+                    shortDescription: this.readString(display, "shortDescription"),
+                  }
                 : {}),
             },
           }
@@ -2632,10 +2683,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ? { displayName: this.readString(record, "displayName")?.trim() }
         : {}),
       ...(this.readString(record, "shortDescription")?.trim()
-        ? { shortDescription: this.readString(record, "shortDescription")?.trim() }
+        ? {
+            shortDescription: this.readString(record, "shortDescription")?.trim(),
+          }
         : {}),
       ...(this.readString(record, "longDescription")?.trim()
-        ? { longDescription: this.readString(record, "longDescription")?.trim() }
+        ? {
+            longDescription: this.readString(record, "longDescription")?.trim(),
+          }
         : {}),
       ...(this.readString(record, "developerName")?.trim()
         ? { developerName: this.readString(record, "developerName")?.trim() }
@@ -2648,10 +2703,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ? { websiteUrl: this.readString(record, "websiteUrl")?.trim() }
         : {}),
       ...(this.readString(record, "privacyPolicyUrl")?.trim()
-        ? { privacyPolicyUrl: this.readString(record, "privacyPolicyUrl")?.trim() }
+        ? {
+            privacyPolicyUrl: this.readString(record, "privacyPolicyUrl")?.trim(),
+          }
         : {}),
       ...(this.readString(record, "termsOfServiceUrl")?.trim()
-        ? { termsOfServiceUrl: this.readString(record, "termsOfServiceUrl")?.trim() }
+        ? {
+            termsOfServiceUrl: this.readString(record, "termsOfServiceUrl")?.trim(),
+          }
         : {}),
       ...(defaultPrompt.length > 0 ? { defaultPrompt } : {}),
       ...(this.readString(record, "brandColor")?.trim()

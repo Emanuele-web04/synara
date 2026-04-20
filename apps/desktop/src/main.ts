@@ -21,12 +21,6 @@ import {
 import type { MenuItemConstructorOptions } from "electron";
 import * as Effect from "effect/Effect";
 import type {
-  BrowserNavigateInput,
-  BrowserNewTabInput,
-  BrowserOpenInput,
-  BrowserSetPanelBoundsInput,
-  BrowserTabInput,
-  BrowserThreadInput,
   DesktopTheme,
   DesktopUpdateActionResult,
   DesktopUpdateState,
@@ -58,8 +52,15 @@ import {
   reduceDesktopUpdateStateOnNoUpdate,
   reduceDesktopUpdateStateOnUpdateAvailable,
 } from "./updateMachine";
+import {
+  buildGitHubReleaseDownloadBaseUrl,
+  resolveGitHubUpdateSource,
+  resolveLatestStableGitHubRelease,
+} from "./githubUpdateFeed";
 import { isArm64HostRunningIntelBuild, resolveDesktopRuntimeInfo } from "./runtimeArch";
 import { DesktopBrowserManager } from "./browserManager";
+import { registerBrowserIpcHandlers, sendBrowserState } from "./browserIpc";
+import { BrowserUsePipeServer } from "./browserUsePipeServer";
 
 syncShellEnvironment();
 
@@ -77,20 +78,6 @@ const UPDATE_DOWNLOAD_CHANNEL = "desktop:update-download";
 const UPDATE_INSTALL_CHANNEL = "desktop:update-install";
 const NOTIFICATIONS_IS_SUPPORTED_CHANNEL = "desktop:notifications-is-supported";
 const NOTIFICATIONS_SHOW_CHANNEL = "desktop:notifications-show";
-const BROWSER_STATE_CHANNEL = "desktop:browser-state";
-const BROWSER_OPEN_CHANNEL = "desktop:browser-open";
-const BROWSER_CLOSE_CHANNEL = "desktop:browser-close";
-const BROWSER_HIDE_CHANNEL = "desktop:browser-hide";
-const BROWSER_GET_STATE_CHANNEL = "desktop:browser-get-state";
-const BROWSER_SET_BOUNDS_CHANNEL = "desktop:browser-set-bounds";
-const BROWSER_NAVIGATE_CHANNEL = "desktop:browser-navigate";
-const BROWSER_RELOAD_CHANNEL = "desktop:browser-reload";
-const BROWSER_GO_BACK_CHANNEL = "desktop:browser-go-back";
-const BROWSER_GO_FORWARD_CHANNEL = "desktop:browser-go-forward";
-const BROWSER_NEW_TAB_CHANNEL = "desktop:browser-new-tab";
-const BROWSER_CLOSE_TAB_CHANNEL = "desktop:browser-close-tab";
-const BROWSER_SELECT_TAB_CHANNEL = "desktop:browser-select-tab";
-const BROWSER_OPEN_DEVTOOLS_CHANNEL = "desktop:browser-open-devtools";
 const BASE_DIR = process.env.T3CODE_HOME?.trim() || Path.join(OS.homedir(), ".dpcode");
 const STATE_DIR = Path.join(BASE_DIR, "userdata");
 const DESKTOP_SCHEME = "t3";
@@ -113,6 +100,14 @@ const AUTO_UPDATE_FOREGROUND_RECHECK_MIN_BACKGROUND_MS = 30 * 1000;
 const AUTO_UPDATE_CHECK_TIMEOUT_MS = 45 * 1000;
 const DESKTOP_UPDATE_CHANNEL = "latest";
 const DESKTOP_UPDATE_ALLOW_PRERELEASE = false;
+const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
+const DPCODE_BROWSER_LABEL = "DPCODE browser";
+const browserPerfLoggingEnabled =
+  process.env.DPCODE_BROWSER_PERF === "1" ||
+  process.env.T3CODE_BROWSER_PERF === "1" ||
+  (isDevelopment &&
+    process.env.DPCODE_BROWSER_PERF !== "0" &&
+    process.env.T3CODE_BROWSER_PERF !== "0");
 
 type DesktopUpdateErrorContext = DesktopUpdateState["errorContext"];
 
@@ -131,11 +126,52 @@ let desktopLogSink: RotatingFileSink | null = null;
 let backendLogSink: RotatingFileSink | null = null;
 let restoreStdIoCapture: (() => void) | null = null;
 let unreadBackgroundNotificationCount = 0;
+let browserPerfInterval: ReturnType<typeof setInterval> | null = null;
 const browserManager = new DesktopBrowserManager();
+let browserUsePipeServer: BrowserUsePipeServer | null = null;
+let configuredGitHubUpdateSource: ReturnType<typeof resolveGitHubUpdateSource> = null;
+let configuredGitHubUpdateToken = "";
 
 browserManager.subscribe((state) => {
-  mainWindow?.webContents.send(BROWSER_STATE_CHANNEL, state);
+  sendBrowserState(mainWindow?.webContents, state);
 });
+
+function startBrowserPerformanceLogging(): void {
+  if (browserPerfInterval || !browserPerfLoggingEnabled) {
+    return;
+  }
+
+  browserPerfInterval = setInterval(() => {
+    const snapshot = browserManager.getPerformanceSnapshot();
+    const trackedProcessIds = new Set(snapshot.trackedProcessIds);
+    const processMetrics = app
+      .getAppMetrics()
+      .filter((metric) => trackedProcessIds.has(metric.pid))
+      .map((metric) => ({
+        pid: metric.pid,
+        type: metric.type,
+        cpu: Number(metric.cpu.percentCPUUsage.toFixed(1)),
+        memMb: Math.round(metric.memory.workingSetSize / 1024),
+        name: metric.name,
+      }));
+
+    console.info(`[${DPCODE_BROWSER_LABEL} perf]`, {
+      ...snapshot.counters,
+      trackedProcessIds: snapshot.trackedProcessIds,
+      processes: processMetrics,
+    });
+  }, BROWSER_PERF_SAMPLE_INTERVAL_MS);
+  browserPerfInterval.unref();
+}
+
+async function ensureBrowserUsePipeServer(): Promise<void> {
+  if (browserUsePipeServer) {
+    return;
+  }
+  const server = new BrowserUsePipeServer(browserManager);
+  await server.start();
+  browserUsePipeServer = server;
+}
 
 let destructiveMenuIconCache: Electron.NativeImage | null | undefined;
 const desktopRuntimeInfo = resolveDesktopRuntimeInfo({
@@ -205,8 +241,29 @@ function getSafeTheme(rawTheme: unknown): DesktopTheme | null {
   return null;
 }
 
-// Wait for the desktop backend to accept HTTP connections before packaged startup continues.
-async function waitForBackendHttpReady(baseUrl: string): Promise<void> {
+// Wait until the desktop backend exposes its health route so packaged startup
+// can proceed even if the rest of the server is still warming up.
+async function waitForBackendHttpListening(baseUrl: string): Promise<void> {
+  cancelBackendReadinessWait();
+  const controller = new AbortController();
+  backendReadinessAbortController = controller;
+
+  try {
+    await waitForHttpReady(baseUrl, {
+      signal: controller.signal,
+      path: "/health",
+    });
+  } finally {
+    if (backendReadinessAbortController === controller) {
+      backendReadinessAbortController = null;
+    }
+  }
+}
+
+// Wait for the backend's full startup pipeline, but keep this separate from
+// the initial launch gate so slow projection/bootstrap work does not look like
+// a fatal startup failure.
+async function waitForBackendStartupReady(baseUrl: string): Promise<void> {
   cancelBackendReadinessWait();
   const controller = new AbortController();
   backendReadinessAbortController = controller;
@@ -931,6 +988,32 @@ function shouldEnableAutoUpdates(): boolean {
   );
 }
 
+async function refreshConfiguredUpdateFeed(): Promise<void> {
+  if (configuredGitHubUpdateSource === null) {
+    return;
+  }
+
+  const latestRelease = await resolveLatestStableGitHubRelease(
+    configuredGitHubUpdateSource,
+    configuredGitHubUpdateToken,
+  );
+  if (latestRelease === null) {
+    throw new Error("No stable GitHub release was found for the desktop update feed.");
+  }
+
+  autoUpdater.setFeedURL({
+    provider: "generic",
+    url: buildGitHubReleaseDownloadBaseUrl(configuredGitHubUpdateSource, latestRelease.tag),
+    ...(configuredGitHubUpdateToken
+      ? {
+          requestHeaders: {
+            authorization: `token ${configuredGitHubUpdateToken}`,
+          },
+        }
+      : {}),
+  });
+}
+
 function clearUpdateBackgroundBlurTimer(): void {
   if (updateBackgroundBlurTimer) {
     clearTimeout(updateBackgroundBlurTimer);
@@ -1020,6 +1103,7 @@ async function checkForUpdates(reason: string): Promise<void> {
   console.info(`[desktop-updater] Checking for updates (${reason})...`);
 
   try {
+    await refreshConfiguredUpdateFeed();
     await autoUpdater.checkForUpdates();
   } catch (error: unknown) {
     clearUpdateCheckTimeoutTimer();
@@ -1033,13 +1117,16 @@ async function checkForUpdates(reason: string): Promise<void> {
   }
 }
 
-async function downloadAvailableUpdate(): Promise<{ accepted: boolean; completed: boolean }> {
+async function downloadAvailableUpdate(): Promise<{
+  accepted: boolean;
+  completed: boolean;
+}> {
   if (!updaterConfigured || updateDownloadInFlight || updateState.status !== "available") {
     return { accepted: false, completed: false };
   }
   updateDownloadInFlight = true;
   setUpdateState(reduceDesktopUpdateStateOnDownloadStart(updateState));
-  autoUpdater.disableDifferentialDownload = isArm64HostRunningIntelBuild(desktopRuntimeInfo);
+  autoUpdater.disableDifferentialDownload = true;
   console.info("[desktop-updater] Downloading update...");
 
   try {
@@ -1055,7 +1142,10 @@ async function downloadAvailableUpdate(): Promise<{ accepted: boolean; completed
   }
 }
 
-async function installDownloadedUpdate(): Promise<{ accepted: boolean; completed: boolean }> {
+async function installDownloadedUpdate(): Promise<{
+  accepted: boolean;
+  completed: boolean;
+}> {
   if (isQuitting || !updaterConfigured || updateState.status !== "downloaded") {
     return { accepted: false, completed: false };
   }
@@ -1076,6 +1166,7 @@ async function installDownloadedUpdate(): Promise<{ accepted: boolean; completed
 }
 
 function configureAutoUpdater(): void {
+  const appUpdateYml = readAppUpdateYml();
   const enabled = shouldEnableAutoUpdates();
   setUpdateState({
     ...createInitialDesktopUpdateState(app.getVersion(), desktopRuntimeInfo),
@@ -1086,23 +1177,11 @@ function configureAutoUpdater(): void {
     return;
   }
   updaterConfigured = true;
+  configuredGitHubUpdateSource = resolveGitHubUpdateSource(appUpdateYml);
 
   const githubToken =
     process.env.T3CODE_DESKTOP_UPDATE_GITHUB_TOKEN?.trim() || process.env.GH_TOKEN?.trim() || "";
-  if (githubToken) {
-    // When a token is provided, re-configure the feed with `private: true` so
-    // electron-updater uses the GitHub API (api.github.com) instead of the
-    // public Atom feed (github.com/…/releases.atom) which rejects Bearer auth.
-    const appUpdateYml = readAppUpdateYml();
-    if (appUpdateYml?.provider === "github") {
-      autoUpdater.setFeedURL({
-        ...appUpdateYml,
-        provider: "github" as const,
-        private: true,
-        token: githubToken,
-      });
-    }
-  }
+  configuredGitHubUpdateToken = githubToken;
 
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
@@ -1110,7 +1189,10 @@ function configureAutoUpdater(): void {
   autoUpdater.channel = DESKTOP_UPDATE_CHANNEL;
   autoUpdater.allowPrerelease = DESKTOP_UPDATE_ALLOW_PRERELEASE;
   autoUpdater.allowDowngrade = false;
-  autoUpdater.disableDifferentialDownload = isArm64HostRunningIntelBuild(desktopRuntimeInfo);
+  // We resolve the exact latest stable release before every check and point the
+  // updater at that tag directly, so full downloads are more reliable than
+  // blockmap-based patching against a moving "latest" target.
+  autoUpdater.disableDifferentialDownload = true;
   let lastLoggedDownloadMilestone = -1;
 
   if (isArm64HostRunningIntelBuild(desktopRuntimeInfo)) {
@@ -1521,7 +1603,12 @@ function registerIpcHandlers(): void {
     async (
       _event,
       input:
-        | { title?: unknown; body?: unknown; silent?: unknown; threadId?: unknown }
+        | {
+            title?: unknown;
+            body?: unknown;
+            silent?: unknown;
+            threadId?: unknown;
+          }
         | null
         | undefined,
     ) =>
@@ -1533,71 +1620,12 @@ function registerIpcHandlers(): void {
       }),
   );
   registerDesktopVoiceTranscriptionHandler();
-
-  ipcMain.removeHandler(BROWSER_OPEN_CHANNEL);
-  ipcMain.handle(BROWSER_OPEN_CHANNEL, async (_event, input: BrowserOpenInput) =>
-    browserManager.open(input),
-  );
-
-  ipcMain.removeHandler(BROWSER_CLOSE_CHANNEL);
-  ipcMain.handle(BROWSER_CLOSE_CHANNEL, async (_event, input: BrowserThreadInput) =>
-    browserManager.close(input),
-  );
-
-  ipcMain.removeHandler(BROWSER_HIDE_CHANNEL);
-  ipcMain.handle(BROWSER_HIDE_CHANNEL, async (_event, input: BrowserThreadInput) => {
-    browserManager.hide(input);
+  startBrowserPerformanceLogging();
+  void ensureBrowserUsePipeServer().catch((error) => {
+    console.warn("[DPCODE browser] Failed to start browser-use native pipe", error);
   });
 
-  ipcMain.removeHandler(BROWSER_GET_STATE_CHANNEL);
-  ipcMain.handle(BROWSER_GET_STATE_CHANNEL, async (_event, input: BrowserThreadInput) =>
-    browserManager.getState(input),
-  );
-
-  ipcMain.removeHandler(BROWSER_SET_BOUNDS_CHANNEL);
-  ipcMain.handle(BROWSER_SET_BOUNDS_CHANNEL, async (_event, input: BrowserSetPanelBoundsInput) =>
-    browserManager.setPanelBounds(input),
-  );
-
-  ipcMain.removeHandler(BROWSER_NAVIGATE_CHANNEL);
-  ipcMain.handle(BROWSER_NAVIGATE_CHANNEL, async (_event, input: BrowserNavigateInput) =>
-    browserManager.navigate(input),
-  );
-
-  ipcMain.removeHandler(BROWSER_RELOAD_CHANNEL);
-  ipcMain.handle(BROWSER_RELOAD_CHANNEL, async (_event, input: BrowserTabInput) =>
-    browserManager.reload(input),
-  );
-
-  ipcMain.removeHandler(BROWSER_GO_BACK_CHANNEL);
-  ipcMain.handle(BROWSER_GO_BACK_CHANNEL, async (_event, input: BrowserTabInput) =>
-    browserManager.goBack(input),
-  );
-
-  ipcMain.removeHandler(BROWSER_GO_FORWARD_CHANNEL);
-  ipcMain.handle(BROWSER_GO_FORWARD_CHANNEL, async (_event, input: BrowserTabInput) =>
-    browserManager.goForward(input),
-  );
-
-  ipcMain.removeHandler(BROWSER_NEW_TAB_CHANNEL);
-  ipcMain.handle(BROWSER_NEW_TAB_CHANNEL, async (_event, input: BrowserNewTabInput) =>
-    browserManager.newTab(input),
-  );
-
-  ipcMain.removeHandler(BROWSER_CLOSE_TAB_CHANNEL);
-  ipcMain.handle(BROWSER_CLOSE_TAB_CHANNEL, async (_event, input: BrowserTabInput) =>
-    browserManager.closeTab(input),
-  );
-
-  ipcMain.removeHandler(BROWSER_SELECT_TAB_CHANNEL);
-  ipcMain.handle(BROWSER_SELECT_TAB_CHANNEL, async (_event, input: BrowserTabInput) =>
-    browserManager.selectTab(input),
-  );
-
-  ipcMain.removeHandler(BROWSER_OPEN_DEVTOOLS_CHANNEL);
-  ipcMain.handle(BROWSER_OPEN_DEVTOOLS_CHANNEL, async (_event, input: BrowserTabInput) => {
-    browserManager.openDevTools(input);
-  });
+  registerBrowserIpcHandlers(ipcMain, browserManager);
 }
 
 function getIconOption(): { icon: string } | Record<string, never> {
@@ -1776,7 +1804,7 @@ async function bootstrap(): Promise<void> {
   if (isDevelopment) {
     mainWindow = createWindow();
     writeDesktopLogHeader("bootstrap main window created");
-    void waitForBackendHttpReady(backendHttpUrl)
+    void waitForBackendStartupReady(backendHttpUrl)
       .then(() => {
         writeDesktopLogHeader("bootstrap backend ready");
       })
@@ -1792,10 +1820,23 @@ async function bootstrap(): Promise<void> {
     return;
   }
 
-  await waitForBackendHttpReady(backendHttpUrl);
-  writeDesktopLogHeader("bootstrap backend ready");
+  await waitForBackendHttpListening(backendHttpUrl);
+  writeDesktopLogHeader("bootstrap backend listening");
   mainWindow = createWindow();
   writeDesktopLogHeader("bootstrap main window created");
+  void waitForBackendStartupReady(backendHttpUrl)
+    .then(() => {
+      writeDesktopLogHeader("bootstrap backend ready");
+    })
+    .catch((error) => {
+      if (isBackendReadinessAborted(error)) {
+        return;
+      }
+      writeDesktopLogHeader(
+        `bootstrap backend readiness warning message=${formatErrorMessage(error)}`,
+      );
+      console.warn("[desktop] backend readiness check timed out during packaged bootstrap", error);
+    });
 }
 
 app.on("before-quit", () => {
@@ -1804,6 +1845,9 @@ app.on("before-quit", () => {
   clearUpdateBackgroundBlurTimer();
   clearUpdateCheckTimeoutTimer();
   clearUpdatePollTimer();
+  void browserUsePipeServer?.dispose().finally(() => {
+    browserUsePipeServer = null;
+  });
   cancelBackendReadinessWait();
   stopBackend();
   browserManager.dispose();

@@ -65,6 +65,7 @@ export interface ProviderThreadTurnSnapshot {
 export interface ProviderThreadSnapshot {
   readonly threadId: ThreadId;
   readonly turns: ReadonlyArray<ProviderThreadTurnSnapshot>;
+  readonly cwd?: string | null;
 }
 
 export interface ProviderAdapterShape<TError> {
@@ -148,6 +149,14 @@ export interface ProviderAdapterShape<TError> {
    * Read a provider thread snapshot.
    */
   readonly readThread: (threadId: ThreadId) => Effect.Effect<ProviderThreadSnapshot, TError>;
+
+  /**
+   * Read a persisted provider thread snapshot without requiring a local app thread binding.
+   */
+  readonly readExternalThread?: (input: {
+    readonly externalThreadId: string;
+    readonly cwd?: string;
+  }) => Effect.Effect<ProviderThreadSnapshot, TError>;
 
   /**
    * Roll back a provider thread by N turns.

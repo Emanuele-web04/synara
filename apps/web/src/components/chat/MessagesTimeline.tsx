@@ -29,9 +29,11 @@ import {
   CheckIcon,
   CircleAlertIcon,
   EyeIcon,
+  GitHubIcon,
   GlobeIcon,
   HammerIcon,
   type LucideIcon,
+  McpIcon,
   QueueArrow,
   SquarePenIcon,
   TerminalIcon,
@@ -642,8 +644,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 {showUserText && (
                   <div
                     className={cn(
-                      "w-max max-w-full min-w-0 self-end rounded-lg bg-secondary px-3",
-                      bubbleIsChipOnly ? "py-0.5" : "pt-[3px] pb-[5px]",
+                      "w-max max-w-full min-w-0 self-end rounded-lg bg-secondary px-3.5",
+                      bubbleIsChipOnly ? "py-1" : "pt-[5px] pb-[7px]",
                     )}
                   >
                     <UserMessageBody
@@ -1656,6 +1658,11 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   return workToneIcon(workEntry.tone).icon;
 }
 
+function isGitHubMcpToolCall(workEntry: TimelineWorkEntry): boolean {
+  const toolName = workEntry.toolName?.trim().toLowerCase();
+  return Boolean(toolName?.startsWith("mcp__codex_apps__github"));
+}
+
 // Keep command, agent-task, and file-change rows visually compact so their icon can trail the label.
 function prefersCompactWorkEntryRow(workEntry: TimelineWorkEntry): boolean {
   const EntryIcon = workEntryIcon(workEntry);
@@ -1802,6 +1809,9 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const showIconRight = compact && usesTrailingCompactIcon;
   const showIconLeft = !compact;
   const showInlineWebSearchIcon = compact && workEntry.itemType === "web_search";
+  const showInlineGitHubIcon = compact && isGitHubMcpToolCall(workEntry);
+  const showInlineMcpIcon =
+    compact && workEntry.itemType === "mcp_tool_call" && !showInlineGitHubIcon;
   const heading = toolWorkEntryHeading(workEntry);
   const preview = workEntryPreview(workEntry);
   const displayText = preview ? `${heading} ${preview}` : heading;
@@ -2050,14 +2060,37 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                   )}
                   style={{ fontSize: `${rowFontSizePx}px` }}
                 >
-                  {showInlineWebSearchIcon ? (
-                    <span className="mr-1 inline-flex align-[-0.125em] text-muted-foreground/38">
-                      <GlobeIcon
-                        style={{
-                          width: `${rowFontSizePx}px`,
-                          height: `${rowFontSizePx}px`,
-                        }}
-                      />
+                  {showInlineWebSearchIcon || showInlineGitHubIcon || showInlineMcpIcon ? (
+                    <span
+                      className="mr-1 inline-flex align-[-0.125em] text-muted-foreground/38"
+                      data-inline-tool-icon={
+                        showInlineGitHubIcon ? "github" : showInlineMcpIcon ? "mcp" : "web-search"
+                      }
+                    >
+                      {showInlineGitHubIcon ? (
+                        <GitHubIcon
+                          style={{
+                            width: `${rowFontSizePx}px`,
+                            height: `${rowFontSizePx}px`,
+                          }}
+                        />
+                      ) : null}
+                      {showInlineMcpIcon ? (
+                        <McpIcon
+                          style={{
+                            width: `${rowFontSizePx}px`,
+                            height: `${rowFontSizePx}px`,
+                          }}
+                        />
+                      ) : null}
+                      {showInlineWebSearchIcon ? (
+                        <GlobeIcon
+                          style={{
+                            width: `${rowFontSizePx}px`,
+                            height: `${rowFontSizePx}px`,
+                          }}
+                        />
+                      ) : null}
                     </span>
                   ) : null}
                   <span className="text-muted-foreground/50">{heading}</span>

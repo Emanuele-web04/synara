@@ -2,7 +2,7 @@
 // Purpose: Shared sidebar sorting and status helpers used by the thread list UI.
 // Exports: Sidebar row state derivation, add-project error helpers, sort utilities, and visibility helpers.
 
-import type { KeybindingCommand } from "@t3tools/contracts";
+import type { KeybindingCommand, ProjectId, ThreadId } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "../appSettings";
 import type { ChatMessage, Project, SidebarThreadSummary, Thread } from "../types";
 import { cn } from "../lib/utils";
@@ -14,6 +14,7 @@ import {
   hasActionableProposedPlan,
   isLatestTurnSettled,
 } from "../session-logic";
+import type { SplitView } from "../splitViewStore";
 
 export {
   extractDuplicateProjectCreateProjectId,
@@ -38,6 +39,33 @@ type SidebarThreadSortInput = {
   updatedAt?: string | undefined;
   latestUserMessageAt?: string | null | undefined;
   messages?: ReadonlyArray<Pick<ChatMessage, "role" | "createdAt">> | undefined;
+};
+
+export type SidebarProjectEntry =
+  | {
+      kind: "thread";
+      rowId: ThreadId;
+      rootRowId: ThreadId;
+      thread: SidebarThreadSummary;
+      depth: number;
+      childCount: number;
+      isExpanded: boolean;
+    }
+  | {
+      kind: "split";
+      rowId: ThreadId;
+      rootRowId: ThreadId;
+      splitView: SplitView;
+    };
+
+export type SidebarDerivedProjectData = {
+  projectThreads: SidebarThreadSummary[];
+  orderedProjectThreadIds: ThreadId[];
+  visibleEntries: SidebarProjectEntry[];
+  hasHiddenThreads: boolean;
+  isThreadListExpanded: boolean;
+  activeEntryId: ThreadId | null;
+  projectStatus: ReturnType<typeof resolveProjectStatusIndicator>;
 };
 
 const THREAD_JUMP_COMMANDS = [
@@ -804,4 +832,136 @@ export function sortProjectsForSidebar<
     if (byTimestamp !== 0) return byTimestamp;
     return left.name.localeCompare(right.name) || left.id.localeCompare(right.id);
   });
+}
+
+// Groups thread summaries once so project-specific sidebar derivations can reuse the same slices.
+export function groupSidebarThreadsByProjectId(
+  threads: readonly SidebarThreadSummary[],
+): ReadonlyMap<ProjectId, SidebarThreadSummary[]> {
+  const byProjectId = new Map<ProjectId, SidebarThreadSummary[]>();
+  for (const thread of threads) {
+    const existing = byProjectId.get(thread.projectId);
+    if (existing) {
+      existing.push(thread);
+    } else {
+      byProjectId.set(thread.projectId, [thread]);
+    }
+  }
+  return byProjectId;
+}
+
+// Groups split views once so project renderers do not rescan the full split list every render.
+export function groupSplitViewsByProjectId(
+  splitViews: readonly SplitView[],
+): ReadonlyMap<ProjectId, SplitView[]> {
+  const byProjectId = new Map<ProjectId, SplitView[]>();
+  for (const splitView of splitViews) {
+    const existing = byProjectId.get(splitView.ownerProjectId);
+    if (existing) {
+      existing.push(splitView);
+    } else {
+      byProjectId.set(splitView.ownerProjectId, [splitView]);
+    }
+  }
+  return byProjectId;
+}
+
+// Centralizes the expensive per-project row derivation so Sidebar.tsx can mostly orchestrate UI state.
+export function deriveSidebarProjectData(input: {
+  projects: readonly Pick<Project, "id" | "cwd" | "expanded">[];
+  sortedSidebarThreadsByProjectId: ReadonlyMap<ProjectId, SidebarThreadSummary[]>;
+  splitViewsByProjectId: ReadonlyMap<ProjectId, SplitView[]>;
+  splitViewBySourceThreadId: ReadonlyMap<ThreadId, SplitView>;
+  pinnedThreadIds: readonly ThreadId[];
+  pinnedThreadIdSet: ReadonlySet<ThreadId>;
+  expandedParentThreadIds: ReadonlySet<ThreadId>;
+  expandedThreadListProjectCwds: ReadonlySet<string>;
+  normalizeProjectCwd: (cwd: string) => string;
+  activeSidebarThreadId: ThreadId | undefined;
+  previewLimit: number;
+}): ReadonlyMap<ProjectId, SidebarDerivedProjectData> {
+  const byProjectId = new Map<ProjectId, SidebarDerivedProjectData>();
+
+  for (const project of input.projects) {
+    const allProjectThreads = input.sortedSidebarThreadsByProjectId.get(project.id) ?? [];
+    const projectThreads = getUnpinnedThreadsForSidebar(allProjectThreads, input.pinnedThreadIds);
+    const projectThreadTree = buildProjectThreadTree({
+      threads: projectThreads,
+      expandedParentThreadIds: input.expandedParentThreadIds,
+    });
+    const projectSplitViews = (input.splitViewsByProjectId.get(project.id) ?? []).filter(
+      (splitView) => !input.pinnedThreadIdSet.has(splitView.sourceThreadId),
+    );
+    const projectStatus = resolveProjectStatusIndicator(
+      allProjectThreads.map((thread) =>
+        resolveThreadStatusPill({
+          thread,
+          hasPendingApprovals: thread.hasPendingApprovals,
+          hasPendingUserInput: thread.hasPendingUserInput,
+        }),
+      ),
+    );
+    const isThreadListExpanded = input.expandedThreadListProjectCwds.has(
+      input.normalizeProjectCwd(project.cwd),
+    );
+    const replacedThreadIds = new Set(
+      projectSplitViews.map((splitView) => splitView.sourceThreadId),
+    );
+    const orderedEntries: SidebarProjectEntry[] = projectThreadTree.map(
+      ({ thread, depth, rootThreadId, childCount, isExpanded }) => {
+        const splitView = input.splitViewBySourceThreadId.get(thread.id);
+        if (!splitView) {
+          return {
+            kind: "thread",
+            rowId: thread.id,
+            rootRowId: rootThreadId,
+            thread,
+            depth,
+            childCount,
+            isExpanded,
+          };
+        }
+        return {
+          kind: "split",
+          rowId: splitView.sourceThreadId,
+          rootRowId: rootThreadId,
+          splitView,
+        };
+      },
+    );
+
+    for (const splitView of projectSplitViews) {
+      if (replacedThreadIds.has(splitView.sourceThreadId)) continue;
+      orderedEntries.push({
+        kind: "split",
+        rowId: splitView.sourceThreadId,
+        rootRowId: splitView.sourceThreadId,
+        splitView,
+      });
+    }
+
+    const activeEntry =
+      input.activeSidebarThreadId === undefined
+        ? null
+        : (orderedEntries.find((entry) => entry.rowId === input.activeSidebarThreadId) ?? null);
+    const { visibleEntries: renderedEntries } = getVisibleSidebarEntriesForPreview({
+      entries: orderedEntries,
+      activeEntryId: activeEntry?.rowId,
+      isExpanded: isThreadListExpanded,
+      previewLimit: input.previewLimit,
+    });
+    const pinnedCollapsedEntry = !project.expanded && activeEntry ? activeEntry : null;
+
+    byProjectId.set(project.id, {
+      projectThreads,
+      orderedProjectThreadIds: projectThreads.map((thread) => thread.id),
+      visibleEntries: pinnedCollapsedEntry ? [pinnedCollapsedEntry] : renderedEntries,
+      hasHiddenThreads: renderedEntries.length < orderedEntries.length,
+      isThreadListExpanded,
+      activeEntryId: activeEntry?.rowId ?? null,
+      projectStatus,
+    });
+  }
+
+  return byProjectId;
 }

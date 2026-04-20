@@ -678,10 +678,6 @@ function runtimeEventToActivities(
     }
 
     case "turn.completed": {
-      const totalCostUsd = event.payload.totalCostUsd;
-      if (typeof totalCostUsd !== "number") {
-        return [];
-      }
       return [
         {
           id: event.eventId,
@@ -689,7 +685,15 @@ function runtimeEventToActivities(
           tone: "info" as const,
           kind: "turn.completed",
           summary: "Turn completed",
-          payload: { totalCostUsd },
+          payload: {
+            state: runtimeTurnState(event),
+            ...(typeof event.payload.totalCostUsd === "number"
+              ? { totalCostUsd: event.payload.totalCostUsd }
+              : {}),
+            ...(runtimeTurnErrorMessage(event)
+              ? { errorMessage: runtimeTurnErrorMessage(event) }
+              : {}),
+          },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },

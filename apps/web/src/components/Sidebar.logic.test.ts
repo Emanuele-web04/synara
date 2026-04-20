@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildProjectThreadTree,
+  deriveSidebarProjectData,
   describeAddProjectError,
   extractDuplicateProjectCreateProjectId,
   findWorkspaceRootMatch,
@@ -12,6 +13,8 @@ import {
   getSidebarThreadIdForJumpCommand,
   getSidebarThreadIdsToPrewarm,
   getRenderedThreadsForSidebarProject,
+  groupSidebarThreadsByProjectId,
+  groupSplitViewsByProjectId,
   getUnpinnedThreadsForSidebar,
   getVisibleSidebarThreadIds,
   getVisibleThreadsForProject,
@@ -34,8 +37,10 @@ import {
   DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
   type Project,
+  type SidebarThreadSummary,
   type Thread,
 } from "../types";
+import type { SplitView } from "../splitViewStore";
 
 function makeLatestTurn(overrides?: {
   completedAt?: string | null;
@@ -894,6 +899,156 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     ...overrides,
   };
 }
+
+function makeSidebarThreadSummary(
+  overrides: Partial<SidebarThreadSummary> = {},
+): SidebarThreadSummary {
+  return {
+    id: ThreadId.makeUnsafe("thread-1"),
+    projectId: ProjectId.makeUnsafe("project-1"),
+    title: "Thread",
+    modelSelection: {
+      provider: "codex",
+      model: "gpt-5.4",
+    },
+    interactionMode: DEFAULT_INTERACTION_MODE,
+    branch: null,
+    worktreePath: null,
+    session: null,
+    createdAt: "2026-03-09T10:00:00.000Z",
+    updatedAt: "2026-03-09T10:00:00.000Z",
+    latestTurn: null,
+    latestUserMessageAt: null,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    hasActionableProposedPlan: false,
+    hasLiveTailWork: false,
+    ...overrides,
+  };
+}
+
+function makeSplitView(overrides: Partial<SplitView> = {}): SplitView {
+  return {
+    id: "split-1",
+    sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+    ownerProjectId: ProjectId.makeUnsafe("project-1"),
+    leftThreadId: ThreadId.makeUnsafe("thread-1"),
+    rightThreadId: null,
+    focusedPane: "right",
+    ratio: 0.5,
+    leftPanel: {
+      panel: null,
+      diffTurnId: null,
+      diffFilePath: null,
+      hasOpenedPanel: false,
+      lastOpenPanel: "browser",
+    },
+    rightPanel: {
+      panel: null,
+      diffTurnId: null,
+      diffFilePath: null,
+      hasOpenedPanel: false,
+      lastOpenPanel: "browser",
+    },
+    createdAt: "2026-03-09T10:00:00.000Z",
+    updatedAt: "2026-03-09T10:00:00.000Z",
+    ...overrides,
+  };
+}
+
+describe("deriveSidebarProjectData", () => {
+  it("replaces a thread row with its split view entry", () => {
+    const project = makeProject();
+    const threadOne = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-1"),
+      title: "One",
+    });
+    const threadTwo = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-2"),
+      title: "Two",
+      createdAt: "2026-03-09T10:05:00.000Z",
+      updatedAt: "2026-03-09T10:05:00.000Z",
+    });
+    const splitView = makeSplitView({
+      sourceThreadId: threadOne.id,
+      ownerProjectId: project.id,
+      leftThreadId: threadOne.id,
+    });
+
+    const data = deriveSidebarProjectData({
+      projects: [project],
+      sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId([threadOne, threadTwo]),
+      splitViewsByProjectId: groupSplitViewsByProjectId([splitView]),
+      splitViewBySourceThreadId: new Map([[splitView.sourceThreadId, splitView]]),
+      pinnedThreadIds: [],
+      pinnedThreadIdSet: new Set(),
+      expandedParentThreadIds: new Set(),
+      expandedThreadListProjectCwds: new Set(),
+      normalizeProjectCwd: (cwd) => cwd,
+      activeSidebarThreadId: undefined,
+      previewLimit: 5,
+    });
+
+    expect(data.get(project.id)?.visibleEntries).toEqual([
+      expect.objectContaining({
+        kind: "split",
+        rowId: splitView.sourceThreadId,
+      }),
+      expect.objectContaining({
+        kind: "thread",
+        rowId: threadTwo.id,
+      }),
+    ]);
+  });
+
+  it("keeps the active thread visible when its project is collapsed", () => {
+    const project = makeProject({ expanded: false });
+    const threadOne = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-1"),
+      title: "One",
+    });
+    const threadTwo = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-2"),
+      title: "Two",
+      createdAt: "2026-03-09T10:01:00.000Z",
+      updatedAt: "2026-03-09T10:01:00.000Z",
+    });
+    const threadThree = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-3"),
+      title: "Three",
+      createdAt: "2026-03-09T10:02:00.000Z",
+      updatedAt: "2026-03-09T10:02:00.000Z",
+    });
+
+    const data = deriveSidebarProjectData({
+      projects: [project],
+      sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId([
+        threadOne,
+        threadTwo,
+        threadThree,
+      ]),
+      splitViewsByProjectId: groupSplitViewsByProjectId([]),
+      splitViewBySourceThreadId: new Map(),
+      pinnedThreadIds: [],
+      pinnedThreadIdSet: new Set(),
+      expandedParentThreadIds: new Set(),
+      expandedThreadListProjectCwds: new Set(),
+      normalizeProjectCwd: (cwd) => cwd,
+      activeSidebarThreadId: threadThree.id,
+      previewLimit: 1,
+    });
+
+    expect(data.get(project.id)).toMatchObject({
+      activeEntryId: threadThree.id,
+      visibleEntries: [
+        expect.objectContaining({
+          kind: "thread",
+          rowId: threadThree.id,
+        }),
+      ],
+    });
+  });
+});
 
 describe("sortThreadsForSidebar", () => {
   it("sorts threads by the latest user message in recency mode", () => {

@@ -1,6 +1,8 @@
 import { type FC, type SVGProps } from "react";
 import { PiGitCommit, PiSquareSplitHorizontal, PiSquareSplitVertical } from "react-icons/pi";
 import { RiApps2Line } from "react-icons/ri";
+import { SiGithub } from "react-icons/si";
+import { VscMcp } from "react-icons/vsc";
 import { LuSplit } from "react-icons/lu";
 import { TbArrowsRightLeft, TbPlug } from "react-icons/tb";
 import {
@@ -18,6 +20,7 @@ import {
   IconBolt,
   IconBrain,
   IconBug,
+  IconCamera,
   IconCheck,
   IconChevronDown,
   IconChevronLeft,
@@ -114,6 +117,7 @@ export const ArrowUpIcon = adaptIcon(IconArrowUp);
 export const ArrowUpDownIcon = adaptIcon(IconArrowsUpDown);
 export const BotIcon = adaptIcon(IconRobot);
 export const BugIcon = adaptIcon(IconBug);
+export const CameraIcon = adaptIcon(IconCamera);
 export const CheckIcon = adaptIcon(IconCheck);
 export const ChevronDownIcon = adaptIcon(IconChevronDown);
 export const ChevronLeftIcon = adaptIcon(IconChevronLeft);
@@ -143,8 +147,14 @@ export const GitCommitIcon: LucideIcon = (props) => (
   <PiGitCommit className={props.className} style={props.style} />
 );
 export const GitForkIcon = adaptIcon(IconGitFork);
+export const GitHubIcon: LucideIcon = (props) => (
+  <SiGithub className={props.className} style={props.style} />
+);
 export const GitPullRequestIcon = adaptIcon(IconGitPullRequest);
 export const GlobeIcon = adaptIcon(IconWorld);
+export const McpIcon: LucideIcon = (props) => (
+  <VscMcp className={props.className} style={props.style} />
+);
 export const PlugIcon: LucideIcon = (props) => (
   <TbPlug className={props.className} style={props.style} />
 );

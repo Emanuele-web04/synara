@@ -1605,6 +1605,25 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         Effect.map((snapshot) => ({
           threadId,
           turns: snapshot.turns,
+          cwd: snapshot.cwd ?? null,
+        })),
+      );
+
+    const readExternalThread: NonNullable<CodexAdapterShape["readExternalThread"]> = (input) =>
+      Effect.tryPromise({
+        try: () => manager.readExternalThread(input),
+        catch: (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "thread/read",
+            detail: toMessage(cause, "Failed to read external Codex thread."),
+            cause,
+          }),
+      }).pipe(
+        Effect.map((snapshot) => ({
+          threadId: ThreadId.makeUnsafe(snapshot.threadId),
+          turns: snapshot.turns,
+          cwd: snapshot.cwd ?? null,
         })),
       );
 
@@ -1816,6 +1835,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       startReview,
       interruptTurn,
       readThread,
+      readExternalThread,
       rollbackThread,
       compactThread,
       forkThread,

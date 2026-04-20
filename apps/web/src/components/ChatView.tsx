@@ -75,6 +75,10 @@ import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch"
 import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
 import { isHomeChatContainerProject } from "../lib/chatProjects";
 import { resolveFirstSendTarget } from "../lib/chatFirstSend";
+import {
+  maybeResolveBrowserPromptAttachment,
+  type BrowserPromptAttachmentResolution,
+} from "../lib/browserPromptContext";
 import { dispatchThreadRename } from "../lib/threadRename";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import {
@@ -427,7 +431,11 @@ function normalizeDynamicModelSlug(provider: ProviderKind, slug: string): string
 
 function mergeDynamicModelOptions(input: {
   provider: ProviderKind;
-  staticOptions: ReadonlyArray<{ slug: string; name: string; isCustom?: boolean }>;
+  staticOptions: ReadonlyArray<{
+    slug: string;
+    name: string;
+    isCustom?: boolean;
+  }>;
   dynamicModels: ReadonlyArray<{ slug: string; name?: string | null }>;
 }): ReadonlyArray<{ slug: string; name: string; isCustom?: boolean }> {
   const staticNameBySlug = new Map(input.staticOptions.map((model) => [model.slug, model.name]));
@@ -4293,7 +4301,7 @@ export default function ChatView({
       queuedChatTurn === null ? (composerEditorRef.current?.readSnapshot() ?? null) : null;
     const promptForSend =
       queuedChatTurn?.prompt ?? liveComposerSnapshot?.value ?? promptRef.current;
-    const composerImagesForSend = queuedChatTurn?.images ?? composerImages;
+    let composerImagesForSend = queuedChatTurn?.images ?? composerImages;
     const composerAssistantSelectionsForSend =
       queuedChatTurn?.assistantSelections ?? composerAssistantSelections;
     const composerTerminalContextsForSend =
@@ -4376,6 +4384,49 @@ export default function ChatView({
       return false;
     }
     if (!activeProject) return false;
+
+    const browserPromptAttachment: BrowserPromptAttachmentResolution =
+      await maybeResolveBrowserPromptAttachment({
+        api,
+        threadId: activeThread.id,
+        prompt: promptForSend,
+      }).catch(
+        (): BrowserPromptAttachmentResolution => ({
+          requested: false,
+          image: null,
+        }),
+      );
+    if (browserPromptAttachment.image) {
+      const nextAttachmentCount =
+        composerImagesForSend.length +
+        composerAssistantSelectionsForSend.length +
+        (browserPromptAttachment.image ? 1 : 0);
+      if (nextAttachmentCount <= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
+        composerImagesForSend = [...composerImagesForSend, browserPromptAttachment.image];
+      } else {
+        toastManager.add({
+          type: "warning",
+          title: `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} references per message.`,
+          description:
+            "The current browser screenshot was skipped because this message is already at the attachment limit.",
+        });
+      }
+    } else if (browserPromptAttachment.requested) {
+      const description =
+        browserPromptAttachment.reason === "no-open-browser"
+          ? "Open the in-app browser first, then try again."
+          : browserPromptAttachment.reason === "no-active-tab"
+            ? "The in-app browser has no active tab to capture yet."
+            : browserPromptAttachment.reason === "attachment-too-large"
+              ? `The browser screenshot exceeded the ${IMAGE_SIZE_LIMIT_LABEL} attachment limit.`
+              : "The current browser context could not be attached.";
+      toastManager.add({
+        type: "warning",
+        title: "Couldn’t attach the in-app browser context",
+        description,
+      });
+    }
+
     if (hasLiveTurn && dispatchMode === "queue" && queuedChatTurn === null) {
       clearComposerInput(activeThread.id);
       const queuedImagesForPersistence = await Promise.all(
@@ -5721,7 +5772,9 @@ export default function ChatView({
           trigger.rangeStart,
           replacementRangeEnd,
           replacement,
-          { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
+          {
+            expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd),
+          },
         );
         if (applied !== false) {
           setComposerHighlightedItemId(null);
@@ -5749,7 +5802,9 @@ export default function ChatView({
           trigger.rangeStart,
           replacementRangeEnd,
           replacement,
-          { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
+          {
+            expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd),
+          },
         );
         if (applied !== false) {
           setComposerHighlightedItemId(null);
@@ -5767,7 +5822,9 @@ export default function ChatView({
           trigger.rangeStart,
           replacementRangeEnd,
           replacement,
-          { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
+          {
+            expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd),
+          },
         );
         if (applied !== false) {
           setSelectedComposerSkills((existing) => {
@@ -5796,7 +5853,9 @@ export default function ChatView({
           trigger.rangeStart,
           replacementRangeEnd,
           replacement,
-          { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
+          {
+            expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd),
+          },
         );
         if (applied !== false) {
           setSelectedComposerMentions((existing) => {
@@ -6003,7 +6062,13 @@ export default function ChatView({
         search: (previous) => {
           const rest = stripDiffSearchParams(previous);
           return filePath
-            ? { ...rest, panel: "diff", diff: "1", diffTurnId: turnId, diffFilePath: filePath }
+            ? {
+                ...rest,
+                panel: "diff",
+                diff: "1",
+                diffTurnId: turnId,
+                diffFilePath: filePath,
+              }
             : { ...rest, panel: "diff", diff: "1", diffTurnId: turnId };
         },
       });
@@ -6115,7 +6180,10 @@ export default function ChatView({
     });
 
     if (outcome === "empty") {
-      toastManager.add({ type: "warning", title: "Thread title cannot be empty" });
+      toastManager.add({
+        type: "warning",
+        title: "Thread title cannot be empty",
+      });
       return;
     }
     if (outcome === "unchanged" || outcome === "unavailable") {

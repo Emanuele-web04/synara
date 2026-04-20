@@ -15,6 +15,7 @@ import {
   resolveCurrentProjectTargetId,
   resolveLatestProjectTargetId,
 } from "../lib/projectShortcutTargets";
+import { requestSidebarAddProject } from "../lib/sidebarShortcuts";
 import { resolveThreadEnvironmentMode } from "../lib/threadEnvironment";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
@@ -135,6 +136,13 @@ function ChatRouteGlobalShortcuts() {
       }
 
       if (!command) return;
+
+      if (command === "sidebar.addProject") {
+        event.preventDefault();
+        event.stopPropagation();
+        requestSidebarAddProject();
+        return;
+      }
 
       if (command === "chat.newChat" || command === "chat.newLocal") {
         event.preventDefault();

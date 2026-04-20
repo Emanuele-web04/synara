@@ -1682,6 +1682,18 @@ describe("WebSocket Server", () => {
 
   it("backfills Codex history when importing a resumed thread", async () => {
     let startSessionInput: unknown;
+    const workspaceRoot = makeTempDir("t3code-ws-import-project-");
+    const worktreeRoot = path.join(workspaceRoot, "..", "import-thread-worktree");
+    const worktreeNestedCwd = path.join(worktreeRoot, "packages", "web");
+    fs.mkdirSync(path.join(workspaceRoot, ".git", "worktrees", "import-thread-worktree"), {
+      recursive: true,
+    });
+    fs.mkdirSync(worktreeNestedCwd, { recursive: true });
+    fs.writeFileSync(
+      path.join(worktreeRoot, ".git"),
+      `gitdir: ${path.join(workspaceRoot, ".git", "worktrees", "import-thread-worktree")}\n`,
+      "utf8",
+    );
     const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
     const providerService: ProviderServiceShape = {
       startSession: (_threadId, input) => {
@@ -1776,6 +1788,12 @@ describe("WebSocket Server", () => {
         getByProvider: (provider) =>
           provider === "codex"
             ? Effect.succeed({
+                readExternalThread: () =>
+                  Effect.succeed({
+                    threadId: asThreadId("019d81fc-612f-7b72-8bbb-cd6bece479a1"),
+                    turns: [],
+                    cwd: worktreeNestedCwd,
+                  }),
                 readThread: () =>
                   Effect.succeed({
                     threadId: asThreadId("import-thread-1"),
@@ -1811,7 +1829,6 @@ describe("WebSocket Server", () => {
     const [ws] = await connectAndAwaitWelcome(port);
     connections.push(ws);
 
-    const workspaceRoot = makeTempDir("t3code-ws-import-project-");
     const createdAt = new Date().toISOString();
     await sendRequest(ws, ORCHESTRATION_WS_METHODS.dispatchCommand, {
       type: "project.create",
@@ -1850,6 +1867,7 @@ describe("WebSocket Server", () => {
     expect(startSessionInput).toMatchObject({
       threadId: "import-thread-1",
       provider: "codex",
+      cwd: worktreeNestedCwd,
       resumeCursor: {
         threadId: "019d81fc-612f-7b72-8bbb-cd6bece479a1",
       },
@@ -1862,6 +1880,8 @@ describe("WebSocket Server", () => {
         id: string;
         messages: Array<{ role: string; text: string }>;
         session: { status: string } | null;
+        envMode: string;
+        worktreePath: string | null;
       }>;
     };
     const importedThread = snapshot.threads.find((thread) => thread.id === "import-thread-1");
@@ -1875,6 +1895,8 @@ describe("WebSocket Server", () => {
       { role: "assistant", text: "I am back" },
     ]);
     expect(importedThread?.session?.status).toBe("ready");
+    expect(importedThread?.envMode).toBe("worktree");
+    expect(importedThread?.worktreePath).toBe(worktreeRoot);
   });
 
   it("backfills Claude history when importing a locally persisted session", async () => {

@@ -408,6 +408,24 @@ describe("TraitsPicker (Codex)", () => {
     });
   });
 
+  it("closes after clicking the already-selected effort", async () => {
+    await using _ = await mountCodexPicker({
+      options: { reasoningEffort: "medium", fastMode: false },
+    });
+
+    await page.getByRole("button").click();
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent ?? "").toContain("Effort");
+    });
+
+    await page.getByRole("menuitemradio", { name: "Medium" }).click();
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent ?? "").not.toContain("Effort");
+    });
+  });
+
   it("persists sticky codex model options when traits change", async () => {
     await using _ = await mountCodexPicker({
       options: { fastMode: false },

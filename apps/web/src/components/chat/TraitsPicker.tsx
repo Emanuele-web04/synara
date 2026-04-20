@@ -38,6 +38,7 @@ export interface TraitsMenuContentProps {
   onPromptChange: (prompt: string) => void;
   includeFastMode?: boolean;
   modelOptions?: ProviderOptions | null | undefined;
+  onSelectionComplete?: () => void;
 }
 
 export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
@@ -48,6 +49,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   onPromptChange,
   includeFastMode = true,
   modelOptions,
+  onSelectionComplete,
 }: TraitsMenuContentProps) {
   const setProviderModelOptions = useComposerDraftStore((store) => store.setProviderModelOptions);
   const {
@@ -75,6 +77,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
             ? ULTRATHINK_PROMPT_PREFIX
             : applyClaudePromptEffortPrefix(prompt, "ultrathink");
         onPromptChange(nextPrompt);
+        onSelectionComplete?.();
         return;
       }
       const nextModelOptionsPatch =
@@ -89,11 +92,13 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
         buildNextProviderOptions(provider, modelOptions, nextModelOptionsPatch),
         { ...(model !== undefined ? { model } : {}), persistSticky: true },
       );
+      onSelectionComplete?.();
     },
     [
       ultrathinkPromptControlled,
       modelOptions,
       onPromptChange,
+      onSelectionComplete,
       threadId,
       setProviderModelOptions,
       effortLevels,
@@ -125,6 +130,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
                   key={option.value}
                   value={option.value}
                   disabled={ultrathinkPromptControlled}
+                  onClick={() => onSelectionComplete?.()}
                 >
                   {option.label}
                   {option.value === defaultEffort ? " (default)" : ""}
@@ -145,10 +151,15 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
                 buildNextProviderOptions(provider, modelOptions, { thinking: value === "on" }),
                 { ...(model !== undefined ? { model } : {}), persistSticky: true },
               );
+              onSelectionComplete?.();
             }}
           >
-            <MenuRadioItem value="on">On (default)</MenuRadioItem>
-            <MenuRadioItem value="off">Off</MenuRadioItem>
+            <MenuRadioItem value="on" onClick={() => onSelectionComplete?.()}>
+              On (default)
+            </MenuRadioItem>
+            <MenuRadioItem value="off" onClick={() => onSelectionComplete?.()}>
+              Off
+            </MenuRadioItem>
           </MenuRadioGroup>
         </MenuGroup>
       ) : null}
@@ -166,10 +177,15 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
                   buildNextProviderOptions(provider, modelOptions, { fastMode: value === "on" }),
                   { ...(model !== undefined ? { model } : {}), persistSticky: true },
                 );
+                onSelectionComplete?.();
               }}
             >
-              <MenuRadioItem value="off">off</MenuRadioItem>
-              <MenuRadioItem value="on">on</MenuRadioItem>
+              <MenuRadioItem value="off" onClick={() => onSelectionComplete?.()}>
+                off
+              </MenuRadioItem>
+              <MenuRadioItem value="on" onClick={() => onSelectionComplete?.()}>
+                on
+              </MenuRadioItem>
             </MenuRadioGroup>
           </MenuGroup>
         </>
@@ -190,10 +206,15 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
                   buildNextProviderOptions(provider, modelOptions, { contextWindow: value }),
                   { ...(model !== undefined ? { model } : {}), persistSticky: true },
                 );
+                onSelectionComplete?.();
               }}
             >
               {contextWindowOptions.map((option) => (
-                <MenuRadioItem key={option.value} value={option.value}>
+                <MenuRadioItem
+                  key={option.value}
+                  value={option.value}
+                  onClick={() => onSelectionComplete?.()}
+                >
                   {option.label}
                   {option.value === defaultContextWindow ? " (default)" : ""}
                 </MenuRadioItem>
@@ -363,6 +384,7 @@ export const TraitsPicker = memo(function TraitsPicker({
           onPromptChange={onPromptChange}
           includeFastMode={includeFastMode}
           modelOptions={modelOptions}
+          onSelectionComplete={() => setMenuOpen(false)}
         />
       </MenuPopup>
     </Menu>
