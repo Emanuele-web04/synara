@@ -1,23 +1,52 @@
-import { useCallback, useEffect, useSyncExternalStore } from "react";
+// FILE: useTheme.ts
+// Purpose: Persists the Codex-style theme store and projects the active pack into DOM CSS variables.
+// Layer: Web appearance state hook
+// Exports: useTheme for mode, resolved variant, theme-pack import/export, and active theme metadata.
 
-type Theme = "light" | "dark" | "system";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
+import { isElectron } from "../env";
+import {
+  DEFAULT_THEME_STATE,
+  type ChromeTheme,
+  type ThemeFonts,
+  type ThemeMode,
+  type ThemePack,
+  type ThemeState,
+  type ThemeVariant,
+  areThemePacksEqual,
+  buildThemeCssVariables,
+  canParseThemeShareString,
+  createThemeShareString,
+  parseStoredThemeState,
+  resetThemeVariant as resetThemeVariantState,
+  resolveThemePack,
+  resolveThemeVariant,
+  serializeThemeState,
+  setThemeCodeThemeId,
+  setThemeFonts,
+  updateChromeTheme,
+  updateThemePackFromShareString,
+} from "../theme/theme.logic";
+
 type ThemeSnapshot = {
-  theme: Theme;
+  state: ThemeState;
   systemDark: boolean;
 };
 
 const STORAGE_KEY = "t3code:theme";
 const MEDIA_QUERY = "(prefers-color-scheme: dark)";
-const DEFAULT_THEME_SNAPSHOT: ThemeSnapshot = {
-  theme: "system",
-  systemDark: false,
-};
 
 let listeners: Array<() => void> = [];
 let lastSnapshot: ThemeSnapshot | null = null;
-let lastDesktopTheme: Theme | null = null;
+let lastSnapshotKey = "";
+let lastDesktopTheme: ThemeMode | null = null;
+
+// ─── Store wiring ─────────────────────────────────────────────────────────
+
 function emitChange() {
-  for (const listener of listeners) listener();
+  for (const listener of listeners) {
+    listener();
+  }
 }
 
 function hasThemeStorage(): boolean {
@@ -28,37 +57,129 @@ function getSystemDark(): boolean {
   return typeof window !== "undefined" && window.matchMedia(MEDIA_QUERY).matches;
 }
 
-function getStored(): Theme {
-  if (!hasThemeStorage()) return DEFAULT_THEME_SNAPSHOT.theme;
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw === "light" || raw === "dark" || raw === "system") return raw;
-  } catch {
-    return DEFAULT_THEME_SNAPSHOT.theme;
+function readStoredThemeState(): ThemeState {
+  if (!hasThemeStorage()) {
+    return DEFAULT_THEME_STATE;
   }
-  return DEFAULT_THEME_SNAPSHOT.theme;
+
+  try {
+    return parseStoredThemeState(localStorage.getItem(STORAGE_KEY));
+  } catch {
+    return DEFAULT_THEME_STATE;
+  }
 }
 
-function applyTheme(theme: Theme, suppressTransitions = false) {
-  if (typeof document === "undefined" || typeof window === "undefined") return;
-  if (suppressTransitions) {
-    document.documentElement.classList.add("no-transitions");
+function writeStoredThemeState(state: ThemeState) {
+  if (!hasThemeStorage()) {
+    return;
   }
-  const isDark = theme === "dark" || (theme === "system" && getSystemDark());
-  document.documentElement.classList.toggle("dark", isDark);
-  syncDesktopTheme(theme);
+
+  localStorage.setItem(STORAGE_KEY, serializeThemeState(state));
+}
+
+function getSnapshot(): ThemeSnapshot {
+  const state = readStoredThemeState();
+  const systemDark = state.mode === "system" ? getSystemDark() : false;
+  const snapshotKey = `${serializeThemeState(state)}|${systemDark ? "dark" : "light"}`;
+
+  if (lastSnapshot && lastSnapshotKey === snapshotKey) {
+    return lastSnapshot;
+  }
+
+  lastSnapshotKey = snapshotKey;
+  lastSnapshot = { state, systemDark };
+  return lastSnapshot;
+}
+
+function updateStoredThemeState(update: (state: ThemeState) => ThemeState) {
+  const nextState = update(readStoredThemeState());
+  writeStoredThemeState(nextState);
+  applyThemeState(nextState, true);
+  emitChange();
+}
+
+function subscribe(listener: () => void): () => void {
+  if (typeof window === "undefined") {
+    return () => {};
+  }
+
+  listeners.push(listener);
+
+  const mediaQuery = window.matchMedia(MEDIA_QUERY);
+  const handleMediaChange = () => {
+    const state = readStoredThemeState();
+    if (state.mode === "system") {
+      applyThemeState(state, true);
+    }
+    emitChange();
+  };
+  const handleStorage = (event: StorageEvent) => {
+    if (event.key !== STORAGE_KEY) {
+      return;
+    }
+    applyThemeState(readStoredThemeState(), true);
+    emitChange();
+  };
+
+  mediaQuery.addEventListener("change", handleMediaChange);
+  window.addEventListener("storage", handleStorage);
+
+  return () => {
+    listeners = listeners.filter((currentListener) => currentListener !== listener);
+    mediaQuery.removeEventListener("change", handleMediaChange);
+    window.removeEventListener("storage", handleStorage);
+  };
+}
+
+// ─── DOM projection ───────────────────────────────────────────────────────
+
+function applyThemeState(state: ThemeState, suppressTransitions = false) {
+  if (typeof document === "undefined" || typeof window === "undefined") {
+    return;
+  }
+
+  const root = document.documentElement;
   if (suppressTransitions) {
-    // Force a reflow so the no-transitions class takes effect before removal
+    root.classList.add("no-transitions");
+  }
+
+  const variant = resolveThemeVariant(state.mode, getSystemDark());
+  const activeTheme = resolveThemePack(state, variant);
+  const cssVariableBuild = buildThemeCssVariables(activeTheme, variant, {
+    electron: isElectron,
+  });
+
+  root.classList.toggle("dark", variant === "dark");
+  root.dataset.codeThemeId = activeTheme.codeThemeId;
+  root.dataset.themeMode = state.mode;
+  root.dataset.themeVariant = variant;
+  root.dataset.windowMaterial = cssVariableBuild.material;
+
+  for (const [name, value] of Object.entries(cssVariableBuild.variables)) {
+    if (value.trim().length === 0) {
+      root.style.removeProperty(name);
+      continue;
+    }
+    root.style.setProperty(name, value);
+  }
+
+  syncDesktopTheme(state.mode);
+
+  if (suppressTransitions) {
+    // Force a reflow so the no-transitions class takes effect before removal.
     // oxlint-disable-next-line no-unused-expressions
-    document.documentElement.offsetHeight;
+    root.offsetHeight;
     requestAnimationFrame(() => {
-      document.documentElement.classList.remove("no-transitions");
+      root.classList.remove("no-transitions");
     });
   }
 }
 
-function syncDesktopTheme(theme: Theme) {
-  if (typeof window === "undefined") return;
+function syncDesktopTheme(theme: ThemeMode) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
   const bridge = window.desktopBridge;
   if (!bridge || lastDesktopTheme === theme) {
     return;
@@ -72,76 +193,111 @@ function syncDesktopTheme(theme: Theme) {
   });
 }
 
-// Apply immediately on module load to prevent flash
-if (typeof document !== "undefined" && hasThemeStorage()) {
-  applyTheme(getStored());
+// Apply immediately on module load to minimize flash before React mounts.
+if (typeof document !== "undefined") {
+  applyThemeState(readStoredThemeState());
 }
 
-function getSnapshot(): ThemeSnapshot {
-  if (!hasThemeStorage()) return DEFAULT_THEME_SNAPSHOT;
-  const theme = getStored();
-  const systemDark = theme === "system" ? getSystemDark() : false;
-
-  if (lastSnapshot && lastSnapshot.theme === theme && lastSnapshot.systemDark === systemDark) {
-    return lastSnapshot;
-  }
-
-  lastSnapshot = { theme, systemDark };
-  return lastSnapshot;
-}
-
-function subscribe(listener: () => void): () => void {
-  if (typeof window === "undefined") {
-    return () => {};
-  }
-  listeners.push(listener);
-
-  // Listen for system preference changes
-  const mq = window.matchMedia(MEDIA_QUERY);
-  const handleChange = () => {
-    if (getStored() === "system") applyTheme("system", true);
-    emitChange();
-  };
-  mq.addEventListener("change", handleChange);
-
-  // Listen for storage changes from other tabs
-  const handleStorage = (e: StorageEvent) => {
-    if (e.key === STORAGE_KEY) {
-      applyTheme(getStored(), true);
-      emitChange();
-    }
-  };
-  window.addEventListener("storage", handleStorage);
-
-  return () => {
-    listeners = listeners.filter((l) => l !== listener);
-    mq.removeEventListener("change", handleChange);
-    window.removeEventListener("storage", handleStorage);
-  };
-}
+// ─── Public hook ──────────────────────────────────────────────────────────
 
 export function useTheme() {
-  const snapshot = useSyncExternalStore(subscribe, getSnapshot, () => DEFAULT_THEME_SNAPSHOT);
-  const theme = snapshot.theme;
+  const snapshot = useSyncExternalStore(subscribe, getSnapshot, () => ({
+    state: DEFAULT_THEME_STATE,
+    systemDark: false,
+  }));
+  const theme = snapshot.state.mode;
+  const resolvedTheme = resolveThemeVariant(theme, snapshot.systemDark);
+  const activeTheme = resolveThemePack(snapshot.state, resolvedTheme);
+  const darkTheme = resolveThemePack(snapshot.state, "dark");
+  const lightTheme = resolveThemePack(snapshot.state, "light");
+  const defaultActiveTheme = resolveThemePack(DEFAULT_THEME_STATE, resolvedTheme);
+  const isDefaultActiveTheme = areThemePacksEqual(activeTheme, defaultActiveTheme);
 
-  const resolvedTheme: "light" | "dark" =
-    theme === "system" ? (snapshot.systemDark ? "dark" : "light") : theme;
-
-  const setTheme = useCallback((next: Theme) => {
-    if (!hasThemeStorage()) return;
-    try {
-      localStorage.setItem(STORAGE_KEY, next);
-    } catch {
-      return;
-    }
-    applyTheme(next, true);
-    emitChange();
+  const setTheme = useCallback((nextTheme: ThemeMode) => {
+    updateStoredThemeState((state) => ({
+      ...state,
+      mode: nextTheme,
+    }));
   }, []);
 
-  // Keep DOM in sync on mount/change
-  useEffect(() => {
-    applyTheme(theme);
-  }, [theme]);
+  const canImportThemeString = useCallback(
+    (value: string, variant: ThemeVariant = resolvedTheme) =>
+      canParseThemeShareString(value, variant),
+    [resolvedTheme],
+  );
 
-  return { theme, setTheme, resolvedTheme } as const;
+  const importThemeString = useCallback(
+    (value: string, variant: ThemeVariant = resolvedTheme) => {
+      updateStoredThemeState((state) => updateThemePackFromShareString(state, value, variant));
+    },
+    [resolvedTheme],
+  );
+
+  const exportThemeString = useCallback(
+    (variant: ThemeVariant = resolvedTheme) =>
+      createThemeShareString(variant, resolveThemePack(snapshot.state, variant)),
+    [resolvedTheme, snapshot.state],
+  );
+
+  const resetActiveTheme = useCallback(() => {
+    updateStoredThemeState((state) => resetThemeVariantState(state, resolvedTheme));
+  }, [resolvedTheme]);
+
+  const resetThemeVariant = useCallback((variant: ThemeVariant) => {
+    updateStoredThemeState((state) => resetThemeVariantState(state, variant));
+  }, []);
+
+  const resetAllThemes = useCallback(() => {
+    updateStoredThemeState(() => DEFAULT_THEME_STATE);
+  }, []);
+
+  const updateThemePack = useCallback((variant: ThemeVariant, patch: Partial<ChromeTheme>) => {
+    updateStoredThemeState((state) => updateChromeTheme(state, variant, patch));
+  }, []);
+
+  const updateThemeFonts = useCallback((variant: ThemeVariant, patch: Partial<ThemeFonts>) => {
+    updateStoredThemeState((state) => setThemeFonts(state, variant, patch));
+  }, []);
+
+  const setCodeThemeId = useCallback((variant: ThemeVariant, codeThemeId: string) => {
+    updateStoredThemeState((state) => setThemeCodeThemeId(state, variant, codeThemeId));
+  }, []);
+
+  const isDefaultThemePack = useCallback(
+    (variant: ThemeVariant) =>
+      areThemePacksEqual(
+        resolveThemePack(snapshot.state, variant),
+        resolveThemePack(DEFAULT_THEME_STATE, variant),
+      ),
+    [snapshot.state],
+  );
+
+  // Keep the DOM synced if something bypassed the immediate module-load apply.
+  useEffect(() => {
+    applyThemeState(snapshot.state);
+  }, [snapshot.state]);
+
+  return {
+    activeTheme,
+    canImportThemeString,
+    darkTheme,
+    defaultActiveTheme,
+    exportThemeString,
+    importThemeString,
+    isDefaultActiveTheme,
+    isDefaultThemePack,
+    lightTheme,
+    resetActiveTheme,
+    resetAllThemes,
+    resetThemeVariant,
+    resolvedTheme,
+    setCodeThemeId,
+    setTheme,
+    theme,
+    themeState: snapshot.state,
+    updateThemeFonts,
+    updateThemePack,
+  } as const;
 }
+
+export type { ChromeTheme, ThemeFonts, ThemeMode, ThemePack, ThemeState, ThemeVariant };

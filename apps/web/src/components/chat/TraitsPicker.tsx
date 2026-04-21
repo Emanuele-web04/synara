@@ -287,7 +287,7 @@ export const TraitsPicker = memo(function TraitsPicker({
   const triggerButton = (
     <Button
       size="sm"
-      variant="ghost"
+      variant="chrome"
       className={
         isCodexStyle
           ? `min-w-0 max-w-40 shrink justify-start overflow-hidden whitespace-nowrap px-2 sm:max-w-48 sm:px-3 [&_svg]:mx-0 ${COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME}`

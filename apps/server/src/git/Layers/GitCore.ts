@@ -1532,19 +1532,20 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
     const readRangeContext: GitCoreShape["readRangeContext"] = (cwd, baseBranch) =>
       Effect.gen(function* () {
         const range = `${baseBranch}..HEAD`;
-        const [commitSummary, diffSummary, diffPatch] = yield* Effect.all(
+        const [commitSummary, diffSummary, diffPatchResult] = yield* Effect.all(
           [
             runGitStdout("GitCore.readRangeContext.log", cwd, ["log", "--oneline", range]),
             runGitStdout("GitCore.readRangeContext.diffStat", cwd, ["diff", "--stat", range]),
-            runGitStdout("GitCore.readRangeContext.diffPatch", cwd, [
-              "diff",
-              "--patch",
-              "--minimal",
-              range,
-            ]),
+            execute({
+              operation: "GitCore.readRangeContext.diffPatch",
+              cwd,
+              args: ["diff", "--patch", "--minimal", range],
+              maxOutputBytes: 10_000_000,
+            }),
           ],
           { concurrency: "unbounded" },
         );
+        const diffPatch = diffPatchResult.stdout;
 
         return {
           commitSummary,

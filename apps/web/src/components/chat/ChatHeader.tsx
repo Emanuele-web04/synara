@@ -242,7 +242,10 @@ export const ChatHeader = memo(function ChatHeader({
                         type="button"
                         size="xs"
                         variant="outline"
-                        className={compact ? "shrink-0 gap-1" : "shrink-0 gap-1.5"}
+                        className={cn(
+                          "shrink-0 bg-transparent not-disabled:before:shadow-none dark:not-disabled:before:shadow-none [:hover,[data-pressed]]:bg-[var(--sidebar-accent)] dark:[:hover,[data-pressed]]:bg-[var(--sidebar-accent)]",
+                          compact ? "gap-1" : "gap-1.5",
+                        )}
                         aria-label={handoffActionLabel}
                         disabled={handoffDisabled || handoffActionTargetProviders.length === 0}
                       />
@@ -290,7 +293,7 @@ export const ChatHeader = memo(function ChatHeader({
                 <Button
                   size="icon-xs"
                   variant="outline"
-                  className="shrink-0"
+                  className="shrink-0 bg-transparent not-disabled:before:shadow-none dark:not-disabled:before:shadow-none [:hover,[data-pressed]]:bg-[var(--sidebar-accent)] dark:[:hover,[data-pressed]]:bg-[var(--sidebar-accent)]"
                   aria-label="Panel toggles"
                 />
               }
@@ -300,7 +303,7 @@ export const ChatHeader = memo(function ChatHeader({
             <MenuPopup
               align="end"
               side="bottom"
-              className="w-50 rounded-lg border-border bg-popover shadow-lg"
+              className="w-50 rounded-lg border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] shadow-lg"
             >
               {activeProjectName ? (
                 <MenuItem

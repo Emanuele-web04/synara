@@ -25,7 +25,7 @@ export const ComposerVoiceButton = memo(function ComposerVoiceButton(props: {
     <Button
       size="icon-sm"
       variant="ghost"
-      className="shrink-0 rounded-md text-muted-foreground/70 hover:text-foreground/80"
+      className="shrink-0 rounded-md"
       disabled={props.disabled || props.isTranscribing}
       aria-label={label}
       title={label}

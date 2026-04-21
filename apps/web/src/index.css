@@ -50,13 +50,28 @@
     @apply border-border outline-ring/30;
   }
   body {
-    @apply bg-transparent text-foreground relative;
+    @apply text-foreground relative;
+    background: var(--app-shell-background, transparent);
   }
 }
 
 @layer components {
   .sidebar-icon-button {
-    @apply items-center justify-center rounded-sm p-0.5 text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground/82 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring;
+    @apply items-center justify-center rounded-sm p-0.5 text-muted-foreground/60 transition-colors hover:text-foreground/82 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring;
+    background: transparent;
+  }
+
+  .sidebar-icon-button:hover {
+    background: var(--color-background-button-secondary-hover);
+  }
+
+  /* Let the renderer switch between Codex-style translucent and opaque shells
+     without duplicating sidebar markup or class strings. */
+  .app-sidebar-surface {
+    background: var(--app-sidebar-surface, var(--card));
+    box-shadow: var(--app-sidebar-shadow, none);
+    backdrop-filter: var(--app-sidebar-backdrop-filter, none);
+    -webkit-backdrop-filter: var(--app-sidebar-backdrop-filter, none);
   }
 
   /* Animate terminal run state in CSS so many open terminals don't schedule JS timers. */
@@ -114,15 +129,80 @@
   animation-duration: 0s !important;
 }
 
+/* Theme settings contrast slider thumb (range input) */
+.theme-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--card);
+  border: 1px solid color-mix(in srgb, var(--foreground) 18%, transparent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  cursor: pointer;
+  transition:
+    transform 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.theme-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--card);
+  border: 1px solid color-mix(in srgb, var(--foreground) 18%, transparent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  cursor: pointer;
+}
+
+.theme-slider:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 32%, transparent);
+}
+.theme-slider:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 32%, transparent);
+}
+
+.theme-slider:hover::-webkit-slider-thumb {
+  transform: scale(1.08);
+}
+.theme-slider:hover::-moz-range-thumb {
+  transform: scale(1.08);
+}
+
 :root {
   color-scheme: light;
   --radius: 0.75rem;
-  --font-ui-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  --font-mono-family:
-    "JetBrains Mono Variable", "JetBrains Mono", "SF Mono", "SFMono-Regular", Consolas,
-    "Liberation Mono", Menlo, monospace;
-  --font-chat-code-family: var(--font-mono-family);
+  --font-ui-family: var(
+    --app-font-ui-override,
+    var(
+      --theme-font-ui-family,
+      -apple-system,
+      BlinkMacSystemFont,
+      "Segoe UI",
+      system-ui,
+      sans-serif
+    )
+  );
+  --font-mono-family: var(
+    --theme-font-code-family,
+    "JetBrains Mono Variable",
+    "JetBrains Mono",
+    "SF Mono",
+    "SFMono-Regular",
+    Consolas,
+    "Liberation Mono",
+    Menlo,
+    monospace
+  );
+  --font-chat-code-family: var(
+    --app-font-chat-code-override,
+    var(--theme-font-code-family, var(--font-mono-family))
+  );
   --terminal-font-family: "JetBrainsMono NFM", "JetBrainsMono NF", "JetBrains Mono", monospace;
+  --app-shell-background: transparent;
+  --app-sidebar-backdrop-filter: none;
+  --app-sidebar-shadow: none;
+  --app-sidebar-surface: var(--card);
   --background: #fcfcfc;
   --foreground: var(--color-neutral-800);
   --card: var(--color-white);
@@ -142,10 +222,16 @@
   --input: --alpha(var(--color-black) / 6%);
   --ring: var(--color-neutral-400);
   --destructive-foreground: var(--color-red-700);
-  --info: var(--color-blue-500);
-  --info-foreground: #526fff;
+  --info: var(--color-text-accent, var(--color-blue-500));
+  --info-foreground: var(--color-text-accent, #526fff);
   --success: var(--color-emerald-500);
   --success-foreground: var(--color-emerald-700);
+  --sidebar: var(--card);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-accent: var(--color-background-button-secondary-hover, var(--accent));
+  --sidebar-accent-active: var(--color-background-button-secondary, var(--sidebar-accent));
+  --sidebar-accent-foreground: var(--color-text-foreground, var(--foreground));
+  --sidebar-border: var(--border);
   --warning: var(--color-amber-500);
   --warning-foreground: var(--color-amber-700);
   --claude: #d97757;
@@ -171,10 +257,16 @@
     --input: --alpha(var(--color-white) / 5%);
     --ring: var(--color-neutral-500);
     --destructive-foreground: var(--color-red-400);
-    --info: var(--color-blue-500);
-    --info-foreground: #6073cc;
+    --info: var(--color-text-accent, var(--color-blue-500));
+    --info-foreground: var(--color-text-accent, #6073cc);
     --success: var(--color-emerald-500);
     --success-foreground: var(--color-emerald-400);
+    --sidebar: var(--card);
+    --sidebar-foreground: var(--foreground);
+    --sidebar-accent: var(--color-background-button-secondary-hover, var(--accent));
+    --sidebar-accent-active: var(--color-background-button-secondary, var(--sidebar-accent));
+    --sidebar-accent-foreground: var(--color-text-foreground, var(--foreground));
+    --sidebar-border: var(--border);
     --warning: var(--color-amber-500);
     --warning-foreground: var(--color-amber-400);
   }
@@ -209,15 +301,6 @@ body,
   overflow-x: hidden;
   overflow-x: clip;
   overscroll-behavior-y: none;
-}
-
-/* Rounded left edge on the content surface when a left sidebar is expanded */
-[data-slot="sidebar"][data-state="expanded"][data-side="left"]
-  ~ [data-slot="sidebar-inset"]
-  > [data-slot="sidebar-inset-surface"] {
-  border-top-left-radius: var(--radius-xl);
-  border-bottom-left-radius: var(--radius-xl);
-  overflow: hidden;
 }
 
 /* Preserve inset variant rounding (inherits from the main element) */
@@ -365,12 +448,12 @@ label:has(> select#reasoning-effort) select {
 }
 
 .chat-markdown a {
-  color: var(--info-foreground);
+  color: var(--color-token-text-link-foreground);
   text-decoration: none;
 }
 
 .chat-markdown a:hover {
-  opacity: 0.8;
+  color: var(--color-token-text-link-active-foreground);
 }
 
 .chat-markdown blockquote {
@@ -493,9 +576,9 @@ diffs-container {
   background: color-mix(in srgb, var(--card) 92%, var(--background));
 }
 
-/* Match composer input background to code block in dark mode (solid color to avoid grain bleed-through) */
-.dark .chat-composer-surface {
-  background: color-mix(in srgb, var(--background) 96%, var(--foreground));
+/* Keep composer chrome on the derived theme tokens instead of hardcoded dark blends. */
+.chat-composer-surface {
+  background: var(--color-background-panel);
 }
 
 @keyframes ultrathink-rainbow {

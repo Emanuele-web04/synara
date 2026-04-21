@@ -434,7 +434,11 @@ export function BranchToolbarBranchSelector({
         key={itemValue}
         index={index}
         value={itemValue}
-        className={itemValue === resolvedActiveBranch ? "bg-accent text-foreground" : undefined}
+        className={
+          itemValue === resolvedActiveBranch
+            ? "bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)]"
+            : undefined
+        }
         style={style}
         onClick={() => selectBranch(branch)}
       >
@@ -481,18 +485,17 @@ export function BranchToolbarBranchSelector({
       value={resolvedActiveBranch}
     >
       <ComboboxTrigger
-        render={<Button variant="ghost" size="xs" />}
-        className="inline-flex items-center text-[length:var(--app-font-size-ui-xs,10px)] sm:text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-muted-foreground/70 hover:text-foreground/80"
+        className="inline-flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--sidebar-accent)] hover:text-[var(--color-text-foreground)] disabled:cursor-not-allowed disabled:opacity-50"
         disabled={(branchesQuery.isLoading && branches.length === 0) || isBranchActionPending}
       >
         <GoGitBranch className="size-3 shrink-0" />
         <span className="max-w-[240px] truncate">{triggerLabel}</span>
-        <ChevronDownIcon />
+        <ChevronDownIcon className="size-3 opacity-60" />
       </ComboboxTrigger>
       <ComboboxPopup align="end" side="top" className="w-80">
         <div className="border-b p-1">
           <ComboboxInput
-            className="rounded-xl border-border/60 bg-background shadow-none before:hidden has-focus-visible:border-neutral-500/15 has-focus-visible:ring-0 [&_input]:font-sans"
+            className="rounded-xl border-[color:var(--color-border)] bg-[var(--color-background-control-opaque)] shadow-none before:hidden has-focus-visible:border-[color:var(--color-border-focus)] has-focus-visible:ring-0 [&_input]:font-sans"
             inputClassName="ring-0"
             placeholder="Search branches..."
             showTrigger={false}
@@ -528,10 +531,10 @@ export function BranchToolbarBranchSelector({
           )}
         </ComboboxList>
         {!isSelectingWorktreeBase ? (
-          <div className="border-t p-1">
+          <div className="border-t border-[color:var(--color-border-light)] p-1">
             <button
               type="button"
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-[var(--color-text-foreground)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)] disabled:cursor-not-allowed disabled:opacity-50"
               disabled={isBranchActionPending}
               onClick={openCreateBranchDialog}
             >

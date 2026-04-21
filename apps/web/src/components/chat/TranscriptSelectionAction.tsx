@@ -23,7 +23,7 @@ export function TranscriptSelectionAction(props: TranscriptSelectionActionProps)
       <button
         type="button"
         className={cn(
-          "pointer-events-auto inline-flex h-8 items-center gap-1.5 rounded-full border border-white/[0.08] bg-popover/90 px-3 text-[11px] font-medium text-popover-foreground shadow-xl backdrop-blur-xl transition-transform duration-150 hover:scale-[1.01] hover:bg-popover/95",
+          "pointer-events-auto inline-flex h-8 items-center gap-1.5 rounded-full border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] px-3 text-[11px] font-medium text-[var(--color-text-foreground)] shadow-xl backdrop-blur-xl transition-transform duration-150 hover:scale-[1.01] hover:bg-[var(--color-background-elevated-secondary)]",
           props.placement === "top" ? "origin-bottom" : "origin-top",
         )}
         onMouseDown={(event) => {

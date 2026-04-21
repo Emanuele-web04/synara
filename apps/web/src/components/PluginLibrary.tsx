@@ -268,8 +268,8 @@ function ProviderToggleButton({
       className={cn(
         "inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[12px] font-medium transition-colors",
         active
-          ? "bg-foreground text-background shadow-xs"
-          : "text-muted-foreground hover:bg-accent hover:text-foreground",
+          ? "bg-[var(--color-text-foreground)] text-[var(--color-background-surface)] shadow-xs"
+          : "text-muted-foreground hover:bg-[var(--sidebar-accent)] hover:text-foreground",
         disabled && "pointer-events-none opacity-35",
       )}
       onClick={onClick}
@@ -320,7 +320,7 @@ function PluginGridItem({ entry }: { entry: PluginEntry }) {
     entry.plugin.source.path;
 
   return (
-    <div className="flex items-center gap-3 rounded-xl px-3 py-3 transition-colors hover:bg-accent/25">
+    <div className="flex items-center gap-3 rounded-xl px-3 py-3 transition-colors hover:bg-[var(--sidebar-accent)]">
       <PluginGlyph plugin={entry.plugin} />
       <div className="min-w-0 flex-1">
         <p className="text-[13px] font-semibold leading-snug text-foreground">
@@ -338,7 +338,7 @@ function SkillGridItem({ skill }: { skill: ProviderSkillDescriptor }) {
     skill.interface?.shortDescription ?? skill.description ?? "No description available.";
 
   return (
-    <div className="flex items-center gap-3 rounded-xl px-3 py-3 transition-colors hover:bg-accent/25">
+    <div className="flex items-center gap-3 rounded-xl px-3 py-3 transition-colors hover:bg-[var(--sidebar-accent)]">
       <SkillGlyph skill={skill} />
       <div className="min-w-0 flex-1">
         <p className="text-[13px] font-semibold leading-snug text-foreground">
@@ -504,7 +504,7 @@ export function PluginLibrary() {
   // ── Render ───────────────────────────────────────────────────────────────
 
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden bg-background isolate">
+    <SidebarInset className="h-dvh min-h-0 overflow-hidden isolate">
       <div className="flex h-full flex-col">
         {/* ── Top nav ───────────────────────────────────────────────────── */}
         <div className="flex shrink-0 items-center gap-3 border-b border-border px-4 sm:px-6">

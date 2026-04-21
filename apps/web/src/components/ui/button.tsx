@@ -30,17 +30,19 @@ const buttonVariants = cva(
         xs: "h-7 gap-1 rounded-sm px-[calc(--spacing(2)-1px)] text-[length:var(--app-font-size-ui-sm,11px)] before:rounded-[calc(var(--radius-sm)-1px)] sm:h-6 sm:text-[length:var(--app-font-size-ui-xs,10px)] [&_svg:not([class*='size-'])]:size-4 sm:[&_svg:not([class*='size-'])]:size-3.5",
       },
       variant: {
+        chrome:
+          "border-transparent bg-transparent text-[var(--color-text-foreground-secondary)] shadow-none focus-visible:ring-[color:var(--color-border-focus)]/60 focus-visible:ring-offset-0 [:hover,[data-pressed]]:bg-[var(--color-background-button-secondary-hover)] [:hover,[data-pressed]]:text-[var(--color-text-foreground)] data-pressed:bg-[var(--color-background-button-secondary)] data-pressed:text-[var(--color-text-foreground)]",
         default:
           "not-disabled:inset-shadow-[0_1px_--theme(--color-white/16%)] border-primary bg-primary text-primary-foreground shadow-primary/24 shadow-xs [:active,[data-pressed]]:inset-shadow-[0_1px_--theme(--color-black/8%)] [:disabled,:active,[data-pressed]]:shadow-none [:hover,[data-pressed]]:bg-primary/90",
         destructive:
           "not-disabled:inset-shadow-[0_1px_--theme(--color-white/16%)] border-destructive bg-destructive text-white shadow-destructive/24 shadow-xs [:active,[data-pressed]]:inset-shadow-[0_1px_--theme(--color-black/8%)] [:disabled,:active,[data-pressed]]:shadow-none [:hover,[data-pressed]]:bg-destructive/90",
         "destructive-outline":
-          "border-input bg-popover not-dark:bg-clip-padding text-destructive-foreground not-disabled:not-active:not-data-pressed:before:shadow-[0_1px_--theme(--color-black/2%)] dark:bg-input/32 dark:not-disabled:before:shadow-[0_-1px_--theme(--color-white/1%)] dark:not-disabled:not-active:not-data-pressed:before:shadow-[0_-1px_--theme(--color-white/3%)] [:hover,[data-pressed]]:border-destructive/32 [:hover,[data-pressed]]:bg-destructive/4",
+          "border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] not-dark:bg-clip-padding text-destructive-foreground not-disabled:not-active:not-data-pressed:before:shadow-[0_1px_--theme(--color-black/2%)] dark:not-disabled:before:shadow-[0_-1px_--theme(--color-white/1%)] dark:not-disabled:not-active:not-data-pressed:before:shadow-[0_-1px_--theme(--color-white/3%)] [:hover,[data-pressed]]:border-destructive/32 [:hover,[data-pressed]]:bg-destructive/4",
         ghost:
-          "border-transparent text-foreground data-pressed:bg-accent [:hover,[data-pressed]]:bg-accent",
+          "border-transparent bg-transparent text-[var(--color-text-foreground-secondary)] shadow-none focus-visible:ring-[color:var(--color-border-focus)]/60 focus-visible:ring-offset-0 [:hover,[data-pressed]]:bg-[var(--color-background-button-secondary-hover)] [:hover,[data-pressed]]:text-[var(--color-text-foreground)] data-pressed:bg-[var(--color-background-button-secondary)] data-pressed:text-[var(--color-text-foreground)]",
         link: "border-transparent underline-offset-4 [:hover,[data-pressed]]:underline",
         outline:
-          "border-input bg-popover not-dark:bg-clip-padding text-foreground not-disabled:not-active:not-data-pressed:before:shadow-[0_1px_--theme(--color-black/2%)] dark:bg-input/32 dark:not-disabled:before:shadow-[0_-1px_--theme(--color-white/1%)] dark:not-disabled:not-active:not-data-pressed:before:shadow-[0_-1px_--theme(--color-white/3%)] [:hover,[data-pressed]]:bg-accent/50 dark:[:hover,[data-pressed]]:bg-input/64",
+          "border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] text-[var(--color-text-foreground)] not-disabled:not-active:not-data-pressed:before:shadow-[0_1px_--theme(--color-black/2%)] focus-visible:ring-[color:var(--color-border-focus)]/60 dark:not-disabled:before:shadow-[0_-1px_--theme(--color-white/3%)] [:hover,[data-pressed]]:bg-[var(--color-background-elevated-secondary)] dark:[:hover,[data-pressed]]:bg-[var(--color-background-elevated-secondary)]",
         secondary:
           "border-transparent bg-secondary text-secondary-foreground [:active,[data-pressed]]:bg-secondary/80 [:hover,[data-pressed]]:bg-secondary/90",
       },

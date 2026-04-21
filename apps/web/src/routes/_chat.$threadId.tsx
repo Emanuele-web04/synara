@@ -477,7 +477,7 @@ function SplitPaneEmptyState(props: {
                   "flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition-colors",
                   isUsed
                     ? "cursor-default border-border/30 opacity-35"
-                    : "border-border/55 hover:bg-accent/40",
+                    : "border-[color:var(--color-border-light)] hover:bg-[var(--sidebar-accent)]",
                 )}
                 onClick={() => {
                   if (!isUsed) props.onSelectThread(thread.id);
@@ -569,7 +569,7 @@ function SplitPaneSurface(props: {
       ) : null}
       <SidebarInset
         className={cn(
-          "min-h-0 min-w-0 overflow-hidden overscroll-y-none bg-background text-foreground transition-shadow",
+          "min-h-0 min-w-0 overflow-hidden overscroll-y-none text-foreground transition-shadow",
           props.isFocused ? "ring-1 ring-inset ring-primary/25" : "",
         )}
         onMouseDown={props.onFocus}
@@ -982,8 +982,8 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
                     className={cn(
                       "flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition-colors",
                       isSelected
-                        ? "border-primary/35 bg-accent/55"
-                        : "border-border/55 hover:bg-accent/40",
+                        ? "border-[color:var(--color-border)] bg-[var(--sidebar-accent)]"
+                        : "border-[color:var(--color-border-light)] hover:bg-[var(--sidebar-accent)]",
                     )}
                     onClick={() => chooseThreadForPane(thread.id)}
                   >
@@ -1132,7 +1132,7 @@ function SingleChatSurface(props: {
   if (!shouldUseDiffSheet) {
     return (
       <div className="flex h-dvh min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
-        <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+        <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground">
           <ChatView
             key={props.threadId}
             threadId={props.threadId}
@@ -1169,7 +1169,7 @@ function SingleChatSurface(props: {
 
   return (
     <>
-      <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+      <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground">
         <ChatView
           key={props.threadId}
           threadId={props.threadId}

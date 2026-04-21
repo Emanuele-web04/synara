@@ -6285,19 +6285,21 @@ export default function ChatView({
   // Empty state: no active thread
   if (!activeThread) {
     return (
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-muted-foreground/40">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--color-background-surface)] text-[var(--color-text-foreground-secondary)]">
         {!isElectron && (
-          <header className="border-b border-border px-3 py-2 md:hidden">
+          <header className="border-b border-[color:var(--color-border-light)] px-3 py-2 md:hidden">
             <div className="flex items-center gap-2">
               <SidebarHeaderTrigger className="size-7 shrink-0" />
-              <span className="text-sm font-medium text-foreground">Threads</span>
+              <span className="text-sm font-medium text-[var(--color-text-foreground)]">
+                Threads
+              </span>
             </div>
           </header>
         )}
         {isElectron && (
           <div
             className={cn(
-              "drag-region flex h-[52px] shrink-0 items-center border-b border-border px-5",
+              "drag-region flex h-[52px] shrink-0 items-center border-b border-[color:var(--color-border-light)] px-5",
               settings.sidebarSide === "right" && "pl-[90px]",
             )}
           >
@@ -6417,14 +6419,14 @@ export default function ChatView({
                 key={queuedTurn.id}
                 data-testid="queued-follow-up-row"
                 className={cn(
-                  "chat-composer-surface flex items-center gap-2 border border-b-0 border-border/75 bg-card px-2.5 py-2 text-[12px]",
+                  "chat-composer-surface flex items-center gap-2 border border-b-0 border-[color:var(--color-border)] px-2.5 py-2 text-[12px] shadow-[0_1px_0_rgba(255,255,255,0.03)_inset]",
                   queuedTurnIndex === 0 && !planCardAboveComposer
                     ? "rounded-t-2xl"
                     : "rounded-none",
                 )}
               >
                 <div className="flex min-w-0 flex-1 items-center gap-1.5">
-                  <QueueArrow className="size-3 shrink-0 text-muted-foreground/70" />
+                  <QueueArrow className="size-3 shrink-0 text-[var(--color-text-foreground-secondary)]" />
                   <span className="truncate text-[12px] font-medium text-foreground/85">
                     {queuedTurn.previewText}
                   </span>
@@ -6432,7 +6434,7 @@ export default function ChatView({
                 <div className="flex shrink-0 items-center gap-0">
                   <button
                     type="button"
-                    className="inline-flex items-center gap-1 rounded-lg bg-muted/80 px-2 py-0.5 text-[11px] font-medium text-foreground transition-colors hover:bg-muted"
+                    className="inline-flex items-center gap-1 rounded-lg bg-[var(--color-background-button-secondary)] px-2 py-0.5 text-[11px] font-medium text-[var(--color-text-foreground)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)]"
                     onClick={() => void onSteerQueuedComposerTurn(queuedTurn)}
                   >
                     <PiArrowBendDownRight className="size-3" />
@@ -6440,7 +6442,7 @@ export default function ChatView({
                   </button>
                   <button
                     type="button"
-                    className="inline-flex size-6 items-center justify-center rounded-lg text-muted-foreground/70 transition-colors hover:bg-muted/60 hover:text-foreground"
+                    className="inline-flex size-6 items-center justify-center rounded-lg text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
                     aria-label="Delete queued follow-up"
                     onClick={() => removeQueuedComposerTurn(queuedTurn.id)}
                   >
@@ -6451,7 +6453,7 @@ export default function ChatView({
                       render={
                         <button
                           type="button"
-                          className="inline-flex size-6 items-center justify-center rounded-lg text-muted-foreground/70 transition-colors hover:bg-muted/60 hover:text-foreground"
+                          className="inline-flex size-6 items-center justify-center rounded-lg text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
                           aria-label="Queued follow-up actions"
                         />
                       }
@@ -6484,20 +6486,22 @@ export default function ChatView({
         >
           <div
             className={cn(
-              "chat-composer-surface rounded-2xl border bg-card transition-colors duration-200 focus-within:border-neutral-500/15",
-              isDragOverComposer ? "border-primary/50 bg-accent/20" : "border-border/75",
+              "chat-composer-surface rounded-2xl border border-[color:var(--color-border)] shadow-[0_1px_0_rgba(255,255,255,0.03)_inset] transition-colors duration-200 focus-within:border-[color:var(--app-composer-focus-border)]",
+              isDragOverComposer
+                ? "border-[color:var(--app-composer-focus-border)] bg-[var(--color-background-control)]"
+                : "border-border/75",
               composerProviderState.composerSurfaceClassName,
             )}
           >
             {activePendingApproval ? (
-              <div className="rounded-t-[23px] border-b border-border/65 bg-muted/20">
+              <div className="rounded-t-[23px] border-b border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)]">
                 <ComposerPendingApprovalPanel
                   approval={activePendingApproval}
                   pendingCount={pendingApprovals.length}
                 />
               </div>
             ) : pendingUserInputs.length > 0 ? (
-              <div className="rounded-t-[23px] border-b border-border/65 bg-muted/20">
+              <div className="rounded-t-[23px] border-b border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)]">
                 <ComposerPendingUserInputPanel
                   pendingUserInputs={pendingUserInputs}
                   respondingRequestIds={respondingRequestIds}
@@ -6508,7 +6512,7 @@ export default function ChatView({
                 />
               </div>
             ) : showPlanFollowUpPrompt && activeProposedPlan ? (
-              <div className="rounded-t-[23px] border-b border-border/65 bg-muted/20">
+              <div className="rounded-t-[23px] border-b border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)]">
                 <ComposerPlanFollowUpBanner
                   key={activeProposedPlan.id}
                   planTitle={proposedPlanTitle(activeProposedPlan.planMarkdown) ?? null}
@@ -6670,7 +6674,7 @@ export default function ChatView({
                           />
                           <Button
                             variant="ghost"
-                            className="shrink-0 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-blue-400 hover:text-blue-300 sm:px-3"
+                            className="shrink-0 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] sm:px-3"
                             size="sm"
                             type="button"
                             onClick={toggleInteractionMode}
@@ -6719,7 +6723,9 @@ export default function ChatView({
                   )}
                 >
                   {isPreparingWorktree ? (
-                    <span className="text-muted-foreground/70 text-xs">Preparing worktree...</span>
+                    <span className="text-[length:var(--app-font-size-ui-xs,10px)] text-[var(--color-text-foreground-secondary)]">
+                      Preparing worktree...
+                    </span>
                   ) : null}
                   {showVoiceNotesControl && (isVoiceRecording || isVoiceTranscribing) ? (
                     <ComposerVoiceRecorderBar
@@ -6774,7 +6780,7 @@ export default function ChatView({
                   ) : phase === "running" ? (
                     <button
                       type="button"
-                      className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-full bg-foreground text-background transition-all duration-150 hover:scale-105 sm:h-[26px] sm:w-[26px]"
+                      className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-full bg-[var(--color-text-foreground)] text-[var(--color-background-surface)] transition-all duration-150 hover:scale-105 sm:h-[26px] sm:w-[26px]"
                       onClick={() => void onInterrupt()}
                       aria-label="Stop generation"
                       title="Stop the current response. On Mac, press Ctrl+C to interrupt."
@@ -6842,7 +6848,7 @@ export default function ChatView({
                         ) : null}
                         <button
                           type="submit"
-                          className="flex h-7 w-7 items-center justify-center rounded-full bg-foreground text-background transition-all duration-150 hover:scale-105 disabled:opacity-20 disabled:hover:scale-100 sm:h-8 sm:w-8"
+                          className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--color-text-foreground)] text-[var(--color-background-surface)] transition-all duration-150 hover:scale-105 disabled:opacity-20 disabled:hover:scale-100 sm:h-8 sm:w-8"
                           disabled={
                             isSendBusy ||
                             isConnecting ||
@@ -6927,7 +6933,7 @@ export default function ChatView({
       {/* Top bar */}
       <header
         className={cn(
-          "border-b border-border px-3 sm:px-5",
+          "border-b border-[color:var(--color-border-light)] px-3 sm:px-5",
           isElectron ? "drag-region flex h-[52px] items-center" : "py-2 sm:py-3",
           isElectron && settings.sidebarSide === "right" && "pl-[90px] sm:pl-[90px]",
         )}
@@ -7131,14 +7137,14 @@ export default function ChatView({
                             key={queuedTurn.id}
                             data-testid="queued-follow-up-row"
                             className={cn(
-                              "chat-composer-surface flex items-center gap-2 border border-b-0 border-border/75 bg-card px-2.5 py-2 text-[12px]",
+                              "chat-composer-surface flex items-center gap-2 border border-b-0 border-[color:var(--color-border)] px-2.5 py-2 text-[12px] shadow-[0_1px_0_rgba(255,255,255,0.03)_inset]",
                               queuedTurnIndex === 0 && !planCardAboveComposer
                                 ? "rounded-t-2xl"
                                 : "rounded-none",
                             )}
                           >
                             <div className="flex min-w-0 flex-1 items-center gap-1.5">
-                              <QueueArrow className="size-3 shrink-0 text-muted-foreground/70" />
+                              <QueueArrow className="size-3 shrink-0 text-[var(--color-text-foreground-secondary)]" />
                               <span className="truncate text-[12px] font-medium text-foreground/85">
                                 {queuedTurn.previewText}
                               </span>
@@ -7146,7 +7152,7 @@ export default function ChatView({
                             <div className="flex shrink-0 items-center gap-0">
                               <button
                                 type="button"
-                                className="inline-flex items-center gap-1 rounded-lg bg-muted/80 px-2 py-0.5 text-[11px] font-medium text-foreground transition-colors hover:bg-muted"
+                                className="inline-flex items-center gap-1 rounded-lg bg-[var(--color-background-button-secondary)] px-2 py-0.5 text-[11px] font-medium text-[var(--color-text-foreground)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)]"
                                 onClick={() => void onSteerQueuedComposerTurn(queuedTurn)}
                               >
                                 <PiArrowBendDownRight className="size-3" />
@@ -7154,7 +7160,7 @@ export default function ChatView({
                               </button>
                               <button
                                 type="button"
-                                className="inline-flex size-6 items-center justify-center rounded-lg text-muted-foreground/70 transition-colors hover:bg-muted/60 hover:text-foreground"
+                                className="inline-flex size-6 items-center justify-center rounded-lg text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
                                 aria-label="Delete queued follow-up"
                                 onClick={() => removeQueuedComposerTurn(queuedTurn.id)}
                               >
@@ -7165,7 +7171,7 @@ export default function ChatView({
                                   render={
                                     <button
                                       type="button"
-                                      className="inline-flex size-6 items-center justify-center rounded-lg text-muted-foreground/70 transition-colors hover:bg-muted/60 hover:text-foreground"
+                                      className="inline-flex size-6 items-center justify-center rounded-lg text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
                                       aria-label="Queued follow-up actions"
                                     />
                                   }
@@ -7198,22 +7204,22 @@ export default function ChatView({
                     >
                       <div
                         className={cn(
-                          "chat-composer-surface rounded-2xl border bg-card transition-colors duration-200 focus-within:border-neutral-500/15",
+                          "chat-composer-surface rounded-2xl border border-[color:var(--color-border)] shadow-[0_1px_0_rgba(255,255,255,0.03)_inset] transition-colors duration-200 focus-within:border-[color:var(--app-composer-focus-border)]",
                           isDragOverComposer
-                            ? "border-primary/50 bg-accent/20"
+                            ? "border-[color:var(--app-composer-focus-border)] bg-[var(--color-background-control)]"
                             : "border-border/75",
                           composerProviderState.composerSurfaceClassName,
                         )}
                       >
                         {activePendingApproval ? (
-                          <div className="rounded-t-[23px] border-b border-border/65 bg-muted/20">
+                          <div className="rounded-t-[23px] border-b border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)]">
                             <ComposerPendingApprovalPanel
                               approval={activePendingApproval}
                               pendingCount={pendingApprovals.length}
                             />
                           </div>
                         ) : pendingUserInputs.length > 0 ? (
-                          <div className="rounded-t-[23px] border-b border-border/65 bg-muted/20">
+                          <div className="rounded-t-[23px] border-b border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)]">
                             <ComposerPendingUserInputPanel
                               pendingUserInputs={pendingUserInputs}
                               respondingRequestIds={respondingRequestIds}
@@ -7224,7 +7230,7 @@ export default function ChatView({
                             />
                           </div>
                         ) : showPlanFollowUpPrompt && activeProposedPlan ? (
-                          <div className="rounded-t-[23px] border-b border-border/65 bg-muted/20">
+                          <div className="rounded-t-[23px] border-b border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)]">
                             <ComposerPlanFollowUpBanner
                               key={activeProposedPlan.id}
                               planTitle={proposedPlanTitle(activeProposedPlan.planMarkdown) ?? null}
@@ -7396,7 +7402,7 @@ export default function ChatView({
                                       />
                                       <Button
                                         variant="ghost"
-                                        className="shrink-0 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-blue-400 hover:text-blue-300 sm:px-3"
+                                        className="shrink-0 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] sm:px-3"
                                         size="sm"
                                         type="button"
                                         onClick={toggleInteractionMode}
@@ -7453,7 +7459,7 @@ export default function ChatView({
                               )}
                             >
                               {isPreparingWorktree ? (
-                                <span className="text-muted-foreground/70 text-xs">
+                                <span className="text-[length:var(--app-font-size-ui-xs,10px)] text-[var(--color-text-foreground-secondary)]">
                                   Preparing worktree...
                                 </span>
                               ) : null}
@@ -7511,7 +7517,7 @@ export default function ChatView({
                               ) : phase === "running" ? (
                                 <button
                                   type="button"
-                                  className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-full bg-foreground text-background transition-all duration-150 hover:scale-105 sm:h-[26px] sm:w-[26px]"
+                                  className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-full bg-[var(--color-text-foreground)] text-[var(--color-background-surface)] transition-all duration-150 hover:scale-105 sm:h-[26px] sm:w-[26px]"
                                   onClick={() => void onInterrupt()}
                                   aria-label="Stop generation"
                                   title="Stop the current response. On Mac, press Ctrl+C to interrupt."
@@ -7584,7 +7590,7 @@ export default function ChatView({
                                     ) : null}
                                     <button
                                       type="submit"
-                                      className="flex h-7 w-7 items-center justify-center rounded-full bg-foreground text-background transition-all duration-150 hover:scale-105 disabled:opacity-20 disabled:hover:scale-100 sm:h-8 sm:w-8"
+                                      className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--color-text-foreground)] text-[var(--color-background-surface)] transition-all duration-150 hover:scale-105 disabled:opacity-20 disabled:hover:scale-100 sm:h-8 sm:w-8"
                                       disabled={
                                         isSendBusy ||
                                         isConnecting ||
@@ -7799,7 +7805,7 @@ export default function ChatView({
             <img
               src={expandedImageItem.src}
               alt={expandedImageItem.name}
-              className="max-h-[86vh] max-w-[92vw] select-none rounded-lg border border-border/70 bg-background object-contain shadow-2xl"
+              className="max-h-[86vh] max-w-[92vw] select-none rounded-lg border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] object-contain shadow-2xl"
               draggable={false}
             />
             <p className="mt-2 max-w-[92vw] truncate text-center text-xs text-muted-foreground/80">

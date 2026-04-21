@@ -709,7 +709,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           className="font-system-ui max-w-[28rem] truncate group-hover:opacity-90"
                           style={{
                             fontSize: `${normalizedChatFontSizePx}px`,
-                            color: "var(--info-foreground)",
+                            color: "var(--color-token-text-link-foreground)",
                           }}
                         >
                           {basename(file.path)}
@@ -1689,7 +1689,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                   className="font-system-ui max-w-[28rem] truncate group-hover:opacity-90"
                   style={{
                     fontSize: `${rowFontSizePx}px`,
-                    color: "var(--info-foreground)",
+                    color: "var(--color-token-text-link-foreground)",
                   }}
                 >
                   {basename(changedFilePath)}

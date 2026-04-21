@@ -893,7 +893,7 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
                 <button
                   key={suggestion.id}
                   type="button"
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-[var(--sidebar-accent)] hover:text-foreground"
                   onMouseDown={(event) => {
                     event.preventDefault();
                     onChooseSuggestion(suggestion);

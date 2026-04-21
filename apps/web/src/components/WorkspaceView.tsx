@@ -388,7 +388,7 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
   );
 
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
         <header className="border-b border-border px-3 sm:px-5">
           <div className="flex h-[52px] items-center gap-2 sm:gap-3">

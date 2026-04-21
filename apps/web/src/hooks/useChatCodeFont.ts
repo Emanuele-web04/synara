@@ -6,6 +6,8 @@
 import { useEffect } from "react";
 import { useAppSettings } from "../appSettings";
 
+const CHAT_CODE_FONT_OVERRIDE_VARIABLE = "--app-font-chat-code-override";
+
 export function useChatCodeFont() {
   const { settings } = useAppSettings();
   const chatCodeFontFamily = settings.chatCodeFontFamily;
@@ -13,11 +15,11 @@ export function useChatCodeFont() {
   useEffect(() => {
     if (chatCodeFontFamily.trim()) {
       document.documentElement.style.setProperty(
-        "--font-chat-code-family",
+        CHAT_CODE_FONT_OVERRIDE_VARIABLE,
         chatCodeFontFamily.trim(),
       );
     } else {
-      document.documentElement.style.removeProperty("--font-chat-code-family");
+      document.documentElement.style.removeProperty(CHAT_CODE_FONT_OVERRIDE_VARIABLE);
     }
   }, [chatCodeFontFamily]);
 }

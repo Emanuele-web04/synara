@@ -773,7 +773,7 @@ function ProjectSortMenu({
       <MenuPopup
         align="end"
         side="bottom"
-        className="min-w-44 rounded-lg border-border bg-popover shadow-lg"
+        className="min-w-44 rounded-lg border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] shadow-lg"
       >
         <MenuGroup>
           <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
@@ -853,7 +853,7 @@ function ChatSortMenu({
       <MenuPopup
         align="end"
         side="bottom"
-        className="min-w-44 rounded-lg border-border bg-popover shadow-lg"
+        className="min-w-44 rounded-lg border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] shadow-lg"
       >
         <MenuGroup>
           <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">Sort chats</div>
@@ -890,7 +890,7 @@ function SidebarPrimaryAction({
         size="default"
         data-active={active}
         aria-current={active ? "page" : undefined}
-        className="group/sidebar-primary-action h-8 gap-2.5 rounded-lg px-2 font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-foreground/82 transition-colors hover:bg-accent/55 hover:text-foreground data-[active=true]:bg-accent/65"
+        className="group/sidebar-primary-action h-8 gap-2.5 rounded-lg px-2 font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-foreground/82 transition-colors hover:bg-[var(--sidebar-accent)] data-[active=true]:bg-[var(--sidebar-accent-active)] data-[active=true]:text-[var(--sidebar-accent-foreground)]"
         aria-disabled={disabled || undefined}
         disabled={disabled}
         onClick={onClick}
@@ -959,7 +959,7 @@ function SidebarSegmentedPicker({
 }) {
   return (
     <div className="px-3 pb-2.5">
-      <div className="inline-flex w-full rounded-md bg-muted/40 p-0.5">
+      <div className="inline-flex w-full rounded-md bg-[var(--color-background-elevated-secondary)] p-0.5">
         {(["threads", "workspace"] as const).map((view) => {
           const active = activeView === view;
           return (
@@ -969,8 +969,8 @@ function SidebarSegmentedPicker({
               className={cn(
                 "flex-1 rounded-sm px-2.5 py-1 text-[11.5px] font-medium tracking-tight transition-colors",
                 active
-                  ? "bg-background dark:bg-neutral-800 text-foreground shadow-xs"
-                  : "text-muted-foreground hover:text-foreground",
+                  ? "bg-[var(--color-background-elevated-primary-opaque)] text-[var(--color-text-foreground)] shadow-xs"
+                  : "text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]",
               )}
               onClick={() => onSelectView(view)}
             >
@@ -3825,8 +3825,8 @@ export default function Sidebar() {
           className={cn(
             "grid h-8 w-full grid-cols-[auto_auto_minmax(0,1fr)_auto_3.5rem] items-center gap-x-1.5 rounded-md px-2 text-left text-[length:var(--app-font-size-ui,12px)] transition-colors cursor-pointer",
             isActive
-              ? "bg-accent/62 text-foreground/90 dark:bg-accent/42"
-              : "text-foreground/72 hover:bg-accent/40 hover:text-foreground/90",
+              ? "bg-[var(--sidebar-accent-active)] text-[var(--sidebar-accent-foreground)]"
+              : "text-foreground/72 hover:bg-[var(--sidebar-accent)]",
           )}
           onClick={() => activateThread(thread.id)}
           onDoubleClick={(event) => {
@@ -4022,8 +4022,8 @@ export default function Sidebar() {
           secondaryMetaClass,
         );
     const toggleButtonClassName = isHighlighted
-      ? "border-foreground/10 bg-background/75 text-foreground/58 hover:bg-background/88 hover:text-foreground/80"
-      : "border-border/45 bg-background/58 text-muted-foreground/56 hover:border-border/75 hover:bg-background/78 hover:text-foreground/76";
+      ? "border-[color:var(--color-border)] bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
+      : "border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground-secondary)] hover:border-[color:var(--color-border)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]";
 
     return (
       <SidebarMenuSubItem key={thread.id} className="group/thread-row w-full" data-thread-item>
@@ -4343,10 +4343,10 @@ export default function Sidebar() {
                   role="button"
                   tabIndex={0}
                   className={cn(
-                    "flex min-w-0 flex-1 select-none items-center gap-1 rounded-md px-1.5 py-0.5 text-left outline-hidden transition-colors focus-visible:ring-1 focus-visible:ring-ring",
+                    "flex min-w-0 flex-1 select-none items-center gap-1 rounded-md px-1.5 py-0.5 text-left outline-hidden transition-colors focus-visible:ring-1 focus-visible:ring-[color:var(--color-border-focus)]",
                     splitView.focusedPane === pane
-                      ? "bg-background shadow-xs dark:bg-foreground/12"
-                      : "hover:bg-accent/35",
+                      ? "bg-[var(--color-background-button-secondary)] shadow-xs"
+                      : "hover:bg-[var(--sidebar-accent)]",
                   )}
                   onClick={(event) => {
                     event.stopPropagation();
@@ -4395,7 +4395,7 @@ export default function Sidebar() {
           <SidebarMenuButton
             ref={isManualProjectSorting ? dragHandleProps?.setActivatorNodeRef : undefined}
             size="sm"
-            className={`h-7.5 gap-2 rounded-lg px-2 py-0.5 text-left text-[length:var(--app-font-size-ui,12px)] font-normal transition-[padding] duration-150 ease-out hover:bg-accent/55 group-hover/project-header:bg-accent/55 group-hover/project-header:pr-[4.75rem] group-hover/project-header:text-sidebar-accent-foreground group-focus-within/project-header:pr-[4.75rem] ${
+            className={`h-7.5 gap-2 rounded-lg px-2 py-0.5 text-left text-[length:var(--app-font-size-ui,12px)] font-normal transition-[padding] duration-150 ease-out hover:bg-[var(--sidebar-accent)] group-hover/project-header:bg-[var(--sidebar-accent)] group-hover/project-header:pr-[4.75rem] group-hover/project-header:text-[var(--sidebar-accent-foreground)] group-focus-within/project-header:pr-[4.75rem] ${
               isManualProjectSorting ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
             }`}
             {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.attributes : {})}
@@ -4602,7 +4602,7 @@ export default function Sidebar() {
                     render={<button type="button" />}
                     data-thread-selection-safe
                     size="sm"
-                    className="h-7 w-full translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
+                    className="h-7 w-full translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/72 hover:bg-[var(--sidebar-accent)]"
                     onClick={() => {
                       expandThreadListForProject(project.cwd);
                     }}
@@ -4617,7 +4617,7 @@ export default function Sidebar() {
                     render={<button type="button" />}
                     data-thread-selection-safe
                     size="sm"
-                    className="h-7 w-full translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
+                    className="h-7 w-full translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/72 hover:bg-[var(--sidebar-accent)]"
                     onClick={() => {
                       collapseThreadListForProject(project.cwd);
                     }}
@@ -4910,7 +4910,7 @@ export default function Sidebar() {
         ? "bg-sky-500 hover:bg-sky-600"
         : shouldHighlightDesktopUpdateError(desktopUpdateState)
           ? "bg-rose-500 hover:bg-rose-600"
-          : "bg-[var(--info-foreground)] hover:brightness-110";
+          : "bg-[var(--info)] hover:brightness-110";
   const desktopUpdateButtonHasSecondaryLabel =
     desktopUpdateButtonPresentation.secondaryLabel !== null;
   const desktopUpdateRowButtonClasses = cn(
@@ -5210,7 +5210,7 @@ export default function Sidebar() {
               <SidebarMenuItem>
                 <SidebarMenuButton
                   size="default"
-                  className="h-8 gap-2.5 rounded-lg px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
+                  className="h-8 gap-2.5 rounded-lg px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 hover:bg-[var(--sidebar-accent)] hover:text-foreground"
                   onClick={() => handleSidebarViewChange("threads")}
                 >
                   <ArrowLeftIcon className="size-[15px]" />
@@ -5245,7 +5245,7 @@ export default function Sidebar() {
                               render={<button type="button" />}
                               size="sm"
                               isActive={isActive}
-                              className="group/settings-nav-item h-7.5 w-full justify-start gap-2 rounded-lg px-2 py-0.5 text-[length:var(--app-font-size-ui,12px)] font-normal hover:bg-accent"
+                              className="group/settings-nav-item h-7.5 w-full justify-start gap-2 rounded-lg px-2 py-0.5 text-[length:var(--app-font-size-ui,12px)] font-normal hover:bg-[var(--sidebar-accent)]"
                               onClick={() => {
                                 void navigate({
                                   to: "/settings",
@@ -5357,7 +5357,7 @@ export default function Sidebar() {
                                         setRenamingWorkspaceTitle(workspace.title);
                                       }
                                     }}
-                                    className="h-7 w-full rounded-md border border-border bg-background px-2 text-[length:var(--app-font-size-ui,12px)] outline-none focus:border-ring"
+                                    className="h-7 w-full rounded-md border border-[color:var(--color-border)] bg-[var(--color-background-control-opaque)] px-2 text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-foreground)] outline-none focus:border-[color:var(--color-border-focus)]"
                                   />
                                 </div>
                               ) : (
@@ -5365,7 +5365,7 @@ export default function Sidebar() {
                                   <SidebarMenuButton
                                     size="sm"
                                     isActive={isActive}
-                                    className="group/ws h-8 gap-2 rounded-lg px-2 font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-foreground/82 transition-colors hover:bg-accent/55 hover:text-foreground data-[active=true]:bg-accent/65"
+                                    className="group/ws h-8 gap-2 rounded-lg px-2 font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-foreground/82 transition-colors hover:bg-[var(--sidebar-accent)] data-[active=true]:bg-[var(--sidebar-accent-active)] data-[active=true]:text-[var(--sidebar-accent-foreground)]"
                                     onClick={() => {
                                       navigateToWorkspace(workspace.id);
                                     }}
@@ -5526,7 +5526,7 @@ export default function Sidebar() {
                         {isElectron && (
                           <button
                             type="button"
-                            className="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg bg-accent/40 px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
+                            className="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg bg-[var(--color-background-elevated-secondary)] px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] disabled:opacity-50"
                             onClick={() => void handlePickFolder()}
                             disabled={isPickingFolder || isAddingProject}
                           >
@@ -5540,7 +5540,7 @@ export default function Sidebar() {
                         )}
                         <button
                           type="button"
-                          className="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg bg-accent/40 px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 transition-colors hover:bg-accent hover:text-foreground"
+                          className="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg bg-[var(--color-background-elevated-secondary)] px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
                           onClick={() => setShowManualPathInput(true)}
                         >
                           <TbCursorText className="size-3.5" />
@@ -5549,10 +5549,10 @@ export default function Sidebar() {
                       </div>
                     ) : (
                       <div
-                        className={`flex items-center rounded-lg border bg-secondary transition-colors ${
+                        className={`flex items-center rounded-lg border bg-[var(--color-background-control-opaque)] transition-colors ${
                           addProjectError
                             ? "border-red-500/70 focus-within:border-red-500"
-                            : "border-border focus-within:border-ring"
+                            : "border-[color:var(--color-border)] focus-within:border-[color:var(--color-border-focus)]"
                         }`}
                       >
                         <input
@@ -5647,7 +5647,7 @@ export default function Sidebar() {
             <div className="group/project-header relative">
               <SidebarMenuButton
                 size="sm"
-                className="h-7.5 gap-2 rounded-lg px-2 py-0.5 text-left text-[length:var(--app-font-size-ui,12px)] font-normal hover:bg-accent/55 group-hover/project-header:bg-accent/55 group-hover/project-header:text-sidebar-accent-foreground cursor-pointer"
+                className="h-7.5 gap-2 rounded-lg px-2 py-0.5 text-left text-[length:var(--app-font-size-ui,12px)] font-normal hover:bg-[var(--sidebar-accent)] group-hover/project-header:bg-[var(--sidebar-accent)] cursor-pointer"
                 onClick={() => setChatSectionExpanded((current) => !current)}
                 onKeyDown={(event) => {
                   if (event.key !== "Enter" && event.key !== " ") return;
@@ -5717,7 +5717,7 @@ export default function Sidebar() {
                     <SidebarMenuItem className="w-full">
                       <SidebarMenuButton
                         size="sm"
-                        className="h-7 w-full justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
+                        className="h-7 w-full justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 hover:bg-[var(--sidebar-accent)]"
                         onClick={() => setChatThreadListExpanded(true)}
                       >
                         <span>Show more</span>
@@ -5728,7 +5728,7 @@ export default function Sidebar() {
                     <SidebarMenuItem className="w-full">
                       <SidebarMenuButton
                         size="sm"
-                        className="h-7 w-full justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
+                        className="h-7 w-full justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 hover:bg-[var(--sidebar-accent)]"
                         onClick={() => setChatThreadListExpanded(false)}
                       >
                         <span>Show less</span>
@@ -5746,7 +5746,7 @@ export default function Sidebar() {
               {!isOnSettings && (
                 <SidebarMenuButton
                   size="default"
-                  className="h-8 flex-1 gap-2.5 rounded-lg px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 hover:bg-accent/55 hover:text-foreground"
+                  className="h-8 flex-1 gap-2.5 rounded-lg px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 hover:bg-[var(--sidebar-accent)]"
                   onClick={() => void navigate({ to: "/settings" })}
                 >
                   <SettingsIcon className="size-[15px]" />

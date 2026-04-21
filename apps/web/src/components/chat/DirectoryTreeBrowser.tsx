@@ -136,14 +136,14 @@ export const DirectoryTreeBrowser = memo(function DirectoryTreeBrowser({
         return [
           <div
             key={entry.path}
-            className="flex min-w-0 items-center gap-1 rounded-lg px-2 py-1 text-sm transition-colors hover:bg-accent/55"
+            className="flex min-w-0 items-center gap-1 rounded-lg px-2 py-1 text-sm transition-colors hover:bg-[var(--color-background-button-secondary-hover)]"
             style={{ paddingLeft: `${8 + depth * 16}px` }}
           >
             <button
               type="button"
               aria-label={expanded ? `Collapse ${entry.name}` : `Expand ${entry.name}`}
               className={cn(
-                "inline-flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground",
+                "inline-flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-[var(--color-background-button-secondary)] hover:text-foreground",
                 (!isDirectory || !entry.hasChildren) && "opacity-35",
               )}
               onClick={() => {
