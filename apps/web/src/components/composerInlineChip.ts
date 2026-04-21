@@ -4,7 +4,7 @@
 // Exports: Chip class names plus shared skill icon/label helpers
 
 export const COMPOSER_INLINE_CHIP_CLASS_NAME =
-  "inline-flex max-w-full select-none items-center gap-0.5 rounded border border-[color:var(--color-border-light)] bg-[var(--sidebar-accent)] px-1 py-px font-medium text-[11px] leading-[1.1] text-[var(--color-text-foreground)] align-middle";
+  "inline-flex max-w-full select-none items-center gap-0.5 rounded border border-[color:var(--color-border-light)] bg-[var(--sidebar-accent)] p-0.5 font-medium text-[11px] leading-[1.1] text-[var(--color-text-foreground)] align-middle";
 
 // Wrapper for file/folder mention chips. Mirrors the skill pill (same tint
 // and rounding) but with tighter padding and smaller text so a path chip

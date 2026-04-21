@@ -36,7 +36,8 @@ const KNOWN_CONTEXT_WINDOW_MAX_TOKENS = {
   "1m": 1_000_000,
 } as const;
 
-export function deriveLatestContextWindowSnapshot(
+// Read the latest token-usage snapshot emitted by the runtime.
+function deriveLatestUsageContextWindowSnapshot(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): ContextWindowSnapshot | null {
   for (let index = activities.length - 1; index >= 0; index -= 1) {
@@ -82,6 +83,67 @@ export function deriveLatestContextWindowSnapshot(
   }
 
   return null;
+}
+
+// Use the configured session window as the source of truth for the meter denominator.
+function deriveLatestConfiguredContextWindowMaxTokens(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): number | null {
+  for (let index = activities.length - 1; index >= 0; index -= 1) {
+    const activity = activities[index];
+    if (!activity || activity.kind !== "context-window.configured") {
+      continue;
+    }
+
+    const payload = asRecord(activity.payload);
+    const maxTokens = asFiniteNumber(payload?.maxTokens);
+    if (maxTokens !== null && maxTokens > 0) {
+      return maxTokens;
+    }
+  }
+
+  return null;
+}
+
+export function deriveLatestContextWindowSnapshot(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): ContextWindowSnapshot | null {
+  const usageSnapshot = deriveLatestUsageContextWindowSnapshot(activities);
+  const configuredMaxTokens = deriveLatestConfiguredContextWindowMaxTokens(activities);
+
+  if (usageSnapshot === null && configuredMaxTokens === null) {
+    return null;
+  }
+
+  const usedTokens = usageSnapshot?.usedTokens ?? 0;
+  const maxTokens = configuredMaxTokens ?? usageSnapshot?.maxTokens ?? null;
+  const usedPercentage =
+    maxTokens !== null && maxTokens > 0 ? Math.min(100, (usedTokens / maxTokens) * 100) : null;
+  const remainingTokens =
+    maxTokens !== null ? Math.max(0, Math.round(maxTokens - usedTokens)) : null;
+  const remainingPercentage = usedPercentage !== null ? Math.max(0, 100 - usedPercentage) : null;
+
+  return {
+    usedTokens,
+    totalProcessedTokens: usageSnapshot?.totalProcessedTokens ?? null,
+    maxTokens,
+    remainingTokens,
+    usedPercentage,
+    remainingPercentage,
+    inputTokens: usageSnapshot?.inputTokens ?? null,
+    cachedInputTokens: usageSnapshot?.cachedInputTokens ?? null,
+    outputTokens: usageSnapshot?.outputTokens ?? null,
+    reasoningOutputTokens: usageSnapshot?.reasoningOutputTokens ?? null,
+    lastUsedTokens: usageSnapshot?.lastUsedTokens ?? null,
+    lastInputTokens: usageSnapshot?.lastInputTokens ?? null,
+    lastCachedInputTokens: usageSnapshot?.lastCachedInputTokens ?? null,
+    lastOutputTokens: usageSnapshot?.lastOutputTokens ?? null,
+    lastReasoningOutputTokens: usageSnapshot?.lastReasoningOutputTokens ?? null,
+    toolUses: usageSnapshot?.toolUses ?? null,
+    durationMs: usageSnapshot?.durationMs ?? null,
+    compactsAutomatically: usageSnapshot?.compactsAutomatically ?? false,
+    updatedAt: usageSnapshot?.updatedAt ?? activities[activities.length - 1]?.createdAt ?? "",
+  };
 }
 
 export function deriveCumulativeCostUsd(

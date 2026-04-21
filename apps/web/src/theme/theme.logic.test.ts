@@ -292,7 +292,9 @@ describe("buildThemeCssVariables", () => {
     expect(cssVariables.variables["--codex-base-accent"]).toBe("#606acc");
     expect(cssVariables.variables["--background"]).toBe("#0d0d0f");
     expect(cssVariables.variables["--card"]).toBe("#151517");
-    expect(cssVariables.variables["--sidebar-accent"]).toBe("rgba(227, 228, 230, 0.038)");
+    expect(cssVariables.variables["--sidebar-accent"]).toBe(
+      cssVariables.variables["--sidebar-accent-active"],
+    );
     expect(cssVariables.variables["--theme-font-ui-family"]).toBe("Inter");
     expect(cssVariables.variables["--theme-font-code-family"]).toBe('"Jetbrains Mono"');
   });
@@ -313,7 +315,7 @@ describe("buildThemeCssVariables", () => {
     expect(tokens.derived.buttonSecondaryBackground).toBe("rgba(227, 228, 230, 0.039)");
     expect(tokens.aliases["--color-token-side-bar-background"]).toBe("#0d0d0f");
     expect(tokens.aliases["--color-token-list-hover-background"]).toBe(
-      "rgba(227, 228, 230, 0.038)",
+      tokens.derived.buttonSecondaryBackground,
     );
     expect(tokens.aliases["--color-token-input-background"]).toBe("rgba(36, 36, 38, 0.96)");
   });

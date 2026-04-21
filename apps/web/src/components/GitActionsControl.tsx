@@ -389,11 +389,7 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
         : null,
       createBranchFlowCompleted: activeThread?.createBranchFlowCompleted ?? false,
     });
-  }, [
-    activeThread?.createBranchFlowCompleted,
-    activeThread?.worktreePath,
-    gitStatusForActions,
-  ]);
+  }, [activeThread?.createBranchFlowCompleted, activeThread?.worktreePath, gitStatusForActions]);
   const currentBranchName =
     gitStatusForActions?.branch ?? currentBranch ?? activeThread?.branch ?? null;
   const suggestedCreateBranchName = useMemo(
@@ -1341,11 +1337,11 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
                               )}
                               <button
                                 type="button"
-                                className="flex flex-1 items-center justify-between gap-3 text-left truncate"
+                                className="group flex flex-1 items-center justify-between gap-3 text-left truncate"
                                 onClick={() => openChangedFileInEditor(file.path)}
                               >
                                 <span
-                                  className={`truncate${isExcluded ? " text-muted-foreground" : ""}`}
+                                  className={`truncate underline-offset-2 group-hover:underline group-focus-visible:underline${isExcluded ? " text-muted-foreground" : ""}`}
                                 >
                                   {file.path}
                                 </span>

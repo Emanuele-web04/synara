@@ -101,7 +101,7 @@ export function ThemePackEditor({
   };
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary)] shadow-[0_1px_0_rgba(255,255,255,0.03)_inset]">
+    <div className="overflow-hidden rounded-2xl border border-[color:var(--color-border)] bg-[var(--color-background-panel)] shadow-[0_1px_0_rgba(255,255,255,0.03)_inset]">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:py-3.5">
         <div className="flex items-center gap-2">

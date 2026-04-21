@@ -71,6 +71,34 @@ describe("contextWindow", () => {
     expect(snapshot?.totalProcessedTokens).toBe(748_126);
   });
 
+  it("uses the configured session max tokens when usage snapshots lag behind", () => {
+    const snapshot = deriveLatestContextWindowSnapshot([
+      makeActivity("activity-1", "context-window.configured", {
+        contextWindow: "1m",
+        maxTokens: 1_000_000,
+      }),
+      makeActivity("activity-2", "context-window.updated", {
+        usedTokens: 23_000,
+        maxTokens: 200_000,
+      }),
+    ]);
+
+    expect(snapshot?.usedTokens).toBe(23_000);
+    expect(snapshot?.maxTokens).toBe(1_000_000);
+  });
+
+  it("returns a session snapshot from configured max tokens before usage arrives", () => {
+    const snapshot = deriveLatestContextWindowSnapshot([
+      makeActivity("activity-1", "context-window.configured", {
+        contextWindow: "1m",
+        maxTokens: 1_000_000,
+      }),
+    ]);
+
+    expect(snapshot?.usedTokens).toBe(0);
+    expect(snapshot?.maxTokens).toBe(1_000_000);
+  });
+
   it("formats context window selection labels for Claude options", () => {
     expect(formatContextWindowSelectionLabel("1m")).toBe("1M");
     expect(formatContextWindowSelectionLabel("200k")).toBe("200k");

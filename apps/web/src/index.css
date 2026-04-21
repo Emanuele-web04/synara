@@ -228,7 +228,7 @@
   --success-foreground: var(--color-emerald-700);
   --sidebar: var(--card);
   --sidebar-foreground: var(--foreground);
-  --sidebar-accent: var(--color-background-button-secondary-hover, var(--accent));
+  --sidebar-accent: var(--color-background-button-secondary, var(--accent));
   --sidebar-accent-active: var(--color-background-button-secondary, var(--sidebar-accent));
   --sidebar-accent-foreground: var(--color-text-foreground, var(--foreground));
   --sidebar-border: var(--border);
@@ -263,7 +263,7 @@
     --success-foreground: var(--color-emerald-400);
     --sidebar: var(--card);
     --sidebar-foreground: var(--foreground);
-    --sidebar-accent: var(--color-background-button-secondary-hover, var(--accent));
+    --sidebar-accent: var(--color-background-button-secondary, var(--accent));
     --sidebar-accent-active: var(--color-background-button-secondary, var(--sidebar-accent));
     --sidebar-accent-foreground: var(--color-text-foreground, var(--foreground));
     --sidebar-border: var(--border);
@@ -452,8 +452,12 @@ label:has(> select#reasoning-effort) select {
   text-decoration: none;
 }
 
-.chat-markdown a:hover {
+.chat-markdown a:hover,
+.chat-markdown a:focus-visible {
   color: var(--color-token-text-link-active-foreground);
+  text-decoration: underline;
+  text-decoration-thickness: from-font;
+  text-underline-offset: 0.18em;
 }
 
 .chat-markdown blockquote {
@@ -576,9 +580,13 @@ diffs-container {
   background: color-mix(in srgb, var(--card) 92%, var(--background));
 }
 
-/* Keep composer chrome on the derived theme tokens instead of hardcoded dark blends. */
+/* Match Codex: composer chrome follows the input token, not the raised panel surface. */
 .chat-composer-surface {
-  background: var(--color-background-panel);
+  background: color-mix(
+    in srgb,
+    var(--color-token-input-background, var(--color-background-control)) 70%,
+    transparent
+  );
 }
 
 @keyframes ultrathink-rainbow {

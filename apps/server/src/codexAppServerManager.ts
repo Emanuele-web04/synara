@@ -91,6 +91,12 @@ interface CodexUserInputAnswer {
   answers: string[];
 }
 
+type CodexApprovalPolicy = "untrusted" | "on-failure" | "on-request" | "never";
+type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
+type CodexTurnSandboxPolicy = {
+  readonly type: "readOnly" | "workspaceWrite" | "dangerFullAccess";
+};
+
 interface CodexSessionContext {
   session: ProviderSession;
   account: CodexAccountSnapshot;
@@ -506,18 +512,44 @@ The \`request_user_input\` tool is unavailable in Default mode. If you call it w
 In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.
 </collaboration_mode>${CODEX_BROWSER_TOOL_ROUTING_INSTRUCTIONS}`;
 
+// Maps DP Code's simple runtime toggle to Codex thread-level permission overrides.
 function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
-  readonly approvalPolicy: "untrusted";
-  readonly sandbox: "read-only";
-} | null {
-  if (runtimeMode === "approval-required") {
-    return {
-      approvalPolicy: "untrusted",
-      sandbox: "read-only",
-    };
+  readonly approvalPolicy: CodexApprovalPolicy;
+  readonly sandbox: CodexSandboxMode;
+} {
+  switch (runtimeMode) {
+    case "approval-required":
+      return {
+        approvalPolicy: "untrusted",
+        sandbox: "read-only",
+      };
+    case "full-access":
+    default:
+      return {
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+      };
   }
+}
 
-  return null;
+// turn/start uses sandboxPolicy objects, so keep this separate from thread/start.
+function mapCodexRuntimeModeToTurnOverrides(runtimeMode: RuntimeMode): {
+  readonly approvalPolicy: CodexApprovalPolicy;
+  readonly sandboxPolicy: CodexTurnSandboxPolicy;
+} {
+  switch (runtimeMode) {
+    case "approval-required":
+      return {
+        approvalPolicy: "untrusted",
+        sandboxPolicy: { type: "readOnly" },
+      };
+    case "full-access":
+    default:
+      return {
+        approvalPolicy: "never",
+        sandboxPolicy: { type: "dangerFullAccess" },
+      };
+  }
 }
 
 export function ensureIsolatedScratchWorkspace(threadId: ThreadId): string {
@@ -789,7 +821,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         model: normalizedModel ?? null,
         ...(input.serviceTier !== undefined ? { serviceTier: input.serviceTier } : {}),
         cwd: resolvedCwd,
-        ...(mapCodexRuntimeMode(input.runtimeMode ?? "full-access") ?? {}),
+        ...mapCodexRuntimeMode(input.runtimeMode ?? "full-access"),
       };
 
       const threadStartParams = {
@@ -973,6 +1005,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       model?: string;
       serviceTier?: string | null;
       effort?: string;
+      approvalPolicy?: CodexApprovalPolicy;
+      sandboxPolicy?: CodexTurnSandboxPolicy;
       collaborationMode?: {
         mode: "default" | "plan";
         settings: {
@@ -984,6 +1018,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     } = {
       threadId: providerThreadId,
       input: turnInput,
+      ...mapCodexRuntimeModeToTurnOverrides(context.session.runtimeMode),
     };
     const normalizedModel = resolveCodexModelForAccount(
       normalizeCodexModelSlug(input.model ?? context.session.model),
@@ -1391,7 +1426,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           ? { serviceTier: "fast" as const }
           : {}),
         cwd: resolvedCwd,
-        ...(mapCodexRuntimeMode(input.runtimeMode) ?? {}),
+        ...mapCodexRuntimeMode(input.runtimeMode),
       };
 
       this.emitLifecycleEvent(

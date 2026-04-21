@@ -1,6 +1,11 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { DesktopBridge } from "@t3tools/contracts";
 import { BROWSER_IPC_CHANNELS } from "./browserIpc";
+import {
+  DESKTOP_WS_URL_CHANNEL,
+  normalizeDesktopWsUrl,
+  resolveDesktopWsUrlFromEnv,
+} from "./desktopWsBridge";
 import { SERVER_TRANSCRIBE_VOICE_CHANNEL } from "./voiceTranscription";
 
 const PICK_FOLDER_CHANNEL = "desktop:pick-folder";
@@ -17,10 +22,18 @@ const UPDATE_DOWNLOAD_CHANNEL = "desktop:update-download";
 const UPDATE_INSTALL_CHANNEL = "desktop:update-install";
 const NOTIFICATIONS_IS_SUPPORTED_CHANNEL = "desktop:notifications-is-supported";
 const NOTIFICATIONS_SHOW_CHANNEL = "desktop:notifications-show";
-const wsUrl = process.env.T3CODE_DESKTOP_WS_URL ?? null;
+
+function getDesktopWsUrl(): string | null {
+  try {
+    const ipcWsUrl = normalizeDesktopWsUrl(ipcRenderer.sendSync(DESKTOP_WS_URL_CHANNEL));
+    return ipcWsUrl ?? resolveDesktopWsUrlFromEnv(process.env);
+  } catch {
+    return resolveDesktopWsUrlFromEnv(process.env);
+  }
+}
 
 contextBridge.exposeInMainWorld("desktopBridge", {
-  getWsUrl: () => wsUrl,
+  getWsUrl: getDesktopWsUrl,
   pickFolder: () => ipcRenderer.invoke(PICK_FOLDER_CHANNEL),
   confirm: (message) => ipcRenderer.invoke(CONFIRM_CHANNEL, message),
   setTheme: (theme) => ipcRenderer.invoke(SET_THEME_CHANNEL, theme),

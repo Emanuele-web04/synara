@@ -30,7 +30,7 @@ export function deriveUserMessagePreviewState(
   }
 
   return {
-    text: text.slice(0, maxChars),
+    text: text.slice(0, maxChars) + "…",
     collapsible: true,
     truncated: true,
   };

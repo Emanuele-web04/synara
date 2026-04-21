@@ -447,26 +447,32 @@ describe("resolveThreadStatusPill", () => {
 });
 
 describe("resolveThreadRowClassName", () => {
-  it("uses the darker selected palette when a thread is both selected and active", () => {
+  it("keeps selected active rows on the selected sidebar background", () => {
     const className = resolveThreadRowClassName({ isActive: true, isSelected: true });
-    expect(className).toContain("bg-primary/16");
-    expect(className).toContain("hover:bg-primary/20");
-    expect(className).toContain("dark:bg-primary/22");
-    expect(className).not.toContain("bg-accent/85");
+    expect(className).toContain("bg-[var(--color-background-button-secondary)]");
+    expect(className).toContain("hover:bg-[var(--color-background-button-secondary)]");
+    expect(className).toContain("text-[var(--color-text-foreground)]");
+    expect(className).not.toContain("hover:bg-[var(--color-background-button-secondary-hover)]");
   });
 
-  it("uses selected hover colors for selected threads", () => {
+  it("keeps selected rows visually stable on hover", () => {
     const className = resolveThreadRowClassName({ isActive: false, isSelected: true });
-    expect(className).toContain("bg-primary/12");
-    expect(className).toContain("hover:bg-primary/16");
-    expect(className).toContain("dark:bg-primary/18");
-    expect(className).not.toContain("hover:bg-accent");
+    expect(className).toContain("bg-[var(--color-background-elevated-secondary)]");
+    expect(className).toContain("hover:bg-[var(--color-background-elevated-secondary)]");
+    expect(className).toContain("text-[var(--color-text-foreground)]");
+    expect(className).not.toContain("hover:bg-[var(--color-background-button-secondary-hover)]");
   });
 
-  it("keeps the accent palette for active-only threads", () => {
+  it("uses the selected sidebar background for active-only threads", () => {
     const className = resolveThreadRowClassName({ isActive: true, isSelected: false });
-    expect(className).toContain("bg-accent/62");
-    expect(className).toContain("hover:bg-accent/72");
+    expect(className).toContain("bg-[var(--color-background-button-secondary)]");
+    expect(className).toContain("hover:bg-[var(--color-background-button-secondary)]");
+  });
+
+  it("matches hover-only rows to the selected active background", () => {
+    const className = resolveThreadRowClassName({ isActive: false, isSelected: false });
+    expect(className).toContain("hover:bg-[var(--color-background-button-secondary)]");
+    expect(className).not.toContain("hover:bg-[var(--color-background-button-secondary-hover)]");
   });
 });
 

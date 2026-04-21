@@ -1337,6 +1337,13 @@ describe("deriveWorkLogEntries context window handling", () => {
           tone: "info",
         }),
         makeActivity({
+          id: "context-2",
+          turnId: "turn-1",
+          kind: "context-window.configured",
+          summary: "Context window configured",
+          tone: "info",
+        }),
+        makeActivity({
           id: "tool-1",
           turnId: "turn-1",
           kind: "tool.completed",

@@ -239,6 +239,35 @@ function buildContextWindowActivityPayload(
   return event.payload.usage;
 }
 
+function asPositiveFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+// Convert session-configured Claude window labels into the max-token shape the web meter uses.
+function buildConfiguredContextWindowPayload(
+  event: ProviderRuntimeEvent,
+): Record<string, unknown> | undefined {
+  if (event.type !== "session.configured") {
+    return undefined;
+  }
+  const config = asObject(event.payload.config);
+  const configuredContextWindow = asString(config?.contextWindow)?.trim().toLowerCase();
+  const maxTokens =
+    asPositiveFiniteNumber(config?.contextWindow) ??
+    (configuredContextWindow === "1m"
+      ? 1_000_000
+      : configuredContextWindow === "200k"
+        ? 200_000
+        : undefined);
+  if (maxTokens === undefined) {
+    return undefined;
+  }
+  return {
+    maxTokens,
+    ...(configuredContextWindow ? { contextWindow: configuredContextWindow } : {}),
+  };
+}
+
 function runtimePayloadRecord(event: ProviderRuntimeEvent): Record<string, unknown> | undefined {
   const payload = (event as { payload?: unknown }).payload;
   if (!payload || typeof payload !== "object") {
@@ -341,6 +370,26 @@ function runtimeEventToActivities(
       : {};
   })();
   switch (event.type) {
+    case "session.configured": {
+      const payload = buildConfiguredContextWindowPayload(event);
+      if (!payload) {
+        return [];
+      }
+
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "context-window.configured",
+          summary: "Context window configured",
+          payload,
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
     case "request.opened": {
       if (event.payload.requestType === "tool_user_input") {
         return [];

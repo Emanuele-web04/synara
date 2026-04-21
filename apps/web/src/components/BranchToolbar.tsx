@@ -354,7 +354,7 @@ export default function BranchToolbar({
                           href={learnMoreHref}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="flex items-center gap-1 pt-0.5 text-[11px] text-[var(--color-text-foreground-secondary)] transition-colors hover:text-[var(--color-text-foreground)]"
+                          className="flex items-center gap-1 pt-0.5 text-[11px] text-[var(--color-text-foreground-secondary)] underline-offset-2 transition-colors hover:text-[var(--color-text-foreground)] hover:underline focus-visible:underline"
                         >
                           Learn more
                           <ExternalLinkIcon className="size-3" />

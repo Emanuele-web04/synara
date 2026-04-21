@@ -715,7 +715,7 @@ export function buildThemeCssVariables(
     "--secondary": readCodexVariable("--color-background-button-secondary"),
     "--secondary-foreground": readCodexVariable("--color-text-button-secondary"),
     "--sidebar": readCodexVariable("--color-background-surface-under"),
-    "--sidebar-accent": readCodexVariable("--color-background-button-secondary-hover"),
+    "--sidebar-accent": readCodexVariable("--color-background-button-secondary"),
     "--sidebar-accent-active": readCodexVariable("--color-background-button-secondary"),
     "--sidebar-accent-foreground": readCodexVariable("--color-text-foreground"),
     "--sidebar-border": readCodexVariable("--color-border"),
@@ -888,9 +888,7 @@ function buildThemeTokenAliases(codexVariables: Record<string, string>): Record<
     "--color-token-list-active-selection-foreground": readCodexVariable("--color-text-foreground"),
     "--color-token-list-active-selection-icon-foreground":
       readCodexVariable("--color-icon-primary"),
-    "--color-token-list-hover-background": readCodexVariable(
-      "--color-background-button-secondary-hover",
-    ),
+    "--color-token-list-hover-background": readCodexVariable("--color-background-button-secondary"),
     "--color-token-main-surface-primary": readCodexVariable("--color-background-surface-under"),
     "--color-token-menu-background": readCodexVariable("--color-background-elevated-primary"),
     "--color-token-menu-border": readCodexVariable("--color-border"),

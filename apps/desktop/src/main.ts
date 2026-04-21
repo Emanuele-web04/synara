@@ -18,7 +18,7 @@ import {
   shell,
   systemPreferences,
 } from "electron";
-import type { MenuItemConstructorOptions } from "electron";
+import type { IpcMainEvent, MenuItemConstructorOptions } from "electron";
 import * as Effect from "effect/Effect";
 import type {
   DesktopTheme,
@@ -61,6 +61,17 @@ import { isArm64HostRunningIntelBuild, resolveDesktopRuntimeInfo } from "./runti
 import { DesktopBrowserManager } from "./browserManager";
 import { registerBrowserIpcHandlers, sendBrowserState } from "./browserIpc";
 import { BrowserUsePipeServer } from "./browserUsePipeServer";
+import {
+  DESKTOP_WS_URL_CHANNEL,
+  normalizeDesktopWsUrl,
+  resolveDesktopWsUrlFromEnv,
+} from "./desktopWsBridge";
+import {
+  resolveDesktopAppDataBase,
+  resolveDesktopUserDataPath,
+  resolveLegacyDesktopUserDataPaths,
+  seedDesktopUserDataProfileFromLegacy,
+} from "./desktopUserDataProfile";
 
 syncShellEnvironment();
 
@@ -78,15 +89,16 @@ const UPDATE_DOWNLOAD_CHANNEL = "desktop:update-download";
 const UPDATE_INSTALL_CHANNEL = "desktop:update-install";
 const NOTIFICATIONS_IS_SUPPORTED_CHANNEL = "desktop:notifications-is-supported";
 const NOTIFICATIONS_SHOW_CHANNEL = "desktop:notifications-show";
-const BASE_DIR = process.env.T3CODE_HOME?.trim() || Path.join(OS.homedir(), ".dpcode");
+const BASE_DIR =
+  process.env.DPCODE_HOME?.trim() ||
+  process.env.T3CODE_HOME?.trim() ||
+  Path.join(OS.homedir(), ".dpcode");
 const STATE_DIR = Path.join(BASE_DIR, "userdata");
 const DESKTOP_SCHEME = "t3";
 const ROOT_DIR = Path.resolve(__dirname, "../../..");
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
 const APP_DISPLAY_NAME = isDevelopment ? "DP Code (Dev)" : "DP Code (Alpha)";
 const APP_USER_MODEL_ID = isDevelopment ? "com.t3tools.dpcode.dev" : "com.t3tools.dpcode";
-const USER_DATA_DIR_NAME = isDevelopment ? "t3code-dev" : "t3code";
-const LEGACY_USER_DATA_DIR_NAME = isDevelopment ? "DP Code (Dev)" : "DP Code (Alpha)";
 const COMMIT_HASH_PATTERN = /^[0-9a-f]{7,40}$/i;
 const COMMIT_HASH_DISPLAY_LENGTH = 12;
 const LOG_DIR = Path.join(STATE_DIR, "logs");
@@ -925,24 +937,30 @@ function showDesktopNotification(input: {
  * parentheses (e.g. `~/.config/DP Code (Alpha)` on Linux). This is
  * unfriendly for shell usage and violates Linux naming conventions.
  *
- * We override it to a clean lowercase name (`t3code`). If the legacy
- * directory already exists we keep using it so existing users don't
- * lose their Chromium profile data (localStorage, cookies, sessions).
+ * We override it to a clean lowercase DP Code name. Legacy T3 Code/early
+ * DP Code Chromium profiles are intentionally left in place so both apps can
+ * coexist without sharing renderer storage.
  */
 function resolveUserDataPath(): string {
-  const appDataBase =
-    process.platform === "win32"
-      ? process.env.APPDATA || Path.join(OS.homedir(), "AppData", "Roaming")
-      : process.platform === "darwin"
-        ? Path.join(OS.homedir(), "Library", "Application Support")
-        : process.env.XDG_CONFIG_HOME || Path.join(OS.homedir(), ".config");
-
-  const legacyPath = Path.join(appDataBase, LEGACY_USER_DATA_DIR_NAME);
-  if (FS.existsSync(legacyPath)) {
-    return legacyPath;
+  const appDataBase = resolveDesktopAppDataBase();
+  const userDataPath = resolveDesktopUserDataPath({ appDataBase, isDevelopment });
+  const seedResult = seedDesktopUserDataProfileFromLegacy({
+    targetPath: userDataPath,
+    legacyPaths: resolveLegacyDesktopUserDataPaths({ appDataBase, isDevelopment }),
+  });
+  if (seedResult.status === "seeded") {
+    console.info("[desktop] Seeded DP Code Electron profile from legacy profile", {
+      sourcePath: seedResult.sourcePath,
+      targetPath: seedResult.targetPath,
+    });
+  } else if (seedResult.status === "seed-failed") {
+    console.warn("[desktop] Failed to seed DP Code Electron profile from legacy profile", {
+      sourcePath: seedResult.sourcePath,
+      targetPath: seedResult.targetPath,
+      error: seedResult.error,
+    });
   }
-
-  return Path.join(appDataBase, USER_DATA_DIR_NAME);
+  return userDataPath;
 }
 
 function configureAppIdentity(): void {
@@ -1282,6 +1300,11 @@ function configureAutoUpdater(): void {
 function backendEnv(): NodeJS.ProcessEnv {
   return {
     ...process.env,
+    DPCODE_MODE: "desktop",
+    DPCODE_NO_BROWSER: "1",
+    DPCODE_PORT: String(backendPort),
+    DPCODE_HOME: BASE_DIR,
+    DPCODE_AUTH_TOKEN: backendAuthToken,
     T3CODE_MODE: "desktop",
     T3CODE_NO_BROWSER: "1",
     T3CODE_PORT: String(backendPort),
@@ -1433,6 +1456,14 @@ async function stopBackendAndWaitForExit(timeoutMs = 5_000): Promise<void> {
 }
 
 function registerIpcHandlers(): void {
+  ipcMain.removeAllListeners(DESKTOP_WS_URL_CHANNEL);
+  ipcMain.on(DESKTOP_WS_URL_CHANNEL, (event: IpcMainEvent) => {
+    // The backend port is reserved at runtime, so preload asks main for the
+    // live URL instead of trusting build-time or inherited renderer env.
+    event.returnValue =
+      normalizeDesktopWsUrl(backendWsUrl) ?? resolveDesktopWsUrlFromEnv(process.env);
+  });
+
   ipcMain.removeHandler(PICK_FOLDER_CHANNEL);
   ipcMain.handle(PICK_FOLDER_CHANNEL, async () => {
     const owner = BrowserWindow.getFocusedWindow() ?? mainWindow;
@@ -1811,6 +1842,7 @@ async function bootstrap(): Promise<void> {
   backendAuthToken = Crypto.randomBytes(24).toString("hex");
   const backendHttpUrl = `http://127.0.0.1:${backendPort}`;
   backendWsUrl = `ws://127.0.0.1:${backendPort}/?token=${encodeURIComponent(backendAuthToken)}`;
+  process.env.DPCODE_DESKTOP_WS_URL = backendWsUrl;
   process.env.T3CODE_DESKTOP_WS_URL = backendWsUrl;
   writeDesktopLogHeader(`bootstrap resolved websocket url=${backendWsUrl}`);
 

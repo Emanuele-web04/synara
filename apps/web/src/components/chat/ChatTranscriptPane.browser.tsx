@@ -9,6 +9,7 @@ import { render } from "vitest-browser-react";
 
 import { ChatTranscriptPane } from "./ChatTranscriptPane";
 import { useTranscriptAssistantSelectionAction } from "./useTranscriptAssistantSelectionAction";
+import { COLLAPSED_USER_MESSAGE_MAX_CHARS } from "./userMessagePreview";
 
 const EMPTY_WORK_GROUPS: Record<string, boolean> = {};
 const EMPTY_TURN_DIFFS = new Map();
@@ -153,6 +154,84 @@ describe("ChatTranscriptPane", () => {
       });
 
       expect(transcriptCommitCount).toBe(baselineCommitCount);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("expands collapsed user messages from the Show more control", async () => {
+    const hiddenTail = "TAIL_SHOULD_APPEAR_AFTER_EXPAND";
+    const longUserText = `${"a".repeat(COLLAPSED_USER_MESSAGE_MAX_CHARS)}${hiddenTail}`;
+
+    const screen = await render(
+      <ChatTranscriptPane
+        activeThreadId="thread-user-message-expand"
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        chatFontSizePx={15}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        emptyStateProjectName={undefined}
+        hasMessages
+        isRevertingCheckpoint={false}
+        isWorking={false}
+        followLiveOutput={false}
+        listRef={{ current: null }}
+        markdownCwd={undefined}
+        onExpandTimelineImage={NOOP}
+        onMessagesClickCapture={NOOP}
+        onMessagesMouseUp={NOOP}
+        onMessagesPointerCancel={NOOP}
+        onMessagesPointerDown={NOOP}
+        onMessagesPointerUp={NOOP}
+        onMessagesScroll={NOOP}
+        onMessagesTouchEnd={NOOP}
+        onMessagesTouchMove={NOOP}
+        onMessagesTouchStart={NOOP}
+        onMessagesWheel={NOOP}
+        onIsAtEndChange={NOOP}
+        onOpenTurnDiff={NOOP}
+        onOpenThread={NOOP}
+        onRevertUserMessage={NOOP}
+        onScrollToBottom={NOOP}
+        resolvedTheme="dark"
+        revertTurnCountByUserMessageId={EMPTY_REVERT_COUNTS}
+        scrollButtonVisible={false}
+        terminalWorkspaceTerminalTabActive={false}
+        timelineEntries={[
+          {
+            id: "user-message-entry",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("user-message-expand"),
+              role: "user",
+              text: longUserText,
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        timestampFormat="locale"
+        turnDiffSummaryByAssistantMessageId={EMPTY_TURN_DIFFS}
+        workspaceRoot={undefined}
+      />,
+    );
+    try {
+      expect(screen.container.textContent).not.toContain(hiddenTail);
+      expect(screen.container.querySelector("button[data-scroll-anchor-ignore]")?.textContent).toBe(
+        "Show more",
+      );
+
+      await page.getByText("Show more").click();
+
+      await vi.waitFor(() => {
+        expect(screen.container.textContent).toContain(hiddenTail);
+      });
+      await expect.element(page.getByText("Show less")).toBeInTheDocument();
+      expect(screen.container.querySelector("button[data-scroll-anchor-ignore]")?.textContent).toBe(
+        "Show less",
+      );
     } finally {
       await screen.unmount();
     }

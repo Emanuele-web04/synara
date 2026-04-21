@@ -50,6 +50,7 @@ import { useRetainedThreadDetailIds } from "../threadDetailSubscriptionRetention
 import { useAppTypography } from "../hooks/useAppTypography";
 import { useTheme } from "../hooks/useTheme";
 import { invalidateGitQueries } from "../lib/gitReactQuery";
+import { hasLiveThreadsWithMissingProjects } from "../lib/desktopProjectRecovery";
 import { parseDiffRouteSearch } from "../diffRouteSearch";
 import { resolveSplitViewThreadIds, selectSplitView, useSplitViewStore } from "../splitViewStore";
 
@@ -759,24 +760,33 @@ function EventRouter() {
 function DesktopProjectBootstrap() {
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
   const projects = useStore((store) => store.projects);
+  const threads = useStore((store) => store.threads);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
   const attemptedRecoveryRef = useRef(false);
 
   useEffect(() => {
     const api = readNativeApi();
-    if (!api || attemptedRecoveryRef.current || !threadsHydrated || projects.length > 0) {
+    if (!api || attemptedRecoveryRef.current || !threadsHydrated) {
+      return;
+    }
+
+    const projectIds = new Set(projects.map((project) => project.id));
+    const hasThreadWithoutProject = threads.some((thread) => !projectIds.has(thread.projectId));
+    if (projects.length > 0 && !hasThreadWithoutProject) {
       return;
     }
 
     attemptedRecoveryRef.current = true;
 
-    // Shell subscriptions should normally hydrate the sidebar. If the desktop
-    // UI comes up empty against a non-empty local database, force one read-model
-    // refresh and fall back to repair only when the snapshot is still empty.
+    // Shell subscriptions should normally hydrate the sidebar. If project rows
+    // are missing while live threads exist, repair before accepting the snapshot.
     void api.orchestration
       .getSnapshot()
       .then((snapshot) => {
-        if (snapshot.projects.length > 0 || snapshot.threads.length > 0) {
+        const needsRepair =
+          (snapshot.projects.length === 0 && snapshot.threads.length === 0) ||
+          hasLiveThreadsWithMissingProjects(snapshot);
+        if (!needsRepair) {
           syncServerReadModel(snapshot);
           return snapshot;
         }
@@ -788,7 +798,7 @@ function DesktopProjectBootstrap() {
       .catch(() => {
         attemptedRecoveryRef.current = false;
       });
-  }, [projects.length, syncServerReadModel, threadsHydrated]);
+  }, [projects, syncServerReadModel, threads, threadsHydrated]);
 
   // Desktop hydration normally runs through EventRouter project + orchestration sync.
   return null;

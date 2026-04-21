@@ -9,6 +9,7 @@ import {
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
   OrchestrationThreadDetailSnapshot,
+  OrchestrationThreadPullRequest,
   ProjectScript,
   ProjectId,
   ProviderMentionReference,
@@ -80,6 +81,7 @@ const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
   Struct.assign({
     createBranchFlowCompleted: Schema.Number,
     handoff: Schema.NullOr(Schema.fromJsonString(ThreadHandoff)),
+    lastKnownPr: Schema.NullOr(Schema.fromJsonString(OrchestrationThreadPullRequest)),
     modelSelection: Schema.fromJsonString(ModelSelection),
   }),
 );
@@ -258,6 +260,7 @@ function toProjectedSession(row: ProjectionThreadSessionDbRow): OrchestrationSes
 function toProjectedProjectShell(row: ProjectionProjectDbRow): OrchestrationProjectShell {
   return {
     id: row.projectId,
+    kind: row.kind,
     title: row.title,
     workspaceRoot: row.workspaceRoot,
     defaultModelSelection: row.defaultModelSelection,
@@ -1064,6 +1067,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 
           const projects: ReadonlyArray<OrchestrationProject> = projectRows.map((row) => ({
             id: row.projectId,
+            kind: row.kind,
             title: row.title,
             workspaceRoot: row.workspaceRoot,
             defaultModelSelection: row.defaultModelSelection,
@@ -1253,6 +1257,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             option,
             (row): OrchestrationProject => ({
               id: row.projectId,
+              kind: row.kind,
               title: row.title,
               workspaceRoot: row.workspaceRoot,
               defaultModelSelection: row.defaultModelSelection,

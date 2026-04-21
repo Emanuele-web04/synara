@@ -334,7 +334,10 @@ import {
   resolveThreadEnvironmentMode,
 } from "../lib/threadEnvironment";
 import { buildModelSelection, buildNextProviderOptions } from "../providerModelOptions";
-import { waitForRecoverableProjectForDuplicateCreate } from "../lib/projectCreateRecovery";
+import {
+  isDuplicateProjectCreateError,
+  waitForRecoverableProjectForDuplicateCreate,
+} from "../lib/projectCreateRecovery";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
@@ -3189,6 +3192,10 @@ export default function ChatView({
   const scrollToEnd = useCallback((animated = false) => {
     legendListRef.current?.scrollToEnd?.({ animated });
   }, []);
+  const transcriptMessageCount = useMemo(
+    () => timelineEntries.filter((entry) => entry.kind === "message").length,
+    [timelineEntries],
+  );
   const onIsAtEndChange = useCallback((isAtEnd: boolean) => {
     if (isAtEndRef.current === isAtEnd) return;
     isAtEndRef.current = isAtEnd;
@@ -3247,6 +3254,18 @@ export default function ChatView({
   const onMessagesTouchMoveBase = useCallback(() => {}, []);
   const onMessagesTouchStartBase = useCallback(() => {}, []);
   const onMessagesWheelBase = useCallback(() => {}, []);
+  useEffect(() => {
+    if (!isAtEndRef.current) {
+      return;
+    }
+    // Re-apply the bottom stick after the next message row actually mounts.
+    const frameId = window.requestAnimationFrame(() => {
+      scrollToEnd(false);
+    });
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [scrollToEnd, transcriptMessageCount]);
   const {
     pendingTranscriptSelectionAction,
     commitTranscriptAssistantSelection,
@@ -4647,12 +4666,17 @@ export default function ChatView({
         } catch (error) {
           const description =
             error instanceof Error ? error.message : "Failed to create the selected project.";
+          if (!isDuplicateProjectCreateError(description)) {
+            throw error;
+          }
+
           // If the server already knows this workspace root, reuse that project and continue.
           const { snapshot, project: recoveredProject } =
             await waitForRecoverableProjectForDuplicateCreate({
               message: description,
               workspaceRoot: firstSendTarget.creation.workspaceRoot,
               loadSnapshot: () => api.orchestration.getSnapshot().catch(() => null),
+              repairSnapshot: () => api.orchestration.repairState().catch(() => null),
             });
           if (!snapshot || !recoveredProject) {
             throw error;

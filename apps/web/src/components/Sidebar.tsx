@@ -217,6 +217,10 @@ import type {
 } from "./SidebarSearchPalette.logic";
 import { useFocusedChatContext } from "../focusedChatContext";
 import { showContextMenuFallback } from "../contextMenuFallback";
+import {
+  waitForRecoverableProjectForDuplicateCreate,
+  waitForRecoverableProjectInReadModel,
+} from "../lib/projectCreateRecovery";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_PREVIEW_LIMIT = 5;
@@ -249,12 +253,6 @@ const PROJECT_CONTEXT_MENU_COPY_PATH_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
 const PROJECT_CONTEXT_MENU_ARCHIVE_ICON = renderToStaticMarkup(<HiOutlineArchiveBox />);
 const PROJECT_CONTEXT_MENU_DELETE_THREADS_ICON = renderToStaticMarkup(<Trash2 />);
-
-function wait(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
 
 function threadJumpLabelMapsEqual(
   left: ReadonlyMap<ThreadId, string>,
@@ -1498,32 +1496,14 @@ export default function Sidebar() {
     ): Promise<{
       project: OrchestrationReadModel["projects"][number] | null;
       snapshot: OrchestrationReadModel | null;
-    }> => {
-      let latestSnapshot: OrchestrationReadModel | null = null;
-
-      for (let attempt = 1; attempt <= ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS; attempt += 1) {
-        const snapshot = await api.orchestration.getSnapshot().catch(() => null);
-        if (snapshot) {
-          latestSnapshot = snapshot;
-          const project =
-            snapshot.projects.find(
-              (candidate) => candidate.id === projectId && candidate.deletedAt === null,
-            ) ?? null;
-          if (project) {
-            return { project, snapshot };
-          }
-        }
-
-        if (attempt < ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS) {
-          await wait(ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS * attempt);
-        }
-      }
-
-      return {
-        project: null,
-        snapshot: latestSnapshot,
-      };
-    },
+    }> =>
+      waitForRecoverableProjectInReadModel({
+        projectId,
+        loadSnapshot: () => api.orchestration.getSnapshot().catch(() => null),
+        repairSnapshot: () => api.orchestration.repairState().catch(() => null),
+        maxAttempts: ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS,
+        delayMs: ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS,
+      }),
     [],
   );
 
@@ -1534,35 +1514,14 @@ export default function Sidebar() {
     ): Promise<{
       project: OrchestrationReadModel["projects"][number] | null;
       snapshot: OrchestrationReadModel | null;
-    }> => {
-      let latestSnapshot: OrchestrationReadModel | null = null;
-
-      for (let attempt = 1; attempt <= ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS; attempt += 1) {
-        const snapshot = await api.orchestration.getSnapshot().catch(() => null);
-        if (snapshot) {
-          latestSnapshot = snapshot;
-          const project =
-            snapshot.projects.find(
-              (candidate) =>
-                candidate.deletedAt === null &&
-                findWorkspaceRootMatch([candidate], workspaceRoot, (item) => item.workspaceRoot) !==
-                  undefined,
-            ) ?? null;
-          if (project) {
-            return { project, snapshot };
-          }
-        }
-
-        if (attempt < ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS) {
-          await wait(ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS * attempt);
-        }
-      }
-
-      return {
-        project: null,
-        snapshot: latestSnapshot,
-      };
-    },
+    }> =>
+      waitForRecoverableProjectInReadModel({
+        workspaceRoot,
+        loadSnapshot: () => api.orchestration.getSnapshot().catch(() => null),
+        repairSnapshot: () => api.orchestration.repairState().catch(() => null),
+        maxAttempts: ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS,
+        delayMs: ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS,
+      }),
     [],
   );
 
@@ -1832,6 +1791,25 @@ export default function Sidebar() {
         const description =
           error instanceof Error ? error.message : "An error occurred while adding the project.";
         if (isDuplicateProjectCreateError(description)) {
+          const { project, snapshot } = await waitForRecoverableProjectForDuplicateCreate({
+            message: description,
+            workspaceRoot: cwd,
+            loadSnapshot: () => api.orchestration.getSnapshot().catch(() => null),
+            repairSnapshot: () => api.orchestration.repairState().catch(() => null),
+            maxAttempts: ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS,
+            delayMs: ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS,
+          });
+          if (snapshot) {
+            syncServerReadModel(snapshot);
+          }
+          if (project && snapshot) {
+            const recovered = await openExistingProjectFromSnapshot(project.id, snapshot);
+            if (recovered) {
+              finishAddingProject();
+              return;
+            }
+          }
+
           const duplicateProjectId = extractDuplicateProjectCreateProjectId(description);
           const recovered = duplicateProjectId
             ? await recoverExistingProjectFromServer(api, ProjectId.makeUnsafe(duplicateProjectId))
@@ -1859,6 +1837,8 @@ export default function Sidebar() {
       recoverExistingProjectFromServer,
       recoverExistingProjectByWorkspaceRootFromServer,
       recoverProjectThreadFromServer,
+      syncServerReadModel,
+      openExistingProjectFromSnapshot,
       setProjectExpanded,
     ],
   );

@@ -596,7 +596,7 @@ export default function ThreadTerminalDrawer({
     <aside
       className={cn(
         "thread-terminal-drawer relative flex min-w-0 flex-col overflow-hidden bg-background",
-        isWorkspaceMode ? "h-full min-h-0" : "shrink-0",
+        isWorkspaceMode ? "h-full min-h-0" : "shrink-0 border-t border-border/70",
       )}
       style={isWorkspaceMode ? undefined : { height: `${drawerHeight}px` }}
     >
