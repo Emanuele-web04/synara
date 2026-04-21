@@ -381,7 +381,6 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
   const shouldOfferCreateBranch = useMemo(() => {
     return shouldOfferCreateBranchPrompt({
       activeWorktreePath: activeThread?.worktreePath ?? null,
-      threadBranch: activeThread?.branch ?? null,
       gitStatus: gitStatusForActions
         ? {
             branch: gitStatusForActions.branch,
@@ -391,7 +390,6 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
       createBranchFlowCompleted: activeThread?.createBranchFlowCompleted ?? false,
     });
   }, [
-    activeThread?.branch,
     activeThread?.createBranchFlowCompleted,
     activeThread?.worktreePath,
     gitStatusForActions,

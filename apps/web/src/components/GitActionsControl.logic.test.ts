@@ -1259,7 +1259,6 @@ describe("shouldOfferCreateBranchPrompt", () => {
     assert.isFalse(
       shouldOfferCreateBranchPrompt({
         activeWorktreePath: "/tmp/project/.worktrees/feature-test",
-        threadBranch: "feature/test",
         gitStatus: {
           branch: "feature/test",
           hasUpstream: false,
@@ -1273,7 +1272,6 @@ describe("shouldOfferCreateBranchPrompt", () => {
     assert.isTrue(
       shouldOfferCreateBranchPrompt({
         activeWorktreePath: "/tmp/project/.worktrees/feature-test",
-        threadBranch: temporaryBranch,
         gitStatus: {
           branch: temporaryBranch,
           hasUpstream: false,
@@ -1283,11 +1281,10 @@ describe("shouldOfferCreateBranchPrompt", () => {
     );
   });
 
-  it("hides the create-branch prompt for a semantic local-only branch", () => {
-    assert.isFalse(
+  it("keeps the create-branch prompt visible for a semantic local-only branch until the flow is completed", () => {
+    assert.isTrue(
       shouldOfferCreateBranchPrompt({
         activeWorktreePath: "/tmp/project/.worktrees/feature-test",
-        threadBranch: "feature/test",
         gitStatus: {
           branch: "feature/test",
           hasUpstream: false,
@@ -1297,13 +1294,12 @@ describe("shouldOfferCreateBranchPrompt", () => {
     );
   });
 
-  it("hides the create-branch prompt when the thread already tracks a semantic branch", () => {
-    assert.isFalse(
+  it("keeps the create-branch prompt visible when the branch was auto-renamed locally but not finalized", () => {
+    assert.isTrue(
       shouldOfferCreateBranchPrompt({
         activeWorktreePath: "/tmp/project/.worktrees/feature-test",
-        threadBranch: "feature/test",
         gitStatus: {
-          branch: temporaryBranch,
+          branch: "feature/test",
           hasUpstream: false,
         },
         createBranchFlowCompleted: false,

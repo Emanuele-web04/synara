@@ -483,7 +483,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   <div
                     className={cn(
                       "w-max max-w-full min-w-0 self-end rounded-xl bg-secondary px-3.5",
-                      bubbleIsChipOnly ? "py-1" : "pt-[5px] pb-[7px]",
+                      bubbleIsChipOnly ? "py-1" : "pt-[6px] pb-[7px]",
                     )}
                   >
                     <UserMessageBody

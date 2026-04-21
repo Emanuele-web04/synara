@@ -356,18 +356,13 @@ export function resolveQuickAction(
 
 export function shouldOfferCreateBranchPrompt(input: {
   activeWorktreePath: string | null;
-  threadBranch: string | null;
   gitStatus: Pick<GitStatusResult, "branch" | "hasUpstream"> | null;
   createBranchFlowCompleted?: boolean;
 }): boolean {
-  // This prompt belongs to the temporary worktree branch handoff flow, not any
-  // ordinary local branch that simply hasn't been published yet.
   if (!input.activeWorktreePath) return false;
   if (!input.gitStatus?.branch) return false;
   if (input.gitStatus.hasUpstream) return false;
   if (input.createBranchFlowCompleted) return false;
-  if (!isTemporaryWorktreeBranch(input.gitStatus.branch)) return false;
-  if (input.threadBranch !== null && !isTemporaryWorktreeBranch(input.threadBranch)) return false;
   return true;
 }
 
