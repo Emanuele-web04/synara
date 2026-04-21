@@ -61,13 +61,17 @@ export function makeServerProviderLayer(): Layer.Layer<
   SqlClient.SqlClient | ServerConfig | FileSystem.FileSystem | AnalyticsService
 > {
   return Effect.gen(function* () {
-    const { providerEventLogPath } = yield* ServerConfig;
-    const nativeEventLogger = yield* makeEventNdjsonLogger(providerEventLogPath, {
-      stream: "native",
-    });
-    const canonicalEventLogger = yield* makeEventNdjsonLogger(providerEventLogPath, {
-      stream: "canonical",
-    });
+    const { logProviderEvents, providerEventLogPath } = yield* ServerConfig;
+    const nativeEventLogger = logProviderEvents
+      ? yield* makeEventNdjsonLogger(providerEventLogPath, {
+          stream: "native",
+        })
+      : undefined;
+    const canonicalEventLogger = logProviderEvents
+      ? yield* makeEventNdjsonLogger(providerEventLogPath, {
+          stream: "canonical",
+        })
+      : undefined;
     const providerSessionDirectoryLayer = ProviderSessionDirectoryLive.pipe(
       Layer.provide(ProviderSessionRuntimeRepositoryLive),
     );

@@ -380,16 +380,22 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
   }, [branchList?.branches, gitStatusForActions?.branch]);
   const shouldOfferCreateBranch = useMemo(() => {
     return shouldOfferCreateBranchPrompt({
-      activeThreadBranch: activeThread?.branch ?? null,
       activeWorktreePath: activeThread?.worktreePath ?? null,
+      threadBranch: activeThread?.branch ?? null,
       gitStatus: gitStatusForActions
         ? {
             branch: gitStatusForActions.branch,
             hasUpstream: gitStatusForActions.hasUpstream,
           }
         : null,
+      createBranchFlowCompleted: activeThread?.createBranchFlowCompleted ?? false,
     });
-  }, [activeThread?.branch, activeThread?.worktreePath, gitStatusForActions]);
+  }, [
+    activeThread?.branch,
+    activeThread?.createBranchFlowCompleted,
+    activeThread?.worktreePath,
+    gitStatusForActions,
+  ]);
   const currentBranchName =
     gitStatusForActions?.branch ?? currentBranch ?? activeThread?.branch ?? null;
   const suggestedCreateBranchName = useMemo(
@@ -880,6 +886,23 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
       setCreateBranchName("");
 
       if (trimmedName.toLowerCase() === normalizedCurrentBranchName) {
+        if (activeThreadId) {
+          void api.orchestration
+            .dispatchCommand({
+              type: "thread.meta.update",
+              commandId: newCommandId(),
+              threadId: activeThreadId,
+              createBranchFlowCompleted: true,
+            })
+            .catch(() => {
+              setThreadWorkspaceAction(activeThreadId, {
+                createBranchFlowCompleted: false,
+              });
+            });
+          setThreadWorkspaceAction(activeThreadId, {
+            createBranchFlowCompleted: true,
+          });
+        }
         toastManager.add({
           type: "success",
           title: `Keeping ${trimmedName}`,
@@ -909,12 +932,18 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
               worktreePath: activeThread?.worktreePath ?? null,
               associatedWorktreeBranch: trimmedName,
               associatedWorktreeRef: trimmedName,
+              createBranchFlowCompleted: true,
             })
-            .catch(() => undefined);
+            .catch(() => {
+              setThreadWorkspaceAction(activeThreadId, {
+                createBranchFlowCompleted: false,
+              });
+            });
           setThreadWorkspaceAction(activeThreadId, {
             branch: trimmedName,
             associatedWorktreeBranch: trimmedName,
             associatedWorktreeRef: trimmedName,
+            createBranchFlowCompleted: true,
           });
         }
         await invalidateGitQueries(queryClient);

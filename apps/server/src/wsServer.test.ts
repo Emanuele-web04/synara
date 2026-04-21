@@ -547,6 +547,7 @@ describe("WebSocket Server", () => {
       noBrowser: true,
       authToken: options.authToken,
       autoBootstrapProjectFromCwd: options.autoBootstrapProjectFromCwd ?? false,
+      logProviderEvents: false,
       logWebSocketEvents: options.logWebSocketEvents ?? false,
     } satisfies ServerConfigShape);
     const infrastructureLayer = providerLayer.pipe(Layer.provideMerge(persistenceLayer));

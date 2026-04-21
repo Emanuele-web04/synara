@@ -4,6 +4,29 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { formatShortTimestamp } from "../../timestampFormat";
 import { COLLAPSED_USER_MESSAGE_MAX_CHARS } from "./userMessagePreview";
 
+vi.mock("@legendapp/list/react", async () => {
+  const React = await import("react");
+
+  const LegendList = React.forwardRef(function MockLegendList(
+    props: {
+      data: Array<{ id: string }>;
+      keyExtractor: (item: { id: string }) => string;
+      renderItem: (args: { item: { id: string } }) => React.ReactNode;
+    },
+    _ref: React.ForwardedRef<unknown>,
+  ) {
+    return (
+      <div data-testid="legend-list">
+        {props.data.map((item) => (
+          <div key={props.keyExtractor(item)}>{props.renderItem({ item })}</div>
+        ))}
+      </div>
+    );
+  });
+
+  return { LegendList };
+});
+
 function matchMedia() {
   return {
     matches: false,
@@ -53,7 +76,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-1",
@@ -99,7 +121,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-1",
@@ -146,7 +167,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-steered-user-message",
@@ -192,7 +212,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-steered-user-message-media",
@@ -253,7 +272,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-plain-user-message",
@@ -302,7 +320,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-long-user-message",
@@ -347,7 +364,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-1",
@@ -401,7 +417,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-user-selection-fallback",
@@ -454,7 +469,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-user-skill-pill",
@@ -500,7 +514,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-user-agent-pill",
@@ -547,7 +560,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-1",
@@ -591,7 +603,6 @@ describe("MessagesTimeline", () => {
         isWorking
         activeTurnInProgress
         activeTurnStartedAt="2026-03-17T19:12:28.000Z"
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-compacting",
@@ -636,7 +647,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-work-inline",
@@ -695,7 +705,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-assistant-trailing",
@@ -753,7 +762,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-inline-tools",
@@ -868,7 +876,6 @@ describe("MessagesTimeline", () => {
         isWorking
         activeTurnInProgress
         activeTurnStartedAt="2026-03-17T19:12:28.000Z"
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-inline-tools-live-1",
@@ -983,7 +990,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-assistant-final",
@@ -1052,7 +1058,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-inline-tools-expanded",
@@ -1154,7 +1159,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-inline-file-change",
@@ -1236,7 +1240,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-inline-command",
@@ -1287,7 +1290,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-inline-web-search",
@@ -1333,7 +1335,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-inline-github-mcp",
@@ -1380,7 +1381,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-inline-mcp",
@@ -1428,7 +1428,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-inline-multi-file-change",
@@ -1518,7 +1517,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-inline-summary-fallback",
@@ -1606,7 +1604,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-assistant-diff",

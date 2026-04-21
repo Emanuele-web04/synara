@@ -1,13 +1,13 @@
 import "../../index.css";
 
 import { MessageId } from "@t3tools/contracts";
+import { type LegendListRef } from "@legendapp/list/react";
 import { page } from "vitest/browser";
 import { Profiler, useCallback, useRef, useState, type ProfilerOnRenderCallback } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { ChatTranscriptPane } from "./ChatTranscriptPane";
-import { useChatAutoScrollController } from "./useChatAutoScrollController";
 import { useTranscriptAssistantSelectionAction } from "./useTranscriptAssistantSelectionAction";
 
 const EMPTY_WORK_GROUPS: Record<string, boolean> = {};
@@ -33,26 +33,7 @@ function TranscriptPerfHarness(props: { onTranscriptRender: () => void }) {
   const [composerValue, setComposerValue] = useState("");
   const composerImagesRef = useRef<readonly []>([]);
   const composerAssistantSelectionsRef = useRef<readonly []>([]);
-  const messageCount = TIMELINE_ENTRIES.length;
-  const {
-    messagesScrollElement,
-    setMessagesBottomAnchorRef,
-    setMessagesScrollContainerRef,
-    onLiveContentHeightChange,
-    onMessagesClickCapture: onMessagesClickCaptureBase,
-    onMessagesPointerCancel: onMessagesPointerCancelBase,
-    onMessagesPointerDown: onMessagesPointerDownBase,
-    onMessagesPointerUp: onMessagesPointerUpBase,
-    onMessagesScroll: onMessagesScrollBase,
-    onMessagesTouchEnd: onMessagesTouchEndBase,
-    onMessagesTouchMove: onMessagesTouchMoveBase,
-    onMessagesTouchStart: onMessagesTouchStartBase,
-    onMessagesWheel: onMessagesWheelBase,
-  } = useChatAutoScrollController({
-    threadId: "thread-transcript-perf",
-    followLiveOutput: false,
-    messageCount,
-  });
+  const listRef = useRef<LegendListRef | null>(null);
   const {
     onMessagesClickCapture,
     onMessagesMouseUp,
@@ -71,15 +52,15 @@ function TranscriptPerfHarness(props: { onTranscriptRender: () => void }) {
     composerAssistantSelectionsRef,
     addComposerAssistantSelectionToDraft: () => true,
     scheduleComposerFocus: NOOP,
-    onMessagesClickCaptureBase,
-    onMessagesPointerCancelBase,
-    onMessagesPointerDownBase,
-    onMessagesPointerUpBase,
-    onMessagesScrollBase,
-    onMessagesTouchEndBase,
-    onMessagesTouchMoveBase,
-    onMessagesTouchStartBase,
-    onMessagesWheelBase,
+    onMessagesClickCaptureBase: NOOP,
+    onMessagesPointerCancelBase: NOOP,
+    onMessagesPointerDownBase: NOOP,
+    onMessagesPointerUpBase: NOOP,
+    onMessagesScrollBase: NOOP,
+    onMessagesTouchEndBase: NOOP,
+    onMessagesTouchMoveBase: NOOP,
+    onMessagesTouchStartBase: NOOP,
+    onMessagesWheelBase: NOOP,
   });
   const handleComposerChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     setComposerValue(event.target.value);
@@ -111,8 +92,8 @@ function TranscriptPerfHarness(props: { onTranscriptRender: () => void }) {
           isRevertingCheckpoint={false}
           isWorking={false}
           followLiveOutput={false}
+          listRef={listRef}
           markdownCwd={undefined}
-          messagesScrollElement={messagesScrollElement}
           onExpandTimelineImage={NOOP}
           onMessagesClickCapture={onMessagesClickCapture}
           onMessagesMouseUp={onMessagesMouseUp}
@@ -124,17 +105,15 @@ function TranscriptPerfHarness(props: { onTranscriptRender: () => void }) {
           onMessagesTouchMove={onMessagesTouchMove}
           onMessagesTouchStart={onMessagesTouchStart}
           onMessagesWheel={onMessagesWheel}
+          onIsAtEndChange={NOOP}
           onOpenTurnDiff={NOOP}
           onOpenThread={NOOP}
           onRevertUserMessage={NOOP}
           onScrollToBottom={NOOP}
-          onLiveContentHeightChange={onLiveContentHeightChange}
           onToggleWorkGroup={NOOP}
           resolvedTheme="dark"
           revertTurnCountByUserMessageId={EMPTY_REVERT_COUNTS}
           scrollButtonVisible={false}
-          setMessagesBottomAnchorRef={setMessagesBottomAnchorRef}
-          setMessagesScrollContainerRef={setMessagesScrollContainerRef}
           terminalWorkspaceTerminalTabActive={false}
           timelineEntries={TIMELINE_ENTRIES}
           timestampFormat="locale"

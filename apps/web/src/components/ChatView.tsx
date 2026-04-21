@@ -45,14 +45,21 @@ import {
 } from "@t3tools/shared/threadEnvironment";
 import { deriveTerminalCommandIdentity } from "@t3tools/shared/terminalThreads";
 import { deriveAssociatedWorktreeMetadata } from "@t3tools/shared/threadWorkspace";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+} from "react";
 import { GoTasklist } from "react-icons/go";
-import { FiThumbsUp } from "react-icons/fi";
-import { HiOutlineHandRaised } from "react-icons/hi2";
 import { PiArrowBendDownRight } from "react-icons/pi";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useDebouncedValue } from "@tanstack/react-pacer";
+import { Debouncer, useDebouncedValue } from "@tanstack/react-pacer";
 import { useNavigate, useSearch } from "@tanstack/react-router";
+import { type LegendListRef } from "@legendapp/list/react";
 import { gitCreateWorktreeMutationOptions, gitBranchesQueryOptions } from "~/lib/gitReactQuery";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import {
@@ -280,7 +287,6 @@ import { ComposerVoiceRecorderBar } from "./chat/ComposerVoiceRecorderBar";
 import { ComposerReferenceAttachments } from "./chat/ComposerReferenceAttachments";
 import { TranscriptSelectionActionLayer } from "./chat/TranscriptSelectionActionLayer";
 import { ActivePlanCard } from "./chat/ActivePlanCard";
-import { useChatAutoScrollController } from "./chat/useChatAutoScrollController";
 import { useTranscriptAssistantSelectionAction } from "./chat/useTranscriptAssistantSelectionAction";
 import {
   getComposerProviderState,
@@ -778,6 +784,7 @@ export default function ChatView({
   const [localDispatch, setLocalDispatch] = useState<LocalDispatchSnapshot | null>(null);
   const [isConnecting, _setIsConnecting] = useState(false);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [respondingRequestIds, setRespondingRequestIds] = useState<ApprovalRequestId[]>([]);
   const [respondingUserInputRequestIds, setRespondingUserInputRequestIds] = useState<
     ApprovalRequestId[]
@@ -787,7 +794,6 @@ export default function ChatView({
   >({});
   const [pendingUserInputQuestionIndexByRequestId, setPendingUserInputQuestionIndexByRequestId] =
     useState<Record<string, number>>({});
-  const [expandedWorkGroups, setExpandedWorkGroups] = useState<Record<string, boolean>>({});
   const [planSidebarOpen, setPlanSidebarOpen] = useState(false);
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
   const [composerCommandPicker, setComposerCommandPicker] = useState<
@@ -824,12 +830,31 @@ export default function ChatView({
   );
   const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
   const [isTraitsPickerOpen, setIsTraitsPickerOpen] = useState(false);
+  const legendListRef = useRef<LegendListRef | null>(null);
+  const isAtEndRef = useRef(true);
+  const pendingInteractionAnchorRef = useRef<{
+    element: HTMLElement;
+    top: number;
+  } | null>(null);
+  const pendingInteractionAnchorFrameRef = useRef<number | null>(null);
+  const showScrollDebouncer = useRef(
+    new Debouncer(() => setShowScrollToBottom(true), { wait: 150 }),
+  );
 
   useEffect(() => {
     setComposerCommandPicker(null);
     setIsModelPickerOpen(false);
     setIsTraitsPickerOpen(false);
   }, [threadId]);
+  useEffect(() => {
+    return () => {
+      showScrollDebouncer.current.cancel();
+      const pendingFrame = pendingInteractionAnchorFrameRef.current;
+      if (pendingFrame !== null) {
+        window.cancelAnimationFrame(pendingFrame);
+      }
+    };
+  }, []);
   useEffect(() => {
     // Thread-bound handoff dialog state is reset by the dedicated hook.
   }, [threadId]);
@@ -1456,14 +1481,9 @@ export default function ChatView({
   const isPreparingWorktree = localDispatch?.preparingWorktree ?? false;
   const hasLiveTurn = phase === "running";
   const isWorking = hasLiveTurn || isSendBusy || isConnecting || isRevertingCheckpoint;
-  // Keep the active-turn UI alive for buffering/task states, but only treat
-  // real assistant text growth as "follow output" for transcript auto-scroll.
-  const hasStreamingAssistantText = useMemo(
-    () =>
-      activeThread?.messages.some((message) => message.role === "assistant" && message.streaming) ??
-      false,
-    [activeThread?.messages],
-  );
+  const hasStreamingAssistantText =
+    activeThread?.messages.some((message) => message.role === "assistant" && message.streaming) ??
+    false;
   const activeTurnLayoutLive = isWorking || !latestTurnSettled;
   const [keepSettledActiveTurnLayout, setKeepSettledActiveTurnLayout] = useState(false);
   const previousActiveTurnLayoutLiveRef = useRef(activeTurnLayoutLive);
@@ -3164,35 +3184,69 @@ export default function ChatView({
     [serverThread],
   );
 
-  // Scroll behavior is isolated in a dedicated controller so the renderer tree only wires events.
-  // Count actual transcript messages here so tool/work rows do not retrigger
-  // the same "new content arrived" auto-stick behavior during buffering.
-  const messageCount = useMemo(
-    () => timelineEntries.filter((entry) => entry.kind === "message").length,
-    [timelineEntries],
+  // Scroll helpers stay list-owned so transcript updates stop bouncing through
+  // a separate measurement/controller loop during streaming.
+  const scrollToEnd = useCallback((animated = false) => {
+    legendListRef.current?.scrollToEnd?.({ animated });
+  }, []);
+  const onIsAtEndChange = useCallback((isAtEnd: boolean) => {
+    if (isAtEndRef.current === isAtEnd) return;
+    isAtEndRef.current = isAtEnd;
+    if (isAtEnd) {
+      showScrollDebouncer.current.cancel();
+      setShowScrollToBottom(false);
+    } else {
+      showScrollDebouncer.current.maybeExecute();
+    }
+  }, []);
+  const cancelPendingInteractionAnchorAdjustment = useCallback(() => {
+    const pendingFrame = pendingInteractionAnchorFrameRef.current;
+    if (pendingFrame === null) return;
+    pendingInteractionAnchorFrameRef.current = null;
+    window.cancelAnimationFrame(pendingFrame);
+  }, []);
+  const onMessagesClickCaptureBase = useCallback(
+    (event: MouseEvent<HTMLDivElement>) => {
+      const scrollContainer = legendListRef.current?.getScrollableNode?.();
+      if (!(scrollContainer instanceof HTMLElement) || !(event.target instanceof Element)) return;
+
+      const trigger = event.target.closest<HTMLElement>(
+        "button, summary, [role='button'], [data-scroll-anchor-target]",
+      );
+      if (!trigger || !scrollContainer.contains(trigger)) return;
+      if (trigger.closest("[data-scroll-anchor-ignore]")) return;
+
+      pendingInteractionAnchorRef.current = {
+        element: trigger,
+        top: trigger.getBoundingClientRect().top,
+      };
+
+      cancelPendingInteractionAnchorAdjustment();
+      pendingInteractionAnchorFrameRef.current = window.requestAnimationFrame(() => {
+        pendingInteractionAnchorFrameRef.current = null;
+        const anchor = pendingInteractionAnchorRef.current;
+        pendingInteractionAnchorRef.current = null;
+        const activeScrollContainer = legendListRef.current?.getScrollableNode?.();
+        if (!(activeScrollContainer instanceof HTMLElement) || !anchor) return;
+        if (!anchor.element.isConnected || !activeScrollContainer.contains(anchor.element)) return;
+
+        const nextTop = anchor.element.getBoundingClientRect().top;
+        const delta = nextTop - anchor.top;
+        if (Math.abs(delta) < 0.5) return;
+
+        activeScrollContainer.scrollTop += delta;
+      });
+    },
+    [cancelPendingInteractionAnchorAdjustment],
   );
-  const {
-    messagesScrollElement,
-    showScrollToBottom,
-    setMessagesBottomAnchorRef,
-    setMessagesScrollContainerRef,
-    forceStickToBottom,
-    onLiveContentHeightChange,
-    onComposerHeightChange,
-    onMessagesClickCapture: onMessagesClickCaptureBase,
-    onMessagesPointerCancel: onMessagesPointerCancelBase,
-    onMessagesPointerDown: onMessagesPointerDownBase,
-    onMessagesPointerUp: onMessagesPointerUpBase,
-    onMessagesScroll: onMessagesScrollBase,
-    onMessagesTouchEnd: onMessagesTouchEndBase,
-    onMessagesTouchMove: onMessagesTouchMoveBase,
-    onMessagesTouchStart: onMessagesTouchStartBase,
-    onMessagesWheel: onMessagesWheelBase,
-  } = useChatAutoScrollController({
-    threadId: activeThread?.id ?? null,
-    followLiveOutput: hasStreamingAssistantText,
-    messageCount,
-  });
+  const onMessagesPointerCancelBase = useCallback(() => {}, []);
+  const onMessagesPointerDownBase = useCallback(() => {}, []);
+  const onMessagesPointerUpBase = useCallback(() => {}, []);
+  const onMessagesScrollBase = useCallback(() => {}, []);
+  const onMessagesTouchEndBase = useCallback(() => {}, []);
+  const onMessagesTouchMoveBase = useCallback(() => {}, []);
+  const onMessagesTouchStartBase = useCallback(() => {}, []);
+  const onMessagesWheelBase = useCallback(() => {}, []);
   const {
     pendingTranscriptSelectionAction,
     commitTranscriptAssistantSelection,
@@ -3249,19 +3303,28 @@ export default function ChatView({
       const nextHeight = entry.contentRect.height;
       const previousHeight = composerFormHeightRef.current;
       composerFormHeightRef.current = nextHeight;
-
-      onComposerHeightChange(previousHeight, nextHeight);
+      if (previousHeight > 0 && Math.abs(nextHeight - previousHeight) < 0.5) {
+        return;
+      }
+      if (!isAtEndRef.current) {
+        return;
+      }
+      window.requestAnimationFrame(() => {
+        scrollToEnd(false);
+      });
     });
 
     observer.observe(composerForm);
     return () => {
       observer.disconnect();
     };
-  }, [activeThread?.id, composerFooterHasWideActions, onComposerHeightChange]);
+  }, [activeThread?.id, composerFooterHasWideActions, scrollToEnd]);
 
   useEffect(() => {
-    setExpandedWorkGroups({});
     setPullRequestDialogState(null);
+    isAtEndRef.current = true;
+    showScrollDebouncer.current.cancel();
+    setShowScrollToBottom(false);
     if (planSidebarOpenOnNextThreadRef.current) {
       planSidebarOpenOnNextThreadRef.current = false;
       setPlanSidebarOpen(true);
@@ -4703,8 +4766,12 @@ export default function ChatView({
         source: "native",
       },
     ]);
-    // Sending a message should always bring the latest user turn into view.
-    forceStickToBottom();
+    // Mark the transcript as anchored before the optimistic row lands so the
+    // list keeps following the active tail automatically.
+    isAtEndRef.current = true;
+    showScrollDebouncer.current.cancel();
+    setShowScrollToBottom(false);
+    scrollToEnd(false);
 
     setThreadError(threadIdForSend, null);
     if (expiredTerminalContextCount > 0) {
@@ -5136,7 +5203,10 @@ export default function ChatView({
         source: "native",
       },
     ]);
-    forceStickToBottom();
+    isAtEndRef.current = true;
+    showScrollDebouncer.current.cancel();
+    setShowScrollToBottom(false);
+    scrollToEnd(false);
 
     try {
       await persistThreadSettingsForNextTurn({
@@ -6143,19 +6213,16 @@ export default function ChatView({
     }
     return false;
   };
-  const onToggleWorkGroup = useCallback((groupId: string) => {
-    setExpandedWorkGroups((existing) => ({
-      ...existing,
-      [groupId]: !existing[groupId],
-    }));
-  }, []);
   const onExpandTimelineImage = useCallback((preview: ExpandedImagePreview) => {
     setExpandedImage(preview);
   }, []);
   const expandedImageItem = expandedImage ? expandedImage.images[expandedImage.index] : null;
   const onScrollToBottom = useCallback(() => {
-    forceStickToBottom("smooth");
-  }, [forceStickToBottom]);
+    isAtEndRef.current = true;
+    showScrollDebouncer.current.cancel();
+    setShowScrollToBottom(false);
+    scrollToEnd(true);
+  }, [scrollToEnd]);
   const onOpenTurnDiff = useCallback(
     (turnId: TurnId, filePath?: string) => {
       if (diffEnvironmentPending) {
@@ -6319,37 +6386,8 @@ export default function ChatView({
       : {}),
   };
 
-  const accessModeToggleButton =
-    !showPlanFollowUpPrompt &&
-    !activePendingProgress &&
-    !isVoiceRecording &&
-    !isVoiceTranscribing ? (
-      <button
-        type="button"
-        className="inline-flex h-7 shrink-0 self-center items-center gap-1 rounded px-1.5 py-0.5 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-muted-foreground/70 transition-colors hover:text-foreground/80 disabled:opacity-50 sm:h-8"
-        onClick={() =>
-          handleRuntimeModeChange(
-            runtimeMode === "full-access" ? "approval-required" : "full-access",
-          )
-        }
-        disabled={isConnecting || isSendBusy || phase === "running"}
-        title={
-          runtimeMode === "full-access"
-            ? "Full access — click to require approvals"
-            : "Ask every action"
-        }
-      >
-        {runtimeMode === "full-access" ? (
-          <FiThumbsUp className="size-3 shrink-0" />
-        ) : (
-          <HiOutlineHandRaised className="size-3 shrink-0" />
-        )}
-        <span className="leading-none">
-          {runtimeMode === "full-access" ? "Full access" : "Default permissions"}
-        </span>
-      </button>
-    ) : null;
-
+  // Composer layout keeps the plan card and footer actions in one render path so
+  // follow-up prompts and normal chat mode stay visually in sync.
   const planCardAboveComposer = Boolean(activePlan && !planSidebarOpen);
 
   const composerSection = (
@@ -6676,8 +6714,7 @@ export default function ChatView({
                 <div
                   data-chat-composer-actions="right"
                   className={cn(
-                    "flex gap-2",
-                    isVoiceRecording || isVoiceTranscribing ? "items-center" : "items-end",
+                    "flex items-center gap-2",
                     isVoiceRecording || isVoiceTranscribing ? "min-w-0 flex-1" : "shrink-0",
                   )}
                 >
@@ -6794,7 +6831,6 @@ export default function ChatView({
                       )
                     ) : (
                       <>
-                        {accessModeToggleButton}
                         {showVoiceNotesControl ? (
                           <ComposerVoiceButton
                             disabled={isComposerApprovalState || isConnecting || isSendBusy}
@@ -7016,6 +7052,7 @@ export default function ChatView({
                     </h2>
                   </div>
                   {composerSection}
+                  {isGitRepo ? <BranchToolbar {...branchToolbarProps} /> : null}
                 </div>
               </div>
             ) : (
@@ -7025,15 +7062,11 @@ export default function ChatView({
                 isWorking={isWorking}
                 activeTurnInProgress={activeTurnInProgress}
                 activeTurnStartedAt={activeWorkStartedAt}
-                messagesScrollElement={messagesScrollElement}
-                setMessagesBottomAnchorRef={setMessagesBottomAnchorRef}
-                setMessagesScrollContainerRef={setMessagesScrollContainerRef}
+                listRef={legendListRef}
                 timelineEntries={timelineEntries}
                 completionDividerBeforeEntryId={completionDividerBeforeEntryId}
                 completionSummary={completionSummary}
                 turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
-                expandedWorkGroups={expandedWorkGroups}
-                onToggleWorkGroup={onToggleWorkGroup}
                 onOpenTurnDiff={onOpenTurnDiff}
                 onOpenThread={onNavigateToThread}
                 revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
@@ -7041,7 +7074,7 @@ export default function ChatView({
                 isRevertingCheckpoint={isRevertingCheckpoint}
                 onExpandTimelineImage={onExpandTimelineImage}
                 followLiveOutput={hasStreamingAssistantText}
-                onLiveContentHeightChange={onLiveContentHeightChange}
+                onIsAtEndChange={onIsAtEndChange}
                 markdownCwd={threadWorkspaceCwd ?? undefined}
                 resolvedTheme={resolvedTheme}
                 chatFontSizePx={settings.chatFontSizePx}
@@ -7538,7 +7571,6 @@ export default function ChatView({
                                   )
                                 ) : (
                                   <>
-                                    {accessModeToggleButton}
                                     {showVoiceNotesControl ? (
                                       <ComposerVoiceButton
                                         disabled={

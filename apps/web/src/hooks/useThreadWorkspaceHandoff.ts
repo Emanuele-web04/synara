@@ -78,6 +78,7 @@ export function useThreadWorkspaceHandoff(input: {
           associatedWorktreePath: result.associatedWorktreePath,
           associatedWorktreeBranch: result.associatedWorktreeBranch,
           associatedWorktreeRef: result.associatedWorktreeRef,
+          ...(targetMode === "worktree" ? { createBranchFlowCompleted: false } : {}),
         } as const;
 
         await api.orchestration.dispatchCommand({

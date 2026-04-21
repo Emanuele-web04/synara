@@ -45,6 +45,7 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly noBrowser: boolean;
   readonly authToken: string | undefined;
   readonly autoBootstrapProjectFromCwd: boolean;
+  readonly logProviderEvents: boolean;
   readonly logWebSocketEvents: boolean;
 }
 
@@ -103,6 +104,7 @@ export class ServerConfig extends ServiceMap.Service<ServerConfig, ServerConfigS
           ...derivedPaths,
           mode: "web",
           autoBootstrapProjectFromCwd: false,
+          logProviderEvents: false,
           logWebSocketEvents: false,
           port: 0,
           host: undefined,

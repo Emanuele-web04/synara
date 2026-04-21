@@ -1173,6 +1173,18 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
 
   const publishScopedOrchestrationEvent = Effect.fnUntraced(function* (event: OrchestrationEvent) {
     const connectedClients = yield* Ref.get(clients);
+    const threadDetailEvent =
+      event.aggregateKind === "thread" && isThreadDetailEvent(event)
+        ? {
+            threadId: ThreadId.makeUnsafe(String(event.aggregateId)),
+            payload: {
+              kind: "event" as const,
+              event,
+            },
+          }
+        : null;
+    let shellEvent: Option.Option<OrchestrationShellStreamEvent> | null = null;
+
     for (const client of connectedClients) {
       const subscriptions = getClientOrchestrationSubscriptions(client);
       const hasScopedSubscriptions = subscriptions.shell || subscriptions.threadIds.size > 0;
@@ -1186,7 +1198,9 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       }
 
       if (subscriptions.shell) {
-        const shellEvent = yield* toShellStreamEvent(event);
+        if (shellEvent === null) {
+          shellEvent = yield* toShellStreamEvent(event);
+        }
         if (Option.isSome(shellEvent)) {
           yield* pushBus
             .publishClient(client, ORCHESTRATION_WS_CHANNELS.shellEvent, shellEvent.value)
@@ -1194,20 +1208,16 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         }
       }
 
-      if (event.aggregateKind !== "thread" || !isThreadDetailEvent(event)) {
+      if (threadDetailEvent === null) {
         continue;
       }
 
-      const threadId = ThreadId.makeUnsafe(String(event.aggregateId));
-      if (!subscriptions.threadIds.has(threadId)) {
+      if (!subscriptions.threadIds.has(threadDetailEvent.threadId)) {
         continue;
       }
 
       yield* pushBus
-        .publishClient(client, ORCHESTRATION_WS_CHANNELS.threadEvent, {
-          kind: "event" as const,
-          event,
-        })
+        .publishClient(client, ORCHESTRATION_WS_CHANNELS.threadEvent, threadDetailEvent.payload)
         .pipe(Effect.asVoid);
     }
   });

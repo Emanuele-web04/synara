@@ -78,6 +78,7 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
 const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
 const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
   Struct.assign({
+    createBranchFlowCompleted: Schema.Number,
     handoff: Schema.NullOr(Schema.fromJsonString(ThreadHandoff)),
     modelSelection: Schema.fromJsonString(ModelSelection),
   }),
@@ -145,6 +146,7 @@ type ProjectionThreadSessionDbRow = Schema.Schema.Type<typeof ProjectionThreadSe
 const REQUIRED_SNAPSHOT_PROJECTORS = [
   ORCHESTRATION_PROJECTOR_NAMES.projects,
   ORCHESTRATION_PROJECTOR_NAMES.threads,
+  ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries,
   ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
   ORCHESTRATION_PROJECTOR_NAMES.threadProposedPlans,
   ORCHESTRATION_PROJECTOR_NAMES.threadActivities,
@@ -292,6 +294,7 @@ function toProjectedThreadShell(input: {
     associatedWorktreePath: threadRow.associatedWorktreePath,
     associatedWorktreeBranch: threadRow.associatedWorktreeBranch,
     associatedWorktreeRef: threadRow.associatedWorktreeRef,
+    createBranchFlowCompleted: threadRow.createBranchFlowCompleted > 0,
     parentThreadId: threadRow.parentThreadId ?? null,
     subagentAgentId: threadRow.subagentAgentId ?? null,
     subagentNickname: threadRow.subagentNickname ?? null,
@@ -330,6 +333,7 @@ function toProjectedThreadShellFromStoredSummary(input: {
     associatedWorktreePath: threadRow.associatedWorktreePath,
     associatedWorktreeBranch: threadRow.associatedWorktreeBranch,
     associatedWorktreeRef: threadRow.associatedWorktreeRef,
+    createBranchFlowCompleted: threadRow.createBranchFlowCompleted > 0,
     parentThreadId: threadRow.parentThreadId ?? null,
     subagentAgentId: threadRow.subagentAgentId ?? null,
     subagentNickname: threadRow.subagentNickname ?? null,
@@ -373,6 +377,7 @@ function toProjectedThread(input: {
     associatedWorktreePath: threadRow.associatedWorktreePath,
     associatedWorktreeBranch: threadRow.associatedWorktreeBranch,
     associatedWorktreeRef: threadRow.associatedWorktreeRef,
+    createBranchFlowCompleted: threadRow.createBranchFlowCompleted > 0,
     parentThreadId: threadRow.parentThreadId ?? null,
     subagentAgentId: threadRow.subagentAgentId ?? null,
     subagentNickname: threadRow.subagentNickname ?? null,
@@ -469,6 +474,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           associated_worktree_path AS "associatedWorktreePath",
           associated_worktree_branch AS "associatedWorktreeBranch",
           associated_worktree_ref AS "associatedWorktreeRef",
+          create_branch_flow_completed AS "createBranchFlowCompleted",
           parent_thread_id AS "parentThreadId",
           subagent_agent_id AS "subagentAgentId",
           subagent_nickname AS "subagentNickname",
@@ -722,6 +728,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           associated_worktree_path AS "associatedWorktreePath",
           associated_worktree_branch AS "associatedWorktreeBranch",
           associated_worktree_ref AS "associatedWorktreeRef",
+          create_branch_flow_completed AS "createBranchFlowCompleted",
           parent_thread_id AS "parentThreadId",
           subagent_agent_id AS "subagentAgentId",
           subagent_nickname AS "subagentNickname",

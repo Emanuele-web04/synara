@@ -233,11 +233,42 @@ type ComposerCommandGroupModel = {
   items: ComposerCommandItem[];
 };
 
-function groupCommandItems(
+const COMPOSER_COMMAND_GROUP_LABEL_CLASSNAME =
+  "px-2 pt-1.5 pb-1 text-[11px] font-normal text-muted-foreground/60";
+
+export function groupCommandItems(
   items: ComposerCommandItem[],
   triggerKind: ComposerTriggerKind | null,
   groupSlashCommandSections: boolean,
 ): ComposerCommandGroupModel[] {
+  if (triggerKind === "mention") {
+    const pluginItems = items.filter((item) => item.type === "plugin");
+    const localItems = items.filter((item) => item.type === "local-root" || item.type === "path");
+    const agentItems = items.filter((item) => item.type === "agent");
+    const otherItems = items.filter(
+      (item) =>
+        item.type !== "plugin" &&
+        item.type !== "local-root" &&
+        item.type !== "path" &&
+        item.type !== "agent",
+    );
+
+    const groups: ComposerCommandGroupModel[] = [];
+    if (pluginItems.length > 0) {
+      groups.push({ id: "plugins", label: "Plugins", items: pluginItems });
+    }
+    if (localItems.length > 0) {
+      groups.push({ id: "local", label: "Local", items: localItems });
+    }
+    if (agentItems.length > 0) {
+      groups.push({ id: "subagents", label: "Subagents", items: agentItems });
+    }
+    if (otherItems.length > 0) {
+      groups.push({ id: "other", label: null, items: otherItems });
+    }
+    return groups;
+  }
+
   if (triggerKind !== "slash-command" || !groupSlashCommandSections) {
     return [{ id: "default", label: null, items }];
   }
@@ -306,7 +337,7 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
               {groupIndex > 0 ? <CommandSeparator className="my-0.5" /> : null}
               <CommandGroup>
                 {group.label ? (
-                  <CommandGroupLabel className="px-2 pt-1.5 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/55">
+                  <CommandGroupLabel className={COMPOSER_COMMAND_GROUP_LABEL_CLASSNAME}>
                     {group.label}
                   </CommandGroupLabel>
                 ) : null}
@@ -326,6 +357,25 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
               </CommandGroup>
             </div>
           ))}
+          {props.triggerKind === "mention" ? (
+            <>
+              {groups.length > 0 ? <CommandSeparator className="my-0.5" /> : null}
+              {/* This footer is informational copy, not a selectable result group. */}
+              <div className="pt-0.5 pb-2">
+                <p
+                  className={cn(
+                    COMPOSER_COMMAND_GROUP_LABEL_CLASSNAME,
+                    "px-2 py-0 font-medium text-muted-foreground text-xs",
+                  )}
+                >
+                  Files
+                </p>
+                <p className="px-2 pt-0.5 text-[11px] text-muted-foreground/55">
+                  Type to search for files
+                </p>
+              </div>
+            </>
+          ) : null}
         </CommandList>
         {props.items.length === 0 && (
           <p className="px-2 py-1.5 text-muted-foreground/50 text-[11px]">

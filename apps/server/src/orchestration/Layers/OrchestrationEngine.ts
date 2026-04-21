@@ -16,6 +16,7 @@ import {
   Ref,
   Schema,
   Semaphore,
+  Scope,
   Stream,
 } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -99,6 +100,9 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const commandQueue = yield* Queue.unbounded<CommandEnvelope>();
   const eventPubSub = yield* PubSub.unbounded<OrchestrationEvent>();
   const maintenanceLock = yield* Semaphore.make(1);
+  const deferredProjectionDirty = yield* Ref.make(false);
+  const deferredProjectionCatchUpInFlight = yield* Ref.make(false);
+  const deferredProjectionScope = yield* Scope.make("sequential");
 
   const makeCommandTimeoutError = (command: OrchestrationCommand) =>
     new OrchestrationCommandTimeoutError({
@@ -140,6 +144,53 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         detail: existingReceipt.value.error ?? "Previously rejected.",
       });
     });
+
+  // When deferred projection slips, recover with one background bootstrap replay instead of
+  // continuing to advance the inline cursor and potentially skipping the failed sequence.
+  const scheduleDeferredProjectionCatchUp = Effect.fn(function* (input: {
+    readonly eventType: OrchestrationEvent["type"];
+    readonly sequence: number;
+  }) {
+    const shouldStart = yield* Ref.modify(
+      deferredProjectionCatchUpInFlight,
+      (inFlight): readonly [boolean, boolean] => [!inFlight, true],
+    );
+    if (!shouldStart) {
+      return;
+    }
+
+    yield* Effect.logWarning("scheduling deferred orchestration projection catch-up").pipe(
+      Effect.annotateLogs({
+        eventType: input.eventType,
+        sequence: input.sequence,
+      }),
+    );
+    yield* maintenanceLock
+      .withPermits(1)(
+        projectionPipeline.bootstrap.pipe(
+          Effect.tap(() => Ref.set(deferredProjectionDirty, false)),
+          Effect.tap(() =>
+            Effect.log("deferred orchestration projection catch-up completed").pipe(
+              Effect.annotateLogs({
+                eventType: input.eventType,
+                sequence: input.sequence,
+              }),
+            ),
+          ),
+          Effect.catchCause((cause) =>
+            Effect.logWarning("deferred orchestration projection catch-up failed").pipe(
+              Effect.annotateLogs({
+                eventType: input.eventType,
+                sequence: input.sequence,
+                cause: Cause.pretty(cause),
+              }),
+            ),
+          ),
+          Effect.ensuring(Ref.set(deferredProjectionCatchUpInFlight, false)),
+        ),
+      )
+      .pipe(Effect.forkIn(deferredProjectionScope), Effect.asVoid);
+  });
 
   const refreshReadModelFromProjectionState = Effect.gen(function* () {
     const projectRows = yield* sql<{
@@ -357,7 +408,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           if (isProjectMetadataEvent(savedEvent)) {
             yield* projectionPipeline.projectMetadataEvent(savedEvent);
           } else {
-            yield* projectionPipeline.projectEvent(savedEvent);
+            yield* projectionPipeline.projectHotEvent(savedEvent);
           }
           committedEvents.push(savedEvent);
         }
@@ -421,6 +472,47 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         );
 
       readModel = committedCommand.nextReadModel;
+      yield* Effect.forEach(
+        committedCommand.committedEvents,
+        (event) =>
+          isProjectMetadataEvent(event)
+            ? Effect.void
+            : Effect.gen(function* () {
+                const isDeferredProjectionDirty = yield* Ref.get(deferredProjectionDirty);
+                if (isDeferredProjectionDirty) {
+                  yield* scheduleDeferredProjectionCatchUp({
+                    eventType: event.type,
+                    sequence: event.sequence,
+                  });
+                  return;
+                }
+
+                const deferredProjectionOutcome = yield* projectionPipeline
+                  .projectDeferredEvent(event)
+                  .pipe(
+                    Effect.matchCause({
+                      onFailure: (cause) => ({ _tag: "failure" as const, cause }),
+                      onSuccess: () => ({ _tag: "success" as const }),
+                    }),
+                  );
+
+                if (deferredProjectionOutcome._tag === "success") {
+                  return;
+                }
+
+                yield* Ref.set(deferredProjectionDirty, true);
+                yield* Effect.logWarning("deferred orchestration projector failed", {
+                  sequence: event.sequence,
+                  eventType: event.type,
+                  cause: Cause.pretty(deferredProjectionOutcome.cause),
+                });
+                yield* scheduleDeferredProjectionCatchUp({
+                  eventType: event.type,
+                  sequence: event.sequence,
+                });
+              }),
+        { concurrency: 1 },
+      );
       for (const event of committedCommand.committedEvents) {
         yield* PubSub.publish(eventPubSub, event);
       }

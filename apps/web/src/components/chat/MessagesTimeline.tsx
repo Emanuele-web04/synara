@@ -1,27 +1,23 @@
 // FILE: MessagesTimeline.tsx
-// Purpose: Renders the virtualized chat transcript, including user bubbles, assistant markdown, and work logs.
+// Purpose: Renders the chat transcript rows and lets LegendList own scrolling/follow behavior.
 // Layer: Web chat presentation component
 // Exports: MessagesTimeline
 
 import { type MessageId, ThreadId, type TurnId } from "@t3tools/contracts";
+import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import {
   memo,
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type CSSProperties,
+  type ComponentProps,
+  type RefObject,
   type ReactNode,
 } from "react";
-import {
-  measureElement as measureVirtualElement,
-  type VirtualItem,
-  useVirtualizer,
-} from "@tanstack/react-virtual";
 import { deriveTimelineEntries, formatElapsed } from "../../session-logic";
-import { AUTO_SCROLL_BOTTOM_THRESHOLD_PX } from "../../chat-scroll";
 import { type TurnDiffSummary } from "../../types";
 import ChatMarkdown from "../ChatMarkdown";
 import {
@@ -41,8 +37,6 @@ import {
   ZapIcon,
 } from "~/lib/icons";
 import { Button } from "../ui/button";
-import { clamp } from "effect/Number";
-import { estimateTimelineMessageHeight, estimateTimelineWorkGroupHeight } from "../timelineHeight";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { DiffStatLabel } from "./DiffStatLabel";
@@ -89,7 +83,7 @@ import {
   formatComposerSkillChipLabel,
 } from "../composerInlineChip";
 import { basenameOfPath } from "../../file-icons";
-import { getChatTranscriptLineHeightPx, getChatTranscriptTextStyle } from "./chatTypography";
+import { getChatTranscriptTextStyle } from "./chatTypography";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { getAppTypographyScale } from "../../lib/appTypography";
 import {
@@ -103,9 +97,6 @@ import { deriveUserMessagePreviewState } from "./userMessagePreview";
 
 const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
 const MAX_VISIBLE_INLINE_TOOL_ENTRIES = 4;
-const ALWAYS_UNVIRTUALIZED_TAIL_ROWS = 8;
-const SIMPLE_LIST_ROW_THRESHOLD = 180;
-const SIMPLE_LIST_ACTIVE_TURN_ROW_THRESHOLD = 260;
 
 const SkillCubeIcon: LucideIcon = (props) => (
   <svg {...props} viewBox="0 0 24 24" fill="none">
@@ -184,21 +175,31 @@ interface MessagesTimelineProps {
   activeTurnStartedAt: string | null;
   followLiveOutput?: boolean;
   emptyStateContent?: ReactNode;
-  scrollContainer: HTMLDivElement | null;
+  listRef?: RefObject<LegendListRef | null>;
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
   completionDividerBeforeEntryId: string | null;
   completionSummary: string | null;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   nowIso?: string;
-  expandedWorkGroups: Record<string, boolean>;
-  onToggleWorkGroup: (groupId: string) => void;
+  expandedWorkGroups?: Record<string, boolean>;
+  onToggleWorkGroup?: (groupId: string) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   onOpenThread?: (threadId: ThreadId) => void;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   onRevertUserMessage: (messageId: MessageId) => void;
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
-  onLiveContentHeightChange?: () => void;
+  onIsAtEndChange?: (isAtEnd: boolean) => void;
+  onMessagesClickCapture?: ComponentProps<typeof LegendList>["onClickCapture"];
+  onMessagesMouseUp?: ComponentProps<typeof LegendList>["onMouseUp"];
+  onMessagesPointerCancel?: ComponentProps<typeof LegendList>["onPointerCancel"];
+  onMessagesPointerDown?: ComponentProps<typeof LegendList>["onPointerDown"];
+  onMessagesPointerUp?: ComponentProps<typeof LegendList>["onPointerUp"];
+  onMessagesScroll?: ComponentProps<typeof LegendList>["onScroll"];
+  onMessagesTouchEnd?: ComponentProps<typeof LegendList>["onTouchEnd"];
+  onMessagesTouchMove?: ComponentProps<typeof LegendList>["onTouchMove"];
+  onMessagesTouchStart?: ComponentProps<typeof LegendList>["onTouchStart"];
+  onMessagesWheel?: ComponentProps<typeof LegendList>["onWheel"];
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
   chatFontSizePx?: number;
@@ -212,7 +213,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   activeTurnInProgress,
   activeTurnStartedAt,
   followLiveOutput = false,
-  scrollContainer,
+  listRef,
   timelineEntries,
   completionDividerBeforeEntryId,
   completionSummary,
@@ -226,7 +227,17 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onRevertUserMessage,
   isRevertingCheckpoint,
   onImageExpand,
-  onLiveContentHeightChange,
+  onIsAtEndChange,
+  onMessagesClickCapture,
+  onMessagesMouseUp,
+  onMessagesPointerCancel,
+  onMessagesPointerDown,
+  onMessagesPointerUp,
+  onMessagesScroll,
+  onMessagesTouchEnd,
+  onMessagesTouchMove,
+  onMessagesTouchStart,
+  onMessagesWheel,
   markdownCwd,
   resolvedTheme,
   chatFontSizePx = DEFAULT_CHAT_FONT_SIZE_PX,
@@ -243,40 +254,31 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     () => getChatTranscriptTextStyle(normalizedChatFontSizePx),
     [normalizedChatFontSizePx],
   );
-  const timelineRootRef = useRef<HTMLDivElement | null>(null);
-  const [timelineWidthPx, setTimelineWidthPx] = useState<number | null>(null);
+  const [localExpandedWorkGroups, setLocalExpandedWorkGroups] = useState<Record<string, boolean>>(
+    {},
+  );
+  const expandedWorkGroupsState = expandedWorkGroups ?? localExpandedWorkGroups;
+  const handleToggleWorkGroup = useCallback(
+    (groupId: string) => {
+      if (onToggleWorkGroup) {
+        onToggleWorkGroup(groupId);
+        return;
+      }
+      setLocalExpandedWorkGroups((current) => ({
+        ...current,
+        [groupId]: !(current[groupId] ?? false),
+      }));
+    },
+    [onToggleWorkGroup],
+  );
   const [expandedFileChangesByMessageId, setExpandedFileChangesByMessageId] = useState<
     Record<string, boolean>
   >({});
   const [expandedUserMessagesById, setExpandedUserMessagesById] = useState<Record<string, boolean>>(
     {},
   );
-
-  useLayoutEffect(() => {
-    const timelineRoot = timelineRootRef.current;
-    if (!timelineRoot) return;
-
-    const syncRootWidth = () => {
-      const nextWidth = timelineRoot.getBoundingClientRect().width;
-      setTimelineWidthPx((previousWidth) => {
-        if (previousWidth !== null && Math.abs(previousWidth - nextWidth) < 0.5) {
-          return previousWidth;
-        }
-        return nextWidth;
-      });
-    };
-
-    syncRootWidth();
-
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => {
-      syncRootWidth();
-    });
-    observer.observe(timelineRoot);
-    return () => {
-      observer.disconnect();
-    };
-  }, [hasMessages]);
+  const fallbackListRef = useRef<LegendListRef | null>(null);
+  const resolvedListRef = listRef ?? fallbackListRef;
 
   const rawRows = useMemo(
     () =>
@@ -298,86 +300,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     ],
   );
   const rows = useStableRows(rawRows);
-  // Match the fork's simpler list behavior for the common case. The virtualizer
-  // stays reserved for very large transcripts where full DOM rendering is still
-  // more expensive than the measuring overhead.
-  const shouldUseSimpleList =
-    rows.length <= SIMPLE_LIST_ROW_THRESHOLD ||
-    (activeTurnInProgress && rows.length <= SIMPLE_LIST_ACTIVE_TURN_ROW_THRESHOLD);
-  useLayoutEffect(() => {
-    if (!shouldUseSimpleList) return;
-    if (!followLiveOutput) return;
-    if (!onLiveContentHeightChange) return;
-    const timelineRoot = timelineRootRef.current;
-    if (!timelineRoot || typeof ResizeObserver === "undefined") return;
-
-    let lastHeight = -1;
-    const syncRootHeight = () => {
-      const nextHeight = timelineRoot.getBoundingClientRect().height;
-      const heightChanged = lastHeight >= 0 && Math.abs(nextHeight - lastHeight) >= 0.5;
-      lastHeight = nextHeight;
-      if (heightChanged) {
-        onLiveContentHeightChange();
-      }
-    };
-
-    syncRootHeight();
-    const observer = new ResizeObserver(() => {
-      syncRootHeight();
-    });
-    observer.observe(timelineRoot);
-    return () => {
-      observer.disconnect();
-    };
-  }, [followLiveOutput, onLiveContentHeightChange, shouldUseSimpleList]);
-
-  const firstUnvirtualizedRowIndex = useMemo(() => {
-    const firstTailRowIndex = Math.max(rows.length - ALWAYS_UNVIRTUALIZED_TAIL_ROWS, 0);
-    if (!activeTurnInProgress) return firstTailRowIndex;
-
-    // We intentionally keep a small live tail outside virtualization so the
-    // currently active turn can expand without the user seeing rows jump in and
-    // out of measurement. If this area ever becomes the next perf bottleneck,
-    // this is the pivot point to shrink first.
-    const turnStartedAtMs =
-      typeof activeTurnStartedAt === "string" ? Date.parse(activeTurnStartedAt) : Number.NaN;
-    let firstCurrentTurnRowIndex = -1;
-    if (!Number.isNaN(turnStartedAtMs)) {
-      firstCurrentTurnRowIndex = rows.findIndex((row) => {
-        if (row.kind === "working") return true;
-        if (!row.createdAt) return false;
-        const rowCreatedAtMs = Date.parse(row.createdAt);
-        return !Number.isNaN(rowCreatedAtMs) && rowCreatedAtMs >= turnStartedAtMs;
-      });
-    }
-
-    if (firstCurrentTurnRowIndex < 0) {
-      firstCurrentTurnRowIndex = rows.findIndex(
-        (row) => row.kind === "message" && row.message.streaming,
-      );
-    }
-
-    if (firstCurrentTurnRowIndex < 0) return firstTailRowIndex;
-
-    for (let index = firstCurrentTurnRowIndex - 1; index >= 0; index -= 1) {
-      const previousRow = rows[index];
-      if (!previousRow || previousRow.kind !== "message") continue;
-      if (previousRow.message.role === "user") {
-        return Math.min(index, firstTailRowIndex);
-      }
-      if (previousRow.message.role === "assistant" && !previousRow.message.streaming) {
-        break;
-      }
-    }
-
-    return Math.min(firstCurrentTurnRowIndex, firstTailRowIndex);
-  }, [activeTurnInProgress, activeTurnStartedAt, rows]);
-
-  const virtualizedRowCount = clamp(firstUnvirtualizedRowIndex, {
-    minimum: 0,
-    maximum: rows.length,
-  });
-  const [allDirectoriesExpandedByTurnId] = useState<Record<string, boolean>>({});
   const userMessageIdByAssistantMessageId = useMemo(() => {
     const map = new Map<MessageId, MessageId>();
     let lastUserMessageId: MessageId | null = null;
@@ -391,146 +313,32 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     }
     return map;
   }, [rows]);
-
-  const rowVirtualizer = useVirtualizer({
-    count: shouldUseSimpleList ? 0 : virtualizedRowCount,
-    getScrollElement: () => scrollContainer,
-    // Use stable row ids so virtual measurements do not leak across thread switches.
-    getItemKey: (index: number) => rows[index]?.id ?? index,
-    // Keep pre-measure placements close to the final layout so fast scrolls do not visually stack rows.
-    estimateSize: (index: number) => {
-      const row = rows[index];
-      if (!row) return 96;
-      if (row.kind === "work") {
-        return estimateTimelineWorkGroupHeight(row.groupedEntries, {
-          expanded: expandedWorkGroups[row.id] ?? false,
-          maxVisibleEntries: MAX_VISIBLE_WORK_LOG_ENTRIES,
-        });
+  const onTimelineImageLoad = useCallback(() => {}, []);
+  const previousRowCountRef = useRef(rows.length);
+  useEffect(() => {
+    const previousRowCount = previousRowCountRef.current;
+    previousRowCountRef.current = rows.length;
+    if (previousRowCount > 0 || rows.length === 0 || !followLiveOutput) {
+      return;
+    }
+    onIsAtEndChange?.(true);
+    const frameId = window.requestAnimationFrame(() => {
+      void resolvedListRef.current?.scrollToEnd?.({ animated: false });
+    });
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [followLiveOutput, onIsAtEndChange, resolvedListRef, rows.length]);
+  const handleListScroll = useCallback<NonNullable<MessagesTimelineProps["onMessagesScroll"]>>(
+    (event) => {
+      onMessagesScroll?.(event);
+      const state = resolvedListRef.current?.getState?.();
+      if (state) {
+        onIsAtEndChange?.(state.isAtEnd);
       }
-      if (row.kind === "proposed-plan") {
-        return estimateTimelineProposedPlanHeight(row.proposedPlan, normalizedChatFontSizePx);
-      }
-      if (row.kind === "working") return 40;
-      const turnSummary = row.assistantTurnDiffSummary;
-      const messageHeightInput = {
-        ...row.message,
-        showCompletionDivider: row.showCompletionDivider,
-      };
-      if (row.message.role === "assistant" && hasOnlyToolToneEntries(row.inlineWorkEntries)) {
-        Object.assign(messageHeightInput, {
-          inlineToolEntries: row.inlineWorkEntries,
-          inlineToolExpanded: row.inlineWorkGroupId
-            ? (expandedWorkGroups[row.inlineWorkGroupId] ?? false)
-            : false,
-        });
-      }
-      if (turnSummary) {
-        Object.assign(messageHeightInput, {
-          diffSummaryFiles: turnSummary.files,
-          diffSummaryAllDirectoriesExpanded:
-            allDirectoriesExpandedByTurnId[turnSummary.turnId] ?? true,
-        });
-      }
-      return estimateTimelineMessageHeight(messageHeightInput, {
-        timelineWidthPx,
-        chatFontSizePx: normalizedChatFontSizePx,
-      });
     },
-    // We still dynamically measure rows because assistant markdown, images and
-    // diff cards do not have stable heights. If we revisit the virtualizer
-    // strategy, this ref is the main seam where we can switch to fixed or
-    // selectively measured rows.
-    measureElement: measureVirtualElement,
-    useAnimationFrameWithResizeObserver: true,
-    overscan: 2,
-  });
-  const pendingMeasureFrameRef = useRef<number | null>(null);
-  // Coalesce all local "please remeasure" triggers into one RAF. The hot path
-  // here is less about any single measure and more about several observers
-  // firing back-to-back while the user is scrolling.
-  const scheduleVirtualizerMeasure = useCallback(() => {
-    if (shouldUseSimpleList || virtualizedRowCount === 0) return;
-    if (pendingMeasureFrameRef.current !== null) return;
-    pendingMeasureFrameRef.current = window.requestAnimationFrame(() => {
-      pendingMeasureFrameRef.current = null;
-      rowVirtualizer.measure();
-    });
-  }, [rowVirtualizer, shouldUseSimpleList, virtualizedRowCount]);
-  useEffect(() => {
-    if (timelineWidthPx === null) return;
-    scheduleVirtualizerMeasure();
-  }, [scheduleVirtualizerMeasure, timelineWidthPx]);
-  useEffect(() => {
-    scheduleVirtualizerMeasure();
-  }, [expandedUserMessagesById, scheduleVirtualizerMeasure]);
-  useLayoutEffect(() => {
-    if (shouldUseSimpleList || virtualizedRowCount === 0) return;
-    if (!scrollContainer || typeof ResizeObserver === "undefined") return;
-
-    let lastViewportWidth = -1;
-    let lastViewportHeight = -1;
-    // Re-measure when the scroll viewport changes because composer/panel chrome
-    // can steal vertical space without remounting the timeline.
-    const syncViewportSize = () => {
-      const nextViewportWidth = scrollContainer.clientWidth;
-      const nextViewportHeight = scrollContainer.clientHeight;
-      if (
-        Math.abs(nextViewportWidth - lastViewportWidth) < 0.5 &&
-        Math.abs(nextViewportHeight - lastViewportHeight) < 0.5
-      ) {
-        return;
-      }
-      lastViewportWidth = nextViewportWidth;
-      lastViewportHeight = nextViewportHeight;
-      scheduleVirtualizerMeasure();
-    };
-
-    syncViewportSize();
-    const observer = new ResizeObserver(() => {
-      syncViewportSize();
-    });
-    observer.observe(scrollContainer);
-    return () => {
-      observer.disconnect();
-    };
-  }, [scheduleVirtualizerMeasure, scrollContainer, shouldUseSimpleList, virtualizedRowCount]);
-  useEffect(() => {
-    scheduleVirtualizerMeasure();
-  }, [
-    expandedWorkGroups,
-    expandedFileChangesByMessageId,
-    allDirectoriesExpandedByTurnId,
-    normalizedChatFontSizePx,
-    scheduleVirtualizerMeasure,
-  ]);
-  useEffect(() => {
-    // TanStack can compensate for late measurements by shifting scroll
-    // position. This keeps the bottom anchored, but it is also one of the
-    // places to revisit if future "scroll fights the user" regressions appear.
-    rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = (_item, _delta, instance) => {
-      const viewportHeight = instance.scrollRect?.height ?? 0;
-      const scrollOffset = instance.scrollOffset ?? 0;
-      const remainingDistance = instance.getTotalSize() - (scrollOffset + viewportHeight);
-      return remainingDistance > AUTO_SCROLL_BOTTOM_THRESHOLD_PX;
-    };
-    return () => {
-      rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = undefined;
-    };
-  }, [rowVirtualizer]);
-  const onTimelineImageLoad = useCallback(() => {
-    scheduleVirtualizerMeasure();
-  }, [scheduleVirtualizerMeasure]);
-  useEffect(() => {
-    return () => {
-      const frame = pendingMeasureFrameRef.current;
-      if (frame !== null) {
-        window.cancelAnimationFrame(frame);
-      }
-    };
-  }, []);
-
-  const virtualRows = shouldUseSimpleList ? [] : rowVirtualizer.getVirtualItems();
-  const nonVirtualizedRows = shouldUseSimpleList ? rows : rows.slice(virtualizedRowCount);
+    [onIsAtEndChange, onMessagesScroll, resolvedListRef],
+  );
   const toggleFileChangesExpanded = useCallback((messageId: MessageId) => {
     setExpandedFileChangesByMessageId((current) => ({
       ...current,
@@ -554,7 +362,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         (() => {
           const groupId = row.id;
           const groupedEntries = row.groupedEntries;
-          const isExpanded = expandedWorkGroups[groupId] ?? false;
+          const isExpanded = expandedWorkGroupsState[groupId] ?? false;
           const hasOverflow = groupedEntries.length > MAX_VISIBLE_WORK_LOG_ENTRIES;
           const visibleEntries =
             hasOverflow && !isExpanded
@@ -583,7 +391,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     type="button"
                     className="font-system-ui text-muted-foreground/55 transition-colors duration-150 hover:text-foreground/75"
                     style={{ fontSize: `${appTypographyScale.uiSmPx}px` }}
-                    onClick={() => onToggleWorkGroup(groupId)}
+                    onClick={() => handleToggleWorkGroup(groupId)}
                   >
                     {isExpanded ? "Show less" : `Show ${hiddenCount} more`}
                   </button>
@@ -674,7 +482,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 {showUserText && (
                   <div
                     className={cn(
-                      "w-max max-w-full min-w-0 self-end rounded-lg bg-secondary px-3.5",
+                      "w-max max-w-full min-w-0 self-end rounded-xl bg-secondary px-3.5",
                       bubbleIsChipOnly ? "py-1" : "pt-[5px] pb-[7px]",
                     )}
                   >
@@ -745,7 +553,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const inlineToolGroupId =
             inlineToolEntries.length > 0 ? (row.inlineWorkGroupId ?? null) : null;
           const inlineToolExpanded =
-            inlineToolGroupId !== null ? (expandedWorkGroups[inlineToolGroupId] ?? false) : false;
+            inlineToolGroupId !== null
+              ? (expandedWorkGroupsState[inlineToolGroupId] ?? false)
+              : false;
           const visibleInlineToolEntries =
             inlineToolExpanded || inlineToolEntries.length <= MAX_VISIBLE_INLINE_TOOL_ENTRIES
               ? inlineToolEntries
@@ -869,7 +679,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                             type="button"
                             className="text-muted-foreground/50 transition-colors duration-150 hover:text-foreground/72"
                             style={{ fontSize: `${normalizedChatFontSizePx}px` }}
-                            onClick={() => onToggleWorkGroup(inlineToolGroupId)}
+                            onClick={() => handleToggleWorkGroup(inlineToolGroupId)}
                           >
                             {inlineToolExpanded
                               ? "Show less"
@@ -1104,41 +914,40 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   }
 
   return (
-    <div
-      ref={timelineRootRef}
-      data-timeline-root="true"
-      className="mx-auto w-full min-w-0 max-w-3xl overflow-x-hidden"
-    >
-      {!shouldUseSimpleList && virtualizedRowCount > 0 && (
-        <div className="relative" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
-          {virtualRows.map((virtualRow: VirtualItem) => {
-            const row = rows[virtualRow.index];
-            if (!row) return null;
-
-            return (
-              <div
-                key={`virtual-row:${row.id}`}
-                data-index={virtualRow.index}
-                ref={rowVirtualizer.measureElement}
-                className="absolute left-0 top-0 w-full"
-                style={{ transform: `translateY(${virtualRow.start}px)` }}
-              >
-                {renderRowContent(row)}
-              </div>
-            );
-          })}
+    <LegendList<MessagesTimelineRow>
+      ref={resolvedListRef}
+      data={rows}
+      keyExtractor={(row) => row.id}
+      renderItem={({ item }) => (
+        <div
+          data-timeline-root="true"
+          className="mx-auto w-full min-w-0 max-w-3xl overflow-x-hidden"
+        >
+          {renderRowContent(item)}
         </div>
       )}
-
-      {nonVirtualizedRows.map((row) => (
-        <div key={`non-virtual-row:${row.id}`}>{renderRowContent(row)}</div>
-      ))}
-    </div>
+      estimatedItemSize={90}
+      initialScrollAtEnd
+      maintainScrollAtEnd={followLiveOutput}
+      maintainScrollAtEndThreshold={0.1}
+      maintainVisibleContentPosition
+      onClickCapture={onMessagesClickCapture}
+      onMouseUp={onMessagesMouseUp}
+      onPointerCancel={onMessagesPointerCancel}
+      onPointerDown={onMessagesPointerDown}
+      onPointerUp={onMessagesPointerUp}
+      onScroll={handleListScroll}
+      onTouchEnd={onMessagesTouchEnd}
+      onTouchMove={onMessagesTouchMove}
+      onTouchStart={onMessagesTouchStart}
+      onWheel={onMessagesWheel}
+      data-chat-scroll-container="true"
+      className="h-full overflow-x-hidden overscroll-y-contain px-3 py-3 sm:px-5 sm:py-4"
+    />
   );
 });
 
 type TimelineMessage = Extract<MessagesTimelineRow, { kind: "message" }>["message"];
-type TimelineProposedPlan = Extract<MessagesTimelineRow, { kind: "proposed-plan" }>["proposedPlan"];
 type TimelineWorkEntry = Extract<MessagesTimelineRow, { kind: "work" }>["groupedEntries"][number];
 
 // Reuse stable row references so streaming updates only force React work for
@@ -1154,14 +963,6 @@ function useStableRows(rows: MessagesTimelineRow[]): MessagesTimelineRow[] {
     previousStateRef.current = nextState;
     return nextState.result;
   }, [rows]);
-}
-
-function estimateTimelineProposedPlanHeight(
-  proposedPlan: TimelineProposedPlan,
-  chatFontSizePx: number,
-): number {
-  const estimatedLines = Math.max(1, Math.ceil(proposedPlan.planMarkdown.length / 72));
-  return 120 + Math.min(estimatedLines * getChatTranscriptLineHeightPx(chatFontSizePx), 880);
 }
 
 // Keep the live clock scoped to tiny leaf components so active Claude turns do
@@ -1567,13 +1368,6 @@ function workToneIcon(tone: TimelineWorkEntry["tone"]): {
     icon: ZapIcon,
     className: "text-muted-foreground/45",
   };
-}
-
-function workToneClass(tone: "thinking" | "tool" | "info" | "error"): string {
-  if (tone === "error") return "text-rose-400/70 dark:text-rose-300/70";
-  if (tone === "tool") return "text-muted-foreground/80";
-  if (tone === "thinking") return "text-muted-foreground/60";
-  return "text-muted-foreground/55";
 }
 
 /**

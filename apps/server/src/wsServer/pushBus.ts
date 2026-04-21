@@ -4,7 +4,7 @@ import {
   type WsPushData,
   type WsPushEnvelopeBase,
 } from "@t3tools/contracts";
-import { Deferred, Effect, Queue, Ref, Schema } from "effect";
+import { Data, Deferred, Effect, Queue, Ref, Schema } from "effect";
 import type { Scope } from "effect";
 import type { WebSocket } from "ws";
 
@@ -18,6 +18,10 @@ interface PushJob<C extends WsPushChannel = WsPushChannel> {
   readonly target: PushTarget;
   readonly delivered: Deferred.Deferred<boolean> | null;
 }
+
+class WsPushEncodeError extends Data.TaggedError("WsPushEncodeError")<{
+  readonly cause: unknown;
+}> {}
 
 export interface ServerPushBus {
   readonly publishAll: <C extends WsPushChannel>(
@@ -38,7 +42,7 @@ export const makeServerPushBus = (input: {
   Effect.gen(function* () {
     const nextSequence = yield* Ref.make(0);
     const queue = yield* Queue.unbounded<PushJob>();
-    const encodePush = Schema.encodeUnknownEffect(Schema.fromJsonString(WsPush));
+    const encodePush = Schema.encodeUnknownSync(Schema.fromJsonString(WsPush));
 
     const settleDelivery = (job: PushJob, delivered: boolean) =>
       job.delivered === null
@@ -55,22 +59,22 @@ export const makeServerPushBus = (input: {
       };
       const recipients =
         job.target.kind === "all" ? yield* Ref.get(input.clients) : new Set([job.target.client]);
+      const message = yield* Effect.try({
+        try: () => encodePush(push),
+        catch: (cause) => new WsPushEncodeError({ cause }),
+      });
 
-      return yield* encodePush(push).pipe(
-        Effect.map((message) => {
-          let recipientCount = 0;
-          for (const client of recipients) {
-            if (client.readyState !== client.OPEN) {
-              continue;
-            }
-            client.send(message);
-            recipientCount += 1;
-          }
+      let recipientCount = 0;
+      for (const client of recipients) {
+        if (client.readyState !== client.OPEN) {
+          continue;
+        }
+        client.send(message);
+        recipientCount += 1;
+      }
 
-          input.logOutgoingPush(push, recipientCount);
-          return recipientCount > 0;
-        }),
-      );
+      input.logOutgoingPush(push, recipientCount);
+      return recipientCount > 0;
     });
 
     yield* Effect.forkScoped(

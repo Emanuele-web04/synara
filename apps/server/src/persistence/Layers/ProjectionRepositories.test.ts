@@ -89,6 +89,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         associatedWorktreePath: null,
         associatedWorktreeBranch: null,
         associatedWorktreeRef: null,
+        createBranchFlowCompleted: false,
         lastKnownPr: null,
         latestTurnId: null,
         handoff: null,

@@ -371,7 +371,7 @@ describe("when: working tree has local changes", () => {
     });
   });
 
-  it("resolveQuickAction only shows create-branch for temporary worktree branches", () => {
+  it("resolveQuickAction hides create-branch when the caller opts out", () => {
     const quick = resolveQuickAction(
       status({ branch: "worktree/semantic-name", hasUpstream: false }),
       false,
@@ -387,7 +387,7 @@ describe("when: working tree has local changes", () => {
     });
   });
 
-  it("resolveQuickAction can keep create-branch visible while a temporary thread branch lags behind checkout", () => {
+  it("resolveQuickAction shows create-branch when the caller opts in", () => {
     const quick = resolveQuickAction(
       status({ branch: "worktree/semantic-name", hasUpstream: false }),
       false,
@@ -1214,28 +1214,99 @@ describe("resolveLiveThreadBranchUpdate", () => {
 });
 
 describe("shouldOfferCreateBranchPrompt", () => {
-  it("keeps the create-branch prompt visible while the thread still points at a temp worktree branch", () => {
+  const temporaryBranch = "dpcode/deadbeef";
+
+  it("shows the create-branch prompt for temporary worktree branches without upstream", () => {
     assert.isTrue(
       shouldOfferCreateBranchPrompt({
-        activeThreadBranch: "dpcode/deadbeef",
         activeWorktreePath: "/tmp/project/.worktrees/feature-test",
+        threadBranch: temporaryBranch,
         gitStatus: {
-          branch: "feature/test",
+          branch: temporaryBranch,
           hasUpstream: false,
         },
       }),
     );
   });
 
-  it("hides the create-branch prompt once the thread branch is semantic", () => {
+  it("hides the create-branch prompt when the branch already has upstream", () => {
     assert.isFalse(
       shouldOfferCreateBranchPrompt({
-        activeThreadBranch: "feature/test",
         activeWorktreePath: "/tmp/project/.worktrees/feature-test",
+        threadBranch: temporaryBranch,
+        gitStatus: {
+          branch: temporaryBranch,
+          hasUpstream: true,
+        },
+      }),
+    );
+  });
+
+  it("hides the create-branch prompt outside a worktree even when the branch is local-only", () => {
+    assert.isFalse(
+      shouldOfferCreateBranchPrompt({
+        activeWorktreePath: null,
+        threadBranch: temporaryBranch,
+        gitStatus: {
+          branch: temporaryBranch,
+          hasUpstream: false,
+        },
+      }),
+    );
+  });
+
+  it("hides the create-branch prompt once the current branch has been finalized", () => {
+    assert.isFalse(
+      shouldOfferCreateBranchPrompt({
+        activeWorktreePath: "/tmp/project/.worktrees/feature-test",
+        threadBranch: "feature/test",
         gitStatus: {
           branch: "feature/test",
           hasUpstream: false,
         },
+        createBranchFlowCompleted: true,
+      }),
+    );
+  });
+
+  it("shows the create-branch prompt for a temporary worktree branch until the flow is completed", () => {
+    assert.isTrue(
+      shouldOfferCreateBranchPrompt({
+        activeWorktreePath: "/tmp/project/.worktrees/feature-test",
+        threadBranch: temporaryBranch,
+        gitStatus: {
+          branch: temporaryBranch,
+          hasUpstream: false,
+        },
+        createBranchFlowCompleted: false,
+      }),
+    );
+  });
+
+  it("hides the create-branch prompt for a semantic local-only branch", () => {
+    assert.isFalse(
+      shouldOfferCreateBranchPrompt({
+        activeWorktreePath: "/tmp/project/.worktrees/feature-test",
+        threadBranch: "feature/test",
+        gitStatus: {
+          branch: "feature/test",
+          hasUpstream: false,
+        },
+        createBranchFlowCompleted: false,
+      }),
+    );
+  });
+
+  it("hides the create-branch prompt when the thread already tracks a semantic branch", () => {
+    assert.isFalse(
+      shouldOfferCreateBranchPrompt({
+        activeWorktreePath: "/tmp/project/.worktrees/feature-test",
+        threadBranch: "feature/test",
+        gitStatus: {
+          branch: temporaryBranch,
+          hasUpstream: false,
+        },
+        createBranchFlowCompleted: false,
       }),
     );
   });

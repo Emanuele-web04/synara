@@ -1,14 +1,16 @@
 // FILE: ChatTranscriptPane.tsx
-// Purpose: Isolate the scrollable transcript subtree so composer state changes do not re-render it unnecessarily.
+// Purpose: Isolate the transcript shell so composer state changes do not re-render it unnecessarily.
 // Layer: Chat transcript shell
-// Depends on: MessagesTimeline and the chat auto-scroll controller contract.
+// Depends on: MessagesTimeline and ChatView's list-owned scroll contract.
 
 import { type MessageId, type ThreadId, type TurnId } from "@t3tools/contracts";
+import { type LegendListRef } from "@legendapp/list/react";
 import {
   memo,
   type ComponentProps,
   type MouseEventHandler,
   type PointerEventHandler,
+  type RefObject,
   type TouchEventHandler,
   type WheelEventHandler,
 } from "react";
@@ -28,35 +30,33 @@ interface ChatTranscriptPaneProps {
   completionDividerBeforeEntryId: string | null;
   completionSummary: string | null;
   emptyStateProjectName: string | undefined;
-  expandedWorkGroups: Record<string, boolean>;
+  expandedWorkGroups?: Record<string, boolean>;
   hasMessages: boolean;
   isRevertingCheckpoint: boolean;
   isWorking: boolean;
   followLiveOutput: boolean;
+  listRef: RefObject<LegendListRef | null>;
   markdownCwd: string | undefined;
-  messagesScrollElement: HTMLDivElement | null;
   onExpandTimelineImage: (preview: ExpandedImagePreview) => void;
   onMessagesClickCapture: MouseEventHandler<HTMLDivElement>;
   onMessagesMouseUp: MouseEventHandler<HTMLDivElement>;
   onMessagesPointerCancel: PointerEventHandler<HTMLDivElement>;
   onMessagesPointerDown: PointerEventHandler<HTMLDivElement>;
   onMessagesPointerUp: PointerEventHandler<HTMLDivElement>;
-  onMessagesScroll: () => void;
+  onMessagesScroll: ComponentProps<typeof MessagesTimeline>["onMessagesScroll"];
   onMessagesTouchEnd: TouchEventHandler<HTMLDivElement>;
   onMessagesTouchMove: TouchEventHandler<HTMLDivElement>;
   onMessagesTouchStart: TouchEventHandler<HTMLDivElement>;
   onMessagesWheel: WheelEventHandler<HTMLDivElement>;
+  onIsAtEndChange: (isAtEnd: boolean) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   onOpenThread: (threadId: ThreadId) => void;
   onRevertUserMessage: (messageId: MessageId) => void;
   onScrollToBottom: () => void;
-  onLiveContentHeightChange: () => void;
-  onToggleWorkGroup: (groupId: string) => void;
+  onToggleWorkGroup?: (groupId: string) => void;
   resolvedTheme: "light" | "dark";
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   scrollButtonVisible: boolean;
-  setMessagesBottomAnchorRef: (element: HTMLDivElement | null) => void;
-  setMessagesScrollContainerRef: (element: HTMLDivElement | null) => void;
   terminalWorkspaceTerminalTabActive: boolean;
   timelineEntries: ComponentProps<typeof MessagesTimeline>["timelineEntries"];
   timestampFormat: TimestampFormat;
@@ -77,8 +77,8 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   isRevertingCheckpoint,
   isWorking,
   followLiveOutput,
+  listRef,
   markdownCwd,
-  messagesScrollElement,
   onExpandTimelineImage,
   onMessagesClickCapture,
   onMessagesMouseUp,
@@ -90,17 +90,15 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   onMessagesTouchMove,
   onMessagesTouchStart,
   onMessagesWheel,
+  onIsAtEndChange,
   onOpenTurnDiff,
   onOpenThread,
   onRevertUserMessage,
   onScrollToBottom,
-  onLiveContentHeightChange,
   onToggleWorkGroup,
   resolvedTheme,
   revertTurnCountByUserMessageId,
   scrollButtonVisible,
-  setMessagesBottomAnchorRef,
-  setMessagesScrollContainerRef,
   terminalWorkspaceTerminalTabActive,
   timelineEntries,
   timestampFormat,
@@ -116,59 +114,51 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
       )}
     >
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-        <div
-          ref={setMessagesScrollContainerRef}
-          className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-3 py-3 sm:px-5 sm:py-4"
-          onScroll={onMessagesScroll}
-          onClickCapture={onMessagesClickCapture}
-          onMouseUp={onMessagesMouseUp}
-          onWheel={onMessagesWheel}
-          onPointerDown={onMessagesPointerDown}
-          onPointerUp={onMessagesPointerUp}
-          onPointerCancel={onMessagesPointerCancel}
-          onTouchStart={onMessagesTouchStart}
-          onTouchMove={onMessagesTouchMove}
-          onTouchEnd={onMessagesTouchEnd}
-          onTouchCancel={onMessagesTouchEnd}
-        >
-          <MessagesTimeline
-            key={activeThreadId}
-            hasMessages={hasMessages}
-            isWorking={isWorking}
-            activeTurnInProgress={activeTurnInProgress}
-            activeTurnStartedAt={activeTurnStartedAt}
-            scrollContainer={messagesScrollElement}
-            timelineEntries={timelineEntries}
-            completionDividerBeforeEntryId={completionDividerBeforeEntryId}
-            completionSummary={completionSummary}
-            turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
-            expandedWorkGroups={expandedWorkGroups}
-            onToggleWorkGroup={onToggleWorkGroup}
-            onOpenTurnDiff={onOpenTurnDiff}
-            onOpenThread={onOpenThread}
-            revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
-            onRevertUserMessage={onRevertUserMessage}
-            isRevertingCheckpoint={isRevertingCheckpoint}
-            onImageExpand={onExpandTimelineImage}
-            followLiveOutput={followLiveOutput}
-            onLiveContentHeightChange={onLiveContentHeightChange}
-            markdownCwd={markdownCwd}
-            resolvedTheme={resolvedTheme}
-            chatFontSizePx={chatFontSizePx}
-            timestampFormat={timestampFormat}
-            workspaceRoot={workspaceRoot}
-            emptyStateContent={<ChatEmptyStateHero projectName={emptyStateProjectName} />}
-          />
-          {/* Keep an explicit bottom target so auto-stick can scroll to real content end
-              without depending on in-flight virtualizer height estimates. */}
-          <div ref={setMessagesBottomAnchorRef} aria-hidden="true" className="h-px w-full" />
-        </div>
+        <MessagesTimeline
+          key={activeThreadId}
+          hasMessages={hasMessages}
+          isWorking={isWorking}
+          activeTurnInProgress={activeTurnInProgress}
+          activeTurnStartedAt={activeTurnStartedAt}
+          listRef={listRef}
+          timelineEntries={timelineEntries}
+          completionDividerBeforeEntryId={completionDividerBeforeEntryId}
+          completionSummary={completionSummary}
+          turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
+          onOpenTurnDiff={onOpenTurnDiff}
+          onOpenThread={onOpenThread}
+          revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
+          onRevertUserMessage={onRevertUserMessage}
+          isRevertingCheckpoint={isRevertingCheckpoint}
+          onImageExpand={onExpandTimelineImage}
+          followLiveOutput={followLiveOutput}
+          onIsAtEndChange={onIsAtEndChange}
+          onMessagesScroll={onMessagesScroll}
+          onMessagesClickCapture={onMessagesClickCapture}
+          onMessagesMouseUp={onMessagesMouseUp}
+          onMessagesWheel={onMessagesWheel}
+          onMessagesPointerDown={onMessagesPointerDown}
+          onMessagesPointerUp={onMessagesPointerUp}
+          onMessagesPointerCancel={onMessagesPointerCancel}
+          onMessagesTouchStart={onMessagesTouchStart}
+          onMessagesTouchMove={onMessagesTouchMove}
+          onMessagesTouchEnd={onMessagesTouchEnd}
+          markdownCwd={markdownCwd}
+          resolvedTheme={resolvedTheme}
+          chatFontSizePx={chatFontSizePx}
+          timestampFormat={timestampFormat}
+          workspaceRoot={workspaceRoot}
+          emptyStateContent={<ChatEmptyStateHero projectName={emptyStateProjectName} />}
+          {...(expandedWorkGroups ? { expandedWorkGroups } : {})}
+          {...(onToggleWorkGroup ? { onToggleWorkGroup } : {})}
+        />
 
         {scrollButtonVisible ? (
           <div className="pointer-events-none absolute bottom-1 left-1/2 z-30 flex -translate-x-1/2 justify-center py-1">
             <button
               type="button"
               onClick={onScrollToBottom}
+              data-scroll-anchor-ignore
               aria-label="Scroll to bottom"
               className="pointer-events-auto flex size-9 items-center justify-center rounded-full border border-border bg-background/95 text-muted-foreground shadow-sm backdrop-blur-sm transition-colors hover:cursor-pointer hover:border-foreground/20 hover:bg-background hover:text-foreground"
             >

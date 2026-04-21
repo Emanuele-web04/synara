@@ -1,6 +1,7 @@
 import {
   ApprovalRequestId,
   type ChatAttachment,
+  EventId,
   type OrchestrationEvent,
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -69,6 +70,7 @@ import { deriveThreadSummaryState } from "@t3tools/shared/threadSummary";
 export const ORCHESTRATION_PROJECTOR_NAMES = {
   projects: "projection.projects",
   threads: "projection.threads",
+  threadShellSummaries: "projection.thread-shell-summaries",
   threadMessages: "projection.thread-messages",
   threadProposedPlans: "projection.thread-proposed-plans",
   threadActivities: "projection.thread-activities",
@@ -83,6 +85,8 @@ type ProjectorName =
 
 interface ProjectorDefinition {
   readonly name: ProjectorName;
+  readonly phase: "hot" | "deferred";
+  readonly shouldApply?: (event: OrchestrationEvent) => boolean;
   readonly apply: (
     event: OrchestrationEvent,
     attachmentSideEffects: AttachmentSideEffects,
@@ -95,6 +99,14 @@ interface AttachmentSideEffects {
 }
 
 const REQUIRED_SNAPSHOT_PROJECTORS = PROJECT_METADATA_SNAPSHOT_PROJECTORS;
+const THREAD_SHELL_SUMMARY_ACTIVITY_KINDS = new Set([
+  "approval.requested",
+  "approval.resolved",
+  "provider.approval.respond.failed",
+  "user-input.requested",
+  "user-input.resolved",
+  "provider.user-input.respond.failed",
+]);
 
 const materializeAttachmentsForProjection = Effect.fn(
   (input: { readonly attachments: ReadonlyArray<ChatAttachment> }) =>
@@ -131,6 +143,24 @@ function extractActivityRequestId(payload: unknown): ApprovalRequestId | null {
   return typeof requestId === "string" ? ApprovalRequestId.makeUnsafe(requestId) : null;
 }
 
+function shouldRefreshThreadShellSummary(event: OrchestrationEvent): boolean {
+  switch (event.type) {
+    case "thread.message-sent":
+      return event.payload.role === "user";
+    case "thread.proposed-plan-upserted":
+    case "thread.approval-response-requested":
+    case "thread.user-input-response-requested":
+    case "thread.reverted":
+    case "thread.session-set":
+    case "thread.turn-diff-completed":
+      return true;
+    case "thread.activity-appended":
+      return THREAD_SHELL_SUMMARY_ACTIVITY_KINDS.has(event.payload.activity.kind);
+    default:
+      return false;
+  }
+}
+
 // Recompute the denormalized sidebar shell summary after per-thread timeline changes.
 const withRefreshedThreadShellSummary = Effect.fn(function* (input: {
   readonly thread: ProjectionThread;
@@ -138,6 +168,8 @@ const withRefreshedThreadShellSummary = Effect.fn(function* (input: {
   readonly projectionThreadActivityRepository: ProjectionThreadActivityRepositoryShape;
   readonly projectionThreadProposedPlanRepository: ProjectionThreadProposedPlanRepositoryShape;
   readonly projectionPendingApprovalRepository: ProjectionPendingApprovalRepositoryShape;
+  readonly summaryUserInputResponseRequestId?: string;
+  readonly summaryUserInputResponseCreatedAt?: string;
 }) {
   const [messages, activities, proposedPlans, pendingApprovals] = yield* Effect.all([
     input.projectionThreadMessageRepository.listByThreadId({
@@ -155,13 +187,29 @@ const withRefreshedThreadShellSummary = Effect.fn(function* (input: {
   ]);
   const summary = deriveThreadSummaryState({
     messages,
-    activities: activities.map((activity) => ({
-      id: activity.activityId,
-      kind: activity.kind,
-      payload: activity.payload,
-      sequence: activity.sequence,
-      createdAt: activity.createdAt,
-    })),
+    activities: [
+      ...activities.map((activity) => ({
+        id: activity.activityId,
+        kind: activity.kind,
+        payload: activity.payload,
+        sequence: activity.sequence,
+        createdAt: activity.createdAt,
+      })),
+      ...(input.summaryUserInputResponseRequestId
+        ? [
+            {
+              id: EventId.makeUnsafe(
+                `synthetic-user-input-resolved:${input.summaryUserInputResponseRequestId}:${input.summaryUserInputResponseCreatedAt ?? input.thread.updatedAt}`,
+              ),
+              kind: "user-input.resolved" as const,
+              payload: {
+                requestId: input.summaryUserInputResponseRequestId,
+              },
+              createdAt: input.summaryUserInputResponseCreatedAt ?? input.thread.updatedAt,
+            },
+          ]
+        : []),
+    ],
     proposedPlans: proposedPlans.map((plan) => ({
       id: plan.planId,
       turnId: plan.turnId,
@@ -485,6 +533,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             associatedWorktreePath: event.payload.associatedWorktreePath ?? null,
             associatedWorktreeBranch: event.payload.associatedWorktreeBranch ?? null,
             associatedWorktreeRef: event.payload.associatedWorktreeRef ?? null,
+            createBranchFlowCompleted: event.payload.createBranchFlowCompleted ?? false,
             parentThreadId: event.payload.parentThreadId ?? null,
             subagentAgentId: event.payload.subagentAgentId ?? null,
             subagentNickname: event.payload.subagentNickname ?? null,
@@ -511,6 +560,13 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           if (Option.isNone(existingRow)) {
             return;
           }
+          const nextCreateBranchFlowCompleted =
+            event.payload.createBranchFlowCompleted !== undefined
+              ? event.payload.createBranchFlowCompleted
+              : event.payload.branch !== undefined &&
+                  event.payload.branch !== existingRow.value.branch
+                ? false
+                : undefined;
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             ...(event.payload.title !== undefined ? { title: event.payload.title } : {}),
@@ -530,6 +586,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               : {}),
             ...(event.payload.associatedWorktreeRef !== undefined
               ? { associatedWorktreeRef: event.payload.associatedWorktreeRef }
+              : {}),
+            ...(nextCreateBranchFlowCompleted !== undefined
+              ? { createBranchFlowCompleted: nextCreateBranchFlowCompleted }
               : {}),
             ...(event.payload.parentThreadId !== undefined
               ? { parentThreadId: event.payload.parentThreadId }
@@ -630,11 +689,24 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           return;
         }
 
+        default:
+          return;
+      }
+    });
+
+  // Keep denormalized shell summary work out of the live transcript projector path.
+  const applyThreadShellSummariesProjection: ProjectorDefinition["apply"] = (event) =>
+    Effect.gen(function* () {
+      switch (event.type) {
         case "thread.message-sent":
         case "thread.proposed-plan-upserted":
         case "thread.activity-appended":
         case "thread.approval-response-requested":
+        case "thread.user-input-response-requested":
         case "thread.reverted": {
+          if (!shouldRefreshThreadShellSummary(event)) {
+            return;
+          }
           const existingRow = yield* projectionThreadRepository.getById({
             threadId: event.payload.threadId,
           });
@@ -652,6 +724,12 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             projectionThreadActivityRepository,
             projectionThreadProposedPlanRepository,
             projectionPendingApprovalRepository,
+            ...(event.type === "thread.user-input-response-requested"
+              ? {
+                  summaryUserInputResponseRequestId: event.payload.requestId,
+                  summaryUserInputResponseCreatedAt: event.payload.createdAt,
+                }
+              : {}),
           });
           yield* projectionThreadRepository.upsert(nextRow);
           return;
@@ -713,24 +791,23 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
     Effect.gen(function* () {
       switch (event.type) {
         case "thread.message-sent": {
-          const existingRows = yield* projectionThreadMessageRepository.listByThreadId({
-            threadId: event.payload.threadId,
+          const existingMessage = yield* projectionThreadMessageRepository.getByMessageId({
+            messageId: event.payload.messageId,
           });
-          const existingMessage = existingRows.find(
-            (row) => row.messageId === event.payload.messageId,
-          );
           const nextText =
-            existingMessage && event.payload.streaming
-              ? `${existingMessage.text}${event.payload.text}`
-              : existingMessage && event.payload.text.length === 0
-                ? existingMessage.text
+            Option.isSome(existingMessage) && event.payload.streaming
+              ? `${existingMessage.value.text}${event.payload.text}`
+              : Option.isSome(existingMessage) && event.payload.text.length === 0
+                ? existingMessage.value.text
                 : event.payload.text;
           const nextAttachments =
             event.payload.attachments !== undefined
               ? yield* materializeAttachmentsForProjection({
                   attachments: event.payload.attachments,
                 })
-              : existingMessage?.attachments;
+              : Option.isSome(existingMessage)
+                ? existingMessage.value.attachments
+                : undefined;
           yield* projectionThreadMessageRepository.upsert({
             messageId: event.payload.messageId,
             threadId: event.payload.threadId,
@@ -745,7 +822,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               : {}),
             isStreaming: event.payload.streaming,
             source: event.payload.source,
-            createdAt: existingMessage?.createdAt ?? event.payload.createdAt,
+            createdAt:
+              (Option.isSome(existingMessage) ? existingMessage.value.createdAt : null) ??
+              event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
           });
           return;
@@ -1281,39 +1360,54 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   const projectors: ReadonlyArray<ProjectorDefinition> = [
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.projects,
+      phase: "hot",
       apply: applyProjectsProjection,
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
+      phase: "hot",
       apply: applyThreadMessagesProjection,
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadProposedPlans,
+      phase: "hot",
       apply: applyThreadProposedPlansProjection,
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadActivities,
+      phase: "hot",
       apply: applyThreadActivitiesProjection,
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadSessions,
+      phase: "hot",
       apply: applyThreadSessionsProjection,
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadTurns,
+      phase: "hot",
       apply: applyThreadTurnsProjection,
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.checkpoints,
+      phase: "hot",
       apply: applyCheckpointsProjection,
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.pendingApprovals,
+      phase: "hot",
       apply: applyPendingApprovalsProjection,
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.threads,
+      phase: "hot",
       apply: applyThreadsProjection,
+    },
+    {
+      name: ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries,
+      phase: "deferred",
+      shouldApply: shouldRefreshThreadShellSummary,
+      apply: applyThreadShellSummariesProjection,
     },
   ];
   const projectsProjector = projectors.find(
@@ -1324,14 +1418,26 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   // off the slower full-projector pass used by thread and runtime events.
   const selectProjectorsForEvent = (
     event: OrchestrationEvent,
+    phase?: ProjectorDefinition["phase"],
   ): ReadonlyArray<ProjectorDefinition> => {
+    const filterProjectors = (candidates: ReadonlyArray<ProjectorDefinition>) =>
+      candidates.filter(
+        (projector) =>
+          (phase === undefined || projector.phase === phase) &&
+          (projector.shouldApply?.(event) ?? true),
+      );
+
     switch (event.type) {
       case "project.created":
       case "project.meta-updated":
       case "project.deleted":
-        return projectsProjector ? [projectsProjector] : projectors;
+        return projectsProjector
+          ? filterProjectors([projectsProjector]).length > 0
+            ? [projectsProjector]
+            : []
+          : filterProjectors(projectors);
       default:
-        return projectors;
+        return filterProjectors(projectors);
     }
   };
 
@@ -1366,6 +1472,16 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       );
     });
 
+  const advanceProjectorStateToEvent = (
+    projector: ProjectorDefinition,
+    event: OrchestrationEvent,
+  ) =>
+    projectionStateRepository.upsert({
+      projector: projector.name,
+      lastAppliedSequence: event.sequence,
+      updatedAt: event.occurredAt,
+    });
+
   const bootstrapProjector = (projector: ProjectorDefinition) =>
     projectionStateRepository
       .getByProjector({
@@ -1373,12 +1489,30 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       })
       .pipe(
         Effect.flatMap((stateRow) =>
-          Stream.runForEach(
-            eventStore.readFromSequence(
-              Option.isSome(stateRow) ? stateRow.value.lastAppliedSequence : 0,
-            ),
-            (event) => runProjectorForEvent(projector, event),
-          ),
+          Effect.gen(function* () {
+            let pendingSkippedEvent: OrchestrationEvent | null = null;
+
+            yield* Stream.runForEach(
+              eventStore.readFromSequence(
+                Option.isSome(stateRow) ? stateRow.value.lastAppliedSequence : 0,
+              ),
+              (event) => {
+                if (!(projector.shouldApply?.(event) ?? true)) {
+                  pendingSkippedEvent = event;
+                  return Effect.void;
+                }
+
+                pendingSkippedEvent = null;
+                return runProjectorForEvent(projector, event);
+              },
+            );
+
+            // Preserve the replay cursor across trailing non-matching events without paying the
+            // full projector transaction/apply cost for bootstrap no-ops.
+            if (pendingSkippedEvent) {
+              yield* advanceProjectorStateToEvent(projector, pendingSkippedEvent);
+            }
+          }),
         ),
       );
 
@@ -1439,6 +1573,44 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       ),
     );
 
+  const projectHotEvent: OrchestrationProjectionPipelineShape["projectHotEvent"] = (event) =>
+    Effect.forEach(
+      selectProjectorsForEvent(event, "hot"),
+      (projector) => runProjectorForEvent(projector, event),
+      {
+        concurrency: 1,
+      },
+    ).pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
+      Effect.provideService(ServerConfig, serverConfig),
+      Effect.asVoid,
+      Effect.catchTag("SqlError", (sqlError) =>
+        Effect.fail(toPersistenceSqlError("ProjectionPipeline.projectHotEvent:query")(sqlError)),
+      ),
+    );
+
+  const projectDeferredEvent: OrchestrationProjectionPipelineShape["projectDeferredEvent"] = (
+    event,
+  ) =>
+    Effect.forEach(
+      selectProjectorsForEvent(event, "deferred"),
+      (projector) => runProjectorForEvent(projector, event),
+      {
+        concurrency: 1,
+      },
+    ).pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
+      Effect.provideService(ServerConfig, serverConfig),
+      Effect.asVoid,
+      Effect.catchTag("SqlError", (sqlError) =>
+        Effect.fail(
+          toPersistenceSqlError("ProjectionPipeline.projectDeferredEvent:query")(sqlError),
+        ),
+      ),
+    );
+
   const bootstrap: OrchestrationProjectionPipelineShape["bootstrap"] = Effect.forEach(
     projectors,
     bootstrapProjector,
@@ -1461,6 +1633,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   return {
     bootstrap,
     projectEvent,
+    projectHotEvent,
+    projectDeferredEvent,
     projectMetadataEvent,
   } satisfies OrchestrationProjectionPipelineShape;
 });

@@ -93,6 +93,7 @@ export function useThreadHandoff() {
         associatedWorktreeBranch: thread.associatedWorktreeBranch ?? thread.branch ?? null,
         associatedWorktreeRef:
           thread.associatedWorktreeRef ?? thread.associatedWorktreeBranch ?? thread.branch ?? null,
+        createBranchFlowCompleted: thread.createBranchFlowCompleted ?? false,
         importedMessages: [...importedMessages],
         createdAt,
       });

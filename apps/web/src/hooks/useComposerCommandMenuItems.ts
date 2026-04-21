@@ -150,8 +150,9 @@ export function useComposerCommandMenuItems(input: {
         label: basenameOfPath(entry.path),
         description: entry.parentPath ?? "",
       }));
-      // Show agents first, then plugins/local browsing, then workspace paths.
-      return [...agentItems, ...pluginItems, ...localRootItems, ...pathItems];
+      // Keep mention suggestions ordered by primary intent: plugins first,
+      // then local context, then subagent delegation targets.
+      return [...pluginItems, ...localRootItems, ...pathItems, ...agentItems];
     }
 
     if (composerTrigger.kind === "slash-command") {

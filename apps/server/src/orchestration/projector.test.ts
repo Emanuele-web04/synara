@@ -88,6 +88,7 @@ describe("orchestration projector", () => {
         associatedWorktreePath: null,
         associatedWorktreeBranch: null,
         associatedWorktreeRef: null,
+        createBranchFlowCompleted: false,
         parentThreadId: null,
         subagentAgentId: null,
         subagentNickname: null,

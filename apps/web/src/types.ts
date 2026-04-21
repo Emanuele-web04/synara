@@ -144,6 +144,7 @@ export interface ThreadWorkspaceState {
   associatedWorktreePath?: string | null;
   associatedWorktreeBranch?: string | null;
   associatedWorktreeRef?: string | null;
+  createBranchFlowCompleted?: boolean;
 }
 
 export interface ThreadWorkspacePatch {
@@ -153,6 +154,7 @@ export interface ThreadWorkspacePatch {
   associatedWorktreePath?: string | null;
   associatedWorktreeBranch?: string | null;
   associatedWorktreeRef?: string | null;
+  createBranchFlowCompleted?: boolean;
 }
 
 export interface Thread extends ThreadWorkspaceState {

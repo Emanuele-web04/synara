@@ -1,6 +1,7 @@
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import { Effect, Layer, Schema, Struct } from "effect";
+import * as SchemaGetter from "effect/SchemaGetter";
 
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
@@ -13,8 +14,16 @@ import {
 } from "../Services/ProjectionThreads.ts";
 import { ModelSelection, OrchestrationThreadPullRequest, ThreadHandoff } from "@t3tools/contracts";
 
+const SqliteBoolean = Schema.Number.pipe(
+  Schema.decodeTo(Schema.Boolean, {
+    decode: SchemaGetter.transform((value) => value !== 0),
+    encode: SchemaGetter.transform((value) => (value ? 1 : 0)),
+  }),
+);
+
 const ProjectionThreadDbRow = ProjectionThread.mapFields(
   Struct.assign({
+    createBranchFlowCompleted: SqliteBoolean,
     handoff: Schema.NullOr(Schema.fromJsonString(ThreadHandoff)),
     lastKnownPr: Schema.NullOr(Schema.fromJsonString(OrchestrationThreadPullRequest)),
     modelSelection: Schema.fromJsonString(ModelSelection),
@@ -42,6 +51,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           associated_worktree_path,
           associated_worktree_branch,
           associated_worktree_ref,
+          create_branch_flow_completed,
           parent_thread_id,
           subagent_agent_id,
           subagent_nickname,
@@ -72,6 +82,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.associatedWorktreePath},
           ${row.associatedWorktreeBranch},
           ${row.associatedWorktreeRef},
+          ${row.createBranchFlowCompleted ? 1 : 0},
           ${row.parentThreadId ?? null},
           ${row.subagentAgentId ?? null},
           ${row.subagentNickname ?? null},
@@ -102,6 +113,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           associated_worktree_path = excluded.associated_worktree_path,
           associated_worktree_branch = excluded.associated_worktree_branch,
           associated_worktree_ref = excluded.associated_worktree_ref,
+          create_branch_flow_completed = excluded.create_branch_flow_completed,
           parent_thread_id = excluded.parent_thread_id,
           subagent_agent_id = excluded.subagent_agent_id,
           subagent_nickname = excluded.subagent_nickname,
@@ -139,6 +151,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           associated_worktree_path AS "associatedWorktreePath",
           associated_worktree_branch AS "associatedWorktreeBranch",
           associated_worktree_ref AS "associatedWorktreeRef",
+          create_branch_flow_completed AS "createBranchFlowCompleted",
           parent_thread_id AS "parentThreadId",
           subagent_agent_id AS "subagentAgentId",
           subagent_nickname AS "subagentNickname",
@@ -178,6 +191,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           associated_worktree_path AS "associatedWorktreePath",
           associated_worktree_branch AS "associatedWorktreeBranch",
           associated_worktree_ref AS "associatedWorktreeRef",
+          create_branch_flow_completed AS "createBranchFlowCompleted",
           parent_thread_id AS "parentThreadId",
           subagent_agent_id AS "subagentAgentId",
           subagent_nickname AS "subagentNickname",

@@ -1,4 +1,5 @@
 import {
+  ApprovalRequestId,
   CheckpointRef,
   EventId,
   MessageId,
@@ -280,6 +281,76 @@ describe("store pure functions", () => {
     });
 
     expect(next.threads[0]?.branch).toBe("feature/semantic-branch");
+  });
+
+  it("preserves optimistic createBranchFlowCompleted during stale read-model syncs", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const optimisticState = setThreadWorkspace(
+      makeState(
+        makeThread({
+          envMode: "worktree",
+          branch: "dpcode/tmp-working",
+          worktreePath: "/tmp/project/.worktrees/tmp-working",
+          associatedWorktreePath: "/tmp/project/.worktrees/tmp-working",
+          associatedWorktreeBranch: "dpcode/tmp-working",
+          associatedWorktreeRef: "dpcode/tmp-working",
+        }),
+      ),
+      threadId,
+      {
+        createBranchFlowCompleted: true,
+      },
+    );
+
+    const next = syncServerReadModel(
+      optimisticState,
+      makeReadModel(
+        makeReadModelThread({
+          envMode: "worktree",
+          branch: "dpcode/tmp-working",
+          worktreePath: "/tmp/project/.worktrees/tmp-working",
+          associatedWorktreePath: "/tmp/project/.worktrees/tmp-working",
+          associatedWorktreeBranch: "dpcode/tmp-working",
+          associatedWorktreeRef: "dpcode/tmp-working",
+          createBranchFlowCompleted: false,
+          updatedAt: "2026-02-27T00:05:00.000Z",
+        }),
+      ),
+    );
+
+    expect(next.threads[0]?.createBranchFlowCompleted).toBe(true);
+    expect(next.threadShellById?.[threadId]?.createBranchFlowCompleted).toBe(true);
+  });
+
+  it("resets createBranchFlowCompleted when the branch context changes", () => {
+    const next = syncServerReadModel(
+      makeState(
+        makeThread({
+          envMode: "worktree",
+          branch: "feature/old-name",
+          worktreePath: "/tmp/project/.worktrees/old-name",
+          associatedWorktreePath: "/tmp/project/.worktrees/old-name",
+          associatedWorktreeBranch: "feature/old-name",
+          associatedWorktreeRef: "feature/old-name",
+          createBranchFlowCompleted: true,
+        }),
+      ),
+      makeReadModel(
+        makeReadModelThread({
+          envMode: "worktree",
+          branch: "feature/new-name",
+          worktreePath: "/tmp/project/.worktrees/new-name",
+          associatedWorktreePath: "/tmp/project/.worktrees/new-name",
+          associatedWorktreeBranch: "feature/new-name",
+          associatedWorktreeRef: "feature/new-name",
+          createBranchFlowCompleted: false,
+          updatedAt: "2026-02-27T00:05:00.000Z",
+        }),
+      ),
+    );
+
+    expect(next.threads[0]?.branch).toBe("feature/new-name");
+    expect(next.threads[0]?.createBranchFlowCompleted).toBe(false);
   });
 
   it("stores server-provided sidebar metadata on hydrated threads", () => {
@@ -608,6 +679,72 @@ describe("store pure functions", () => {
     expect(next.sidebarThreadSummaryById["thread-project-1"]).toBeUndefined();
   });
 
+  it("does not let a stale shell upsert clear optimistic createBranchFlowCompleted", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const initialState = syncServerReadModel(
+      makeState(
+        makeThread({
+          envMode: "worktree",
+          branch: "feature/semantic-branch",
+          worktreePath: "/tmp/project/.worktrees/semantic-branch",
+          associatedWorktreePath: "/tmp/project/.worktrees/semantic-branch",
+          associatedWorktreeBranch: "feature/semantic-branch",
+          associatedWorktreeRef: "feature/semantic-branch",
+          createBranchFlowCompleted: true,
+        }),
+      ),
+      makeReadModel(
+        makeReadModelThread({
+          envMode: "worktree",
+          branch: "feature/semantic-branch",
+          worktreePath: "/tmp/project/.worktrees/semantic-branch",
+          associatedWorktreePath: "/tmp/project/.worktrees/semantic-branch",
+          associatedWorktreeBranch: "feature/semantic-branch",
+          associatedWorktreeRef: "feature/semantic-branch",
+          createBranchFlowCompleted: true,
+          updatedAt: "2026-02-27T00:00:00.000Z",
+        }),
+      ),
+    );
+
+    const next = applyShellEvent(initialState, {
+      kind: "thread-upserted",
+      sequence: 2,
+      thread: {
+        id: threadId,
+        projectId: ProjectId.makeUnsafe("project-1"),
+        title: "Thread",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5.3-codex",
+        },
+        runtimeMode: DEFAULT_RUNTIME_MODE,
+        interactionMode: DEFAULT_INTERACTION_MODE,
+        envMode: "worktree",
+        branch: "feature/semantic-branch",
+        worktreePath: "/tmp/project/.worktrees/semantic-branch",
+        associatedWorktreePath: "/tmp/project/.worktrees/semantic-branch",
+        associatedWorktreeBranch: "feature/semantic-branch",
+        associatedWorktreeRef: "feature/semantic-branch",
+        createBranchFlowCompleted: false,
+        parentThreadId: null,
+        subagentAgentId: null,
+        subagentNickname: null,
+        subagentRole: null,
+        forkSourceThreadId: null,
+        lastKnownPr: null,
+        latestTurn: null,
+        createdAt: "2026-02-27T00:00:00.000Z",
+        updatedAt: "2026-02-27T00:05:00.000Z",
+        archivedAt: null,
+        handoff: null,
+        session: null,
+      },
+    });
+
+    expect(next.threadShellById?.[threadId]?.createBranchFlowCompleted).toBe(true);
+  });
+
   it("settles a running latest turn immediately when session stop is requested", () => {
     const initialState = makeState(
       makeThread({
@@ -813,6 +950,30 @@ describe("store pure functions", () => {
       session: null,
       updatedAt: "2026-02-27T00:01:00.000Z",
     });
+  });
+
+  it("keeps createBranchFlowCompleted sticky for stale thread.meta-updated payloads", () => {
+    const initialState = makeState(
+      makeThread({
+        envMode: "worktree",
+        branch: "feature/semantic-branch",
+        worktreePath: "/tmp/project/.worktrees/semantic-branch",
+        associatedWorktreePath: "/tmp/project/.worktrees/semantic-branch",
+        associatedWorktreeBranch: "feature/semantic-branch",
+        associatedWorktreeRef: "feature/semantic-branch",
+        createBranchFlowCompleted: true,
+      }),
+    );
+
+    const next = applyOrchestrationEvents(initialState, [
+      makeDomainEvent("thread.meta-updated", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        createBranchFlowCompleted: false,
+        updatedAt: "2026-02-27T00:01:00.000Z",
+      }),
+    ]);
+
+    expect(next.threads[0]?.createBranchFlowCompleted).toBe(true);
   });
 
   it("updates turn diffs and latest turn immediately from live events", () => {
@@ -1455,8 +1616,7 @@ describe("store read model sync", () => {
     expect(next.threadSessionById?.[threadId]?.activeTurnId).toBeUndefined();
   });
 
-  it("updates sidebar summaries during hot-path thread detail syncs", () => {
-    // Seed the hydrated store with the original thread metadata that the sidebar already shows.
+  it("keeps sidebar summaries shell-owned during hot-path thread detail syncs", () => {
     const initialState = syncServerReadModel(
       makeState(makeThread({ title: "Original title" })),
       makeReadModel(
@@ -1467,7 +1627,6 @@ describe("store read model sync", () => {
       ),
     );
 
-    // Apply the live detail snapshot that renames and archives the same thread.
     const next = syncServerThreadDetailHotPath(
       initialState,
       makeReadModelThread({
@@ -1477,15 +1636,146 @@ describe("store read model sync", () => {
       }),
     );
 
-    // The sidebar row must reflect the latest title and archive state immediately.
     expect(next.sidebarThreadSummaryById["thread-1"]).toMatchObject({
-      title: "Renamed title",
-      archivedAt: "2026-02-27T00:05:00.000Z",
+      title: "Original title",
+      archivedAt: null,
     });
   });
 
-  it("updates sidebar summaries for hot-path archive events", () => {
-    // Start from a hydrated unarchived thread so the event must flip the sidebar summary.
+  it("keeps createBranchFlowCompleted sticky during stale hot-path detail syncs", () => {
+    const threadId = ThreadId.makeUnsafe("thread-hot-path-branch-flow");
+    const liveState = makeState(
+      makeThread({
+        id: threadId,
+        branch: "dpcode/tmp-working",
+        worktreePath: "/tmp/worktrees/thread-hot-path-branch-flow",
+        createBranchFlowCompleted: true,
+      }),
+    );
+
+    const next = syncServerThreadDetailHotPath(
+      liveState,
+      makeReadModelThread({
+        id: threadId,
+        branch: "dpcode/tmp-working",
+        worktreePath: "/tmp/worktrees/thread-hot-path-branch-flow",
+        createBranchFlowCompleted: false,
+      }),
+    );
+
+    expect(next.threads.find((thread) => thread.id === threadId)?.createBranchFlowCompleted).toBe(
+      true,
+    );
+    expect(next.threadShellById?.[threadId]?.createBranchFlowCompleted).toBe(true);
+  });
+
+  it("does not rebuild sidebar summaries for streaming assistant deltas", () => {
+    const initialState = syncServerReadModel(
+      makeState(makeThread({ title: "Stable sidebar title" })),
+      makeReadModel(
+        makeReadModelThread({
+          title: "Stable sidebar title",
+          updatedAt: "2026-02-27T00:00:00.000Z",
+        }),
+      ),
+    );
+
+    const previousSummary = initialState.sidebarThreadSummaryById["thread-1"];
+    const next = applyOrchestrationEvents(initialState, [
+      makeDomainEvent("thread.message-sent", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: MessageId.makeUnsafe("assistant-streaming"),
+        role: "assistant",
+        text: "streaming delta",
+        turnId: TurnId.makeUnsafe("turn-1"),
+        streaming: true,
+        createdAt: "2026-02-27T00:01:00.000Z",
+        updatedAt: "2026-02-27T00:01:00.000Z",
+        attachments: [],
+        source: "native",
+      }),
+    ]);
+
+    expect(next.sidebarThreadSummaryById["thread-1"]).toBe(previousSummary);
+    expect(next.threads[0]?.messages.at(-1)).toMatchObject({
+      id: MessageId.makeUnsafe("assistant-streaming"),
+      text: "streaming delta",
+      streaming: true,
+    });
+  });
+
+  it("preserves the existing sidebar pending-user-input state during detail-only response events", () => {
+    const initialState = syncServerReadModel(
+      makeState(
+        makeThread({
+          hasPendingUserInput: true,
+          activities: [
+            makeActivity({
+              id: "activity-user-input-requested",
+              createdAt: "2026-02-27T00:00:30.000Z",
+              kind: "user-input.requested",
+              summary: "Need more input",
+              payload: {
+                requestId: "request-1",
+                questions: [
+                  {
+                    id: "q1",
+                    prompt: "Pick one",
+                    type: "single_select",
+                    options: [{ id: "yes", label: "Yes" }],
+                  },
+                ],
+              },
+              sequence: 1,
+            }),
+          ],
+        }),
+      ),
+      makeReadModel(
+        makeReadModelThread({
+          activities: [
+            makeActivity({
+              id: "activity-user-input-requested",
+              createdAt: "2026-02-27T00:00:30.000Z",
+              kind: "user-input.requested",
+              summary: "Need more input",
+              payload: {
+                requestId: "request-1",
+                questions: [
+                  {
+                    id: "q1",
+                    prompt: "Pick one",
+                    type: "single_select",
+                    options: [{ id: "yes", label: "Yes" }],
+                  },
+                ],
+              },
+              sequence: 1,
+            }),
+          ],
+        }),
+      ),
+    );
+
+    const next = applyOrchestrationEvents(initialState, [
+      makeDomainEvent("thread.user-input-response-requested", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        requestId: ApprovalRequestId.makeUnsafe("request-1"),
+        answers: {
+          q1: {
+            type: "option",
+            optionId: "yes",
+          },
+        },
+        createdAt: "2026-02-27T00:01:00.000Z",
+      }),
+    ]);
+
+    expect(next.threads[0]?.hasPendingUserInput).toBe(false);
+    expect(next.sidebarThreadSummaryById["thread-1"]?.hasPendingUserInput).toBe(false);
+  });
+
+  it("keeps sidebar summaries shell-owned during hot-path archive events", () => {
     const initialState = syncServerReadModel(
       makeState(makeThread({ title: "Archivable thread" })),
       makeReadModel(
@@ -1496,7 +1786,6 @@ describe("store read model sync", () => {
       ),
     );
 
-    // Replay the live archive event through the hot path used by the event router.
     const next = applyOrchestrationEventsHotPath(
       initialState,
       [
@@ -1509,8 +1798,7 @@ describe("store read model sync", () => {
       { updateThreadArray: false },
     );
 
-    // The sidebar summary must expose the new archive timestamp without waiting for a full refresh.
-    expect(next.sidebarThreadSummaryById["thread-1"]?.archivedAt).toBe("2026-02-27T00:07:00.000Z");
+    expect(next.sidebarThreadSummaryById["thread-1"]?.archivedAt).toBeNull();
   });
 
   it("retains archived threads in the synced store for the archived settings panel", () => {
@@ -1532,8 +1820,7 @@ describe("store read model sync", () => {
     );
   });
 
-  it("updates sidebar summaries during hot-path thread detail syncs", () => {
-    // Seed the hydrated store with the original thread metadata that the sidebar already shows.
+  it("keeps sidebar summaries shell-owned during hot-path thread detail syncs", () => {
     const initialState = syncServerReadModel(
       makeState(makeThread({ title: "Original title" })),
       makeReadModel(
@@ -1544,7 +1831,6 @@ describe("store read model sync", () => {
       ),
     );
 
-    // Apply the live detail snapshot that renames and archives the same thread.
     const next = syncServerThreadDetailHotPath(
       initialState,
       makeReadModelThread({
@@ -1554,15 +1840,13 @@ describe("store read model sync", () => {
       }),
     );
 
-    // The sidebar row must reflect the latest title and archive state immediately.
     expect(next.sidebarThreadSummaryById["thread-1"]).toMatchObject({
-      title: "Renamed title",
-      archivedAt: "2026-02-27T00:05:00.000Z",
+      title: "Original title",
+      archivedAt: null,
     });
   });
 
-  it("updates sidebar summaries for hot-path archive events", () => {
-    // Start from a hydrated unarchived thread so the event must flip the sidebar summary.
+  it("keeps sidebar summaries shell-owned during hot-path archive events", () => {
     const initialState = syncServerReadModel(
       makeState(makeThread({ title: "Archivable thread" })),
       makeReadModel(
@@ -1573,7 +1857,6 @@ describe("store read model sync", () => {
       ),
     );
 
-    // Replay the live archive event through the hot path used by the event router.
     const next = applyOrchestrationEventsHotPath(
       initialState,
       [
@@ -1586,8 +1869,7 @@ describe("store read model sync", () => {
       { updateThreadArray: false },
     );
 
-    // The sidebar summary must expose the new archive timestamp without waiting for a full refresh.
-    expect(next.sidebarThreadSummaryById["thread-1"]?.archivedAt).toBe("2026-02-27T00:07:00.000Z");
+    expect(next.sidebarThreadSummaryById["thread-1"]?.archivedAt).toBeNull();
   });
 
   it("preserves the current project order when syncing incoming read model updates", () => {

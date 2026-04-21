@@ -4,6 +4,7 @@
 
 import { Fragment, type ReactNode, createElement, useEffect } from "react";
 import {
+  EventId,
   MessageId,
   type OrchestrationEvent,
   type ProviderKind,
@@ -61,6 +62,14 @@ type ReadModelMessage = OrchestrationReadModel["threads"][number]["messages"][nu
 type ShellSnapshotProject = OrchestrationShellSnapshot["projects"][number];
 type ShellSnapshotThread = OrchestrationShellSnapshot["threads"][number];
 type ThreadMessageSentEvent = Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
+type ThreadActivityAppendedEvent = Extract<
+  OrchestrationEvent,
+  { type: "thread.activity-appended" }
+>;
+type ThreadUserInputResponseRequestedEvent = Extract<
+  OrchestrationEvent,
+  { type: "thread.user-input-response-requested" }
+>;
 
 const PERSISTED_STATE_KEY = "t3code:renderer-state:v8";
 const LEGACY_PERSISTED_STATE_KEYS = [
@@ -93,6 +102,14 @@ const EMPTY_TURN_DIFF_BY_THREAD: Record<
   ThreadId,
   Record<TurnId, Thread["turnDiffSummaries"][number]>
 > = {};
+const THREAD_SUMMARY_ACTIVITY_KINDS = new Set([
+  "approval.requested",
+  "approval.resolved",
+  "provider.approval.respond.failed",
+  "user-input.requested",
+  "user-input.resolved",
+  "provider.user-input.respond.failed",
+]);
 
 const initialState: AppState = {
   projects: [],
@@ -282,6 +299,45 @@ function threadSessionsEqual(
   );
 }
 
+// Keep optimistic branch-flow completion sticky for the same branch/worktree identity,
+// but let the server reinitialize it whenever the thread moves to a new branch context.
+function resolveCreateBranchFlowCompletedMerge(input: {
+  currentBranch: string | null;
+  nextBranch: string | null;
+  currentWorktreePath: string | null;
+  nextWorktreePath: string | null;
+  currentAssociatedWorktreePath: string | null | undefined;
+  nextAssociatedWorktreePath: string | null | undefined;
+  currentAssociatedWorktreeBranch: string | null | undefined;
+  nextAssociatedWorktreeBranch: string | null | undefined;
+  currentAssociatedWorktreeRef: string | null | undefined;
+  nextAssociatedWorktreeRef: string | null | undefined;
+  currentCreateBranchFlowCompleted: boolean | undefined;
+  nextCreateBranchFlowCompleted: boolean | undefined;
+}): boolean {
+  const contextChanged =
+    input.currentBranch !== input.nextBranch ||
+    input.currentWorktreePath !== input.nextWorktreePath ||
+    (input.currentAssociatedWorktreePath ?? null) !== (input.nextAssociatedWorktreePath ?? null) ||
+    (input.currentAssociatedWorktreeBranch ?? null) !==
+      (input.nextAssociatedWorktreeBranch ?? null) ||
+    (input.currentAssociatedWorktreeRef ?? null) !== (input.nextAssociatedWorktreeRef ?? null);
+
+  if (contextChanged) {
+    return input.nextCreateBranchFlowCompleted ?? false;
+  }
+
+  if (input.nextCreateBranchFlowCompleted === undefined) {
+    return input.currentCreateBranchFlowCompleted ?? false;
+  }
+
+  if ((input.currentCreateBranchFlowCompleted ?? false) && !input.nextCreateBranchFlowCompleted) {
+    return true;
+  }
+
+  return input.nextCreateBranchFlowCompleted;
+}
+
 function threadShellsEqual(left: ThreadShell | undefined, right: ThreadShell): boolean {
   return (
     left !== undefined &&
@@ -302,6 +358,7 @@ function threadShellsEqual(left: ThreadShell | undefined, right: ThreadShell): b
     (left.associatedWorktreePath ?? null) === (right.associatedWorktreePath ?? null) &&
     (left.associatedWorktreeBranch ?? null) === (right.associatedWorktreeBranch ?? null) &&
     (left.associatedWorktreeRef ?? null) === (right.associatedWorktreeRef ?? null) &&
+    (left.createBranchFlowCompleted ?? false) === (right.createBranchFlowCompleted ?? false) &&
     (left.parentThreadId ?? null) === (right.parentThreadId ?? null) &&
     (left.subagentAgentId ?? null) === (right.subagentAgentId ?? null) &&
     (left.subagentNickname ?? null) === (right.subagentNickname ?? null) &&
@@ -344,6 +401,7 @@ function toThreadShell(thread: Thread): ThreadShell {
     associatedWorktreePath: thread.associatedWorktreePath ?? null,
     associatedWorktreeBranch: thread.associatedWorktreeBranch ?? null,
     associatedWorktreeRef: thread.associatedWorktreeRef ?? null,
+    createBranchFlowCompleted: thread.createBranchFlowCompleted ?? false,
     parentThreadId: thread.parentThreadId ?? null,
     subagentAgentId: thread.subagentAgentId ?? null,
     subagentNickname: thread.subagentNickname ?? null,
@@ -1323,9 +1381,27 @@ function normalizeThreadFromReadModel(
     typeof incoming.hasActionableProposedPlan === "boolean"
       ? incoming.hasActionableProposedPlan
       : undefined;
+  const nextWorktreePath = incoming.worktreePath;
+  const nextAssociatedWorktreePath = incoming.associatedWorktreePath ?? null;
+  const nextAssociatedWorktreeBranch = incoming.associatedWorktreeBranch ?? null;
+  const nextAssociatedWorktreeRef = incoming.associatedWorktreeRef ?? null;
   const resolvedBranch = resolveThreadBranchRegressionGuard({
     currentBranch: previous?.branch ?? null,
     nextBranch: incoming.branch,
+  });
+  const resolvedCreateBranchFlowCompleted = resolveCreateBranchFlowCompletedMerge({
+    currentBranch: previous?.branch ?? null,
+    nextBranch: resolvedBranch,
+    currentWorktreePath: previous?.worktreePath ?? null,
+    nextWorktreePath,
+    currentAssociatedWorktreePath: previous?.associatedWorktreePath,
+    nextAssociatedWorktreePath,
+    currentAssociatedWorktreeBranch: previous?.associatedWorktreeBranch,
+    nextAssociatedWorktreeBranch,
+    currentAssociatedWorktreeRef: previous?.associatedWorktreeRef,
+    nextAssociatedWorktreeRef,
+    currentCreateBranchFlowCompleted: previous?.createBranchFlowCompleted,
+    nextCreateBranchFlowCompleted: incoming.createBranchFlowCompleted,
   });
   const pendingSourceProposedPlan =
     latestTurn?.sourceProposedPlan ??
@@ -1354,10 +1430,11 @@ function normalizeThreadFromReadModel(
     (previous.subagentRole ?? null) === (incoming.subagentRole ?? null) &&
     previous.envMode === (incoming.envMode ?? "local") &&
     previous.branch === resolvedBranch &&
-    previous.worktreePath === incoming.worktreePath &&
-    (previous.associatedWorktreePath ?? null) === (incoming.associatedWorktreePath ?? null) &&
-    (previous.associatedWorktreeBranch ?? null) === (incoming.associatedWorktreeBranch ?? null) &&
-    (previous.associatedWorktreeRef ?? null) === (incoming.associatedWorktreeRef ?? null) &&
+    previous.worktreePath === nextWorktreePath &&
+    (previous.associatedWorktreePath ?? null) === nextAssociatedWorktreePath &&
+    (previous.associatedWorktreeBranch ?? null) === nextAssociatedWorktreeBranch &&
+    (previous.associatedWorktreeRef ?? null) === nextAssociatedWorktreeRef &&
+    (previous.createBranchFlowCompleted ?? false) === resolvedCreateBranchFlowCompleted &&
     previous.latestUserMessageAt === resolvedLatestUserMessageAt &&
     previous.hasPendingApprovals === resolvedHasPendingApprovals &&
     previous.hasPendingUserInput === resolvedHasPendingUserInput &&
@@ -1395,10 +1472,11 @@ function normalizeThreadFromReadModel(
     subagentRole: incoming.subagentRole ?? null,
     envMode: incoming.envMode ?? "local",
     branch: resolvedBranch,
-    worktreePath: incoming.worktreePath,
-    associatedWorktreePath: incoming.associatedWorktreePath ?? null,
-    associatedWorktreeBranch: incoming.associatedWorktreeBranch ?? null,
-    associatedWorktreeRef: incoming.associatedWorktreeRef ?? null,
+    worktreePath: nextWorktreePath,
+    associatedWorktreePath: nextAssociatedWorktreePath,
+    associatedWorktreeBranch: nextAssociatedWorktreeBranch,
+    associatedWorktreeRef: nextAssociatedWorktreeRef,
+    createBranchFlowCompleted: resolvedCreateBranchFlowCompleted,
     forkSourceThreadId: incoming.forkSourceThreadId ?? null,
     lastKnownPr,
     handoff,
@@ -1442,9 +1520,27 @@ function normalizeThreadShellSnapshot(
       : (incoming.lastKnownPr ?? null);
   const error = normalizeThreadErrorMessage(incoming.session?.lastError);
   const lastVisitedAt = previous?.lastVisitedAt ?? incoming.updatedAt;
+  const nextWorktreePath = incoming.worktreePath;
+  const nextAssociatedWorktreePath = incoming.associatedWorktreePath ?? null;
+  const nextAssociatedWorktreeBranch = incoming.associatedWorktreeBranch ?? null;
+  const nextAssociatedWorktreeRef = incoming.associatedWorktreeRef ?? null;
   const resolvedBranch = resolveThreadBranchRegressionGuard({
     currentBranch: previous?.branch ?? null,
     nextBranch: incoming.branch,
+  });
+  const resolvedCreateBranchFlowCompleted = resolveCreateBranchFlowCompletedMerge({
+    currentBranch: previous?.branch ?? null,
+    nextBranch: resolvedBranch,
+    currentWorktreePath: previous?.worktreePath ?? null,
+    nextWorktreePath,
+    currentAssociatedWorktreePath: previous?.associatedWorktreePath,
+    nextAssociatedWorktreePath,
+    currentAssociatedWorktreeBranch: previous?.associatedWorktreeBranch,
+    nextAssociatedWorktreeBranch,
+    currentAssociatedWorktreeRef: previous?.associatedWorktreeRef,
+    nextAssociatedWorktreeRef,
+    currentCreateBranchFlowCompleted: previous?.createBranchFlowCompleted,
+    nextCreateBranchFlowCompleted: incoming.createBranchFlowCompleted,
   });
   const shell: ThreadShell = {
     id: incoming.id,
@@ -1460,10 +1556,11 @@ function normalizeThreadShellSnapshot(
     updatedAt: incoming.updatedAt,
     envMode: incoming.envMode ?? "local",
     branch: resolvedBranch,
-    worktreePath: incoming.worktreePath,
-    associatedWorktreePath: incoming.associatedWorktreePath ?? null,
-    associatedWorktreeBranch: incoming.associatedWorktreeBranch ?? null,
-    associatedWorktreeRef: incoming.associatedWorktreeRef ?? null,
+    worktreePath: nextWorktreePath,
+    associatedWorktreePath: nextAssociatedWorktreePath,
+    associatedWorktreeBranch: nextAssociatedWorktreeBranch,
+    associatedWorktreeRef: nextAssociatedWorktreeRef,
+    createBranchFlowCompleted: resolvedCreateBranchFlowCompleted,
     parentThreadId: incoming.parentThreadId ?? null,
     subagentAgentId: incoming.subagentAgentId ?? null,
     subagentNickname: incoming.subagentNickname ?? null,
@@ -1655,19 +1752,28 @@ function resolveThreadSidebarMetadata(
   | "hasActionableProposedPlan"
   | "hasLiveTailWork"
 > {
-  const derivedMetadata = deriveThreadSummaryMetadata({
-    messages: thread.messages,
-    activities: thread.activities,
-    proposedPlans: thread.proposedPlans,
-    latestTurn: thread.latestTurn,
-  });
+  const needsDerivedMetadata =
+    thread.latestUserMessageAt === undefined ||
+    thread.hasPendingApprovals === undefined ||
+    thread.hasPendingUserInput === undefined ||
+    thread.hasActionableProposedPlan === undefined;
+  const derivedMetadata = needsDerivedMetadata
+    ? deriveThreadSummaryMetadata({
+        messages: thread.messages,
+        activities: thread.activities,
+        proposedPlans: thread.proposedPlans,
+        latestTurn: thread.latestTurn,
+      })
+    : null;
 
   return {
-    latestUserMessageAt: thread.latestUserMessageAt ?? derivedMetadata.latestUserMessageAt,
-    hasPendingApprovals: thread.hasPendingApprovals ?? derivedMetadata.hasPendingApprovals,
-    hasPendingUserInput: thread.hasPendingUserInput ?? derivedMetadata.hasPendingUserInput,
+    latestUserMessageAt: thread.latestUserMessageAt ?? derivedMetadata?.latestUserMessageAt ?? null,
+    hasPendingApprovals:
+      thread.hasPendingApprovals ?? derivedMetadata?.hasPendingApprovals ?? false,
+    hasPendingUserInput:
+      thread.hasPendingUserInput ?? derivedMetadata?.hasPendingUserInput ?? false,
     hasActionableProposedPlan:
-      thread.hasActionableProposedPlan ?? derivedMetadata.hasActionableProposedPlan,
+      thread.hasActionableProposedPlan ?? derivedMetadata?.hasActionableProposedPlan ?? false,
     hasLiveTailWork: Boolean(
       hasLiveTurnTailWork({
         latestTurn: thread.latestTurn,
@@ -1677,6 +1783,38 @@ function resolveThreadSidebarMetadata(
       }),
     ),
   };
+}
+
+function threadMessageUpdatesSummary(event: ThreadMessageSentEvent): boolean {
+  return event.payload.role === "user";
+}
+
+function threadActivityUpdatesSummary(event: ThreadActivityAppendedEvent): boolean {
+  return THREAD_SUMMARY_ACTIVITY_KINDS.has(event.payload.activity.kind);
+}
+
+function resolveThreadSummaryAfterUserInputResponseRequested(
+  thread: Thread,
+  event: ThreadUserInputResponseRequestedEvent,
+) {
+  return deriveThreadSummaryMetadata({
+    messages: thread.messages,
+    activities: [
+      ...thread.activities,
+      {
+        id: EventId.makeUnsafe(
+          `synthetic-user-input-resolved:${event.payload.requestId}:${event.sequence}`,
+        ),
+        kind: "user-input.resolved",
+        payload: {
+          requestId: event.payload.requestId,
+        },
+        createdAt: event.payload.createdAt,
+      },
+    ],
+    proposedPlans: thread.proposedPlans,
+    latestTurn: thread.latestTurn,
+  });
 }
 
 function sidebarThreadSummariesEqual(
@@ -1839,6 +1977,8 @@ function writeThreadShellProjection(
   return nextState;
 }
 
+// Detail writes keep the active thread slices current, but sidebar summaries stay
+// shell-owned so active transcript churn does not fan out into the navigation tree.
 function writeThreadState(state: AppState, nextThread: Thread, previousThread?: Thread): AppState {
   const nextShell = toThreadShell(nextThread);
   const nextTurnState = toThreadTurnState(nextThread);
@@ -2040,9 +2180,9 @@ function commitThreadProjection(
     return state;
   }
 
-  // Let hot-path detail syncs skip array churn without suppressing sidebar freshness.
+  // Let hot-path detail syncs skip array churn without forcing sidebar ownership
+  // back onto the thread-detail path.
   const shouldUpdateThreadArray = options?.updateThreadArray ?? true;
-  // Sidebar summaries still need the latest title/archive signals for navigation.
   const shouldUpdateSidebarSummary = options?.updateSidebarSummary ?? true;
   const threadExists = previousThread !== undefined;
   const threads = shouldUpdateThreadArray
@@ -2387,6 +2527,8 @@ function applyThreadUpdate(
   updater: (thread: Thread) => Thread,
   options?: {
     updateThreadArray?: boolean;
+    recomputeSummarySignals?: boolean;
+    updateSidebarSummary?: boolean;
   },
 ): AppState {
   const currentThread =
@@ -2394,12 +2536,16 @@ function applyThreadUpdate(
   if (!currentThread) {
     return state;
   }
-  const updatedThread = withDerivedThreadStateSignals(updater(currentThread));
+  const updatedThread =
+    options?.recomputeSummarySignals === false
+      ? updater(currentThread)
+      : withDerivedThreadStateSignals(updater(currentThread));
   if (updatedThread === currentThread) {
     return state;
   }
   return commitThreadProjection(writeThreadState(state, updatedThread, currentThread), threadId, {
     updateThreadArray: options?.updateThreadArray ?? true,
+    updateSidebarSummary: options?.updateSidebarSummary ?? true,
   });
 }
 
@@ -2547,6 +2693,7 @@ function applyOrchestrationEvent(
   event: OrchestrationEvent,
   options?: {
     updateThreadArray?: boolean;
+    updateSidebarSummary?: boolean;
   },
 ): AppState {
   switch (event.type) {
@@ -2619,6 +2766,32 @@ function applyOrchestrationEvent(
             event.payload.worktreePath !== undefined
               ? event.payload.worktreePath
               : thread.worktreePath;
+          const nextAssociatedWorktreePath =
+            event.payload.associatedWorktreePath !== undefined
+              ? event.payload.associatedWorktreePath
+              : (thread.associatedWorktreePath ?? null);
+          const nextAssociatedWorktreeBranch =
+            event.payload.associatedWorktreeBranch !== undefined
+              ? event.payload.associatedWorktreeBranch
+              : (thread.associatedWorktreeBranch ?? null);
+          const nextAssociatedWorktreeRef =
+            event.payload.associatedWorktreeRef !== undefined
+              ? event.payload.associatedWorktreeRef
+              : (thread.associatedWorktreeRef ?? null);
+          const nextCreateBranchFlowCompleted = resolveCreateBranchFlowCompletedMerge({
+            currentBranch: thread.branch,
+            nextBranch,
+            currentWorktreePath: thread.worktreePath,
+            nextWorktreePath,
+            currentAssociatedWorktreePath: thread.associatedWorktreePath,
+            nextAssociatedWorktreePath,
+            currentAssociatedWorktreeBranch: thread.associatedWorktreeBranch,
+            nextAssociatedWorktreeBranch,
+            currentAssociatedWorktreeRef: thread.associatedWorktreeRef,
+            nextAssociatedWorktreeRef,
+            currentCreateBranchFlowCompleted: thread.createBranchFlowCompleted,
+            nextCreateBranchFlowCompleted: event.payload.createBranchFlowCompleted,
+          });
           const nextUpdatedAt =
             (thread.updatedAt ?? thread.createdAt) > event.payload.updatedAt
               ? thread.updatedAt
@@ -2631,15 +2804,10 @@ function applyOrchestrationEvent(
             (event.payload.envMode === undefined || event.payload.envMode === thread.envMode) &&
             nextBranch === thread.branch &&
             nextWorktreePath === thread.worktreePath &&
-            (event.payload.associatedWorktreePath === undefined ||
-              (event.payload.associatedWorktreePath ?? null) ===
-                (thread.associatedWorktreePath ?? null)) &&
-            (event.payload.associatedWorktreeBranch === undefined ||
-              (event.payload.associatedWorktreeBranch ?? null) ===
-                (thread.associatedWorktreeBranch ?? null)) &&
-            (event.payload.associatedWorktreeRef === undefined ||
-              (event.payload.associatedWorktreeRef ?? null) ===
-                (thread.associatedWorktreeRef ?? null)) &&
+            nextAssociatedWorktreePath === (thread.associatedWorktreePath ?? null) &&
+            nextAssociatedWorktreeBranch === (thread.associatedWorktreeBranch ?? null) &&
+            nextAssociatedWorktreeRef === (thread.associatedWorktreeRef ?? null) &&
+            nextCreateBranchFlowCompleted === (thread.createBranchFlowCompleted ?? false) &&
             (event.payload.parentThreadId === undefined ||
               (event.payload.parentThreadId ?? null) === (thread.parentThreadId ?? null)) &&
             (event.payload.subagentAgentId === undefined ||
@@ -2664,15 +2832,10 @@ function applyOrchestrationEvent(
             ...(event.payload.envMode !== undefined ? { envMode: event.payload.envMode } : {}),
             branch: nextBranch,
             worktreePath: nextWorktreePath,
-            ...(event.payload.associatedWorktreePath !== undefined
-              ? { associatedWorktreePath: event.payload.associatedWorktreePath }
-              : {}),
-            ...(event.payload.associatedWorktreeBranch !== undefined
-              ? { associatedWorktreeBranch: event.payload.associatedWorktreeBranch }
-              : {}),
-            ...(event.payload.associatedWorktreeRef !== undefined
-              ? { associatedWorktreeRef: event.payload.associatedWorktreeRef }
-              : {}),
+            associatedWorktreePath: nextAssociatedWorktreePath,
+            associatedWorktreeBranch: nextAssociatedWorktreeBranch,
+            associatedWorktreeRef: nextAssociatedWorktreeRef,
+            createBranchFlowCompleted: nextCreateBranchFlowCompleted,
             ...(event.payload.parentThreadId !== undefined
               ? { parentThreadId: event.payload.parentThreadId }
               : {}),
@@ -2701,7 +2864,11 @@ function applyOrchestrationEvent(
         state,
         event.payload.threadId,
         (thread) => applyThreadMessageSentEvent(thread, event),
-        options,
+        {
+          ...options,
+          recomputeSummarySignals: threadMessageUpdatesSummary(event),
+          updateSidebarSummary: options?.updateSidebarSummary ?? false,
+        },
       );
 
     case "thread.session-set":
@@ -2813,6 +2980,28 @@ function applyOrchestrationEvent(
         options,
       );
 
+    case "thread.user-input-response-requested":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          const summary = resolveThreadSummaryAfterUserInputResponseRequested(thread, event);
+          return {
+            ...thread,
+            hasPendingUserInput: summary.hasPendingUserInput,
+            updatedAt:
+              (thread.updatedAt ?? thread.createdAt) > event.payload.createdAt
+                ? thread.updatedAt
+                : event.payload.createdAt,
+          };
+        },
+        {
+          ...options,
+          recomputeSummarySignals: false,
+          updateSidebarSummary: options?.updateSidebarSummary ?? false,
+        },
+      );
+
     case "thread.activity-appended":
       return applyThreadUpdate(
         state,
@@ -2834,7 +3023,11 @@ function applyOrchestrationEvent(
                 : event.payload.activity.createdAt,
           };
         },
-        options,
+        {
+          ...options,
+          recomputeSummarySignals: threadActivityUpdatesSummary(event),
+          updateSidebarSummary: options?.updateSidebarSummary ?? false,
+        },
       );
 
     case "thread.proposed-plan-upserted":
@@ -2984,7 +3177,10 @@ export function applyOrchestrationEvents(
   state: AppState,
   events: ReadonlyArray<OrchestrationEvent>,
 ): AppState {
-  return applyOrchestrationEventsHotPath(state, events, { updateThreadArray: true });
+  return applyOrchestrationEventsHotPath(state, events, {
+    updateThreadArray: true,
+    updateSidebarSummary: false,
+  });
 }
 
 export function applyOrchestrationEventsHotPath(
@@ -2992,11 +3188,16 @@ export function applyOrchestrationEventsHotPath(
   events: ReadonlyArray<OrchestrationEvent>,
   options?: {
     updateThreadArray?: boolean;
+    updateSidebarSummary?: boolean;
   },
 ): AppState {
+  const normalizedOptions = {
+    updateThreadArray: options?.updateThreadArray,
+    updateSidebarSummary: options?.updateSidebarSummary ?? false,
+  };
   let nextState = state;
   for (const event of events) {
-    nextState = applyOrchestrationEvent(nextState, event, options);
+    nextState = applyOrchestrationEvent(nextState, event, normalizedOptions);
   }
   return nextState;
 }
@@ -3090,6 +3291,7 @@ function syncServerThreadDetailWithOptions(
     thread.id,
     {
       updateThreadArray: options?.updateThreadArray ?? true,
+      updateSidebarSummary: false,
     },
   );
 }
@@ -3354,13 +3556,28 @@ export function setThreadWorkspace(
       patch.associatedWorktreeRef !== undefined
         ? patch.associatedWorktreeRef
         : (t.associatedWorktreeRef ?? null);
+    const nextCreateBranchFlowCompleted = resolveCreateBranchFlowCompletedMerge({
+      currentBranch: t.branch,
+      nextBranch,
+      currentWorktreePath: t.worktreePath,
+      nextWorktreePath,
+      currentAssociatedWorktreePath: t.associatedWorktreePath,
+      nextAssociatedWorktreePath,
+      currentAssociatedWorktreeBranch: t.associatedWorktreeBranch,
+      nextAssociatedWorktreeBranch,
+      currentAssociatedWorktreeRef: t.associatedWorktreeRef,
+      nextAssociatedWorktreeRef,
+      currentCreateBranchFlowCompleted: t.createBranchFlowCompleted,
+      nextCreateBranchFlowCompleted: patch.createBranchFlowCompleted,
+    });
     if (
       t.envMode === nextEnvMode &&
       t.branch === nextBranch &&
       t.worktreePath === nextWorktreePath &&
       (t.associatedWorktreePath ?? null) === nextAssociatedWorktreePath &&
       (t.associatedWorktreeBranch ?? null) === nextAssociatedWorktreeBranch &&
-      (t.associatedWorktreeRef ?? null) === nextAssociatedWorktreeRef
+      (t.associatedWorktreeRef ?? null) === nextAssociatedWorktreeRef &&
+      (t.createBranchFlowCompleted ?? false) === nextCreateBranchFlowCompleted
     ) {
       return t;
     }
@@ -3373,6 +3590,7 @@ export function setThreadWorkspace(
       associatedWorktreePath: nextAssociatedWorktreePath,
       associatedWorktreeBranch: nextAssociatedWorktreeBranch,
       associatedWorktreeRef: nextAssociatedWorktreeRef,
+      createBranchFlowCompleted: nextCreateBranchFlowCompleted,
       ...(cwdChanged ? { session: null } : {}),
     };
   });
@@ -3410,7 +3628,12 @@ export const useStore = create<AppStore>((set) => ({
   applyShellEvent: (event) => set((state) => applyShellEvent(state, event)),
   applyOrchestrationEvents: (events) => set((state) => applyOrchestrationEvents(state, events)),
   applyOrchestrationEventsHotPath: (events) =>
-    set((state) => applyOrchestrationEventsHotPath(state, events, { updateThreadArray: false })),
+    set((state) =>
+      applyOrchestrationEventsHotPath(state, events, {
+        updateThreadArray: false,
+        updateSidebarSummary: false,
+      }),
+    ),
   markThreadVisited: (threadId, visitedAt) =>
     set((state) => markThreadVisited(state, threadId, visitedAt)),
   markThreadUnread: (threadId) => set((state) => markThreadUnread(state, threadId)),

@@ -237,12 +237,7 @@ export function resolveQuickAction(
     };
   }
 
-  // Worktree with temporary branch (dpcode/xxxxxxxx) that hasn't been pushed yet
-  // → prompt user to create a permanent branch name
-  if (
-    !gitStatus.hasUpstream &&
-    (isTemporaryWorktreeBranch(gitStatus.branch!) || shouldOfferCreateBranch)
-  ) {
+  if (!gitStatus.hasUpstream && shouldOfferCreateBranch) {
     return {
       label: "Create Branch",
       disabled: false,
@@ -360,20 +355,20 @@ export function resolveQuickAction(
 }
 
 export function shouldOfferCreateBranchPrompt(input: {
-  activeThreadBranch: string | null;
   activeWorktreePath: string | null;
+  threadBranch: string | null;
   gitStatus: Pick<GitStatusResult, "branch" | "hasUpstream"> | null;
+  createBranchFlowCompleted?: boolean;
 }): boolean {
-  if (
-    !input.activeWorktreePath ||
-    !input.activeThreadBranch ||
-    !input.gitStatus?.branch ||
-    input.gitStatus.hasUpstream
-  ) {
-    return false;
-  }
-
-  return isTemporaryWorktreeBranch(input.activeThreadBranch);
+  // This prompt belongs to the temporary worktree branch handoff flow, not any
+  // ordinary local branch that simply hasn't been published yet.
+  if (!input.activeWorktreePath) return false;
+  if (!input.gitStatus?.branch) return false;
+  if (input.gitStatus.hasUpstream) return false;
+  if (input.createBranchFlowCompleted) return false;
+  if (!isTemporaryWorktreeBranch(input.gitStatus.branch)) return false;
+  if (input.threadBranch !== null && !isTemporaryWorktreeBranch(input.threadBranch)) return false;
+  return true;
 }
 
 export function requiresDefaultBranchConfirmation(

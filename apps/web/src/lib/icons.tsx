@@ -4,7 +4,7 @@ import { RiApps2Line } from "react-icons/ri";
 import { SiGithub } from "react-icons/si";
 import { VscMcp } from "react-icons/vsc";
 import { LuSplit } from "react-icons/lu";
-import { TbArrowsRightLeft, TbPlug } from "react-icons/tb";
+import { TbArrowsRightLeft } from "react-icons/tb";
 import {
   IconAdjustments,
   IconAlertCircle,
@@ -155,7 +155,23 @@ export const McpIcon: LucideIcon = (props) => (
   <VscMcp className={props.className} style={props.style} />
 );
 export const PlugIcon: LucideIcon = (props) => (
-  <TbPlug className={props.className} style={props.style} />
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.5}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+    {...props}
+  >
+    <path d="M3.75 7C3.75 8.79493 5.20507 10.25 7 10.25C8.79493 10.25 10.25 8.79493 10.25 7C10.25 5.20507 8.79493 3.75 7 3.75C5.20507 3.75 3.75 5.20507 3.75 7Z" />
+    <path d="M3.75 17C3.75 18.7949 5.20507 20.25 7 20.25C8.79493 20.25 10.25 18.7949 10.25 17C10.25 15.2051 8.79493 13.75 7 13.75C5.20507 13.75 3.75 15.2051 3.75 17Z" />
+    <path d="M13.75 7C13.75 8.79493 15.2051 10.25 17 10.25C18.7949 10.25 20.25 8.79493 20.25 7C20.25 5.20507 18.7949 3.75 17 3.75C15.2051 3.75 13.75 5.20507 13.75 7Z" />
+    <path d="M13.75 17C13.75 18.7949 15.2051 20.25 17 20.25C18.7949 20.25 20.25 18.7949 20.25 17C20.25 15.2051 18.7949 13.75 17 13.75C15.2051 13.75 13.75 15.2051 13.75 17Z" />
+    <path d="M9.5 14.5L14.5 9.5" />
+  </svg>
 );
 export const HammerIcon = adaptIcon(IconTool);
 export const HandoffIcon: LucideIcon = (props) => (

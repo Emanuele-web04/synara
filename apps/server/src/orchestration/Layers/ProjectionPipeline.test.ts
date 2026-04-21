@@ -375,6 +375,262 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-pipe
         ]);
       }),
     );
+
+    it.effect("does not refresh stored thread shell summary for streaming assistant deltas", () =>
+      Effect.gen(function* () {
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const eventStore = yield* OrchestrationEventStore;
+        const sql = yield* SqlClient.SqlClient;
+        const projectId = ProjectId.makeUnsafe("project-streaming-shell");
+        const threadId = ThreadId.makeUnsafe("thread-streaming-shell");
+        const createdAt = "2026-03-05T10:00:00.000Z";
+        const deltaAt = "2026-03-05T10:00:05.000Z";
+
+        yield* eventStore.append({
+          type: "project.created",
+          eventId: EventId.makeUnsafe("evt-streaming-shell-project"),
+          aggregateKind: "project",
+          aggregateId: projectId,
+          occurredAt: createdAt,
+          commandId: CommandId.makeUnsafe("cmd-streaming-shell-project"),
+          causationEventId: null,
+          correlationId: CorrelationId.makeUnsafe("cmd-streaming-shell-project"),
+          metadata: {},
+          payload: {
+            projectId,
+            title: "Streaming Shell Project",
+            workspaceRoot: "/tmp/project-streaming-shell",
+            defaultModelSelection: null,
+            scripts: [],
+            createdAt,
+            updatedAt: createdAt,
+          },
+        });
+
+        yield* eventStore.append({
+          type: "thread.created",
+          eventId: EventId.makeUnsafe("evt-streaming-shell-thread"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: createdAt,
+          commandId: CommandId.makeUnsafe("cmd-streaming-shell-thread"),
+          causationEventId: null,
+          correlationId: CorrelationId.makeUnsafe("cmd-streaming-shell-thread"),
+          metadata: {},
+          payload: {
+            threadId,
+            projectId,
+            title: "Streaming Shell Thread",
+            modelSelection: {
+              provider: "codex",
+              model: "gpt-5-codex",
+            },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        });
+
+        yield* eventStore.append({
+          type: "thread.message-sent",
+          eventId: EventId.makeUnsafe("evt-streaming-shell-assistant-delta"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: deltaAt,
+          commandId: CommandId.makeUnsafe("cmd-streaming-shell-assistant-delta"),
+          causationEventId: null,
+          correlationId: CorrelationId.makeUnsafe("cmd-streaming-shell-assistant-delta"),
+          metadata: {},
+          payload: {
+            threadId,
+            messageId: MessageId.makeUnsafe("message-streaming-shell-assistant"),
+            role: "assistant",
+            text: "hello",
+            turnId: null,
+            streaming: true,
+            createdAt: deltaAt,
+            updatedAt: deltaAt,
+          },
+        });
+
+        yield* projectionPipeline.bootstrap;
+
+        const rows = yield* sql<{
+          readonly latestUserMessageAt: string | null;
+          readonly updatedAt: string;
+        }>`
+          SELECT
+            latest_user_message_at AS "latestUserMessageAt",
+            updated_at AS "updatedAt"
+          FROM projection_threads
+          WHERE thread_id = ${threadId}
+        `;
+        assert.deepEqual(rows, [
+          {
+            latestUserMessageAt: null,
+            updatedAt: createdAt,
+          },
+        ]);
+      }),
+    );
+
+    it.effect(
+      "refreshes stored thread user-input summary after user-input-response-requested",
+      () =>
+        Effect.gen(function* () {
+          const eventStore = yield* OrchestrationEventStore;
+          const projectionPipeline = yield* OrchestrationProjectionPipeline;
+          const sql = yield* SqlClient.SqlClient;
+          const projectId = ProjectId.makeUnsafe("project-user-inputs");
+          const threadId = ThreadId.makeUnsafe("thread-user-inputs");
+          const requestId = ApprovalRequestId.makeUnsafe("user-input-request-1");
+          const createdAt = "2026-03-05T11:00:00.000Z";
+          const requestedAt = "2026-03-05T11:00:01.000Z";
+          const respondedAt = "2026-03-05T11:00:02.000Z";
+
+          yield* eventStore.append({
+            type: "project.created",
+            eventId: EventId.makeUnsafe("evt-user-input-project"),
+            aggregateKind: "project",
+            aggregateId: projectId,
+            occurredAt: createdAt,
+            commandId: CommandId.makeUnsafe("cmd-user-input-project"),
+            causationEventId: null,
+            correlationId: CorrelationId.makeUnsafe("cmd-user-input-project"),
+            metadata: {},
+            payload: {
+              projectId,
+              title: "User Input Project",
+              workspaceRoot: "/tmp/project-user-input",
+              defaultModelSelection: null,
+              scripts: [],
+              createdAt,
+              updatedAt: createdAt,
+            },
+          });
+
+          yield* eventStore.append({
+            type: "thread.created",
+            eventId: EventId.makeUnsafe("evt-user-input-thread"),
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: createdAt,
+            commandId: CommandId.makeUnsafe("cmd-user-input-thread"),
+            causationEventId: null,
+            correlationId: CorrelationId.makeUnsafe("cmd-user-input-thread"),
+            metadata: {},
+            payload: {
+              threadId,
+              projectId,
+              title: "User Input Thread",
+              modelSelection: {
+                provider: "codex",
+                model: "gpt-5-codex",
+              },
+              runtimeMode: "full-access",
+              branch: null,
+              worktreePath: null,
+              createdAt,
+              updatedAt: createdAt,
+            },
+          });
+
+          yield* eventStore.append({
+            type: "thread.activity-appended",
+            eventId: EventId.makeUnsafe("evt-user-input-requested"),
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: requestedAt,
+            commandId: CommandId.makeUnsafe("cmd-user-input-requested"),
+            causationEventId: null,
+            correlationId: CorrelationId.makeUnsafe("cmd-user-input-requested"),
+            metadata: {},
+            payload: {
+              threadId,
+              activity: {
+                id: EventId.makeUnsafe("activity-user-input-requested"),
+                tone: "info",
+                kind: "user-input.requested",
+                summary: "Need more info",
+                payload: {
+                  requestId,
+                  questions: [
+                    {
+                      id: "q1",
+                      header: "Choice",
+                      question: "Pick one",
+                      options: [
+                        {
+                          label: "Yes",
+                          description: "Use the provided answer",
+                        },
+                      ],
+                    },
+                  ],
+                },
+                turnId: null,
+                createdAt: requestedAt,
+              },
+            },
+          });
+
+          yield* projectionPipeline.bootstrap;
+
+          const rowsAfterRequest = yield* sql<{
+            readonly pendingUserInputCount: number;
+          }>`
+          SELECT
+            pending_user_input_count AS "pendingUserInputCount"
+          FROM projection_threads
+          WHERE thread_id = ${threadId}
+        `;
+          assert.deepEqual(rowsAfterRequest, [{ pendingUserInputCount: 1 }]);
+
+          yield* eventStore.append({
+            type: "thread.user-input-response-requested",
+            eventId: EventId.makeUnsafe("evt-user-input-responded"),
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: respondedAt,
+            commandId: CommandId.makeUnsafe("cmd-user-input-responded"),
+            causationEventId: null,
+            correlationId: CorrelationId.makeUnsafe("cmd-user-input-responded"),
+            metadata: {},
+            payload: {
+              threadId,
+              requestId,
+              answers: {
+                q1: {
+                  type: "option",
+                  optionId: "yes",
+                },
+              },
+              createdAt: respondedAt,
+            },
+          });
+
+          yield* projectionPipeline.bootstrap;
+
+          const rowsAfterRespond = yield* sql<{
+            readonly pendingUserInputCount: number;
+            readonly updatedAt: string;
+          }>`
+          SELECT
+            pending_user_input_count AS "pendingUserInputCount",
+            updated_at AS "updatedAt"
+          FROM projection_threads
+          WHERE thread_id = ${threadId}
+        `;
+          assert.deepEqual(rowsAfterRespond, [
+            {
+              pendingUserInputCount: 0,
+              updatedAt: respondedAt,
+            },
+          ]);
+        }),
+    );
   },
 );
 
