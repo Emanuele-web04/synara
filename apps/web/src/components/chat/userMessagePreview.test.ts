@@ -18,7 +18,7 @@ describe("userMessagePreview", () => {
     const text = `${"a".repeat(COLLAPSED_USER_MESSAGE_MAX_CHARS)}tail`;
 
     expect(deriveUserMessagePreviewState(text)).toEqual({
-      text: "a".repeat(COLLAPSED_USER_MESSAGE_MAX_CHARS),
+      text: `${"a".repeat(COLLAPSED_USER_MESSAGE_MAX_CHARS)}…`,
       collapsible: true,
       truncated: true,
     });
