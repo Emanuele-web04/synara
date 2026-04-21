@@ -1,6 +1,7 @@
 // FILE: projectCreateRecovery.test.ts
 // Purpose: Verifies duplicate `project.create` recovery helpers used by import flows.
 
+import { ProjectId } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -188,7 +189,7 @@ describe("projectCreateRecovery", () => {
           updatedAt: "2026-04-21T00:00:01.000Z",
           projects: [
             {
-              id: "project-123",
+              id: ProjectId.makeUnsafe("project-123"),
               kind: "project",
               title: "One",
               workspaceRoot: "/Users/tester/Code/one",

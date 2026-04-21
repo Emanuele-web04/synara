@@ -76,12 +76,13 @@ export function findRecoverableProject<T extends DuplicateProjectCreateRecoveryC
     return null;
   }
 
+  const workspaceRoot = input.workspaceRoot;
   return (
     input.projects.find(
       (project) =>
         project.deletedAt === null &&
         isRecoverableProjectKind(project.kind) &&
-        workspaceRootsEqual(project.workspaceRoot, input.workspaceRoot),
+        workspaceRootsEqual(project.workspaceRoot, workspaceRoot),
     ) ?? null
   );
 }

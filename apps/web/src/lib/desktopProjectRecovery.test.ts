@@ -38,7 +38,7 @@ function makeThread(
       model: "gpt-5.3-codex",
     },
     runtimeMode: "approval-required",
-    interactionMode: "chat",
+    interactionMode: "default",
     envMode: "local",
     branch: null,
     worktreePath: null,

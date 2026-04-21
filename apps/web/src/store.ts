@@ -3192,7 +3192,7 @@ export function applyOrchestrationEventsHotPath(
   },
 ): AppState {
   const normalizedOptions = {
-    updateThreadArray: options?.updateThreadArray,
+    updateThreadArray: options?.updateThreadArray ?? true,
     updateSidebarSummary: options?.updateSidebarSummary ?? false,
   };
   let nextState = state;

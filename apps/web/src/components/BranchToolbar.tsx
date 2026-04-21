@@ -57,13 +57,13 @@ interface BranchToolbarProps {
 }
 
 export interface RuntimeUsageControlsProps {
-  runtimeMode?: RuntimeMode;
-  onRuntimeModeChange?: (mode: RuntimeMode) => void;
-  contextWindow?: ContextWindowSnapshot | null;
-  cumulativeCostUsd?: number | null;
-  activeContextWindowLabel?: string | null;
-  pendingContextWindowLabel?: string | null;
-  className?: string;
+  runtimeMode?: RuntimeMode | undefined;
+  onRuntimeModeChange?: ((mode: RuntimeMode) => void) | undefined;
+  contextWindow?: ContextWindowSnapshot | null | undefined;
+  cumulativeCostUsd?: number | null | undefined;
+  activeContextWindowLabel?: string | null | undefined;
+  pendingContextWindowLabel?: string | null | undefined;
+  className?: string | undefined;
 }
 
 export function RuntimeUsageControls({
