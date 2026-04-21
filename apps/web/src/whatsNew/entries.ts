@@ -22,6 +22,42 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.0.34",
+    date: "Apr 21",
+    features: [
+      {
+        id: "theme-pack-editor",
+        title: "🎨 Theme packs are editable",
+        description:
+          "The new theme pack editor lets you tune UI colors directly in DP Code, with shared theme tokens keeping the sidebar, composer, transcript, and controls in sync.",
+      },
+      {
+        id: "sidebar-notifications",
+        title: "🔔 Sidebar notifications are easier to read",
+        description:
+          "Thread activity now surfaces more clearly in the sidebar, so updates, background work, and attention states are easier to spot without opening every conversation.",
+      },
+      {
+        id: "steadier-transcript-performance",
+        title: "🧵 Steadier transcripts under load",
+        description:
+          "Transcript rendering and sidebar-owned state were separated more cleanly, reducing unnecessary churn while long conversations and live agent output are moving.",
+      },
+      {
+        id: "runtime-mode-recovery",
+        title: "🛡️ Safer runtime-mode recovery",
+        description:
+          "Codex runtime permissions now propagate more reliably across resumed sessions and provider restarts, keeping the app closer to the mode you actually selected.",
+      },
+      {
+        id: "composer-and-picker-polish",
+        title: "✨ Cleaner composer and picker styling",
+        description:
+          "Composer chrome, picker hover states, runtime controls, and changed-file rows picked up a more consistent visual pass across light and dark themes.",
+      },
+    ],
+  },
+  {
     version: "0.0.33",
     date: "Apr 20",
     features: [
