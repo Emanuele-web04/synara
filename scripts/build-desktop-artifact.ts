@@ -13,6 +13,7 @@ import desktopPackageJson from "../apps/desktop/package.json" with { type: "json
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
+import { createDesktopPlatformBuildConfig } from "./lib/desktop-platform-build-config.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
@@ -23,8 +24,6 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
 const BuildArch = Schema.Literals(["arm64", "x64", "universal"]);
-const MICROPHONE_USAGE_DESCRIPTION =
-  "DP Code needs microphone access so you can record voice notes and transcribe them into the chat composer.";
 
 const RepoRoot = Effect.service(Path.Path).pipe(
   Effect.flatMap((path) => path.fromFileUrl(new URL("..", import.meta.url))),
@@ -534,49 +533,18 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     ];
   }
 
-  if (platform === "mac") {
-    buildConfig.mac = {
-      target: target === "dmg" ? [target, "zip"] : [target],
-      icon: hasMacIconComposer ? "icon.icon" : "icon.icns",
-      category: "public.app-category.developer-tools",
-      extendInfo: {
-        NSMicrophoneUsageDescription: MICROPHONE_USAGE_DESCRIPTION,
-        ...(hasMacIconComposer ? { CFBundleIconFile: "icon.icns" } : {}),
-      },
-    };
-    if (hasMacIconComposer) {
-      // Keep the DMG volume icon and pre-Tahoe bundle metadata on the legacy path while Tahoe uses Assets.car.
-      buildConfig.afterPack = "./electron-builder-after-pack.cjs";
-      buildConfig.dmg = {
-        icon: "icon.icns",
-      };
-    }
-  }
+  const windowsAzureSignOptions =
+    platform === "win" && signed ? yield* AzureTrustedSigningOptionsConfig : undefined;
 
-  if (platform === "linux") {
-    buildConfig.linux = {
-      target: [target],
-      executableName: "dpcode",
-      icon: "icon.png",
-      category: "Development",
-      desktop: {
-        entry: {
-          StartupWMClass: "dpcode",
-        },
-      },
-    };
-  }
-
-  if (platform === "win") {
-    const winConfig: Record<string, unknown> = {
-      target: [target],
-      icon: "icon.ico",
-    };
-    if (signed) {
-      winConfig.azureSignOptions = yield* AzureTrustedSigningOptionsConfig;
-    }
-    buildConfig.win = winConfig;
-  }
+  Object.assign(
+    buildConfig,
+    createDesktopPlatformBuildConfig({
+      platform,
+      target,
+      hasMacIconComposer,
+      windowsAzureSignOptions,
+    }),
+  );
 
   return buildConfig;
 });
