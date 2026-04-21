@@ -957,12 +957,14 @@ function buildLightDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
       theme.theme.ink,
       0.04 + theme.contrast * 0.05,
     ),
-    iconAccent: formatOpaqueRgb(focusBase),
+    iconAccent: theme.theme.accent,
     iconPrimary: formatRgba(theme.ink, 0.82 + theme.contrast * 0.14),
     iconSecondary: formatRgba(theme.ink, 0.65 + theme.contrast * 0.1),
     iconTertiary: formatRgba(theme.ink, 0.45 + theme.contrast * 0.1),
     simpleScrim: formatRgba(theme.ink, 0.08 + theme.contrast * 0.04),
-    textAccent: formatOpaqueRgb(focusBase),
+    // Keep light-mode affordances on the real accent so links and file labels
+    // match the active theme color instead of a softened focus-only variant.
+    textAccent: theme.theme.accent,
     textButtonPrimary: formatOpaqueRgb(buttonPrimaryBase),
     textButtonSecondary: mixHex(theme.theme.ink, theme.theme.surface, 0.7 + theme.contrast * 0.1),
     textButtonTertiary: formatRgba(theme.ink, 0.45 + theme.contrast * 0.1),

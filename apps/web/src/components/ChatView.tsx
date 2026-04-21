@@ -174,7 +174,7 @@ import { useThreadWorkspaceHandoff } from "../hooks/useThreadWorkspaceHandoff";
 import { useComposerCommandMenuItems } from "../hooks/useComposerCommandMenuItems";
 import { useThreadHandoff } from "../hooks/useThreadHandoff";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
-import BranchToolbar from "./BranchToolbar";
+import BranchToolbar, { RuntimeUsageControls } from "./BranchToolbar";
 import { ThreadWorktreeHandoffDialog } from "./ThreadWorktreeHandoffDialog";
 import {
   formatShortcutLabel,
@@ -254,6 +254,7 @@ import {
   deriveContextWindowSelectionStatus,
   deriveCumulativeCostUsd,
   deriveLatestContextWindowSnapshot,
+  deriveSelectedContextWindowSnapshot,
 } from "../lib/contextWindow";
 import { formatVoiceRecordingDuration, useVoiceRecorder } from "../lib/voiceRecorder";
 import { shouldUseCompactComposerFooter } from "./composerFooterLayout";
@@ -5566,14 +5567,22 @@ export default function ChatView({
     prompt,
     selectedProviderModelOptions,
   );
+  const runtimeUsageContextWindow = useMemo(
+    () =>
+      activeContextWindow ??
+      (selectedProvider === "claudeAgent"
+        ? deriveSelectedContextWindowSnapshot(composerTraitSelection.contextWindow)
+        : null),
+    [activeContextWindow, composerTraitSelection.contextWindow, selectedProvider],
+  );
   const contextWindowSelectionStatus = useMemo(
     () =>
       deriveContextWindowSelectionStatus({
-        activeSnapshot: activeContextWindow,
+        activeSnapshot: runtimeUsageContextWindow,
         selectedValue:
           selectedProvider === "claudeAgent" ? composerTraitSelection.contextWindow : null,
       }),
-    [activeContextWindow, composerTraitSelection.contextWindow, selectedProvider],
+    [runtimeUsageContextWindow, composerTraitSelection.contextWindow, selectedProvider],
   );
   const providerTraitsPicker = renderProviderTraitsPicker({
     provider: selectedProvider,
@@ -6393,20 +6402,23 @@ export default function ChatView({
     }
   };
 
+  const runtimeUsageControlsProps = {
+    runtimeMode,
+    onRuntimeModeChange: handleRuntimeModeChange,
+    contextWindow: runtimeUsageContextWindow,
+    cumulativeCostUsd: activeCumulativeCostUsd,
+    activeContextWindowLabel: contextWindowSelectionStatus.activeLabel,
+    pendingContextWindowLabel: contextWindowSelectionStatus.pendingSelectedLabel,
+  };
   const branchToolbarProps = {
     threadId: activeThread.id,
     onEnvModeChange,
     envLocked,
-    runtimeMode,
-    onRuntimeModeChange: handleRuntimeModeChange,
+    ...runtimeUsageControlsProps,
     onHandoffToWorktree,
     onHandoffToLocal,
     handoffBusy,
     onComposerFocusRequest: scheduleComposerFocus,
-    contextWindow: activeContextWindow,
-    cumulativeCostUsd: activeCumulativeCostUsd,
-    activeContextWindowLabel: contextWindowSelectionStatus.activeLabel,
-    pendingContextWindowLabel: contextWindowSelectionStatus.pendingSelectedLabel,
     ...(canCheckoutPullRequestIntoThread
       ? { onCheckoutPullRequestRequest: openPullRequestDialog }
       : {}),
@@ -6510,10 +6522,8 @@ export default function ChatView({
         >
           <div
             className={cn(
-              "chat-composer-surface rounded-2xl border border-[color:var(--color-border)] shadow-[0_1px_0_rgba(255,255,255,0.03)_inset] transition-colors duration-200 focus-within:border-[color:var(--app-composer-focus-border)]",
-              isDragOverComposer
-                ? "border-[color:var(--app-composer-focus-border)] bg-[var(--color-background-control)]"
-                : "border-border/75",
+              "chat-composer-surface rounded-2xl border border-[color:var(--color-border-light)] !bg-secondary transition-colors duration-200",
+              isDragOverComposer ? "!bg-[var(--color-background-control)]" : "",
               composerProviderState.composerSurfaceClassName,
             )}
           >
@@ -6938,7 +6948,7 @@ export default function ChatView({
         </div>
       </form>
       {isEmptyChatLanding ? (
-        <div className="mt-2 flex w-full items-center justify-start px-3">
+        <div className="mt-2 flex w-full items-center justify-between gap-3 px-3">
           <ProjectPicker
             align="start"
             side="top"
@@ -6947,6 +6957,7 @@ export default function ChatView({
             onSelectWorkspaceRoot={handleSelectWorkspaceRoot}
             onResetToHome={handleResetWorkspaceToHome}
           />
+          <RuntimeUsageControls {...runtimeUsageControlsProps} className="shrink-0" />
         </div>
       ) : null}
     </>
@@ -7082,7 +7093,13 @@ export default function ChatView({
                     </h2>
                   </div>
                   {composerSection}
-                  {isGitRepo ? <BranchToolbar {...branchToolbarProps} /> : null}
+                  {isGitRepo ? (
+                    <BranchToolbar {...branchToolbarProps} />
+                  ) : !isEmptyChatLanding ? (
+                    <div className="mx-auto flex w-full max-w-3xl items-center justify-end px-3 pb-3 pt-1">
+                      <RuntimeUsageControls {...runtimeUsageControlsProps} />
+                    </div>
+                  ) : null}
                 </div>
               </div>
             ) : (
@@ -7228,10 +7245,8 @@ export default function ChatView({
                     >
                       <div
                         className={cn(
-                          "chat-composer-surface rounded-2xl border border-[color:var(--color-border)] shadow-[0_1px_0_rgba(255,255,255,0.03)_inset] transition-colors duration-200 focus-within:border-[color:var(--app-composer-focus-border)]",
-                          isDragOverComposer
-                            ? "border-[color:var(--app-composer-focus-border)] bg-[var(--color-background-control)]"
-                            : "border-border/75",
+                          "chat-composer-surface rounded-2xl border border-[color:var(--color-border-light)] !bg-secondary transition-colors duration-200",
+                          isDragOverComposer ? "!bg-[var(--color-background-control)]" : "",
                           composerProviderState.composerSurfaceClassName,
                         )}
                       >
@@ -7680,7 +7695,13 @@ export default function ChatView({
                     </div>
                   </form>
                 </div>
-                {isGitRepo ? <BranchToolbar {...branchToolbarProps} /> : null}
+                {isGitRepo ? (
+                  <BranchToolbar {...branchToolbarProps} />
+                ) : (
+                  <div className="mx-auto flex w-full max-w-3xl items-center justify-end px-3 pb-3 pt-1">
+                    <RuntimeUsageControls {...runtimeUsageControlsProps} />
+                  </div>
+                )}
               </>
             ) : null}
 

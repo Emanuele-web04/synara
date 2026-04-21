@@ -56,6 +56,73 @@ interface BranchToolbarProps {
   pendingContextWindowLabel?: string | null;
 }
 
+export interface RuntimeUsageControlsProps {
+  runtimeMode?: RuntimeMode;
+  onRuntimeModeChange?: (mode: RuntimeMode) => void;
+  contextWindow?: ContextWindowSnapshot | null;
+  cumulativeCostUsd?: number | null;
+  activeContextWindowLabel?: string | null;
+  pendingContextWindowLabel?: string | null;
+  className?: string;
+}
+
+export function RuntimeUsageControls({
+  runtimeMode,
+  onRuntimeModeChange,
+  contextWindow,
+  cumulativeCostUsd,
+  activeContextWindowLabel,
+  pendingContextWindowLabel,
+  className,
+}: RuntimeUsageControlsProps) {
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-1.5 text-[var(--color-text-foreground-secondary)]",
+        className,
+      )}
+    >
+      {runtimeMode && onRuntimeModeChange ? (
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[length:var(--app-font-size-ui-xs,10px)] font-normal transition-colors hover:text-[var(--color-text-foreground)]"
+          onClick={() =>
+            onRuntimeModeChange(
+              runtimeMode === "full-access" ? "approval-required" : "full-access",
+            )
+          }
+          title={
+            runtimeMode === "full-access"
+              ? "Full access — click to require approvals"
+              : "Ask every action"
+          }
+        >
+          {runtimeMode === "full-access" ? (
+            <FiThumbsUp className="size-3 shrink-0" />
+          ) : (
+            <HiOutlineHandRaised className="size-3 shrink-0" />
+          )}
+          <span className="leading-none">
+            {runtimeMode === "full-access" ? "Full access" : "Default permissions"}
+          </span>
+        </button>
+      ) : null}
+      {contextWindow ? (
+        <ContextWindowMeter
+          usage={contextWindow}
+          {...(cumulativeCostUsd != null ? { cumulativeCostUsd } : {})}
+          {...(activeContextWindowLabel !== undefined
+            ? { activeWindowLabel: activeContextWindowLabel }
+            : {})}
+          {...(pendingContextWindowLabel !== undefined
+            ? { pendingWindowLabel: pendingContextWindowLabel }
+            : {})}
+        />
+      ) : null}
+    </div>
+  );
+}
+
 export default function BranchToolbar({
   threadId,
   className,
@@ -386,45 +453,14 @@ export default function BranchToolbar({
         />
       </div>
 
-      <div className="flex items-center gap-1.5 text-[var(--color-text-foreground-secondary)]">
-        {runtimeMode && onRuntimeModeChange ? (
-          <button
-            type="button"
-            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[length:var(--app-font-size-ui-xs,10px)] font-normal transition-colors hover:text-[var(--color-text-foreground)]"
-            onClick={() =>
-              onRuntimeModeChange(
-                runtimeMode === "full-access" ? "approval-required" : "full-access",
-              )
-            }
-            title={
-              runtimeMode === "full-access"
-                ? "Full access — click to require approvals"
-                : "Ask every action"
-            }
-          >
-            {runtimeMode === "full-access" ? (
-              <FiThumbsUp className="size-3 shrink-0" />
-            ) : (
-              <HiOutlineHandRaised className="size-3 shrink-0" />
-            )}
-            <span className="leading-none">
-              {runtimeMode === "full-access" ? "Full access" : "Default permissions"}
-            </span>
-          </button>
-        ) : null}
-        {contextWindow ? (
-          <ContextWindowMeter
-            usage={contextWindow}
-            {...(cumulativeCostUsd != null ? { cumulativeCostUsd } : {})}
-            {...(activeContextWindowLabel !== undefined
-              ? { activeWindowLabel: activeContextWindowLabel }
-              : {})}
-            {...(pendingContextWindowLabel !== undefined
-              ? { pendingWindowLabel: pendingContextWindowLabel }
-              : {})}
-          />
-        ) : null}
-      </div>
+      <RuntimeUsageControls
+        runtimeMode={runtimeMode}
+        onRuntimeModeChange={onRuntimeModeChange}
+        contextWindow={contextWindow}
+        cumulativeCostUsd={cumulativeCostUsd}
+        activeContextWindowLabel={activeContextWindowLabel}
+        pendingContextWindowLabel={pendingContextWindowLabel}
+      />
     </div>
   );
 }

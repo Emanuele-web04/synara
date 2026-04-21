@@ -145,9 +145,14 @@ function SelectPopup({
           >
             <ChevronUpIcon className="relative size-4.5 sm:size-4" />
           </SelectPrimitive.ScrollUpArrow>
-          <div className="relative h-full min-w-(--anchor-width) rounded-xl border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] shadow-xl">
+          {/* Keep a hard popup viewport cap so long theme lists can always scroll
+              fully to both edges even when the positioner reports a tight height. */}
+          <div className="relative min-w-(--anchor-width) max-h-[min(var(--available-height),28rem)] rounded-xl border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] shadow-xl">
             <SelectPrimitive.List
-              className={cn("max-h-(--available-height) overflow-y-auto p-1", className)}
+              className={cn(
+                "max-h-[min(var(--available-height),28rem)] overflow-y-auto overscroll-contain p-1",
+                className,
+              )}
               data-slot="select-list"
             >
               {children}

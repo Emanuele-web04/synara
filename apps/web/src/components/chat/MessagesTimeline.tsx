@@ -750,10 +750,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     correspondingUserMessageId != null &&
                     revertTurnCountByUserMessageId.has(correspondingUserMessageId);
                   return (
-                    <div className="mt-5 overflow-hidden rounded-lg border border-border bg-neutral-50 dark:bg-neutral-900">
-                      <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
+                    <div className="mt-5 overflow-hidden rounded-lg border border-[color:var(--color-border-light)] bg-secondary">
+                      <div className="flex items-center justify-between gap-2 border-b border-[color:var(--color-border-light)] px-3 py-2">
                         <span
-                          className="truncate font-normal text-foreground"
+                          className="truncate font-normal text-foreground/92"
                           style={{ fontSize: chatTypographyStyle.fontSize }}
                         >
                           {checkpointFiles.length === 1
@@ -763,7 +763,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         <div className="flex items-center gap-4">
                           <button
                             type="button"
-                            className="inline-flex items-center justify-center rounded-md p-1 text-muted-foreground/70 transition-colors hover:bg-background/60 hover:text-foreground/80"
+                            className="inline-flex items-center justify-center rounded-md p-1 text-muted-foreground/70 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground/80"
                             aria-expanded={fileChangesExpanded}
                             aria-label={
                               fileChangesExpanded
@@ -795,12 +795,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         </div>
                       </div>
                       {fileChangesExpanded && (
-                        <div className="bg-neutral-100 dark:bg-neutral-800/40">
+                        <div className="bg-secondary">
                           {checkpointFiles.map((file) => (
                             <button
                               key={file.path}
                               type="button"
-                              className="group flex w-full items-center gap-2 border-t border-border/45 px-3 py-1.5 text-left first:border-t-0 transition-colors hover:bg-muted/60"
+                              className="group flex w-full items-center gap-2 border-t border-[color:var(--color-border-light)] px-3 py-1.5 text-left first:border-t-0 transition-colors hover:bg-[var(--color-background-button-secondary-hover)]"
                               onClick={() => onOpenTurnDiff(turnSummary.turnId, file.path)}
                             >
                               <FileEntryIcon
@@ -810,8 +810,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                                 className="size-4 shrink-0 opacity-50 dark:opacity-30"
                               />
                               <span
-                                className="font-chat-code truncate font-normal text-neutral-900 underline-offset-2 group-hover:underline group-focus-visible:underline dark:text-foreground dark:hover:text-foreground"
-                                style={{ fontSize: `${appTypographyScale.chatCodePx}px` }}
+                                className="font-chat-code truncate font-normal underline-offset-2 group-hover:underline group-focus-visible:underline"
+                                style={{
+                                  fontSize: `${appTypographyScale.chatCodePx}px`,
+                                  color: "var(--color-text-foreground)",
+                                }}
                               >
                                 {file.path}
                               </span>

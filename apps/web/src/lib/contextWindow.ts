@@ -146,6 +146,44 @@ export function deriveLatestContextWindowSnapshot(
   };
 }
 
+export function deriveSelectedContextWindowSnapshot(
+  selectedValue: string | null | undefined,
+): ContextWindowSnapshot | null {
+  const normalized = selectedValue?.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  const maxTokens =
+    KNOWN_CONTEXT_WINDOW_MAX_TOKENS[
+      normalized as keyof typeof KNOWN_CONTEXT_WINDOW_MAX_TOKENS
+    ] ?? null;
+  if (maxTokens === null) {
+    return null;
+  }
+
+  return {
+    usedTokens: 0,
+    totalProcessedTokens: null,
+    maxTokens,
+    remainingTokens: maxTokens,
+    usedPercentage: 0,
+    remainingPercentage: 100,
+    inputTokens: null,
+    cachedInputTokens: null,
+    outputTokens: null,
+    reasoningOutputTokens: null,
+    lastUsedTokens: null,
+    lastInputTokens: null,
+    lastCachedInputTokens: null,
+    lastOutputTokens: null,
+    lastReasoningOutputTokens: null,
+    toolUses: null,
+    durationMs: null,
+    compactsAutomatically: false,
+    updatedAt: "",
+  };
+}
+
 export function deriveCumulativeCostUsd(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): number | null {
