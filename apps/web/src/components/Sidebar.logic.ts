@@ -91,6 +91,8 @@ export interface ThreadStatusPill {
   colorClass: string;
   dotClass: string;
   pulse: boolean;
+  dismissible?: boolean;
+  dismissalKey?: string;
 }
 
 const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
@@ -104,12 +106,34 @@ const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
 
 type ThreadStatusInput = Pick<
   Thread,
-  "interactionMode" | "latestTurn" | "lastVisitedAt" | "session"
+  "interactionMode" | "latestTurn" | "lastVisitedAt" | "session" | "updatedAt"
 > & {
   proposedPlans?: Thread["proposedPlans"] | undefined;
   hasActionableProposedPlan?: boolean | undefined;
   hasLiveTailWork?: boolean | undefined;
+  dismissedStatusKey?: string | undefined;
 };
+
+function createThreadStatusDismissalKey(
+  label: Extract<ThreadStatusPill["label"], "Pending Approval" | "Awaiting Input" | "Plan Ready">,
+  thread: ThreadStatusInput,
+): string {
+  return [
+    label,
+    thread.updatedAt ?? "",
+    thread.latestTurn?.turnId ?? "",
+    thread.latestTurn?.completedAt ?? "",
+    thread.session?.updatedAt ?? "",
+  ].join(":");
+}
+
+function createCompletedDismissalKey(thread: ThreadStatusInput): string | null {
+  if (!thread.latestTurn?.completedAt) {
+    return null;
+  }
+
+  return ["Completed", thread.latestTurn.turnId, thread.latestTurn.completedAt].join(":");
+}
 
 export function hasUnseenCompletion(thread: ThreadStatusInput): boolean {
   if (!thread.latestTurn?.completedAt) return false;
@@ -219,20 +243,32 @@ export function resolveThreadStatusPill(input: {
   const { hasPendingApprovals, hasPendingUserInput, thread } = input;
 
   if (hasPendingApprovals) {
+    const dismissalKey = createThreadStatusDismissalKey("Pending Approval", thread);
+    if (thread.dismissedStatusKey === dismissalKey) {
+      return null;
+    }
     return {
       label: "Pending Approval",
       colorClass: "text-amber-600 dark:text-amber-300/90",
       dotClass: "bg-amber-500 dark:bg-amber-300/90",
       pulse: false,
+      dismissible: true,
+      dismissalKey,
     };
   }
 
   if (hasPendingUserInput) {
+    const dismissalKey = createThreadStatusDismissalKey("Awaiting Input", thread);
+    if (thread.dismissedStatusKey === dismissalKey) {
+      return null;
+    }
     return {
       label: "Awaiting Input",
       colorClass: "text-indigo-600 dark:text-indigo-300/90",
       dotClass: "bg-indigo-500 dark:bg-indigo-300/90",
       pulse: false,
+      dismissible: true,
+      dismissalKey,
     };
   }
 
@@ -242,6 +278,7 @@ export function resolveThreadStatusPill(input: {
       colorClass: "text-sky-600 dark:text-sky-300/80",
       dotClass: "bg-sky-500 dark:bg-sky-300/80",
       pulse: true,
+      dismissible: false,
     };
   }
 
@@ -254,6 +291,7 @@ export function resolveThreadStatusPill(input: {
       colorClass: "text-sky-600 dark:text-sky-300/80",
       dotClass: "bg-sky-500 dark:bg-sky-300/80",
       pulse: true,
+      dismissible: false,
     };
   }
 
@@ -263,6 +301,7 @@ export function resolveThreadStatusPill(input: {
       colorClass: "text-sky-600 dark:text-sky-300/80",
       dotClass: "bg-sky-500 dark:bg-sky-300/80",
       pulse: true,
+      dismissible: false,
     };
   }
 
@@ -276,20 +315,32 @@ export function resolveThreadStatusPill(input: {
         findLatestProposedPlan(thread.proposedPlans ?? [], thread.latestTurn?.turnId ?? null),
       ));
   if (hasPlanReadyPrompt) {
+    const dismissalKey = createThreadStatusDismissalKey("Plan Ready", thread);
+    if (thread.dismissedStatusKey === dismissalKey) {
+      return null;
+    }
     return {
       label: "Plan Ready",
       colorClass: "text-violet-600 dark:text-violet-300/90",
       dotClass: "bg-violet-500 dark:bg-violet-300/90",
       pulse: false,
+      dismissible: true,
+      dismissalKey,
     };
   }
 
   if (!thread.hasLiveTailWork && hasUnseenCompletion(thread)) {
+    const dismissalKey = createCompletedDismissalKey(thread);
+    if (dismissalKey && thread.dismissedStatusKey === dismissalKey) {
+      return null;
+    }
     return {
       label: "Completed",
       colorClass: "text-emerald-600 dark:text-emerald-300/90",
       dotClass: "bg-emerald-500 dark:bg-emerald-300/90",
       pulse: false,
+      dismissible: true,
+      ...(dismissalKey ? { dismissalKey } : {}),
     };
   }
 
@@ -879,6 +930,9 @@ export function deriveSidebarProjectData(input: {
   normalizeProjectCwd: (cwd: string) => string;
   activeSidebarThreadId: ThreadId | undefined;
   previewLimit: number;
+  resolveThreadStatus?: (
+    thread: SidebarThreadSummary,
+  ) => ReturnType<typeof resolveThreadStatusPill>;
 }): ReadonlyMap<ProjectId, SidebarDerivedProjectData> {
   const byProjectId = new Map<ProjectId, SidebarDerivedProjectData>();
 
@@ -894,11 +948,13 @@ export function deriveSidebarProjectData(input: {
     );
     const projectStatus = resolveProjectStatusIndicator(
       allProjectThreads.map((thread) =>
-        resolveThreadStatusPill({
-          thread,
-          hasPendingApprovals: thread.hasPendingApprovals,
-          hasPendingUserInput: thread.hasPendingUserInput,
-        }),
+        input.resolveThreadStatus
+          ? input.resolveThreadStatus(thread)
+          : resolveThreadStatusPill({
+              thread,
+              hasPendingApprovals: thread.hasPendingApprovals,
+              hasPendingUserInput: thread.hasPendingUserInput,
+            }),
       ),
     );
     const isThreadListExpanded = input.expandedThreadListProjectCwds.has(

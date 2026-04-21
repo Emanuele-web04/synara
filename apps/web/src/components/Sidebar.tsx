@@ -1024,6 +1024,7 @@ export default function Sidebar() {
   const threadsHydrated = useStore((store) => store.threadsHydrated);
   const sidebarThreadSummaryById = useStore((store) => store.sidebarThreadSummaryById);
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
+  const markThreadVisited = useStore((store) => store.markThreadVisited);
   const markThreadUnread = useStore((store) => store.markThreadUnread);
   const toggleProject = useStore((store) => store.toggleProject);
   const setProjectExpanded = useStore((store) => store.setProjectExpanded);
@@ -1117,6 +1118,9 @@ export default function Sidebar() {
   const [chatThreadListExpanded, setChatThreadListExpanded] = useState(
     () => readSidebarUiState().chatThreadListExpanded,
   );
+  const [dismissedThreadStatusKeyByThreadId, setDismissedThreadStatusKeyByThreadId] = useState<
+    Record<string, string>
+  >(() => readSidebarUiState().dismissedThreadStatusKeyByThreadId);
   const [lastThreadRoute, setLastThreadRoute] = useState(
     () => readSidebarUiState().lastThreadRoute,
   );
@@ -1149,6 +1153,68 @@ export default function Sidebar() {
   const selectSidebarDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
   const sidebarThreads = useStore(selectSidebarThreads);
   const sidebarDisplayThreads = useStore(selectSidebarDisplayThreads);
+  const dismissThreadStatus = useCallback(
+    (threadId: ThreadId, statusKey: string | null | undefined) => {
+      if (!statusKey) {
+        return;
+      }
+      setDismissedThreadStatusKeyByThreadId((current) => {
+        if (current[threadId] === statusKey) {
+          return current;
+        }
+        return {
+          ...current,
+          [threadId]: statusKey,
+        };
+      });
+    },
+    [],
+  );
+  const clearDismissedThreadStatus = useCallback((threadId: ThreadId) => {
+    setDismissedThreadStatusKeyByThreadId((current) => {
+      if (!(threadId in current)) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[threadId];
+      return next;
+    });
+  }, []);
+  const resolveThreadStatusForSidebar = useCallback(
+    (thread: SidebarThreadSummary) =>
+      resolveThreadStatusPill({
+        thread: {
+          ...thread,
+          dismissedStatusKey: dismissedThreadStatusKeyByThreadId[thread.id],
+        },
+        hasPendingApprovals: thread.hasPendingApprovals,
+        hasPendingUserInput: thread.hasPendingUserInput,
+      }),
+    [dismissedThreadStatusKeyByThreadId],
+  );
+  const clearThreadNotification = useCallback(
+    (threadId: ThreadId) => {
+      const thread = sidebarThreadSummaryById[threadId];
+      if (!thread) {
+        return;
+      }
+      const threadStatus = resolveThreadStatusForSidebar(thread);
+      if (!threadStatus?.dismissible) {
+        return;
+      }
+      if (threadStatus.label === "Completed") {
+        markThreadVisited(threadId, thread.latestTurn?.completedAt ?? undefined);
+        return;
+      }
+      dismissThreadStatus(threadId, threadStatus.dismissalKey);
+    },
+    [
+      dismissThreadStatus,
+      markThreadVisited,
+      resolveThreadStatusForSidebar,
+      sidebarThreadSummaryById,
+    ],
+  );
   const routeThreadSummary = routeThreadId
     ? (sidebarThreadSummaryById[routeThreadId] ?? null)
     : null;
@@ -2586,6 +2652,7 @@ export default function Sidebar() {
         hasPendingApprovals,
         hasPendingUserInput,
       });
+      const threadStatus = threadSummary ? resolveThreadStatusForSidebar(threadSummary) : null;
       const handoffTargets = canHandoff
         ? resolveAvailableHandoffTargetProviders(thread.modelSelection.provider)
         : [];
@@ -2602,6 +2669,9 @@ export default function Sidebar() {
         [
           { id: "rename", label: "Rename thread" },
           { id: "toggle-pin", label: isPinned ? "Unpin thread" : "Pin thread" },
+          ...(threadStatus?.dismissible
+            ? [{ id: "clear-notification", label: "Clear notification" }]
+            : []),
           { id: "mark-unread", label: "Mark unread" },
           ...handoffItems,
           { id: "copy-path", label: "Copy Path" },
@@ -2628,7 +2698,12 @@ export default function Sidebar() {
       }
 
       if (clicked === "mark-unread") {
+        clearDismissedThreadStatus(threadId);
         markThreadUnread(threadId);
+        return;
+      }
+      if (clicked === "clear-notification") {
+        clearThreadNotification(threadId);
         return;
       }
       if (typeof clicked === "string" && clicked.startsWith("handoff:")) {
@@ -2759,11 +2834,14 @@ export default function Sidebar() {
       confirmAndDeleteThread,
       copyPathToClipboard,
       copyThreadIdToClipboard,
+      clearDismissedThreadStatus,
+      clearThreadNotification,
       handoffThread,
       markThreadUnread,
       navigate,
       pinnedThreadIdSet,
       projectCwdById,
+      resolveThreadStatusForSidebar,
       sidebarThreadSummaryById,
       togglePinnedThread,
     ],
@@ -2837,6 +2915,7 @@ export default function Sidebar() {
 
       if (clicked === "mark-unread") {
         for (const id of ids) {
+          clearDismissedThreadStatus(id);
           markThreadUnread(id);
         }
         clearSelection();
@@ -2884,6 +2963,7 @@ export default function Sidebar() {
       appSettings.confirmThreadDelete,
       archiveThread,
       clearSelection,
+      clearDismissedThreadStatus,
       deleteThread,
       markThreadUnread,
       removeFromSelection,
@@ -3338,6 +3418,7 @@ export default function Sidebar() {
         normalizeProjectCwd: normalizeSidebarProjectThreadListCwd,
         activeSidebarThreadId: activeSidebarThreadId ?? undefined,
         previewLimit: THREAD_PREVIEW_LIMIT,
+        resolveThreadStatus: resolveThreadStatusForSidebar,
       }),
     [
       activeSidebarThreadId,
@@ -3349,6 +3430,7 @@ export default function Sidebar() {
       splitViewBySourceThreadId,
       splitViewsByProjectId,
       standardProjects,
+      resolveThreadStatusForSidebar,
     ],
   );
   const allProjectsExpanded = useMemo(
@@ -3375,13 +3457,33 @@ export default function Sidebar() {
   }, [prunePinnedThreads, sidebarThreads, threadsHydrated]);
 
   useEffect(() => {
+    const retainedThreadIds = new Set(sidebarThreads.map((thread) => thread.id));
+    setDismissedThreadStatusKeyByThreadId((current) => {
+      const nextEntries = Object.entries(current).filter(([threadId]) =>
+        retainedThreadIds.has(ThreadId.makeUnsafe(threadId)),
+      );
+      if (nextEntries.length === Object.keys(current).length) {
+        return current;
+      }
+      return Object.fromEntries(nextEntries);
+    });
+  }, [sidebarThreads]);
+
+  useEffect(() => {
     persistSidebarUiState({
       chatSectionExpanded,
       chatThreadListExpanded,
       expandedProjectThreadListCwds: [...expandedThreadListsByProject],
+      dismissedThreadStatusKeyByThreadId,
       lastThreadRoute,
     });
-  }, [chatSectionExpanded, chatThreadListExpanded, expandedThreadListsByProject, lastThreadRoute]);
+  }, [
+    chatSectionExpanded,
+    chatThreadListExpanded,
+    dismissedThreadStatusKeyByThreadId,
+    expandedThreadListsByProject,
+    lastThreadRoute,
+  ]);
 
   useEffect(() => {
     if (isOnWorkspace || isOnSettings || routeThreadId === null) {
@@ -3614,12 +3716,12 @@ export default function Sidebar() {
     return (
       <button
         type="button"
+        data-testid={`thread-archive-${threadId}`}
         aria-label="Archive thread"
         title="Archive thread"
         className={cn(
-          "sidebar-icon-button pointer-events-none absolute inset-y-0 right-0 my-auto inline-flex justify-center opacity-0 transition-[opacity,color] hover:text-foreground/82",
+          "sidebar-icon-button inline-flex justify-center hover:text-foreground/82",
           compact ? "size-[18px]" : "size-5",
-          "group-hover/thread-row:pointer-events-auto group-hover/thread-row:opacity-100 group-focus-within/thread-row:pointer-events-auto group-focus-within/thread-row:opacity-100",
           toneClassName,
         )}
         onMouseDown={(event) => {
@@ -3634,6 +3736,56 @@ export default function Sidebar() {
       >
         <HiOutlineArchiveBox className={cn("shrink-0", compact ? "size-[11px]" : "size-3")} />
       </button>
+    );
+  }
+
+  function renderThreadHoverActions(input: {
+    threadId: ThreadId;
+    toneClassName: string;
+    compact?: boolean;
+  }) {
+    const compact = input.compact === true;
+    const isPendingConfirmation = pendingArchiveConfirmationThreadId === input.threadId;
+
+    if (isPendingConfirmation) {
+      return (
+        <div
+          data-testid={`thread-hover-actions-${input.threadId}`}
+          className="pointer-events-none absolute inset-y-0 right-0 my-auto inline-flex items-center opacity-100"
+        >
+          <button
+            type="button"
+            aria-label="Confirm archive"
+            title="Confirm archive"
+            className={cn(
+              "pointer-events-auto inline-flex h-5 items-center rounded-full px-2.5 text-[10px] font-normal leading-none tracking-[-0.01em] opacity-100 transition-colors",
+              "bg-red-400/12 text-red-400 hover:bg-red-400/16 hover:text-red-300",
+              "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-red-400/45",
+              compact ? "h-4.5 px-1.5 text-[10px]" : undefined,
+            )}
+            onMouseDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              void inlineConfirmArchiveThread(input.threadId);
+            }}
+          >
+            <span>Confirm</span>
+          </button>
+        </div>
+      );
+    }
+
+    return (
+      <div
+        data-testid={`thread-hover-actions-${input.threadId}`}
+        className="pointer-events-none absolute inset-y-0 right-0 my-auto inline-flex items-center opacity-0 transition-opacity group-hover/thread-row:pointer-events-auto group-hover/thread-row:opacity-100 group-focus-within/thread-row:pointer-events-auto group-focus-within/thread-row:opacity-100"
+      >
+        {renderThreadArchiveAction(input.threadId, input.toneClassName, { compact })}
+      </div>
     );
   }
 
@@ -3652,11 +3804,7 @@ export default function Sidebar() {
       thread,
       includeHandoffBadge: true,
     });
-    const threadStatus = resolveThreadStatusPill({
-      thread,
-      hasPendingApprovals: thread.hasPendingApprovals,
-      hasPendingUserInput: thread.hasPendingUserInput,
-    });
+    const threadStatus = resolveThreadStatusForSidebar(thread);
     const isSubagentThread = Boolean(thread.parentThreadId);
     const prStatus = prStatusIndicator(prByThreadId.get(thread.id) ?? null);
     const leadingPrStatus = isSubagentThread || thread.forkSourceThreadId ? null : prStatus;
@@ -3799,7 +3947,9 @@ export default function Sidebar() {
                   {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
                 </span>
               ) : null}
-              {renderThreadArchiveAction(thread.id, "text-muted-foreground/42", {
+              {renderThreadHoverActions({
+                threadId: thread.id,
+                toneClassName: "text-muted-foreground/42",
                 compact: isSubagentThread,
               })}
             </div>
@@ -3823,11 +3973,7 @@ export default function Sidebar() {
     const isPinned = pinnedThreadIdSet.has(thread.id);
     const isSelected = selectedThreadIds.has(thread.id);
     const isHighlighted = isActive || isSelected;
-    const threadStatus = resolveThreadStatusPill({
-      thread,
-      hasPendingApprovals: thread.hasPendingApprovals,
-      hasPendingUserInput: thread.hasPendingUserInput,
-    });
+    const threadStatus = resolveThreadStatusForSidebar(thread);
     const prStatus = prStatusIndicator(prByThreadId.get(thread.id) ?? null);
     const terminalStatus = terminalStatusFromThreadState({
       runningTerminalIds: threadTerminalState.runningTerminalIds,
@@ -4120,7 +4266,9 @@ export default function Sidebar() {
                   {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
                 </span>
               ) : null}
-              {renderThreadArchiveAction(thread.id, secondaryMetaClass, {
+              {renderThreadHoverActions({
+                threadId: thread.id,
+                toneClassName: secondaryMetaClass,
                 compact: isSubagentThread,
               })}
             </div>

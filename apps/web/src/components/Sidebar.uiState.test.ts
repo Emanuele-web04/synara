@@ -39,6 +39,7 @@ describe("Sidebar.uiState", () => {
       chatSectionExpanded: false,
       chatThreadListExpanded: false,
       expandedProjectThreadListCwds: [],
+      dismissedThreadStatusKeyByThreadId: {},
       lastThreadRoute: null,
     });
   });
@@ -52,6 +53,9 @@ describe("Sidebar.uiState", () => {
         "/Users/tester/Code/demo/",
         "/Users/tester/Code/other",
       ],
+      dismissedThreadStatusKeyByThreadId: {
+        "thread-123": "Plan Ready:turn-1",
+      },
       lastThreadRoute: {
         threadId: "thread-123",
         splitViewId: "split-456",
@@ -65,6 +69,9 @@ describe("Sidebar.uiState", () => {
         normalizeSidebarProjectThreadListCwd("/Users/tester/Code/demo"),
         normalizeSidebarProjectThreadListCwd("/Users/tester/Code/other"),
       ],
+      dismissedThreadStatusKeyByThreadId: {
+        "thread-123": "Plan Ready:turn-1",
+      },
       lastThreadRoute: {
         threadId: "thread-123",
         splitViewId: "split-456",
@@ -79,6 +86,11 @@ describe("Sidebar.uiState", () => {
         chatSectionExpanded: true,
         chatThreadListExpanded: false,
         expandedProjectThreadListCwds: ["/Users/tester/Code/demo", 42, null, ""],
+        dismissedThreadStatusKeyByThreadId: {
+          "thread-123": "Awaiting Input:turn-2",
+          "": "bad",
+          "thread-456": 42,
+        },
         lastThreadRoute: {
           threadId: "thread-123",
           splitViewId: 42,
@@ -92,6 +104,9 @@ describe("Sidebar.uiState", () => {
       expandedProjectThreadListCwds: [
         normalizeSidebarProjectThreadListCwd("/Users/tester/Code/demo"),
       ],
+      dismissedThreadStatusKeyByThreadId: {
+        "thread-123": "Awaiting Input:turn-2",
+      },
       lastThreadRoute: {
         threadId: "thread-123",
       },
@@ -113,6 +128,7 @@ describe("Sidebar.uiState", () => {
       chatSectionExpanded: false,
       chatThreadListExpanded: false,
       expandedProjectThreadListCwds: [],
+      dismissedThreadStatusKeyByThreadId: {},
       lastThreadRoute: null,
     });
   });
