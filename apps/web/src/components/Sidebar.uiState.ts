@@ -6,6 +6,7 @@ export type SidebarUiState = {
   chatSectionExpanded: boolean;
   chatThreadListExpanded: boolean;
   expandedProjectThreadListCwds: string[];
+  dismissedThreadStatusKeyByThreadId: Record<string, string>;
   lastThreadRoute: {
     threadId: string;
     splitViewId?: string | undefined;
@@ -16,6 +17,7 @@ const DEFAULT_SIDEBAR_UI_STATE: SidebarUiState = {
   chatSectionExpanded: false,
   chatThreadListExpanded: false,
   expandedProjectThreadListCwds: [],
+  dismissedThreadStatusKeyByThreadId: {},
   lastThreadRoute: null,
 };
 
@@ -38,6 +40,7 @@ export function readSidebarUiState(): SidebarUiState {
       chatSectionExpanded?: boolean;
       chatThreadListExpanded?: boolean;
       expandedProjectThreadListCwds?: string[];
+      dismissedThreadStatusKeyByThreadId?: Record<string, string>;
       lastThreadRoute?: {
         threadId?: unknown;
         splitViewId?: unknown;
@@ -68,6 +71,15 @@ export function readSidebarUiState(): SidebarUiState {
             .filter((cwd) => cwd.length > 0),
         ),
       ],
+      dismissedThreadStatusKeyByThreadId: Object.fromEntries(
+        Object.entries(parsed.dismissedThreadStatusKeyByThreadId ?? {}).filter(
+          ([threadId, statusKey]) =>
+            typeof threadId === "string" &&
+            threadId.length > 0 &&
+            typeof statusKey === "string" &&
+            statusKey.length > 0,
+        ),
+      ),
       lastThreadRoute,
     };
   } catch {
@@ -93,6 +105,11 @@ export function persistSidebarUiState(input: SidebarUiState): void {
               .filter((cwd) => cwd.length > 0),
           ),
         ],
+        dismissedThreadStatusKeyByThreadId: Object.fromEntries(
+          Object.entries(input.dismissedThreadStatusKeyByThreadId).filter(
+            ([threadId, statusKey]) => threadId.length > 0 && statusKey.length > 0,
+          ),
+        ),
         lastThreadRoute: input.lastThreadRoute
           ? {
               threadId: input.lastThreadRoute.threadId,

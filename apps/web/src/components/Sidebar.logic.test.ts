@@ -285,8 +285,10 @@ describe("resolveThreadStatusPill", () => {
     interactionMode: "plan" as const,
     latestTurn: null,
     lastVisitedAt: undefined,
+    dismissedStatusKey: undefined,
     proposedPlans: [],
     hasLiveTailWork: false,
+    updatedAt: "2026-03-09T10:05:00.000Z",
     session: {
       provider: "codex" as const,
       status: "running" as const,
@@ -420,6 +422,27 @@ describe("resolveThreadStatusPill", () => {
         hasPendingUserInput: false,
       }),
     ).toMatchObject({ label: "Completed", pulse: false });
+  });
+
+  it("hides a dismissible status when its dismissal key matches", () => {
+    expect(
+      resolveThreadStatusPill({
+        thread: {
+          ...baseThread,
+          hasActionableProposedPlan: true,
+          latestTurn: makeLatestTurn(),
+          dismissedStatusKey:
+            "Plan Ready:2026-03-09T10:05:00.000Z:turn-1:2026-03-09T10:05:00.000Z:2026-03-09T10:00:00.000Z",
+          session: {
+            ...baseThread.session,
+            status: "ready",
+            orchestrationStatus: "ready",
+          },
+        },
+        hasPendingApprovals: false,
+        hasPendingUserInput: false,
+      }),
+    ).toBeNull();
   });
 });
 
@@ -1047,6 +1070,32 @@ describe("deriveSidebarProjectData", () => {
         }),
       ],
     });
+  });
+
+  it("uses the provided thread-status resolver for project status", () => {
+    const project = makeProject();
+    const threadOne = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-1"),
+      title: "One",
+      hasPendingApprovals: true,
+    });
+
+    const data = deriveSidebarProjectData({
+      projects: [project],
+      sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId([threadOne]),
+      splitViewsByProjectId: groupSplitViewsByProjectId([]),
+      splitViewBySourceThreadId: new Map(),
+      pinnedThreadIds: [],
+      pinnedThreadIdSet: new Set(),
+      expandedParentThreadIds: new Set(),
+      expandedThreadListProjectCwds: new Set(),
+      normalizeProjectCwd: (cwd) => cwd,
+      activeSidebarThreadId: undefined,
+      previewLimit: 5,
+      resolveThreadStatus: () => null,
+    });
+
+    expect(data.get(project.id)?.projectStatus).toBeNull();
   });
 });
 
