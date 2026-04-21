@@ -45,9 +45,9 @@ export function showContextMenuFallback<T extends string>(
 
     function focusItem(index: number) {
       if (index < 0 || index >= buttons.length) return;
-      buttons[focusedIndex]?.classList.remove("bg-accent", "text-accent-foreground");
+      buttons[focusedIndex]?.classList.remove("bg-[var(--sidebar-accent)]");
       focusedIndex = index;
-      buttons[focusedIndex]?.classList.add("bg-accent", "text-accent-foreground");
+      buttons[focusedIndex]?.classList.add("bg-[var(--sidebar-accent)]");
       buttons[focusedIndex]?.focus();
     }
 
@@ -105,7 +105,7 @@ export function showContextMenuFallback<T extends string>(
         focusItem(buttons.length > 0 ? buttons.indexOf(btn) : 0),
       );
       btn.addEventListener("mouseleave", () => {
-        btn.classList.remove("bg-accent", "text-accent-foreground");
+        btn.classList.remove("bg-[var(--sidebar-accent)]");
         focusedIndex = -1;
       });
       buttons.push(btn);

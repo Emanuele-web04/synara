@@ -41,7 +41,7 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
           ) : null}
         </div>
         {pendingCount > 1 ? (
-          <span className="flex h-4 shrink-0 items-center rounded bg-muted/55 px-1 text-[9.5px] font-medium tabular-nums text-muted-foreground/60">
+          <span className="flex h-4 shrink-0 items-center rounded bg-[var(--color-background-elevated-secondary)] px-1 text-[9.5px] font-medium tabular-nums text-[var(--color-text-foreground-secondary)]">
             1/{pendingCount}
           </span>
         ) : null}

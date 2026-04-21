@@ -20,22 +20,29 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./u
 import { Switch } from "./ui/switch";
 import { Textarea } from "./ui/textarea";
 import { toastManager } from "./ui/toast";
-import { type ChromeTheme, type ThemeVariant, useTheme } from "../hooks/useTheme";
+import { type ChromeTheme, type ThemeMode, type ThemeVariant, useTheme } from "../hooks/useTheme";
 import { cn } from "../lib/utils";
 import {
   CODE_THEME_OPTIONS,
   DEFAULT_THEME_STATE,
   getAvailableCodeThemes,
+  getCodeThemeSeed,
   resolveThemePack,
 } from "../theme/theme.logic";
 
 type ThemePackEditorProps = {
+  isActive?: boolean;
+  mode?: ThemeMode;
   variant: ThemeVariant;
 };
 
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 
-export function ThemePackEditor({ variant }: ThemePackEditorProps) {
+export function ThemePackEditor({
+  variant,
+  isActive = false,
+  mode = "system",
+}: ThemePackEditorProps) {
   const {
     darkTheme,
     lightTheme,
@@ -51,11 +58,26 @@ export function ThemePackEditor({ variant }: ThemePackEditorProps) {
   const pack = variant === "dark" ? darkTheme : lightTheme;
   const theme = pack.theme;
   const defaultTheme = resolveThemePack(DEFAULT_THEME_STATE, variant).theme;
-  const codeThemes = useMemo(() => getAvailableCodeThemes(variant), [variant]);
+  const codeThemes = useMemo(() => {
+    const options = getAvailableCodeThemes(variant);
+    return options.map((option) => ({
+      id: option.id,
+      label: option.label,
+      previewTheme: getCodeThemeSeed(option.id, variant),
+      variants: option.variants,
+    }));
+  }, [variant]);
   const codeThemeLabel =
     CODE_THEME_OPTIONS.find((option) => option.id === pack.codeThemeId)?.label ?? pack.codeThemeId;
   const isPristine = isDefaultThemePack(variant);
   const titleLabel = variant === "dark" ? "Dark theme" : "Light theme";
+  const contextLabel = isActive
+    ? mode === "system"
+      ? `System is currently using this ${variant} slot.`
+      : "This is the active theme right now."
+    : mode === "system"
+      ? `Used when your system switches to ${variant}.`
+      : `Inactive while the app is locked to ${mode}.`;
 
   const handleCopy = async () => {
     try {
@@ -84,6 +106,7 @@ export function ThemePackEditor({ variant }: ThemePackEditorProps) {
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:py-3.5">
         <div className="flex items-center gap-2">
           <h3 className="text-sm font-medium text-foreground">{titleLabel}</h3>
+          <ThemeSlotBadge isActive={isActive} mode={mode} variant={variant} />
           {!isPristine ? (
             <button
               type="button"
@@ -101,7 +124,7 @@ export function ThemePackEditor({ variant }: ThemePackEditorProps) {
             onClick={() => void handleCopy()}
             className="rounded-md px-2 py-1 text-xs text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)]"
           >
-            Copy theme
+            Copy JSON
           </button>
           <Select
             value={pack.codeThemeId}
@@ -112,21 +135,30 @@ export function ThemePackEditor({ variant }: ThemePackEditorProps) {
           >
             <SelectTrigger
               size="sm"
-              className="ml-1 min-w-40 gap-2"
+              className="ml-1 min-w-52 gap-2"
               aria-label={`${titleLabel} code theme`}
             >
-              <CodeThemeBadge theme={theme} />
-              <SelectValue className="flex-1 text-left">{codeThemeLabel}</SelectValue>
+              <SelectValue className="flex-1 text-left">
+                <CodeThemeSelectOption label={codeThemeLabel} theme={theme} />
+              </SelectValue>
             </SelectTrigger>
-            <SelectPopup align="end" alignItemWithTrigger={false}>
+            <SelectPopup align="end" alignItemWithTrigger={false} className="p-1.5">
               {codeThemes.map((option) => (
-                <SelectItem hideIndicator key={option.id} value={option.id}>
-                  {option.label}
+                <SelectItem
+                  hideIndicator
+                  key={option.id}
+                  value={option.id}
+                  className="rounded-lg px-2 py-2"
+                >
+                  <CodeThemeSelectOption label={option.label} theme={option.previewTheme} />
                 </SelectItem>
               ))}
             </SelectPopup>
           </Select>
         </div>
+      </div>
+      <div className="px-4 pb-3 text-[11px] text-[var(--color-text-foreground-secondary)] sm:px-4">
+        {contextLabel}
       </div>
 
       <div className="border-t border-border/40">
@@ -228,6 +260,33 @@ function ThemeRow({ label, children }: { label: string; children: React.ReactNod
   );
 }
 
+function ThemeSlotBadge({
+  isActive,
+  mode,
+  variant,
+}: {
+  isActive: boolean;
+  mode: ThemeMode;
+  variant: ThemeVariant;
+}) {
+  const label = isActive ? "Active now" : mode === "system" ? "Standby" : "Inactive";
+  const className = isActive
+    ? "border-[color:var(--color-border-focus)]/35 bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)]"
+    : "border-[color:var(--color-border)] bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground-secondary)]";
+
+  return (
+    <span
+      className={cn(
+        "inline-flex h-5 items-center rounded-full border px-2 text-[10px] font-medium tracking-[0.02em]",
+        className,
+      )}
+      title={isActive ? `${variant} is currently applied` : `${variant} slot preview`}
+    >
+      {label}
+    </span>
+  );
+}
+
 // ── Color pill ────────────────────────────────────────────────────────────
 
 function ColorPill({
@@ -263,7 +322,7 @@ function ColorPill({
       <button
         type="button"
         onClick={() => colorInputRef.current?.click()}
-        className="group relative flex h-9 min-w-44 items-center gap-2 overflow-hidden rounded-full px-2 pr-3 text-left transition-[transform,box-shadow] hover:scale-[1.005] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        className="group relative flex h-8 min-w-44 items-center gap-2 overflow-hidden rounded-md px-2 pr-3 text-left transition-[transform,box-shadow] hover:scale-[1.005] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
         style={{ backgroundColor: color, color: textColor }}
         aria-label={ariaLabel}
       >
@@ -288,7 +347,7 @@ function ColorPill({
           onClick={(event) => event.stopPropagation()}
           spellCheck={false}
           maxLength={7}
-          className="w-20 flex-1 bg-transparent font-chat-code text-[12px] uppercase tracking-tight outline-none placeholder:text-current/50"
+          className="font-system-ui w-20 flex-1 bg-transparent text-[12px] uppercase tracking-tight outline-none placeholder:text-current/50"
           style={{ color: textColor }}
           aria-label={`${ariaLabel} hex value`}
         />
@@ -322,6 +381,17 @@ function CodeThemeBadge({ theme }: { theme: ChromeTheme }) {
   );
 }
 
+function CodeThemeSelectOption({ label, theme }: { label: string; theme: ChromeTheme }) {
+  return (
+    <div className="flex min-w-0 items-center gap-2.5">
+      <CodeThemeBadge theme={theme} />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[13px] text-[var(--color-text-foreground)]">{label}</div>
+      </div>
+    </div>
+  );
+}
+
 // ── Font input ────────────────────────────────────────────────────────────
 
 function FontInput({
@@ -337,14 +407,20 @@ function FontInput({
   mono?: boolean;
   onChange: (next: string) => void;
 }) {
+  const [draft, setDraft] = useState<string | null>(null);
   return (
     <Input
-      value={value}
+      value={draft ?? value}
       placeholder={placeholder}
-      onChange={(event) => onChange(event.target.value)}
+      onChange={(event) => {
+        const next = event.target.value;
+        setDraft(next);
+        onChange(next);
+      }}
+      onBlur={() => setDraft(null)}
       spellCheck={false}
       aria-label={ariaLabel}
-      className={cn("h-8 min-w-44 rounded-full px-3 text-right", mono && "font-chat-code")}
+      className={cn("h-8 min-w-44 rounded-md px-3 text-right", mono && "font-chat-code")}
     />
   );
 }
@@ -432,7 +508,8 @@ function ImportThemeDialog({
           <p className="text-xs text-muted-foreground">
             Paste a{" "}
             <code className="rounded bg-muted px-1 py-0.5 font-chat-code">codex-theme-v1:</code>{" "}
-            share string. The embedded variant must match {variant}.
+            share string. The embedded variant must match {variant}, and the selected code theme
+            must exist for that variant.
           </p>
         </DialogHeader>
         <DialogPanel>

@@ -683,7 +683,7 @@ function ProjectSortMenu({
       <MenuPopup
         align="end"
         side="bottom"
-        className="min-w-44 rounded-lg border-border bg-popover shadow-lg"
+        className="min-w-44 rounded-lg border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] shadow-lg"
       >
         <MenuGroup>
           <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
@@ -763,7 +763,7 @@ function ChatSortMenu({
       <MenuPopup
         align="end"
         side="bottom"
-        className="min-w-44 rounded-lg border-border bg-popover shadow-lg"
+        className="min-w-44 rounded-lg border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] shadow-lg"
       >
         <MenuGroup>
           <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">Sort chats</div>
@@ -3733,8 +3733,8 @@ export default function Sidebar() {
           secondaryMetaClass,
         );
     const toggleButtonClassName = isHighlighted
-      ? "border-foreground/10 bg-background/75 text-foreground/58 hover:bg-background/88 hover:text-foreground/80"
-      : "border-border/45 bg-background/58 text-muted-foreground/56 hover:border-border/75 hover:bg-background/78 hover:text-foreground/76";
+      ? "border-[color:var(--color-border)] bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
+      : "border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground-secondary)] hover:border-[color:var(--color-border)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]";
 
     return (
       <SidebarMenuSubItem key={thread.id} className="group/thread-row w-full" data-thread-item>
@@ -4160,9 +4160,9 @@ export default function Sidebar() {
                   role="button"
                   tabIndex={0}
                   className={cn(
-                    "flex min-w-0 flex-1 select-none items-center gap-1 rounded-md px-1.5 py-0.5 text-left outline-hidden transition-colors focus-visible:ring-1 focus-visible:ring-ring",
+                    "flex min-w-0 flex-1 select-none items-center gap-1 rounded-md px-1.5 py-0.5 text-left outline-hidden transition-colors focus-visible:ring-1 focus-visible:ring-[color:var(--color-border-focus)]",
                     splitView.focusedPane === pane
-                      ? "bg-background shadow-xs dark:bg-foreground/12"
+                      ? "bg-[var(--color-background-button-secondary)] shadow-xs"
                       : "hover:bg-[var(--sidebar-accent)]",
                   )}
                   onClick={(event) => {
@@ -4730,7 +4730,7 @@ export default function Sidebar() {
         ? "bg-sky-500 hover:bg-sky-600"
         : shouldHighlightDesktopUpdateError(desktopUpdateState)
           ? "bg-rose-500 hover:bg-rose-600"
-          : "bg-[var(--info-foreground)] hover:brightness-110";
+          : "bg-[var(--info)] hover:brightness-110";
   const desktopUpdateButtonHasSecondaryLabel =
     desktopUpdateButtonPresentation.secondaryLabel !== null;
   const desktopUpdateRowButtonClasses = cn(
@@ -5177,7 +5177,7 @@ export default function Sidebar() {
                                         setRenamingWorkspaceTitle(workspace.title);
                                       }
                                     }}
-                                    className="h-7 w-full rounded-md border border-border bg-background px-2 text-[length:var(--app-font-size-ui,12px)] outline-none focus:border-ring"
+                                    className="h-7 w-full rounded-md border border-[color:var(--color-border)] bg-[var(--color-background-control-opaque)] px-2 text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-foreground)] outline-none focus:border-[color:var(--color-border-focus)]"
                                   />
                                 </div>
                               ) : (
@@ -5369,10 +5369,10 @@ export default function Sidebar() {
                       </div>
                     ) : (
                       <div
-                        className={`flex items-center rounded-lg border bg-secondary transition-colors ${
+                        className={`flex items-center rounded-lg border bg-[var(--color-background-control-opaque)] transition-colors ${
                           addProjectError
                             ? "border-red-500/70 focus-within:border-red-500"
-                            : "border-border focus-within:border-ring"
+                            : "border-[color:var(--color-border)] focus-within:border-[color:var(--color-border-focus)]"
                         }`}
                       >
                         <input

@@ -305,7 +305,8 @@ export const ProjectPicker = memo(function ProjectPicker({
                     setOpen(false);
                   }}
                   className={cn(
-                    folder.cwd === selectedWorkspaceRoot && "bg-accent/40 text-accent-foreground",
+                    folder.cwd === selectedWorkspaceRoot &&
+                      "bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)]",
                   )}
                 >
                   <div className="flex min-w-0 items-center gap-2">
@@ -342,7 +343,8 @@ export const ProjectPicker = memo(function ProjectPicker({
                     setOpen(false);
                   }}
                   className={cn(
-                    absolutePath === selectedWorkspaceRoot && "bg-accent/40 text-accent-foreground",
+                    absolutePath === selectedWorkspaceRoot &&
+                      "bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)]",
                   )}
                 >
                   <div className="flex min-w-0 items-center gap-2">
@@ -357,7 +359,7 @@ export const ProjectPicker = memo(function ProjectPicker({
         <div className="border-t p-1">
           <button
             type="button"
-            className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+            className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] disabled:cursor-not-allowed disabled:opacity-60"
             onClick={() => void handleAddNewProject()}
             disabled={isPicking}
           >
@@ -369,7 +371,7 @@ export const ProjectPicker = memo(function ProjectPicker({
           {showResetToHome ? (
             <button
               type="button"
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm transition-colors hover:bg-accent"
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
               onClick={() => {
                 onResetToHome?.();
                 setOpen(false);

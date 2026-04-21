@@ -181,6 +181,10 @@ const CODE_THEME_SEED_PATCH_METADATA: Partial<
     dark: { contrast: true, fonts: { code: true, ui: true }, opaqueWindows: true },
     light: { contrast: true, fonts: { code: true, ui: true }, opaqueWindows: true },
   },
+  "dp-code": {
+    dark: { contrast: true },
+    light: { contrast: true },
+  },
 };
 
 // Mirror the packaged Codex catalog closely enough that share-string validation
@@ -190,6 +194,7 @@ export const CODE_THEME_OPTIONS: readonly CodeThemeOption[] = [
   { id: "ayu", label: "Ayu", variants: ["dark"] },
   { id: "catppuccin", label: "Catppuccin", variants: ["light", "dark"] },
   { id: "codex", label: "Codex", variants: ["light", "dark"] },
+  { id: "dp-code", label: "DP Code", variants: ["light", "dark"] },
   { id: "dracula", label: "Dracula", variants: ["dark"] },
   { id: "everforest", label: "Everforest", variants: ["light", "dark"] },
   { id: "github", label: "GitHub", variants: ["light", "dark"] },
@@ -657,6 +662,13 @@ export function buildThemeCssVariables(
   const material: WindowMaterial =
     options?.electron === true && !pack.theme.opaqueWindows ? "translucent" : "opaque";
   const warningColor = variant === "dark" ? "#f5b44a" : "#d97706";
+  const sidebarSurfaceUnder = readCodexVariable("--color-background-surface-under");
+  const sidebarRaisedSurface = readCodexVariable("--color-background-elevated-primary");
+  const composerFocusBorder = buildComposerFocusBorder(
+    pack,
+    variant,
+    resolvedTokens.computed.panel,
+  );
   const appVariables: Record<string, string> = {
     "--accent": readCodexVariable("--color-background-accent"),
     "--accent-foreground": readCodexVariable("--color-text-foreground"),
@@ -664,16 +676,23 @@ export function buildThemeCssVariables(
       material === "translucent"
         ? "transparent"
         : readCodexVariable("--color-background-surface-under"),
+    "--app-composer-focus-border": composerFocusBorder,
     "--app-sidebar-backdrop-filter":
-      material === "translucent" ? "blur(18px) saturate(150%)" : "none",
+      material === "translucent" ? "blur(8px) saturate(135%)" : "none",
     "--app-sidebar-shadow":
-      variant === "dark"
-        ? "inset 0 1px 0 rgba(255,255,255,0.025)"
-        : "inset 0 1px 0 rgba(255,255,255,0.04)",
+      material === "translucent"
+        ? variant === "dark"
+          ? "inset 0 1px 0 rgba(255,255,255,0.024)"
+          : "inset 0 1px 0 rgba(0,0,0,0.025)"
+        : variant === "dark"
+          ? "inset 0 1px 0 rgba(255,255,255,0.025)"
+          : "inset 0 1px 0 rgba(0,0,0,0.03)",
     "--app-sidebar-surface":
       material === "translucent"
-        ? readCodexVariable("--color-background-elevated-primary")
-        : readCodexVariable("--color-background-surface-under"),
+        ? variant === "dark"
+          ? `color-mix(in srgb, ${sidebarSurfaceUnder} 72%, transparent)`
+          : `color-mix(in srgb, ${sidebarSurfaceUnder} 64%, transparent)`
+        : sidebarSurfaceUnder,
     "--background": readCodexVariable("--color-background-surface-under"),
     "--border": readCodexVariable("--color-border"),
     "--card": readCodexVariable("--color-background-panel"),
@@ -682,7 +701,9 @@ export function buildThemeCssVariables(
     "--destructive-foreground": pack.theme.surface,
     "--foreground": readCodexVariable("--color-text-foreground"),
     "--info": pack.theme.accent,
-    "--info-foreground": pack.theme.surface,
+    // Keep legacy app-level "info" consumers on Codex's accent-text path so
+    // links, file labels, and similar affordances inherit the real light/dark logic.
+    "--info-foreground": readCodexVariable("--color-text-accent"),
     "--input": readCodexVariable("--color-background-control-opaque"),
     "--muted": readCodexVariable("--color-background-elevated-secondary"),
     "--muted-foreground": readCodexVariable("--color-text-foreground-secondary"),
@@ -882,9 +903,7 @@ function buildThemeTokenAliases(codexVariables: Record<string, string>): Record<
     "--color-token-text-code-block-background": readCodexVariable(
       "--color-background-elevated-secondary-opaque",
     ),
-    "--color-token-text-link-active-foreground": readCodexVariable(
-      "--color-background-accent-active",
-    ),
+    "--color-token-text-link-active-foreground": readCodexVariable("--color-text-accent"),
     "--color-token-text-link-foreground": readCodexVariable("--color-text-accent"),
     "--color-token-text-primary": readCodexVariable("--color-text-foreground"),
     "--color-token-text-secondary": readCodexVariable("--color-text-foreground-secondary"),
@@ -924,8 +943,8 @@ function buildLightDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
     buttonPrimaryBackgroundHover: formatRgba(theme.ink, 0.04 + theme.contrast * 0.03),
     buttonPrimaryBackgroundInactive: formatRgba(theme.ink, 0.02 + theme.contrast * 0.02),
     buttonSecondaryBackground: formatRgba(theme.ink, 0.04 + theme.contrast * 0.02),
-    buttonSecondaryBackgroundActive: formatRgba(theme.ink, 0.09 + theme.contrast * 0.05),
-    buttonSecondaryBackgroundHover: formatRgba(theme.ink, 0.06 + theme.contrast * 0.03),
+    buttonSecondaryBackgroundActive: formatRgba(theme.ink, 0.14 + theme.contrast * 0.06),
+    buttonSecondaryBackgroundHover: formatRgba(theme.ink, 0.1 + theme.contrast * 0.05),
     buttonSecondaryBackgroundInactive: formatRgba(theme.ink, 0.02 + theme.contrast * 0.03),
     buttonTertiaryBackground: formatRgba(theme.ink, 0.02 + theme.contrast * 0.015),
     buttonTertiaryBackgroundActive: formatRgba(theme.ink, 0.07 + theme.contrast * 0.05),
@@ -981,8 +1000,8 @@ function buildDarkDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
     buttonPrimaryBackgroundHover: formatRgba(theme.ink, 0.05 + theme.contrast * 0.06),
     buttonPrimaryBackgroundInactive: formatRgba(theme.ink, 0.18 + theme.contrast * 0.14),
     buttonSecondaryBackground: formatRgba(theme.ink, 0.04 + theme.contrast * 0.02),
-    buttonSecondaryBackgroundActive: formatRgba(theme.ink, 0.03 + theme.contrast * 0.02),
-    buttonSecondaryBackgroundHover: formatRgba(theme.ink, 0.04 + theme.contrast * 0.03),
+    buttonSecondaryBackgroundActive: formatRgba(theme.ink, 0.1 + theme.contrast * 0.06),
+    buttonSecondaryBackgroundHover: formatRgba(theme.ink, 0.08 + theme.contrast * 0.05),
     buttonSecondaryBackgroundInactive: formatRgba(theme.ink, 0.01 + theme.contrast * 0.02),
     buttonTertiaryBackground: formatRgba(theme.ink, 0),
     buttonTertiaryBackgroundActive: formatRgba(theme.ink, 0.16 + theme.contrast * 0.08),
@@ -1030,6 +1049,18 @@ function buildPanelBackground(theme: ReturnType<typeof buildComputedTheme>): str
     formatHex(anchor),
     PANEL_BASE_ALPHA[theme.variant] + theme.contrast * PANEL_CONTRAST_STEP[theme.variant],
   );
+}
+
+function buildComposerFocusBorder(
+  pack: ThemePack,
+  variant: ThemeVariant,
+  panelBackground: string,
+): string {
+  const panel = parseHexColor(panelBackground);
+  const anchor = variant === "dark" ? WHITE : parseHexColor(pack.theme.ink);
+  const contrast = normalizeContrastStrength(pack.theme.contrast, variant);
+  const mixAmount = variant === "dark" ? 0.12 + contrast * 0.06 : 0.1 + contrast * 0.05;
+  return mixHex(formatHex(panel), formatHex(anchor), mixAmount);
 }
 
 function normalizeContrastStrength(value: number, variant: ThemeVariant): number {

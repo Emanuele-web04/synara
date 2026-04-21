@@ -55,8 +55,8 @@ function normalizeWeights(weights: number[]): number[] {
 
 function splitHandleClassName(direction: ThreadTerminalSplitNode["direction"]): string {
   return direction === "horizontal"
-    ? "shrink-0 w-px cursor-col-resize bg-border/70 hover:bg-accent/80"
-    : "shrink-0 h-px cursor-row-resize bg-border/70 hover:bg-accent/80";
+    ? "shrink-0 w-px cursor-col-resize bg-border/70 hover:bg-[var(--sidebar-accent)]"
+    : "shrink-0 h-px cursor-row-resize bg-border/70 hover:bg-[var(--sidebar-accent)]";
 }
 
 function canMoveTerminalToOwnGroup(node: ThreadTerminalLayoutNode, terminalId: string): boolean {
@@ -82,7 +82,7 @@ function PaneActionButton(props: {
     <button
       type="button"
       className={cn(
-        "inline-flex h-7 w-7 items-center justify-center bg-background text-foreground/80 transition-colors hover:bg-accent hover:text-foreground",
+        "inline-flex h-7 w-7 items-center justify-center bg-background text-foreground/80 transition-colors hover:bg-[var(--sidebar-accent)] hover:text-foreground",
         props.className,
       )}
       onClick={(event) => {
@@ -150,10 +150,10 @@ export default function TerminalViewportPane({
                       "group/tab relative flex h-full shrink-0 items-stretch border-r border-border/70",
                       index === 0 ? "border-l-0" : "",
                       isActiveTab && isFocusedPane
-                        ? "shadow-[inset_0_1px_0_var(--color-info-foreground)] bg-background text-foreground"
+                        ? "shadow-[inset_0_1px_0_var(--color-text-foreground)] bg-background text-foreground"
                         : isActiveTab
-                          ? "shadow-[inset_0_1px_0_var(--color-foreground)/0.35] bg-background text-foreground"
-                          : "border-b border-border/70 bg-muted/25 text-muted-foreground hover:bg-background/70 hover:text-foreground",
+                          ? "shadow-[inset_0_1px_0_color-mix(in_srgb,var(--color-text-foreground)_35%,transparent)] bg-background text-foreground"
+                          : "border-b border-border/70 bg-muted/25 text-muted-foreground hover:bg-[var(--sidebar-accent)] hover:text-foreground",
                     )}
                   >
                     <button

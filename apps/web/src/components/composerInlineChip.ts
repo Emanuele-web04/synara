@@ -4,10 +4,10 @@
 // Exports: Chip class names plus shared skill icon/label helpers
 
 export const COMPOSER_INLINE_CHIP_CLASS_NAME =
-  "inline-flex max-w-full select-none items-center gap-0.5 rounded border border-border/40 bg-accent/25 px-1 py-px font-medium text-[11px] leading-[1.1] text-foreground/75 align-middle";
+  "inline-flex max-w-full select-none items-center gap-0.5 rounded border border-[color:var(--color-border-light)] bg-[var(--sidebar-accent)] px-1 py-px font-medium text-[11px] leading-[1.1] text-[var(--color-text-foreground)] align-middle";
 
 export const COMPOSER_INLINE_SKILL_CHIP_CLASS_NAME =
-  "inline-flex max-w-full select-none items-center gap-1 rounded-md bg-[var(--info-foreground)]/10 px-2 py-0.5 text-[var(--info-foreground)]/80 align-middle -translate-y-px";
+  "inline-flex max-w-full select-none items-center gap-1 rounded-md bg-[var(--info)]/10 px-2 py-0.5 text-[var(--info-foreground)]/80 align-middle -translate-y-px";
 
 export const COMPOSER_INLINE_SKILL_CHIP_ICON_CLASS_NAME = "size-3.5 shrink-0";
 

@@ -27,10 +27,10 @@ export const ComposerImageAttachmentChip = memo(function ComposerImageAttachment
   onRemoveImage,
 }: ComposerImageAttachmentChipProps) {
   return (
-    <div className="inline-flex min-w-0 max-w-full items-center gap-0.5 rounded-full border border-border/60 bg-background/92 p-0.5 shadow-[0_1px_0_rgba(255,255,255,0.14)_inset]">
+    <div className="inline-flex min-w-0 max-w-full items-center gap-0.5 rounded-full border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] p-0.5 shadow-[0_1px_0_rgba(255,255,255,0.14)_inset]">
       <button
         type="button"
-        className="flex min-w-0 max-w-[232px] items-center gap-1.5 rounded-full py-0 pl-0 pr-0.5 text-left transition-colors hover:bg-accent/28 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        className="flex min-w-0 max-w-[232px] items-center gap-1.5 rounded-full py-0 pl-0 pr-0.5 text-left transition-colors hover:bg-[var(--color-background-button-secondary-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         aria-label={`Preview ${image.name}`}
         onClick={() => {
           const preview = buildExpandedImagePreview(images, image.id);
@@ -38,7 +38,7 @@ export const ComposerImageAttachmentChip = memo(function ComposerImageAttachment
           onExpandImage(preview);
         }}
       >
-        <span className="flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-full border border-border/55 bg-muted/35">
+        <span className="flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-full border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)]">
           {image.previewUrl ? (
             <img src={image.previewUrl} alt={image.name} className="size-full object-cover" />
           ) : (
@@ -75,7 +75,7 @@ export const ComposerImageAttachmentChip = memo(function ComposerImageAttachment
         type="button"
         className={cn(
           COMPOSER_INLINE_CHIP_DISMISS_BUTTON_CLASS_NAME,
-          "size-5 rounded-full text-muted-foreground/62 hover:bg-accent/36 hover:text-foreground",
+          "size-5 rounded-full text-muted-foreground/62 hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground",
         )}
         onClick={() => onRemoveImage(image.id)}
         aria-label={`Remove ${image.name}`}

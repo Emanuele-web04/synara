@@ -190,7 +190,7 @@ export default function ProjectScriptsControl({
   }, [preferredScriptId, scripts]);
   const isEditing = editingScriptId !== null;
   const dropdownItemClassName =
-    "data-highlighted:bg-transparent data-highlighted:text-foreground hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground data-highlighted:hover:bg-accent data-highlighted:hover:text-accent-foreground data-highlighted:focus-visible:bg-accent data-highlighted:focus-visible:text-accent-foreground";
+    "data-highlighted:bg-transparent data-highlighted:text-foreground hover:bg-[var(--sidebar-accent)] hover:text-foreground focus-visible:bg-[var(--sidebar-accent)] focus-visible:text-foreground data-highlighted:hover:bg-[var(--sidebar-accent)] data-highlighted:hover:text-foreground data-highlighted:focus-visible:bg-[var(--sidebar-accent)] data-highlighted:focus-visible:text-foreground";
 
   const captureKeybinding = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Tab") return;
@@ -421,8 +421,8 @@ export default function ProjectScriptsControl({
                               type="button"
                               className={`relative flex flex-col items-center gap-2 rounded-md border px-2 py-2 text-xs ${
                                 isSelected
-                                  ? "border-primary/70 bg-primary/10"
-                                  : "border-border/70 hover:bg-accent/60"
+                                  ? "border-[color:var(--color-border)] bg-[var(--sidebar-accent)]"
+                                  : "border-[color:var(--color-border-light)] hover:bg-[var(--sidebar-accent)]"
                               }`}
                               onClick={() => {
                                 setIcon(entry.id);

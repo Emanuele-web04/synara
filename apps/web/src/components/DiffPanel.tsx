@@ -706,8 +706,8 @@ export default function DiffPanel({
               className={cn(
                 "rounded-md border px-2 py-1 text-left transition-colors",
                 selectedTurnId === null
-                  ? "border-border bg-accent text-accent-foreground"
-                  : "border-border/70 bg-background/70 text-muted-foreground/80 hover:border-border hover:text-foreground/80",
+                  ? "border-[color:var(--color-border)] bg-[var(--color-text-foreground)] text-[var(--color-background-surface)]"
+                  : "border-[color:var(--color-border-light)] bg-transparent text-[var(--color-text-foreground-secondary)] hover:border-[color:var(--color-border)] hover:bg-[var(--sidebar-accent)] hover:text-[var(--color-text-foreground)]",
               )}
             >
               <div className="text-[10px] leading-tight font-medium">All turns</div>
@@ -726,8 +726,8 @@ export default function DiffPanel({
                 className={cn(
                   "rounded-md border px-2 py-1 text-left transition-colors",
                   summary.turnId === selectedTurn?.turnId
-                    ? "border-border bg-accent text-accent-foreground"
-                    : "border-border/70 bg-background/70 text-muted-foreground/80 hover:border-border hover:text-foreground/80",
+                    ? "border-[color:var(--color-border)] bg-[var(--color-text-foreground)] text-[var(--color-background-surface)]"
+                    : "border-[color:var(--color-border-light)] bg-transparent text-[var(--color-text-foreground-secondary)] hover:border-[color:var(--color-border)] hover:bg-[var(--sidebar-accent)] hover:text-[var(--color-text-foreground)]",
                 )}
               >
                 <div className="flex items-center gap-1">
@@ -785,7 +785,7 @@ export default function DiffPanel({
         {onClosePanel ? (
           <button
             type="button"
-            className="inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-transparent text-foreground transition-colors hover:bg-accent [-webkit-app-region:no-drag]"
+            className="inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-transparent text-[var(--color-text-foreground)] transition-colors hover:bg-[var(--sidebar-accent)] [-webkit-app-region:no-drag]"
             onClick={(event) => {
               event.stopPropagation();
               onClosePanel();
@@ -850,7 +850,7 @@ export default function DiffPanel({
                 aria-pressed={surfaceMode === "review"}
               >
                 <span className="inline-flex size-4 items-center justify-center rounded-[4px]">
-                  <FaPlusMinus className="size-2.25 text-black dark:text-white" />
+                  <FaPlusMinus className="size-2.25 text-[var(--color-text-foreground)]" />
                 </span>
                 <span>Review</span>
               </button>

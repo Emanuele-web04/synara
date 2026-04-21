@@ -126,6 +126,40 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
       surface: "#ffffff",
     },
   },
+  "dp-code": {
+    dark: {
+      accent: "#6073cc",
+      contrast: 75,
+      fonts: {
+        code: null,
+        ui: null,
+      },
+      ink: "#f5f5f5",
+      opaqueWindows: false,
+      semanticColors: {
+        diffAdded: "#40c977",
+        diffRemoved: "#fa423e",
+        skill: "#ad7bf9",
+      },
+      surface: "#0e0e0e",
+    },
+    light: {
+      accent: "#526fff",
+      contrast: 65,
+      fonts: {
+        code: null,
+        ui: null,
+      },
+      ink: "#262626",
+      opaqueWindows: false,
+      semanticColors: {
+        diffAdded: "#00a240",
+        diffRemoved: "#ba2623",
+        skill: "#924ff7",
+      },
+      surface: "#fcfcfc",
+    },
+  },
   dracula: {
     dark: {
       accent: "#ff79c6",

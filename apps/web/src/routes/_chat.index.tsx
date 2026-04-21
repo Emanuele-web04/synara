@@ -39,7 +39,7 @@ function ChatIndexRouteView() {
         {errorMessage ? (
           <button
             type="button"
-            className="rounded-md border border-border/70 px-3 py-1.5 text-sm text-foreground/85 transition-colors hover:bg-accent"
+            className="rounded-md border border-border/70 px-3 py-1.5 text-sm text-foreground/85 transition-colors hover:bg-[var(--sidebar-accent)]"
             onClick={() => setAttempt((value) => value + 1)}
           >
             Retry

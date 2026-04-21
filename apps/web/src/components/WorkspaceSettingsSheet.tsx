@@ -120,8 +120,8 @@ export default function WorkspaceSettingsSheet(props: {
                     className={cn(
                       "group rounded-2xl border p-3 text-left transition-colors",
                       isSelected
-                        ? "border-primary/60 bg-primary/6 shadow-sm"
-                        : "border-border/80 bg-card/50 hover:border-foreground/18 hover:bg-accent/45",
+                        ? "border-[color:var(--color-border)] bg-[var(--sidebar-accent)] shadow-sm"
+                        : "border-[color:var(--color-border-light)] bg-card/50 hover:border-[color:var(--color-border)] hover:bg-[var(--sidebar-accent)]",
                     )}
                     aria-pressed={isSelected}
                     onClick={() => props.onSelectPreset(preset.id)}
@@ -129,7 +129,7 @@ export default function WorkspaceSettingsSheet(props: {
                     <div className="relative h-24 overflow-hidden rounded-xl bg-gradient-to-b from-muted/65 to-muted/35 p-0.5">
                       <WorkspaceLayoutPresetPreview presetId={preset.id} />
                       {isSelected ? (
-                        <div className="absolute right-2 top-2 inline-flex size-6 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm">
+                        <div className="absolute right-2 top-2 inline-flex size-6 items-center justify-center rounded-full bg-[var(--color-text-foreground)] text-[var(--color-background-surface)] shadow-sm">
                           <CheckIcon className="size-3.5" />
                         </div>
                       ) : null}

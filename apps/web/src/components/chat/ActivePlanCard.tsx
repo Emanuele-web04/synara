@@ -37,7 +37,7 @@ export const ActivePlanCard = memo(function ActivePlanCard({
   const stepOccurrenceCount = new Map<string, number>();
 
   return (
-    <div className="overflow-hidden rounded-t-2xl border border-b-0 border-border/60 bg-card">
+    <div className="overflow-hidden rounded-t-2xl border border-b-0 border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)]">
       {/* Header */}
       <div className="flex items-center justify-between gap-2 px-2.5 py-2">
         <div className="flex min-w-0 items-center gap-1.5 text-[12px] text-muted-foreground/80">
@@ -50,7 +50,7 @@ export const ActivePlanCard = memo(function ActivePlanCard({
           type="button"
           variant="ghost"
           size="icon-xs"
-          className="size-5 shrink-0 rounded-md text-muted-foreground/60 hover:bg-muted/60 hover:text-foreground/80"
+          className="size-5 shrink-0 rounded-md text-[var(--color-text-foreground-tertiary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
           onClick={onOpenSidebar}
           aria-label="Collapse plan"
           title="Collapse plan"

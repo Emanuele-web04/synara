@@ -68,7 +68,7 @@ import {
   gitStatusQueryOptions,
   invalidateGitQueries,
 } from "~/lib/gitReactQuery";
-import { newCommandId, randomUUID } from "~/lib/utils";
+import { cn, newCommandId, randomUUID } from "~/lib/utils";
 import { resolvePathLinkTarget } from "~/terminal-links";
 import { readNativeApi } from "~/nativeApi";
 import { createThreadSelector } from "~/storeSelectors";
@@ -1056,12 +1056,16 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
 
   if (!gitCwd) return null;
 
+  const headerGhostClass =
+    "bg-transparent not-disabled:before:shadow-none dark:not-disabled:before:shadow-none [:hover,[data-pressed]]:bg-[var(--sidebar-accent)] dark:[:hover,[data-pressed]]:bg-[var(--sidebar-accent)]";
+
   return (
     <>
       {!isRepo ? (
         <Button
           variant="outline"
           size="xs"
+          className={headerGhostClass}
           disabled={initMutation.isPending}
           onClick={() => initMutation.mutate()}
         >
@@ -1076,7 +1080,10 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
                 render={
                   <Button
                     aria-disabled="true"
-                    className="cursor-not-allowed rounded-e-none border-e-0 opacity-64 before:rounded-e-none"
+                    className={cn(
+                      "cursor-not-allowed rounded-e-none border-e-0 opacity-64 before:rounded-e-none",
+                      headerGhostClass,
+                    )}
                     size="xs"
                     variant="outline"
                   />
@@ -1093,6 +1100,7 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
             <Button
               variant="outline"
               size="xs"
+              className={headerGhostClass}
               disabled={isGitActionRunning || quickAction.disabled}
               onClick={runQuickAction}
             >
@@ -1107,12 +1115,22 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
             }}
           >
             <MenuTrigger
-              render={<Button aria-label="Git action options" size="icon-xs" variant="outline" />}
+              render={
+                <Button
+                  aria-label="Git action options"
+                  size="icon-xs"
+                  variant="outline"
+                  className={headerGhostClass}
+                />
+              }
               disabled={isGitActionRunning}
             >
               <ChevronDownIcon aria-hidden="true" className="size-4" />
             </MenuTrigger>
-            <MenuPopup align="end" className="w-64 rounded-lg border-border bg-popover shadow-lg">
+            <MenuPopup
+              align="end"
+              className="w-64 rounded-lg border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] shadow-lg"
+            >
               <MenuGroup>
                 <MenuGroupLabel>Push & Deploy</MenuGroupLabel>
                 {gitPickerMenuItems.map((item) => {
@@ -1188,7 +1206,7 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
             <DialogDescription>{COMMIT_DIALOG_DESCRIPTION}</DialogDescription>
           </DialogHeader>
           <DialogPanel className="space-y-4">
-            <div className="space-y-3 rounded-lg border border-input bg-muted/40 p-3 text-xs">
+            <div className="space-y-3 rounded-lg border border-[color:var(--color-border)] bg-[var(--color-background-elevated-secondary)] p-3 text-xs">
               <div className="grid grid-cols-[auto_1fr] items-center gap-x-2 gap-y-1">
                 <span className="text-muted-foreground">Branch</span>
                 <span className="flex items-center justify-between gap-2">
@@ -1235,14 +1253,14 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
                   <p className="font-medium">none</p>
                 ) : (
                   <div className="space-y-2">
-                    <ScrollArea className="h-44 rounded-md border border-input bg-background">
+                    <ScrollArea className="h-44 rounded-md border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)]">
                       <div className="space-y-1 p-1">
                         {allFiles.map((file) => {
                           const isExcluded = excludedFiles.has(file.path);
                           return (
                             <div
                               key={file.path}
-                              className="flex w-full items-center gap-2 rounded-md px-2 py-1 font-mono text-xs transition-colors hover:bg-accent/50"
+                              className="flex w-full items-center gap-2 rounded-md px-2 py-1 font-mono text-xs transition-colors hover:bg-[var(--color-background-button-secondary-hover)]"
                             >
                               {isEditingFiles && (
                                 <Checkbox

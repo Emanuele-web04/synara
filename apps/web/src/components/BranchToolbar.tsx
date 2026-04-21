@@ -213,7 +213,7 @@ export default function BranchToolbar({
       <div className="flex items-center gap-2">
         {showEnvPicker ? (
           <Popover open={envPickerOpen} onOpenChange={setEnvPickerOpen}>
-            <PopoverTrigger className="inline-flex cursor-pointer items-center gap-1 px-1.5 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-muted-foreground/70 transition-colors hover:text-foreground/80">
+            <PopoverTrigger className="inline-flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--sidebar-accent)] hover:text-[var(--color-text-foreground)]">
               {environmentPresentation.mode === "local" ? (
                 <PiLaptop className="size-3.5" />
               ) : (
@@ -229,15 +229,15 @@ export default function BranchToolbar({
               className="w-56 [&_[data-slot=popover-viewport]]:py-0 [&_[data-slot=popover-viewport]]:[--viewport-inline-padding:0px]"
             >
               <div className="py-1.5">
-                <p className="px-3 pb-1 pt-1 text-[11px] font-medium text-muted-foreground">
+                <p className="px-3 pb-1 pt-1 text-[11px] font-medium text-[var(--color-text-foreground-secondary)]">
                   Continue in
                 </p>
                 {environmentPresentation.mode === "local" ? (
                   <div className="flex w-full items-center gap-2 px-3 py-1.5 text-sm">
-                    <PiLaptop className="size-4 text-muted-foreground" />
+                    <PiLaptop className="size-4 text-[var(--color-text-foreground-secondary)]" />
                     <span>{environmentPresentation.localOptionLabel}</span>
                     <svg
-                      className="ml-auto size-4 text-foreground"
+                      className="ml-auto size-4 text-[var(--color-text-foreground)]"
                       viewBox="0 0 24 24"
                       fill="none"
                       stroke="currentColor"
@@ -251,35 +251,35 @@ export default function BranchToolbar({
                 ) : (
                   <button
                     type="button"
-                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-accent"
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-text-foreground)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)]"
                     onClick={() => {
                       setEnvPickerOpen(false);
                       onEnvModeChange("local");
                     }}
                   >
-                    <PiLaptop className="size-4 text-muted-foreground" />
+                    <PiLaptop className="size-4 text-[var(--color-text-foreground-secondary)]" />
                     <span>{environmentPresentation.localOptionLabel}</span>
                   </button>
                 )}
                 {canSwitchToWorktree ? (
                   <button
                     type="button"
-                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-accent"
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-text-foreground)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)]"
                     onClick={() => {
                       setEnvPickerOpen(false);
                       onEnvModeChange("worktree");
                     }}
                   >
-                    <WorktreeGlyph className="size-4 text-muted-foreground" />
+                    <WorktreeGlyph className="size-4 text-[var(--color-text-foreground-secondary)]" />
                     <span>New worktree</span>
                   </button>
                 ) : null}
                 {effectiveEnvMode === "worktree" && !canHandoffToLocal ? (
                   <div className="flex w-full items-center gap-2 px-3 py-1.5 text-sm">
-                    <WorktreeGlyph className="size-4 text-muted-foreground" />
+                    <WorktreeGlyph className="size-4 text-[var(--color-text-foreground-secondary)]" />
                     <span>{environmentPresentation.worktreeOptionLabel}</span>
                     <svg
-                      className="ml-auto size-4 text-foreground"
+                      className="ml-auto size-4 text-[var(--color-text-foreground)]"
                       viewBox="0 0 24 24"
                       fill="none"
                       stroke="currentColor"
@@ -294,40 +294,40 @@ export default function BranchToolbar({
                 {canHandoffToWorktree && onHandoffToWorktree ? (
                   <button
                     type="button"
-                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-text-foreground)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)] disabled:pointer-events-none disabled:opacity-50"
                     disabled={handoffBusy}
                     onClick={() => {
                       setEnvPickerOpen(false);
                       onHandoffToWorktree();
                     }}
                   >
-                    <WorktreeGlyph className="size-4 text-muted-foreground" />
+                    <WorktreeGlyph className="size-4 text-[var(--color-text-foreground-secondary)]" />
                     <span>Hand off to new worktree</span>
                   </button>
                 ) : null}
                 {canHandoffToLocal && onHandoffToLocal ? (
                   <button
                     type="button"
-                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-text-foreground)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)] disabled:pointer-events-none disabled:opacity-50"
                     disabled={handoffBusy}
                     onClick={() => {
                       setEnvPickerOpen(false);
                       onHandoffToLocal();
                     }}
                   >
-                    <HandoffIcon className="size-4 text-muted-foreground" />
+                    <HandoffIcon className="size-4 text-[var(--color-text-foreground-secondary)]" />
                     <span>Hand off to local</span>
                   </button>
                 ) : null}
               </div>
 
-              <div className="mx-3 border-t border-border/50" />
+              <div className="mx-3 border-t border-[color:var(--color-border-light)]" />
 
               <div className="py-1.5">
                 <Collapsible open={rateLimitsOpen} onOpenChange={setRateLimitsOpen}>
-                  <CollapsibleTrigger className="flex w-full items-center gap-2 px-3 py-1.5 text-sm transition-colors hover:bg-accent">
+                  <CollapsibleTrigger className="flex w-full items-center gap-2 px-3 py-1.5 text-sm text-[var(--color-text-foreground)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)]">
                     <svg
-                      className="size-4 text-muted-foreground"
+                      className="size-4 text-[var(--color-text-foreground-secondary)]"
                       viewBox="0 0 24 24"
                       fill="none"
                       stroke="currentColor"
@@ -341,7 +341,7 @@ export default function BranchToolbar({
                     <span>Rate limits remaining</span>
                     <ChevronRightIcon
                       className={cn(
-                        "ml-auto size-3.5 text-muted-foreground transition-transform duration-150",
+                        "ml-auto size-3.5 text-[var(--color-text-foreground-secondary)] transition-transform duration-150",
                         rateLimitsOpen && "rotate-90",
                       )}
                     />
@@ -354,7 +354,7 @@ export default function BranchToolbar({
                           href={learnMoreHref}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="flex items-center gap-1 pt-0.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+                          className="flex items-center gap-1 pt-0.5 text-[11px] text-[var(--color-text-foreground-secondary)] transition-colors hover:text-[var(--color-text-foreground)]"
                         >
                           Learn more
                           <ExternalLinkIcon className="size-3" />
@@ -367,7 +367,7 @@ export default function BranchToolbar({
             </PopoverPopup>
           </Popover>
         ) : (
-          <span className="inline-flex items-center gap-1 px-1.5 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-muted-foreground/70">
+          <span className="inline-flex items-center gap-1 px-1.5 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-[var(--color-text-foreground-secondary)]">
             <WorktreeGlyph className="size-3.5" />
             {environmentPresentation.shortLabel}
           </span>
@@ -386,11 +386,11 @@ export default function BranchToolbar({
         />
       </div>
 
-      <div className="flex items-center gap-1.5 text-muted-foreground/70">
+      <div className="flex items-center gap-1.5 text-[var(--color-text-foreground-secondary)]">
         {runtimeMode && onRuntimeModeChange ? (
           <button
             type="button"
-            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[length:var(--app-font-size-ui-xs,10px)] font-normal transition-colors hover:text-foreground/80"
+            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[length:var(--app-font-size-ui-xs,10px)] font-normal transition-colors hover:text-[var(--color-text-foreground)]"
             onClick={() =>
               onRuntimeModeChange(
                 runtimeMode === "full-access" ? "approval-required" : "full-access",

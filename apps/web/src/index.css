@@ -222,8 +222,8 @@
   --input: --alpha(var(--color-black) / 6%);
   --ring: var(--color-neutral-400);
   --destructive-foreground: var(--color-red-700);
-  --info: var(--color-blue-500);
-  --info-foreground: #526fff;
+  --info: var(--color-text-accent, var(--color-blue-500));
+  --info-foreground: var(--color-text-accent, #526fff);
   --success: var(--color-emerald-500);
   --success-foreground: var(--color-emerald-700);
   --sidebar: var(--card);
@@ -257,8 +257,8 @@
     --input: --alpha(var(--color-white) / 5%);
     --ring: var(--color-neutral-500);
     --destructive-foreground: var(--color-red-400);
-    --info: var(--color-blue-500);
-    --info-foreground: #6073cc;
+    --info: var(--color-text-accent, var(--color-blue-500));
+    --info-foreground: var(--color-text-accent, #6073cc);
     --success: var(--color-emerald-500);
     --success-foreground: var(--color-emerald-400);
     --sidebar: var(--card);
@@ -301,15 +301,6 @@ body,
   overflow-x: hidden;
   overflow-x: clip;
   overscroll-behavior-y: none;
-}
-
-/* Rounded left edge on the content surface when a left sidebar is expanded */
-[data-slot="sidebar"][data-state="expanded"][data-side="left"]
-  ~ [data-slot="sidebar-inset"]
-  > [data-slot="sidebar-inset-surface"] {
-  border-top-left-radius: var(--radius-xl);
-  border-bottom-left-radius: var(--radius-xl);
-  overflow: hidden;
 }
 
 /* Preserve inset variant rounding (inherits from the main element) */
@@ -457,12 +448,12 @@ label:has(> select#reasoning-effort) select {
 }
 
 .chat-markdown a {
-  color: var(--info-foreground);
+  color: var(--color-token-text-link-foreground);
   text-decoration: none;
 }
 
 .chat-markdown a:hover {
-  opacity: 0.8;
+  color: var(--color-token-text-link-active-foreground);
 }
 
 .chat-markdown blockquote {

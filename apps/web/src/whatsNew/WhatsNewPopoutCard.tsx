@@ -90,7 +90,7 @@ export function WhatsNewPopoutCard({
           className={cn(
             "absolute end-1.5 top-1.5 z-10 inline-flex size-6 items-center justify-center rounded-full",
             "text-muted-foreground/80 transition-colors",
-            "hover:bg-accent/60 hover:text-foreground",
+            "hover:bg-[var(--sidebar-accent)] hover:text-foreground",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
           )}
         >

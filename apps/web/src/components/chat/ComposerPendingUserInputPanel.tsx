@@ -17,6 +17,7 @@ interface PendingUserInputPanelProps {
   onAdvance: () => void;
 }
 
+// Keep pending-input choices neutral so they read like Codex list controls instead of accent buttons.
 export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserInputPanel({
   pendingUserInputs,
   respondingRequestIds,
@@ -127,7 +128,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-2">
           {prompt.questions.length > 1 ? (
-            <span className="flex h-5 items-center rounded-md bg-muted/60 px-1.5 text-[10px] font-medium tabular-nums text-muted-foreground/60">
+            <span className="flex h-5 items-center rounded-md bg-[var(--color-background-elevated-secondary)] px-1.5 text-[10px] font-medium tabular-nums text-[var(--color-text-foreground-secondary)]">
               {questionIndex + 1}/{prompt.questions.length}
             </span>
           ) : null}
@@ -153,8 +154,8 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
               className={cn(
                 "group flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition-all duration-150",
                 isSelected
-                  ? "border-blue-500/40 bg-blue-500/8 text-foreground"
-                  : "border-transparent bg-muted/20 text-foreground/80 hover:bg-muted/40 hover:border-border/40",
+                  ? "border-[color:var(--color-border)] bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)]"
+                  : "border-transparent bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]/80 hover:border-[color:var(--color-border-light)] hover:bg-[var(--color-background-button-secondary-hover)]",
                 isResponding && "opacity-50 cursor-not-allowed",
               )}
             >
@@ -163,8 +164,8 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
                   className={cn(
                     "flex size-5 shrink-0 items-center justify-center rounded text-[11px] font-medium tabular-nums transition-colors duration-150",
                     isSelected
-                      ? "bg-blue-500/20 text-blue-400"
-                      : "bg-muted/40 text-muted-foreground/50 group-hover:bg-muted/60 group-hover:text-muted-foreground/70",
+                      ? "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]"
+                      : "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground-secondary)] group-hover:bg-[var(--color-background-button-secondary)] group-hover:text-[var(--color-text-foreground)]",
                   )}
                 >
                   {shortcutKey}
@@ -178,7 +179,9 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
                   </span>
                 ) : null}
               </div>
-              {isSelected ? <CheckIcon className="size-3.5 shrink-0 text-blue-400" /> : null}
+              {isSelected ? (
+                <CheckIcon className="size-3.5 shrink-0 text-[var(--color-text-foreground)]" />
+              ) : null}
             </button>
           );
         })}

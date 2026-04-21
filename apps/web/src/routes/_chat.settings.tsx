@@ -198,7 +198,7 @@ function SettingsRow({
 }) {
   return (
     <div
-      className="rounded-xl border border-border/50 bg-card/50 px-4 py-3.5 transition-colors hover:bg-accent"
+      className="rounded-xl border border-[color:var(--color-border-light)] bg-[var(--color-background-panel)] px-4 py-3.5 transition-colors hover:bg-[var(--sidebar-accent)]"
       data-slot="settings-row"
     >
       <div
@@ -1102,8 +1102,17 @@ function SettingsRouteView() {
           />
 
           <div className="space-y-3 pt-1">
-            <ThemePackEditor variant="dark" />
-            <ThemePackEditor variant="light" />
+            {theme === "system" ? (
+              <div className="rounded-xl border border-[color:var(--color-border)] bg-[var(--color-background-elevated-secondary)] px-4 py-3 text-xs text-[var(--color-text-foreground-secondary)]">
+                System theme is currently resolving to{" "}
+                <span className="font-medium text-[var(--color-text-foreground)]">
+                  {resolvedTheme}
+                </span>
+                . Edit either slot below; the active one updates immediately.
+              </div>
+            ) : null}
+            <ThemePackEditor variant="dark" isActive={resolvedTheme === "dark"} mode={theme} />
+            <ThemePackEditor variant="light" isActive={resolvedTheme === "light"} mode={theme} />
           </div>
 
           <SettingsRow
@@ -2119,7 +2128,7 @@ function SettingsRouteView() {
   };
 
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground">
       <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
         {/* Header */}
         {isElectron ? (

@@ -646,14 +646,10 @@ function SidebarInset({ className, children, ...props }: React.ComponentProps<"m
       className={cn(
         // Keep caller layout classes on the outer shell so route-level height and
         // overflow constraints still apply after the inner-surface refactor.
-        "relative flex min-h-0 min-w-0 w-full flex-1 flex-col bg-background",
+        "relative flex min-h-0 min-w-0 w-full flex-1 flex-col bg-transparent",
         "md:peer-data-[variant=sidebar]:peer-data-[side=left]:peer-data-[state=expanded]:-ms-[var(--sidebar-width)]",
         "md:peer-data-[variant=sidebar]:peer-data-[side=left]:peer-data-[state=expanded]:w-[calc(100%+var(--sidebar-width))]",
         "md:peer-data-[variant=sidebar]:peer-data-[side=left]:peer-data-[state=expanded]:ps-[var(--sidebar-width)]",
-        // Clip the shell's bg to the content-box so the padding area behind the
-        // sidebar stays transparent (allows native vibrancy), while still filling
-        // the rounded-corner gaps of the inner surface with bg-background.
-        "md:peer-data-[variant=sidebar]:peer-data-[side=left]:peer-data-[state=expanded]:bg-clip-content",
         "md:peer-data-[variant=inset]:peer-data-[state=collapsed]:ms-2 md:peer-data-[variant=inset]:m-2 md:peer-data-[variant=inset]:ms-0 md:peer-data-[variant=inset]:rounded-xl md:peer-data-[variant=inset]:shadow-sm/5",
         className,
       )}
