@@ -29,7 +29,7 @@ describe("normalizeProviderStatusForLocalConfig", () => {
       available: true,
       status: "warning",
       message:
-        "Gemini uses a custom local binary path in this app. Availability will be confirmed when you start a Gemini session.",
+        "Gemini uses a custom local binary path in this app. Availability will be confirmed when you start a session.",
     });
   });
 

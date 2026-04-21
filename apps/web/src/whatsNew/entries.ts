@@ -22,6 +22,96 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.0.33",
+    date: "Apr 20",
+    features: [
+      {
+        id: "local-folder-browsing-in-composer",
+        title: "📂 Browse local folders right from the composer",
+        description:
+          "Folder mentions now open a real local directory picker, so you can drill into nearby files and attach the right path without leaving the chat flow.",
+      },
+      {
+        id: "cleaner-file-and-folder-mentions",
+        title: "🗂️ Cleaner file and folder mentions",
+        description:
+          "Mention chips, file trees, and changed-file rows now use a lighter shared icon system that keeps paths easier to scan across the app.",
+      },
+      {
+        id: "desktop-browser-and-runtime-upgrades",
+        title: "🌐 Stronger desktop browser runtime",
+        description:
+          "The desktop browser path picked up better IPC plumbing, screenshots, clipboard support, and more efficient state syncing for browser-driven tasks.",
+      },
+      {
+        id: "safer-startup-and-provider-recovery",
+        title: "🛟 Smoother startup and provider recovery",
+        description:
+          "Project hydration, desktop startup, auth visibility, and aborted-turn cleanup were tightened up so sessions recover more predictably after interruptions.",
+      },
+    ],
+  },
+  {
+    version: "0.0.32",
+    date: "Apr 19",
+    features: [
+      {
+        id: "steering-conversation-label",
+        title: "↪︎ Steering messages are clearly marked",
+        description:
+          "Messages sent with steering now keep a lightweight 'Steering conversation' label above the bubble, even after the app reconciles with the server.",
+      },
+      {
+        id: "calmer-foreground-update-checks",
+        title: "🚦 Less aggressive background return checks",
+        description:
+          "Desktop update checks now wait for a real background return instead of reacting to every tiny blur/focus bounce.",
+      },
+      {
+        id: "update-check-timeout-recovery",
+        title: "🛟 No more stuck checking state",
+        description:
+          "If the updater never answers, DP Code now times out and recovers instead of hanging on a permanent Checking status.",
+      },
+    ],
+  },
+  {
+    version: "0.0.31",
+    date: "Apr 19",
+    features: [
+      {
+        id: "gemini-provider-support",
+        title: "♊ Gemini support is here",
+        description:
+          "Use Gemini alongside Codex and Claude Agent, with provider-aware models and handoff support built into the app.",
+      },
+      {
+        id: "custom-provider-binaries",
+        title: "🛠️ Custom binary paths for every provider",
+        description:
+          "Point DP Code at your own Codex, Claude, or Gemini binary when your setup lives outside the default install path.",
+      },
+      {
+        id: "assistant-selections-as-context",
+        title: "📎 Reuse assistant replies as attachments",
+        description:
+          "Select parts of an assistant response and send them back as structured context in your next prompt.",
+      },
+      {
+        id: "stronger-thread-continuity",
+        title: "🧵 Better thread continuity",
+        description:
+          "The app now remembers your last open thread, carries pull request context into draft threads, and keeps sidebar state more stable.",
+      },
+      {
+        id: "stability-and-update-polish",
+        title: "🩹 Smoother recovery and update checks",
+        description:
+          "Project creation recovery, foreground update checks, and a few rough edges around long messages and download state have been tightened up.",
+      },
+    ],
+  },
+  {
     version: "0.0.30",
     date: "Apr 18",
     features: [

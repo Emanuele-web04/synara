@@ -9,6 +9,7 @@ import {
 
 import {
   applyClaudePromptEffortPrefix,
+  formatModelDisplayName,
   getDefaultContextWindow,
   getDefaultModel,
   getGeminiThinkingModelAlias,
@@ -274,6 +275,21 @@ describe("applyClaudePromptEffortPrefix", () => {
 
   it("leaves non-ultrathink prompts unchanged", () => {
     expect(applyClaudePromptEffortPrefix("Investigate this", "high")).toBe("Investigate this");
+  });
+});
+
+describe("formatModelDisplayName", () => {
+  it("returns built-in display names for known models", () => {
+    expect(formatModelDisplayName("gpt-5.3-codex")).toBe("GPT-5.3 Codex");
+  });
+
+  it("humanizes unknown GPT model slugs", () => {
+    expect(formatModelDisplayName("gpt-5.1-codex-max")).toBe("GPT-5.1 Codex Max");
+    expect(formatModelDisplayName("gpt-5.1-codex-mini")).toBe("GPT-5.1 Codex Mini");
+  });
+
+  it("leaves non-GPT custom slugs unchanged", () => {
+    expect(formatModelDisplayName("custom/internal-model")).toBe("custom/internal-model");
   });
 });
 

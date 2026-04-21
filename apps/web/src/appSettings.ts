@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import { Option, Schema } from "effect";
 import { TrimmedNonEmptyString, ProviderKind, type ProviderStartOptions } from "@t3tools/contracts";
 import {
+  formatModelDisplayName,
   getDefaultModel,
   getModelOptions,
   normalizeModelSlug,
@@ -229,7 +230,7 @@ export function getAppModelOptions(
     seen.add(slug);
     options.push({
       slug,
-      name: slug,
+      name: formatModelDisplayName(slug) ?? slug,
       isCustom: true,
     });
   }
@@ -245,7 +246,7 @@ export function getAppModelOptions(
   ) {
     options.push({
       slug: normalizedSelectedModel,
-      name: normalizedSelectedModel,
+      name: formatModelDisplayName(normalizedSelectedModel) ?? normalizedSelectedModel,
       isCustom: true,
     });
   }

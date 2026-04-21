@@ -27,6 +27,7 @@ import {
   ensureTerminalIdsForPreset,
   type WorkspaceLayoutPresetId,
 } from "~/workspaceTerminalLayoutPresets";
+import { terminalRuntimeRegistry } from "./terminal/terminalRuntimeRegistry";
 
 function randomTerminalId(): string {
   if (typeof crypto.randomUUID === "function") {
@@ -281,6 +282,7 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
       if (!confirmed) {
         return;
       }
+      terminalRuntimeRegistry.disposeTerminal(threadId, terminalId);
       const fallbackExitWrite = () =>
         api?.terminal.write({ threadId, terminalId, data: "exit\n" }).catch(() => undefined);
 

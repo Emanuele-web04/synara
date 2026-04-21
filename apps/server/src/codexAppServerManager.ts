@@ -1,6 +1,9 @@
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import readline from "node:readline";
 
 import {
@@ -98,6 +101,7 @@ interface CodexSessionContext {
   pendingUserInputs: Map<ApprovalRequestId, PendingUserInputRequest>;
   collabReceiverTurns: Map<string, TurnId>;
   collabReceiverParents: Map<string, string>;
+  reviewTurnIds: Set<TurnId>;
   nextRequestId: number;
   stopping: boolean;
   discovery?: boolean;
@@ -203,6 +207,7 @@ export interface CodexThreadTurnSnapshot {
 export interface CodexThreadSnapshot {
   threadId: string;
   turns: CodexThreadTurnSnapshot[];
+  cwd?: string | null;
 }
 
 const CODEX_VERSION_CHECK_TIMEOUT_MS = 4_000;
@@ -227,6 +232,9 @@ const CODEX_DEFAULT_MODEL = "gpt-5.3-codex";
 const CODEX_SPARK_MODEL = "gpt-5.3-codex-spark";
 const CODEX_SPARK_DISABLED_PLAN_TYPES = new Set<CodexPlanType>(["free", "go", "plus"]);
 const CODEX_PROCESS_SHELL_ENV_NAMES = ["PATH", "SSH_AUTH_SOCK"] as const;
+const CODEX_BROWSER_USE_PIPE_PATH =
+  process.platform === "win32" ? String.raw`\\.\pipe\codex-browser-use` : "/tmp/codex-browser-use";
+const NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS = "NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS";
 
 function asObject(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object") {
@@ -273,6 +281,20 @@ export function buildCodexProcessEnv(
       }
     } catch {
       // Keep inherited environment if shell lookup fails.
+    }
+  }
+
+  if (platform !== "win32") {
+    const allowedSockets =
+      effectiveEnv[NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS]
+        ?.split(",")
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0) ?? [];
+    if (!allowedSockets.includes(CODEX_BROWSER_USE_PIPE_PATH)) {
+      effectiveEnv[NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS] = [
+        ...allowedSockets,
+        CODEX_BROWSER_USE_PIPE_PATH,
+      ].join(",");
     }
   }
 
@@ -333,6 +355,21 @@ export function readCodexAccountSnapshot(response: unknown): CodexAccountSnapsho
     sparkEnabled: true,
   };
 }
+
+const CODEX_BROWSER_TOOL_ROUTING_INSTRUCTIONS = `
+
+## Browser tool routing
+
+Prefer the built-in in-app browser for browser work whenever possible.
+
+When the user asks to inspect a page, navigate a site, read what is visible in the browser, take a browser screenshot, or interact with content already open in chat, use the in-app browser path first.
+
+Use \`Computer Use\` only when at least one of these is true:
+- the user explicitly asks to use \`Computer Use\`
+- the task is outside the in-app browser (desktop apps, OS settings, system UI, other app windows)
+- the in-app browser cannot complete the task and a broader desktop fallback is required
+
+Do not choose \`Computer Use\` first for ordinary browser inspection, browser screenshots, or browser navigation when the in-app browser can handle the request.`;
 
 export const CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Plan Mode (Conversational)
 
@@ -454,7 +491,7 @@ plan content should be human and agent digestible. The final plan must be plan-o
 Do not ask "should I proceed?" in the final output. The user can easily switch out of Plan mode and request implementation if you have included a \`<proposed_plan>\` block in your response. Alternatively, they can decide to stay in Plan mode and continue refining the plan.
 
 Only produce at most one \`<proposed_plan>\` block per turn, and only when you are presenting a complete spec.
-</collaboration_mode>`;
+</collaboration_mode>${CODEX_BROWSER_TOOL_ROUTING_INSTRUCTIONS}`;
 
 export const CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Collaboration Mode: Default
 
@@ -467,12 +504,12 @@ Your active mode changes only when new developer instructions with a different \
 The \`request_user_input\` tool is unavailable in Default mode. If you call it while in Default mode, it will return an error.
 
 In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.
-</collaboration_mode>`;
+</collaboration_mode>${CODEX_BROWSER_TOOL_ROUTING_INSTRUCTIONS}`;
 
 function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
-  readonly approvalPolicy: "untrusted" | "never";
-  readonly sandbox: "read-only" | "danger-full-access";
-} {
+  readonly approvalPolicy: "untrusted";
+  readonly sandbox: "read-only";
+} | null {
   if (runtimeMode === "approval-required") {
     return {
       approvalPolicy: "untrusted",
@@ -480,10 +517,14 @@ function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
     };
   }
 
-  return {
-    approvalPolicy: "never",
-    sandbox: "danger-full-access",
-  };
+  return null;
+}
+
+export function ensureIsolatedScratchWorkspace(threadId: ThreadId): string {
+  const workspaceRoot = path.join(tmpdir(), "dpcode-codex-workspaces");
+  const workspaceDir = path.join(workspaceRoot, String(threadId));
+  mkdirSync(workspaceDir, { recursive: true });
+  return workspaceDir;
 }
 
 export function resolveCodexModelForAccount(
@@ -505,7 +546,9 @@ export function resolveCodexModelForAccount(
 function killChildTree(child: ChildProcessWithoutNullStreams): void {
   if (process.platform === "win32" && child.pid !== undefined) {
     try {
-      spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+      spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
+        stdio: "ignore",
+      });
       return;
     } catch {
       // fallback to direct kill
@@ -661,7 +704,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     let context: CodexSessionContext | undefined;
 
     try {
-      const resolvedCwd = input.cwd ?? process.cwd();
+      const resolvedCwd = input.cwd ?? ensureIsolatedScratchWorkspace(threadId);
 
       const session: ProviderSession = {
         provider: "codex",
@@ -706,6 +749,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         pendingUserInputs: new Map(),
         collabReceiverTurns: new Map(),
         collabReceiverParents: new Map(),
+        reviewTurnIds: new Set(),
         nextRequestId: 1,
         stopping: false,
       };
@@ -744,8 +788,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const sessionOverrides = {
         model: normalizedModel ?? null,
         ...(input.serviceTier !== undefined ? { serviceTier: input.serviceTier } : {}),
-        cwd: input.cwd ?? null,
-        ...mapCodexRuntimeMode(input.runtimeMode ?? "full-access"),
+        cwd: resolvedCwd,
+        ...(mapCodexRuntimeMode(input.runtimeMode ?? "full-access") ?? {}),
       };
 
       const threadStartParams = {
@@ -1099,6 +1143,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       throw new Error("review/start response did not include a turn id.");
     }
     const turnId = TurnId.makeUnsafe(turnIdRaw);
+    context.reviewTurnIds.add(turnId);
+    console.log("[codex-review] review/start acknowledged", {
+      threadId: context.session.threadId,
+      providerThreadId,
+      turnId,
+      target: input.target.type,
+    });
 
     this.updateSession(context, {
       status: "running",
@@ -1133,13 +1184,86 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         resumeCursor: context.session.resumeCursor,
       });
     if (!effectiveTurnId || !providerThreadId) {
+      console.log("[codex-review] turn/interrupt skipped", {
+        threadId,
+        requestedTurnId: turnId ?? null,
+        activeTurnId: context.session.activeTurnId ?? null,
+        providerThreadId: providerThreadId ?? null,
+      });
       return;
     }
 
-    await this.sendRequest(context, "turn/interrupt", {
-      threadId: providerThreadId,
+    console.log("[codex-review] turn/interrupt requested", {
+      threadId,
+      providerThreadId,
       turnId: effectiveTurnId,
+      isTrackedReviewTurn: context.reviewTurnIds.has(effectiveTurnId),
     });
+    try {
+      await this.sendRequest(context, "turn/interrupt", {
+        threadId: providerThreadId,
+        turnId: effectiveTurnId,
+      });
+      console.log("[codex-review] turn/interrupt acknowledged", {
+        threadId,
+        providerThreadId,
+        turnId: effectiveTurnId,
+      });
+    } catch (error) {
+      console.log("[codex-review] turn/interrupt failed", {
+        threadId,
+        providerThreadId,
+        turnId: effectiveTurnId,
+        isTrackedReviewTurn: context.reviewTurnIds.has(effectiveTurnId),
+        error: error instanceof Error ? error.message : String(error),
+      });
+      if (!context.reviewTurnIds.has(effectiveTurnId) || !this.isTurnInterruptTimeout(error)) {
+        throw error;
+      }
+
+      const snapshot = await this.readThread(threadId);
+      const latestReviewTurnId = this.findLatestReviewTurnId(snapshot);
+      console.log("[codex-review] review interrupt recovery snapshot", {
+        threadId,
+        currentTurnId: effectiveTurnId,
+        latestReviewTurnId: latestReviewTurnId ?? null,
+        latestReviewTurnExited: latestReviewTurnId
+          ? this.isExitedReviewTurn(snapshot, latestReviewTurnId)
+          : false,
+        snapshotTurnIds: snapshot.turns.map((turn) => String(turn.id)),
+      });
+
+      if (latestReviewTurnId && this.isExitedReviewTurn(snapshot, latestReviewTurnId)) {
+        console.log("[codex-review] settling review from thread/read exitedReviewMode", {
+          threadId,
+          turnId: latestReviewTurnId,
+        });
+        this.settleTrackedReview(context, {
+          completedTurnId: latestReviewTurnId,
+          reason: "review exited via thread/read",
+        });
+        return;
+      }
+
+      if (latestReviewTurnId && latestReviewTurnId !== effectiveTurnId) {
+        console.log("[codex-review] retrying turn/interrupt with refreshed review turn", {
+          threadId,
+          previousTurnId: effectiveTurnId,
+          nextTurnId: latestReviewTurnId,
+        });
+        await this.sendRequest(context, "turn/interrupt", {
+          threadId: providerThreadId,
+          turnId: latestReviewTurnId,
+        });
+        context.reviewTurnIds.add(latestReviewTurnId);
+        this.updateSession(context, {
+          activeTurnId: latestReviewTurnId,
+        });
+        return;
+      }
+
+      throw error;
+    }
   }
 
   async readThread(threadId: ThreadId): Promise<CodexThreadSnapshot> {
@@ -1160,6 +1284,18 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     return this.parseThreadSnapshot("thread/read", response);
   }
 
+  async readExternalThread(input: {
+    externalThreadId: string;
+    cwd?: string;
+  }): Promise<CodexThreadSnapshot> {
+    const context = await this.resolveContextForDiscovery(undefined, input.cwd);
+    const response = await this.sendRequest(context, "thread/read", {
+      threadId: input.externalThreadId,
+      includeTurns: true,
+    });
+    return this.parseThreadSnapshot("thread/read", response);
+  }
+
   async forkThread(input: ProviderForkThreadInput): Promise<ProviderForkThreadResult> {
     const threadId = input.threadId;
     const now = new Date().toISOString();
@@ -1171,7 +1307,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         throw new Error("Provider fork is missing the source thread resume id.");
       }
 
-      const resolvedCwd = input.cwd ?? process.cwd();
+      const resolvedCwd = input.cwd ?? ensureIsolatedScratchWorkspace(threadId);
       const session: ProviderSession = {
         provider: "codex",
         status: "connecting",
@@ -1223,6 +1359,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         pendingUserInputs: new Map(),
         collabReceiverTurns: new Map(),
         collabReceiverParents: new Map(),
+        reviewTurnIds: new Set(),
         nextRequestId: 1,
         stopping: false,
       };
@@ -1253,8 +1390,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ...(input.modelSelection?.provider === "codex" && input.modelSelection.options?.fastMode
           ? { serviceTier: "fast" as const }
           : {}),
-        ...(input.cwd ? { cwd: input.cwd } : {}),
-        ...mapCodexRuntimeMode(input.runtimeMode),
+        cwd: resolvedCwd,
+        ...(mapCodexRuntimeMode(input.runtimeMode) ?? {}),
       };
 
       this.emitLifecycleEvent(
@@ -1772,6 +1909,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       pendingUserInputs: new Map(),
       collabReceiverTurns: new Map(),
       collabReceiverParents: new Map(),
+      reviewTurnIds: new Set(),
       nextRequestId: 1,
       stopping: false,
       discovery: true,
@@ -1970,7 +2108,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         this.readString(this.readObject(notification.params)?.thread, "id"),
       );
       if (startedThreadId && !isChildConversation) {
-        this.updateSession(context, { resumeCursor: { threadId: startedThreadId } });
+        this.updateSession(context, {
+          resumeCursor: { threadId: startedThreadId },
+        });
       }
       return;
     }
@@ -1980,6 +2120,18 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         return;
       }
       const turnId = toTurnId(this.readString(this.readObject(notification.params)?.turn, "id"));
+      if (
+        turnId !== undefined &&
+        context.session.activeTurnId !== undefined &&
+        context.reviewTurnIds.has(context.session.activeTurnId)
+      ) {
+        context.reviewTurnIds.add(turnId);
+        console.log("[codex-review] extending tracked review turn set on turn/started", {
+          threadId: context.session.threadId,
+          previousTurnId: context.session.activeTurnId,
+          nextTurnId: turnId,
+        });
+      }
       this.updateSession(context, {
         status: "running",
         activeTurnId: turnId,
@@ -1992,6 +2144,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         return;
       }
       context.collabReceiverTurns.clear();
+      if (rawRoute.turnId) {
+        context.reviewTurnIds.delete(rawRoute.turnId);
+      }
       const turn = this.readObject(notification.params, "turn");
       const status = this.readString(turn, "status");
       const errorMessageRaw = this.readString(this.readObject(turn, "error"), "message");
@@ -2004,6 +2159,76 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         activeTurnId: undefined,
         lastError: errorMessage ?? context.session.lastError,
       });
+      return;
+    }
+
+    if (notification.method === "turn/aborted") {
+      if (isChildConversation) {
+        return;
+      }
+      context.collabReceiverTurns.clear();
+      if (rawRoute.turnId) {
+        context.reviewTurnIds.delete(rawRoute.turnId);
+      }
+      this.updateSession(context, {
+        status: "ready",
+        activeTurnId: undefined,
+        lastError: undefined,
+      });
+      return;
+    }
+
+    if (this.isExitedReviewModeNotification(notification)) {
+      if (isChildConversation) {
+        return;
+      }
+      const item = this.readObject(notification.params, "item");
+      const reviewTurnId = toTurnId(this.readString(item, "id")) ?? rawRoute.turnId;
+      const reviewTurnTracked =
+        reviewTurnId !== undefined ? context.reviewTurnIds.has(reviewTurnId) : false;
+      const activeTurnTracked =
+        context.session.activeTurnId !== undefined &&
+        context.reviewTurnIds.has(context.session.activeTurnId);
+      console.log("[codex-review] exitedReviewMode notification", {
+        threadId: context.session.threadId,
+        reviewTurnId: reviewTurnId ?? null,
+        activeTurnId: context.session.activeTurnId ?? null,
+        reviewTurnTracked,
+        activeTurnTracked,
+      });
+      if (
+        reviewTurnId !== undefined &&
+        context.session.activeTurnId !== undefined &&
+        reviewTurnId !== context.session.activeTurnId &&
+        !reviewTurnTracked &&
+        !activeTurnTracked
+      ) {
+        console.log("[codex-review] exitedReviewMode ignored due to turn mismatch", {
+          threadId: context.session.threadId,
+          reviewTurnId,
+          activeTurnId: context.session.activeTurnId,
+        });
+        return;
+      }
+      // `review/start` can emit the final review result via `exitedReviewMode`
+      // before the terminal `turn/completed` notification arrives. If that
+      // completion never shows up, settle the session here instead of leaving
+      // native review stuck in "running" forever.
+      console.log("[codex-review] settling review from exitedReviewMode notification", {
+        threadId: context.session.threadId,
+        reviewTurnId: reviewTurnId ?? null,
+      });
+      this.settleTrackedReview(
+        context,
+        reviewTurnId !== undefined
+          ? {
+              completedTurnId: reviewTurnId,
+              reason: "review exited via exitedReviewMode",
+            }
+          : {
+              reason: "review exited via exitedReviewMode",
+            },
+      );
       return;
     }
 
@@ -2201,6 +2426,51 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     this.emit("event", event);
   }
 
+  private settleTrackedReview(
+    context: CodexSessionContext,
+    input: {
+      readonly completedTurnId?: TurnId;
+      readonly reason: string;
+    },
+  ): void {
+    const terminalTurnId =
+      context.session.activeTurnId !== undefined &&
+      context.reviewTurnIds.has(context.session.activeTurnId)
+        ? context.session.activeTurnId
+        : input.completedTurnId !== undefined && context.reviewTurnIds.has(input.completedTurnId)
+          ? input.completedTurnId
+          : context.reviewTurnIds.values().next().value;
+
+    this.updateSession(context, {
+      status: "ready",
+      activeTurnId: undefined,
+      lastError: undefined,
+    });
+
+    context.reviewTurnIds.clear();
+
+    if (!terminalTurnId) {
+      return;
+    }
+
+    this.emitEvent({
+      id: EventId.makeUnsafe(randomUUID()),
+      kind: "notification",
+      provider: "codex",
+      threadId: context.session.threadId,
+      createdAt: new Date().toISOString(),
+      method: "turn/completed",
+      turnId: terminalTurnId,
+      message: input.reason,
+      payload: {
+        turn: {
+          id: terminalTurnId,
+          status: "completed",
+        },
+      },
+    });
+  }
+
   private assertSupportedCodexCliVersion(input: {
     readonly binaryPath: string;
     readonly cwd: string;
@@ -2235,11 +2505,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   private parseThreadSnapshot(method: string, response: unknown): CodexThreadSnapshot {
     const responseRecord = this.readObject(response);
+    const threadRecord = this.readObject(responseRecord, "thread");
     const threadIdRaw = this.readThreadIdFromResponse(method, responseRecord);
     const turnsRaw =
-      this.readArray(this.readObject(responseRecord, "thread"), "turns") ??
-      this.readArray(responseRecord, "turns") ??
-      [];
+      this.readArray(threadRecord, "turns") ?? this.readArray(responseRecord, "turns") ?? [];
     const turns = turnsRaw.map((turnValue, index) => {
       const turn = this.readObject(turnValue);
       const turnIdRaw = this.readString(turn, "id") ?? `${threadIdRaw}:turn:${index + 1}`;
@@ -2254,6 +2523,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     return {
       threadId: threadIdRaw,
       turns,
+      cwd: this.readString(threadRecord, "cwd") ?? this.readString(responseRecord, "cwd") ?? null,
     };
   }
 
@@ -2461,6 +2731,56 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     return typeof candidate === "boolean" ? candidate : undefined;
   }
 
+  private isExitedReviewModeNotification(notification: JsonRpcNotification): boolean {
+    if (notification.method !== "item/completed") {
+      return false;
+    }
+    const item = this.readObject(notification.params, "item");
+    const itemType = this.readString(item, "type") ?? this.readString(item, "kind");
+    return itemType === "exitedReviewMode";
+  }
+
+  private isTurnInterruptTimeout(error: unknown): boolean {
+    return error instanceof Error && error.message.includes("Timed out waiting for turn/interrupt");
+  }
+
+  private normalizeItemType(raw: unknown): string {
+    if (typeof raw !== "string") return "";
+    return raw
+      .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+      .replace(/[._/-]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+  }
+
+  private turnHasReviewItem(
+    turn: CodexThreadTurnSnapshot,
+    itemType: "entered" | "exited",
+  ): boolean {
+    return turn.items.some((item) => {
+      const record = this.readObject(item);
+      const normalized = this.normalizeItemType(
+        this.readString(record, "type") ?? this.readString(record, "kind"),
+      );
+      return itemType === "entered"
+        ? normalized.includes("entered review mode")
+        : normalized.includes("exited review mode");
+    });
+  }
+
+  private findLatestReviewTurnId(snapshot: CodexThreadSnapshot): TurnId | undefined {
+    const latestReviewTurn = [...snapshot.turns]
+      .reverse()
+      .find((turn) => this.turnHasReviewItem(turn, "entered"));
+    return latestReviewTurn?.id;
+  }
+
+  private isExitedReviewTurn(snapshot: CodexThreadSnapshot, turnId: TurnId): boolean {
+    const turn = snapshot.turns.find((entry) => entry.id === turnId);
+    return turn ? this.turnHasReviewItem(turn, "exited") : false;
+  }
+
   private parseSkillDescriptor(skill: unknown): ProviderSkillDescriptor | undefined {
     const record = this.readObject(skill);
     if (!record) return undefined;
@@ -2485,7 +2805,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
                 ? { displayName: this.readString(display, "displayName") }
                 : {}),
               ...(this.readString(display, "shortDescription")
-                ? { shortDescription: this.readString(display, "shortDescription") }
+                ? {
+                    shortDescription: this.readString(display, "shortDescription"),
+                  }
                 : {}),
             },
           }
@@ -2632,10 +2954,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ? { displayName: this.readString(record, "displayName")?.trim() }
         : {}),
       ...(this.readString(record, "shortDescription")?.trim()
-        ? { shortDescription: this.readString(record, "shortDescription")?.trim() }
+        ? {
+            shortDescription: this.readString(record, "shortDescription")?.trim(),
+          }
         : {}),
       ...(this.readString(record, "longDescription")?.trim()
-        ? { longDescription: this.readString(record, "longDescription")?.trim() }
+        ? {
+            longDescription: this.readString(record, "longDescription")?.trim(),
+          }
         : {}),
       ...(this.readString(record, "developerName")?.trim()
         ? { developerName: this.readString(record, "developerName")?.trim() }
@@ -2648,10 +2974,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ? { websiteUrl: this.readString(record, "websiteUrl")?.trim() }
         : {}),
       ...(this.readString(record, "privacyPolicyUrl")?.trim()
-        ? { privacyPolicyUrl: this.readString(record, "privacyPolicyUrl")?.trim() }
+        ? {
+            privacyPolicyUrl: this.readString(record, "privacyPolicyUrl")?.trim(),
+          }
         : {}),
       ...(this.readString(record, "termsOfServiceUrl")?.trim()
-        ? { termsOfServiceUrl: this.readString(record, "termsOfServiceUrl")?.trim() }
+        ? {
+            termsOfServiceUrl: this.readString(record, "termsOfServiceUrl")?.trim(),
+          }
         : {}),
       ...(defaultPrompt.length > 0 ? { defaultPrompt } : {}),
       ...(this.readString(record, "brandColor")?.trim()

@@ -18,12 +18,15 @@ export function resolveThreadWorkspaceCwd(input: {
   };
   readonly projects: ReadonlyArray<{
     readonly id: ProjectId;
+    readonly kind?: "project" | "chat" | undefined;
     readonly workspaceRoot: string;
   }>;
 }): string | undefined {
-  const projectCwd = input.projects.find(
-    (project) => project.id === input.thread.projectId,
-  )?.workspaceRoot;
+  const project = input.projects.find((entry) => entry.id === input.thread.projectId);
+  const projectCwd =
+    project?.kind === "chat" && !input.thread.worktreePath
+      ? null
+      : (project?.workspaceRoot ?? null);
   return (
     resolveSharedThreadWorkspaceCwd({
       projectCwd,

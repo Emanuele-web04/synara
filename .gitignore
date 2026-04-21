@@ -24,3 +24,11 @@ __screenshots__/
 /.pi/
 /.tmp/
 /~/
+/bootstrap.js
+/preload.js
+/browser-sidebar-comment-preload.js
+/main-*.js
+/main-*.js.map
+/browser-sidebar-comment-preload.js.map
+/preload.js.map
+/bootstrap.js.map

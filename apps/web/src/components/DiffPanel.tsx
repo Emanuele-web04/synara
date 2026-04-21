@@ -49,7 +49,7 @@ import { resolveDiffPanelThread } from "./DiffPanel.logic";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { Button } from "./ui/button";
 import { ToggleGroup, Toggle } from "./ui/toggle-group";
-import { VscodeEntryIcon } from "./chat/VscodeEntryIcon";
+import { FileEntryIcon } from "./chat/FileEntryIcon";
 import { type SplitViewPanePanelState } from "../splitViewStore";
 
 type DiffRenderMode = "stacked" | "split";
@@ -1010,7 +1010,7 @@ export default function DiffPanel({
                             collapsed: isCollapsed,
                           }}
                           renderHeaderPrefix={() => (
-                            <VscodeEntryIcon
+                            <FileEntryIcon
                               pathValue={filePath}
                               kind="file"
                               theme={resolvedTheme}

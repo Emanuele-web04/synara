@@ -10,6 +10,7 @@ import {
   ChatAttachment,
   OrchestrationMessageRole,
   OrchestrationMessageSource,
+  TurnDispatchMode,
   MessageId,
   ProviderMentionReference,
   ProviderSkillReference,
@@ -18,7 +19,7 @@ import {
   IsoDateTime,
 } from "@t3tools/contracts";
 import { Schema, ServiceMap } from "effect";
-import type { Effect } from "effect";
+import type { Effect, Option } from "effect";
 
 import type { ProjectionRepositoryError } from "../Errors.ts";
 
@@ -31,6 +32,7 @@ export const ProjectionThreadMessage = Schema.Struct({
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
   skills: Schema.optional(Schema.Array(ProviderSkillReference)),
   mentions: Schema.optional(Schema.Array(ProviderMentionReference)),
+  dispatchMode: Schema.optional(TurnDispatchMode),
   isStreaming: Schema.Boolean,
   source: OrchestrationMessageSource,
   createdAt: IsoDateTime,
@@ -42,6 +44,11 @@ export const ListProjectionThreadMessagesInput = Schema.Struct({
   threadId: ThreadId,
 });
 export type ListProjectionThreadMessagesInput = typeof ListProjectionThreadMessagesInput.Type;
+
+export const GetProjectionThreadMessageInput = Schema.Struct({
+  messageId: MessageId,
+});
+export type GetProjectionThreadMessageInput = typeof GetProjectionThreadMessageInput.Type;
 
 export const DeleteProjectionThreadMessagesInput = Schema.Struct({
   threadId: ThreadId,
@@ -60,6 +67,13 @@ export interface ProjectionThreadMessageRepositoryShape {
   readonly upsert: (
     message: ProjectionThreadMessage,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  /**
+   * Read a projected thread message by id.
+   */
+  readonly getByMessageId: (
+    input: GetProjectionThreadMessageInput,
+  ) => Effect.Effect<Option.Option<ProjectionThreadMessage>, ProjectionRepositoryError>;
 
   /**
    * List projected thread messages for a thread.

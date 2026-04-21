@@ -274,6 +274,7 @@ export function projectEvent(
             associatedWorktreePath: payload.associatedWorktreePath,
             associatedWorktreeBranch: payload.associatedWorktreeBranch,
             associatedWorktreeRef: payload.associatedWorktreeRef,
+            createBranchFlowCompleted: payload.createBranchFlowCompleted,
             parentThreadId: payload.parentThreadId,
             subagentAgentId: payload.subagentAgentId,
             subagentNickname: payload.subagentNickname,
@@ -344,40 +345,55 @@ export function projectEvent(
 
     case "thread.meta-updated":
       return decodeForEvent(ThreadMetaUpdatedPayload, event.payload, event.type, "payload").pipe(
-        Effect.map((payload) => ({
-          ...nextBase,
-          threads: updateThread(nextBase.threads, payload.threadId, {
-            ...(payload.title !== undefined ? { title: payload.title } : {}),
-            ...(payload.modelSelection !== undefined
-              ? { modelSelection: payload.modelSelection }
-              : {}),
-            ...(payload.envMode !== undefined ? { envMode: payload.envMode } : {}),
-            ...(payload.branch !== undefined ? { branch: payload.branch } : {}),
-            ...(payload.worktreePath !== undefined ? { worktreePath: payload.worktreePath } : {}),
-            ...(payload.associatedWorktreePath !== undefined
-              ? { associatedWorktreePath: payload.associatedWorktreePath }
-              : {}),
-            ...(payload.associatedWorktreeBranch !== undefined
-              ? { associatedWorktreeBranch: payload.associatedWorktreeBranch }
-              : {}),
-            ...(payload.associatedWorktreeRef !== undefined
-              ? { associatedWorktreeRef: payload.associatedWorktreeRef }
-              : {}),
-            ...(payload.parentThreadId !== undefined
-              ? { parentThreadId: payload.parentThreadId }
-              : {}),
-            ...(payload.subagentAgentId !== undefined
-              ? { subagentAgentId: payload.subagentAgentId }
-              : {}),
-            ...(payload.subagentNickname !== undefined
-              ? { subagentNickname: payload.subagentNickname }
-              : {}),
-            ...(payload.subagentRole !== undefined ? { subagentRole: payload.subagentRole } : {}),
-            ...(payload.lastKnownPr !== undefined ? { lastKnownPr: payload.lastKnownPr } : {}),
-            ...(payload.handoff !== undefined ? { handoff: payload.handoff } : {}),
-            updatedAt: payload.updatedAt,
-          }),
-        })),
+        Effect.map((payload) => {
+          const existingThread =
+            nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
+          const nextCreateBranchFlowCompleted =
+            payload.createBranchFlowCompleted !== undefined
+              ? payload.createBranchFlowCompleted
+              : payload.branch !== undefined &&
+                  existingThread !== null &&
+                  payload.branch !== existingThread.branch
+                ? false
+                : undefined;
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              ...(payload.title !== undefined ? { title: payload.title } : {}),
+              ...(payload.modelSelection !== undefined
+                ? { modelSelection: payload.modelSelection }
+                : {}),
+              ...(payload.envMode !== undefined ? { envMode: payload.envMode } : {}),
+              ...(payload.branch !== undefined ? { branch: payload.branch } : {}),
+              ...(payload.worktreePath !== undefined ? { worktreePath: payload.worktreePath } : {}),
+              ...(payload.associatedWorktreePath !== undefined
+                ? { associatedWorktreePath: payload.associatedWorktreePath }
+                : {}),
+              ...(payload.associatedWorktreeBranch !== undefined
+                ? { associatedWorktreeBranch: payload.associatedWorktreeBranch }
+                : {}),
+              ...(payload.associatedWorktreeRef !== undefined
+                ? { associatedWorktreeRef: payload.associatedWorktreeRef }
+                : {}),
+              ...(nextCreateBranchFlowCompleted !== undefined
+                ? { createBranchFlowCompleted: nextCreateBranchFlowCompleted }
+                : {}),
+              ...(payload.parentThreadId !== undefined
+                ? { parentThreadId: payload.parentThreadId }
+                : {}),
+              ...(payload.subagentAgentId !== undefined
+                ? { subagentAgentId: payload.subagentAgentId }
+                : {}),
+              ...(payload.subagentNickname !== undefined
+                ? { subagentNickname: payload.subagentNickname }
+                : {}),
+              ...(payload.subagentRole !== undefined ? { subagentRole: payload.subagentRole } : {}),
+              ...(payload.lastKnownPr !== undefined ? { lastKnownPr: payload.lastKnownPr } : {}),
+              ...(payload.handoff !== undefined ? { handoff: payload.handoff } : {}),
+              updatedAt: payload.updatedAt,
+            }),
+          };
+        }),
       );
 
     case "thread.runtime-mode-set":

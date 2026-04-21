@@ -40,6 +40,7 @@ const fallbackBrowserStates = new Map<ThreadId, ThreadBrowserState>();
 function defaultBrowserState(threadId: ThreadId): ThreadBrowserState {
   return {
     threadId,
+    version: 0,
     open: false,
     activeTabId: null,
     tabs: [],
@@ -96,6 +97,10 @@ function emitFallbackBrowserState(threadId: ThreadId): ThreadBrowserState {
     listener(state);
   }
   return state;
+}
+
+function markFallbackBrowserStateChanged(state: ThreadBrowserState): void {
+  state.version += 1;
 }
 
 function ensureFallbackBrowserWorkspace(threadId: ThreadId): ThreadBrowserState {
@@ -305,6 +310,8 @@ export function createWsNativeApi(): NativeApi {
     projects: {
       listDirectories: (input) => transport.request(WS_METHODS.projectsListDirectories, input),
       searchEntries: (input) => transport.request(WS_METHODS.projectsSearchEntries, input),
+      searchLocalEntries: (input) =>
+        transport.request(WS_METHODS.projectsSearchLocalEntries, input),
       writeFile: (input) => transport.request(WS_METHODS.projectsWriteFile, input),
     },
     shell: {
@@ -335,9 +342,13 @@ export function createWsNativeApi(): NativeApi {
       status: (input) => transport.request(WS_METHODS.gitStatus, input),
       readWorkingTreeDiff: (input) => transport.request(WS_METHODS.gitReadWorkingTreeDiff, input),
       summarizeDiff: (input) =>
-        transport.request(WS_METHODS.gitSummarizeDiff, input, { timeoutMs: null }),
+        transport.request(WS_METHODS.gitSummarizeDiff, input, {
+          timeoutMs: null,
+        }),
       runStackedAction: (input) =>
-        transport.request(WS_METHODS.gitRunStackedAction, input, { timeoutMs: null }),
+        transport.request(WS_METHODS.gitRunStackedAction, input, {
+          timeoutMs: null,
+        }),
       listBranches: (input) => transport.request(WS_METHODS.gitListBranches, input),
       createWorktree: (input) => transport.request(WS_METHODS.gitCreateWorktree, input),
       createDetachedWorktree: (input) =>
@@ -394,14 +405,18 @@ export function createWsNativeApi(): NativeApi {
     orchestration: {
       getSnapshot: () => transport.request(ORCHESTRATION_WS_METHODS.getSnapshot),
       dispatchCommand: (command) =>
-        transport.request(ORCHESTRATION_WS_METHODS.dispatchCommand, { command }),
+        transport.request(ORCHESTRATION_WS_METHODS.dispatchCommand, {
+          command,
+        }),
       importThread: (input) => transport.request(ORCHESTRATION_WS_METHODS.importThread, input),
       repairState: () => transport.request(ORCHESTRATION_WS_METHODS.repairState),
       getTurnDiff: (input) => transport.request(ORCHESTRATION_WS_METHODS.getTurnDiff, input),
       getFullThreadDiff: (input) =>
         transport.request(ORCHESTRATION_WS_METHODS.getFullThreadDiff, input),
       replayEvents: (fromSequenceExclusive) =>
-        transport.request(ORCHESTRATION_WS_METHODS.replayEvents, { fromSequenceExclusive }),
+        transport.request(ORCHESTRATION_WS_METHODS.replayEvents, {
+          fromSequenceExclusive,
+        }),
       subscribeShell: () => transport.request<void>(ORCHESTRATION_WS_METHODS.subscribeShell, {}),
       unsubscribeShell: () =>
         transport.request<void>(ORCHESTRATION_WS_METHODS.unsubscribeShell, {}),
@@ -440,6 +455,7 @@ export function createWsNativeApi(): NativeApi {
           activeTab.title = defaultBrowserTitle(input.initialUrl);
           activeTab.lastCommittedUrl = input.initialUrl;
         }
+        markFallbackBrowserStateChanged(state);
         return emitFallbackBrowserState(input.threadId);
       },
       close: async (input) => {
@@ -451,6 +467,7 @@ export function createWsNativeApi(): NativeApi {
         state.activeTabId = null;
         state.tabs = [];
         state.lastError = null;
+        markFallbackBrowserStateChanged(state);
         return emitFallbackBrowserState(input.threadId);
       },
       hide: async (input) => {
@@ -466,9 +483,28 @@ export function createWsNativeApi(): NativeApi {
       },
       setPanelBounds: async (input) => {
         if (window.desktopBridge) {
-          return window.desktopBridge.browser.setPanelBounds(input);
+          await window.desktopBridge.browser.setPanelBounds(input);
+          return;
         }
-        return cloneBrowserState(getFallbackBrowserState(input.threadId));
+      },
+      copyScreenshotToClipboard: async (input) => {
+        if (window.desktopBridge) {
+          await window.desktopBridge.browser.copyScreenshotToClipboard(input);
+          return;
+        }
+        throw new Error("Browser screenshots require the desktop app.");
+      },
+      captureScreenshot: async (input) => {
+        if (window.desktopBridge) {
+          return window.desktopBridge.browser.captureScreenshot(input);
+        }
+        throw new Error("Browser screenshots require the desktop app.");
+      },
+      executeCdp: async (input) => {
+        if (window.desktopBridge) {
+          return window.desktopBridge.browser.executeCdp(input);
+        }
+        throw new Error("Browser automation requires the desktop app.");
       },
       navigate: async (input) => {
         if (window.desktopBridge) {
@@ -482,6 +518,7 @@ export function createWsNativeApi(): NativeApi {
         tab.lastError = null;
         tab.status = "live";
         state.activeTabId = tab.id;
+        markFallbackBrowserStateChanged(state);
         return emitFallbackBrowserState(input.threadId);
       },
       reload: async (input) => {
@@ -512,6 +549,7 @@ export function createWsNativeApi(): NativeApi {
         if (input.activate !== false || !state.activeTabId) {
           state.activeTabId = tab.id;
         }
+        markFallbackBrowserStateChanged(state);
         return emitFallbackBrowserState(input.threadId);
       },
       closeTab: async (input) => {
@@ -526,6 +564,7 @@ export function createWsNativeApi(): NativeApi {
         } else if (!state.tabs.some((tab) => tab.id === state.activeTabId)) {
           state.activeTabId = state.tabs[0]?.id ?? null;
         }
+        markFallbackBrowserStateChanged(state);
         return emitFallbackBrowserState(input.threadId);
       },
       selectTab: async (input) => {
@@ -535,6 +574,7 @@ export function createWsNativeApi(): NativeApi {
         const state = ensureFallbackBrowserWorkspace(input.threadId);
         const tab = resolveFallbackBrowserTab(state, input.tabId);
         state.activeTabId = tab.id;
+        markFallbackBrowserStateChanged(state);
         return emitFallbackBrowserState(input.threadId);
       },
       openDevTools: async (input) => {

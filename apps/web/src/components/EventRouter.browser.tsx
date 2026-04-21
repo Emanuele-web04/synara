@@ -28,6 +28,7 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { getRouter } from "../router";
 import { useStore } from "../store";
 import { getThreadFromState } from "../threadDerivation";
+import { useWorkspaceStore } from "../workspaceStore";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-root-browser-test");
 const PROJECT_ID = ProjectId.makeUnsafe("project-root-browser-test");
@@ -43,6 +44,7 @@ let fixture: TestFixture;
 let wsClient: { send: (data: string) => void } | null = null;
 let pushSequence = 1;
 let delayNextThreadSnapshot = false;
+let subscribeShellRequestCount = 0;
 
 const wsLink = ws.link(/ws(s)?:\/\/.*/);
 
@@ -265,6 +267,9 @@ const worker = setupWorker(
       if (typeof method !== "string") {
         return;
       }
+      if (method === ORCHESTRATION_WS_METHODS.subscribeShell) {
+        subscribeShellRequestCount += 1;
+      }
       client.send(
         JSON.stringify({
           id: request.id,
@@ -444,6 +449,19 @@ describe("EventRouter scoped orchestration sync", () => {
       sidebarThreadSummaryById: {},
       threadsHydrated: false,
     });
+    useWorkspaceStore.setState({
+      homeDir: null,
+      workspacePages: [
+        {
+          id: "workspace-test",
+          title: "Workspace 1",
+          layoutPresetId: "single",
+          createdAt: NOW_ISO,
+          updatedAt: NOW_ISO,
+        },
+      ],
+    });
+    subscribeShellRequestCount = 0;
   });
 
   afterEach(() => {
@@ -816,6 +834,29 @@ describe("EventRouter scoped orchestration sync", () => {
       fixture = previousFixture;
     } finally {
       fixture = buildFixture();
+      await mounted.cleanup();
+    }
+  });
+
+  it("does not resubscribe shell sync when workspace pages change", async () => {
+    const mounted = await mountApp();
+
+    try {
+      let initialSubscribeShellCount = 0;
+      await vi.waitFor(
+        () => {
+          expect(subscribeShellRequestCount).toBeGreaterThan(0);
+          initialSubscribeShellCount = subscribeShellRequestCount;
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+
+      useWorkspaceStore.getState().createWorkspace();
+
+      await new Promise((resolve) => window.setTimeout(resolve, 120));
+
+      expect(subscribeShellRequestCount).toBe(initialSubscribeShellCount);
+    } finally {
       await mounted.cleanup();
     }
   });

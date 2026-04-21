@@ -84,9 +84,12 @@ import { Sidebar, SidebarInset, SidebarProvider, SidebarRail } from "~/component
 const DiffPanel = lazy(() => import("../components/DiffPanel"));
 const DIFF_INLINE_LAYOUT_MEDIA_QUERY = "(max-width: 1180px)";
 const DIFF_INLINE_DEFAULT_WIDTH = "clamp(28rem,48vw,44rem)";
+const BROWSER_INLINE_DEFAULT_WIDTH = "clamp(34rem,56vw,72rem)";
 const SPLIT_PANE_PANEL_DEFAULT_WIDTH_PX = 22 * 16;
+const BROWSER_SPLIT_PANE_PANEL_DEFAULT_WIDTH_PX = 32 * 16;
 const SPLIT_PANE_CHAT_MIN_WIDTH = 20 * 16;
 const SINGLE_PANEL_MIN_WIDTH = 26 * 16;
+const BROWSER_PANEL_MIN_WIDTH = 30 * 16;
 const COMPOSER_COMPACT_MIN_LEFT_CONTROLS_WIDTH_PX = 208;
 const RIGHT_PANEL_SIDEBAR_WIDTH_STORAGE_KEY = "chat_right_panel_width";
 
@@ -220,6 +223,14 @@ const PanePanelInlineSidebar = (props: {
     panelState,
     onUpdatePanelState,
   } = props;
+  const inlineSidebarWidth =
+    panel === "browser" ? BROWSER_INLINE_DEFAULT_WIDTH : DIFF_INLINE_DEFAULT_WIDTH;
+  const inlineSidebarMinWidth =
+    panel === "browser" ? BROWSER_PANEL_MIN_WIDTH : SINGLE_PANEL_MIN_WIDTH;
+  const inlineSidebarStorageKey =
+    panel === "browser"
+      ? `${RIGHT_PANEL_SIDEBAR_WIDTH_STORAGE_KEY}:browser`
+      : `${RIGHT_PANEL_SIDEBAR_WIDTH_STORAGE_KEY}:diff`;
   const onOpenChange = useCallback(
     (open: boolean) => {
       if (open) {
@@ -257,16 +268,17 @@ const PanePanelInlineSidebar = (props: {
       open={panelOpen}
       onOpenChange={onOpenChange}
       className="w-auto min-h-0 flex-none bg-transparent"
-      style={{ "--sidebar-width": DIFF_INLINE_DEFAULT_WIDTH } as CSSProperties}
+      style={{ "--sidebar-width": inlineSidebarWidth } as CSSProperties}
     >
       <Sidebar
         side="right"
         collapsible="offcanvas"
+        data-native-browser-surface={panel === "browser" ? "true" : undefined}
         className="border-l border-border/50 bg-card text-foreground"
         resizable={{
-          minWidth: SINGLE_PANEL_MIN_WIDTH,
+          minWidth: inlineSidebarMinWidth,
           shouldAcceptWidth: shouldAcceptInlineSidebarWidth,
-          storageKey: RIGHT_PANEL_SIDEBAR_WIDTH_STORAGE_KEY,
+          storageKey: inlineSidebarStorageKey,
         }}
       >
         {renderPanelContent && threadId ? (
@@ -304,16 +316,22 @@ function SplitPaneEmbeddedPanel(props: {
   ) => void;
 }) {
   const wrapperRef = useRef<HTMLDivElement>(null);
-  const storageKey = `${RIGHT_PANEL_SIDEBAR_WIDTH_STORAGE_KEY}:${props.splitViewId}:${props.pane}`;
+  const panelWidthStorageKey =
+    props.panel === "browser" ? "browser" : props.panel === "diff" ? "diff" : "panel";
+  const storageKey = `${RIGHT_PANEL_SIDEBAR_WIDTH_STORAGE_KEY}:${props.splitViewId}:${props.pane}:${panelWidthStorageKey}`;
+  const defaultPanelWidth =
+    props.panel === "browser"
+      ? BROWSER_SPLIT_PANE_PANEL_DEFAULT_WIDTH_PX
+      : SPLIT_PANE_PANEL_DEFAULT_WIDTH_PX;
+  const minPanelWidth =
+    props.panel === "browser" ? BROWSER_PANEL_MIN_WIDTH : SINGLE_PANEL_MIN_WIDTH;
   const [panelWidth, setPanelWidth] = useState<number>(() => {
-    return getLocalStorageItem(storageKey, Schema.Finite) ?? SPLIT_PANE_PANEL_DEFAULT_WIDTH_PX;
+    return getLocalStorageItem(storageKey, Schema.Finite) ?? defaultPanelWidth;
   });
 
   useEffect(() => {
-    setPanelWidth(
-      getLocalStorageItem(storageKey, Schema.Finite) ?? SPLIT_PANE_PANEL_DEFAULT_WIDTH_PX,
-    );
-  }, [storageKey]);
+    setPanelWidth(getLocalStorageItem(storageKey, Schema.Finite) ?? defaultPanelWidth);
+  }, [defaultPanelWidth, storageKey]);
 
   const shouldAcceptEmbeddedWidth = useCallback(
     (nextWidth: number) => {
@@ -343,14 +361,11 @@ function SplitPaneEmbeddedPanel(props: {
       event.stopPropagation();
       const startX = event.clientX;
       const startWidth = panelWidth;
-      const maxWidth = Math.max(
-        SINGLE_PANEL_MIN_WIDTH,
-        parent.clientWidth - SPLIT_PANE_CHAT_MIN_WIDTH,
-      );
+      const maxWidth = Math.max(minPanelWidth, parent.clientWidth - SPLIT_PANE_CHAT_MIN_WIDTH);
 
       const onPointerMove = (moveEvent: PointerEvent) => {
         const delta = startX - moveEvent.clientX;
-        const nextWidth = Math.max(SINGLE_PANEL_MIN_WIDTH, Math.min(maxWidth, startWidth + delta));
+        const nextWidth = Math.max(minPanelWidth, Math.min(maxWidth, startWidth + delta));
         if (!shouldAcceptEmbeddedWidth(nextWidth)) {
           return;
         }
@@ -368,7 +383,7 @@ function SplitPaneEmbeddedPanel(props: {
       window.addEventListener("pointermove", onPointerMove);
       window.addEventListener("pointerup", onPointerUp);
     },
-    [panelWidth, shouldAcceptEmbeddedWidth, storageKey],
+    [minPanelWidth, panelWidth, shouldAcceptEmbeddedWidth, storageKey],
   );
 
   if (!props.panelOpen || !props.threadId) {
@@ -378,6 +393,7 @@ function SplitPaneEmbeddedPanel(props: {
   return (
     <div
       ref={wrapperRef}
+      data-native-browser-surface={props.panel === "browser" ? "true" : undefined}
       className="relative flex h-full min-h-0 min-w-0 flex-none border-l border-border/50 bg-card text-foreground"
       style={{ width: `${panelWidth}px` } as CSSProperties}
     >
@@ -1010,6 +1026,10 @@ function SingleChatSurface(props: {
   const activePanel = panelState.panel;
   const panelOpen = activePanel !== null;
   const lastAppliedRoutePanelSearchKeyRef = useRef<string | null>(null);
+  const hasNormalizedAutoRestoredBrowserPanelRef = useRef(false);
+  useEffect(() => {
+    hasNormalizedAutoRestoredBrowserPanelRef.current = false;
+  }, [props.threadId]);
   const updatePanelState = useCallback(
     (patch: Partial<Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">>) => {
       const nextPanel = patch.panel ?? panelState.panel;
@@ -1074,6 +1094,22 @@ function SingleChatSurface(props: {
       search: (previous) => stripDiffSearchParams(previous),
     });
   }, [navigate, props.search, props.threadId, updatePanelState]);
+
+  useEffect(() => {
+    if (hasNormalizedAutoRestoredBrowserPanelRef.current) {
+      return;
+    }
+
+    hasNormalizedAutoRestoredBrowserPanelRef.current = true;
+    const routeExplicitlyRequestsBrowserPanel = props.search.panel === "browser";
+    if (routeExplicitlyRequestsBrowserPanel || activePanel !== "browser") {
+      return;
+    }
+
+    // Don't auto-restore the browser panel just because this thread happened to
+    // have it open previously. Reopening the browser must stay an explicit user action.
+    updatePanelState({ panel: null });
+  }, [activePanel, props.search.panel, updatePanelState]);
 
   useEffect(() => {
     const onMenuAction = window.desktopBridge?.onMenuAction;

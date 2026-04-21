@@ -39,6 +39,8 @@ describe("Sidebar.uiState", () => {
       chatSectionExpanded: false,
       chatThreadListExpanded: false,
       expandedProjectThreadListCwds: [],
+      dismissedThreadStatusKeyByThreadId: {},
+      lastThreadRoute: null,
     });
   });
 
@@ -51,6 +53,13 @@ describe("Sidebar.uiState", () => {
         "/Users/tester/Code/demo/",
         "/Users/tester/Code/other",
       ],
+      dismissedThreadStatusKeyByThreadId: {
+        "thread-123": "Plan Ready:turn-1",
+      },
+      lastThreadRoute: {
+        threadId: "thread-123",
+        splitViewId: "split-456",
+      },
     });
 
     expect(readSidebarUiState()).toEqual({
@@ -60,6 +69,13 @@ describe("Sidebar.uiState", () => {
         normalizeSidebarProjectThreadListCwd("/Users/tester/Code/demo"),
         normalizeSidebarProjectThreadListCwd("/Users/tester/Code/other"),
       ],
+      dismissedThreadStatusKeyByThreadId: {
+        "thread-123": "Plan Ready:turn-1",
+      },
+      lastThreadRoute: {
+        threadId: "thread-123",
+        splitViewId: "split-456",
+      },
     });
   });
 
@@ -70,6 +86,15 @@ describe("Sidebar.uiState", () => {
         chatSectionExpanded: true,
         chatThreadListExpanded: false,
         expandedProjectThreadListCwds: ["/Users/tester/Code/demo", 42, null, ""],
+        dismissedThreadStatusKeyByThreadId: {
+          "thread-123": "Awaiting Input:turn-2",
+          "": "bad",
+          "thread-456": 42,
+        },
+        lastThreadRoute: {
+          threadId: "thread-123",
+          splitViewId: 42,
+        },
       }),
     );
 
@@ -79,6 +104,32 @@ describe("Sidebar.uiState", () => {
       expandedProjectThreadListCwds: [
         normalizeSidebarProjectThreadListCwd("/Users/tester/Code/demo"),
       ],
+      dismissedThreadStatusKeyByThreadId: {
+        "thread-123": "Awaiting Input:turn-2",
+      },
+      lastThreadRoute: {
+        threadId: "thread-123",
+      },
+    });
+  });
+
+  it("drops malformed persisted last thread routes", () => {
+    window.localStorage.setItem(
+      "t3code:sidebar-ui:v1",
+      JSON.stringify({
+        lastThreadRoute: {
+          threadId: 42,
+          splitViewId: "split-123",
+        },
+      }),
+    );
+
+    expect(readSidebarUiState()).toEqual({
+      chatSectionExpanded: false,
+      chatThreadListExpanded: false,
+      expandedProjectThreadListCwds: [],
+      dismissedThreadStatusKeyByThreadId: {},
+      lastThreadRoute: null,
     });
   });
 });

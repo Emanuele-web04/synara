@@ -78,6 +78,16 @@ describe("splitPromptIntoComposerSegments", () => {
     ]);
   });
 
+  it("supports quoted mention tokens so folder paths can include spaces", () => {
+    expect(
+      splitPromptIntoComposerSegments('Inspect @"/Users/test/Application Support" please'),
+    ).toEqual([
+      { type: "text", text: "Inspect " },
+      { type: "mention", path: "/Users/test/Application Support" },
+      { type: "text", text: " please" },
+    ]);
+  });
+
   it("keeps inline terminal context placeholders at their prompt positions", () => {
     expect(
       splitPromptIntoComposerSegments(
@@ -103,6 +113,13 @@ describe("splitPromptIntoDisplaySegments", () => {
     expect(splitPromptIntoDisplaySegments("Use $check-code")).toEqual([
       { type: "text", text: "Use " },
       { type: "skill", name: "check-code", prefix: "$" },
+    ]);
+  });
+
+  it("renders trailing quoted mention tokens at the end of text", () => {
+    expect(splitPromptIntoDisplaySegments('Use @"/Users/test/Application Support"')).toEqual([
+      { type: "text", text: "Use " },
+      { type: "mention", path: "/Users/test/Application Support" },
     ]);
   });
 });

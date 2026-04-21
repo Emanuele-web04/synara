@@ -2,6 +2,30 @@ import { MessageId, TurnId } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { formatShortTimestamp } from "../../timestampFormat";
+import { COLLAPSED_USER_MESSAGE_MAX_CHARS } from "./userMessagePreview";
+
+vi.mock("@legendapp/list/react", async () => {
+  const React = await import("react");
+
+  const LegendList = React.forwardRef(function MockLegendList(
+    props: {
+      data: Array<{ id: string }>;
+      keyExtractor: (item: { id: string }) => string;
+      renderItem: (args: { item: { id: string } }) => React.ReactNode;
+    },
+    _ref: React.ForwardedRef<unknown>,
+  ) {
+    return (
+      <div data-testid="legend-list">
+        {props.data.map((item) => (
+          <div key={props.keyExtractor(item)}>{props.renderItem({ item })}</div>
+        ))}
+      </div>
+    );
+  });
+
+  return { LegendList };
+});
 
 function matchMedia() {
   return {
@@ -44,6 +68,51 @@ beforeAll(() => {
 });
 
 describe("MessagesTimeline", () => {
+  it("keeps small transcripts on the simple non-virtualized path", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        timelineEntries={[
+          {
+            id: "entry-1",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("assistant-message-1"),
+              role: "assistant",
+              text: "stable transcript body",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).not.toContain('data-index="0"');
+    expect(markup).not.toContain('class="relative" style="height:');
+    expect(markup).toContain('data-timeline-row-kind="message"');
+  });
+
   it("renders user message metadata outside the bubble shell", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
@@ -52,7 +121,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-1",
@@ -87,10 +155,113 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain("flex w-full justify-end");
     expect(markup).toContain("group flex max-w-[80%] flex-col items-end gap-px");
-    expect(markup).toContain(
-      "w-max max-w-full min-w-0 self-end rounded-lg border border-border/70",
-    );
+    expect(markup).toContain("w-max max-w-full min-w-0 self-end rounded-lg bg-secondary px-3");
     expect(markup).toContain("text-muted-foreground/45");
+  });
+
+  it("renders a steering chip above steered user messages", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        timelineEntries={[
+          {
+            id: "entry-steered-user-message",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-steered-user"),
+              role: "user",
+              text: "hello",
+              dispatchMode: "steer",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("Steering conversation");
+    expect(markup).toContain("mb-1.5");
+  });
+
+  it("pushes the steering chip higher when the user message has chips or photos", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        timelineEntries={[
+          {
+            id: "entry-steered-user-message-media",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-steered-user-media"),
+              role: "user",
+              text: "hello",
+              dispatchMode: "steer",
+              attachments: [
+                {
+                  id: "assistant-selection-1",
+                  type: "assistant-selection",
+                  assistantMessageId: MessageId.makeUnsafe("assistant-1"),
+                  text: "draft this",
+                },
+                {
+                  id: "image-1",
+                  type: "image",
+                  name: "image.png",
+                  mimeType: "image/png",
+                  sizeBytes: 5,
+                },
+              ],
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("Steering conversation");
+    expect(markup).toContain("mb-3");
   });
 
   it("renders plain user text without preformatted shrink-wrap markup", async () => {
@@ -101,7 +272,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-plain-user-message",
@@ -140,6 +310,52 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("<pre");
   });
 
+  it("collapses long user messages at the 600-char message budget and renders a separate Show more button", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const hiddenTail = "TAIL_SHOULD_STAY_HIDDEN";
+    const longText = `${"a".repeat(COLLAPSED_USER_MESSAGE_MAX_CHARS)}${hiddenTail}`;
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        timelineEntries={[
+          {
+            id: "entry-long-user-message",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-long-user"),
+              role: "user",
+              text: longText,
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("Show more");
+    expect(markup).not.toContain(hiddenTail);
+  });
+
   it("renders inline terminal labels with the composer chip UI", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
@@ -148,7 +364,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-1",
@@ -202,7 +417,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-user-selection-fallback",
@@ -255,7 +469,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-user-skill-pill",
@@ -301,7 +514,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-user-agent-pill",
@@ -348,7 +560,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-1",
@@ -384,7 +595,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("Work log");
   });
 
-  it("renders the active compaction label instead of the generic working copy", async () => {
+  it("keeps the generic working copy alongside the active compaction entry", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -392,7 +603,6 @@ describe("MessagesTimeline", () => {
         isWorking
         activeTurnInProgress
         activeTurnStartedAt="2026-03-17T19:12:28.000Z"
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-compacting",
@@ -425,8 +635,8 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Compacting conversation...");
-    expect(markup).not.toContain("Working for");
-    expect(markup).toContain("h-px flex-1 bg-border");
+    expect(markup).toContain("Working for");
+    expect(markup).not.toContain("h-px flex-1 bg-border");
   });
 
   it("folds work log summaries into the next assistant message footer", async () => {
@@ -437,7 +647,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-work-inline",
@@ -496,7 +705,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-assistant-trailing",
@@ -554,7 +762,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-inline-tools",
@@ -669,7 +876,6 @@ describe("MessagesTimeline", () => {
         isWorking
         activeTurnInProgress
         activeTurnStartedAt="2026-03-17T19:12:28.000Z"
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-inline-tools-live-1",
@@ -784,7 +990,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-assistant-final",
@@ -853,7 +1058,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-inline-tools-expanded",
@@ -955,7 +1159,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-inline-file-change",
@@ -1037,7 +1240,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-inline-command",
@@ -1088,7 +1290,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-inline-web-search",
@@ -1126,6 +1327,98 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("tabler-icon-world");
   });
 
+  it("shows a GitHub icon next to compact GitHub MCP rows", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        timelineEntries={[
+          {
+            id: "entry-inline-github-mcp",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-inline-github-mcp",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "MCP tool call",
+              tone: "tool",
+              itemType: "mcp_tool_call",
+              toolTitle: "Codex Apps: Github Fetch Pr",
+              toolName: "mcp__codex_apps__github__fetch_pr",
+            },
+          },
+        ]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="dark"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("Codex Apps: Github Fetch Pr");
+    expect(markup).toContain('data-inline-tool-icon="github"');
+  });
+
+  it("shows an MCP icon next to compact non-GitHub MCP rows", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        timelineEntries={[
+          {
+            id: "entry-inline-mcp",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-inline-mcp",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "MCP tool call",
+              tone: "tool",
+              itemType: "mcp_tool_call",
+              toolTitle: "Codex Apps: Slack Search",
+              toolName: "mcp__codex_apps__slack__search",
+            },
+          },
+        ]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="dark"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("Codex Apps: Slack Search");
+    expect(markup).toContain('data-inline-tool-icon="mcp"');
+  });
+
   it("renders every changed file in the same inline file-change tool call", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const assistantMessageId = MessageId.makeUnsafe("message-assistant-inline-multi-edit");
@@ -1135,7 +1428,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-inline-multi-file-change",
@@ -1225,7 +1517,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-inline-summary-fallback",
@@ -1313,7 +1604,6 @@ describe("MessagesTimeline", () => {
         isWorking={false}
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
-        scrollContainer={null}
         timelineEntries={[
           {
             id: "entry-assistant-diff",

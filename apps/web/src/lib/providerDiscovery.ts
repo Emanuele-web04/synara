@@ -43,6 +43,12 @@ export function buildSkillSearchBlob(
   );
 }
 
+export function isInstalledProviderPlugin(
+  plugin: Pick<ProviderPluginDescriptor, "installed" | "enabled" | "installPolicy">,
+): boolean {
+  return plugin.installed || plugin.enabled || plugin.installPolicy === "INSTALLED_BY_DEFAULT";
+}
+
 export function buildPluginSearchBlob(
   plugin: Pick<ProviderPluginDescriptor, "name" | "interface">,
 ): string {

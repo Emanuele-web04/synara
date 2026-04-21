@@ -44,6 +44,7 @@ interface CliInput {
   readonly noBrowser: Option.Option<boolean>;
   readonly authToken: Option.Option<string>;
   readonly autoBootstrapProjectFromCwd: Option.Option<boolean>;
+  readonly logProviderEvents: Option.Option<boolean>;
   readonly logWebSocketEvents: Option.Option<boolean>;
 }
 
@@ -116,6 +117,10 @@ const CliEnvConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  logProviderEvents: Config.boolean("T3CODE_LOG_PROVIDER_EVENTS").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
   logWebSocketEvents: Config.boolean("T3CODE_LOG_WS_EVENTS").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
@@ -176,6 +181,12 @@ const ServerConfigLive = (input: CliInput) =>
         input.autoBootstrapProjectFromCwd,
         env.autoBootstrapProjectFromCwd ?? mode === "web",
       );
+      // Provider event NDJSON logging is helpful for debugging, but it is too
+      // expensive to keep enabled on the streaming hot path by default.
+      const logProviderEvents = resolveBooleanFlag(
+        input.logProviderEvents,
+        env.logProviderEvents ?? false,
+      );
       // Keep websocket payload logging opt-in in dev. Terminal/TUI traffic is
       // high-volume enough that automatic logging adds noticeable CPU and I/O.
       const logWebSocketEvents = resolveBooleanFlag(
@@ -201,6 +212,7 @@ const ServerConfigLive = (input: CliInput) =>
         noBrowser,
         authToken,
         autoBootstrapProjectFromCwd,
+        logProviderEvents,
         logWebSocketEvents,
       } satisfies ServerConfigShape;
 
@@ -334,6 +346,12 @@ const autoBootstrapProjectFromCwdFlag = Flag.boolean("auto-bootstrap-project-fro
   ),
   Flag.optional,
 );
+const logProviderEventsFlag = Flag.boolean("log-provider-events").pipe(
+  Flag.withDescription(
+    "Emit native/canonical provider NDJSON logs for debugging (equivalent to T3CODE_LOG_PROVIDER_EVENTS).",
+  ),
+  Flag.optional,
+);
 const logWebSocketEventsFlag = Flag.boolean("log-websocket-events").pipe(
   Flag.withDescription(
     "Emit server-side logs for outbound WebSocket push traffic (equivalent to T3CODE_LOG_WS_EVENTS).",
@@ -351,6 +369,7 @@ export const t3Cli = Command.make("t3", {
   noBrowser: noBrowserFlag,
   authToken: authTokenFlag,
   autoBootstrapProjectFromCwd: autoBootstrapProjectFromCwdFlag,
+  logProviderEvents: logProviderEventsFlag,
   logWebSocketEvents: logWebSocketEventsFlag,
 }).pipe(
   Command.withDescription("Run the DP Code server."),

@@ -110,6 +110,7 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(resolvedConfig?.noBrowser, true);
       assert.equal(resolvedConfig?.authToken, "auth-secret");
       assert.equal(resolvedConfig?.autoBootstrapProjectFromCwd, false);
+      assert.equal(resolvedConfig?.logProviderEvents, false);
       assert.equal(resolvedConfig?.logWebSocketEvents, false);
       assert.equal(stop.mock.calls.length, 1);
     }),
@@ -146,6 +147,7 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(resolvedConfig?.noBrowser, true);
       assert.equal(resolvedConfig?.authToken, "env-token");
       assert.equal(resolvedConfig?.autoBootstrapProjectFromCwd, false);
+      assert.equal(resolvedConfig?.logProviderEvents, false);
       assert.equal(resolvedConfig?.logWebSocketEvents, false);
       assert.equal(findAvailablePort.mock.calls.length, 0);
     }),
@@ -218,10 +220,11 @@ it.layer(testLayer)("server CLI command", (it) => {
     }),
   );
 
-  it.effect("supports CLI and env for bootstrap/log websocket toggles", () =>
+  it.effect("supports CLI and env for bootstrap/provider-log/websocket toggles", () =>
     Effect.gen(function* () {
       yield* runCli(["--auto-bootstrap-project-from-cwd"], {
         T3CODE_MODE: "desktop",
+        T3CODE_LOG_PROVIDER_EVENTS: "true",
         T3CODE_LOG_WS_EVENTS: "false",
         T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD: "false",
         T3CODE_NO_BROWSER: "true",
@@ -229,6 +232,7 @@ it.layer(testLayer)("server CLI command", (it) => {
 
       assert.equal(start.mock.calls.length, 1);
       assert.equal(resolvedConfig?.autoBootstrapProjectFromCwd, true);
+      assert.equal(resolvedConfig?.logProviderEvents, true);
       assert.equal(resolvedConfig?.logWebSocketEvents, false);
     }),
   );

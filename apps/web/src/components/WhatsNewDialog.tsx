@@ -8,7 +8,7 @@
 
 import { useEffect, useState } from "react";
 
-import { ArrowLeftIcon, ArrowRightIcon, RocketIcon } from "~/lib/icons";
+import { ArrowLeftIcon, ArrowRightIcon } from "~/lib/icons";
 
 import { ChangelogAccordion } from "../whatsNew/ChangelogAccordion";
 import { FeatureSection } from "../whatsNew/FeatureSection";
@@ -126,9 +126,14 @@ function CurrentHeader({
 }) {
   return (
     <div className="flex items-center gap-3">
-      <span className="inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/12 text-primary">
-        <RocketIcon className="size-4" />
-      </span>
+      <img
+        src="/favicon-32x32.png"
+        alt=""
+        aria-hidden="true"
+        className="size-8 shrink-0 rounded-[8px]"
+        loading="eager"
+        decoding="async"
+      />
       <div className="flex min-w-0 flex-col">
         <DialogTitle className="text-base">What&rsquo;s new?</DialogTitle>
         <DialogDescription className="text-xs">

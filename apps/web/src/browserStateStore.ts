@@ -50,6 +50,31 @@ function upsertRecentHistoryEntry(
   return nextEntries.slice(0, BROWSER_HISTORY_LIMIT);
 }
 
+function sameBrowserHistoryEntries(
+  previousEntries: BrowserHistoryEntry[] | undefined,
+  nextEntries: BrowserHistoryEntry[],
+): boolean {
+  if (previousEntries === nextEntries) {
+    return true;
+  }
+
+  if (previousEntries == null || previousEntries.length !== nextEntries.length) {
+    return false;
+  }
+
+  return previousEntries.every((entry, index) => {
+    const nextEntry = nextEntries[index];
+    if (!nextEntry) {
+      return false;
+    }
+    return (
+      entry.url === nextEntry.url &&
+      entry.title === nextEntry.title &&
+      entry.tabId === nextEntry.tabId
+    );
+  });
+}
+
 export const useBrowserStateStore = create<BrowserStateStore>()(
   persist(
     (set) => ({
@@ -57,10 +82,16 @@ export const useBrowserStateStore = create<BrowserStateStore>()(
       recentHistoryByThreadId: {},
       upsertThreadState: (state) =>
         set((current) => {
+          const previousState = current.threadStatesByThreadId[state.threadId];
+          if (previousState?.version === state.version) {
+            return current;
+          }
           const activeTab = state.tabs.find((tab) => tab.id === state.activeTabId) ?? null;
           const orderedTabs = activeTab
             ? [activeTab, ...state.tabs.filter((tab) => tab.id !== activeTab.id)]
             : state.tabs;
+          const previousHistory =
+            current.recentHistoryByThreadId[state.threadId] ?? EMPTY_BROWSER_HISTORY;
           const nextHistory = orderedTabs.reduce(
             (entries, tab) =>
               upsertRecentHistoryEntry(entries, {
@@ -68,18 +99,21 @@ export const useBrowserStateStore = create<BrowserStateStore>()(
                 title: tab.title,
                 tabId: tab.id,
               }),
-            current.recentHistoryByThreadId[state.threadId],
+            previousHistory,
           );
+          const historyChanged = !sameBrowserHistoryEntries(previousHistory, nextHistory);
 
           return {
             threadStatesByThreadId: {
               ...current.threadStatesByThreadId,
               [state.threadId]: state,
             },
-            recentHistoryByThreadId: {
-              ...current.recentHistoryByThreadId,
-              [state.threadId]: nextHistory,
-            },
+            recentHistoryByThreadId: historyChanged
+              ? {
+                  ...current.recentHistoryByThreadId,
+                  [state.threadId]: nextHistory,
+                }
+              : current.recentHistoryByThreadId,
           };
         }),
       removeThreadState: (threadId) =>
@@ -87,8 +121,12 @@ export const useBrowserStateStore = create<BrowserStateStore>()(
           if (!Object.hasOwn(current.threadStatesByThreadId, threadId)) {
             return current;
           }
-          const nextThreadStatesByThreadId = { ...current.threadStatesByThreadId };
-          const nextRecentHistoryByThreadId = { ...current.recentHistoryByThreadId };
+          const nextThreadStatesByThreadId = {
+            ...current.threadStatesByThreadId,
+          };
+          const nextRecentHistoryByThreadId = {
+            ...current.recentHistoryByThreadId,
+          };
           delete nextThreadStatesByThreadId[threadId];
           delete nextRecentHistoryByThreadId[threadId];
           return {
@@ -100,6 +138,9 @@ export const useBrowserStateStore = create<BrowserStateStore>()(
     {
       name: BROWSER_STATE_STORAGE_KEY,
       storage: createJSONStorage(() => localStorage),
+      partialize: (state) => ({
+        recentHistoryByThreadId: state.recentHistoryByThreadId,
+      }),
     },
   ),
 );

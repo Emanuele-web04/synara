@@ -64,7 +64,11 @@ import { resolveThreadWorkspaceCwd } from "./checkpointing/Utils.ts";
 import { GitManager } from "./git/Services/GitManager.ts";
 import { TerminalManager } from "./terminal/Services/Manager.ts";
 import { Keybindings } from "./keybindings";
-import { listWorkspaceDirectories, searchWorkspaceEntries } from "./workspaceEntries";
+import {
+  listWorkspaceDirectories,
+  searchLocalEntries,
+  searchWorkspaceEntries,
+} from "./workspaceEntries";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReactor";
@@ -95,7 +99,10 @@ import { expandHomePath } from "./os-jank.ts";
 import { makeServerPushBus } from "./wsServer/pushBus.ts";
 import { makeServerReadiness } from "./wsServer/readiness.ts";
 import { decodeJsonResult, formatSchemaError } from "@t3tools/shared/schemaJson";
-import { workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
+import {
+  deriveAssociatedWorktreeMetadata,
+  workspaceRootsEqual,
+} from "@t3tools/shared/threadWorkspace";
 import { TerminalThreadTitleTracker } from "./terminal/terminalThreadTitleTracker";
 
 /**
@@ -1070,6 +1077,14 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
 
   const listenOptions = host ? { host, port } : { port };
 
+  // Listen as soon as the health and static handlers are attached so desktop
+  // startup can distinguish "backend is alive but still warming up" from a
+  // true launch failure.
+  yield* NodeHttpServer.make(() => httpServer, listenOptions).pipe(
+    Effect.mapError((cause) => new ServerLifecycleError({ operation: "httpServerListen", cause })),
+  );
+  yield* readiness.markHttpListening;
+
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionReadModelQuery = yield* ProjectionSnapshotQuery;
   const checkpointDiffQuery = yield* CheckpointDiffQuery;
@@ -1158,6 +1173,18 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
 
   const publishScopedOrchestrationEvent = Effect.fnUntraced(function* (event: OrchestrationEvent) {
     const connectedClients = yield* Ref.get(clients);
+    const threadDetailEvent =
+      event.aggregateKind === "thread" && isThreadDetailEvent(event)
+        ? {
+            threadId: ThreadId.makeUnsafe(String(event.aggregateId)),
+            payload: {
+              kind: "event" as const,
+              event,
+            },
+          }
+        : null;
+    let shellEvent: Option.Option<OrchestrationShellStreamEvent> | null = null;
+
     for (const client of connectedClients) {
       const subscriptions = getClientOrchestrationSubscriptions(client);
       const hasScopedSubscriptions = subscriptions.shell || subscriptions.threadIds.size > 0;
@@ -1171,7 +1198,9 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       }
 
       if (subscriptions.shell) {
-        const shellEvent = yield* toShellStreamEvent(event);
+        if (shellEvent === null) {
+          shellEvent = yield* toShellStreamEvent(event);
+        }
         if (Option.isSome(shellEvent)) {
           yield* pushBus
             .publishClient(client, ORCHESTRATION_WS_CHANNELS.shellEvent, shellEvent.value)
@@ -1179,20 +1208,16 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         }
       }
 
-      if (event.aggregateKind !== "thread" || !isThreadDetailEvent(event)) {
+      if (threadDetailEvent === null) {
         continue;
       }
 
-      const threadId = ThreadId.makeUnsafe(String(event.aggregateId));
-      if (!subscriptions.threadIds.has(threadId)) {
+      if (!subscriptions.threadIds.has(threadDetailEvent.threadId)) {
         continue;
       }
 
       yield* pushBus
-        .publishClient(client, ORCHESTRATION_WS_CHANNELS.threadEvent, {
-          kind: "event" as const,
-          event,
-        })
+        .publishClient(client, ORCHESTRATION_WS_CHANNELS.threadEvent, threadDetailEvent.payload)
         .pipe(Effect.asVoid);
     }
   });
@@ -1319,11 +1344,6 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   yield* Effect.addFinalizer(() => Effect.sync(() => unsubscribeTerminalEvents()));
   yield* readiness.markTerminalSubscriptionsReady;
 
-  yield* NodeHttpServer.make(() => httpServer, listenOptions).pipe(
-    Effect.mapError((cause) => new ServerLifecycleError({ operation: "httpServerListen", cause })),
-  );
-  yield* readiness.markHttpListening;
-
   yield* Effect.addFinalizer(() =>
     Effect.all([closeAllClients, closeWebSocketServer.pipe(Effect.ignoreCause({ log: true }))]),
   );
@@ -1371,6 +1391,97 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         ? `Claude session '${input.externalId}' exists, but not for this workspace. Claude resume only works when the session file is stored for '${input.cwd}'.`
         : `Claude session '${input.externalId}' was not found on this machine for this workspace. Claude import only works with a locally persisted Claude session ID.`,
     );
+  });
+
+  const resolveImportedCodexThreadContext = Effect.fn(function* (input: {
+    readonly externalId: string;
+    readonly projectWorkspaceRoot: string;
+    readonly fallbackCwd?: string;
+  }) {
+    const adapter = yield* providerAdapterRegistry.getByProvider("codex");
+    if (!adapter.readExternalThread) {
+      return null;
+    }
+
+    const snapshot = yield* adapter
+      .readExternalThread({
+        externalThreadId: input.externalId,
+        ...(input.fallbackCwd ? { cwd: input.fallbackCwd } : {}),
+      })
+      .pipe(Effect.catch(() => Effect.succeed(null)));
+    const externalCwd = snapshot?.cwd?.trim();
+    if (!externalCwd) {
+      return null;
+    }
+
+    if (
+      workspaceRootsEqual(input.projectWorkspaceRoot, externalCwd, {
+        platform: process.platform,
+      })
+    ) {
+      return {
+        runtimeCwd: externalCwd,
+        patch: {
+          envMode: "local" as const,
+          worktreePath: null,
+          associatedWorktreePath: null,
+          associatedWorktreeBranch: null,
+          associatedWorktreeRef: null,
+        },
+      };
+    }
+
+    const relativeToProjectRoot = path.relative(input.projectWorkspaceRoot, externalCwd);
+    if (
+      relativeToProjectRoot.length > 0 &&
+      !relativeToProjectRoot.startsWith("..") &&
+      !path.isAbsolute(relativeToProjectRoot)
+    ) {
+      return {
+        runtimeCwd: externalCwd,
+        patch: null,
+      };
+    }
+
+    let currentPath = externalCwd;
+    while (true) {
+      const gitPointerFileContents = yield* fileSystem
+        .readFileString(path.join(currentPath, ".git"))
+        .pipe(Effect.catch(() => Effect.succeed(null)));
+
+      if (gitPointerFileContents) {
+        const workspaceRoot = parseManagedWorktreeWorkspaceRoot({
+          gitPointerFileContents,
+          path,
+          worktreePath: currentPath,
+        });
+        if (
+          workspaceRoot &&
+          workspaceRootsEqual(input.projectWorkspaceRoot, workspaceRoot, {
+            platform: process.platform,
+          })
+        ) {
+          return {
+            runtimeCwd: externalCwd,
+            patch: {
+              envMode: "worktree" as const,
+              branch: null,
+              worktreePath: currentPath,
+              ...deriveAssociatedWorktreeMetadata({
+                branch: null,
+                worktreePath: currentPath,
+              }),
+            },
+          };
+        }
+      }
+
+      const parentPath = path.dirname(currentPath);
+      if (parentPath === currentPath) {
+        return null;
+      }
+      currentPath = parentPath;
+    }
   });
 
   const importCodexThreadHistory = Effect.fn(function* (input: {
@@ -1473,6 +1584,25 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           projects: readModel.projects,
         });
         const externalId = body.externalId.trim();
+        const project = readModel.projects.find((entry) => entry.id === thread.projectId);
+
+        const importedCodexContext =
+          thread.modelSelection.provider === "codex" && project
+            ? yield* resolveImportedCodexThreadContext({
+                externalId,
+                projectWorkspaceRoot: project.workspaceRoot,
+                ...(cwd ? { fallbackCwd: cwd } : {}),
+              })
+            : null;
+
+        if (importedCodexContext?.patch) {
+          yield* orchestrationEngine.dispatch({
+            type: "thread.meta.update",
+            commandId: CommandId.makeUnsafe(crypto.randomUUID()),
+            threadId: thread.id,
+            ...importedCodexContext.patch,
+          });
+        }
 
         if (thread.modelSelection.provider === "claudeAgent") {
           yield* ensureClaudeThreadImportable({
@@ -1484,7 +1614,9 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         const session = yield* providerService.startSession(thread.id, {
           threadId: thread.id,
           provider: thread.modelSelection.provider,
-          ...(cwd ? { cwd } : {}),
+          ...((importedCodexContext?.runtimeCwd ?? cwd)
+            ? { cwd: importedCodexContext?.runtimeCwd ?? cwd }
+            : {}),
           modelSelection: thread.modelSelection,
           resumeCursor:
             thread.modelSelection.provider === "claudeAgent"
@@ -1624,6 +1756,17 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           catch: (cause) =>
             new RouteRequestError({
               message: `Failed to list workspace directories: ${String(cause)}`,
+            }),
+        });
+      }
+
+      case WS_METHODS.projectsSearchLocalEntries: {
+        const body = stripRequestTag(request.body);
+        return yield* Effect.tryPromise({
+          try: () => searchLocalEntries(body),
+          catch: (cause) =>
+            new RouteRequestError({
+              message: `Failed to search local entries: ${String(cause)}`,
             }),
         });
       }

@@ -34,6 +34,22 @@ export interface OrchestrationProjectionPipelineShape {
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 
   /**
+   * Project only the hot-path repositories required for live transcript and
+   * session updates during streaming.
+   */
+  readonly projectHotEvent: (
+    event: OrchestrationEvent,
+  ) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  /**
+   * Project deferred repositories whose derived shell metadata is safe to
+   * compute after the main event transaction commits.
+   */
+  readonly projectDeferredEvent: (
+    event: OrchestrationEvent,
+  ) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  /**
    * Project a single project metadata event while the caller already owns the
    * surrounding transaction.
    */

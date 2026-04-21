@@ -156,10 +156,13 @@ describe("threadBootstrap", () => {
       modelSelection: modelSelection("codex", "gpt-5"),
       runtimeMode: "full-access",
       interactionMode: "default",
+      envMode: undefined,
+      lastKnownPr: null,
     });
-    expect(createActiveDraftThreadSnapshot(makeDraftThread(), PROJECT_ID)).toEqual(
-      makeDraftThread(),
-    );
+    expect(createActiveDraftThreadSnapshot(makeDraftThread(), PROJECT_ID)).toEqual({
+      ...makeDraftThread(),
+      lastKnownPr: null,
+    });
   });
 
   it("builds the fresh draft seed from creation inputs", () => {
@@ -228,6 +231,7 @@ describe("threadBootstrap", () => {
       envMode: "worktree",
       branch: "feature/terminal-bootstrap",
       worktreePath: "/repo/.worktrees/terminal-bootstrap",
+      lastKnownPr: null,
     });
   });
 

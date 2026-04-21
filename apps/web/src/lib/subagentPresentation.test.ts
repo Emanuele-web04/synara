@@ -215,4 +215,8 @@ describe("formatSubagentModelLabel", () => {
     expect(formatSubagentModelLabel("gpt-5.4-mini")).toBe("GPT-5.4 Mini");
     expect(formatSubagentModelLabel("gpt-5.3-codex-spark")).toBe("GPT-5.3 Codex Spark");
   });
+
+  it("humanizes unknown GPT subagent models", () => {
+    expect(formatSubagentModelLabel("gpt-5.1-codex-max")).toBe("GPT-5.1 Codex Max");
+  });
 });

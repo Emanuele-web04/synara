@@ -1472,6 +1472,78 @@ describe("ProviderRuntimeIngestion", () => {
     expect(message?.streaming).toBe(false);
   });
 
+  it("ignores whitespace-only buffered assistant deltas on completion", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-buffered-whitespace"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-buffered-whitespace"),
+    });
+    await waitForThread(
+      harness.engine,
+      (thread) =>
+        thread.session?.status === "running" &&
+        thread.session?.activeTurnId === "turn-buffered-whitespace",
+    );
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-message-delta-buffered-whitespace"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-buffered-whitespace"),
+      itemId: asItemId("item-buffered-whitespace"),
+      payload: {
+        streamKind: "assistant_text",
+        delta: "  \n\t  ",
+      },
+    });
+
+    await harness.drain();
+    const midReadModel = await Effect.runPromise(harness.engine.getReadModel());
+    const midThread = midReadModel.threads.find(
+      (entry) => entry.id === ThreadId.makeUnsafe("thread-1"),
+    );
+    expect(
+      midThread?.messages.some(
+        (message: ProviderRuntimeTestMessage) =>
+          message.id === "assistant:item-buffered-whitespace",
+      ),
+    ).toBe(false);
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-message-completed-buffered-whitespace"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-buffered-whitespace"),
+      itemId: asItemId("item-buffered-whitespace"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.messages.some(
+        (message: ProviderRuntimeTestMessage) =>
+          message.id === "assistant:item-buffered-whitespace" && !message.streaming,
+      ),
+    );
+    const message = thread.messages.find(
+      (entry: ProviderRuntimeTestMessage) => entry.id === "assistant:item-buffered-whitespace",
+    );
+    expect(message?.text).toBe("");
+    expect(message?.streaming).toBe(false);
+  });
+
   it("streams assistant deltas when thread.turn.start requests streaming mode", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
@@ -2638,6 +2710,42 @@ describe("ProviderRuntimeIngestion", () => {
     ).toBe("# Plan title");
   });
 
+  it("still appends turn.completed activity when the provider omits cost metadata", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-turn-completed-no-cost"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-no-cost"),
+      payload: {
+        state: "completed",
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-turn-completed-no-cost",
+      ),
+    );
+
+    const completed = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) => activity.id === "evt-turn-completed-no-cost",
+    );
+    const completedPayload =
+      completed?.payload && typeof completed.payload === "object"
+        ? (completed.payload as Record<string, unknown>)
+        : undefined;
+
+    expect(completed?.kind).toBe("turn.completed");
+    expect(completed?.turnId).toBe("turn-no-cost");
+    expect(completedPayload?.state).toBe("completed");
+    expect(completedPayload?.totalCostUsd).toBeUndefined();
+  });
+
   it("projects structured user input request and resolution as thread activities", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
@@ -2685,6 +2793,7 @@ describe("ProviderRuntimeIngestion", () => {
     const thread = await waitForThread(
       harness.engine,
       (entry) =>
+        entry.runtimeMode === "approval-required" &&
         entry.activities.some(
           (activity: ProviderRuntimeTestActivity) => activity.kind === "user-input.requested",
         ) &&
@@ -2709,6 +2818,7 @@ describe("ProviderRuntimeIngestion", () => {
     expect(resolvedPayload?.answers).toEqual({
       sandbox_mode: "workspace-write",
     });
+    expect(thread.runtimeMode).toBe("approval-required");
   });
 
   it("creates and routes subagent runtime events into child threads", async () => {

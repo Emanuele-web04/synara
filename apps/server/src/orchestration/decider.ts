@@ -252,6 +252,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
               ? { associatedWorktreeRef: command.associatedWorktreeRef }
               : {}),
           }),
+          createBranchFlowCompleted: command.createBranchFlowCompleted,
           parentThreadId: command.parentThreadId,
           subagentAgentId: command.subagentAgentId,
           subagentNickname: command.subagentNickname,
@@ -331,6 +332,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
               ? { associatedWorktreeRef: command.associatedWorktreeRef }
               : {}),
           }),
+          createBranchFlowCompleted: command.createBranchFlowCompleted,
           parentThreadId: null,
           subagentAgentId: null,
           subagentNickname: null,
@@ -433,6 +435,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
               ? { associatedWorktreeRef: command.associatedWorktreeRef }
               : {}),
           }),
+          createBranchFlowCompleted: command.createBranchFlowCompleted,
           parentThreadId: null,
           subagentAgentId: null,
           subagentNickname: null,
@@ -574,6 +577,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
               ? { associatedWorktreeRef: command.associatedWorktreeRef }
               : {}),
           }),
+          ...(command.createBranchFlowCompleted !== undefined
+            ? { createBranchFlowCompleted: command.createBranchFlowCompleted }
+            : {}),
           ...(command.parentThreadId !== undefined
             ? { parentThreadId: command.parentThreadId }
             : {}),
@@ -684,6 +690,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           attachments: command.message.attachments,
           ...(command.message.skills !== undefined ? { skills: command.message.skills } : {}),
           ...(command.message.mentions !== undefined ? { mentions: command.message.mentions } : {}),
+          dispatchMode,
           turnId: null,
           streaming: false,
           source: "native",
@@ -701,8 +708,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         ...(command.reviewTarget !== undefined ? { reviewTarget: command.reviewTarget } : {}),
         assistantDeliveryMode: command.assistantDeliveryMode ?? DEFAULT_ASSISTANT_DELIVERY_MODE,
         dispatchMode,
-        runtimeMode: targetThread.runtimeMode,
-        interactionMode: targetThread.interactionMode,
+        runtimeMode: command.runtimeMode,
+        interactionMode: command.interactionMode,
         ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
         createdAt: command.createdAt,
       } as const;

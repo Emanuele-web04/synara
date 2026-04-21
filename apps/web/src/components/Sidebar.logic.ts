@@ -2,7 +2,7 @@
 // Purpose: Shared sidebar sorting and status helpers used by the thread list UI.
 // Exports: Sidebar row state derivation, add-project error helpers, sort utilities, and visibility helpers.
 
-import type { KeybindingCommand } from "@t3tools/contracts";
+import type { KeybindingCommand, ProjectId, ThreadId } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "../appSettings";
 import type { ChatMessage, Project, SidebarThreadSummary, Thread } from "../types";
 import { cn } from "../lib/utils";
@@ -14,6 +14,7 @@ import {
   hasActionableProposedPlan,
   isLatestTurnSettled,
 } from "../session-logic";
+import type { SplitView } from "../splitViewStore";
 
 export {
   extractDuplicateProjectCreateProjectId,
@@ -23,6 +24,10 @@ export {
 export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
 export const SIDEBAR_THREAD_PREWARM_LIMIT = 10;
 export type SidebarNewThreadEnvMode = "local" | "worktree";
+export type SidebarLastThreadRoute = {
+  threadId: string;
+  splitViewId?: string | undefined;
+};
 type SidebarProject = {
   id: string;
   name: string;
@@ -34,6 +39,33 @@ type SidebarThreadSortInput = {
   updatedAt?: string | undefined;
   latestUserMessageAt?: string | null | undefined;
   messages?: ReadonlyArray<Pick<ChatMessage, "role" | "createdAt">> | undefined;
+};
+
+export type SidebarProjectEntry =
+  | {
+      kind: "thread";
+      rowId: ThreadId;
+      rootRowId: ThreadId;
+      thread: SidebarThreadSummary;
+      depth: number;
+      childCount: number;
+      isExpanded: boolean;
+    }
+  | {
+      kind: "split";
+      rowId: ThreadId;
+      rootRowId: ThreadId;
+      splitView: SplitView;
+    };
+
+export type SidebarDerivedProjectData = {
+  projectThreads: SidebarThreadSummary[];
+  orderedProjectThreadIds: ThreadId[];
+  visibleEntries: SidebarProjectEntry[];
+  hasHiddenThreads: boolean;
+  isThreadListExpanded: boolean;
+  activeEntryId: ThreadId | null;
+  projectStatus: ReturnType<typeof resolveProjectStatusIndicator>;
 };
 
 const THREAD_JUMP_COMMANDS = [
@@ -59,6 +91,8 @@ export interface ThreadStatusPill {
   colorClass: string;
   dotClass: string;
   pulse: boolean;
+  dismissible?: boolean;
+  dismissalKey?: string;
 }
 
 const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
@@ -72,12 +106,34 @@ const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
 
 type ThreadStatusInput = Pick<
   Thread,
-  "interactionMode" | "latestTurn" | "lastVisitedAt" | "session"
+  "interactionMode" | "latestTurn" | "lastVisitedAt" | "session" | "updatedAt"
 > & {
   proposedPlans?: Thread["proposedPlans"] | undefined;
   hasActionableProposedPlan?: boolean | undefined;
   hasLiveTailWork?: boolean | undefined;
+  dismissedStatusKey?: string | undefined;
 };
+
+function createThreadStatusDismissalKey(
+  label: Extract<ThreadStatusPill["label"], "Pending Approval" | "Awaiting Input" | "Plan Ready">,
+  thread: ThreadStatusInput,
+): string {
+  return [
+    label,
+    thread.updatedAt ?? "",
+    thread.latestTurn?.turnId ?? "",
+    thread.latestTurn?.completedAt ?? "",
+    thread.session?.updatedAt ?? "",
+  ].join(":");
+}
+
+function createCompletedDismissalKey(thread: ThreadStatusInput): string | null {
+  if (!thread.latestTurn?.completedAt) {
+    return null;
+  }
+
+  return ["Completed", thread.latestTurn.turnId, thread.latestTurn.completedAt].join(":");
+}
 
 export function hasUnseenCompletion(thread: ThreadStatusInput): boolean {
   if (!thread.latestTurn?.completedAt) return false;
@@ -100,6 +156,52 @@ export function resolveSidebarNewThreadEnvMode(input: {
   defaultEnvMode: SidebarNewThreadEnvMode;
 }): SidebarNewThreadEnvMode {
   return input.requestedEnvMode ?? input.defaultEnvMode;
+}
+
+// Reuses the last visited thread route when leaving special views like settings.
+export function resolveSidebarRestorableThreadRoute(input: {
+  lastThreadRoute: SidebarLastThreadRoute | null;
+  availableThreadIds: ReadonlySet<string>;
+}): SidebarLastThreadRoute | null {
+  const { lastThreadRoute, availableThreadIds } = input;
+  if (!lastThreadRoute) {
+    return null;
+  }
+
+  return availableThreadIds.has(lastThreadRoute.threadId) ? lastThreadRoute : null;
+}
+
+// Drops remembered "show more" state for projects that are currently collapsed.
+export function pruneExpandedProjectThreadListsForCollapsedProjects<
+  T extends Pick<Project, "cwd" | "expanded">,
+>(input: {
+  expandedProjectThreadListCwds: ReadonlySet<string>;
+  projects: readonly T[];
+  normalizeProjectCwd: (cwd: string) => string;
+}): ReadonlySet<string> {
+  const { expandedProjectThreadListCwds, normalizeProjectCwd, projects } = input;
+  const collapsedProjectCwds = new Set(
+    projects
+      .filter((project) => !project.expanded)
+      .map((project) => normalizeProjectCwd(project.cwd))
+      .filter((cwd) => cwd.length > 0),
+  );
+
+  if (collapsedProjectCwds.size === 0) {
+    return expandedProjectThreadListCwds;
+  }
+
+  let changed = false;
+  const nextExpandedProjectThreadListCwds = new Set<string>();
+  for (const cwd of expandedProjectThreadListCwds) {
+    if (collapsedProjectCwds.has(cwd)) {
+      changed = true;
+      continue;
+    }
+    nextExpandedProjectThreadListCwds.add(cwd);
+  }
+
+  return changed ? nextExpandedProjectThreadListCwds : expandedProjectThreadListCwds;
 }
 
 export function resolveThreadRowClassName(input: {
@@ -144,20 +246,32 @@ export function resolveThreadStatusPill(input: {
   const { hasPendingApprovals, hasPendingUserInput, thread } = input;
 
   if (hasPendingApprovals) {
+    const dismissalKey = createThreadStatusDismissalKey("Pending Approval", thread);
+    if (thread.dismissedStatusKey === dismissalKey) {
+      return null;
+    }
     return {
       label: "Pending Approval",
       colorClass: "text-amber-600 dark:text-amber-300/90",
       dotClass: "bg-amber-500 dark:bg-amber-300/90",
       pulse: false,
+      dismissible: true,
+      dismissalKey,
     };
   }
 
   if (hasPendingUserInput) {
+    const dismissalKey = createThreadStatusDismissalKey("Awaiting Input", thread);
+    if (thread.dismissedStatusKey === dismissalKey) {
+      return null;
+    }
     return {
       label: "Awaiting Input",
       colorClass: "text-indigo-600 dark:text-indigo-300/90",
       dotClass: "bg-indigo-500 dark:bg-indigo-300/90",
       pulse: false,
+      dismissible: true,
+      dismissalKey,
     };
   }
 
@@ -167,6 +281,7 @@ export function resolveThreadStatusPill(input: {
       colorClass: "text-sky-600 dark:text-sky-300/80",
       dotClass: "bg-sky-500 dark:bg-sky-300/80",
       pulse: true,
+      dismissible: false,
     };
   }
 
@@ -179,6 +294,7 @@ export function resolveThreadStatusPill(input: {
       colorClass: "text-sky-600 dark:text-sky-300/80",
       dotClass: "bg-sky-500 dark:bg-sky-300/80",
       pulse: true,
+      dismissible: false,
     };
   }
 
@@ -188,6 +304,7 @@ export function resolveThreadStatusPill(input: {
       colorClass: "text-sky-600 dark:text-sky-300/80",
       dotClass: "bg-sky-500 dark:bg-sky-300/80",
       pulse: true,
+      dismissible: false,
     };
   }
 
@@ -201,20 +318,32 @@ export function resolveThreadStatusPill(input: {
         findLatestProposedPlan(thread.proposedPlans ?? [], thread.latestTurn?.turnId ?? null),
       ));
   if (hasPlanReadyPrompt) {
+    const dismissalKey = createThreadStatusDismissalKey("Plan Ready", thread);
+    if (thread.dismissedStatusKey === dismissalKey) {
+      return null;
+    }
     return {
       label: "Plan Ready",
       colorClass: "text-violet-600 dark:text-violet-300/90",
       dotClass: "bg-violet-500 dark:bg-violet-300/90",
       pulse: false,
+      dismissible: true,
+      dismissalKey,
     };
   }
 
   if (!thread.hasLiveTailWork && hasUnseenCompletion(thread)) {
+    const dismissalKey = createCompletedDismissalKey(thread);
+    if (dismissalKey && thread.dismissedStatusKey === dismissalKey) {
+      return null;
+    }
     return {
       label: "Completed",
       colorClass: "text-emerald-600 dark:text-emerald-300/90",
       dotClass: "bg-emerald-500 dark:bg-emerald-300/90",
       pulse: false,
+      dismissible: true,
+      ...(dismissalKey ? { dismissalKey } : {}),
     };
   }
 
@@ -757,4 +886,141 @@ export function sortProjectsForSidebar<
     if (byTimestamp !== 0) return byTimestamp;
     return left.name.localeCompare(right.name) || left.id.localeCompare(right.id);
   });
+}
+
+// Groups thread summaries once so project-specific sidebar derivations can reuse the same slices.
+export function groupSidebarThreadsByProjectId(
+  threads: readonly SidebarThreadSummary[],
+): ReadonlyMap<ProjectId, SidebarThreadSummary[]> {
+  const byProjectId = new Map<ProjectId, SidebarThreadSummary[]>();
+  for (const thread of threads) {
+    const existing = byProjectId.get(thread.projectId);
+    if (existing) {
+      existing.push(thread);
+    } else {
+      byProjectId.set(thread.projectId, [thread]);
+    }
+  }
+  return byProjectId;
+}
+
+// Groups split views once so project renderers do not rescan the full split list every render.
+export function groupSplitViewsByProjectId(
+  splitViews: readonly SplitView[],
+): ReadonlyMap<ProjectId, SplitView[]> {
+  const byProjectId = new Map<ProjectId, SplitView[]>();
+  for (const splitView of splitViews) {
+    const existing = byProjectId.get(splitView.ownerProjectId);
+    if (existing) {
+      existing.push(splitView);
+    } else {
+      byProjectId.set(splitView.ownerProjectId, [splitView]);
+    }
+  }
+  return byProjectId;
+}
+
+// Centralizes the expensive per-project row derivation so Sidebar.tsx can mostly orchestrate UI state.
+export function deriveSidebarProjectData(input: {
+  projects: readonly Pick<Project, "id" | "cwd" | "expanded">[];
+  sortedSidebarThreadsByProjectId: ReadonlyMap<ProjectId, SidebarThreadSummary[]>;
+  splitViewsByProjectId: ReadonlyMap<ProjectId, SplitView[]>;
+  splitViewBySourceThreadId: ReadonlyMap<ThreadId, SplitView>;
+  pinnedThreadIds: readonly ThreadId[];
+  pinnedThreadIdSet: ReadonlySet<ThreadId>;
+  expandedParentThreadIds: ReadonlySet<ThreadId>;
+  expandedThreadListProjectCwds: ReadonlySet<string>;
+  normalizeProjectCwd: (cwd: string) => string;
+  activeSidebarThreadId: ThreadId | undefined;
+  previewLimit: number;
+  resolveThreadStatus?: (
+    thread: SidebarThreadSummary,
+  ) => ReturnType<typeof resolveThreadStatusPill>;
+}): ReadonlyMap<ProjectId, SidebarDerivedProjectData> {
+  const byProjectId = new Map<ProjectId, SidebarDerivedProjectData>();
+
+  for (const project of input.projects) {
+    const allProjectThreads = input.sortedSidebarThreadsByProjectId.get(project.id) ?? [];
+    const projectThreads = getUnpinnedThreadsForSidebar(allProjectThreads, input.pinnedThreadIds);
+    const projectThreadTree = buildProjectThreadTree({
+      threads: projectThreads,
+      expandedParentThreadIds: input.expandedParentThreadIds,
+    });
+    const projectSplitViews = (input.splitViewsByProjectId.get(project.id) ?? []).filter(
+      (splitView) => !input.pinnedThreadIdSet.has(splitView.sourceThreadId),
+    );
+    const projectStatus = resolveProjectStatusIndicator(
+      allProjectThreads.map((thread) =>
+        input.resolveThreadStatus
+          ? input.resolveThreadStatus(thread)
+          : resolveThreadStatusPill({
+              thread,
+              hasPendingApprovals: thread.hasPendingApprovals,
+              hasPendingUserInput: thread.hasPendingUserInput,
+            }),
+      ),
+    );
+    const isThreadListExpanded = input.expandedThreadListProjectCwds.has(
+      input.normalizeProjectCwd(project.cwd),
+    );
+    const replacedThreadIds = new Set(
+      projectSplitViews.map((splitView) => splitView.sourceThreadId),
+    );
+    const orderedEntries: SidebarProjectEntry[] = projectThreadTree.map(
+      ({ thread, depth, rootThreadId, childCount, isExpanded }) => {
+        const splitView = input.splitViewBySourceThreadId.get(thread.id);
+        if (!splitView) {
+          return {
+            kind: "thread",
+            rowId: thread.id,
+            rootRowId: rootThreadId,
+            thread,
+            depth,
+            childCount,
+            isExpanded,
+          };
+        }
+        return {
+          kind: "split",
+          rowId: splitView.sourceThreadId,
+          rootRowId: rootThreadId,
+          splitView,
+        };
+      },
+    );
+
+    for (const splitView of projectSplitViews) {
+      if (replacedThreadIds.has(splitView.sourceThreadId)) continue;
+      orderedEntries.push({
+        kind: "split",
+        rowId: splitView.sourceThreadId,
+        rootRowId: splitView.sourceThreadId,
+        splitView,
+      });
+    }
+
+    const activeEntry =
+      input.activeSidebarThreadId === undefined
+        ? null
+        : (orderedEntries.find((entry) => entry.rowId === input.activeSidebarThreadId) ?? null);
+    const { visibleEntries: renderedEntries } = getVisibleSidebarEntriesForPreview({
+      entries: orderedEntries,
+      activeEntryId: activeEntry?.rowId,
+      isExpanded: isThreadListExpanded,
+      previewLimit: input.previewLimit,
+    });
+    const pinnedCollapsedEntry = !project.expanded && activeEntry ? activeEntry : null;
+
+    byProjectId.set(project.id, {
+      projectThreads,
+      orderedProjectThreadIds: projectThreads.map((thread) => thread.id),
+      visibleEntries: pinnedCollapsedEntry ? [pinnedCollapsedEntry] : renderedEntries,
+      hasHiddenThreads: renderedEntries.length < orderedEntries.length,
+      isThreadListExpanded,
+      activeEntryId: activeEntry?.rowId ?? null,
+      projectStatus,
+    });
+  }
+
+  return byProjectId;
 }

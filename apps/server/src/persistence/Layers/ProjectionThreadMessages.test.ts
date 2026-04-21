@@ -167,4 +167,42 @@ layer("ProjectionThreadMessageRepository", (it) => {
       ]);
     }),
   );
+
+  it.effect("preserves dispatch mode when later updates omit it", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectionThreadMessageRepository;
+      const threadId = ThreadId.makeUnsafe("thread-preserve-dispatch-mode");
+      const messageId = MessageId.makeUnsafe("message-preserve-dispatch-mode");
+      const createdAt = "2026-02-28T19:30:00.000Z";
+
+      yield* repository.upsert({
+        messageId,
+        threadId,
+        turnId: null,
+        role: "user",
+        text: "steer this",
+        dispatchMode: "steer",
+        isStreaming: false,
+        source: "native",
+        createdAt,
+        updatedAt: "2026-02-28T19:30:01.000Z",
+      });
+
+      yield* repository.upsert({
+        messageId,
+        threadId,
+        turnId: null,
+        role: "user",
+        text: "steer this harder",
+        isStreaming: false,
+        source: "native",
+        createdAt,
+        updatedAt: "2026-02-28T19:30:02.000Z",
+      });
+
+      const rows = yield* repository.listByThreadId({ threadId });
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0]?.dispatchMode, "steer");
+    }),
+  );
 });

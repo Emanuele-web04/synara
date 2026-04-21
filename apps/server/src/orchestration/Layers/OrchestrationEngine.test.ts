@@ -426,7 +426,8 @@ describe("OrchestrationEngine", () => {
     const flakyProjectionPipeline: OrchestrationProjectionPipelineShape = {
       bootstrap: Effect.void,
       projectMetadataEvent: () => Effect.void,
-      projectEvent: (event) => {
+      projectEvent: () => Effect.void,
+      projectHotEvent: (event) => {
         if (
           shouldFailRequestedProjection &&
           event.commandId === CommandId.makeUnsafe("cmd-turn-start-atomic") &&
@@ -442,6 +443,7 @@ describe("OrchestrationEngine", () => {
         }
         return Effect.void;
       },
+      projectDeferredEvent: () => Effect.void,
     };
 
     const runtime = ManagedRuntime.make(
@@ -579,6 +581,8 @@ describe("OrchestrationEngine", () => {
         return Effect.void;
       },
       projectEvent: () => Effect.void,
+      projectHotEvent: () => Effect.void,
+      projectDeferredEvent: () => Effect.void,
     };
 
     const runtime = ManagedRuntime.make(
@@ -674,7 +678,8 @@ describe("OrchestrationEngine", () => {
     const flakyProjectionPipeline: OrchestrationProjectionPipelineShape = {
       bootstrap: Effect.void,
       projectMetadataEvent: () => Effect.void,
-      projectEvent: (event) => {
+      projectEvent: () => Effect.void,
+      projectHotEvent: (event) => {
         if (
           shouldFailProjection &&
           event.commandId === CommandId.makeUnsafe("cmd-thread-meta-sync-fail")
@@ -689,6 +694,7 @@ describe("OrchestrationEngine", () => {
         }
         return Effect.void;
       },
+      projectDeferredEvent: () => Effect.void,
     };
 
     const runtime = ManagedRuntime.make(
@@ -780,6 +786,108 @@ describe("OrchestrationEngine", () => {
     ).rejects.toThrow("Thread 'thread-missing' does not exist");
 
     await system.dispose();
+  });
+
+  it("schedules one deferred projection catch-up after a deferred projection failure", async () => {
+    let bootstrapCalls = 0;
+    let deferredCalls = 0;
+    let resolveRecoveryBootstrap: (() => void) | null = null;
+    const recoveryBootstrap = new Promise<void>((resolve) => {
+      resolveRecoveryBootstrap = resolve;
+    });
+
+    const flakyProjectionPipeline: OrchestrationProjectionPipelineShape = {
+      bootstrap: Effect.sync(() => {
+        bootstrapCalls += 1;
+        if (bootstrapCalls === 2) {
+          resolveRecoveryBootstrap?.();
+        }
+      }),
+      projectMetadataEvent: () => Effect.void,
+      projectEvent: () => Effect.void,
+      projectHotEvent: () => Effect.void,
+      projectDeferredEvent: () => {
+        deferredCalls += 1;
+        if (deferredCalls === 1) {
+          return Effect.fail(
+            new PersistenceSqlError({
+              operation: "test.deferredProjection",
+              detail: "deferred projection failed",
+            }),
+          );
+        }
+        return Effect.void;
+      },
+    };
+
+    const runtime = ManagedRuntime.make(
+      OrchestrationEngineLive.pipe(
+        Layer.provide(Layer.succeed(OrchestrationProjectionPipeline, flakyProjectionPipeline)),
+        Layer.provide(OrchestrationEventStoreLive),
+        Layer.provide(OrchestrationCommandReceiptRepositoryLive),
+        Layer.provide(SqlitePersistenceMemory),
+      ),
+    );
+    const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
+    const createdAt = now();
+
+    await runtime.runPromise(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-project-deferred-recovery"),
+        projectId: asProjectId("project-deferred-recovery"),
+        title: "Deferred Recovery Project",
+        workspaceRoot: "/tmp/project-deferred-recovery",
+        defaultModelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        createdAt,
+      }),
+    );
+    await runtime.runPromise(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-thread-deferred-recovery"),
+        threadId: ThreadId.makeUnsafe("thread-deferred-recovery"),
+        projectId: asProjectId("project-deferred-recovery"),
+        title: "deferred-recovery",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    const result = await runtime.runPromise(
+      engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-deferred-recovery"),
+        threadId: ThreadId.makeUnsafe("thread-deferred-recovery"),
+        message: {
+          messageId: asMessageId("msg-deferred-recovery"),
+          role: "user",
+          text: "hello",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt,
+      }),
+    );
+
+    await recoveryBootstrap;
+
+    expect(result.sequence).toBe(4);
+    expect(deferredCalls).toBeGreaterThanOrEqual(1);
+    expect(bootstrapCalls).toBe(2);
+
+    await runtime.dispose();
   });
 
   it("rejects duplicate thread creation", async () => {

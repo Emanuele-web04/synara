@@ -1056,7 +1056,7 @@ async function measureUserRow(options: {
   const rowSelector = `[data-message-id="${targetMessageId}"][data-message-role="user"]`;
 
   const scrollContainer = await waitForElement(
-    () => host.querySelector<HTMLDivElement>("div.overflow-y-auto.overscroll-y-contain"),
+    () => host.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
     "Unable to find ChatView message scroll container.",
   );
 
@@ -1114,7 +1114,7 @@ async function measureUserRow(options: {
 
 async function measureChatLayout(host: HTMLElement): Promise<ChatLayoutMeasurement> {
   const scrollContainer = await waitForElement(
-    () => host.querySelector<HTMLDivElement>("div.overflow-y-auto.overscroll-y-contain"),
+    () => host.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
     "Unable to find ChatView message scroll container.",
   );
   const composerForm = await waitForElement(
@@ -1488,7 +1488,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
     try {
       const scrollContainer = await waitForElement(
-        () => document.querySelector<HTMLDivElement>("div.overflow-y-auto.overscroll-y-contain"),
+        () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
         "Unable to find message scroll container.",
       );
       scrollContainer.scrollTop = scrollContainer.scrollHeight;
@@ -1603,6 +1603,21 @@ describe("ChatView timeline estimator parity (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows branch tools on a fresh top-level thread before any messages", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: addThreadToSnapshot(createDraftOnlySnapshot(), THREAD_ID),
+    });
+
+    try {
+      await expect.element(page.getByText("What should we do in")).toBeInTheDocument();
+      await expect.element(page.getByText("Local")).toBeInTheDocument();
+      await expect.element(page.getByText("main")).toBeInTheDocument();
     } finally {
       await mounted.cleanup();
     }

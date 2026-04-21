@@ -32,6 +32,8 @@ import type {
   ProjectListDirectoriesResult,
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
+  ProjectSearchLocalEntriesInput,
+  ProjectSearchLocalEntriesResult,
   ProjectWriteFileInput,
   ProjectWriteFileResult,
 } from "./project";
@@ -150,6 +152,7 @@ export interface BrowserTabState {
 
 export interface ThreadBrowserState {
   threadId: ThreadId;
+  version: number;
   open: boolean;
   activeTabId: string | null;
   tabs: BrowserTabState[];
@@ -194,6 +197,18 @@ export interface BrowserSetPanelBoundsInput {
   bounds: BrowserPanelBounds | null;
 }
 
+export interface BrowserCaptureScreenshotResult {
+  name: string;
+  mimeType: "image/png";
+  sizeBytes: number;
+  bytes: Uint8Array;
+}
+
+export interface BrowserExecuteCdpInput extends BrowserTabInput {
+  method: string;
+  params?: Record<string, unknown>;
+}
+
 export interface DesktopNotificationInput {
   title: string;
   body?: string;
@@ -235,7 +250,10 @@ export interface DesktopBridge {
     close: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;
     hide: (input: BrowserThreadInput) => Promise<void>;
     getState: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;
-    setPanelBounds: (input: BrowserSetPanelBoundsInput) => Promise<ThreadBrowserState>;
+    setPanelBounds: (input: BrowserSetPanelBoundsInput) => Promise<void>;
+    copyScreenshotToClipboard: (input: BrowserTabInput) => Promise<void>;
+    captureScreenshot: (input: BrowserTabInput) => Promise<BrowserCaptureScreenshotResult>;
+    executeCdp: (input: BrowserExecuteCdpInput) => Promise<unknown>;
     navigate: (input: BrowserNavigateInput) => Promise<ThreadBrowserState>;
     reload: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
     goBack: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
@@ -265,6 +283,9 @@ export interface NativeApi {
   projects: {
     listDirectories: (input: ProjectListDirectoriesInput) => Promise<ProjectListDirectoriesResult>;
     searchEntries: (input: ProjectSearchEntriesInput) => Promise<ProjectSearchEntriesResult>;
+    searchLocalEntries: (
+      input: ProjectSearchLocalEntriesInput,
+    ) => Promise<ProjectSearchLocalEntriesResult>;
     writeFile: (input: ProjectWriteFileInput) => Promise<ProjectWriteFileResult>;
   };
   shell: {
@@ -350,7 +371,10 @@ export interface NativeApi {
     close: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;
     hide: (input: BrowserThreadInput) => Promise<void>;
     getState: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;
-    setPanelBounds: (input: BrowserSetPanelBoundsInput) => Promise<ThreadBrowserState>;
+    setPanelBounds: (input: BrowserSetPanelBoundsInput) => Promise<void>;
+    copyScreenshotToClipboard: (input: BrowserTabInput) => Promise<void>;
+    captureScreenshot: (input: BrowserTabInput) => Promise<BrowserCaptureScreenshotResult>;
+    executeCdp: (input: BrowserExecuteCdpInput) => Promise<unknown>;
     navigate: (input: BrowserNavigateInput) => Promise<ThreadBrowserState>;
     reload: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
     goBack: (input: BrowserTabInput) => Promise<ThreadBrowserState>;

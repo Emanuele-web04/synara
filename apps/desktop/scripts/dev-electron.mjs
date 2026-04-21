@@ -19,6 +19,7 @@ const watchedDirectories = [
 const forcedShutdownTimeoutMs = 1_500;
 const restartDebounceMs = 120;
 const childTreeGracePeriodMs = 1_200;
+const staleComputerUseGracePeriodMs = 300;
 
 await waitOn({
   resources: [`tcp:${port}`, ...requiredFiles.map((filePath) => `file:${filePath}`)],
@@ -48,6 +49,66 @@ function cleanupStaleDevApps() {
   }
 
   spawnSync("pkill", ["-f", "--", `--t3code-dev-root=${desktopDir}`], { stdio: "ignore" });
+}
+
+function listStaleComputerUsePids() {
+  if (process.platform === "win32") {
+    return [];
+  }
+
+  const result = spawnSync("pgrep", ["-fal", "DP Code \\(Dev\\).*(computerUseMcp\\.mjs mcp)"], {
+    encoding: "utf8",
+  });
+  const output = typeof result.stdout === "string" ? result.stdout.trim() : "";
+  if (!output) {
+    return [];
+  }
+
+  return output
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .flatMap((line) => {
+      const firstSpace = line.indexOf(" ");
+      if (firstSpace <= 0) {
+        return [];
+      }
+
+      const pid = Number(line.slice(0, firstSpace));
+      const command = line.slice(firstSpace + 1);
+      if (!Number.isInteger(pid) || pid <= 0) {
+        return [];
+      }
+
+      // Leave the current worktree's helper alone and only reap stale runtimes
+      // from other worktrees or abandoned dev sessions.
+      if (command.includes(desktopDir)) {
+        return [];
+      }
+
+      return [pid];
+    });
+}
+
+function cleanupStaleComputerUseApps() {
+  const stalePids = listStaleComputerUsePids();
+  if (stalePids.length === 0) {
+    return;
+  }
+
+  console.error(
+    `[desktop-dev] Cleaning up ${stalePids.length} stale DP Code (Dev) Computer Use helper process${stalePids.length === 1 ? "" : "es"} from other worktrees.`,
+  );
+
+  for (const pid of stalePids) {
+    spawnSync("kill", ["-TERM", String(pid)], { stdio: "ignore" });
+  }
+
+  spawnSync("sleep", [String(staleComputerUseGracePeriodMs / 1000)], { stdio: "ignore" });
+
+  for (const pid of stalePids) {
+    spawnSync("kill", ["-KILL", String(pid)], { stdio: "ignore" });
+  }
 }
 
 function warnIfAlphaAppRunning() {
@@ -224,6 +285,7 @@ async function shutdown(exitCode) {
 
 startWatchers();
 cleanupStaleDevApps();
+cleanupStaleComputerUseApps();
 warnIfAlphaAppRunning();
 startApp();
 

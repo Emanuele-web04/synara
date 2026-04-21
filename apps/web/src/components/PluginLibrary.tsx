@@ -31,6 +31,7 @@ import { useStore } from "~/store";
 import {
   buildPluginSearchBlob,
   buildSkillSearchBlob,
+  isInstalledProviderPlugin,
   normalizeProviderDiscoveryText,
   resolveProviderDiscoveryCwd,
 } from "~/lib/providerDiscovery";
@@ -99,10 +100,6 @@ const KNOWN_PLUGIN_BRANDS: Record<string, PluginBrandArtwork> = {
 
 function pluginEntryKey(entry: Pick<PluginEntry, "marketplacePath" | "plugin">): string {
   return `${entry.marketplacePath}::${entry.plugin.name}`;
-}
-
-function isInstalledPlugin(plugin: ProviderPluginDescriptor): boolean {
-  return plugin.installed || plugin.enabled || plugin.installPolicy === "INSTALLED_BY_DEFAULT";
 }
 
 function sectionTitle(value: string): string {
@@ -331,7 +328,7 @@ function PluginGridItem({ entry }: { entry: PluginEntry }) {
         </p>
         <p className="mt-0.5 truncate text-[12px] text-muted-foreground">{description}</p>
       </div>
-      <InstalledStatus installed={isInstalledPlugin(entry.plugin)} />
+      <InstalledStatus installed={isInstalledProviderPlugin(entry.plugin)} />
     </div>
   );
 }
@@ -468,7 +465,7 @@ export function PluginLibrary() {
   }, [pluginsQuery.data]);
 
   const installedPluginEntries = useMemo(
-    () => pluginEntries.filter((entry) => isInstalledPlugin(entry.plugin)),
+    () => pluginEntries.filter((entry) => isInstalledProviderPlugin(entry.plugin)),
     [pluginEntries],
   );
 

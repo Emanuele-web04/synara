@@ -2,12 +2,12 @@
 // Purpose: Normalizes subagent identity, nickname colors, and status labels for sidebar/chat UI.
 // Exports: Shared presentation helpers consumed by sidebar rows, chat cards, and thread hydration.
 
-import { MODEL_OPTIONS } from "@t3tools/contracts";
 import {
   buildSubagentIdentityDirectory,
   extractSubagentIdentityHints as extractParsedSubagentIdentityHints,
   resolveSubagentIdentityFromDirectory,
 } from "@t3tools/shared/subagents";
+import { formatModelDisplayName } from "@t3tools/shared/model";
 
 const SUBAGENT_ACCENT_PALETTE = [
   "#b84e44",
@@ -62,10 +62,6 @@ const subagentIdentityDirectoryByActivities = new WeakMap<
   ReadonlyArray<SubagentThreadActivityLike>,
   ReturnType<typeof buildSubagentIdentityDirectory>
 >();
-
-const MODEL_LABEL_BY_SLUG = new Map(
-  MODEL_OPTIONS.map((model) => [model.slug.toLowerCase(), model.name]),
-);
 
 function basename(value: string): string {
   const slashIndex = Math.max(value.lastIndexOf("/"), value.lastIndexOf("\\"));
@@ -357,9 +353,5 @@ export function humanizeSubagentStatus(
 }
 
 export function formatSubagentModelLabel(model: string | null | undefined): string | undefined {
-  const normalized = normalizeWhitespace(model);
-  if (!normalized) {
-    return undefined;
-  }
-  return MODEL_LABEL_BY_SLUG.get(normalized.toLowerCase()) ?? normalized;
+  return formatModelDisplayName(normalizeWhitespace(model));
 }

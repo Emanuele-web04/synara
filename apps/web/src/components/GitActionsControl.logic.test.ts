@@ -9,6 +9,7 @@ import {
   resolveDefaultBranchActionDialogCopy,
   resolveLiveThreadBranchUpdate,
   resolveQuickAction,
+  shouldOfferCreateBranchPrompt,
   summarizeGitResult,
 } from "./GitActionsControl.logic";
 
@@ -252,15 +253,20 @@ describe("when: branch is clean, ahead, and has no open PR", () => {
 });
 
 describe("when: branch is clean, up to date, and has no open PR", () => {
-  it("resolveQuickAction returns disabled no-action state", () => {
+  it("resolveQuickAction offers creating a PR on a published feature branch", () => {
     const quick = resolveQuickAction(
       status({ aheadCount: 0, behindCount: 0, hasWorkingTreeChanges: false, pr: null }),
       false,
     );
-    assert.deepInclude(quick, { kind: "show_hint", label: "Commit", disabled: true });
+    assert.deepInclude(quick, {
+      kind: "run_action",
+      action: "create_pr",
+      label: "Create PR",
+      disabled: false,
+    });
   });
 
-  it("buildMenuItems disables commit, push, and create PR", () => {
+  it("buildMenuItems enables create PR for a published feature branch", () => {
     const items = buildMenuItems(status({ aheadCount: 0, behindCount: 0, pr: null }), false);
     assert.deepEqual(items, [
       {
@@ -282,7 +288,7 @@ describe("when: branch is clean, up to date, and has no open PR", () => {
       {
         id: "pr",
         label: "Create PR",
-        disabled: true,
+        disabled: false,
         icon: "pr",
         kind: "open_dialog",
         dialogAction: "create_pr",
@@ -365,7 +371,23 @@ describe("when: working tree has local changes", () => {
     });
   });
 
-  it("resolveQuickAction keeps create-branch visible for unpushed worktree branches after rename", () => {
+  it("resolveQuickAction hides create-branch when the caller opts out", () => {
+    const quick = resolveQuickAction(
+      status({ branch: "worktree/semantic-name", hasUpstream: false }),
+      false,
+      false,
+      true,
+      false,
+    );
+    assert.deepInclude(quick, {
+      kind: "show_hint",
+      label: "Push",
+      hint: "No local commits to push.",
+      disabled: true,
+    });
+  });
+
+  it("resolveQuickAction shows create-branch when the caller opts in", () => {
     const quick = resolveQuickAction(
       status({ branch: "worktree/semantic-name", hasUpstream: false }),
       false,
@@ -525,6 +547,41 @@ describe("when: on default branch without open PR", () => {
         id: "pr",
         label: "Create PR",
         disabled: false,
+        icon: "pr",
+        kind: "open_dialog",
+        dialogAction: "create_pr",
+      },
+    ]);
+  });
+
+  it("does not enable create PR on a clean default branch with nothing new to publish", () => {
+    const items = buildMenuItems(
+      status({ branch: "main", aheadCount: 0, behindCount: 0, pr: null }),
+      false,
+      true,
+      true,
+    );
+    assert.deepEqual(items, [
+      {
+        id: "commit",
+        label: "Commit",
+        disabled: true,
+        icon: "commit",
+        kind: "open_dialog",
+        dialogAction: "commit",
+      },
+      {
+        id: "push",
+        label: "Commit & push",
+        disabled: true,
+        icon: "push",
+        kind: "open_dialog",
+        dialogAction: "commit_push",
+      },
+      {
+        id: "pr",
+        label: "Create PR",
+        disabled: true,
         icon: "pr",
         kind: "open_dialog",
         dialogAction: "create_pr",
@@ -1153,5 +1210,100 @@ describe("resolveLiveThreadBranchUpdate", () => {
     });
 
     assert.deepEqual(update, { branch: "feature/new" });
+  });
+});
+
+describe("shouldOfferCreateBranchPrompt", () => {
+  const temporaryBranch = "dpcode/deadbeef";
+
+  it("shows the create-branch prompt for temporary worktree branches without upstream", () => {
+    assert.isTrue(
+      shouldOfferCreateBranchPrompt({
+        activeWorktreePath: "/tmp/project/.worktrees/feature-test",
+        threadBranch: temporaryBranch,
+        gitStatus: {
+          branch: temporaryBranch,
+          hasUpstream: false,
+        },
+      }),
+    );
+  });
+
+  it("hides the create-branch prompt when the branch already has upstream", () => {
+    assert.isFalse(
+      shouldOfferCreateBranchPrompt({
+        activeWorktreePath: "/tmp/project/.worktrees/feature-test",
+        threadBranch: temporaryBranch,
+        gitStatus: {
+          branch: temporaryBranch,
+          hasUpstream: true,
+        },
+      }),
+    );
+  });
+
+  it("hides the create-branch prompt outside a worktree even when the branch is local-only", () => {
+    assert.isFalse(
+      shouldOfferCreateBranchPrompt({
+        activeWorktreePath: null,
+        threadBranch: temporaryBranch,
+        gitStatus: {
+          branch: temporaryBranch,
+          hasUpstream: false,
+        },
+      }),
+    );
+  });
+
+  it("hides the create-branch prompt once the current branch has been finalized", () => {
+    assert.isFalse(
+      shouldOfferCreateBranchPrompt({
+        activeWorktreePath: "/tmp/project/.worktrees/feature-test",
+        gitStatus: {
+          branch: "feature/test",
+          hasUpstream: false,
+        },
+        createBranchFlowCompleted: true,
+      }),
+    );
+  });
+
+  it("shows the create-branch prompt for a temporary worktree branch until the flow is completed", () => {
+    assert.isTrue(
+      shouldOfferCreateBranchPrompt({
+        activeWorktreePath: "/tmp/project/.worktrees/feature-test",
+        gitStatus: {
+          branch: temporaryBranch,
+          hasUpstream: false,
+        },
+        createBranchFlowCompleted: false,
+      }),
+    );
+  });
+
+  it("keeps the create-branch prompt visible for a semantic local-only branch until the flow is completed", () => {
+    assert.isTrue(
+      shouldOfferCreateBranchPrompt({
+        activeWorktreePath: "/tmp/project/.worktrees/feature-test",
+        gitStatus: {
+          branch: "feature/test",
+          hasUpstream: false,
+        },
+        createBranchFlowCompleted: false,
+      }),
+    );
+  });
+
+  it("keeps the create-branch prompt visible when the branch was auto-renamed locally but not finalized", () => {
+    assert.isTrue(
+      shouldOfferCreateBranchPrompt({
+        activeWorktreePath: "/tmp/project/.worktrees/feature-test",
+        gitStatus: {
+          branch: "feature/test",
+          hasUpstream: false,
+        },
+        createBranchFlowCompleted: false,
+      }),
+    );
   });
 });

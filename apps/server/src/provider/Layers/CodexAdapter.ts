@@ -226,8 +226,8 @@ function toCanonicalItemType(raw: unknown): CanonicalItemType {
   if (type.includes("collab")) return "collab_agent_tool_call";
   if (type.includes("web search")) return "web_search";
   if (type.includes("image")) return "image_view";
-  if (type.includes("review entered")) return "review_entered";
-  if (type.includes("review exited")) return "review_exited";
+  if (type.includes("review entered") || type.includes("entered review")) return "review_entered";
+  if (type.includes("review exited") || type.includes("exited review")) return "review_exited";
   if (type.includes("compact")) return "context_compaction";
   if (type.includes("error")) return "error";
   return "unknown";
@@ -271,6 +271,7 @@ function itemDetail(
     asString(item.command),
     asString(item.title),
     asString(item.summary),
+    asString(item.review),
     asString(item.text),
     asString(item.path),
     asString(item.prompt),
@@ -579,6 +580,9 @@ function mapItemLifecycle(
     return undefined;
   }
 
+  const canonicalItemType =
+    lifecycle === "item.completed" && itemType === "review_exited" ? "assistant_message" : itemType;
+
   const detail = itemDetail(source, payload ?? {});
   const status =
     lifecycle === "item.started"
@@ -591,9 +595,9 @@ function mapItemLifecycle(
     ...runtimeEventBase(event, canonicalThreadId),
     type: lifecycle,
     payload: {
-      itemType,
+      itemType: canonicalItemType,
       ...(status ? { status } : {}),
-      ...(itemTitle(itemType) ? { title: itemTitle(itemType) } : {}),
+      ...(itemTitle(canonicalItemType) ? { title: itemTitle(canonicalItemType) } : {}),
       ...(detail ? { detail } : {}),
       ...(event.payload !== undefined ? { data: event.payload } : {}),
     },
@@ -1415,6 +1419,10 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         ...(input.modelSelection?.provider === "codex"
           ? { model: input.modelSelection.model }
           : {}),
+        ...(input.modelSelection?.provider === "codex" &&
+        input.modelSelection.options?.reasoningEffort !== undefined
+          ? { effort: input.modelSelection.options.reasoningEffort }
+          : {}),
         ...(input.modelSelection?.provider === "codex" && input.modelSelection.options?.fastMode
           ? { serviceTier: "fast" }
           : {}),
@@ -1605,6 +1613,25 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         Effect.map((snapshot) => ({
           threadId,
           turns: snapshot.turns,
+          cwd: snapshot.cwd ?? null,
+        })),
+      );
+
+    const readExternalThread: NonNullable<CodexAdapterShape["readExternalThread"]> = (input) =>
+      Effect.tryPromise({
+        try: () => manager.readExternalThread(input),
+        catch: (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "thread/read",
+            detail: toMessage(cause, "Failed to read external Codex thread."),
+            cause,
+          }),
+      }).pipe(
+        Effect.map((snapshot) => ({
+          threadId: ThreadId.makeUnsafe(snapshot.threadId),
+          turns: snapshot.turns,
+          cwd: snapshot.cwd ?? null,
         })),
       );
 
@@ -1816,6 +1843,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       startReview,
       interruptTurn,
       readThread,
+      readExternalThread,
       rollbackThread,
       compactThread,
       forkThread,

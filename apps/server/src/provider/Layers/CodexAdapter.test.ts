@@ -208,6 +208,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
           provider: "codex",
           model: "gpt-5.3-codex",
           options: {
+            reasoningEffort: "high",
             fastMode: true,
           },
         },
@@ -218,6 +219,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
         provider: "codex",
         threadId: asThreadId("thread-1"),
         model: "gpt-5.3-codex",
+        effort: "high",
         serviceTier: "fast",
         runtimeMode: "full-access",
       });
@@ -342,6 +344,45 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       assert.equal(firstEvent.value.itemId, "msg_1");
       assert.equal(firstEvent.value.turnId, "turn-1");
       assert.equal(firstEvent.value.payload.itemType, "assistant_message");
+    }),
+  );
+
+  it.effect("maps exited review items to assistant completion events with review text", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      const event: ProviderEvent = {
+        id: asEventId("evt-review-complete"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "item/completed",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-review"),
+        payload: {
+          item: {
+            type: "exitedReviewMode",
+            id: "review_1",
+            review: "Working tree is clean.",
+          },
+        },
+      };
+
+      lifecycleManager.emit("event", event);
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") {
+        return;
+      }
+      assert.equal(firstEvent.value.type, "item.completed");
+      if (firstEvent.value.type !== "item.completed") {
+        return;
+      }
+      assert.equal(firstEvent.value.turnId, "turn-review");
+      assert.equal(firstEvent.value.payload.itemType, "assistant_message");
+      assert.equal(firstEvent.value.payload.detail, "Working tree is clean.");
     }),
   );
 

@@ -9,7 +9,6 @@ import {
   type UserInputQuestion,
   type ThreadId,
   type TurnId,
-  PROVIDER_DISPLAY_NAMES,
 } from "@t3tools/contracts";
 import {
   decodeSubagentAgentStates,
@@ -49,6 +48,7 @@ export interface WorkLogEntry {
   changedFiles?: ReadonlyArray<string>;
   tone: "thinking" | "tool" | "info" | "error";
   toolTitle?: string;
+  toolName?: string;
   itemType?: ToolLifecycleItemType;
   requestKind?: PendingApproval["requestKind"];
   subagents?: ReadonlyArray<WorkLogSubagent>;
@@ -403,6 +403,17 @@ export function deriveActivePlanState(
 ): ActivePlanState | null {
   const ordered = [...activities].toSorted(compareActivitiesByOrder);
   const allPlanActivities = ordered.filter((activity) => activity.kind === "turn.plan.updated");
+  const settledTurnIds = new Set<TurnId>();
+
+  // A prior-turn plan only stays visible while that originating turn is still unresolved.
+  for (const activity of ordered) {
+    if (!activity.turnId) {
+      continue;
+    }
+    if (activity.kind === "turn.completed" || activity.kind === "turn.aborted") {
+      settledTurnIds.add(activity.turnId);
+    }
+  }
 
   const toActivePlanState = (activity: OrchestrationThreadActivity): ActivePlanState | null => {
     const payload =
@@ -465,6 +476,10 @@ export function deriveActivePlanState(
   const latestPriorPlan =
     allPlanActivities.map(toActivePlanState).findLast((plan) => plan !== null) ?? null;
   if (!latestPriorPlan) {
+    return null;
+  }
+
+  if (latestPriorPlan.turnId && settledTurnIds.has(latestPriorPlan.turnId)) {
     return null;
   }
 

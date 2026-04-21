@@ -32,10 +32,17 @@ export function shouldCheckForUpdatesOnForeground(args: {
   checkedAt: string | null;
   backgroundedAtMs: number | null;
   foregroundedAtMs: number;
+  minBackgroundDurationMs: number;
   minIntervalMs: number;
 }): boolean {
-  const { checkedAt, backgroundedAtMs, foregroundedAtMs, minIntervalMs } = args;
+  const { checkedAt, backgroundedAtMs, foregroundedAtMs, minBackgroundDurationMs, minIntervalMs } =
+    args;
   if (backgroundedAtMs === null || foregroundedAtMs <= backgroundedAtMs) {
+    return false;
+  }
+
+  // Ignore fleeting blur/focus churn from window transitions and native dialogs.
+  if (foregroundedAtMs - backgroundedAtMs < minBackgroundDurationMs) {
     return false;
   }
 

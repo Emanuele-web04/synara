@@ -5,10 +5,16 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useStore } from "zustand";
-import { type ThreadId } from "@t3tools/contracts";
+import {
+  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+  PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+  type ThreadId,
+} from "@t3tools/contracts";
 import {
   ArrowLeftIcon,
   ArrowRightIcon,
+  CameraIcon,
+  CopyIcon,
   ExternalLinkIcon,
   GlobeIcon,
   LoaderCircleIcon,
@@ -25,6 +31,12 @@ import {
   selectThreadBrowserHistory,
   selectThreadBrowserState,
 } from "../browserStateStore";
+import { useComposerDraftStore } from "../composerDraftStore";
+import { anchoredToastManager } from "./ui/toast";
+import {
+  composerImageFromBrowserScreenshot,
+  screenshotAttachmentName,
+} from "../lib/browserPromptContext";
 import {
   browserAddressDisplayValue,
   buildBrowserAddressSuggestions,
@@ -36,6 +48,7 @@ import {
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
+import { toastManager } from "./ui/toast";
 
 interface BrowserPanelProps {
   mode: DiffPanelMode;
@@ -43,6 +56,55 @@ interface BrowserPanelProps {
   onClosePanel: () => void;
 }
 
+const BROWSER_BOUNDS_SYNC_BURST_FRAMES = 8;
+const BROWSER_BOUNDS_SYNC_STABLE_FRAME_TARGET = 2;
+const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
+const DPCODE_BROWSER_LABEL = "DPCODE browser";
+const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
+const NATIVE_BROWSER_OBSCURING_OVERLAY_SELECTOR = [
+  "[data-slot='dialog-backdrop']",
+  "[data-slot='dialog-popup']",
+  "[data-slot='dialog-viewport']",
+  "[data-slot='sheet-backdrop']",
+  "[data-slot='sheet-popup']",
+  "[data-slot='alert-dialog-backdrop']",
+  "[data-slot='alert-dialog-popup']",
+  "[data-slot='alert-dialog-viewport']",
+  "[data-slot='command-dialog-backdrop']",
+  "[data-slot='command-dialog-popup']",
+  "[data-slot='command-dialog-viewport']",
+  "[data-slot='toast-viewport']",
+  "[data-slot='toast-viewport-anchored']",
+  "[data-slot='toast-positioner']",
+  "[data-slot='toast-popup']",
+  "[role='dialog'][aria-modal='true']",
+].join(", ");
+
+interface BrowserViewportPerfCounters {
+  syncAttempts: number;
+  syncSkips: number;
+  syncSends: number;
+  resizeSchedules: number;
+  resizeScheduleSkips: number;
+  burstStarts: number;
+  burstExtensions: number;
+  burstFrames: number;
+  transitionSignals: number;
+  ignoredTransitionSignals: number;
+}
+
+const VIEWPORT_TRANSITION_PROPERTIES = new Set([
+  "transform",
+  "width",
+  "max-width",
+  "min-width",
+  "left",
+  "right",
+  "inset",
+  "inset-inline",
+  "inset-inline-start",
+  "inset-inline-end",
+]);
 function closeButtonClassName(isActive: boolean) {
   return cn(
     "ml-1 size-5 shrink-0 rounded-sm p-0 text-muted-foreground/70 hover:bg-background/80 hover:text-foreground",
@@ -60,20 +122,203 @@ function formatBrowserActionError(error: unknown): string | null {
   return "Couldn't complete that browser action.";
 }
 
+function ignoreBrowserBoundsSyncError(): void {
+  // Bounds sync is best-effort plumbing between the React shell and the native
+  // browser surface. Avoid surfacing transient geometry-sync failures as user-facing
+  // browser errors because they do not reflect page navigation health.
+}
+
+function isVisibleOverlayElement(element: HTMLElement): boolean {
+  const styles = window.getComputedStyle(element);
+  if (styles.display === "none" || styles.visibility === "hidden" || styles.opacity === "0") {
+    return false;
+  }
+  return element.getClientRects().length > 0;
+}
+
+const NATIVE_BROWSER_OVERLAY_SAMPLE_POINTS = [
+  [0.5, 0.5],
+  [0.2, 0.2],
+  [0.8, 0.2],
+  [0.2, 0.8],
+  [0.8, 0.8],
+] as const;
+
+function rectsIntersect(a: DOMRect, b: DOMRect): boolean {
+  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+}
+
+function candidateObscuresNativeBrowser(candidate: HTMLElement, element: HTMLElement): boolean {
+  if (candidate === element || candidate.contains(element) || element.contains(candidate)) {
+    return false;
+  }
+  if (!isVisibleOverlayElement(candidate)) {
+    return false;
+  }
+
+  const elementRect = element.getBoundingClientRect();
+  const candidateRects = candidate.getClientRects();
+  for (const candidateRect of candidateRects) {
+    if (rectsIntersect(elementRect, candidateRect)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function hasTopLayerDomObstruction(element: HTMLElement): boolean {
+  const rect = element.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) {
+    return false;
+  }
+
+  for (const [xRatio, yRatio] of NATIVE_BROWSER_OVERLAY_SAMPLE_POINTS) {
+    const x = rect.left + rect.width * xRatio;
+    const y = rect.top + rect.height * yRatio;
+    if (x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) {
+      continue;
+    }
+
+    const hitElements = document.elementsFromPoint(x, y);
+    for (const hitElement of hitElements) {
+      if (!(hitElement instanceof HTMLElement)) {
+        continue;
+      }
+      if (hitElement === element || element.contains(hitElement) || hitElement.contains(element)) {
+        continue;
+      }
+      if (!isVisibleOverlayElement(hitElement)) {
+        continue;
+      }
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function hasNativeBrowserObscuringOverlay(element: HTMLElement): boolean {
+  const candidates = document.querySelectorAll<HTMLElement>(
+    NATIVE_BROWSER_OBSCURING_OVERLAY_SELECTOR,
+  );
+  for (const candidate of candidates) {
+    if (candidateObscuresNativeBrowser(candidate, element)) {
+      return true;
+    }
+  }
+
+  return hasTopLayerDomObstruction(element);
+}
+
+function nodeMayAffectNativeBrowserOverlay(node: Node | null): boolean {
+  if (!(node instanceof HTMLElement)) {
+    return false;
+  }
+
+  return (
+    node.matches(NATIVE_BROWSER_OBSCURING_OVERLAY_SELECTOR) ||
+    node.querySelector(NATIVE_BROWSER_OBSCURING_OVERLAY_SELECTOR) !== null ||
+    node.closest(NATIVE_BROWSER_OBSCURING_OVERLAY_SELECTOR) !== null
+  );
+}
+
+function mutationMayAffectNativeBrowserOverlay(mutation: MutationRecord): boolean {
+  if (nodeMayAffectNativeBrowserOverlay(mutation.target)) {
+    return true;
+  }
+
+  for (const node of mutation.addedNodes) {
+    if (nodeMayAffectNativeBrowserOverlay(node)) {
+      return true;
+    }
+  }
+
+  for (const node of mutation.removedNodes) {
+    if (nodeMayAffectNativeBrowserOverlay(node)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function isNativeBrowserTransitionSignalTarget(
+  target: EventTarget | null,
+  viewportElement: HTMLElement,
+): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  if (viewportElement.contains(target) || target.contains(viewportElement)) {
+    return true;
+  }
+
+  return (
+    target.closest(NATIVE_BROWSER_OBSCURING_OVERLAY_SELECTOR) !== null ||
+    target.closest("[data-slot='sidebar-container']") !== null ||
+    target.closest("[data-slot='sheet-popup']") !== null
+  );
+}
+
+function isBrowserPerfLoggingEnabled(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  if (import.meta.env.DEV) {
+    return true;
+  }
+
+  try {
+    return (
+      window.localStorage.getItem("dpcode:browser-perf") === "1" ||
+      window.localStorage.getItem("t3code:browser-perf") === "1"
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps) {
   const api = readNativeApi();
   const threadBrowserState = useStore(useBrowserStateStore, selectThreadBrowserState(threadId));
   const recentHistory = useStore(useBrowserStateStore, selectThreadBrowserHistory(threadId));
   const upsertThreadState = useBrowserStateStore((store) => store.upsertThreadState);
+  const addComposerDraftImage = useComposerDraftStore((store) => store.addImage);
+  const composerDraftImageCount = useComposerDraftStore(
+    (store) => store.draftsByThreadId[threadId]?.images.length ?? 0,
+  );
+  const composerDraftAssistantSelectionCount = useComposerDraftStore(
+    (store) => store.draftsByThreadId[threadId]?.assistantSelections.length ?? 0,
+  );
   const addressInputRef = useRef<HTMLInputElement>(null);
   const browserViewportRef = useRef<HTMLDivElement>(null);
+  const copyScreenshotButtonRef = useRef<HTMLButtonElement>(null);
   const addressDraftsByTabIdRef = useRef(new Map<string, string>());
   const lastSyncedAddressByTabIdRef = useRef(new Map<string, string>());
   const previousActiveTabIdRef = useRef<string | null>(null);
   const lastSentBoundsRef = useRef<string | null>(null);
+  const lastMeasuredBoundsKeyRef = useRef<string | null>(null);
+  const lastOverlayObscuredRef = useRef(false);
   const isAddressEditingRef = useRef(false);
   const resizeFrameRef = useRef<number | null>(null);
   const boundsBurstFrameRef = useRef<number | null>(null);
+  const burstFramesRemainingRef = useRef(0);
+  const burstStableFramesRef = useRef(0);
+  const perfCountersRef = useRef<BrowserViewportPerfCounters>({
+    syncAttempts: 0,
+    syncSkips: 0,
+    syncSends: 0,
+    resizeSchedules: 0,
+    resizeScheduleSkips: 0,
+    burstStarts: 0,
+    burstExtensions: 0,
+    burstFrames: 0,
+    transitionSignals: 0,
+    ignoredTransitionSignals: 0,
+  });
   const [addressValue, setAddressValue] = useState("");
   const [isAddressFocused, setIsAddressFocused] = useState(false);
   const [workspaceReady, setWorkspaceReady] = useState(false);
@@ -185,6 +430,23 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
     }
   }, [threadBrowserState?.tabs]);
 
+  useEffect(() => {
+    if (!isBrowserPerfLoggingEnabled()) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      console.info(`[${DPCODE_BROWSER_LABEL} panel perf]`, {
+        threadId,
+        ...perfCountersRef.current,
+      });
+    }, BROWSER_PERF_SAMPLE_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [threadId]);
+
   useLayoutEffect(() => {
     if (!api) {
       return;
@@ -196,50 +458,79 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
     }
 
     const syncBounds = () => {
-      const rect = element.getBoundingClientRect();
-      const bounds =
-        rect.width > 0 && rect.height > 0
-          ? {
+      perfCountersRef.current.syncAttempts += 1;
+      const obscuredByOverlay = hasNativeBrowserObscuringOverlay(element);
+      lastOverlayObscuredRef.current = obscuredByOverlay;
+      const bounds = obscuredByOverlay
+        ? null
+        : (() => {
+            const rect = element.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) {
+              return null;
+            }
+            return {
               x: rect.left,
               y: rect.top,
               width: rect.width,
               height: rect.height,
-            }
-          : null;
+            };
+          })();
       const nextKey = bounds
         ? `${Math.round(bounds.x)}:${Math.round(bounds.y)}:${Math.round(bounds.width)}:${Math.round(bounds.height)}`
         : "hidden";
+      lastMeasuredBoundsKeyRef.current = nextKey;
       if (lastSentBoundsRef.current === nextKey) {
+        perfCountersRef.current.syncSkips += 1;
         return;
       }
       lastSentBoundsRef.current = nextKey;
-      void runBrowserAction(() => api.browser.setPanelBounds({ threadId, bounds }));
+      perfCountersRef.current.syncSends += 1;
+      void api.browser.setPanelBounds({ threadId, bounds }).catch(ignoreBrowserBoundsSyncError);
     };
 
-    // The right panel opens with an off-canvas slide animation, so the viewport's
-    // x/y position changes for a few frames without triggering ResizeObserver.
-    const syncBoundsBurst = (frames = 18) => {
+    // The panel can slide horizontally without resizing. A short burst keeps the
+    // native browser view in lockstep without paying for a long frame-by-frame loop.
+    const syncBoundsBurst = (frames = BROWSER_BOUNDS_SYNC_BURST_FRAMES) => {
       if (boundsBurstFrameRef.current !== null) {
-        cancelAnimationFrame(boundsBurstFrameRef.current);
+        perfCountersRef.current.burstExtensions += 1;
+        burstFramesRemainingRef.current = Math.max(burstFramesRemainingRef.current, frames);
+        burstStableFramesRef.current = 0;
+        return;
       }
 
-      let framesRemaining = frames;
+      perfCountersRef.current.burstStarts += 1;
+      burstFramesRemainingRef.current = frames;
+      burstStableFramesRef.current = 0;
       const tick = () => {
+        perfCountersRef.current.burstFrames += 1;
+        const previousMeasuredKey = lastMeasuredBoundsKeyRef.current;
         syncBounds();
-        framesRemaining -= 1;
-        if (framesRemaining > 0) {
+        if (lastMeasuredBoundsKeyRef.current === previousMeasuredKey) {
+          burstStableFramesRef.current += 1;
+        } else {
+          burstStableFramesRef.current = 0;
+        }
+        burstFramesRemainingRef.current -= 1;
+        if (
+          burstFramesRemainingRef.current > 0 &&
+          burstStableFramesRef.current < BROWSER_BOUNDS_SYNC_STABLE_FRAME_TARGET
+        ) {
           boundsBurstFrameRef.current = window.requestAnimationFrame(tick);
           return;
         }
         boundsBurstFrameRef.current = null;
+        burstFramesRemainingRef.current = 0;
+        burstStableFramesRef.current = 0;
       };
 
       boundsBurstFrameRef.current = window.requestAnimationFrame(tick);
     };
 
     const scheduleSyncBounds = () => {
+      perfCountersRef.current.resizeSchedules += 1;
       if (resizeFrameRef.current !== null) {
-        cancelAnimationFrame(resizeFrameRef.current);
+        perfCountersRef.current.resizeScheduleSkips += 1;
+        return;
       }
       resizeFrameRef.current = window.requestAnimationFrame(() => {
         resizeFrameRef.current = null;
@@ -247,36 +538,70 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
       });
     };
 
-    const transitionTargets = [
-      element.closest<HTMLElement>("[data-slot='sidebar-container']"),
-      element.closest<HTMLElement>("[data-slot='sheet-popup']"),
-    ].filter((target): target is HTMLElement => target !== null);
-    const handleTransitionBounds = () => {
+    const scheduleOverlayVisibilitySync = () => {
+      const obscuredByOverlay = hasNativeBrowserObscuringOverlay(element);
+      if (obscuredByOverlay === lastOverlayObscuredRef.current) {
+        return;
+      }
       scheduleSyncBounds();
-      syncBoundsBurst();
+      if (obscuredByOverlay) {
+        syncBoundsBurst();
+      }
     };
 
-    scheduleSyncBounds();
+    const handleTransitionBounds = (event: TransitionEvent) => {
+      if (!isNativeBrowserTransitionSignalTarget(event.target, element)) {
+        perfCountersRef.current.ignoredTransitionSignals += 1;
+        return;
+      }
+
+      if (
+        event.propertyName.length > 0 &&
+        !VIEWPORT_TRANSITION_PROPERTIES.has(event.propertyName)
+      ) {
+        perfCountersRef.current.ignoredTransitionSignals += 1;
+        return;
+      }
+
+      perfCountersRef.current.transitionSignals += 1;
+      scheduleSyncBounds();
+      if (event.type === "transitionrun") {
+        syncBoundsBurst();
+      }
+    };
+
+    syncBounds();
     syncBoundsBurst();
     const observer = new ResizeObserver(() => {
       scheduleSyncBounds();
     });
     observer.observe(element);
     window.addEventListener("resize", scheduleSyncBounds);
-    for (const target of transitionTargets) {
-      target.addEventListener("transitionrun", handleTransitionBounds);
-      target.addEventListener("transitionend", handleTransitionBounds);
-      target.addEventListener("transitioncancel", handleTransitionBounds);
-    }
+    // Keep overlay sync event-driven instead of watching the full app subtree.
+    // Codex-style browser hosts avoid broad DOM observation and instead react to
+    // explicit UI lifecycle signals plus direct visibility checks at sync time.
+    const overlayObserver = new MutationObserver((mutations) => {
+      if (!mutations.some(mutationMayAffectNativeBrowserOverlay)) {
+        return;
+      }
+      scheduleOverlayVisibilitySync();
+    });
+    overlayObserver.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+    });
+    document.addEventListener("transitionrun", handleTransitionBounds, true);
+    document.addEventListener("transitionend", handleTransitionBounds, true);
+    document.addEventListener("transitioncancel", handleTransitionBounds, true);
 
     return () => {
       observer.disconnect();
+      overlayObserver.disconnect();
       window.removeEventListener("resize", scheduleSyncBounds);
-      for (const target of transitionTargets) {
-        target.removeEventListener("transitionrun", handleTransitionBounds);
-        target.removeEventListener("transitionend", handleTransitionBounds);
-        target.removeEventListener("transitioncancel", handleTransitionBounds);
-      }
+      document.removeEventListener("transitionrun", handleTransitionBounds, true);
+      document.removeEventListener("transitionend", handleTransitionBounds, true);
+      document.removeEventListener("transitioncancel", handleTransitionBounds, true);
       if (resizeFrameRef.current !== null) {
         cancelAnimationFrame(resizeFrameRef.current);
         resizeFrameRef.current = null;
@@ -285,9 +610,10 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
         cancelAnimationFrame(boundsBurstFrameRef.current);
         boundsBurstFrameRef.current = null;
       }
-      void api.browser.hide({ threadId });
+      burstFramesRemainingRef.current = 0;
+      burstStableFramesRef.current = 0;
     };
-  }, [api, runBrowserAction, threadId]);
+  }, [api, threadId]);
 
   const onSubmitAddress = useCallback(() => {
     if (!api || !activeTab) {
@@ -299,7 +625,11 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
     addressDraftsByTabIdRef.current.set(activeTab.id, normalizedAddress);
     setAddressValue(normalizedAddress);
     void runBrowserAction(() =>
-      api.browser.navigate({ threadId, tabId: activeTab.id, url: normalizedAddress }),
+      api.browser.navigate({
+        threadId,
+        tabId: activeTab.id,
+        url: normalizedAddress,
+      }),
     ).then((state) => {
       if (state) {
         upsertThreadState(state);
@@ -365,6 +695,78 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
     });
   }, [api, runBrowserAction, threadId, upsertThreadState]);
 
+  const onCaptureScreenshot = useCallback(() => {
+    if (!api || !activeTab) {
+      return;
+    }
+
+    const attachmentCount = composerDraftImageCount + composerDraftAssistantSelectionCount;
+    if (attachmentCount >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
+      setLocalError(
+        `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} references per message.`,
+      );
+      return;
+    }
+
+    void runBrowserAction(() =>
+      api.browser.captureScreenshot({ threadId, tabId: activeTab.id }),
+    ).then((screenshot) => {
+      if (!screenshot) {
+        return;
+      }
+      if (screenshot.sizeBytes > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
+        setLocalError(
+          `'${screenshotAttachmentName(screenshot)}' exceeds the ${IMAGE_SIZE_LIMIT_LABEL} attachment limit.`,
+        );
+        return;
+      }
+
+      addComposerDraftImage(threadId, composerImageFromBrowserScreenshot(screenshot));
+      setLocalError(null);
+    });
+  }, [
+    activeTab,
+    addComposerDraftImage,
+    api,
+    composerDraftAssistantSelectionCount,
+    composerDraftImageCount,
+    runBrowserAction,
+    threadId,
+  ]);
+
+  const onCopyScreenshotToClipboard = useCallback(() => {
+    if (!api || !activeTab) {
+      return;
+    }
+
+    void runBrowserAction(() =>
+      api.browser.copyScreenshotToClipboard({ threadId, tabId: activeTab.id }),
+    ).then((result) => {
+      if (result === null) {
+        return;
+      }
+      const anchor = copyScreenshotButtonRef.current;
+      if (anchor) {
+        anchoredToastManager.add({
+          data: {
+            tooltipStyle: true,
+          },
+          positionerProps: {
+            anchor,
+          },
+          timeout: 1_200,
+          title: "Browser screenshot copied",
+        });
+        return;
+      }
+
+      toastManager.add({
+        type: "success",
+        title: "Browser screenshot copied",
+      });
+    });
+  }, [activeTab, api, runBrowserAction, threadId]);
+
   const onCloseTab = useCallback(
     (tabId: string) => {
       if (!api) {
@@ -390,6 +792,7 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
         <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
           <Button
             type="button"
+            ref={copyScreenshotButtonRef}
             variant="ghost"
             size="icon-sm"
             className="size-7 shrink-0"
@@ -527,6 +930,28 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
         >
           <PlusIcon className="size-3.5" />
           <span className="sr-only">New tab</span>
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className="size-7"
+          disabled={!activeTab}
+          onClick={onCaptureScreenshot}
+        >
+          <CameraIcon className="size-3.5" />
+          <span className="sr-only">Capture screenshot into composer</span>
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className="size-7"
+          disabled={!activeTab}
+          onClick={onCopyScreenshotToClipboard}
+        >
+          <CopyIcon className="size-3.5" />
+          <span className="sr-only">Copy browser screenshot to clipboard</span>
         </Button>
         <Button
           type="button"

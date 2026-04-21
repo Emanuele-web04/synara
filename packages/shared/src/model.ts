@@ -128,6 +128,28 @@ export function geminiCapabilitiesForModel(
   }
 }
 
+const MODEL_NAME_BY_SLUG = new Map(
+  Object.values(MODEL_OPTIONS_BY_PROVIDER)
+    .flat()
+    .map((option) => [option.slug.toLowerCase(), option.name] as const),
+);
+
+function humanizeUnknownModelSlug(slug: string): string {
+  if (!slug.toLowerCase().startsWith("gpt-")) return slug;
+  const [, version, ...rest] = slug.split("-");
+  if (rest.length === 0) return `GPT-${version}`;
+  return `GPT-${version} ${rest.map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join(" ")}`;
+}
+
+export function formatModelDisplayName(model: string | null | undefined): string | undefined {
+  const normalized = trimOrNull(model);
+  if (!normalized) {
+    return undefined;
+  }
+
+  return MODEL_NAME_BY_SLUG.get(normalized.toLowerCase()) ?? humanizeUnknownModelSlug(normalized);
+}
+
 export function getGeminiThinkingSelectionValue(
   caps: ModelCapabilities,
   modelOptions: GeminiModelOptions | null | undefined,
