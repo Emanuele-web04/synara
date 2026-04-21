@@ -280,7 +280,7 @@ export default function BranchToolbar({
       <div className="flex items-center gap-2">
         {showEnvPicker ? (
           <Popover open={envPickerOpen} onOpenChange={setEnvPickerOpen}>
-            <PopoverTrigger className="inline-flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--sidebar-accent)] hover:text-[var(--color-text-foreground)]">
+            <PopoverTrigger className="inline-flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)]">
               {environmentPresentation.mode === "local" ? (
                 <PiLaptop className="size-3.5" />
               ) : (
@@ -318,7 +318,7 @@ export default function BranchToolbar({
                 ) : (
                   <button
                     type="button"
-                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-text-foreground)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)]"
+                    className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-left text-sm text-[var(--color-text-foreground)] transition-colors hover:bg-[var(--color-background-elevated-secondary)]"
                     onClick={() => {
                       setEnvPickerOpen(false);
                       onEnvModeChange("local");
@@ -331,7 +331,7 @@ export default function BranchToolbar({
                 {canSwitchToWorktree ? (
                   <button
                     type="button"
-                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-text-foreground)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)]"
+                    className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-left text-sm text-[var(--color-text-foreground)] transition-colors hover:bg-[var(--color-background-elevated-secondary)]"
                     onClick={() => {
                       setEnvPickerOpen(false);
                       onEnvModeChange("worktree");
@@ -361,7 +361,7 @@ export default function BranchToolbar({
                 {canHandoffToWorktree && onHandoffToWorktree ? (
                   <button
                     type="button"
-                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-text-foreground)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)] disabled:pointer-events-none disabled:opacity-50"
+                    className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-left text-sm text-[var(--color-text-foreground)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] disabled:pointer-events-none disabled:opacity-50"
                     disabled={handoffBusy}
                     onClick={() => {
                       setEnvPickerOpen(false);
@@ -375,7 +375,7 @@ export default function BranchToolbar({
                 {canHandoffToLocal && onHandoffToLocal ? (
                   <button
                     type="button"
-                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-text-foreground)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)] disabled:pointer-events-none disabled:opacity-50"
+                    className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-left text-sm text-[var(--color-text-foreground)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] disabled:pointer-events-none disabled:opacity-50"
                     disabled={handoffBusy}
                     onClick={() => {
                       setEnvPickerOpen(false);
@@ -392,7 +392,7 @@ export default function BranchToolbar({
 
               <div className="py-1.5">
                 <Collapsible open={rateLimitsOpen} onOpenChange={setRateLimitsOpen}>
-                  <CollapsibleTrigger className="flex w-full items-center gap-2 px-3 py-1.5 text-sm text-[var(--color-text-foreground)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)]">
+                  <CollapsibleTrigger className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-sm text-[var(--color-text-foreground)] transition-colors hover:bg-[var(--color-background-elevated-secondary)]">
                     <svg
                       className="size-4 text-[var(--color-text-foreground-secondary)]"
                       viewBox="0 0 24 24"

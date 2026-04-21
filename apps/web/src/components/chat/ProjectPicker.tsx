@@ -293,7 +293,7 @@ export const ProjectPicker = memo(function ProjectPicker({
             <>
               <button
                 type="button"
-                className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] disabled:cursor-not-allowed disabled:opacity-60"
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)] disabled:cursor-not-allowed disabled:opacity-60"
                 onClick={() => void handleAddNewProject()}
                 disabled={isPicking}
               >
@@ -305,7 +305,7 @@ export const ProjectPicker = memo(function ProjectPicker({
               {showResetToHome ? (
                 <button
                   type="button"
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)]"
                   onClick={() => {
                     onResetToHome?.();
                     setOpen(false);
@@ -344,7 +344,7 @@ export const ProjectPicker = memo(function ProjectPicker({
                     }}
                     className={cn(
                       folder.cwd === selectedWorkspaceRoot &&
-                        "bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)]",
+                        "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]",
                     )}
                   >
                     <div className="flex min-w-0 items-center gap-2">
@@ -382,7 +382,7 @@ export const ProjectPicker = memo(function ProjectPicker({
                     }}
                     className={cn(
                       absolutePath === selectedWorkspaceRoot &&
-                        "bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)]",
+                        "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]",
                     )}
                   >
                     <div className="flex min-w-0 items-center gap-2">

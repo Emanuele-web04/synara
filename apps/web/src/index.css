@@ -580,13 +580,18 @@ diffs-container {
   background: color-mix(in srgb, var(--card) 92%, var(--background));
 }
 
-/* Match Codex: composer chrome follows the input token, not the raised panel surface. */
+/* In light mode the composer should stay close to the chat canvas, just slightly shaded.
+   Dark mode keeps the user-bubble surface treatment we aligned elsewhere. */
 .chat-composer-surface {
   background: color-mix(
     in srgb,
-    var(--color-token-input-background, var(--color-background-control)) 70%,
-    transparent
+    var(--color-background-surface-under) 97%,
+    white 3%
   );
+}
+
+.dark .chat-composer-surface {
+  background: var(--color-secondary);
 }
 
 @keyframes ultrathink-rainbow {

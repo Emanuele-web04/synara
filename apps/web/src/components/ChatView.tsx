@@ -6522,7 +6522,7 @@ export default function ChatView({
         >
           <div
             className={cn(
-              "chat-composer-surface rounded-2xl border border-[color:var(--color-border-light)] !bg-secondary transition-colors duration-200",
+              "chat-composer-surface rounded-2xl border border-[color:var(--color-border-light)] transition-colors duration-200",
               isDragOverComposer ? "!bg-[var(--color-background-control)]" : "",
               composerProviderState.composerSurfaceClassName,
             )}
@@ -7245,7 +7245,7 @@ export default function ChatView({
                     >
                       <div
                         className={cn(
-                          "chat-composer-surface rounded-2xl border border-[color:var(--color-border-light)] !bg-secondary transition-colors duration-200",
+                          "chat-composer-surface rounded-2xl border border-[color:var(--color-border-light)] transition-colors duration-200",
                           isDragOverComposer ? "!bg-[var(--color-background-control)]" : "",
                           composerProviderState.composerSurfaceClassName,
                         )}
