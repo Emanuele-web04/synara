@@ -2507,6 +2507,8 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
       supportsPluginMentions: false,
       supportsPluginDiscovery: false,
       supportsRuntimeModelList: true,
+      supportsThreadCompaction: false,
+      supportsThreadImport: false,
     } satisfies ProviderComposerCapabilities);
 
   yield* Effect.addFinalizer(() =>

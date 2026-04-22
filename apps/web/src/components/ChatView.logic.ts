@@ -2,9 +2,11 @@ import {
   ProjectId,
   ThreadId,
   type ModelSelection,
+  type ProviderKind,
   type ServerProviderAuthStatus,
   type ThreadId as ThreadIdType,
 } from "@t3tools/contracts";
+import { normalizeModelSlug } from "@t3tools/shared/model";
 import { sanitizeBranchFragment } from "@t3tools/shared/git";
 import { isGenericChatThreadTitle } from "@t3tools/shared/chatThreads";
 import { isGenericTerminalThreadTitle } from "@t3tools/shared/terminalThreads";
@@ -194,6 +196,40 @@ export function deriveComposerVoiceState(input: {
     canStartVoiceNotes,
     showVoiceNotesControl: canRenderVoiceNotes || input.isRecording || input.isTranscribing,
   };
+}
+
+export function shouldShowComposerModelBootstrapSkeleton(input: {
+  selectedProvider: ProviderKind;
+  selectedModel: string | null | undefined;
+  persistedModelSelection: ModelSelection | null | undefined;
+  draftModelSelection: ModelSelection | null | undefined;
+  providerModelsLoading: boolean;
+}): boolean {
+  const draftSelection = input.draftModelSelection;
+  if (draftSelection && draftSelection.provider === input.selectedProvider) {
+    return false;
+  }
+
+  const persistedSelection = input.persistedModelSelection;
+  if (!persistedSelection) {
+    return false;
+  }
+
+  if (persistedSelection.provider !== input.selectedProvider) {
+    return true;
+  }
+
+  if (!input.providerModelsLoading) {
+    return false;
+  }
+
+  const normalizedSelectedModel =
+    normalizeModelSlug(input.selectedModel, input.selectedProvider) ?? input.selectedModel;
+  const normalizedPersistedModel =
+    normalizeModelSlug(persistedSelection.model, persistedSelection.provider) ??
+    persistedSelection.model;
+
+  return normalizedSelectedModel !== normalizedPersistedModel;
 }
 
 export interface PullRequestDialogState {

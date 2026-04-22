@@ -6,6 +6,7 @@ import type {
   GitActionProgressEvent,
   GitActionProgressPhase,
   GitStackedAction,
+  ProviderStartOptions,
 } from "@t3tools/contracts";
 import {
   resolveAutoFeatureBranchName,
@@ -1092,6 +1093,7 @@ export const makeGitManager = Effect.gen(function* () {
     branch: string | null;
     commitMessage?: string;
     codexHomePath?: string;
+    providerOptions?: ProviderStartOptions;
     /** When true, also produce a semantic feature branch name. */
     includeBranch?: boolean;
     filePaths?: readonly string[];
@@ -1122,6 +1124,7 @@ export const makeGitManager = Effect.gen(function* () {
           stagedSummary: limitContext(context.stagedSummary, 8_000),
           stagedPatch: limitContext(context.stagedPatch, 50_000),
           ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
+          ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
           ...(input.includeBranch ? { includeBranch: true } : {}),
           ...(input.model ? { model: input.model } : {}),
         })
@@ -1157,6 +1160,7 @@ export const makeGitManager = Effect.gen(function* () {
     preResolvedSuggestion?: CommitAndBranchSuggestion,
     filePaths?: readonly string[],
     codexHomePath?: string,
+    providerOptions?: ProviderStartOptions,
     model?: string,
     progressReporter?: GitActionProgressReporter,
     actionId?: string,
@@ -1188,6 +1192,7 @@ export const makeGitManager = Effect.gen(function* () {
           ...(commitMessage ? { commitMessage } : {}),
           ...(filePaths ? { filePaths } : {}),
           ...(codexHomePath ? { codexHomePath } : {}),
+          ...(providerOptions ? { providerOptions } : {}),
           ...(model ? { model } : {}),
         });
       }
@@ -1269,6 +1274,7 @@ export const makeGitManager = Effect.gen(function* () {
     cwd: string,
     fallbackBranch: string | null,
     codexHomePath?: string,
+    providerOptions?: ProviderStartOptions,
     model?: string,
   ) =>
     Effect.gen(function* () {
@@ -1321,6 +1327,7 @@ export const makeGitManager = Effect.gen(function* () {
         diffSummary: limitContext(rangeContext.diffSummary, 20_000),
         diffPatch: limitContext(rangeContext.diffPatch, 60_000),
         ...(codexHomePath ? { codexHomePath } : {}),
+        ...(providerOptions ? { providerOptions } : {}),
         ...(model ? { model } : {}),
       });
 
@@ -1404,6 +1411,7 @@ export const makeGitManager = Effect.gen(function* () {
       cwd: input.cwd,
       patch,
       ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
+      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
       ...(input.textGenerationModel ? { model: input.textGenerationModel } : {}),
     });
 
@@ -2357,6 +2365,7 @@ The local stash entry was kept for recovery.`,
     commitMessage?: string,
     filePaths?: readonly string[],
     codexHomePath?: string,
+    providerOptions?: ProviderStartOptions,
     model?: string,
     options?: FeatureBranchStepOptions,
   ) =>
@@ -2367,6 +2376,7 @@ The local stash entry was kept for recovery.`,
         ...(commitMessage ? { commitMessage } : {}),
         ...(filePaths ? { filePaths } : {}),
         ...(codexHomePath ? { codexHomePath } : {}),
+        ...(providerOptions ? { providerOptions } : {}),
         includeBranch: true,
         ...(model ? { model } : {}),
       });
@@ -2556,6 +2566,7 @@ The local stash entry was kept for recovery.`,
             input.commitMessage,
             input.filePaths,
             input.codexHomePath,
+            input.providerOptions,
             input.textGenerationModel,
             {
               allowCommittedHead: !wantsCommit,
@@ -2582,6 +2593,7 @@ The local stash entry was kept for recovery.`,
                 preResolvedCommitSuggestion,
                 input.filePaths,
                 input.codexHomePath,
+                input.providerOptions,
                 input.textGenerationModel,
                 options?.progressReporter,
                 progress.actionId,
@@ -2621,6 +2633,7 @@ The local stash entry was kept for recovery.`,
                       input.cwd,
                       currentBranch,
                       input.codexHomePath,
+                      input.providerOptions,
                       input.textGenerationModel,
                     );
                   }),

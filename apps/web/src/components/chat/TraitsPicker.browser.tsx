@@ -5,6 +5,7 @@ import {
   ClaudeModelOptions,
   CodexModelOptions,
   DEFAULT_MODEL_BY_PROVIDER,
+  type OpenCodeModelOptions,
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -37,7 +38,7 @@ function ClaudeTraitsPickerHarness(props: {
     selectedProvider: "claudeAgent",
     threadModelSelection: props.fallbackModelSelection,
     projectModelSelection: null,
-    customModelsByProvider: { codex: [], claudeAgent: [], gemini: [] },
+    customModelsByProvider: { codex: [], claudeAgent: [], gemini: [], opencode: [] },
   });
   const handlePromptChange = useCallback(
     (nextPrompt: string) => {
@@ -437,6 +438,88 @@ describe("TraitsPicker (Codex)", () => {
     expect(useComposerDraftStore.getState().stickyModelSelectionByProvider.codex).toMatchObject({
       provider: "codex",
       options: { fastMode: true },
+    });
+  });
+});
+
+// ── OpenCode TraitsPicker tests ───────────────────────────────────────
+
+async function mountOpenCodePicker(props: { model?: string; options?: OpenCodeModelOptions }) {
+  const threadId = ThreadId.makeUnsafe("thread-opencode-traits");
+  const model = props.model ?? DEFAULT_MODEL_BY_PROVIDER.opencode;
+  const draftsByThreadId: Record<ThreadId, ComposerThreadDraftState> = {
+    [threadId]: {
+      prompt: "",
+      images: [],
+      nonPersistedImageIds: [],
+      persistedAttachments: [],
+      terminalContexts: [],
+      queuedTurns: [],
+      assistantSelections: [],
+      modelSelectionByProvider: {
+        opencode: {
+          provider: "opencode",
+          model,
+          ...(props.options ? { options: props.options } : {}),
+        },
+      },
+      activeProvider: "opencode",
+      runtimeMode: null,
+      interactionMode: null,
+    },
+  };
+
+  useComposerDraftStore.setState({
+    draftsByThreadId,
+    draftThreadsByThreadId: {},
+    projectDraftThreadIdByProjectId: {},
+  });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const screen = await render(
+    <TraitsPicker
+      provider="opencode"
+      threadId={threadId}
+      model={model}
+      prompt=""
+      modelOptions={props.options}
+      onPromptChange={() => {}}
+    />,
+    { container: host },
+  );
+
+  const cleanup = async () => {
+    await screen.unmount();
+    host.remove();
+  };
+
+  return {
+    host,
+    [Symbol.asyncDispose]: cleanup,
+    cleanup,
+  };
+}
+
+describe("TraitsPicker (OpenCode)", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+    localStorage.removeItem(COMPOSER_DRAFT_STORAGE_KEY);
+    useComposerDraftStore.setState({
+      draftsByThreadId: {},
+      draftThreadsByThreadId: {},
+      projectDraftThreadIdByProjectId: {},
+      stickyModelSelectionByProvider: {},
+    });
+  });
+
+  it("does not render an empty traits trigger when the model exposes no controls", async () => {
+    await using mounted = await mountOpenCodePicker({
+      model: "openrouter/gpt-oss-120b:free",
+    });
+
+    await vi.waitFor(() => {
+      expect(mounted.host.textContent ?? "").toBe("");
+      expect(mounted.host.querySelector("button")).toBeNull();
     });
   });
 });

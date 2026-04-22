@@ -61,7 +61,6 @@ interface SnapshotSqliteDatabase {
 
 const importRuntimeModule = (specifier: string): Promise<unknown> =>
   Function("specifier", "return import(specifier)")(specifier) as Promise<unknown>;
-
 const openReadOnlySnapshotDatabase = async (
   sourcePath: string,
 ): Promise<SnapshotSqliteDatabase> => {

@@ -72,6 +72,7 @@ import {
   supportsNativeSlashCommandDiscovery,
   supportsPluginDiscovery,
   supportsSkillDiscovery,
+  supportsThreadCompaction,
 } from "~/lib/providerDiscoveryReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
@@ -100,6 +101,7 @@ import {
   buildThreadBreadcrumbs,
   enrichSubagentWorkEntries,
   resolveActiveThreadTitle,
+  shouldShowComposerModelBootstrapSkeleton,
 } from "./ChatView.logic";
 import {
   createRelevantWorkLogThreadsSelector,
@@ -195,6 +197,7 @@ import {
 } from "~/lib/icons";
 import { Button } from "./ui/button";
 import { Separator } from "./ui/separator";
+import { Skeleton } from "./ui/skeleton";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
 import { terminalRuntimeRegistry } from "./terminal/terminalRuntimeRegistry";
 import { cn, isMacPlatform, randomUUID } from "~/lib/utils";
@@ -216,7 +219,8 @@ import {
   resolveTerminalCloseTitle,
 } from "~/lib/terminalCloseConfirmation";
 import {
-  getCustomModelOptionsByProvider,
+  getAppModelOptions,
+  getCustomBinaryPathForProvider,
   getCustomModelsByProvider,
   getProviderStartOptions,
   resolveAppModelSelection,
@@ -335,7 +339,11 @@ import {
   resolveDiffEnvironmentState,
   resolveThreadEnvironmentMode,
 } from "../lib/threadEnvironment";
-import { buildModelSelection, buildNextProviderOptions } from "../providerModelOptions";
+import {
+  buildModelSelection,
+  buildNextProviderOptions,
+  type ProviderModelOption,
+} from "../providerModelOptions";
 import {
   isDuplicateProjectCreateError,
   waitForRecoverableProjectForDuplicateCreate,
@@ -458,16 +466,17 @@ function normalizeDynamicModelSlug(provider: ProviderKind, slug: string): string
 
 function mergeDynamicModelOptions(input: {
   provider: ProviderKind;
-  staticOptions: ReadonlyArray<{
+  staticOptions: ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>;
+  dynamicModels: ReadonlyArray<{
     slug: string;
-    name: string;
-    isCustom?: boolean;
+    name?: string | null;
+    upstreamProviderId?: string | null;
+    upstreamProviderName?: string | null;
   }>;
-  dynamicModels: ReadonlyArray<{ slug: string; name?: string | null }>;
-}): ReadonlyArray<{ slug: string; name: string; isCustom?: boolean }> {
+}): ReadonlyArray<ProviderModelOption & { isCustom?: boolean }> {
   const staticNameBySlug = new Map(input.staticOptions.map((model) => [model.slug, model.name]));
   const dynamicNormalizedSlugs = new Set<string>();
-  const normalizedDynamicOptions: Array<{ slug: string; name: string }> = [];
+  const normalizedDynamicOptions: ProviderModelOption[] = [];
 
   for (const dynamicModel of input.dynamicModels) {
     const rawName = dynamicModel.name?.trim() ?? "";
@@ -497,6 +506,12 @@ function mergeDynamicModelOptions(input: {
         rawName.toLowerCase() !== normalizedSlug.toLowerCase()
           ? rawName
           : displayNameFallback),
+      ...(dynamicModel.upstreamProviderId?.trim()
+        ? { upstreamProviderId: dynamicModel.upstreamProviderId.trim() }
+        : {}),
+      ...(dynamicModel.upstreamProviderName?.trim()
+        ? { upstreamProviderName: dynamicModel.upstreamProviderName.trim() }
+        : {}),
     });
   }
 
@@ -506,9 +521,10 @@ function mergeDynamicModelOptions(input: {
   const staticBuiltInModels = input.staticOptions.filter(
     (model) => !("isCustom" in model) || model.isCustom !== true,
   );
-  const missingStaticBuiltIns = staticBuiltInModels.filter(
-    (model) => !dynamicNormalizedSlugs.has(model.slug),
-  );
+  const missingStaticBuiltIns =
+    input.provider === "opencode" && normalizedDynamicOptions.length > 0
+      ? []
+      : staticBuiltInModels.filter((model) => !dynamicNormalizedSlugs.has(model.slug));
 
   const orderedDynamicOptions =
     input.provider === "claudeAgent"
@@ -640,6 +656,22 @@ const terminalContextIdListsEqual = (
   ids: ReadonlyArray<string>,
 ): boolean =>
   contexts.length === ids.length && contexts.every((context, index) => context.id === ids[index]);
+
+function ComposerControlSkeleton(props: {
+  widthClassName: string;
+}) {
+  return (
+    <div
+      aria-hidden="true"
+      className={cn(
+        "flex h-8 shrink-0 items-center rounded-md border border-border/50 px-2",
+        props.widthClassName,
+      )}
+    >
+      <Skeleton className="h-3.5 w-full rounded-full" />
+    </div>
+  );
+}
 
 interface ChatViewProps {
   threadId: ThreadId;
@@ -1216,13 +1248,27 @@ export default function ChatView({
   voiceThreadIdRef.current = threadId;
   voiceProviderRef.current = selectedProvider;
   const customModelsByProvider = useMemo(() => getCustomModelsByProvider(settings), [settings]);
-  const { modelOptions: composerModelOptions, selectedModel } = useEffectiveComposerModelState({
-    threadId,
-    selectedProvider,
-    threadModelSelection: activeThread?.modelSelection,
-    projectModelSelection: activeProject?.defaultModelSelection,
-    customModelsByProvider,
-  });
+  const composerModelHintByProvider = useMemo<Record<ProviderKind, string | null>>(() => {
+    const threadModelSelection = activeThread?.modelSelection ?? null;
+    const projectModelSelection = activeProject?.defaultModelSelection ?? null;
+    const draftSelections = composerDraft.modelSelectionByProvider;
+
+    const resolveHint = (provider: ProviderKind): string | null =>
+      draftSelections[provider]?.model ??
+      (threadModelSelection?.provider === provider ? threadModelSelection.model : null) ??
+      (projectModelSelection?.provider === provider ? projectModelSelection.model : null);
+
+    return {
+      codex: resolveHint("codex"),
+      claudeAgent: resolveHint("claudeAgent"),
+      gemini: resolveHint("gemini"),
+      opencode: resolveHint("opencode"),
+    };
+  }, [
+    activeProject?.defaultModelSelection,
+    activeThread?.modelSelection,
+    composerDraft.modelSelectionByProvider,
+  ]);
   const claudeDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({ provider: "claudeAgent" }),
   );
@@ -1234,22 +1280,102 @@ export default function ChatView({
       enabled: selectedProvider === "gemini" || lockedProvider === "gemini",
     }),
   );
+  const openCodeDynamicModelsQuery = useQuery(
+    providerModelsQueryOptions({
+      provider: "opencode",
+      binaryPath: settings.openCodeBinaryPath || null,
+    }),
+  );
   const claudeDynamicAgentsQuery = useQuery(
     providerAgentsQueryOptions({ provider: "claudeAgent" }),
   );
   const codexDynamicAgentsQuery = useQuery(providerAgentsQueryOptions({ provider: "codex" }));
+  const openCodeDynamicAgentsQuery = useQuery(providerAgentsQueryOptions({ provider: "opencode" }));
+  const modelOptionsByProvider = useMemo(() => {
+    const staticOptions: Record<ProviderKind, ReturnType<typeof getAppModelOptions>> = {
+      codex: getAppModelOptions(
+        "codex",
+        customModelsByProvider.codex,
+        composerModelHintByProvider.codex,
+      ),
+      claudeAgent: getAppModelOptions(
+        "claudeAgent",
+        customModelsByProvider.claudeAgent,
+        composerModelHintByProvider.claudeAgent,
+      ),
+      gemini: getAppModelOptions(
+        "gemini",
+        customModelsByProvider.gemini,
+        composerModelHintByProvider.gemini,
+      ),
+      opencode: getAppModelOptions(
+        "opencode",
+        customModelsByProvider.opencode,
+        composerModelHintByProvider.opencode,
+      ),
+    };
+    const result = { ...staticOptions };
+
+    const dynamicSources: Record<ProviderKind, typeof claudeDynamicModelsQuery.data> = {
+      claudeAgent: claudeDynamicModelsQuery.data,
+      codex: codexDynamicModelsQuery.data,
+      gemini: geminiModelsQuery.data,
+      opencode: openCodeDynamicModelsQuery.data,
+    };
+
+    for (const provider of ["claudeAgent", "codex", "gemini", "opencode"] as const) {
+      const dynamicModels = dynamicSources[provider]?.models;
+      if (dynamicModels && dynamicModels.length > 0) {
+        result[provider] = mergeDynamicModelOptions({
+          provider,
+          staticOptions: staticOptions[provider],
+          dynamicModels: dynamicModels.map((model) => ({
+            slug: model.slug,
+            name: model.name,
+            upstreamProviderId: model.upstreamProviderId,
+            upstreamProviderName: model.upstreamProviderName,
+          })),
+        });
+      }
+    }
+
+    return result;
+  }, [
+    claudeDynamicModelsQuery.data,
+    composerModelHintByProvider,
+    codexDynamicModelsQuery.data,
+    customModelsByProvider,
+    geminiModelsQuery.data,
+    openCodeDynamicModelsQuery.data,
+  ]);
+  const { modelOptions: composerModelOptions, selectedModel } = useEffectiveComposerModelState({
+    threadId,
+    selectedProvider,
+    threadModelSelection: activeThread?.modelSelection,
+    projectModelSelection: activeProject?.defaultModelSelection,
+    customModelsByProvider,
+    availableModelOptionsByProvider: modelOptionsByProvider,
+  });
   const runtimeModelsByProvider = useMemo(
     () => ({
       claudeAgent: claudeDynamicModelsQuery.data?.models ?? [],
       codex: codexDynamicModelsQuery.data?.models ?? [],
       gemini: geminiModelsQuery.data?.models ?? [],
+      opencode: openCodeDynamicModelsQuery.data?.models ?? [],
     }),
     [
       claudeDynamicModelsQuery.data?.models,
       codexDynamicModelsQuery.data?.models,
       geminiModelsQuery.data?.models,
+      openCodeDynamicModelsQuery.data?.models,
     ],
   );
+  const providerModelsQueryByProvider = {
+    claudeAgent: claudeDynamicModelsQuery,
+    codex: codexDynamicModelsQuery,
+    gemini: geminiModelsQuery,
+    opencode: openCodeDynamicModelsQuery,
+  } as const;
   const selectedRuntimeModel = useMemo(
     () =>
       resolveRuntimeModelDescriptor({
@@ -1278,57 +1404,44 @@ export default function ChatView({
   );
   const providerOptionsForDispatch = useMemo(() => getProviderStartOptions(settings), [settings]);
   const selectedModelForPicker = selectedModel;
-  const modelOptionsByProvider = useMemo(() => {
-    const staticOptions = getCustomModelOptionsByProvider(settings);
-    const result = { ...staticOptions };
-
-    const dynamicSources: Record<ProviderKind, typeof claudeDynamicModelsQuery.data> = {
-      claudeAgent: claudeDynamicModelsQuery.data,
-      codex: codexDynamicModelsQuery.data,
-      gemini: geminiModelsQuery.data,
-    };
-
-    for (const provider of ["claudeAgent", "codex", "gemini"] as const) {
-      const dynamicModels = dynamicSources[provider]?.models;
-      if (dynamicModels && dynamicModels.length > 0) {
-        result[provider] = mergeDynamicModelOptions({
-          provider,
-          staticOptions: staticOptions[provider],
-          dynamicModels: dynamicModels.map((model) => ({
-            slug: model.slug,
-            name: model.name,
-          })),
-        });
-      }
-    }
-
-    return result;
-  }, [
-    settings,
-    claudeDynamicModelsQuery.data,
-    codexDynamicModelsQuery.data,
-    geminiModelsQuery.data,
-  ]);
   const selectedModelForPickerWithCustomFallback = useMemo(() => {
     const currentOptions = modelOptionsByProvider[selectedProvider];
     return currentOptions.some((option) => option.slug === selectedModelForPicker)
       ? selectedModelForPicker
       : (normalizeModelSlug(selectedModelForPicker, selectedProvider) ?? selectedModelForPicker);
   }, [modelOptionsByProvider, selectedModelForPicker, selectedProvider]);
+  const persistedComposerModelSelection = activeThread?.modelSelection ?? activeProject?.defaultModelSelection ?? null;
+  const draftModelSelectionForSelectedProvider =
+    composerDraft.modelSelectionByProvider[selectedProvider] ?? null;
+  const selectedProviderModelsQuery = providerModelsQueryByProvider[selectedProvider];
+  const providerModelsLoading =
+    selectedProviderModelsQuery.isLoading ||
+    (selectedProviderModelsQuery.isFetching && selectedProviderModelsQuery.data === undefined);
+  const showComposerModelBootstrapSkeleton = shouldShowComposerModelBootstrapSkeleton({
+    selectedProvider,
+    selectedModel,
+    persistedModelSelection: persistedComposerModelSelection,
+    draftModelSelection: draftModelSelectionForSelectedProvider,
+    providerModelsLoading,
+  });
   const searchableModelOptions = useMemo(
     () =>
       AVAILABLE_PROVIDER_OPTIONS.filter(
         (option) => lockedProvider === null || option.value === lockedProvider,
       ).flatMap((option) =>
-        modelOptionsByProvider[option.value].map(({ slug, name }) => ({
-          provider: option.value,
-          providerLabel: option.label,
-          slug,
-          name,
-          searchSlug: slug.toLowerCase(),
-          searchName: name.toLowerCase(),
-          searchProvider: option.label.toLowerCase(),
-        })),
+        modelOptionsByProvider[option.value].map(
+          ({ slug, name, upstreamProviderId, upstreamProviderName }) => ({
+            provider: option.value,
+            providerLabel: option.label,
+            slug,
+            name,
+            searchSlug: slug.toLowerCase(),
+            searchName: name.toLowerCase(),
+            searchProvider: option.label.toLowerCase(),
+            searchUpstreamProvider:
+              (upstreamProviderName ?? upstreamProviderId ?? "").toLowerCase(),
+          }),
+        ),
       ),
     [lockedProvider, modelOptionsByProvider],
   );
@@ -2000,29 +2113,24 @@ export default function ChatView({
       selectedMentionCount: selectedComposerMentions.length,
       interactionMode,
     });
-  const selectedDynamicAgents = useMemo(
-    () =>
+  const dynamicAgents = useMemo(() => {
+    const query =
       selectedProvider === "claudeAgent"
-        ? (claudeDynamicAgentsQuery.data?.agents ?? [])
-        : (codexDynamicAgentsQuery.data?.agents ?? []),
-    [selectedProvider, claudeDynamicAgentsQuery.data?.agents, codexDynamicAgentsQuery.data?.agents],
-  );
-  const dynamicAgents = useMemo(
-    () =>
-      selectedDynamicAgents.map((agent) =>
-        agent.description
-          ? {
-              name: agent.name,
-              displayName: agent.displayName,
-              description: agent.description,
-            }
-          : {
-              name: agent.name,
-              displayName: agent.displayName,
-            },
-      ),
-    [selectedDynamicAgents],
-  );
+        ? claudeDynamicAgentsQuery
+        : selectedProvider === "opencode"
+          ? openCodeDynamicAgentsQuery
+          : codexDynamicAgentsQuery;
+    return (query.data?.agents ?? []).map((a) => ({
+      name: a.name,
+      displayName: a.displayName,
+      ...(a.description ? { description: a.description } : {}),
+    }));
+  }, [
+    selectedProvider,
+    claudeDynamicAgentsQuery.data,
+    codexDynamicAgentsQuery.data,
+    openCodeDynamicAgentsQuery.data,
+  ]);
   const normalComposerMenuItems = useComposerCommandMenuItems({
     composerTrigger: effectiveComposerTrigger,
     provider: selectedProvider,
@@ -2033,7 +2141,7 @@ export default function ChatView({
     searchableModelOptions,
     supportsFastSlashCommand,
     canOfferCompactCommand:
-      selectedProvider === "codex" &&
+      supportsThreadCompaction(providerComposerCapabilitiesQuery.data) &&
       isServerThread &&
       activeThread?.session !== null &&
       activeThread?.session?.status !== "closed",
@@ -2113,21 +2221,11 @@ export default function ChatView({
           normalizeProviderStatusForLocalConfig({
             provider: status.provider,
             status,
-            customBinaryPath:
-              status.provider === "codex"
-                ? settings.codexBinaryPath
-                : status.provider === "claudeAgent"
-                  ? settings.claudeBinaryPath
-                  : settings.geminiBinaryPath,
+            customBinaryPath: getCustomBinaryPathForProvider(settings, status.provider),
           }),
         )
         .flatMap((status) => (status ? [status] : [])),
-    [
-      serverConfigQuery.data?.providers,
-      settings.claudeBinaryPath,
-      settings.codexBinaryPath,
-      settings.geminiBinaryPath,
-    ],
+    [serverConfigQuery.data?.providers, settings],
   );
   const handoffBadgeLabel = useMemo(
     () => (activeThread ? resolveThreadHandoffBadgeLabel(activeThread) : null),
@@ -5621,6 +5719,34 @@ export default function ChatView({
     shortcutLabel: traitsPickerShortcutLabel,
     onPromptChange: setPromptFromTraits,
   });
+  const composerModelPickerControl = showComposerModelBootstrapSkeleton ? (
+    <ComposerControlSkeleton
+      widthClassName={isComposerFooterCompact ? "w-28" : "w-32 sm:w-36"}
+    />
+  ) : (
+    <ProviderModelPicker
+      compact={isComposerFooterCompact}
+      provider={selectedProvider}
+      model={selectedModelForPickerWithCustomFallback}
+      lockedProvider={lockedProvider}
+      providers={providerStatuses}
+      modelOptionsByProvider={modelOptionsByProvider}
+      open={isModelPickerOpen}
+      onOpenChange={handleModelPickerOpenChange}
+      shortcutLabel={modelPickerShortcutLabel}
+      {...(composerProviderState.modelPickerIconClassName
+        ? {
+            activeProviderIconClassName: composerProviderState.modelPickerIconClassName,
+          }
+        : {})}
+      onProviderModelChange={onProviderModelSelect}
+    />
+  );
+  const composerTraitsPickerControl = showComposerModelBootstrapSkeleton ? (
+    <ComposerControlSkeleton widthClassName={isComposerFooterCompact ? "w-16" : "w-20"} />
+  ) : (
+    providerTraitsPicker
+  );
   const toggleFastMode = useCallback(() => {
     if (!composerTraitSelection.caps.supportsFastMode) {
       scheduleComposerFocus();
@@ -5963,7 +6089,7 @@ export default function ChatView({
     isServerThread,
     supportsFastSlashCommand,
     canOfferCompactCommand:
-      selectedProvider === "codex" &&
+      supportsThreadCompaction(providerComposerCapabilitiesQuery.data) &&
       isServerThread &&
       activeThread?.session !== null &&
       activeThread?.session?.status !== "closed",
@@ -6696,32 +6822,15 @@ export default function ChatView({
 
                   {!isVoiceRecording && !isVoiceTranscribing ? (
                     <>
-                      <ProviderModelPicker
-                        compact={isComposerFooterCompact}
-                        provider={selectedProvider}
-                        model={selectedModelForPickerWithCustomFallback}
-                        lockedProvider={lockedProvider}
-                        providers={providerStatuses}
-                        modelOptionsByProvider={modelOptionsByProvider}
-                        open={isModelPickerOpen}
-                        onOpenChange={handleModelPickerOpenChange}
-                        shortcutLabel={modelPickerShortcutLabel}
-                        {...(composerProviderState.modelPickerIconClassName
-                          ? {
-                              activeProviderIconClassName:
-                                composerProviderState.modelPickerIconClassName,
-                            }
-                          : {})}
-                        onProviderModelChange={onProviderModelSelect}
-                      />
+                      {composerModelPickerControl}
 
-                      {providerTraitsPicker ? (
+                      {composerTraitsPickerControl ? (
                         <>
                           <Separator
                             orientation="vertical"
                             className="mx-0.5 hidden h-4 sm:block"
                           />
-                          {providerTraitsPicker}
+                          {composerTraitsPickerControl}
                         </>
                       ) : null}
 
@@ -7429,32 +7538,15 @@ export default function ChatView({
                               {!isVoiceRecording && !isVoiceTranscribing ? (
                                 <>
                                   {/* Provider/model picker */}
-                                  <ProviderModelPicker
-                                    compact={isComposerFooterCompact}
-                                    provider={selectedProvider}
-                                    model={selectedModelForPickerWithCustomFallback}
-                                    lockedProvider={lockedProvider}
-                                    providers={providerStatuses}
-                                    modelOptionsByProvider={modelOptionsByProvider}
-                                    open={isModelPickerOpen}
-                                    onOpenChange={handleModelPickerOpenChange}
-                                    shortcutLabel={modelPickerShortcutLabel}
-                                    {...(composerProviderState.modelPickerIconClassName
-                                      ? {
-                                          activeProviderIconClassName:
-                                            composerProviderState.modelPickerIconClassName,
-                                        }
-                                      : {})}
-                                    onProviderModelChange={onProviderModelSelect}
-                                  />
+                                  {composerModelPickerControl}
 
-                                  {providerTraitsPicker ? (
+                                  {composerTraitsPickerControl ? (
                                     <>
                                       <Separator
                                         orientation="vertical"
                                         className="mx-0.5 hidden h-4 sm:block"
                                       />
-                                      {providerTraitsPicker}
+                                      {composerTraitsPickerControl}
                                     </>
                                   ) : null}
 

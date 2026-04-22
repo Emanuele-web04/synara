@@ -1391,6 +1391,67 @@ describe("store read model sync", () => {
     expect(next.threads[0]?.modelSelection.model).toBe("claude-sonnet-4-6");
   });
 
+  it("preserves OpenCode as the active session provider", () => {
+    const initialState = makeState(makeThread());
+    const readModel = makeReadModel(
+      makeReadModelThread({
+        modelSelection: {
+          provider: "opencode",
+          model: "openrouter/gpt-oss-120b:free",
+        },
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "ready",
+          providerName: "opencode",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: "2026-02-27T00:00:00.000Z",
+        },
+      }),
+    );
+
+    const next = syncServerReadModel(initialState, readModel);
+
+    expect(next.threads[0]?.modelSelection.provider).toBe("opencode");
+    expect(next.threads[0]?.session?.provider).toBe("opencode");
+  });
+
+  it("preserves exact OpenCode thread model slugs from the read model", () => {
+    const initialState = makeState(makeThread());
+    const readModel = makeReadModel(
+      makeReadModelThread({
+        modelSelection: {
+          provider: "opencode",
+          model: "openai/gpt-5.4",
+        },
+      }),
+    );
+
+    const next = syncServerReadModel(initialState, readModel);
+
+    expect(next.threads[0]?.modelSelection.model).toBe("openai/gpt-5.4");
+  });
+
+  it("preserves exact OpenCode project default model slugs from the read model", () => {
+    const initialState = makeState(makeThread());
+    const readModel = {
+      ...makeReadModel(makeReadModelThread({})),
+      projects: [
+        makeReadModelProject({
+          defaultModelSelection: {
+            provider: "opencode",
+            model: "openai/gpt-5.4",
+          },
+        }),
+      ],
+    };
+
+    const next = syncServerReadModel(initialState, readModel);
+
+    expect(next.projects[0]?.defaultModelSelection?.model).toBe("openai/gpt-5.4");
+  });
+
   it("preserves project and thread updatedAt timestamps from the read model", () => {
     const initialState = makeState(makeThread());
     const readModel = makeReadModel(

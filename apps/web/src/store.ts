@@ -16,7 +16,7 @@ import {
   type TurnId,
 } from "@t3tools/contracts";
 import { resolveThreadBranchRegressionGuard } from "@t3tools/shared/git";
-import { resolveModelSlugForProvider } from "@t3tools/shared/model";
+import { normalizeModelSlug } from "@t3tools/shared/model";
 import { normalizeWorkspaceRootForComparison } from "@t3tools/shared/threadWorkspace";
 import { create } from "zustand";
 import {
@@ -557,7 +557,7 @@ function normalizeModelSelection<T extends { provider: ProviderKind; model: stri
   value: T,
   previous: T | null | undefined,
 ): T {
-  const normalizedModel = resolveModelSlugForProvider(value.provider, value.model);
+  const normalizedModel = normalizeModelSlug(value.model, value.provider) ?? value.model;
   const next = normalizedModel === value.model ? value : { ...value, model: normalizedModel };
   return previous && deepEqualJson(previous, next) ? previous : next;
 }
@@ -1708,7 +1708,12 @@ function toLegacySessionStatus(
 }
 
 function toLegacyProvider(providerName: string | null): ProviderKind {
-  if (providerName === "codex" || providerName === "claudeAgent" || providerName === "gemini") {
+  if (
+    providerName === "codex" ||
+    providerName === "claudeAgent" ||
+    providerName === "gemini" ||
+    providerName === "opencode"
+  ) {
     return providerName;
   }
   return "codex";

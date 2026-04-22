@@ -3,16 +3,17 @@ import { describe, expect, it } from "vitest";
 
 import {
   appendVoiceTranscriptToPrompt,
+  type LocalDispatchSnapshot,
+  deriveComposerSendState,
   deriveComposerVoiceState,
   describeVoiceRecordingStartError,
   hasServerAcknowledgedLocalDispatch,
   isVoiceAuthExpiredMessage,
   resolveActiveThreadTitle,
   sanitizeVoiceErrorMessage,
-  shouldAutoDeleteTerminalThreadOnLastClose,
   buildExpiredTerminalContextToastCopy,
-  type LocalDispatchSnapshot,
-  deriveComposerSendState,
+  shouldAutoDeleteTerminalThreadOnLastClose,
+  shouldShowComposerModelBootstrapSkeleton,
   shouldStartActiveTurnLayoutGrace,
   shouldRenderTerminalWorkspace,
 } from "./ChatView.logic";
@@ -115,6 +116,71 @@ describe("voice helpers", () => {
       canStartVoiceNotes: false,
       showVoiceNotesControl: true,
     });
+  });
+});
+
+describe("shouldShowComposerModelBootstrapSkeleton", () => {
+  it("shows a skeleton while provider discovery is still resolving a persisted thread model", () => {
+    expect(
+      shouldShowComposerModelBootstrapSkeleton({
+        selectedProvider: "opencode",
+        selectedModel: "openai/gpt-5-codex",
+        persistedModelSelection: {
+          provider: "opencode",
+          model: "openai/gpt-5.4",
+        },
+        draftModelSelection: null,
+        providerModelsLoading: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("hides the skeleton once the persisted thread model is already selected", () => {
+    expect(
+      shouldShowComposerModelBootstrapSkeleton({
+        selectedProvider: "opencode",
+        selectedModel: "openai/gpt-5.4",
+        persistedModelSelection: {
+          provider: "opencode",
+          model: "openai/gpt-5.4",
+        },
+        draftModelSelection: null,
+        providerModelsLoading: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("prefers an explicit draft selection over persisted thread state", () => {
+    expect(
+      shouldShowComposerModelBootstrapSkeleton({
+        selectedProvider: "opencode",
+        selectedModel: "opencode/minimax-m2.5-free",
+        persistedModelSelection: {
+          provider: "opencode",
+          model: "openai/gpt-5.4",
+        },
+        draftModelSelection: {
+          provider: "opencode",
+          model: "opencode/minimax-m2.5-free",
+        },
+        providerModelsLoading: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("shows a skeleton when the provisional provider does not match the persisted thread provider", () => {
+    expect(
+      shouldShowComposerModelBootstrapSkeleton({
+        selectedProvider: "codex",
+        selectedModel: "gpt-5.4",
+        persistedModelSelection: {
+          provider: "opencode",
+          model: "openai/gpt-5.4",
+        },
+        draftModelSelection: null,
+        providerModelsLoading: false,
+      }),
+    ).toBe(true);
   });
 });
 

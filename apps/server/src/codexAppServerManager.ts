@@ -1825,6 +1825,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       supportsPluginMentions: true,
       supportsPluginDiscovery: true,
       supportsRuntimeModelList: true,
+      supportsThreadCompaction: true,
+      supportsThreadImport: true,
     };
   }
 

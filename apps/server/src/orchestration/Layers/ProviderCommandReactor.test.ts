@@ -543,6 +543,85 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  it("passes OpenCode model selection and provider options into thread-title generation", async () => {
+    const harness = await createHarness({
+      threadModelSelection: {
+        provider: "opencode",
+        model: "openai/gpt-5",
+        options: {
+          agent: "plan",
+          variant: "balanced",
+        },
+      },
+    });
+    const now = new Date().toISOString();
+    harness.generateThreadTitle.mockImplementation(() =>
+      Effect.succeed({
+        title: "Plan release work",
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-thread-title-opencode"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        title: "New thread",
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-opencode-title"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-opencode-title-1"),
+          role: "user",
+          text: "Plan the release workflow and deployment checklist",
+          attachments: [],
+        },
+        modelSelection: {
+          provider: "opencode",
+          model: "openai/gpt-5",
+          options: {
+            agent: "plan",
+            variant: "balanced",
+          },
+        },
+        providerOptions: {
+          opencode: {
+            binaryPath: "/custom/bin/opencode",
+            serverUrl: "http://127.0.0.1:4096",
+            serverPassword: "secret",
+          },
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.generateThreadTitle.mock.calls.length === 1);
+    expect(harness.generateThreadTitle.mock.calls[0]?.[0]).toMatchObject({
+      modelSelection: {
+        provider: "opencode",
+        model: "openai/gpt-5",
+        options: {
+          agent: "plan",
+          variant: "balanced",
+        },
+      },
+      providerOptions: {
+        opencode: {
+          binaryPath: "/custom/bin/opencode",
+          serverUrl: "http://127.0.0.1:4096",
+          serverPassword: "secret",
+        },
+      },
+    });
+  });
+
   it("queues a follow-up turn while the current turn is still running", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
