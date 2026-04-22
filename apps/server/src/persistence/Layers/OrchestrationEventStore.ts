@@ -63,6 +63,112 @@ const ReadFromSequenceRequestSchema = Schema.Struct({
 });
 const DEFAULT_READ_FROM_SEQUENCE_LIMIT = 1_000;
 const READ_PAGE_SIZE = 500;
+const LEGACY_MODEL_SELECTION_EVENT_TYPES = new Set([
+  "thread.created",
+  "thread.meta-updated",
+  "thread.turn-start-requested",
+]);
+
+type PersistedEventRow = typeof OrchestrationEventPersistedRowSchema.Type;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readTrimmedString(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function inferLegacyModelProvider(provider: unknown, model: string): "codex" | "claudeAgent" | "gemini" {
+  if (provider === "codex" || provider === "claudeAgent" || provider === "gemini") {
+    return provider;
+  }
+  const lowerModel = model.toLowerCase();
+  if (lowerModel.includes("claude")) {
+    return "claudeAgent";
+  }
+  if (lowerModel.includes("gemini")) {
+    return "gemini";
+  }
+  return "codex";
+}
+
+function readLegacyProviderOptions(
+  options: unknown,
+  provider: "codex" | "claudeAgent" | "gemini",
+): unknown {
+  if (!isRecord(options)) {
+    return options;
+  }
+  const providerScopedOptions = options[provider];
+  return providerScopedOptions === undefined ? options : providerScopedOptions;
+}
+
+function legacyModelSelection(input: {
+  readonly provider: unknown;
+  readonly model: string;
+  readonly options: unknown;
+}): Record<string, unknown> {
+  const provider = inferLegacyModelProvider(input.provider, input.model);
+  const options = readLegacyProviderOptions(input.options, provider);
+  return {
+    provider,
+    model: input.model,
+    ...(options === undefined ? {} : { options }),
+  };
+}
+
+function normalizeLegacyEventRow(row: PersistedEventRow): PersistedEventRow {
+  if (!isRecord(row.payload)) {
+    return row;
+  }
+
+  if (
+    (row.type === "project.created" || row.type === "project.meta-updated") &&
+    row.payload.defaultModelSelection === undefined
+  ) {
+    const nextPayload = { ...row.payload };
+    const legacyModel = readTrimmedString(row.payload, "defaultModel");
+    nextPayload.defaultModelSelection = legacyModel
+      ? legacyModelSelection({
+          provider: row.payload.defaultProvider,
+          model: legacyModel,
+          options: row.payload.defaultModelOptions,
+        })
+      : null;
+    delete nextPayload.defaultProvider;
+    delete nextPayload.defaultModel;
+    delete nextPayload.defaultModelOptions;
+    return { ...row, payload: nextPayload };
+  }
+
+  if (
+    LEGACY_MODEL_SELECTION_EVENT_TYPES.has(row.type) &&
+    row.payload.modelSelection === undefined
+  ) {
+    const nextPayload = { ...row.payload };
+    const legacyModel =
+      readTrimmedString(row.payload, "model") ?? (row.type === "thread.created" ? "gpt-5.4" : undefined);
+    if (legacyModel !== undefined) {
+      nextPayload.modelSelection = legacyModelSelection({
+        provider: row.payload.provider,
+        model: legacyModel,
+        options: row.payload.modelOptions,
+      });
+    }
+    delete nextPayload.provider;
+    delete nextPayload.model;
+    delete nextPayload.modelOptions;
+    return { ...row, payload: nextPayload };
+  }
+
+  return row;
+}
 
 function inferActorKind(
   event: Omit<OrchestrationEvent, "sequence">,
@@ -230,9 +336,11 @@ const makeEventStore = Effect.gen(function* () {
           ),
           Effect.flatMap((rows) =>
             Effect.forEach(rows, (row) =>
-              decodeEvent(row).pipe(
+              decodeEvent(normalizeLegacyEventRow(row)).pipe(
                 Effect.mapError(
-                  toPersistenceDecodeError("OrchestrationEventStore.readFromSequence:rowToEvent"),
+                  toPersistenceDecodeError(
+                    `OrchestrationEventStore.readFromSequence:rowToEvent(sequence=${row.sequence}, type=${row.type})`,
+                  ),
                 ),
               ),
             ),

@@ -24,7 +24,8 @@ export type ProviderReasoningEffort =
   | `${GeminiThinkingBudget}`;
 
 export const CodexModelOptions = Schema.Struct({
-  reasoningEffort: Schema.optional(Schema.Literals(CODEX_REASONING_EFFORT_OPTIONS)),
+  // Codex runtime discovery can expose early-access effort values outside the built-in enum.
+  reasoningEffort: Schema.optional(TrimmedNonEmptyString),
   fastMode: Schema.optional(Schema.Boolean),
 });
 export type CodexModelOptions = typeof CodexModelOptions.Type;
@@ -60,6 +61,7 @@ export type ProviderModelOptions = typeof ProviderModelOptions.Type;
 export type EffortOption = {
   readonly value: string;
   readonly label: string;
+  readonly description?: string;
   readonly isDefault?: true;
 };
 

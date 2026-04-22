@@ -715,7 +715,7 @@ export function buildThemeCssVariables(
     "--secondary": readCodexVariable("--color-background-button-secondary"),
     "--secondary-foreground": readCodexVariable("--color-text-button-secondary"),
     "--sidebar": readCodexVariable("--color-background-surface-under"),
-    "--sidebar-accent": readCodexVariable("--color-background-button-secondary-hover"),
+    "--sidebar-accent": readCodexVariable("--color-background-button-secondary"),
     "--sidebar-accent-active": readCodexVariable("--color-background-button-secondary"),
     "--sidebar-accent-foreground": readCodexVariable("--color-text-foreground"),
     "--sidebar-border": readCodexVariable("--color-border"),
@@ -888,9 +888,7 @@ function buildThemeTokenAliases(codexVariables: Record<string, string>): Record<
     "--color-token-list-active-selection-foreground": readCodexVariable("--color-text-foreground"),
     "--color-token-list-active-selection-icon-foreground":
       readCodexVariable("--color-icon-primary"),
-    "--color-token-list-hover-background": readCodexVariable(
-      "--color-background-button-secondary-hover",
-    ),
+    "--color-token-list-hover-background": readCodexVariable("--color-background-button-secondary"),
     "--color-token-main-surface-primary": readCodexVariable("--color-background-surface-under"),
     "--color-token-menu-background": readCodexVariable("--color-background-elevated-primary"),
     "--color-token-menu-border": readCodexVariable("--color-border"),
@@ -927,7 +925,6 @@ function getRequiredVariable(variables: Record<string, string>, name: string): s
 function buildLightDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
   const controlBase = mixRgb(theme.surface, theme.ink, 0.06 + theme.contrast * 0.05);
   const focusBase = mixRgb(theme.accent, WHITE, 0.3 + theme.contrast * 0.15);
-  const buttonPrimaryBase = mixRgb(theme.surface, BLACK, 0.38 + theme.contrast * 0.12);
   const elevatedPrimaryBase = mixRgb(theme.surface, theme.ink, 0.08 + theme.contrast * 0.08);
 
   return {
@@ -938,7 +935,7 @@ function buildLightDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
     borderFocus: formatRgba(focusBase, 0.7 + theme.contrast * 0.1),
     borderHeavy: formatRgba(theme.ink, 0.12 + theme.contrast * 0.06),
     borderLight: formatRgba(theme.ink, 0.03 + theme.contrast * 0.02),
-    buttonPrimaryBackground: formatOpaqueRgb(buttonPrimaryBase),
+    buttonPrimaryBackground: theme.theme.ink,
     buttonPrimaryBackgroundActive: formatRgba(theme.ink, 0.07 + theme.contrast * 0.05),
     buttonPrimaryBackgroundHover: formatRgba(theme.ink, 0.04 + theme.contrast * 0.03),
     buttonPrimaryBackgroundInactive: formatRgba(theme.ink, 0.02 + theme.contrast * 0.02),
@@ -959,13 +956,15 @@ function buildLightDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
       theme.theme.ink,
       0.04 + theme.contrast * 0.05,
     ),
-    iconAccent: formatOpaqueRgb(focusBase),
+    iconAccent: theme.theme.accent,
     iconPrimary: formatRgba(theme.ink, 0.82 + theme.contrast * 0.14),
     iconSecondary: formatRgba(theme.ink, 0.65 + theme.contrast * 0.1),
     iconTertiary: formatRgba(theme.ink, 0.45 + theme.contrast * 0.1),
     simpleScrim: formatRgba(theme.ink, 0.08 + theme.contrast * 0.04),
-    textAccent: formatOpaqueRgb(focusBase),
-    textButtonPrimary: formatOpaqueRgb(buttonPrimaryBase),
+    // Keep light-mode affordances on the real accent so links and file labels
+    // match the active theme color instead of a softened focus-only variant.
+    textAccent: theme.theme.accent,
+    textButtonPrimary: theme.theme.surface,
     textButtonSecondary: mixHex(theme.theme.ink, theme.theme.surface, 0.7 + theme.contrast * 0.1),
     textButtonTertiary: formatRgba(theme.ink, 0.45 + theme.contrast * 0.1),
     textForeground: theme.theme.ink,

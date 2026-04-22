@@ -1,3 +1,8 @@
+// FILE: providerDiscovery.ts
+// Purpose: Defines provider discovery request/response contracts shared across web and server.
+// Layer: Shared contracts
+// Exports: provider discovery schemas and inferred types used by the WS/native API.
+
 import { Schema } from "effect";
 import { TrimmedNonEmptyString } from "./baseSchemas";
 
@@ -211,11 +216,22 @@ export const ProviderListModelsInput = Schema.Struct({
 });
 export type ProviderListModelsInput = typeof ProviderListModelsInput.Type;
 
+export const ProviderReasoningEffortDescriptor = Schema.Struct({
+  value: TrimmedNonEmptyString,
+  label: Schema.optional(TrimmedNonEmptyString),
+  description: Schema.optional(TrimmedNonEmptyString),
+});
+export type ProviderReasoningEffortDescriptor = typeof ProviderReasoningEffortDescriptor.Type;
+
 export const ProviderModelDescriptor = Schema.Struct({
   slug: TrimmedNonEmptyString,
   name: TrimmedNonEmptyString,
   upstreamProviderId: Schema.optional(TrimmedNonEmptyString),
   upstreamProviderName: Schema.optional(TrimmedNonEmptyString),
+  // Codex model/list results are normalized here so the web app can consume both
+  // the legacy string array and Remodex-style reasoning objects uniformly.
+  supportedReasoningEfforts: Schema.optional(Schema.Array(ProviderReasoningEffortDescriptor)),
+  defaultReasoningEffort: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderModelDescriptor = typeof ProviderModelDescriptor.Type;
 

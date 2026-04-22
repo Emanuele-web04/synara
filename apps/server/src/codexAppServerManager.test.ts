@@ -20,15 +20,23 @@ import {
 } from "./codexAppServerManager";
 
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
+const fullAccessTurnOverrides = {
+  approvalPolicy: "never",
+  sandboxPolicy: { type: "dangerFullAccess" },
+} as const;
+const approvalRequiredTurnOverrides = {
+  approvalPolicy: "untrusted",
+  sandboxPolicy: { type: "readOnly" },
+} as const;
 
-function createSendTurnHarness() {
+function createSendTurnHarness(runtimeMode: "approval-required" | "full-access" = "full-access") {
   const manager = new CodexAppServerManager();
   const context = {
     session: {
       provider: "codex",
       status: "ready",
       threadId: "thread_1",
-      runtimeMode: "full-access",
+      runtimeMode,
       model: "gpt-5.3-codex",
       activeTurnId: undefined as string | undefined,
       resumeCursor: { threadId: "thread_1" },
@@ -538,6 +546,7 @@ describe("sendTurn", () => {
     expect(requireSession).toHaveBeenCalledWith("thread_1");
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
+      ...fullAccessTurnOverrides,
       input: [
         {
           type: "text",
@@ -560,6 +569,28 @@ describe("sendTurn", () => {
     });
   });
 
+  it("uses approval-required Codex overrides on turn/start", async () => {
+    const { manager, context, sendRequest } = createSendTurnHarness("approval-required");
+
+    await manager.sendTurn({
+      threadId: asThreadId("thread_1"),
+      input: "Check this before changing files",
+    });
+
+    expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
+      threadId: "thread_1",
+      ...approvalRequiredTurnOverrides,
+      input: [
+        {
+          type: "text",
+          text: "Check this before changing files",
+          text_elements: [],
+        },
+      ],
+      model: "gpt-5.3-codex",
+    });
+  });
+
   it("supports image-only turns", async () => {
     const { manager, context, sendRequest } = createSendTurnHarness();
 
@@ -575,6 +606,7 @@ describe("sendTurn", () => {
 
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
+      ...fullAccessTurnOverrides,
       input: [
         {
           type: "image",
@@ -601,6 +633,7 @@ describe("sendTurn", () => {
 
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
+      ...fullAccessTurnOverrides,
       input: [
         {
           type: "text",
@@ -633,6 +666,7 @@ describe("sendTurn", () => {
 
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
+      ...fullAccessTurnOverrides,
       input: [
         {
           type: "text",
@@ -660,6 +694,7 @@ describe("sendTurn", () => {
 
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
+      ...fullAccessTurnOverrides,
       input: [
         {
           type: "text",
@@ -690,6 +725,7 @@ describe("sendTurn", () => {
 
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
+      ...fullAccessTurnOverrides,
       input: [
         {
           type: "text",
@@ -721,6 +757,7 @@ describe("sendTurn", () => {
 
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
+      ...fullAccessTurnOverrides,
       input: [
         {
           type: "text",
@@ -770,6 +807,7 @@ describe("sendTurn", () => {
     });
     expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
       threadId: "thread_1",
+      ...fullAccessTurnOverrides,
       input: [
         {
           type: "text",
@@ -1509,9 +1547,16 @@ describe("thread checkpoint control", () => {
       runtimeMode: "full-access",
     });
 
-    expect(sendRequest).toHaveBeenNthCalledWith(3, expect.anything(), "thread/fork", {
-      threadId: "thread_1",
-    });
+    expect(sendRequest).toHaveBeenNthCalledWith(
+      3,
+      expect.anything(),
+      "thread/fork",
+      expect.objectContaining({
+        threadId: "thread_1",
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+      }),
+    );
     expect(result).toEqual({
       threadId: "thread_2",
       resumeCursor: {

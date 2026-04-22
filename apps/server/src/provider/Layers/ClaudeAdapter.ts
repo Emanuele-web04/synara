@@ -55,6 +55,7 @@ import {
   getAgentMentionAliases,
 } from "@t3tools/contracts";
 import {
+  getDefaultContextWindow,
   hasEffortLevel,
   hasContextWindowOption,
   applyClaudePromptEffortPrefix,
@@ -164,6 +165,7 @@ interface ClaudeSessionContext {
   streamFiber: Fiber.Fiber<void, Error> | undefined;
   readonly startedAt: string;
   readonly basePermissionMode: PermissionMode | undefined;
+  currentApiModelId: string | undefined;
   resumeSessionId: string | undefined;
   readonly pendingApprovals: Map<ApprovalRequestId, PendingApproval>;
   readonly pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
@@ -424,7 +426,48 @@ function mergeClaudeTokenUsageSnapshot(
   };
 }
 
-const CLAUDE_CONTEXT_1M_BETA = "context-1m-2025-08-07" as const;
+const CLAUDE_CONTEXT_WINDOW_MAX_TOKENS = {
+  "200k": 200_000,
+  "1m": 1_000_000,
+} as const;
+
+function resolveSelectedClaudeContextWindowMaxTokens(
+  model: string | null | undefined,
+  selectedContextWindow: string | null | undefined,
+): number | undefined {
+  const caps = getModelCapabilities("claudeAgent", model);
+  const resolvedContextWindow =
+    trimOrNull(selectedContextWindow) ?? getDefaultContextWindow(caps) ?? null;
+  if (
+    !resolvedContextWindow ||
+    !hasContextWindowOption(caps, resolvedContextWindow) ||
+    !Object.prototype.hasOwnProperty.call(CLAUDE_CONTEXT_WINDOW_MAX_TOKENS, resolvedContextWindow)
+  ) {
+    return undefined;
+  }
+
+  return CLAUDE_CONTEXT_WINDOW_MAX_TOKENS[
+    resolvedContextWindow as keyof typeof CLAUDE_CONTEXT_WINDOW_MAX_TOKENS
+  ];
+}
+
+function resolveEffectiveClaudeContextWindow(input: {
+  reportedContextWindow: number | undefined;
+  lastKnownContextWindow: number | undefined;
+  currentApiModelId: string | undefined;
+}): number | undefined {
+  const { reportedContextWindow, lastKnownContextWindow, currentApiModelId } = input;
+  const currentSessionUsesOneMillionWindow = currentApiModelId?.endsWith("[1m]") === true;
+  if (
+    currentSessionUsesOneMillionWindow &&
+    lastKnownContextWindow === CLAUDE_CONTEXT_WINDOW_MAX_TOKENS["1m"] &&
+    reportedContextWindow !== undefined &&
+    reportedContextWindow < lastKnownContextWindow
+  ) {
+    return lastKnownContextWindow;
+  }
+  return reportedContextWindow ?? lastKnownContextWindow;
+}
 
 function asCanonicalTurnId(value: TurnId): TurnId {
   return value;
@@ -1634,8 +1677,13 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     ): Effect.Effect<void> =>
       Effect.gen(function* () {
         const resultContextWindow = maxClaudeContextWindowFromModelUsage(result?.modelUsage);
-        if (resultContextWindow !== undefined) {
-          context.lastKnownContextWindow = resultContextWindow;
+        const effectiveContextWindow = resolveEffectiveClaudeContextWindow({
+          reportedContextWindow: resultContextWindow,
+          lastKnownContextWindow: context.lastKnownContextWindow,
+          currentApiModelId: context.currentApiModelId,
+        });
+        if (effectiveContextWindow !== undefined) {
+          context.lastKnownContextWindow = effectiveContextWindow;
         }
 
         // The SDK result.usage contains *accumulated* totals across all API calls
@@ -1645,10 +1693,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         // events and treat the accumulated total as totalProcessedTokens.
         const accumulatedSnapshot = normalizeClaudeTokenUsage(
           result?.usage,
-          resultContextWindow ?? context.lastKnownContextWindow,
+          effectiveContextWindow,
         );
         const lastGoodUsage = context.lastKnownTokenUsage;
-        const maxTokens = resultContextWindow ?? context.lastKnownContextWindow;
+        const maxTokens = effectiveContextWindow;
         const usageSnapshot: ThreadTokenUsageSnapshot | undefined = lastGoodUsage
           ? mergeClaudeTokenUsageSnapshot(lastGoodUsage, accumulatedSnapshot, maxTokens)
           : accumulatedSnapshot;
@@ -3085,8 +3133,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         const apiModelId = modelSelection ? resolveApiModelId(modelSelection) : undefined;
         const effort =
           requestedEffort && hasEffortLevel(caps, requestedEffort) ? requestedEffort : null;
-        const contextWindow1mEnabled =
-          requestedContextWindow === "1m" && hasContextWindowOption(caps, "1m");
         const fastMode = modelSelection?.options?.fastMode === true && caps.supportsFastMode;
         const thinking =
           typeof modelSelection?.options?.thinking === "boolean" && caps.supportsThinkingToggle
@@ -3104,8 +3150,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
         const queryOptions: ClaudeQueryOptions = {
           ...(input.cwd ? { cwd: input.cwd } : {}),
+          // Keep Claude context-window selection model-driven so session start
+          // and in-session switches both use the same API model contract.
           ...(apiModelId ? { model: apiModelId } : {}),
-          ...(contextWindow1mEnabled ? { betas: [CLAUDE_CONTEXT_1M_BETA] } : {}),
           pathToClaudeCodeExecutable: providerOptions?.binaryPath ?? "claude",
           settingSources: [...CLAUDE_SETTING_SOURCES],
           systemPrompt: {
@@ -3213,6 +3260,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           streamFiber: undefined,
           startedAt,
           basePermissionMode: permissionMode,
+          currentApiModelId: apiModelId,
           resumeSessionId: sessionId,
           pendingApprovals,
           pendingUserInputs,
@@ -3299,6 +3347,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         const context = yield* requireSession(input.threadId);
         const modelSelection =
           input.modelSelection?.provider === "claudeAgent" ? input.modelSelection : undefined;
+        const requestedContextWindowMaxTokens = resolveSelectedClaudeContextWindowMaxTokens(
+          modelSelection?.model,
+          modelSelection?.options?.contextWindow,
+        );
 
         if (context.turnState) {
           // Auto-close a stale synthetic turn (from background agent responses
@@ -3312,6 +3364,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             try: () => context.query.setModel(apiModelId),
             catch: (cause) => toRequestError(input.threadId, "turn/setModel", cause),
           });
+          context.currentApiModelId = apiModelId;
+          if (requestedContextWindowMaxTokens !== undefined) {
+            context.lastKnownContextWindow = requestedContextWindowMaxTokens;
+          }
         }
 
         // Apply interaction mode by switching the SDK's permission mode.

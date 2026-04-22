@@ -2,6 +2,7 @@
 // Purpose: Centralizes duplicate `project.create` error parsing and recovery helpers.
 // Exports: duplicate-create error guards plus snapshot matching for import recovery.
 
+import type { OrchestrationReadModel } from "@t3tools/contracts";
 import { workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
 
 const DUPLICATE_PROJECT_CREATE_ERROR_PREFIX =
@@ -18,6 +19,11 @@ export interface DuplicateProjectCreateRecoveryCandidate {
 
 interface SnapshotWithProjects<T extends DuplicateProjectCreateRecoveryCandidate> {
   readonly projects: readonly T[];
+}
+
+interface ProjectLookupInput {
+  readonly projectId?: string | null | undefined;
+  readonly workspaceRoot?: string | null | undefined;
 }
 
 function isRecoverableProjectKind(kind: string | undefined): boolean {
@@ -49,6 +55,38 @@ export function extractDuplicateProjectCreateProjectId(message: string): string 
   return message.slice(DUPLICATE_PROJECT_CREATE_ERROR_PREFIX.length, duplicateMarkerIndex) || null;
 }
 
+export function findRecoverableProject<T extends DuplicateProjectCreateRecoveryCandidate>(
+  input: ProjectLookupInput & {
+    readonly projects: readonly T[];
+  },
+): T | null {
+  if (input.projectId) {
+    const projectById = input.projects.find(
+      (project) =>
+        project.deletedAt === null &&
+        isRecoverableProjectKind(project.kind) &&
+        project.id === input.projectId,
+    );
+    if (projectById) {
+      return projectById;
+    }
+  }
+
+  if (!input.workspaceRoot) {
+    return null;
+  }
+
+  const workspaceRoot = input.workspaceRoot;
+  return (
+    input.projects.find(
+      (project) =>
+        project.deletedAt === null &&
+        isRecoverableProjectKind(project.kind) &&
+        workspaceRootsEqual(project.workspaceRoot, workspaceRoot),
+    ) ?? null
+  );
+}
+
 // Prefers the explicit duplicate id, then falls back to workspace-root matching for older clients.
 export function findRecoverableProjectForDuplicateCreate<
   T extends DuplicateProjectCreateRecoveryCandidate,
@@ -61,27 +99,69 @@ export function findRecoverableProjectForDuplicateCreate<
     return null;
   }
 
-  const duplicateProjectId = extractDuplicateProjectCreateProjectId(input.message);
-  if (duplicateProjectId) {
-    const projectById = input.projects.find(
-      (project) =>
-        project.deletedAt === null &&
-        isRecoverableProjectKind(project.kind) &&
-        project.id === duplicateProjectId,
-    );
-    if (projectById) {
-      return projectById;
+  return findRecoverableProject({
+    projects: input.projects,
+    projectId: extractDuplicateProjectCreateProjectId(input.message),
+    workspaceRoot: input.workspaceRoot,
+  });
+}
+
+export async function waitForRecoverableProjectInReadModel(
+  input: ProjectLookupInput & {
+    readonly loadSnapshot: () => Promise<OrchestrationReadModel | null>;
+    readonly repairSnapshot?: (() => Promise<OrchestrationReadModel | null>) | undefined;
+    readonly maxAttempts?: number;
+    readonly delayMs?: number;
+  },
+): Promise<{
+  project: OrchestrationReadModel["projects"][number] | null;
+  snapshot: OrchestrationReadModel | null;
+}> {
+  let latestSnapshot: OrchestrationReadModel | null = null;
+  const maxAttempts = input.maxAttempts ?? DEFAULT_RECOVERY_MAX_ATTEMPTS;
+  const delayMs = input.delayMs ?? DEFAULT_RECOVERY_DELAY_MS;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const snapshot = await input.loadSnapshot();
+    if (snapshot) {
+      latestSnapshot = snapshot;
+      const project = findRecoverableProject({
+        projects: snapshot.projects,
+        projectId: input.projectId,
+        workspaceRoot: input.workspaceRoot,
+      });
+      if (project) {
+        return { project, snapshot };
+      }
+    }
+
+    if (attempt < maxAttempts) {
+      await wait(delayMs * attempt);
     }
   }
 
-  return (
-    input.projects.find(
-      (project) =>
-        project.deletedAt === null &&
-        isRecoverableProjectKind(project.kind) &&
-        workspaceRootsEqual(project.workspaceRoot, input.workspaceRoot),
-    ) ?? null
-  );
+  if (input.repairSnapshot) {
+    const repairedSnapshot = await input.repairSnapshot();
+    if (repairedSnapshot) {
+      latestSnapshot = repairedSnapshot;
+      const repairedProject = findRecoverableProject({
+        projects: repairedSnapshot.projects,
+        projectId: input.projectId,
+        workspaceRoot: input.workspaceRoot,
+      });
+      if (repairedProject) {
+        return {
+          project: repairedProject,
+          snapshot: repairedSnapshot,
+        };
+      }
+    }
+  }
+
+  return {
+    project: null,
+    snapshot: latestSnapshot,
+  };
 }
 
 // Retries snapshot reads briefly so freshly restored projects can be reused by the first-send flow.
@@ -91,6 +171,7 @@ export async function waitForRecoverableProjectForDuplicateCreate<
   readonly message: string;
   readonly workspaceRoot: string;
   readonly loadSnapshot: () => Promise<TSnapshot | null>;
+  readonly repairSnapshot?: (() => Promise<TSnapshot | null>) | undefined;
   readonly maxAttempts?: number;
   readonly delayMs?: number;
 }): Promise<{
@@ -117,6 +198,24 @@ export async function waitForRecoverableProjectForDuplicateCreate<
 
     if (attempt < maxAttempts) {
       await wait(delayMs * attempt);
+    }
+  }
+
+  if (input.repairSnapshot) {
+    const repairedSnapshot = await input.repairSnapshot();
+    if (repairedSnapshot) {
+      latestSnapshot = repairedSnapshot;
+      const repairedProject = findRecoverableProjectForDuplicateCreate({
+        message: input.message,
+        projects: repairedSnapshot.projects,
+        workspaceRoot: input.workspaceRoot,
+      }) as TSnapshot["projects"][number] | null;
+      if (repairedProject) {
+        return {
+          project: repairedProject,
+          snapshot: repairedSnapshot,
+        };
+      }
     }
   }
 

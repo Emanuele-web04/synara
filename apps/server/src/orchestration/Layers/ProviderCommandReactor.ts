@@ -432,7 +432,7 @@ const make = Effect.gen(function* () {
     const existingSessionThreadId =
       thread.session && thread.session.status !== "stopped" && activeSession ? thread.id : null;
     if (existingSessionThreadId) {
-      const runtimeModeChanged = thread.runtimeMode !== thread.session?.runtimeMode;
+      const runtimeModeChanged = desiredRuntimeMode !== thread.session?.runtimeMode;
       const providerChanged =
         requestedModelSelection !== undefined &&
         requestedModelSelection.provider !== currentProvider;
@@ -469,7 +469,7 @@ const make = Effect.gen(function* () {
         currentProvider,
         desiredProvider: desiredModelSelection.provider,
         currentRuntimeMode: thread.session?.runtimeMode,
-        desiredRuntimeMode: thread.runtimeMode,
+        desiredRuntimeMode,
         runtimeModeChanged,
         providerChanged,
         modelChanged,
@@ -1167,6 +1167,7 @@ const make = Effect.gen(function* () {
               ? { providerOptions: cachedProviderOptions }
               : {}),
             ...(cachedModelSelection !== undefined ? { modelSelection: cachedModelSelection } : {}),
+            runtimeMode: event.payload.runtimeMode,
           });
           return;
         }

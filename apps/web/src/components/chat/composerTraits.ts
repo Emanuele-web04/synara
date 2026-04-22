@@ -8,6 +8,7 @@ import {
   type CodexModelOptions,
   type GeminiModelOptions,
   type ProviderKind,
+  type ProviderModelDescriptor,
 } from "@t3tools/contracts";
 import {
   getDefaultEffort,
@@ -21,6 +22,7 @@ import {
 } from "@t3tools/shared/model";
 
 import type { ProviderOptions } from "../../providerModelOptions";
+import { getRuntimeAwareModelCapabilities } from "./runtimeModelCapabilities";
 
 function getRawEffort(
   provider: ProviderKind,
@@ -53,8 +55,9 @@ export function getComposerTraitSelection(
   model: string | null | undefined,
   prompt: string,
   modelOptions: ProviderOptions | null | undefined,
+  runtimeModel?: ProviderModelDescriptor,
 ) {
-  const caps = getModelCapabilities(provider, model);
+  const caps = getRuntimeAwareModelCapabilities({ provider, model, runtimeModel });
   const effortLevels = caps.reasoningEffortLevels;
   const defaultEffort = getDefaultEffort(caps);
   const defaultContextWindow = getDefaultContextWindow(caps);
@@ -104,7 +107,7 @@ export function getComposerTraitSelection(
 export function hasVisibleComposerTraitControls(
   selection: Pick<
     ReturnType<typeof getComposerTraitSelection>,
-    "caps" | "effort" | "thinkingEnabled"
+    "caps" | "effort" | "thinkingEnabled" | "contextWindowOptions"
   >,
   options?: {
     includeFastMode?: boolean;
@@ -113,6 +116,7 @@ export function hasVisibleComposerTraitControls(
   return (
     selection.effort !== null ||
     selection.thinkingEnabled !== null ||
+    selection.contextWindowOptions.length > 1 ||
     ((options?.includeFastMode ?? true) && selection.caps.supportsFastMode)
   );
 }

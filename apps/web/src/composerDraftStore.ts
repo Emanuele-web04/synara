@@ -1,5 +1,4 @@
 import {
-  CODEX_REASONING_EFFORT_OPTIONS,
   type ClaudeCodeEffort,
   type CodexReasoningEffort,
   type GeminiThinkingBudget,
@@ -221,7 +220,7 @@ const PersistedComposerThreadDraftState = Schema.Struct({
 type PersistedComposerThreadDraftState = typeof PersistedComposerThreadDraftState.Type;
 
 const LegacyCodexFields = Schema.Struct({
-  effort: Schema.optionalKey(Schema.Literals(CODEX_REASONING_EFFORT_OPTIONS)),
+  effort: Schema.optionalKey(Schema.String),
   codexFastMode: Schema.optionalKey(Schema.Boolean),
   serviceTier: Schema.optionalKey(Schema.String),
 });

@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { Option, Schema } from "effect";
 import { TrimmedNonEmptyString, ProviderKind, type ProviderStartOptions } from "@t3tools/contracts";
 import {
@@ -27,17 +27,16 @@ export type SidebarSide = typeof SidebarSide.Type;
 export const DEFAULT_SIDEBAR_SIDE: SidebarSide = "left";
 export const SidebarProjectSortOrder = Schema.Literals(["updated_at", "created_at", "manual"]);
 export type SidebarProjectSortOrder = typeof SidebarProjectSortOrder.Type;
-export const DEFAULT_SIDEBAR_PROJECT_SORT_ORDER: SidebarProjectSortOrder = "updated_at";
+export const DEFAULT_SIDEBAR_PROJECT_SORT_ORDER: SidebarProjectSortOrder = "manual";
 export const SidebarThreadSortOrder = Schema.Literals(["updated_at", "created_at"]);
 export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
 export const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
-
 type CustomModelSettingsKey =
   | "customCodexModels"
   | "customClaudeModels"
   | "customGeminiModels"
   | "customOpenCodeModels";
-
+const LEGACY_DEFAULT_SIDEBAR_PROJECT_SORT_ORDER: SidebarProjectSortOrder = "updated_at";
 export type ProviderCustomModelConfig = {
   provider: ProviderKind;
   settingsKey: CustomModelSettingsKey;
@@ -408,6 +407,27 @@ export function useAppSettings() {
     DEFAULT_APP_SETTINGS,
     AppSettingsSchema,
   );
+  const migratedLegacyProjectSortRef = useRef(false);
+
+  useEffect(() => {
+    if (migratedLegacyProjectSortRef.current) {
+      return;
+    }
+    migratedLegacyProjectSortRef.current = true;
+
+    setSettings((previous) => {
+      const normalized = normalizeAppSettings(previous);
+      if (normalized.sidebarProjectSortOrder !== LEGACY_DEFAULT_SIDEBAR_PROJECT_SORT_ORDER) {
+        return normalized;
+      }
+
+      // Preserve folder muscle memory for older installs that inherited the recency-based default.
+      return {
+        ...normalized,
+        sidebarProjectSortOrder: DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
+      };
+    });
+  }, [setSettings]);
 
   const updateSettings = useCallback(
     (patch: Partial<AppSettings>) => {

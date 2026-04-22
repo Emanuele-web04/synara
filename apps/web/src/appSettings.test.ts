@@ -186,8 +186,8 @@ describe("chat font size defaults", () => {
 });
 
 describe("sidebar sort defaults", () => {
-  it("defaults project sorting to updated_at", () => {
-    expect(DEFAULT_SIDEBAR_PROJECT_SORT_ORDER).toBe("updated_at");
+  it("defaults project sorting to manual", () => {
+    expect(DEFAULT_SIDEBAR_PROJECT_SORT_ORDER).toBe("manual");
   });
 
   it("defaults thread sorting to updated_at", () => {

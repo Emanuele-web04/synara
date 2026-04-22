@@ -3,7 +3,8 @@
 // Layer: Web settings UI
 // Exports: ThemePackEditor
 
-import { useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { HexColorPicker } from "react-colorful";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -16,6 +17,7 @@ import {
   DialogTrigger,
 } from "./ui/dialog";
 import { Input } from "./ui/input";
+import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./ui/select";
 import { Switch } from "./ui/switch";
 import { Textarea } from "./ui/textarea";
@@ -37,6 +39,7 @@ type ThemePackEditorProps = {
 };
 
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+const COLOR_PICKER_COMMIT_DELAY_MS = 220;
 
 export function ThemePackEditor({
   variant,
@@ -101,7 +104,7 @@ export function ThemePackEditor({
   };
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary)] shadow-[0_1px_0_rgba(255,255,255,0.03)_inset]">
+    <div className="overflow-hidden rounded-2xl border border-[color:var(--color-border)] bg-[var(--color-background-panel)] shadow-[0_1px_0_rgba(255,255,255,0.03)_inset]">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:py-3.5">
         <div className="flex items-center gap-2">
@@ -300,18 +303,88 @@ function ColorPill({
   onChange: (next: string) => void;
   onReset?: (() => void) | undefined;
 }) {
-  const colorInputRef = useRef<HTMLInputElement>(null);
+  const commitTimerRef = useRef<number | null>(null);
+  const pendingCommitRef = useRef<string | null>(null);
+  const colorRef = useRef(color);
   const [draftHex, setDraftHex] = useState<string | null>(null);
+  const [isOpen, setIsOpen] = useState(false);
+  const normalizedDraftHex = draftHex?.trim().toLowerCase() ?? null;
+  const previewColor =
+    normalizedDraftHex && HEX_COLOR_RE.test(normalizedDraftHex) ? normalizedDraftHex : color;
   const inputValue = draftHex ?? color;
-  const textColor = useReadableTextColor(color);
-  const ringColor = useReadableTextColor(color, 0.32);
+  const textColor = useReadableTextColor(previewColor);
+  const ringColor = useReadableTextColor(previewColor, 0.32);
+
+  useEffect(() => {
+    colorRef.current = color;
+    setDraftHex((current) => (current === color ? null : current));
+  }, [color]);
+
+  const clearCommitTimer = useCallback(() => {
+    if (commitTimerRef.current === null) {
+      return;
+    }
+    window.clearTimeout(commitTimerRef.current);
+    commitTimerRef.current = null;
+  }, []);
+
+  const commitColor = useCallback(
+    (next: string | null = pendingCommitRef.current) => {
+      clearCommitTimer();
+      pendingCommitRef.current = null;
+      if (!next || next === colorRef.current) {
+        return;
+      }
+      onChange(next);
+    },
+    [clearCommitTimer, onChange],
+  );
+
+  const scheduleCommit = useCallback(
+    (next: string) => {
+      pendingCommitRef.current = next;
+      clearCommitTimer();
+      commitTimerRef.current = window.setTimeout(() => {
+        commitColor(next);
+      }, COLOR_PICKER_COMMIT_DELAY_MS);
+    },
+    [clearCommitTimer, commitColor],
+  );
+
+  useEffect(
+    () => () => {
+      clearCommitTimer();
+    },
+    [clearCommitTimer],
+  );
+
+  // Dragging updates only this local preview; the real theme store is committed
+  // after a short idle delay so CSS-var projection stays smooth.
+  const handleValidDraft = (next: string) => {
+    const normalized = next.trim().toLowerCase();
+    setDraftHex(normalized);
+    scheduleCommit(normalized);
+  };
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    setIsOpen(nextOpen);
+    if (!nextOpen) {
+      commitColor();
+      setDraftHex(null);
+    }
+  };
 
   return (
     <div className="flex items-center gap-1">
       {onReset ? (
         <button
           type="button"
-          onClick={onReset}
+          onClick={() => {
+            clearCommitTimer();
+            pendingCommitRef.current = null;
+            setDraftHex(null);
+            onReset();
+          }}
           className="rounded-sm p-1 text-[var(--color-text-foreground-tertiary)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)]"
           aria-label={`Reset ${ariaLabel}`}
           title="Reset to default"
@@ -319,48 +392,56 @@ function ColorPill({
           <ResetGlyph />
         </button>
       ) : null}
-      <button
-        type="button"
-        onClick={() => colorInputRef.current?.click()}
-        className="group relative flex h-8 min-w-44 items-center gap-2 overflow-hidden rounded-md px-2 pr-3 text-left transition-[transform,box-shadow] hover:scale-[1.005] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-        style={{ backgroundColor: color, color: textColor }}
-        aria-label={ariaLabel}
-      >
-        <span
-          aria-hidden
-          className="block size-5 shrink-0 rounded-full border"
-          style={{ borderColor: ringColor }}
-        />
-        <input
-          type="text"
-          value={inputValue}
-          onChange={(event) => {
-            const next = event.target.value;
-            setDraftHex(next);
-            if (HEX_COLOR_RE.test(next.trim())) {
-              onChange(next.trim().toLowerCase());
-            }
-          }}
-          onBlur={() => {
-            setDraftHex(null);
-          }}
-          onClick={(event) => event.stopPropagation()}
-          spellCheck={false}
-          maxLength={7}
-          className="font-system-ui w-20 flex-1 bg-transparent text-[12px] uppercase tracking-tight outline-none placeholder:text-current/50"
-          style={{ color: textColor }}
-          aria-label={`${ariaLabel} hex value`}
-        />
-      </button>
-      <input
-        ref={colorInputRef}
-        type="color"
-        value={color}
-        onChange={(event) => onChange(event.target.value.toLowerCase())}
-        className="sr-only"
-        tabIndex={-1}
-        aria-hidden
-      />
+      <Popover open={isOpen} onOpenChange={handleOpenChange}>
+        <PopoverTrigger
+          render={
+            <button
+              type="button"
+              className="group relative flex h-8 min-w-44 items-center gap-2 overflow-hidden rounded-md px-2 pr-3 text-left transition-[transform,box-shadow] hover:scale-[1.005] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+              style={{ backgroundColor: previewColor, color: textColor }}
+              aria-label={ariaLabel}
+            />
+          }
+        >
+          <span
+            aria-hidden
+            className="block size-5 shrink-0 rounded-full border"
+            style={{ borderColor: ringColor }}
+          />
+          <span className="font-system-ui flex-1 text-[12px] uppercase tracking-tight">
+            {previewColor}
+          </span>
+        </PopoverTrigger>
+        <PopoverPopup
+          align="end"
+          side="bottom"
+          sideOffset={8}
+          className="p-0 [&_[data-slot=popover-viewport]]:p-0"
+        >
+          <div className="theme-color-picker flex w-56 flex-col gap-3 p-3">
+            <HexColorPicker color={previewColor} onChange={handleValidDraft} />
+            <input
+              type="text"
+              value={inputValue}
+              onChange={(event) => {
+                const next = event.target.value;
+                setDraftHex(next);
+                if (HEX_COLOR_RE.test(next.trim())) {
+                  handleValidDraft(next);
+                }
+              }}
+              onBlur={() => {
+                commitColor();
+                setDraftHex(null);
+              }}
+              spellCheck={false}
+              maxLength={7}
+              className="h-8 rounded-md border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] px-2 text-center font-chat-code text-xs uppercase outline-none focus:border-[color:var(--color-border-focus)]"
+              aria-label={`${ariaLabel} hex value`}
+            />
+          </div>
+        </PopoverPopup>
+      </Popover>
     </div>
   );
 }

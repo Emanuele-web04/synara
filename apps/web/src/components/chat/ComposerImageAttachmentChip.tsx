@@ -8,7 +8,10 @@ import { type ComposerImageAttachment } from "../../composerDraftStore";
 import { CircleAlertIcon, XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { COMPOSER_INLINE_CHIP_DISMISS_BUTTON_CLASS_NAME } from "../composerInlineChip";
+import {
+  COMPOSER_ATTACHMENT_CHIP_CLASS_NAME,
+  COMPOSER_INLINE_CHIP_DISMISS_BUTTON_CLASS_NAME,
+} from "../composerInlineChip";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 
 interface ComposerImageAttachmentChipProps {
@@ -27,7 +30,7 @@ export const ComposerImageAttachmentChip = memo(function ComposerImageAttachment
   onRemoveImage,
 }: ComposerImageAttachmentChipProps) {
   return (
-    <div className="inline-flex min-w-0 max-w-full items-center gap-0.5 rounded-full border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] p-0.5 shadow-[0_1px_0_rgba(255,255,255,0.14)_inset]">
+    <div className={COMPOSER_ATTACHMENT_CHIP_CLASS_NAME}>
       <button
         type="button"
         className="flex min-w-0 max-w-[232px] items-center gap-1.5 rounded-full py-0 pl-0 pr-0.5 text-left transition-colors hover:bg-[var(--color-background-button-secondary-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"

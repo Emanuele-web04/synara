@@ -53,7 +53,7 @@ export default function RateLimitsPanel({
                   href={learnMoreHref}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-1 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+                  className="flex items-center gap-1 text-[11px] text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline focus-visible:underline"
                 >
                   Learn more
                   <ExternalLinkIcon className="size-3" />

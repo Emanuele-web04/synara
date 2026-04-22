@@ -1836,6 +1836,60 @@ describe("store read model sync", () => {
     expect(next.sidebarThreadSummaryById["thread-1"]?.hasPendingUserInput).toBe(false);
   });
 
+  it("clears pending approval summary state when an approval response is requested", () => {
+    const initialState = syncServerReadModel(
+      makeState(
+        makeThread({
+          hasPendingApprovals: true,
+          activities: [
+            makeActivity({
+              id: "activity-approval-requested",
+              createdAt: "2026-02-27T00:00:30.000Z",
+              kind: "approval.requested",
+              summary: "Command approval requested",
+              tone: "approval",
+              payload: {
+                requestId: "request-1",
+                requestKind: "command",
+              },
+              sequence: 1,
+            }),
+          ],
+        }),
+      ),
+      makeReadModel(
+        makeReadModelThread({
+          activities: [
+            makeActivity({
+              id: "activity-approval-requested",
+              createdAt: "2026-02-27T00:00:30.000Z",
+              kind: "approval.requested",
+              summary: "Command approval requested",
+              tone: "approval",
+              payload: {
+                requestId: "request-1",
+                requestKind: "command",
+              },
+              sequence: 1,
+            }),
+          ],
+        }),
+      ),
+    );
+
+    const next = applyOrchestrationEvents(initialState, [
+      makeDomainEvent("thread.approval-response-requested", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        requestId: ApprovalRequestId.makeUnsafe("request-1"),
+        decision: "accept",
+        createdAt: "2026-02-27T00:01:00.000Z",
+      }),
+    ]);
+
+    expect(next.threads[0]?.hasPendingApprovals).toBe(false);
+    expect(next.sidebarThreadSummaryById["thread-1"]?.hasPendingApprovals).toBe(false);
+  });
+
   it("keeps sidebar summaries shell-owned during hot-path archive events", () => {
     const initialState = syncServerReadModel(
       makeState(makeThread({ title: "Archivable thread" })),

@@ -1342,7 +1342,7 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  it("restarts the provider session when runtime mode is updated on the thread", async () => {
+  it("restarts the provider session when runtime mode changes on the thread or turn request", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
@@ -1411,6 +1411,7 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
+    await waitFor(() => harness.startSession.mock.calls.length === 3);
     await waitFor(() => harness.sendTurn.mock.calls.length === 2);
 
     expect(harness.stopSession.mock.calls.length).toBe(0);
@@ -1419,6 +1420,11 @@ describe("ProviderCommandReactor", () => {
       runtimeMode: "approval-required",
     });
     expect(harness.startSession.mock.calls[1]?.[1]).not.toHaveProperty("resumeCursor");
+    expect(harness.startSession.mock.calls[2]?.[1]).toMatchObject({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      runtimeMode: "full-access",
+    });
+    expect(harness.startSession.mock.calls[2]?.[1]).not.toHaveProperty("resumeCursor");
     expect(harness.sendTurn.mock.calls[1]?.[0]).toMatchObject({
       threadId: ThreadId.makeUnsafe("thread-1"),
     });
@@ -1426,7 +1432,7 @@ describe("ProviderCommandReactor", () => {
     const readModel = await Effect.runPromise(harness.engine.getReadModel());
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
     expect(thread?.session?.threadId).toBe("thread-1");
-    expect(thread?.session?.runtimeMode).toBe("approval-required");
+    expect(thread?.session?.runtimeMode).toBe("full-access");
   });
 
   it("does not inject derived model options when restarting claude on runtime mode changes", async () => {

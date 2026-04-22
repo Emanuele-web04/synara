@@ -175,7 +175,7 @@ import { useThreadWorkspaceHandoff } from "../hooks/useThreadWorkspaceHandoff";
 import { useComposerCommandMenuItems } from "../hooks/useComposerCommandMenuItems";
 import { useThreadHandoff } from "../hooks/useThreadHandoff";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
-import BranchToolbar from "./BranchToolbar";
+import BranchToolbar, { RuntimeUsageControls } from "./BranchToolbar";
 import { ThreadWorktreeHandoffDialog } from "./ThreadWorktreeHandoffDialog";
 import {
   formatShortcutLabel,
@@ -256,6 +256,7 @@ import {
   deriveContextWindowSelectionStatus,
   deriveCumulativeCostUsd,
   deriveLatestContextWindowSnapshot,
+  deriveSelectedContextWindowSnapshot,
 } from "../lib/contextWindow";
 import { formatVoiceRecordingDuration, useVoiceRecorder } from "../lib/voiceRecorder";
 import { shouldUseCompactComposerFooter } from "./composerFooterLayout";
@@ -295,6 +296,7 @@ import {
   renderProviderTraitsPicker,
 } from "./chat/composerProviderRegistry";
 import { getComposerTraitSelection } from "./chat/composerTraits";
+import { resolveRuntimeModelDescriptor } from "./chat/runtimeModelCapabilities";
 import { ProjectPicker } from "./chat/ProjectPicker";
 import { ProviderHealthBanner } from "./chat/ProviderHealthBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
@@ -340,7 +342,10 @@ import {
   buildNextProviderOptions,
   type ProviderModelOption,
 } from "../providerModelOptions";
-import { waitForRecoverableProjectForDuplicateCreate } from "../lib/projectCreateRecovery";
+import {
+  isDuplicateProjectCreateError,
+  waitForRecoverableProjectForDuplicateCreate,
+} from "../lib/projectCreateRecovery";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
@@ -1290,15 +1295,39 @@ export default function ChatView({
     customModelsByProvider,
     availableModelOptionsByProvider: modelOptionsByProvider,
   });
+  const runtimeModelsByProvider = useMemo(
+    () => ({
+      claudeAgent: claudeDynamicModelsQuery.data?.models ?? [],
+      codex: codexDynamicModelsQuery.data?.models ?? [],
+      gemini: geminiModelsQuery.data?.models ?? [],
+      opencode: openCodeDynamicModelsQuery.data?.models ?? [],
+    }),
+    [
+      claudeDynamicModelsQuery.data?.models,
+      codexDynamicModelsQuery.data?.models,
+      geminiModelsQuery.data?.models,
+      openCodeDynamicModelsQuery.data?.models,
+    ],
+  );
+  const selectedRuntimeModel = useMemo(
+    () =>
+      resolveRuntimeModelDescriptor({
+        provider: selectedProvider,
+        model: selectedModel,
+        runtimeModels: runtimeModelsByProvider[selectedProvider],
+      }),
+    [runtimeModelsByProvider, selectedModel, selectedProvider],
+  );
   const composerProviderState = useMemo(
     () =>
       getComposerProviderState({
         provider: selectedProvider,
         model: selectedModel,
+        runtimeModel: selectedRuntimeModel,
         prompt,
         modelOptions: composerModelOptions,
       }),
-    [composerModelOptions, prompt, selectedModel, selectedProvider],
+    [composerModelOptions, prompt, selectedModel, selectedProvider, selectedRuntimeModel],
   );
   const selectedPromptEffort = composerProviderState.promptEffort;
   const selectedModelOptionsForDispatch = composerProviderState.modelOptionsForDispatch;
@@ -3204,6 +3233,10 @@ export default function ChatView({
   const scrollToEnd = useCallback((animated = false) => {
     legendListRef.current?.scrollToEnd?.({ animated });
   }, []);
+  const transcriptMessageCount = useMemo(
+    () => timelineEntries.filter((entry) => entry.kind === "message").length,
+    [timelineEntries],
+  );
   const onIsAtEndChange = useCallback((isAtEnd: boolean) => {
     if (isAtEndRef.current === isAtEnd) return;
     isAtEndRef.current = isAtEnd;
@@ -3262,6 +3295,18 @@ export default function ChatView({
   const onMessagesTouchMoveBase = useCallback(() => {}, []);
   const onMessagesTouchStartBase = useCallback(() => {}, []);
   const onMessagesWheelBase = useCallback(() => {}, []);
+  useEffect(() => {
+    if (!isAtEndRef.current) {
+      return;
+    }
+    // Re-apply the bottom stick after the next message row actually mounts.
+    const frameId = window.requestAnimationFrame(() => {
+      scrollToEnd(false);
+    });
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [scrollToEnd, transcriptMessageCount]);
   const {
     pendingTranscriptSelectionAction,
     commitTranscriptAssistantSelection,
@@ -4662,12 +4707,17 @@ export default function ChatView({
         } catch (error) {
           const description =
             error instanceof Error ? error.message : "Failed to create the selected project.";
+          if (!isDuplicateProjectCreateError(description)) {
+            throw error;
+          }
+
           // If the server already knows this workspace root, reuse that project and continue.
           const { snapshot, project: recoveredProject } =
             await waitForRecoverableProjectForDuplicateCreate({
               message: description,
               workspaceRoot: firstSendTarget.creation.workspaceRoot,
               loadSnapshot: () => api.orchestration.getSnapshot().catch(() => null),
+              repairSnapshot: () => api.orchestration.repairState().catch(() => null),
             });
           if (!snapshot || !recoveredProject) {
             throw error;
@@ -5556,20 +5606,30 @@ export default function ChatView({
     selectedModel,
     prompt,
     selectedProviderModelOptions,
+    selectedRuntimeModel,
+  );
+  const runtimeUsageContextWindow = useMemo(
+    () =>
+      activeContextWindow ??
+      (selectedProvider === "claudeAgent"
+        ? deriveSelectedContextWindowSnapshot(composerTraitSelection.contextWindow)
+        : null),
+    [activeContextWindow, composerTraitSelection.contextWindow, selectedProvider],
   );
   const contextWindowSelectionStatus = useMemo(
     () =>
       deriveContextWindowSelectionStatus({
-        activeSnapshot: activeContextWindow,
+        activeSnapshot: runtimeUsageContextWindow,
         selectedValue:
           selectedProvider === "claudeAgent" ? composerTraitSelection.contextWindow : null,
       }),
-    [activeContextWindow, composerTraitSelection.contextWindow, selectedProvider],
+    [runtimeUsageContextWindow, composerTraitSelection.contextWindow, selectedProvider],
   );
   const providerTraitsPicker = renderProviderTraitsPicker({
     provider: selectedProvider,
     threadId,
     model: selectedModel,
+    runtimeModel: selectedRuntimeModel,
     modelOptions: selectedProviderModelOptions,
     prompt,
     includeFastMode: false,
@@ -6384,20 +6444,23 @@ export default function ChatView({
     }
   };
 
+  const runtimeUsageControlsProps = {
+    runtimeMode,
+    onRuntimeModeChange: handleRuntimeModeChange,
+    contextWindow: runtimeUsageContextWindow,
+    cumulativeCostUsd: activeCumulativeCostUsd,
+    activeContextWindowLabel: contextWindowSelectionStatus.activeLabel,
+    pendingContextWindowLabel: contextWindowSelectionStatus.pendingSelectedLabel,
+  };
   const branchToolbarProps = {
     threadId: activeThread.id,
     onEnvModeChange,
     envLocked,
-    runtimeMode,
-    onRuntimeModeChange: handleRuntimeModeChange,
+    ...runtimeUsageControlsProps,
     onHandoffToWorktree,
     onHandoffToLocal,
     handoffBusy,
     onComposerFocusRequest: scheduleComposerFocus,
-    contextWindow: activeContextWindow,
-    cumulativeCostUsd: activeCumulativeCostUsd,
-    activeContextWindowLabel: contextWindowSelectionStatus.activeLabel,
-    pendingContextWindowLabel: contextWindowSelectionStatus.pendingSelectedLabel,
     ...(canCheckoutPullRequestIntoThread
       ? { onCheckoutPullRequestRequest: openPullRequestDialog }
       : {}),
@@ -6501,10 +6564,8 @@ export default function ChatView({
         >
           <div
             className={cn(
-              "chat-composer-surface rounded-2xl border border-[color:var(--color-border)] shadow-[0_1px_0_rgba(255,255,255,0.03)_inset] transition-colors duration-200 focus-within:border-[color:var(--app-composer-focus-border)]",
-              isDragOverComposer
-                ? "border-[color:var(--app-composer-focus-border)] bg-[var(--color-background-control)]"
-                : "border-border/75",
+              "chat-composer-surface rounded-2xl border border-[color:var(--color-border-light)] transition-colors duration-200",
+              isDragOverComposer ? "!bg-[var(--color-background-control)]" : "",
               composerProviderState.composerSurfaceClassName,
             )}
           >
@@ -6929,7 +6990,7 @@ export default function ChatView({
         </div>
       </form>
       {isEmptyChatLanding ? (
-        <div className="mt-2 flex w-full items-center justify-start px-3">
+        <div className="mt-2 flex w-full items-center justify-between gap-3 px-3">
           <ProjectPicker
             align="start"
             side="top"
@@ -6938,6 +6999,7 @@ export default function ChatView({
             onSelectWorkspaceRoot={handleSelectWorkspaceRoot}
             onResetToHome={handleResetWorkspaceToHome}
           />
+          <RuntimeUsageControls {...runtimeUsageControlsProps} className="shrink-0" />
         </div>
       ) : null}
     </>
@@ -7073,7 +7135,13 @@ export default function ChatView({
                     </h2>
                   </div>
                   {composerSection}
-                  {isGitRepo ? <BranchToolbar {...branchToolbarProps} /> : null}
+                  {isGitRepo ? (
+                    <BranchToolbar {...branchToolbarProps} />
+                  ) : !isEmptyChatLanding ? (
+                    <div className="mx-auto flex w-full max-w-3xl items-center justify-end px-3 pb-3 pt-1">
+                      <RuntimeUsageControls {...runtimeUsageControlsProps} />
+                    </div>
+                  ) : null}
                 </div>
               </div>
             ) : (
@@ -7219,10 +7287,8 @@ export default function ChatView({
                     >
                       <div
                         className={cn(
-                          "chat-composer-surface rounded-2xl border border-[color:var(--color-border)] shadow-[0_1px_0_rgba(255,255,255,0.03)_inset] transition-colors duration-200 focus-within:border-[color:var(--app-composer-focus-border)]",
-                          isDragOverComposer
-                            ? "border-[color:var(--app-composer-focus-border)] bg-[var(--color-background-control)]"
-                            : "border-border/75",
+                          "chat-composer-surface rounded-2xl border border-[color:var(--color-border-light)] transition-colors duration-200",
+                          isDragOverComposer ? "!bg-[var(--color-background-control)]" : "",
                           composerProviderState.composerSurfaceClassName,
                         )}
                       >
@@ -7671,7 +7737,13 @@ export default function ChatView({
                     </div>
                   </form>
                 </div>
-                {isGitRepo ? <BranchToolbar {...branchToolbarProps} /> : null}
+                {isGitRepo ? (
+                  <BranchToolbar {...branchToolbarProps} />
+                ) : (
+                  <div className="mx-auto flex w-full max-w-3xl items-center justify-end px-3 pb-3 pt-1">
+                    <RuntimeUsageControls {...runtimeUsageControlsProps} />
+                  </div>
+                )}
               </>
             ) : null}
 

@@ -59,11 +59,18 @@ interface SnapshotSqliteDatabase {
   readonly close: () => unknown;
 }
 
+const importRuntimeModule = (specifier: string): Promise<unknown> =>
+  Function("specifier", "return import(specifier)")(specifier) as Promise<unknown>;
 const openReadOnlySnapshotDatabase = async (
   sourcePath: string,
 ): Promise<SnapshotSqliteDatabase> => {
   if (process.versions.bun !== undefined) {
-    const { Database } = await import("bun:sqlite");
+    const { Database } = (await importRuntimeModule("bun:sqlite")) as {
+      readonly Database: new (
+        path: string,
+        options: { readonly: boolean },
+      ) => SnapshotSqliteDatabase;
+    };
     return new Database(sourcePath, { readonly: true });
   }
 

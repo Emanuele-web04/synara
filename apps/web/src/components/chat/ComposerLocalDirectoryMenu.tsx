@@ -391,7 +391,7 @@ export const ComposerLocalDirectoryMenu = memo(function ComposerLocalDirectoryMe
 
   return (
     <Command autoHighlight={false} mode="none">
-      <div className="chat-composer-surface relative overflow-hidden rounded-xl border border-border/60 bg-card">
+      <div className="chat-composer-surface relative overflow-hidden rounded-xl border border-[color:var(--color-border-light)] bg-[var(--color-background-surface-under)]">
         <div className="flex items-center gap-2 border-b px-2 py-1.5">
           {parent ? (
             <button
@@ -399,7 +399,7 @@ export const ComposerLocalDirectoryMenu = memo(function ComposerLocalDirectoryMe
               aria-label="Go up one directory"
               onMouseDown={(event) => event.preventDefault()}
               onClick={handleGoUp}
-              className="inline-flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground"
+              className="inline-flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-foreground"
             >
               <ArrowUpIcon className="size-3.5" />
             </button>
@@ -414,7 +414,7 @@ export const ComposerLocalDirectoryMenu = memo(function ComposerLocalDirectoryMe
               type="button"
               onMouseDown={(event) => event.preventDefault()}
               onClick={handleSelectCurrentDirectory}
-              className="shrink-0 rounded-md px-1.5 py-0.5 text-[10.5px] text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground"
+              className="shrink-0 rounded-md px-1.5 py-0.5 text-[10.5px] text-muted-foreground/70 transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-foreground"
             >
               Use this folder
             </button>
@@ -540,8 +540,9 @@ const UseCurrentFolderRow = memo(function UseCurrentFolderRow(props: {
       data-highlight-index={index}
       value="use-current-folder"
       className={cn(
-        "cursor-pointer select-none gap-2 rounded-lg px-2 py-1 transition-colors hover:bg-accent/40",
-        isHighlighted && "bg-accent/40 text-accent-foreground",
+        "cursor-pointer select-none gap-2 rounded-lg px-2 py-1 transition-colors hover:bg-[var(--color-background-elevated-secondary)]",
+        isHighlighted &&
+          "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]",
       )}
       onMouseDown={(event) => {
         event.preventDefault();
@@ -593,8 +594,9 @@ const LocalSearchRow = memo(function LocalSearchRow(props: {
       data-highlight-index={index}
       value={`search:${entry.kind}:${entry.path}`}
       className={cn(
-        "cursor-pointer select-none gap-2 rounded-lg px-2 py-1 transition-colors hover:bg-accent/40",
-        isHighlighted && "bg-accent/40 text-accent-foreground",
+        "cursor-pointer select-none gap-2 rounded-lg px-2 py-1 transition-colors hover:bg-[var(--color-background-elevated-secondary)]",
+        isHighlighted &&
+          "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]",
       )}
       onMouseDown={(event) => {
         event.preventDefault();
@@ -638,8 +640,9 @@ const LocalEntryRow = memo(function LocalEntryRow(props: {
       data-highlight-index={index}
       value={`${entry.kind}:${entry.path}`}
       className={cn(
-        "cursor-pointer select-none gap-2 rounded-lg px-2 py-1 transition-colors hover:bg-accent/40",
-        isHighlighted && "bg-accent/40 text-accent-foreground",
+        "cursor-pointer select-none gap-2 rounded-lg px-2 py-1 transition-colors hover:bg-[var(--color-background-elevated-secondary)]",
+        isHighlighted &&
+          "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]",
       )}
       onMouseDown={(event) => {
         event.preventDefault();

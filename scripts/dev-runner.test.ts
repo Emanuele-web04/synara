@@ -158,6 +158,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         });
 
         assert.equal(env.T3CODE_HOME, resolve("/tmp/my-t3"));
+        assert.equal(env.DPCODE_HOME, resolve("/tmp/my-t3"));
       }),
     );
   });

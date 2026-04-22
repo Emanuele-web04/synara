@@ -49,7 +49,7 @@ function MenuPopup({
       >
         <MenuPrimitive.Popup
           className={cn(
-            "relative flex not-[class*='w-']:min-w-32 origin-(--transform-origin) rounded-xl border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary)] text-[var(--color-text-foreground)] shadow-xl outline-none focus:outline-none",
+            "relative flex not-[class*='w-']:min-w-32 origin-(--transform-origin) rounded-xl border border-[color:var(--color-border-light)] bg-[var(--composer-surface)] text-[var(--color-text-foreground)] shadow-xl outline-none focus:outline-none",
             className,
           )}
           data-slot="menu-popup"
@@ -235,7 +235,7 @@ function MenuSubTrigger({
   return (
     <MenuPrimitive.SubmenuTrigger
       className={cn(
-        "flex min-h-8 items-center gap-2 rounded-sm px-2 py-1 text-[length:var(--app-font-size-ui,12px)] text-foreground outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-elevated-secondary)] data-popup-open:bg-[var(--color-background-button-secondary)] data-inset:ps-8 data-highlighted:text-[var(--color-text-foreground)] data-popup-open:text-[var(--color-text-foreground)] data-disabled:opacity-64 sm:min-h-7 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none",
+        "flex min-h-8 items-center gap-2 rounded-sm px-2 py-1 text-[length:var(--app-font-size-ui,12px)] text-foreground outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-elevated-secondary)] data-popup-open:bg-[var(--color-background-elevated-secondary)] data-inset:ps-8 data-highlighted:text-[var(--color-text-foreground)] data-popup-open:text-[var(--color-text-foreground)] data-disabled:opacity-64 sm:min-h-7 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none",
         className,
       )}
       data-inset={inset}

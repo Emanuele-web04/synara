@@ -1515,6 +1515,45 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("re-sticks to the bottom after sending an optimistic user message", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-send-bottom-stick" as MessageId,
+        targetText: "bottom stick target",
+      }),
+    });
+
+    try {
+      const scrollContainer = await waitForElement(
+        () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+        "Unable to find message scroll container.",
+      );
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      scrollContainer.dispatchEvent(new Event("scroll"));
+      await waitForLayout();
+
+      const prompt = "keep me pinned after send";
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, prompt);
+
+      const sendButton = await waitForSendButton();
+      expect(sendButton.disabled).toBe(false);
+      sendButton.click();
+
+      await vi.waitFor(
+        async () => {
+          expect(document.body.textContent).toContain(prompt);
+          const layout = await mounted.measureLayout();
+          expect(layout.scrollHeightPx).toBeGreaterThan(layout.scrollClientHeightPx);
+          expect(layout.distanceFromBottomPx).toBeLessThanOrEqual(AUTO_SCROLL_BOTTOM_THRESHOLD_PX);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it.each(ATTACHMENT_VIEWPORT_MATRIX)(
     "keeps user attachment estimate close at the $name viewport",
     async (viewport) => {

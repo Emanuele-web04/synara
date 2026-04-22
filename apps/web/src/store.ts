@@ -66,6 +66,10 @@ type ThreadActivityAppendedEvent = Extract<
   OrchestrationEvent,
   { type: "thread.activity-appended" }
 >;
+type ThreadApprovalResponseRequestedEvent = Extract<
+  OrchestrationEvent,
+  { type: "thread.approval-response-requested" }
+>;
 type ThreadUserInputResponseRequestedEvent = Extract<
   OrchestrationEvent,
   { type: "thread.user-input-response-requested" }
@@ -1822,6 +1826,35 @@ function resolveThreadSummaryAfterUserInputResponseRequested(
   });
 }
 
+function resolveThreadSummaryAfterApprovalResponseRequested(
+  thread: Thread,
+  event: ThreadApprovalResponseRequestedEvent,
+) {
+  return deriveThreadSummaryMetadata({
+    messages: thread.messages,
+    activities: [
+      ...thread.activities,
+      {
+        id: EventId.makeUnsafe(
+          `synthetic-approval-resolved:${event.payload.requestId}:${event.sequence}`,
+        ),
+        kind: "approval.resolved",
+        payload: {
+          requestId: event.payload.requestId,
+          decision: event.payload.decision,
+        },
+        createdAt: event.payload.createdAt,
+        summary: "Approval resolved",
+        tone: "approval",
+        turnId: null,
+        sequence: event.sequence,
+      },
+    ],
+    proposedPlans: thread.proposedPlans,
+    latestTurn: thread.latestTurn,
+  });
+}
+
 function sidebarThreadSummariesEqual(
   left: SidebarThreadSummary | undefined,
   right: SidebarThreadSummary,
@@ -3003,7 +3036,29 @@ function applyOrchestrationEvent(
         {
           ...options,
           recomputeSummarySignals: false,
-          updateSidebarSummary: options?.updateSidebarSummary ?? false,
+          updateSidebarSummary: true,
+        },
+      );
+
+    case "thread.approval-response-requested":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          const summary = resolveThreadSummaryAfterApprovalResponseRequested(thread, event);
+          return {
+            ...thread,
+            hasPendingApprovals: summary.hasPendingApprovals,
+            updatedAt:
+              (thread.updatedAt ?? thread.createdAt) > event.payload.createdAt
+                ? thread.updatedAt
+                : event.payload.createdAt,
+          };
+        },
+        {
+          ...options,
+          recomputeSummarySignals: false,
+          updateSidebarSummary: true,
         },
       );
 
@@ -3197,9 +3252,7 @@ export function applyOrchestrationEventsHotPath(
   },
 ): AppState {
   const normalizedOptions = {
-    ...(options?.updateThreadArray !== undefined
-      ? { updateThreadArray: options.updateThreadArray }
-      : {}),
+    updateThreadArray: options?.updateThreadArray ?? true,
     updateSidebarSummary: options?.updateSidebarSummary ?? false,
   };
   let nextState = state;

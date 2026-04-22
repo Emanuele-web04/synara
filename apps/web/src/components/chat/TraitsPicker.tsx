@@ -3,7 +3,7 @@
 // Layer: Chat composer presentation
 // Depends on: shared trait resolution helpers, provider model option updates, and shared menu primitives.
 
-import { type ProviderKind, type ThreadId } from "@t3tools/contracts";
+import { type ProviderKind, type ProviderModelDescriptor, type ThreadId } from "@t3tools/contracts";
 import {
   applyClaudePromptEffortPrefix,
   geminiModelOptionsFromEffortValue,
@@ -34,6 +34,7 @@ export interface TraitsMenuContentProps {
   provider: ProviderKind;
   threadId: ThreadId;
   model: string | null | undefined;
+  runtimeModel?: ProviderModelDescriptor;
   prompt: string;
   onPromptChange: (prompt: string) => void;
   includeFastMode?: boolean;
@@ -45,6 +46,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   provider,
   threadId,
   model,
+  runtimeModel,
   prompt,
   onPromptChange,
   includeFastMode = true,
@@ -63,9 +65,9 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     contextWindow,
     defaultContextWindow,
     ultrathinkPromptControlled,
-  } = getComposerTraitSelection(provider, model, prompt, modelOptions);
+  } = getComposerTraitSelection(provider, model, prompt, modelOptions, runtimeModel);
   const hasVisibleControls = hasVisibleComposerTraitControls(
-    { caps, effort, thinkingEnabled },
+    { caps, effort, thinkingEnabled, contextWindowOptions },
     { includeFastMode },
   );
 
@@ -129,17 +131,29 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
               </div>
             ) : null}
             <MenuRadioGroup value={effort} onValueChange={handleEffortChange}>
-              {effortLevels.map((option) => (
-                <MenuRadioItem
-                  key={option.value}
-                  value={option.value}
-                  disabled={ultrathinkPromptControlled}
-                  onClick={() => onSelectionComplete?.()}
-                >
-                  {option.label}
-                  {option.value === defaultEffort ? " (default)" : ""}
-                </MenuRadioItem>
-              ))}
+              {effortLevels.map((option) => {
+                const item = (
+                  <MenuRadioItem
+                    key={option.value}
+                    value={option.value}
+                    disabled={ultrathinkPromptControlled}
+                    onClick={() => onSelectionComplete?.()}
+                  >
+                    {option.label}
+                    {option.value === defaultEffort ? " (default)" : ""}
+                  </MenuRadioItem>
+                );
+                return option.description ? (
+                  <Tooltip key={option.value}>
+                    <TooltipTrigger render={item} />
+                    <TooltipPopup side="right" className="max-w-80 whitespace-normal leading-tight">
+                      {option.description}
+                    </TooltipPopup>
+                  </Tooltip>
+                ) : (
+                  item
+                );
+              })}
             </MenuRadioGroup>
           </MenuGroup>
         </>
@@ -235,6 +249,7 @@ export const TraitsPicker = memo(function TraitsPicker({
   provider,
   threadId,
   model,
+  runtimeModel,
   prompt,
   onPromptChange,
   includeFastMode = true,
@@ -268,9 +283,9 @@ export const TraitsPicker = memo(function TraitsPicker({
     contextWindow,
     defaultContextWindow,
     ultrathinkPromptControlled,
-  } = getComposerTraitSelection(provider, model, prompt, modelOptions);
+  } = getComposerTraitSelection(provider, model, prompt, modelOptions, runtimeModel);
   const hasVisibleControls = hasVisibleComposerTraitControls(
-    { caps, effort, thinkingEnabled },
+    { caps, effort, thinkingEnabled, contextWindowOptions },
     { includeFastMode },
   );
 
@@ -392,6 +407,7 @@ export const TraitsPicker = memo(function TraitsPicker({
           provider={provider}
           threadId={threadId}
           model={model}
+          runtimeModel={runtimeModel}
           prompt={prompt}
           onPromptChange={onPromptChange}
           includeFastMode={includeFastMode}

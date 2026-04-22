@@ -1,3 +1,8 @@
+// FILE: ChangedFilesTree.tsx
+// Purpose: Render the collapsible changed-files tree shown inside assistant turn summaries.
+// Layer: Chat timeline UI
+// Exports: ChangedFilesTree
+
 import { type TurnId } from "@t3tools/contracts";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { type TurnDiffFileChange } from "../../types";
@@ -7,6 +12,9 @@ import { cn } from "~/lib/utils";
 import { DiffStatLabel, hasNonZeroStat } from "./DiffStatLabel";
 import { FileEntryIcon } from "./FileEntryIcon";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
+
+const CHANGED_FILE_ROW_SEPARATOR_CLASS =
+  "border-t border-[color:var(--color-border-light)]/60 first:border-t-0";
 
 export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
   turnId: TurnId;
@@ -48,10 +56,10 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
     if (node.kind === "directory") {
       const isExpanded = expandedDirectories[node.path] ?? depth === 0;
       return (
-        <div key={`dir:${node.path}`}>
+        <div key={`dir:${node.path}`} className={CHANGED_FILE_ROW_SEPARATOR_CLASS}>
           <button
             type="button"
-            className="group flex w-full items-center gap-1.5 rounded-md py-1 pr-2 text-left hover:bg-background/80"
+            className="group flex w-full items-center gap-1.5 rounded-md py-1 pr-2 text-left hover:bg-[var(--color-token-list-hover-background)]"
             style={{ paddingLeft: `${leftPadding}px` }}
             onClick={() => toggleDirectory(node.path, depth === 0)}
           >
@@ -65,7 +73,7 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
               <FolderClosedIcon className="size-3.5 shrink-0 text-muted-foreground/75" />
             )}
             <span
-              className="font-chat-code truncate text-muted-foreground/90 group-hover:text-foreground/90"
+              className="font-chat-code truncate text-muted-foreground/90 underline-offset-2 group-hover:text-foreground/90 group-hover:underline group-focus-visible:underline"
               style={{ fontSize: "var(--app-font-size-chat-code,11px)" }}
             >
               {node.name}
@@ -80,48 +88,47 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
             )}
           </button>
           {isExpanded && (
-            <div className="space-y-0.5">
-              {node.children.map((childNode) => renderTreeNode(childNode, depth + 1))}
-            </div>
+            <div>{node.children.map((childNode) => renderTreeNode(childNode, depth + 1))}</div>
           )}
         </div>
       );
     }
 
     return (
-      <button
-        key={`file:${node.path}`}
-        type="button"
-        className="group flex w-full items-center gap-1.5 rounded-md py-1 pr-2 text-left hover:bg-background/80"
-        style={{ paddingLeft: `${leftPadding}px` }}
-        onClick={() => onOpenTurnDiff(turnId, node.path)}
-      >
-        <span aria-hidden="true" className="size-3.5 shrink-0" />
-        <FileEntryIcon
-          pathValue={node.path}
-          kind="file"
-          theme={resolvedTheme}
-          className="size-3.5 text-muted-foreground/70"
-        />
-        <span
-          className="font-chat-code truncate text-muted-foreground/80 group-hover:text-foreground/90"
-          style={{ fontSize: "var(--app-font-size-chat-code,11px)" }}
+      <div key={`file:${node.path}`} className={CHANGED_FILE_ROW_SEPARATOR_CLASS}>
+        <button
+          type="button"
+          className="group flex w-full items-center gap-1.5 rounded-md py-1 pr-2 text-left hover:bg-[var(--color-token-list-hover-background)]"
+          style={{ paddingLeft: `${leftPadding}px` }}
+          onClick={() => onOpenTurnDiff(turnId, node.path)}
         >
-          {node.name}
-        </span>
-        {node.stat && (
+          <span aria-hidden="true" className="size-3.5 shrink-0" />
+          <FileEntryIcon
+            pathValue={node.path}
+            kind="file"
+            theme={resolvedTheme}
+            className="size-3.5 text-muted-foreground/70"
+          />
           <span
-            className="font-chat-code ml-auto shrink-0 tabular-nums"
-            style={{ fontSize: "var(--app-font-size-chat-meta,10px)" }}
+            className="font-chat-code truncate text-muted-foreground/80 underline-offset-2 group-hover:text-foreground/90 group-hover:underline group-focus-visible:underline"
+            style={{ fontSize: "var(--app-font-size-chat-code,11px)" }}
           >
-            <DiffStatLabel additions={node.stat.additions} deletions={node.stat.deletions} />
+            {node.name}
           </span>
-        )}
-      </button>
+          {node.stat && (
+            <span
+              className="font-chat-code ml-auto shrink-0 tabular-nums"
+              style={{ fontSize: "var(--app-font-size-chat-meta,10px)" }}
+            >
+              <DiffStatLabel additions={node.stat.additions} deletions={node.stat.deletions} />
+            </span>
+          )}
+        </button>
+      </div>
     );
   };
 
-  return <div className="space-y-0.5">{treeNodes.map((node) => renderTreeNode(node, 0))}</div>;
+  return <div>{treeNodes.map((node) => renderTreeNode(node, 0))}</div>;
 });
 
 function collectDirectoryPaths(nodes: ReadonlyArray<TurnDiffTreeNode>): string[] {

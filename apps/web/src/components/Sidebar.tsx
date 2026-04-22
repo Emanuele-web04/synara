@@ -221,6 +221,10 @@ import type {
 } from "./SidebarSearchPalette.logic";
 import { useFocusedChatContext } from "../focusedChatContext";
 import { showContextMenuFallback } from "../contextMenuFallback";
+import {
+  waitForRecoverableProjectForDuplicateCreate,
+  waitForRecoverableProjectInReadModel,
+} from "../lib/projectCreateRecovery";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_PREVIEW_LIMIT = 5;
@@ -253,12 +257,6 @@ const PROJECT_CONTEXT_MENU_COPY_PATH_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
 const PROJECT_CONTEXT_MENU_ARCHIVE_ICON = renderToStaticMarkup(<HiOutlineArchiveBox />);
 const PROJECT_CONTEXT_MENU_DELETE_THREADS_ICON = renderToStaticMarkup(<Trash2 />);
-
-function wait(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
 
 function threadJumpLabelMapsEqual(
   left: ReadonlyMap<ThreadId, string>,
@@ -976,7 +974,7 @@ function SidebarSegmentedPicker({
               className={cn(
                 "flex-1 rounded-sm px-2.5 py-1 text-[11.5px] font-medium tracking-tight transition-colors",
                 active
-                  ? "bg-[var(--color-background-elevated-primary-opaque)] text-[var(--color-text-foreground)] shadow-xs"
+                  ? "bg-[var(--composer-surface)] text-[var(--color-text-foreground)] shadow-xs"
                   : "text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]",
               )}
               onClick={() => onSelectView(view)}
@@ -1505,32 +1503,14 @@ export default function Sidebar() {
     ): Promise<{
       project: OrchestrationReadModel["projects"][number] | null;
       snapshot: OrchestrationReadModel | null;
-    }> => {
-      let latestSnapshot: OrchestrationReadModel | null = null;
-
-      for (let attempt = 1; attempt <= ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS; attempt += 1) {
-        const snapshot = await api.orchestration.getSnapshot().catch(() => null);
-        if (snapshot) {
-          latestSnapshot = snapshot;
-          const project =
-            snapshot.projects.find(
-              (candidate) => candidate.id === projectId && candidate.deletedAt === null,
-            ) ?? null;
-          if (project) {
-            return { project, snapshot };
-          }
-        }
-
-        if (attempt < ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS) {
-          await wait(ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS * attempt);
-        }
-      }
-
-      return {
-        project: null,
-        snapshot: latestSnapshot,
-      };
-    },
+    }> =>
+      waitForRecoverableProjectInReadModel({
+        projectId,
+        loadSnapshot: () => api.orchestration.getSnapshot().catch(() => null),
+        repairSnapshot: () => api.orchestration.repairState().catch(() => null),
+        maxAttempts: ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS,
+        delayMs: ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS,
+      }),
     [],
   );
 
@@ -1541,35 +1521,14 @@ export default function Sidebar() {
     ): Promise<{
       project: OrchestrationReadModel["projects"][number] | null;
       snapshot: OrchestrationReadModel | null;
-    }> => {
-      let latestSnapshot: OrchestrationReadModel | null = null;
-
-      for (let attempt = 1; attempt <= ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS; attempt += 1) {
-        const snapshot = await api.orchestration.getSnapshot().catch(() => null);
-        if (snapshot) {
-          latestSnapshot = snapshot;
-          const project =
-            snapshot.projects.find(
-              (candidate) =>
-                candidate.deletedAt === null &&
-                findWorkspaceRootMatch([candidate], workspaceRoot, (item) => item.workspaceRoot) !==
-                  undefined,
-            ) ?? null;
-          if (project) {
-            return { project, snapshot };
-          }
-        }
-
-        if (attempt < ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS) {
-          await wait(ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS * attempt);
-        }
-      }
-
-      return {
-        project: null,
-        snapshot: latestSnapshot,
-      };
-    },
+    }> =>
+      waitForRecoverableProjectInReadModel({
+        workspaceRoot,
+        loadSnapshot: () => api.orchestration.getSnapshot().catch(() => null),
+        repairSnapshot: () => api.orchestration.repairState().catch(() => null),
+        maxAttempts: ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS,
+        delayMs: ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS,
+      }),
     [],
   );
 
@@ -1839,6 +1798,25 @@ export default function Sidebar() {
         const description =
           error instanceof Error ? error.message : "An error occurred while adding the project.";
         if (isDuplicateProjectCreateError(description)) {
+          const { project, snapshot } = await waitForRecoverableProjectForDuplicateCreate({
+            message: description,
+            workspaceRoot: cwd,
+            loadSnapshot: () => api.orchestration.getSnapshot().catch(() => null),
+            repairSnapshot: () => api.orchestration.repairState().catch(() => null),
+            maxAttempts: ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS,
+            delayMs: ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS,
+          });
+          if (snapshot) {
+            syncServerReadModel(snapshot);
+          }
+          if (project && snapshot) {
+            const recovered = await openExistingProjectFromSnapshot(project.id, snapshot);
+            if (recovered) {
+              finishAddingProject();
+              return;
+            }
+          }
+
           const duplicateProjectId = extractDuplicateProjectCreateProjectId(description);
           const recovered = duplicateProjectId
             ? await recoverExistingProjectFromServer(api, ProjectId.makeUnsafe(duplicateProjectId))
@@ -1866,6 +1844,8 @@ export default function Sidebar() {
       recoverExistingProjectFromServer,
       recoverExistingProjectByWorkspaceRootFromServer,
       recoverProjectThreadFromServer,
+      syncServerReadModel,
+      openExistingProjectFromSnapshot,
       setProjectExpanded,
     ],
   );
@@ -3822,8 +3802,8 @@ export default function Sidebar() {
     const threadJumpLabelParts =
       visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
     const pinnedTimestampClassName = isSubagentThread
-      ? "w-[1.2rem] text-right text-[10px] leading-none tabular-nums text-muted-foreground/26 transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0"
-      : "w-[1.625rem] text-right text-[length:var(--app-font-size-ui-meta,11px)] leading-none tabular-nums text-muted-foreground/38 transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0";
+      ? "mr-1 w-[1.2rem] text-right text-[10px] leading-none tabular-nums text-muted-foreground/26 transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0"
+      : "mr-1 w-[1.625rem] text-right text-[length:var(--app-font-size-ui-meta,11px)] leading-none tabular-nums text-muted-foreground/38 transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0";
 
     return (
       <div key={thread.id} className="group/thread-row relative w-full">
@@ -4023,11 +4003,11 @@ export default function Sidebar() {
     const childCountLabel = `${childCount} subagent${childCount === 1 ? "" : "s"}`;
     const trailingTimestampClassName = isSubagentThread
       ? cn(
-          "w-[1.2rem] text-right text-[10px] leading-none tabular-nums tracking-[-0.01em] transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
+          "mr-1 w-[1.2rem] text-right text-[10px] leading-none tabular-nums tracking-[-0.01em] transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
           isHighlighted ? "text-foreground/38 dark:text-foreground/46" : "text-muted-foreground/24",
         )
       : cn(
-          "w-[1.625rem] text-right text-[length:var(--app-font-size-ui-meta,11px)] leading-none tabular-nums transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
+          "mr-1 w-[1.625rem] text-right text-[length:var(--app-font-size-ui-meta,11px)] leading-none tabular-nums transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
           secondaryMetaClass,
         );
     const toggleButtonClassName = isHighlighted

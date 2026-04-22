@@ -29,7 +29,7 @@ describe("groupCommandItems", () => {
           name: "GitHub",
           source: {
             type: "local",
-            path: "plugin://GitHub@codex",
+            path: "/test/plugins/github",
           },
           interface: {
             displayName: "GitHub",
@@ -38,7 +38,7 @@ describe("groupCommandItems", () => {
           installed: true,
           enabled: true,
           installPolicy: "AVAILABLE",
-          authPolicy: "ON_INSTALL",
+          authPolicy: "ON_USE",
         },
         mention: {
           name: "GitHub",

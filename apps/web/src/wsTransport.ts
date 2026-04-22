@@ -66,6 +66,9 @@ export class WsTransport {
   constructor(url?: string) {
     const bridgeUrl = window.desktopBridge?.getWsUrl();
     const envUrl = import.meta.env.VITE_WS_URL as string | undefined;
+    if (window.desktopBridge && (!bridgeUrl || bridgeUrl.length === 0)) {
+      console.warn("Desktop bridge did not provide a WebSocket URL; falling back to web env URL.");
+    }
     this.url =
       url ??
       (bridgeUrl && bridgeUrl.length > 0

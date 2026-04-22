@@ -1151,17 +1151,8 @@ function SettingsRouteView() {
           />
 
           <div className="space-y-3 pt-1">
-            {theme === "system" ? (
-              <div className="rounded-xl border border-[color:var(--color-border)] bg-[var(--color-background-elevated-secondary)] px-4 py-3 text-xs text-[var(--color-text-foreground-secondary)]">
-                System theme is currently resolving to{" "}
-                <span className="font-medium text-[var(--color-text-foreground)]">
-                  {resolvedTheme}
-                </span>
-                . Edit either slot below; the active one updates immediately.
-              </div>
-            ) : null}
-            <ThemePackEditor variant="dark" isActive={resolvedTheme === "dark"} mode={theme} />
             <ThemePackEditor variant="light" isActive={resolvedTheme === "light"} mode={theme} />
+            <ThemePackEditor variant="dark" isActive={resolvedTheme === "dark"} mode={theme} />
           </div>
 
           <SettingsRow

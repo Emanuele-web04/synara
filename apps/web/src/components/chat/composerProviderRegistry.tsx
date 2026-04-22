@@ -1,28 +1,34 @@
+// FILE: composerProviderRegistry.tsx
+// Purpose: Centralizes provider-specific composer state and trait picker rendering.
+// Layer: Chat composer orchestration
+// Depends on: shared model helpers, trait picker components, and runtime model discovery metadata.
+
 import {
   type ModelSlug,
   type ProviderKind,
+  type ProviderModelDescriptor,
   type ProviderModelOptions,
   type ThreadId,
 } from "@t3tools/contracts";
 import {
-  getModelCapabilities,
+  getDefaultEffort,
   getGeminiThinkingSelectionValue,
+  hasEffortLevel,
   isClaudeUltrathinkPrompt,
   normalizeClaudeModelOptions,
-  normalizeCodexModelOptions,
   normalizeGeminiModelOptions,
   normalizeOpenCodeModelOptions,
   trimOrNull,
-  getDefaultEffort,
-  hasEffortLevel,
 } from "@t3tools/shared/model";
 import type { ReactNode } from "react";
 import { TraitsMenuContent, TraitsPicker } from "./TraitsPicker";
 import { getComposerTraitSelection, hasVisibleComposerTraitControls } from "./composerTraits";
+import { getRuntimeAwareModelCapabilities } from "./runtimeModelCapabilities";
 
 export type ComposerProviderStateInput = {
   provider: ProviderKind;
   model: ModelSlug;
+  runtimeModel?: ProviderModelDescriptor;
   prompt: string;
   modelOptions: ProviderModelOptions | null | undefined;
 };
@@ -36,34 +42,72 @@ export type ComposerProviderState = {
   modelPickerIconClassName?: string;
 };
 
+type ProviderTraitRenderInput = {
+  threadId: ThreadId;
+  model: ModelSlug;
+  runtimeModel?: ProviderModelDescriptor;
+  modelOptions: ProviderModelOptions[ProviderKind] | undefined;
+  prompt: string;
+  includeFastMode?: boolean;
+  onPromptChange: (prompt: string) => void;
+};
+
+type ProviderTraitPickerRenderInput = ProviderTraitRenderInput & {
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  shortcutLabel?: string | null;
+};
+
 type ProviderRegistryEntry = {
   getState: (input: ComposerProviderStateInput) => ComposerProviderState;
-  renderTraitsMenuContent: (input: {
-    threadId: ThreadId;
-    model: ModelSlug;
-    modelOptions: ProviderModelOptions[ProviderKind] | undefined;
-    prompt: string;
-    includeFastMode?: boolean;
-    onPromptChange: (prompt: string) => void;
-  }) => ReactNode;
-  renderTraitsPicker: (input: {
-    threadId: ThreadId;
-    model: ModelSlug;
-    modelOptions: ProviderModelOptions[ProviderKind] | undefined;
-    prompt: string;
-    includeFastMode?: boolean;
-    open?: boolean;
-    onOpenChange?: (open: boolean) => void;
-    shortcutLabel?: string | null;
-    onPromptChange: (prompt: string) => void;
-  }) => ReactNode;
+  renderTraitsMenuContent: (input: ProviderTraitRenderInput) => ReactNode;
+  renderTraitsPicker: (input: ProviderTraitPickerRenderInput) => ReactNode;
 };
+
+function renderTraitsMenuContentForProvider(
+  provider: ProviderKind,
+  input: ProviderTraitRenderInput,
+): ReactNode {
+  return (
+    <TraitsMenuContent
+      provider={provider}
+      threadId={input.threadId}
+      model={input.model}
+      runtimeModel={input.runtimeModel}
+      modelOptions={input.modelOptions}
+      prompt={input.prompt}
+      {...(input.includeFastMode === undefined ? {} : { includeFastMode: input.includeFastMode })}
+      onPromptChange={input.onPromptChange}
+    />
+  );
+}
+
+function renderTraitsPickerForProvider(
+  provider: ProviderKind,
+  input: ProviderTraitPickerRenderInput,
+): ReactNode {
+  return (
+    <TraitsPicker
+      provider={provider}
+      threadId={input.threadId}
+      model={input.model}
+      runtimeModel={input.runtimeModel}
+      modelOptions={input.modelOptions}
+      prompt={input.prompt}
+      {...(input.open !== undefined ? { open: input.open } : {})}
+      {...(input.onOpenChange ? { onOpenChange: input.onOpenChange } : {})}
+      {...(input.shortcutLabel !== undefined ? { shortcutLabel: input.shortcutLabel } : {})}
+      {...(input.includeFastMode === undefined ? {} : { includeFastMode: input.includeFastMode })}
+      onPromptChange={input.onPromptChange}
+    />
+  );
+}
 
 function getProviderStateFromCapabilities(
   input: ComposerProviderStateInput,
 ): ComposerProviderState {
-  const { provider, model, prompt, modelOptions } = input;
-  const caps = getModelCapabilities(provider, model);
+  const { provider, model, runtimeModel, prompt, modelOptions } = input;
+  const caps = getRuntimeAwareModelCapabilities({ provider, model, runtimeModel });
 
   let rawEffort: string | null = null;
   let normalizedOptions: ProviderModelOptions[ProviderKind] | undefined;
@@ -72,7 +116,17 @@ function getProviderStateFromCapabilities(
     case "codex": {
       const providerOptions = modelOptions?.codex;
       rawEffort = trimOrNull(providerOptions?.reasoningEffort);
-      normalizedOptions = normalizeCodexModelOptions(model, providerOptions);
+      const defaultReasoningEffort = getDefaultEffort(caps);
+      const reasoningEffort =
+        rawEffort && hasEffortLevel(caps, rawEffort) && rawEffort !== defaultReasoningEffort
+          ? rawEffort
+          : undefined;
+      const fastModeEnabled = providerOptions?.fastMode === true;
+      const nextOptions = {
+        ...(reasoningEffort ? { reasoningEffort } : {}),
+        ...(fastModeEnabled ? { fastMode: true } : {}),
+      };
+      normalizedOptions = Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
       break;
     }
     case "claudeAgent": {
@@ -93,7 +147,6 @@ function getProviderStateFromCapabilities(
     }
   }
 
-  // Resolve effort
   const draftEffort = trimOrNull(rawEffort);
   const defaultEffort = getDefaultEffort(caps);
   const isPromptInjected = draftEffort
@@ -106,7 +159,6 @@ function getProviderStateFromCapabilities(
         ? defaultEffort
         : null;
 
-  // Ultrathink styling (driven by capabilities data, not provider identity)
   const ultrathinkActive =
     caps.promptInjectedEffortLevels.length > 0 && isClaudeUltrathinkPrompt(prompt);
 
@@ -125,171 +177,23 @@ function getProviderStateFromCapabilities(
 const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
   codex: {
     getState: (input) => getProviderStateFromCapabilities(input),
-    renderTraitsMenuContent: ({
-      threadId,
-      model,
-      modelOptions,
-      prompt,
-      includeFastMode,
-      onPromptChange,
-    }) => (
-      <TraitsMenuContent
-        provider="codex"
-        threadId={threadId}
-        model={model}
-        modelOptions={modelOptions}
-        prompt={prompt}
-        {...(includeFastMode === undefined ? {} : { includeFastMode })}
-        onPromptChange={onPromptChange}
-      />
-    ),
-    renderTraitsPicker: ({
-      threadId,
-      model,
-      modelOptions,
-      prompt,
-      includeFastMode,
-      open,
-      onOpenChange,
-      shortcutLabel,
-      onPromptChange,
-    }) => (
-      <TraitsPicker
-        provider="codex"
-        threadId={threadId}
-        model={model}
-        modelOptions={modelOptions}
-        prompt={prompt}
-        {...(open !== undefined ? { open } : {})}
-        {...(onOpenChange ? { onOpenChange } : {})}
-        {...(shortcutLabel !== undefined ? { shortcutLabel } : {})}
-        {...(includeFastMode === undefined ? {} : { includeFastMode })}
-        onPromptChange={onPromptChange}
-      />
-    ),
+    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("codex", input),
+    renderTraitsPicker: (input) => renderTraitsPickerForProvider("codex", input),
   },
   claudeAgent: {
     getState: (input) => getProviderStateFromCapabilities(input),
-    renderTraitsMenuContent: ({
-      threadId,
-      model,
-      modelOptions,
-      prompt,
-      includeFastMode,
-      onPromptChange,
-    }) => (
-      <TraitsMenuContent
-        provider="claudeAgent"
-        threadId={threadId}
-        model={model}
-        modelOptions={modelOptions}
-        prompt={prompt}
-        {...(includeFastMode === undefined ? {} : { includeFastMode })}
-        onPromptChange={onPromptChange}
-      />
-    ),
-    renderTraitsPicker: ({
-      threadId,
-      model,
-      modelOptions,
-      prompt,
-      includeFastMode,
-      open,
-      onOpenChange,
-      shortcutLabel,
-      onPromptChange,
-    }) => (
-      <TraitsPicker
-        provider="claudeAgent"
-        threadId={threadId}
-        model={model}
-        modelOptions={modelOptions}
-        prompt={prompt}
-        {...(open !== undefined ? { open } : {})}
-        {...(onOpenChange ? { onOpenChange } : {})}
-        {...(shortcutLabel !== undefined ? { shortcutLabel } : {})}
-        {...(includeFastMode === undefined ? {} : { includeFastMode })}
-        onPromptChange={onPromptChange}
-      />
-    ),
+    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("claudeAgent", input),
+    renderTraitsPicker: (input) => renderTraitsPickerForProvider("claudeAgent", input),
   },
   gemini: {
     getState: (input) => getProviderStateFromCapabilities(input),
-    renderTraitsMenuContent: ({
-      threadId,
-      model,
-      modelOptions,
-      prompt,
-      includeFastMode,
-      onPromptChange,
-    }) => (
-      <TraitsMenuContent
-        provider="gemini"
-        threadId={threadId}
-        model={model}
-        modelOptions={modelOptions}
-        prompt={prompt}
-        {...(includeFastMode === undefined ? {} : { includeFastMode })}
-        onPromptChange={onPromptChange}
-      />
-    ),
-    renderTraitsPicker: ({
-      threadId,
-      model,
-      modelOptions,
-      prompt,
-      includeFastMode,
-      onPromptChange,
-    }) => (
-      <TraitsPicker
-        provider="gemini"
-        threadId={threadId}
-        model={model}
-        modelOptions={modelOptions}
-        prompt={prompt}
-        {...(includeFastMode === undefined ? {} : { includeFastMode })}
-        onPromptChange={onPromptChange}
-      />
-    ),
+    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("gemini", input),
+    renderTraitsPicker: (input) => renderTraitsPickerForProvider("gemini", input),
   },
   opencode: {
     getState: (input) => getProviderStateFromCapabilities(input),
-    renderTraitsMenuContent: ({
-      threadId,
-      model,
-      modelOptions,
-      prompt,
-      includeFastMode,
-      onPromptChange,
-    }) => (
-      <TraitsMenuContent
-        provider="opencode"
-        threadId={threadId}
-        model={model}
-        modelOptions={modelOptions}
-        prompt={prompt}
-        {...(includeFastMode === undefined ? {} : { includeFastMode })}
-        onPromptChange={onPromptChange}
-      />
-    ),
-    renderTraitsPicker: ({
-      threadId,
-      model,
-      modelOptions,
-      prompt,
-      includeFastMode,
-      onPromptChange,
-    }) => (
-      <TraitsPicker
-        provider="opencode"
-        threadId={threadId}
-        model={model}
-        modelOptions={modelOptions}
-        prompt={prompt}
-        {...(includeFastMode === undefined ? {} : { includeFastMode })}
-        onPromptChange={onPromptChange}
-      />
-    ),
+    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("opencode", input),
+    renderTraitsPicker: (input) => renderTraitsPickerForProvider("opencode", input),
   },
 };
 
@@ -301,6 +205,7 @@ export function renderProviderTraitsMenuContent(input: {
   provider: ProviderKind;
   threadId: ThreadId;
   model: ModelSlug;
+  runtimeModel?: ProviderModelDescriptor;
   modelOptions: ProviderModelOptions[ProviderKind] | undefined;
   prompt: string;
   includeFastMode?: boolean;
@@ -311,6 +216,7 @@ export function renderProviderTraitsMenuContent(input: {
     input.model,
     input.prompt,
     input.modelOptions,
+    input.runtimeModel,
   );
   if (
     !hasVisibleComposerTraitControls(
@@ -320,30 +226,14 @@ export function renderProviderTraitsMenuContent(input: {
   ) {
     return null;
   }
-  return composerProviderRegistry[input.provider].renderTraitsMenuContent(
-    input.includeFastMode === undefined
-      ? {
-          threadId: input.threadId,
-          model: input.model,
-          modelOptions: input.modelOptions,
-          prompt: input.prompt,
-          onPromptChange: input.onPromptChange,
-        }
-      : {
-          threadId: input.threadId,
-          model: input.model,
-          modelOptions: input.modelOptions,
-          prompt: input.prompt,
-          includeFastMode: input.includeFastMode,
-          onPromptChange: input.onPromptChange,
-        },
-  );
+  return composerProviderRegistry[input.provider].renderTraitsMenuContent(input);
 }
 
 export function renderProviderTraitsPicker(input: {
   provider: ProviderKind;
   threadId: ThreadId;
   model: ModelSlug;
+  runtimeModel?: ProviderModelDescriptor;
   modelOptions: ProviderModelOptions[ProviderKind] | undefined;
   prompt: string;
   includeFastMode?: boolean;
@@ -357,6 +247,7 @@ export function renderProviderTraitsPicker(input: {
     input.model,
     input.prompt,
     input.modelOptions,
+    input.runtimeModel,
   );
   if (
     !hasVisibleComposerTraitControls(
@@ -366,28 +257,5 @@ export function renderProviderTraitsPicker(input: {
   ) {
     return null;
   }
-  return composerProviderRegistry[input.provider].renderTraitsPicker(
-    input.includeFastMode === undefined
-      ? {
-          threadId: input.threadId,
-          model: input.model,
-          modelOptions: input.modelOptions,
-          prompt: input.prompt,
-          ...(input.open !== undefined ? { open: input.open } : {}),
-          ...(input.onOpenChange ? { onOpenChange: input.onOpenChange } : {}),
-          ...(input.shortcutLabel !== undefined ? { shortcutLabel: input.shortcutLabel } : {}),
-          onPromptChange: input.onPromptChange,
-        }
-      : {
-          threadId: input.threadId,
-          model: input.model,
-          modelOptions: input.modelOptions,
-          prompt: input.prompt,
-          includeFastMode: input.includeFastMode,
-          ...(input.open !== undefined ? { open: input.open } : {}),
-          ...(input.onOpenChange ? { onOpenChange: input.onOpenChange } : {}),
-          ...(input.shortcutLabel !== undefined ? { shortcutLabel: input.shortcutLabel } : {}),
-          onPromptChange: input.onPromptChange,
-        },
-  );
+  return composerProviderRegistry[input.provider].renderTraitsPicker(input);
 }

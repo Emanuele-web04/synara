@@ -139,6 +139,15 @@ function applyThemeState(state: ThemeState, suppressTransitions = false) {
   }
 
   const root = document.documentElement;
+  // Some server-rendered tests stub only the tiny DOM surface they need.
+  if (
+    typeof root.classList?.toggle !== "function" ||
+    typeof root.style?.setProperty !== "function" ||
+    typeof root.style?.removeProperty !== "function"
+  ) {
+    return;
+  }
+
   if (suppressTransitions) {
     root.classList.add("no-transitions");
   }
@@ -150,10 +159,10 @@ function applyThemeState(state: ThemeState, suppressTransitions = false) {
   });
 
   root.classList.toggle("dark", variant === "dark");
-  root.dataset.codeThemeId = activeTheme.codeThemeId;
-  root.dataset.themeMode = state.mode;
-  root.dataset.themeVariant = variant;
-  root.dataset.windowMaterial = cssVariableBuild.material;
+  root.setAttribute("data-code-theme-id", activeTheme.codeThemeId);
+  root.setAttribute("data-theme-mode", state.mode);
+  root.setAttribute("data-theme-variant", variant);
+  root.setAttribute("data-window-material", cssVariableBuild.material);
 
   for (const [name, value] of Object.entries(cssVariableBuild.variables)) {
     if (value.trim().length === 0) {

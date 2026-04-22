@@ -234,7 +234,7 @@ export function resolveThreadRowClassName(input: {
 
   return cn(
     baseClassName,
-    "text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]",
+    "text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary)] hover:text-[var(--color-text-foreground)]",
   );
 }
 

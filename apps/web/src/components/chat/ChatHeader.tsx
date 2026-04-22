@@ -306,7 +306,7 @@ export const ChatHeader = memo(function ChatHeader({
             <MenuPopup
               align="end"
               side="bottom"
-              className="w-50 rounded-lg border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] shadow-lg"
+              className="w-50 rounded-lg border-[color:var(--color-border)] bg-[var(--composer-surface)] shadow-lg"
             >
               {activeProjectName ? (
                 <MenuItem
