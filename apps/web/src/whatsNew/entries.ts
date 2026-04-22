@@ -22,6 +22,42 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.0.35",
+    date: "Apr 22",
+    features: [
+      {
+        id: "project-import-path-browsing",
+        title: "🗂️ Project import browsing got smarter",
+        description:
+          "The import palette can now browse nearby paths more directly, helping you find and open the right project location with less guesswork.",
+      },
+      {
+        id: "provider-usage-in-branch-toolbar",
+        title: "📊 Provider usage is visible in-context",
+        description:
+          "The branch toolbar now surfaces provider usage snapshots, making it easier to keep an eye on current usage without leaving your working view.",
+      },
+      {
+        id: "desktop-boot-splash-screen",
+        title: "🚀 Desktop startup feels clearer",
+        description:
+          "DP Code now shows a proper splash screen while the desktop backend spins up, so launch feels intentional instead of looking briefly stalled.",
+      },
+      {
+        id: "provider-capability-and-theme-polish",
+        title: "🎛️ Better provider and theme polish",
+        description:
+          "Model capability handling, theme editing, and related picker behavior were tightened up so settings feel more consistent and trustworthy.",
+      },
+      {
+        id: "desktop-release-reliability",
+        title: "🛠️ Desktop release plumbing is sturdier",
+        description:
+          "Startup readiness checks, desktop packaging config, and platform entitlements were refined to make desktop builds and app boot more reliable.",
+      },
+    ],
+  },
+  {
     version: "0.0.34",
     date: "Apr 21",
     features: [
