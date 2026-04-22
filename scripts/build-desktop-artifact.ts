@@ -543,10 +543,7 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     ...(windowsAzureSignOptions ? { windowsAzureSignOptions } : {}),
   } as const;
 
-  Object.assign(
-    buildConfig,
-    createDesktopPlatformBuildConfig(platformBuildConfigInput),
-  );
+  Object.assign(buildConfig, createDesktopPlatformBuildConfig(platformBuildConfigInput));
 
   return buildConfig;
 });

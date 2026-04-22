@@ -19,7 +19,7 @@ describe("waitForBackendStartupReady", () => {
   });
 
   it("prefers the listening signal and cancels the http wait", async () => {
-    let resolveListening: (() => void) | null = null;
+    let resolveListening!: () => void;
     const listeningPromise = new Promise<void>((resolve) => {
       resolveListening = resolve;
     });
@@ -32,7 +32,7 @@ describe("waitForBackendStartupReady", () => {
       cancelHttpWait,
     });
 
-    resolveListening?.();
+    resolveListening();
 
     await expect(resultPromise).resolves.toBe("listening");
     expect(cancelHttpWait).toHaveBeenCalledTimes(1);

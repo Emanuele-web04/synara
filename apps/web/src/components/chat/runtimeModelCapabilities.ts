@@ -57,7 +57,7 @@ export function resolveRuntimeModelDescriptor(input: {
 export function getRuntimeAwareModelCapabilities(input: {
   provider: ProviderKind;
   model: string | null | undefined;
-  runtimeModel?: ProviderModelDescriptor;
+  runtimeModel?: ProviderModelDescriptor | undefined;
 }): ModelCapabilities {
   const staticCapabilities = getModelCapabilities(input.provider, input.model);
   const runtimeEfforts = input.runtimeModel?.supportedReasoningEfforts;
@@ -72,14 +72,18 @@ export function getRuntimeAwareModelCapabilities(input: {
       ? staticDefaultEffort
       : null);
 
-  const reasoningEffortLevels: EffortOption[] = runtimeEfforts.map((effort) => ({
-    value: effort.value,
-    label: runtimeEffortLabel(effort.value),
-    ...(trimOrNull(effort.description ?? effort.label)
-      ? { description: trimOrNull(effort.description ?? effort.label) ?? undefined }
-      : {}),
-    ...(effort.value === runtimeDefaultEffort ? { isDefault: true as const } : {}),
-  }));
+  const reasoningEffortLevels: EffortOption[] = runtimeEfforts.map((effort) => {
+    const nextEffort = {
+      value: effort.value,
+      label: runtimeEffortLabel(effort.value),
+    } satisfies Pick<EffortOption, "value" | "label">;
+    const description = trimOrNull(effort.description ?? effort.label);
+    return Object.assign(
+      nextEffort,
+      description ? { description } : {},
+      effort.value === runtimeDefaultEffort ? ({ isDefault: true } as const) : {},
+    );
+  });
 
   return {
     ...staticCapabilities,

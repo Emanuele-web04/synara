@@ -26,7 +26,7 @@ import { getRuntimeAwareModelCapabilities } from "./runtimeModelCapabilities";
 export type ComposerProviderStateInput = {
   provider: ProviderKind;
   model: ModelSlug;
-  runtimeModel?: ProviderModelDescriptor;
+  runtimeModel?: ProviderModelDescriptor | undefined;
   prompt: string;
   modelOptions: ProviderModelOptions | null | undefined;
 };
@@ -43,7 +43,7 @@ export type ComposerProviderState = {
 type ProviderTraitRenderInput = {
   threadId: ThreadId;
   model: ModelSlug;
-  runtimeModel?: ProviderModelDescriptor;
+  runtimeModel?: ProviderModelDescriptor | undefined;
   modelOptions: ProviderModelOptions[ProviderKind] | undefined;
   prompt: string;
   includeFastMode?: boolean;
@@ -194,7 +194,7 @@ export function renderProviderTraitsMenuContent(input: {
   provider: ProviderKind;
   threadId: ThreadId;
   model: ModelSlug;
-  runtimeModel?: ProviderModelDescriptor;
+  runtimeModel?: ProviderModelDescriptor | undefined;
   modelOptions: ProviderModelOptions[ProviderKind] | undefined;
   prompt: string;
   includeFastMode?: boolean;
@@ -207,7 +207,7 @@ export function renderProviderTraitsPicker(input: {
   provider: ProviderKind;
   threadId: ThreadId;
   model: ModelSlug;
-  runtimeModel?: ProviderModelDescriptor;
+  runtimeModel?: ProviderModelDescriptor | undefined;
   modelOptions: ProviderModelOptions[ProviderKind] | undefined;
   prompt: string;
   includeFastMode?: boolean;

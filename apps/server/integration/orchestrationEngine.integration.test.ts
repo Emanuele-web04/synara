@@ -1267,6 +1267,13 @@ itLiveUnlessCi("reverts claudeAgent turns and rolls back provider conversation s
           },
         });
 
+        yield* harness.waitForReceipt(
+          (receipt): receipt is TurnProcessingQuiescedReceipt =>
+            receipt.type === "turn.processing.quiesced" &&
+            receipt.threadId === THREAD_ID &&
+            receipt.checkpointTurnCount === 1,
+        );
+
         yield* harness.waitForThread(
           THREAD_ID,
           (entry) =>
@@ -1309,6 +1316,13 @@ itLiveUnlessCi("reverts claudeAgent turns and rolls back provider conversation s
           text: "Second Claude edit",
         });
 
+        yield* harness.waitForReceipt(
+          (receipt): receipt is TurnProcessingQuiescedReceipt =>
+            receipt.type === "turn.processing.quiesced" &&
+            receipt.threadId === THREAD_ID &&
+            receipt.checkpointTurnCount === 2,
+        );
+
         yield* harness.waitForThread(
           THREAD_ID,
           (entry) =>
@@ -1325,6 +1339,7 @@ itLiveUnlessCi("reverts claudeAgent turns and rolls back provider conversation s
           createdAt: nowIso(),
         });
 
+        yield* harness.waitForDomainEvent((event) => event.type === "thread.reverted");
         const revertedThread = yield* harness.waitForThread(
           THREAD_ID,
           (entry) =>

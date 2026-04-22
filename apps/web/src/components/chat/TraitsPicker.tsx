@@ -34,7 +34,7 @@ export interface TraitsMenuContentProps {
   provider: ProviderKind;
   threadId: ThreadId;
   model: string | null | undefined;
-  runtimeModel?: ProviderModelDescriptor;
+  runtimeModel?: ProviderModelDescriptor | undefined;
   prompt: string;
   onPromptChange: (prompt: string) => void;
   includeFastMode?: boolean;
