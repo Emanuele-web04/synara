@@ -378,8 +378,8 @@ function TerminalViewport({
   }, [clearSelectionAction, showSelectionAction, terminalInstance]);
 
   return (
-    <div className="h-full min-h-0 w-full rounded-[8px] bg-background p-3">
-      <div className="relative h-full min-h-0 w-full overflow-hidden rounded-[4px]">
+    <div className="h-full min-h-0 w-full bg-background p-3">
+      <div className="relative h-full min-h-0 w-full overflow-hidden">
         <TerminalSearch
           searchAddon={searchAddonInstance}
           isOpen={searchOpen}

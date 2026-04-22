@@ -31,8 +31,10 @@ import type { ContextMenuItem } from "@t3tools/contracts";
 import { NetService } from "@t3tools/shared/Net";
 import { RotatingFileSink } from "@t3tools/shared/logging";
 import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness";
+import { waitForBackendStartupReady } from "./backendStartupReadiness";
 import { showDesktopConfirmDialog } from "./confirmDialog";
 import { shouldAllowMediaPermissionRequest } from "./mediaPermissions";
+import { ServerListeningDetector } from "./serverListeningDetector";
 import { syncShellEnvironment } from "./syncShellEnvironment";
 import {
   getAutoUpdateDisabledReason,
@@ -128,8 +130,11 @@ let mainWindow: BrowserWindow | null = null;
 let backendProcess: ChildProcess.ChildProcess | null = null;
 let backendPort = 0;
 let backendAuthToken = "";
+let backendHttpUrl = "";
 let backendWsUrl = "";
 let backendReadinessAbortController: AbortController | null = null;
+let backendInitialWindowOpenInFlight: Promise<void> | null = null;
+let backendListeningDetector: ServerListeningDetector | null = null;
 let restartAttempt = 0;
 let restartTimer: ReturnType<typeof setTimeout> | null = null;
 let isQuitting = false;
@@ -254,50 +259,18 @@ function getSafeTheme(rawTheme: unknown): DesktopTheme | null {
   return null;
 }
 
-// Wait until the desktop backend exposes its health route so packaged startup
-// can proceed even if the rest of the server is still warming up.
-async function waitForBackendHttpListening(baseUrl: string): Promise<void> {
+async function waitForBackendHttpReady(
+  baseUrl: string,
+  options?: Parameters<typeof waitForHttpReady>[1],
+): Promise<void> {
   cancelBackendReadinessWait();
   const controller = new AbortController();
   backendReadinessAbortController = controller;
 
   try {
     await waitForHttpReady(baseUrl, {
+      ...options,
       signal: controller.signal,
-      path: "/health",
-    });
-  } finally {
-    if (backendReadinessAbortController === controller) {
-      backendReadinessAbortController = null;
-    }
-  }
-}
-
-// Wait for the backend's full startup pipeline, but keep this separate from
-// the initial launch gate so slow projection/bootstrap work does not look like
-// a fatal startup failure.
-async function waitForBackendStartupReady(baseUrl: string): Promise<void> {
-  cancelBackendReadinessWait();
-  const controller = new AbortController();
-  backendReadinessAbortController = controller;
-
-  try {
-    await waitForHttpReady(baseUrl, {
-      signal: controller.signal,
-      path: "/health",
-      isReady: async (response) => {
-        if (!response.ok) {
-          return false;
-        }
-        try {
-          const payload = (await response.json()) as {
-            startupReady?: unknown;
-          };
-          return payload.startupReady === true;
-        } catch {
-          return false;
-        }
-      },
     });
   } finally {
     if (backendReadinessAbortController === controller) {
@@ -309,6 +282,69 @@ async function waitForBackendStartupReady(baseUrl: string): Promise<void> {
 function cancelBackendReadinessWait(): void {
   backendReadinessAbortController?.abort();
   backendReadinessAbortController = null;
+}
+
+async function waitForBackendWindowReady(baseUrl: string): Promise<"listening" | "http"> {
+  return await waitForBackendStartupReady({
+    listeningPromise: backendListeningDetector?.promise ?? null,
+    waitForHttpReady: () =>
+      waitForBackendHttpReady(baseUrl, {
+        path: "/health",
+        timeoutMs: 60_000,
+        isReady: async (response) => {
+          if (!response.ok) {
+            return false;
+          }
+          try {
+            const payload = (await response.json()) as {
+              startupReady?: unknown;
+            };
+            return payload.startupReady === true;
+          } catch {
+            return false;
+          }
+        },
+      }),
+    cancelHttpWait: cancelBackendReadinessWait,
+  });
+}
+
+function ensureInitialBackendWindowOpen(baseUrl: string): void {
+  const existingWindow = mainWindow ?? BrowserWindow.getAllWindows()[0] ?? null;
+  if (
+    isDevelopment ||
+    baseUrl.length === 0 ||
+    existingWindow !== null ||
+    backendInitialWindowOpenInFlight !== null
+  ) {
+    return;
+  }
+
+  const nextOpen = waitForBackendWindowReady(baseUrl)
+    .then((source) => {
+      writeDesktopLogHeader(`bootstrap backend ready source=${source}`);
+      if (mainWindow ?? BrowserWindow.getAllWindows()[0]) {
+        return;
+      }
+      mainWindow = createWindow();
+      writeDesktopLogHeader("bootstrap main window created");
+    })
+    .catch((error) => {
+      if (isBackendReadinessAborted(error)) {
+        return;
+      }
+      writeDesktopLogHeader(
+        `bootstrap backend readiness warning message=${formatErrorMessage(error)}`,
+      );
+      console.warn("[desktop] backend readiness check timed out during packaged bootstrap", error);
+    })
+    .finally(() => {
+      if (backendInitialWindowOpenInFlight === nextOpen) {
+        backendInitialWindowOpenInFlight = null;
+      }
+    });
+
+  backendInitialWindowOpenInFlight = nextOpen;
 }
 
 function writeDesktopStreamChunk(
@@ -388,14 +424,16 @@ function initializePackagedLogging(): void {
 }
 
 function captureBackendOutput(child: ChildProcess.ChildProcess): void {
-  if (!app.isPackaged || backendLogSink === null) return;
-  const writeChunk = (chunk: unknown): void => {
-    if (!backendLogSink) return;
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
-    backendLogSink.write(buffer);
+  const attachStream = (stream: NodeJS.ReadableStream | null | undefined): void => {
+    stream?.on("data", (chunk: unknown) => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
+      backendLogSink?.write(buffer);
+      backendListeningDetector?.push(buffer);
+    });
   };
-  child.stdout?.on("data", writeChunk);
-  child.stderr?.on("data", writeChunk);
+
+  attachStream(child.stdout);
+  attachStream(child.stderr);
 }
 
 initializePackagedLogging();
@@ -1346,6 +1384,8 @@ function startBackend(): void {
     },
     stdio: captureBackendLogs ? ["ignore", "pipe", "pipe"] : "inherit",
   });
+  const listeningDetector = new ServerListeningDetector();
+  backendListeningDetector = listeningDetector;
   backendProcess = child;
   let backendSessionClosed = false;
   const closeBackendSession = (details: string) => {
@@ -1364,6 +1404,10 @@ function startBackend(): void {
   });
 
   child.on("error", (error) => {
+    if (backendListeningDetector === listeningDetector) {
+      listeningDetector.fail(error);
+      backendListeningDetector = null;
+    }
     if (backendProcess === child) {
       backendProcess = null;
     }
@@ -1372,6 +1416,14 @@ function startBackend(): void {
   });
 
   child.on("exit", (code, signal) => {
+    if (backendListeningDetector === listeningDetector) {
+      listeningDetector.fail(
+        new Error(
+          `backend exited before logging readiness (code=${code ?? "null"} signal=${signal ?? "null"})`,
+        ),
+      );
+      backendListeningDetector = null;
+    }
     if (backendProcess === child) {
       backendProcess = null;
     }
@@ -1385,6 +1437,8 @@ function startBackend(): void {
 }
 
 function stopBackend(): void {
+  cancelBackendReadinessWait();
+  backendListeningDetector = null;
   if (restartTimer) {
     clearTimeout(restartTimer);
     restartTimer = null;
@@ -1405,6 +1459,8 @@ function stopBackend(): void {
 }
 
 async function stopBackendAndWaitForExit(timeoutMs = 5_000): Promise<void> {
+  cancelBackendReadinessWait();
+  backendListeningDetector = null;
   if (restartTimer) {
     clearTimeout(restartTimer);
     restartTimer = null;
@@ -1840,7 +1896,7 @@ async function bootstrap(): Promise<void> {
   );
   writeDesktopLogHeader(`reserved backend port via NetService port=${backendPort}`);
   backendAuthToken = Crypto.randomBytes(24).toString("hex");
-  const backendHttpUrl = `http://127.0.0.1:${backendPort}`;
+  backendHttpUrl = `http://127.0.0.1:${backendPort}`;
   backendWsUrl = `ws://127.0.0.1:${backendPort}/?token=${encodeURIComponent(backendAuthToken)}`;
   process.env.DPCODE_DESKTOP_WS_URL = backendWsUrl;
   process.env.T3CODE_DESKTOP_WS_URL = backendWsUrl;
@@ -1854,9 +1910,9 @@ async function bootstrap(): Promise<void> {
   if (isDevelopment) {
     mainWindow = createWindow();
     writeDesktopLogHeader("bootstrap main window created");
-    void waitForBackendStartupReady(backendHttpUrl)
-      .then(() => {
-        writeDesktopLogHeader("bootstrap backend ready");
+    void waitForBackendWindowReady(backendHttpUrl)
+      .then((source) => {
+        writeDesktopLogHeader(`bootstrap backend ready source=${source}`);
       })
       .catch((error) => {
         if (isBackendReadinessAborted(error)) {
@@ -1870,23 +1926,7 @@ async function bootstrap(): Promise<void> {
     return;
   }
 
-  await waitForBackendHttpListening(backendHttpUrl);
-  writeDesktopLogHeader("bootstrap backend listening");
-  mainWindow = createWindow();
-  writeDesktopLogHeader("bootstrap main window created");
-  void waitForBackendStartupReady(backendHttpUrl)
-    .then(() => {
-      writeDesktopLogHeader("bootstrap backend ready");
-    })
-    .catch((error) => {
-      if (isBackendReadinessAborted(error)) {
-        return;
-      }
-      writeDesktopLogHeader(
-        `bootstrap backend readiness warning message=${formatErrorMessage(error)}`,
-      );
-      console.warn("[desktop] backend readiness check timed out during packaged bootstrap", error);
-    });
+  ensureInitialBackendWindowOpen(backendHttpUrl);
 }
 
 app.on("before-quit", () => {
@@ -1929,6 +1969,10 @@ if (hasSingleInstanceLock) {
       app.on("activate", () => {
         handleDesktopAppForegrounded();
         if (BrowserWindow.getAllWindows().length === 0) {
+          if (!isDevelopment) {
+            ensureInitialBackendWindowOpen(backendHttpUrl);
+            return;
+          }
           mainWindow = createWindow();
           return;
         }

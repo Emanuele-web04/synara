@@ -6,6 +6,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
+import { SplashScreen } from "../components/SplashScreen";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 
 function ChatIndexRouteView() {
@@ -31,22 +32,10 @@ function ChatIndexRouteView() {
   }, [attempt, handleNewChat]);
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 items-center justify-center bg-background">
-      <div className="flex flex-col items-center gap-3">
-        <span className="text-sm text-muted-foreground/70">
-          {errorMessage ? errorMessage : "Preparing new chat…"}
-        </span>
-        {errorMessage ? (
-          <button
-            type="button"
-            className="rounded-md border border-border/70 px-3 py-1.5 text-sm text-foreground/85 transition-colors hover:bg-[var(--sidebar-accent)]"
-            onClick={() => setAttempt((value) => value + 1)}
-          >
-            Retry
-          </button>
-        ) : null}
-      </div>
-    </div>
+    <SplashScreen
+      errorMessage={errorMessage}
+      onRetry={errorMessage ? () => setAttempt((value) => value + 1) : null}
+    />
   );
 }
 
