@@ -24,7 +24,7 @@ import {
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { buildNextProviderOptions, type ProviderOptions } from "../../providerModelOptions";
 import { COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME } from "./composerPickerStyles";
-import { getComposerTraitSelection } from "./composerTraits";
+import { getComposerTraitSelection, hasVisibleComposerTraitControls } from "./composerTraits";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ShortcutKbd } from "../ui/shortcut-kbd";
 
@@ -64,6 +64,10 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     defaultContextWindow,
     ultrathinkPromptControlled,
   } = getComposerTraitSelection(provider, model, prompt, modelOptions);
+  const hasVisibleControls = hasVisibleComposerTraitControls(
+    { caps, effort, thinkingEnabled },
+    { includeFastMode },
+  );
 
   const handleEffortChange = useCallback(
     (value: string) => {
@@ -109,7 +113,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     ],
   );
 
-  if (effort === null && thinkingEnabled === null && contextWindowOptions.length <= 1) {
+  if (!hasVisibleControls) {
     return null;
   }
 
@@ -265,6 +269,14 @@ export const TraitsPicker = memo(function TraitsPicker({
     defaultContextWindow,
     ultrathinkPromptControlled,
   } = getComposerTraitSelection(provider, model, prompt, modelOptions);
+  const hasVisibleControls = hasVisibleComposerTraitControls(
+    { caps, effort, thinkingEnabled },
+    { includeFastMode },
+  );
+
+  if (!hasVisibleControls) {
+    return null;
+  }
 
   const effortLabel = effort
     ? (effortLevels.find((l) => l.value === effort)?.label ?? effort)

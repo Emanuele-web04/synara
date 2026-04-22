@@ -10,6 +10,7 @@ import {
 } from "@t3tools/shared/model";
 import { useLocalStorage } from "./hooks/useLocalStorage";
 import { EnvMode } from "./components/BranchToolbar.logic";
+import type { ProviderModelOption } from "./providerModelOptions";
 
 const APP_SETTINGS_STORAGE_KEY = "t3code:app-settings:v1";
 const MAX_CUSTOM_MODEL_COUNT = 32;
@@ -30,7 +31,13 @@ export const DEFAULT_SIDEBAR_PROJECT_SORT_ORDER: SidebarProjectSortOrder = "upda
 export const SidebarThreadSortOrder = Schema.Literals(["updated_at", "created_at"]);
 export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
 export const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
-type CustomModelSettingsKey = "customCodexModels" | "customClaudeModels" | "customGeminiModels";
+
+type CustomModelSettingsKey =
+  | "customCodexModels"
+  | "customClaudeModels"
+  | "customGeminiModels"
+  | "customOpenCodeModels";
+
 export type ProviderCustomModelConfig = {
   provider: ProviderKind;
   settingsKey: CustomModelSettingsKey;
@@ -45,6 +52,7 @@ const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>
   codex: new Set(getModelOptions("codex").map((option) => option.slug)),
   claudeAgent: new Set(getModelOptions("claudeAgent").map((option) => option.slug)),
   gemini: new Set(getModelOptions("gemini").map((option) => option.slug)),
+  opencode: new Set(getModelOptions("opencode").map((option) => option.slug)),
 };
 
 const withDefaults =
@@ -67,6 +75,11 @@ export const AppSettingsSchema = Schema.Struct({
   codexBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   codexHomePath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   geminiBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  openCodeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  openCodeServerUrl: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  openCodeServerPassword: Schema.String.check(Schema.isMaxLength(4096)).pipe(
+    withDefaults(() => ""),
+  ),
   defaultThreadEnvMode: EnvMode.pipe(withDefaults(() => "local" as const satisfies EnvMode)),
   confirmThreadDelete: Schema.Boolean.pipe(withDefaults(() => true)),
   confirmThreadArchive: Schema.Boolean.pipe(withDefaults(() => false)),
@@ -86,18 +99,19 @@ export const AppSettingsSchema = Schema.Struct({
   customCodexModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customClaudeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customGeminiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
+  customOpenCodeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
   uiFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
   defaultProvider: ProviderKind.pipe(withDefaults(() => "codex" as const)),
 });
 export type AppSettings = typeof AppSettingsSchema.Type;
-export interface AppModelOption {
-  slug: string;
-  name: string;
+
+export interface AppModelOption extends ProviderModelOption {
   isCustom: boolean;
 }
 
 const DEFAULT_APP_SETTINGS = AppSettingsSchema.makeUnsafe({});
+
 const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConfig> = {
   codex: {
     provider: "codex",
@@ -126,7 +140,17 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     placeholder: "your-gemini-model-slug",
     example: "gemini-3.5-pro-preview",
   },
+  opencode: {
+    provider: "opencode",
+    settingsKey: "customOpenCodeModels",
+    defaultSettingsKey: "customOpenCodeModels",
+    title: "OpenCode",
+    description: "Save additional OpenCode model slugs for the picker and provider runtime.",
+    placeholder: "provider/model",
+    example: "openai/gpt-5",
+  },
 };
+
 export const MODEL_PROVIDER_SETTINGS = Object.values(PROVIDER_CUSTOM_MODEL_CONFIG);
 
 export function normalizeCustomModelSlugs(
@@ -173,6 +197,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     customCodexModels: normalizeCustomModelSlugs(settings.customCodexModels, "codex"),
     customClaudeModels: normalizeCustomModelSlugs(settings.customClaudeModels, "claudeAgent"),
     customGeminiModels: normalizeCustomModelSlugs(settings.customGeminiModels, "gemini"),
+    customOpenCodeModels: normalizeCustomModelSlugs(settings.customOpenCodeModels, "opencode"),
   };
 }
 
@@ -206,6 +231,7 @@ export function getCustomModelsByProvider(
     codex: getCustomModelsForProvider(settings, "codex"),
     claudeAgent: getCustomModelsForProvider(settings, "claudeAgent"),
     gemini: getCustomModelsForProvider(settings, "gemini"),
+    opencode: getCustomModelsForProvider(settings, "opencode"),
   };
 }
 
@@ -254,6 +280,36 @@ export function getAppModelOptions(
   return options;
 }
 
+export function getGitTextGenerationModelOptions(
+  settings: Pick<AppSettings, "customCodexModels" | "customOpenCodeModels" | "textGenerationModel">,
+): AppModelOption[] {
+  const options = [
+    ...getAppModelOptions("codex", settings.customCodexModels),
+    ...getAppModelOptions("opencode", settings.customOpenCodeModels),
+  ];
+  const deduped: AppModelOption[] = [];
+  const seen = new Set<string>();
+
+  for (const option of options) {
+    if (seen.has(option.slug)) {
+      continue;
+    }
+    seen.add(option.slug);
+    deduped.push(option);
+  }
+
+  const selectedModel = settings.textGenerationModel?.trim();
+  if (selectedModel && !seen.has(selectedModel)) {
+    deduped.push({
+      slug: selectedModel,
+      name: selectedModel,
+      isCustom: true,
+    });
+  }
+
+  return deduped;
+}
+
 export function resolveAppModelSelection(
   provider: ProviderKind,
   customModels: Record<ProviderKind, readonly string[]>,
@@ -266,19 +322,26 @@ export function resolveAppModelSelection(
 
 export function getCustomModelOptionsByProvider(
   settings: Pick<AppSettings, CustomModelSettingsKey>,
-): Record<ProviderKind, ReadonlyArray<{ slug: string; name: string }>> {
+): Record<ProviderKind, ReadonlyArray<ProviderModelOption>> {
   const customModelsByProvider = getCustomModelsByProvider(settings);
   return {
     codex: getAppModelOptions("codex", customModelsByProvider.codex),
     claudeAgent: getAppModelOptions("claudeAgent", customModelsByProvider.claudeAgent),
     gemini: getAppModelOptions("gemini", customModelsByProvider.gemini),
+    opencode: getAppModelOptions("opencode", customModelsByProvider.opencode),
   };
 }
 
 export function getProviderStartOptions(
   settings: Pick<
     AppSettings,
-    "claudeBinaryPath" | "codexBinaryPath" | "codexHomePath" | "geminiBinaryPath"
+    | "claudeBinaryPath"
+    | "codexBinaryPath"
+    | "codexHomePath"
+    | "geminiBinaryPath"
+    | "openCodeBinaryPath"
+    | "openCodeServerPassword"
+    | "openCodeServerUrl"
   >,
 ): ProviderStartOptions | undefined {
   const providerOptions: ProviderStartOptions = {
@@ -304,9 +367,39 @@ export function getProviderStartOptions(
           },
         }
       : {}),
+    ...(settings.openCodeBinaryPath || settings.openCodeServerUrl || settings.openCodeServerPassword
+      ? {
+          opencode: {
+            ...(settings.openCodeBinaryPath ? { binaryPath: settings.openCodeBinaryPath } : {}),
+            ...(settings.openCodeServerUrl ? { serverUrl: settings.openCodeServerUrl } : {}),
+            ...(settings.openCodeServerPassword
+              ? { serverPassword: settings.openCodeServerPassword }
+              : {}),
+          },
+        }
+      : {}),
   };
 
   return Object.keys(providerOptions).length > 0 ? providerOptions : undefined;
+}
+
+export function getCustomBinaryPathForProvider(
+  settings: Pick<
+    AppSettings,
+    "claudeBinaryPath" | "codexBinaryPath" | "geminiBinaryPath" | "openCodeBinaryPath"
+  >,
+  provider: ProviderKind,
+): string {
+  switch (provider) {
+    case "codex":
+      return settings.codexBinaryPath;
+    case "claudeAgent":
+      return settings.claudeBinaryPath;
+    case "gemini":
+      return settings.geminiBinaryPath;
+    case "opencode":
+      return settings.openCodeBinaryPath;
+  }
 }
 
 export function useAppSettings() {

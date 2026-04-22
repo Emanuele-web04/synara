@@ -11,12 +11,14 @@ import {
   normalizeClaudeModelOptions,
   normalizeCodexModelOptions,
   normalizeGeminiModelOptions,
+  normalizeOpenCodeModelOptions,
   trimOrNull,
   getDefaultEffort,
   hasEffortLevel,
 } from "@t3tools/shared/model";
 import type { ReactNode } from "react";
 import { TraitsMenuContent, TraitsPicker } from "./TraitsPicker";
+import { getComposerTraitSelection, hasVisibleComposerTraitControls } from "./composerTraits";
 
 export type ComposerProviderStateInput = {
   provider: ProviderKind;
@@ -83,6 +85,10 @@ function getProviderStateFromCapabilities(
       const providerOptions = modelOptions?.gemini;
       rawEffort = getGeminiThinkingSelectionValue(caps, providerOptions);
       normalizedOptions = normalizeGeminiModelOptions(model, providerOptions);
+      break;
+    }
+    case "opencode": {
+      normalizedOptions = normalizeOpenCodeModelOptions(modelOptions?.opencode);
       break;
     }
   }
@@ -246,6 +252,45 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
       />
     ),
   },
+  opencode: {
+    getState: (input) => getProviderStateFromCapabilities(input),
+    renderTraitsMenuContent: ({
+      threadId,
+      model,
+      modelOptions,
+      prompt,
+      includeFastMode,
+      onPromptChange,
+    }) => (
+      <TraitsMenuContent
+        provider="opencode"
+        threadId={threadId}
+        model={model}
+        modelOptions={modelOptions}
+        prompt={prompt}
+        {...(includeFastMode === undefined ? {} : { includeFastMode })}
+        onPromptChange={onPromptChange}
+      />
+    ),
+    renderTraitsPicker: ({
+      threadId,
+      model,
+      modelOptions,
+      prompt,
+      includeFastMode,
+      onPromptChange,
+    }) => (
+      <TraitsPicker
+        provider="opencode"
+        threadId={threadId}
+        model={model}
+        modelOptions={modelOptions}
+        prompt={prompt}
+        {...(includeFastMode === undefined ? {} : { includeFastMode })}
+        onPromptChange={onPromptChange}
+      />
+    ),
+  },
 };
 
 export function getComposerProviderState(input: ComposerProviderStateInput): ComposerProviderState {
@@ -261,6 +306,20 @@ export function renderProviderTraitsMenuContent(input: {
   includeFastMode?: boolean;
   onPromptChange: (prompt: string) => void;
 }): ReactNode {
+  const selection = getComposerTraitSelection(
+    input.provider,
+    input.model,
+    input.prompt,
+    input.modelOptions,
+  );
+  if (
+    !hasVisibleComposerTraitControls(
+      selection,
+      input.includeFastMode === undefined ? undefined : { includeFastMode: input.includeFastMode },
+    )
+  ) {
+    return null;
+  }
   return composerProviderRegistry[input.provider].renderTraitsMenuContent(
     input.includeFastMode === undefined
       ? {
@@ -293,6 +352,20 @@ export function renderProviderTraitsPicker(input: {
   shortcutLabel?: string | null;
   onPromptChange: (prompt: string) => void;
 }): ReactNode {
+  const selection = getComposerTraitSelection(
+    input.provider,
+    input.model,
+    input.prompt,
+    input.modelOptions,
+  );
+  if (
+    !hasVisibleComposerTraitControls(
+      selection,
+      input.includeFastMode === undefined ? undefined : { includeFastMode: input.includeFastMode },
+    )
+  ) {
+    return null;
+  }
   return composerProviderRegistry[input.provider].renderTraitsPicker(
     input.includeFastMode === undefined
       ? {

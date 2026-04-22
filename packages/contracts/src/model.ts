@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { TrimmedNonEmptyString } from "./baseSchemas";
 import type { ProviderKind } from "./orchestration";
 
 export const CODEX_REASONING_EFFORT_OPTIONS = ["low", "medium", "high", "xhigh"] as const;
@@ -42,10 +43,17 @@ export const GeminiModelOptions = Schema.Struct({
 });
 export type GeminiModelOptions = typeof GeminiModelOptions.Type;
 
+export const OpenCodeModelOptions = Schema.Struct({
+  variant: Schema.optional(TrimmedNonEmptyString),
+  agent: Schema.optional(TrimmedNonEmptyString),
+});
+export type OpenCodeModelOptions = typeof OpenCodeModelOptions.Type;
+
 export const ProviderModelOptions = Schema.Struct({
   codex: Schema.optional(CodexModelOptions),
   claudeAgent: Schema.optional(ClaudeModelOptions),
   gemini: Schema.optional(GeminiModelOptions),
+  opencode: Schema.optional(OpenCodeModelOptions),
 });
 export type ProviderModelOptions = typeof ProviderModelOptions.Type;
 
@@ -67,6 +75,8 @@ export type ModelCapabilities = {
   readonly supportsThinkingToggle: boolean;
   readonly promptInjectedEffortLevels: readonly string[];
   readonly contextWindowOptions: readonly ContextWindowOption[];
+  readonly variantOptions?: readonly EffortOption[];
+  readonly agentOptions?: readonly EffortOption[];
 };
 
 const GEMINI_2_5_CAPABILITIES: ModelCapabilities = {
@@ -359,6 +369,19 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       capabilities: GEMINI_2_5_CAPABILITIES,
     },
   ],
+  opencode: [
+    {
+      slug: "openai/gpt-5",
+      name: "OpenAI GPT-5",
+      capabilities: {
+        reasoningEffortLevels: [],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+  ],
 } as const satisfies Record<ProviderKind, readonly ModelDefinition[]>;
 export type ModelOptionsByProvider = typeof MODEL_OPTIONS_BY_PROVIDER;
 
@@ -369,6 +392,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderKind, ModelSlug> = {
   codex: "gpt-5.4",
   claudeAgent: "claude-sonnet-4-6",
   gemini: "auto-gemini-3",
+  opencode: "openai/gpt-5",
 };
 
 // Backward compatibility for existing Codex-only call sites.
@@ -416,6 +440,7 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "gemini-2.5-flash": "gemini-2.5-flash",
     "gemini-2.5-flash-lite": "gemini-2.5-flash-lite",
   },
+  opencode: {},
 };
 
 // ── Agent mention aliases ─────────────────────────────────────────────
@@ -446,4 +471,5 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   codex: "Codex",
   claudeAgent: "Claude",
   gemini: "Gemini",
+  opencode: "OpenCode",
 };

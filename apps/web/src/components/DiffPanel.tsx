@@ -41,7 +41,7 @@ import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { useStore } from "../store";
 import { createProjectSelector, createThreadSelector } from "../storeSelectors";
-import { useAppSettings } from "../appSettings";
+import { getProviderStartOptions, useAppSettings } from "../appSettings";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { formatShortTimestamp } from "../timestampFormat";
 import ChatMarkdown from "./ChatMarkdown";
@@ -217,6 +217,7 @@ export default function DiffPanel({
   const queryClient = useQueryClient();
   const { resolvedTheme } = useTheme();
   const { settings } = useAppSettings();
+  const providerOptions = useMemo(() => getProviderStartOptions(settings), [settings]);
   const [diffRenderMode, setDiffRenderMode] = useState<DiffRenderMode>("stacked");
   const [diffWordWrap, setDiffWordWrap] = useState(settings.diffWordWrap);
   const [surfaceMode, setSurfaceMode] = useState<DiffSurfaceMode>("review");
@@ -459,6 +460,7 @@ export default function DiffPanel({
         patch: normalizedWorkingTreePatch,
         codexHomePath: settings.codexHomePath || null,
         model: settings.textGenerationModel ?? null,
+        ...(providerOptions ? { providerOptions } : {}),
         enabled: true,
       }),
     [
@@ -467,6 +469,7 @@ export default function DiffPanel({
       normalizedWorkingTreePatch,
       settings.codexHomePath,
       settings.textGenerationModel,
+      providerOptions,
     ],
   );
   const diffSummaryQueryOptions = useMemo(
@@ -477,6 +480,7 @@ export default function DiffPanel({
         patch: normalizedWorkingTreePatch,
         codexHomePath: settings.codexHomePath || null,
         model: settings.textGenerationModel ?? null,
+        ...(providerOptions ? { providerOptions } : {}),
         enabled: surfaceMode === "summary",
       }),
     [
@@ -485,6 +489,7 @@ export default function DiffPanel({
       normalizedWorkingTreePatch,
       settings.codexHomePath,
       settings.textGenerationModel,
+      providerOptions,
       surfaceMode,
     ],
   );

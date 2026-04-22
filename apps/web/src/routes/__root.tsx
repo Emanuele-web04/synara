@@ -52,6 +52,7 @@ import { useTheme } from "../hooks/useTheme";
 import { invalidateGitQueries } from "../lib/gitReactQuery";
 import { parseDiffRouteSearch } from "../diffRouteSearch";
 import { resolveSplitViewThreadIds, selectSplitView, useSplitViewStore } from "../splitViewStore";
+import { providerDiscoveryQueryKeys } from "../lib/providerDiscoveryReactQuery";
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient;
@@ -709,6 +710,13 @@ function EventRouter() {
       queryClient.setQueryData(serverQueryKeys.config(), {
         ...currentConfig,
         providers: payload.providers,
+      });
+      // OpenCode model availability depends on which underlying providers are connected.
+      void queryClient.invalidateQueries({
+        queryKey: ["provider-discovery", "models", "opencode"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: providerDiscoveryQueryKeys.agents("opencode"),
       });
     });
     subscribed = true;

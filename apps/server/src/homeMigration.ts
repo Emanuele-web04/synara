@@ -2,10 +2,8 @@
  * FILE: homeMigration.ts
  * Purpose: Imports legacy ~/.t3 state into the new ~/.dpcode home on first startup.
  * Layer: Startup utility
- * Depends on: config path derivation, Effect filesystem/path services, and node:sqlite snapshots
+ * Depends on: config path derivation, Effect filesystem/path services, and sqlite snapshots
  */
-import { DatabaseSync } from "node:sqlite";
-
 import { Data, Effect, FileSystem, Path } from "effect";
 
 import { deriveServerPaths } from "./config";
@@ -55,6 +53,23 @@ interface MigrationMarker {
 }
 
 const IMPORTABLE_ARTIFACTS = ["database", "keybindings", "attachments", "anonymousId"] as const;
+
+interface SnapshotSqliteDatabase {
+  readonly exec: (sql: string) => unknown;
+  readonly close: () => unknown;
+}
+
+const openReadOnlySnapshotDatabase = async (
+  sourcePath: string,
+): Promise<SnapshotSqliteDatabase> => {
+  if (process.versions.bun !== undefined) {
+    const { Database } = await import("bun:sqlite");
+    return new Database(sourcePath, { readonly: true });
+  }
+
+  const { DatabaseSync } = await import("node:sqlite");
+  return new DatabaseSync(sourcePath, { readOnly: true });
+};
 
 const writeMigrationMarker = (markerPath: string, marker: MigrationMarker) =>
   Effect.gen(function* () {
@@ -119,10 +134,10 @@ const readMigrationMarker = (markerPath: string) =>
   });
 
 const snapshotSqliteDatabase = (sourcePath: string, targetPath: string) =>
-  Effect.try({
-    try: () => {
+  Effect.tryPromise({
+    try: async () => {
       const escapedTargetPath = targetPath.replaceAll("'", "''");
-      const sourceDb = new DatabaseSync(sourcePath, { readOnly: true });
+      const sourceDb = await openReadOnlySnapshotDatabase(sourcePath);
       try {
         sourceDb.exec(`VACUUM INTO '${escapedTargetPath}'`);
       } finally {

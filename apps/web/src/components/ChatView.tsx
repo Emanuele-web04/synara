@@ -72,6 +72,7 @@ import {
   supportsNativeSlashCommandDiscovery,
   supportsPluginDiscovery,
   supportsSkillDiscovery,
+  supportsThreadCompaction,
 } from "~/lib/providerDiscoveryReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
@@ -216,6 +217,7 @@ import {
   resolveTerminalCloseTitle,
 } from "~/lib/terminalCloseConfirmation";
 import {
+  getCustomBinaryPathForProvider,
   getCustomModelOptionsByProvider,
   getCustomModelsByProvider,
   getProviderStartOptions,
@@ -333,7 +335,11 @@ import {
   resolveDiffEnvironmentState,
   resolveThreadEnvironmentMode,
 } from "../lib/threadEnvironment";
-import { buildModelSelection, buildNextProviderOptions } from "../providerModelOptions";
+import {
+  buildModelSelection,
+  buildNextProviderOptions,
+  type ProviderModelOption,
+} from "../providerModelOptions";
 import { waitForRecoverableProjectForDuplicateCreate } from "../lib/projectCreateRecovery";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
@@ -453,16 +459,17 @@ function normalizeDynamicModelSlug(provider: ProviderKind, slug: string): string
 
 function mergeDynamicModelOptions(input: {
   provider: ProviderKind;
-  staticOptions: ReadonlyArray<{
+  staticOptions: ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>;
+  dynamicModels: ReadonlyArray<{
     slug: string;
-    name: string;
-    isCustom?: boolean;
+    name?: string | null;
+    upstreamProviderId?: string | null;
+    upstreamProviderName?: string | null;
   }>;
-  dynamicModels: ReadonlyArray<{ slug: string; name?: string | null }>;
-}): ReadonlyArray<{ slug: string; name: string; isCustom?: boolean }> {
+}): ReadonlyArray<ProviderModelOption & { isCustom?: boolean }> {
   const staticNameBySlug = new Map(input.staticOptions.map((model) => [model.slug, model.name]));
   const dynamicNormalizedSlugs = new Set<string>();
-  const normalizedDynamicOptions: Array<{ slug: string; name: string }> = [];
+  const normalizedDynamicOptions: ProviderModelOption[] = [];
 
   for (const dynamicModel of input.dynamicModels) {
     const rawName = dynamicModel.name?.trim() ?? "";
@@ -492,6 +499,12 @@ function mergeDynamicModelOptions(input: {
         rawName.toLowerCase() !== normalizedSlug.toLowerCase()
           ? rawName
           : displayNameFallback),
+      ...(dynamicModel.upstreamProviderId?.trim()
+        ? { upstreamProviderId: dynamicModel.upstreamProviderId.trim() }
+        : {}),
+      ...(dynamicModel.upstreamProviderName?.trim()
+        ? { upstreamProviderName: dynamicModel.upstreamProviderName.trim() }
+        : {}),
     });
   }
 
@@ -501,9 +514,10 @@ function mergeDynamicModelOptions(input: {
   const staticBuiltInModels = input.staticOptions.filter(
     (model) => !("isCustom" in model) || model.isCustom !== true,
   );
-  const missingStaticBuiltIns = staticBuiltInModels.filter(
-    (model) => !dynamicNormalizedSlugs.has(model.slug),
-  );
+  const missingStaticBuiltIns =
+    input.provider === "opencode" && normalizedDynamicOptions.length > 0
+      ? []
+      : staticBuiltInModels.filter((model) => !dynamicNormalizedSlugs.has(model.slug));
 
   const orderedDynamicOptions =
     input.provider === "claudeAgent"
@@ -1211,12 +1225,70 @@ export default function ChatView({
   voiceThreadIdRef.current = threadId;
   voiceProviderRef.current = selectedProvider;
   const customModelsByProvider = useMemo(() => getCustomModelsByProvider(settings), [settings]);
+  const claudeDynamicModelsQuery = useQuery(
+    providerModelsQueryOptions({ provider: "claudeAgent" }),
+  );
+  const codexDynamicModelsQuery = useQuery(providerModelsQueryOptions({ provider: "codex" }));
+  const geminiModelsQuery = useQuery(
+    providerModelsQueryOptions({
+      provider: "gemini",
+      binaryPath: settings.geminiBinaryPath || null,
+      enabled: selectedProvider === "gemini" || lockedProvider === "gemini",
+    }),
+  );
+  const openCodeDynamicModelsQuery = useQuery(
+    providerModelsQueryOptions({
+      provider: "opencode",
+      binaryPath: settings.openCodeBinaryPath || null,
+    }),
+  );
+  const claudeDynamicAgentsQuery = useQuery(
+    providerAgentsQueryOptions({ provider: "claudeAgent" }),
+  );
+  const codexDynamicAgentsQuery = useQuery(providerAgentsQueryOptions({ provider: "codex" }));
+  const openCodeDynamicAgentsQuery = useQuery(providerAgentsQueryOptions({ provider: "opencode" }));
+  const modelOptionsByProvider = useMemo(() => {
+    const staticOptions = getCustomModelOptionsByProvider(settings);
+    const result = { ...staticOptions };
+
+    const dynamicSources: Record<ProviderKind, typeof claudeDynamicModelsQuery.data> = {
+      claudeAgent: claudeDynamicModelsQuery.data,
+      codex: codexDynamicModelsQuery.data,
+      gemini: geminiModelsQuery.data,
+      opencode: openCodeDynamicModelsQuery.data,
+    };
+
+    for (const provider of ["claudeAgent", "codex", "gemini", "opencode"] as const) {
+      const dynamicModels = dynamicSources[provider]?.models;
+      if (dynamicModels && dynamicModels.length > 0) {
+        result[provider] = mergeDynamicModelOptions({
+          provider,
+          staticOptions: staticOptions[provider],
+          dynamicModels: dynamicModels.map((model) => ({
+            slug: model.slug,
+            name: model.name,
+            upstreamProviderId: model.upstreamProviderId,
+            upstreamProviderName: model.upstreamProviderName,
+          })),
+        });
+      }
+    }
+
+    return result;
+  }, [
+    settings,
+    claudeDynamicModelsQuery.data,
+    codexDynamicModelsQuery.data,
+    geminiModelsQuery.data,
+    openCodeDynamicModelsQuery.data,
+  ]);
   const { modelOptions: composerModelOptions, selectedModel } = useEffectiveComposerModelState({
     threadId,
     selectedProvider,
     threadModelSelection: activeThread?.modelSelection,
     projectModelSelection: activeProject?.defaultModelSelection,
     customModelsByProvider,
+    availableModelOptionsByProvider: modelOptionsByProvider,
   });
   const composerProviderState = useMemo(
     () =>
@@ -1236,52 +1308,6 @@ export default function ChatView({
   );
   const providerOptionsForDispatch = useMemo(() => getProviderStartOptions(settings), [settings]);
   const selectedModelForPicker = selectedModel;
-  const claudeDynamicModelsQuery = useQuery(
-    providerModelsQueryOptions({ provider: "claudeAgent" }),
-  );
-  const codexDynamicModelsQuery = useQuery(providerModelsQueryOptions({ provider: "codex" }));
-  const geminiModelsQuery = useQuery(
-    providerModelsQueryOptions({
-      provider: "gemini",
-      binaryPath: settings.geminiBinaryPath || null,
-      enabled: selectedProvider === "gemini" || lockedProvider === "gemini",
-    }),
-  );
-  const claudeDynamicAgentsQuery = useQuery(
-    providerAgentsQueryOptions({ provider: "claudeAgent" }),
-  );
-  const codexDynamicAgentsQuery = useQuery(providerAgentsQueryOptions({ provider: "codex" }));
-  const modelOptionsByProvider = useMemo(() => {
-    const staticOptions = getCustomModelOptionsByProvider(settings);
-    const result = { ...staticOptions };
-
-    const dynamicSources: Record<ProviderKind, typeof claudeDynamicModelsQuery.data> = {
-      claudeAgent: claudeDynamicModelsQuery.data,
-      codex: codexDynamicModelsQuery.data,
-      gemini: geminiModelsQuery.data,
-    };
-
-    for (const provider of ["claudeAgent", "codex", "gemini"] as const) {
-      const dynamicModels = dynamicSources[provider]?.models;
-      if (dynamicModels && dynamicModels.length > 0) {
-        result[provider] = mergeDynamicModelOptions({
-          provider,
-          staticOptions: staticOptions[provider],
-          dynamicModels: dynamicModels.map((model) => ({
-            slug: model.slug,
-            name: model.name,
-          })),
-        });
-      }
-    }
-
-    return result;
-  }, [
-    settings,
-    claudeDynamicModelsQuery.data,
-    codexDynamicModelsQuery.data,
-    geminiModelsQuery.data,
-  ]);
   const selectedModelForPickerWithCustomFallback = useMemo(() => {
     const currentOptions = modelOptionsByProvider[selectedProvider];
     return currentOptions.some((option) => option.slug === selectedModelForPicker)
@@ -1293,15 +1319,19 @@ export default function ChatView({
       AVAILABLE_PROVIDER_OPTIONS.filter(
         (option) => lockedProvider === null || option.value === lockedProvider,
       ).flatMap((option) =>
-        modelOptionsByProvider[option.value].map(({ slug, name }) => ({
-          provider: option.value,
-          providerLabel: option.label,
-          slug,
-          name,
-          searchSlug: slug.toLowerCase(),
-          searchName: name.toLowerCase(),
-          searchProvider: option.label.toLowerCase(),
-        })),
+        modelOptionsByProvider[option.value].map(
+          ({ slug, name, upstreamProviderId, upstreamProviderName }) => ({
+            provider: option.value,
+            providerLabel: option.label,
+            slug,
+            name,
+            searchSlug: slug.toLowerCase(),
+            searchName: name.toLowerCase(),
+            searchProvider: option.label.toLowerCase(),
+            searchUpstreamProvider:
+              (upstreamProviderName ?? upstreamProviderId ?? "").toLowerCase(),
+          }),
+        ),
       ),
     [lockedProvider, modelOptionsByProvider],
   );
@@ -1973,29 +2003,24 @@ export default function ChatView({
       selectedMentionCount: selectedComposerMentions.length,
       interactionMode,
     });
-  const selectedDynamicAgents = useMemo(
-    () =>
+  const dynamicAgents = useMemo(() => {
+    const query =
       selectedProvider === "claudeAgent"
-        ? (claudeDynamicAgentsQuery.data?.agents ?? [])
-        : (codexDynamicAgentsQuery.data?.agents ?? []),
-    [selectedProvider, claudeDynamicAgentsQuery.data?.agents, codexDynamicAgentsQuery.data?.agents],
-  );
-  const dynamicAgents = useMemo(
-    () =>
-      selectedDynamicAgents.map((agent) =>
-        agent.description
-          ? {
-              name: agent.name,
-              displayName: agent.displayName,
-              description: agent.description,
-            }
-          : {
-              name: agent.name,
-              displayName: agent.displayName,
-            },
-      ),
-    [selectedDynamicAgents],
-  );
+        ? claudeDynamicAgentsQuery
+        : selectedProvider === "opencode"
+          ? openCodeDynamicAgentsQuery
+          : codexDynamicAgentsQuery;
+    return (query.data?.agents ?? []).map((a) => ({
+      name: a.name,
+      displayName: a.displayName,
+      ...(a.description ? { description: a.description } : {}),
+    }));
+  }, [
+    selectedProvider,
+    claudeDynamicAgentsQuery.data,
+    codexDynamicAgentsQuery.data,
+    openCodeDynamicAgentsQuery.data,
+  ]);
   const normalComposerMenuItems = useComposerCommandMenuItems({
     composerTrigger: effectiveComposerTrigger,
     provider: selectedProvider,
@@ -2006,7 +2031,7 @@ export default function ChatView({
     searchableModelOptions,
     supportsFastSlashCommand,
     canOfferCompactCommand:
-      selectedProvider === "codex" &&
+      supportsThreadCompaction(providerComposerCapabilitiesQuery.data) &&
       isServerThread &&
       activeThread?.session !== null &&
       activeThread?.session?.status !== "closed",
@@ -2086,21 +2111,11 @@ export default function ChatView({
           normalizeProviderStatusForLocalConfig({
             provider: status.provider,
             status,
-            customBinaryPath:
-              status.provider === "codex"
-                ? settings.codexBinaryPath
-                : status.provider === "claudeAgent"
-                  ? settings.claudeBinaryPath
-                  : settings.geminiBinaryPath,
+            customBinaryPath: getCustomBinaryPathForProvider(settings, status.provider),
           }),
         )
         .flatMap((status) => (status ? [status] : [])),
-    [
-      serverConfigQuery.data?.providers,
-      settings.claudeBinaryPath,
-      settings.codexBinaryPath,
-      settings.geminiBinaryPath,
-    ],
+    [serverConfigQuery.data?.providers, settings],
   );
   const handoffBadgeLabel = useMemo(
     () => (activeThread ? resolveThreadHandoffBadgeLabel(activeThread) : null),
@@ -5905,7 +5920,7 @@ export default function ChatView({
     isServerThread,
     supportsFastSlashCommand,
     canOfferCompactCommand:
-      selectedProvider === "codex" &&
+      supportsThreadCompaction(providerComposerCapabilitiesQuery.data) &&
       isServerThread &&
       activeThread?.session !== null &&
       activeThread?.session?.status !== "closed",

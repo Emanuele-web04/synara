@@ -1220,7 +1220,6 @@ describe("shouldOfferCreateBranchPrompt", () => {
     assert.isTrue(
       shouldOfferCreateBranchPrompt({
         activeWorktreePath: "/tmp/project/.worktrees/feature-test",
-        threadBranch: temporaryBranch,
         gitStatus: {
           branch: temporaryBranch,
           hasUpstream: false,
@@ -1233,7 +1232,6 @@ describe("shouldOfferCreateBranchPrompt", () => {
     assert.isFalse(
       shouldOfferCreateBranchPrompt({
         activeWorktreePath: "/tmp/project/.worktrees/feature-test",
-        threadBranch: temporaryBranch,
         gitStatus: {
           branch: temporaryBranch,
           hasUpstream: true,
@@ -1246,7 +1244,6 @@ describe("shouldOfferCreateBranchPrompt", () => {
     assert.isFalse(
       shouldOfferCreateBranchPrompt({
         activeWorktreePath: null,
-        threadBranch: temporaryBranch,
         gitStatus: {
           branch: temporaryBranch,
           hasUpstream: false,

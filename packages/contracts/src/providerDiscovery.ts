@@ -1,7 +1,7 @@
 import { Schema } from "effect";
 import { TrimmedNonEmptyString } from "./baseSchemas";
 
-const ProviderDiscoveryKind = Schema.Literals(["codex", "claudeAgent", "gemini"]);
+const ProviderDiscoveryKind = Schema.Literals(["codex", "claudeAgent", "gemini", "opencode"]);
 
 export const ProviderSkillInterface = Schema.Struct({
   displayName: Schema.optional(TrimmedNonEmptyString),
@@ -40,6 +40,8 @@ export const ProviderComposerCapabilities = Schema.Struct({
   supportsPluginMentions: Schema.Boolean,
   supportsPluginDiscovery: Schema.Boolean,
   supportsRuntimeModelList: Schema.Boolean,
+  supportsThreadCompaction: Schema.optional(Schema.Boolean),
+  supportsThreadImport: Schema.optional(Schema.Boolean),
 });
 export type ProviderComposerCapabilities = typeof ProviderComposerCapabilities.Type;
 
@@ -212,6 +214,8 @@ export type ProviderListModelsInput = typeof ProviderListModelsInput.Type;
 export const ProviderModelDescriptor = Schema.Struct({
   slug: TrimmedNonEmptyString,
   name: TrimmedNonEmptyString,
+  upstreamProviderId: Schema.optional(TrimmedNonEmptyString),
+  upstreamProviderName: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderModelDescriptor = typeof ProviderModelDescriptor.Type;
 

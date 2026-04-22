@@ -126,11 +126,11 @@ export function useComposerSlashCommands(input: {
     providerNativeCommandNames,
   });
 
-  const compactCodexThread = useCallback(async (): Promise<boolean> => {
+  const compactProviderThread = useCallback(async (): Promise<boolean> => {
     const api = readNativeApi();
     if (
       !api ||
-      selectedProvider !== "codex" ||
+      !canOfferCompactCommand ||
       !isServerThread ||
       !activeThread?.session ||
       activeThread.session.status === "closed"
@@ -138,7 +138,7 @@ export function useComposerSlashCommands(input: {
       toastManager.add({
         type: "warning",
         title: "Compact is unavailable",
-        description: "Open an active Codex server thread before compacting context.",
+        description: "Open an active supported server thread before compacting context.",
       });
       return false;
     }
@@ -161,7 +161,7 @@ export function useComposerSlashCommands(input: {
       toastManager.add({
         type: "success",
         title: "Compaction started",
-        description: "Codex is compacting the current thread context.",
+        description: "The current provider is compacting the thread context.",
       });
       return true;
     } catch (error) {
@@ -173,7 +173,7 @@ export function useComposerSlashCommands(input: {
       });
       return false;
     }
-  }, [activeThread, isServerThread, selectedProvider]);
+  }, [activeThread, canOfferCompactCommand, isServerThread]);
 
   const setFastModeFromSlashCommand = useCallback(
     (enabled: boolean) => {
@@ -498,7 +498,7 @@ export function useComposerSlashCommands(input: {
       }
       if (slashInvocation.command === "compact") {
         editorActions.clearComposerSlashDraft();
-        await compactCodexThread();
+        await compactProviderThread();
         return true;
       }
       if (slashInvocation.command === "plan" || slashInvocation.command === "default") {
@@ -590,7 +590,7 @@ export function useComposerSlashCommands(input: {
     [
       availableBuiltInSlashCommands,
       checkClaudeFastSlashCommandAvailability,
-      compactCodexThread,
+      compactProviderThread,
       createForkThreadFromSlashCommand,
       editorActions,
       handleClearConversation,
@@ -650,7 +650,7 @@ export function useComposerSlashCommands(input: {
           return;
         }
         editorActions.setComposerHighlightedItemId(null);
-        void compactCodexThread();
+        void compactProviderThread();
         editorActions.scheduleComposerFocus();
         return;
       }
@@ -749,7 +749,7 @@ export function useComposerSlashCommands(input: {
       }
     },
     [
-      compactCodexThread,
+      compactProviderThread,
       editorActions,
       handleClearConversation,
       handleInteractionModeChange,

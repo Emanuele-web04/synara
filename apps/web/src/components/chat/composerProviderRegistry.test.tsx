@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { getComposerProviderState } from "./composerProviderRegistry";
+import { ThreadId } from "@t3tools/contracts";
+import { describe, expect, it, vi } from "vitest";
+import {
+  getComposerProviderState,
+  renderProviderTraitsMenuContent,
+  renderProviderTraitsPicker,
+} from "./composerProviderRegistry";
 
 describe("getComposerProviderState", () => {
   it("returns codex defaults when no codex draft options exist", () => {
@@ -259,5 +264,31 @@ describe("getComposerProviderState", () => {
       promptEffort: "HIGH",
       modelOptionsForDispatch: undefined,
     });
+  });
+
+  it("does not render a traits picker for OpenCode models without exposed controls", () => {
+    const threadId = ThreadId.makeUnsafe("thread-opencode-traits-hidden");
+
+    const picker = renderProviderTraitsPicker({
+      provider: "opencode",
+      threadId,
+      model: "openrouter/gpt-oss-120b:free",
+      modelOptions: undefined,
+      prompt: "",
+      includeFastMode: false,
+      onPromptChange: vi.fn(),
+    });
+
+    const menuContent = renderProviderTraitsMenuContent({
+      provider: "opencode",
+      threadId,
+      model: "openrouter/gpt-oss-120b:free",
+      modelOptions: undefined,
+      prompt: "",
+      onPromptChange: vi.fn(),
+    });
+
+    expect(picker).toBeNull();
+    expect(menuContent).toBeNull();
   });
 });

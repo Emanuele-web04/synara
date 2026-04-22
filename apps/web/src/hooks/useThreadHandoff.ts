@@ -2,7 +2,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback } from "react";
 import { type ProviderKind } from "@t3tools/contracts";
-import { useAppSettings } from "../appSettings";
+import { getCustomBinaryPathForProvider, useAppSettings } from "../appSettings";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import {
@@ -54,12 +54,7 @@ export function useThreadHandoff() {
         status:
           serverConfigQuery.data?.providers.find((entry) => entry.provider === targetProvider) ??
           null,
-        customBinaryPath:
-          targetProvider === "codex"
-            ? settings.codexBinaryPath
-            : targetProvider === "claudeAgent"
-              ? settings.claudeBinaryPath
-              : settings.geminiBinaryPath,
+        customBinaryPath: getCustomBinaryPathForProvider(settings, targetProvider),
       });
       if (!isProviderUsable(targetStatus)) {
         throw new Error("This provider is not available yet.");
@@ -113,9 +108,7 @@ export function useThreadHandoff() {
       navigate,
       projects,
       serverConfigQuery.data?.providers,
-      settings.claudeBinaryPath,
-      settings.codexBinaryPath,
-      settings.geminiBinaryPath,
+      settings,
       syncServerReadModel,
     ],
   );

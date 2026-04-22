@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { ProviderModelPicker } from "./ProviderModelPicker";
+import type { ProviderModelOption } from "../../providerModelOptions";
 
 const MODEL_OPTIONS_BY_PROVIDER = {
   claudeAgent: [
@@ -19,7 +20,21 @@ const MODEL_OPTIONS_BY_PROVIDER = {
     { slug: "auto-gemini-3", name: "Auto Gemini 3" },
     { slug: "gemini-2.5-pro", name: "Gemini 2.5 Pro" },
   ],
-} as const satisfies Record<ProviderKind, ReadonlyArray<{ slug: ModelSlug; name: string }>>;
+  opencode: [
+    {
+      slug: "opencode/nemotron-3-super-free",
+      name: "Nemotron 3 Super Free",
+      upstreamProviderId: "opencode",
+      upstreamProviderName: "OpenCode",
+    },
+    {
+      slug: "openai/gpt-5",
+      name: "GPT-5",
+      upstreamProviderId: "openai",
+      upstreamProviderName: "OpenAI",
+    },
+  ],
+} as const satisfies Record<ProviderKind, ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>>;
 
 async function mountPicker(props: {
   provider: ProviderKind;
@@ -113,6 +128,28 @@ describe("ProviderModelPicker", () => {
         "claudeAgent",
         "claude-sonnet-4-6",
       );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("groups upstream OpenCode models by provider label", async () => {
+    const mounted = await mountPicker({
+      provider: "opencode",
+      model: "openai/gpt-5",
+      lockedProvider: "opencode",
+    });
+
+    try {
+      await page.getByRole("button").click();
+
+      await vi.waitFor(() => {
+        const text = document.body.textContent ?? "";
+        expect(text).toContain("OpenCode");
+        expect(text).toContain("Nemotron 3 Super Free");
+        expect(text).toContain("OpenAI");
+        expect(text).toContain("GPT-5");
+      });
     } finally {
       await mounted.cleanup();
     }

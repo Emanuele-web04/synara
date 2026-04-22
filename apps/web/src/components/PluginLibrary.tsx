@@ -26,7 +26,7 @@ import {
   SiStripe,
   SiVercel,
 } from "react-icons/si";
-import { ClaudeAI, Gemini } from "./Icons";
+import { ClaudeAI, Gemini, OpenCodeIcon } from "./Icons";
 import { useStore } from "~/store";
 import {
   buildPluginSearchBlob,
@@ -79,8 +79,14 @@ const PROVIDER_ICON: Record<ProviderKind, React.FC<React.SVGProps<SVGSVGElement>
   codex: HammerIcon,
   claudeAgent: ClaudeAI,
   gemini: Gemini,
+  opencode: OpenCodeIcon,
 };
-const PROVIDER_DISCOVERY_ORDER: ReadonlyArray<ProviderKind> = ["codex", "claudeAgent", "gemini"];
+const PROVIDER_DISCOVERY_ORDER: ReadonlyArray<ProviderKind> = [
+  "codex",
+  "claudeAgent",
+  "gemini",
+  "opencode",
+];
 const KNOWN_PLUGIN_BRANDS: Record<string, PluginBrandArtwork> = {
   canva: { icon: SiCanva, color: "#00C4CC" },
   figma: { icon: SiFigma, color: "#F24E1E" },
@@ -379,6 +385,7 @@ export function PluginLibrary() {
   const codexCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("codex"));
   const claudeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("claudeAgent"));
   const geminiCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("gemini"));
+  const openCodeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("opencode"));
 
   const providerCapabilities = useMemo<Record<ProviderKind, ProviderCapabilities>>(
     () => ({
@@ -394,8 +401,17 @@ export function PluginLibrary() {
         plugins: supportsPluginDiscovery(geminiCapabilitiesQuery.data),
         skills: supportsSkillDiscovery(geminiCapabilitiesQuery.data),
       },
+      opencode: {
+        plugins: supportsPluginDiscovery(openCodeCapabilitiesQuery.data),
+        skills: supportsSkillDiscovery(openCodeCapabilitiesQuery.data),
+      },
     }),
-    [claudeCapabilitiesQuery.data, codexCapabilitiesQuery.data, geminiCapabilitiesQuery.data],
+    [
+      claudeCapabilitiesQuery.data,
+      codexCapabilitiesQuery.data,
+      geminiCapabilitiesQuery.data,
+      openCodeCapabilitiesQuery.data,
+    ],
   );
 
   // Auto-fallback: switch provider when current tab/provider combo is unsupported

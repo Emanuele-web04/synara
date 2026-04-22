@@ -11,6 +11,7 @@ import {
   COMPOSER_DRAFT_STORAGE_KEY,
   type ComposerImageAttachment,
   type QueuedComposerTurn,
+  deriveEffectiveComposerModelState,
   resolvePreferredComposerModelSelection,
   useComposerDraftStore,
 } from "./composerDraftStore";
@@ -124,7 +125,7 @@ function resetComposerDraftStore() {
 }
 
 function modelSelection(
-  provider: "codex" | "claudeAgent",
+  provider: "codex" | "claudeAgent" | "opencode",
   model: string,
   options?: ModelSelection["options"],
 ): ModelSelection {
@@ -1077,6 +1078,70 @@ describe("composerDraftStore modelSelection", () => {
         fastMode: true,
       }),
     );
+  });
+
+  it("prefers the active OpenCode thread model over a stale draft default when runtime models are available", () => {
+    const state = deriveEffectiveComposerModelState({
+      draft: {
+        modelSelectionByProvider: {
+          opencode: modelSelection("opencode", "openai/gpt-5"),
+        },
+        activeProvider: "opencode",
+      },
+      selectedProvider: "opencode",
+      threadModelSelection: modelSelection("opencode", "opencode/gpt-5-nano"),
+      projectModelSelection: null,
+      customModelsByProvider: { codex: [], claudeAgent: [], gemini: [], opencode: [] },
+      availableModelOptionsByProvider: {
+        opencode: [{ slug: "opencode/gpt-5-nano", name: "GPT-5 Nano" }],
+      },
+    });
+
+    expect(state.selectedModel).toBe("opencode/gpt-5-nano");
+  });
+
+  it("preserves the persisted OpenCode thread model when discovery omits it", () => {
+    const state = deriveEffectiveComposerModelState({
+      draft: {
+        modelSelectionByProvider: {},
+        activeProvider: "opencode",
+      },
+      selectedProvider: "opencode",
+      threadModelSelection: modelSelection("opencode", "openai/gpt-5.4"),
+      projectModelSelection: null,
+      customModelsByProvider: { codex: [], claudeAgent: [], gemini: [], opencode: [] },
+      availableModelOptionsByProvider: {
+        opencode: [
+          { slug: "openai/gpt-5-codex", name: "GPT-5-Codex" },
+          { slug: "openai/gpt-5.4-mini", name: "GPT-5.4 Mini" },
+        ],
+      },
+    });
+
+    expect(state.selectedModel).toBe("openai/gpt-5.4");
+  });
+
+  it("falls back to the first exposed OpenCode runtime model when the draft selection is stale", () => {
+    const state = deriveEffectiveComposerModelState({
+      draft: {
+        modelSelectionByProvider: {
+          opencode: modelSelection("opencode", "openai/gpt-5"),
+        },
+        activeProvider: "opencode",
+      },
+      selectedProvider: "opencode",
+      threadModelSelection: null,
+      projectModelSelection: null,
+      customModelsByProvider: { codex: [], claudeAgent: [], gemini: [], opencode: [] },
+      availableModelOptionsByProvider: {
+        opencode: [
+          { slug: "opencode/gpt-5-nano", name: "GPT-5 Nano" },
+          { slug: "opencode/big-pickle", name: "Big Pickle" },
+        ],
+      },
+    });
+
+    expect(state.selectedModel).toBe("opencode/gpt-5-nano");
   });
 
   it("updates only the draft when sticky persistence is disabled", () => {

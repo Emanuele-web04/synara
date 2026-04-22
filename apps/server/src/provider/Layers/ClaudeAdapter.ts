@@ -3598,6 +3598,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       supportsPluginMentions: false,
       supportsPluginDiscovery: false,
       supportsRuntimeModelList: true,
+      supportsThreadCompaction: false,
+      supportsThreadImport: true,
     };
 
     const getComposerCapabilities: NonNullable<

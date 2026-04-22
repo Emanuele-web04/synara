@@ -95,6 +95,10 @@ import {
   gitResolvePullRequestQueryOptions,
   gitStatusQueryOptions,
 } from "../lib/gitReactQuery";
+import {
+  providerComposerCapabilitiesQueryOptions,
+  supportsThreadImport,
+} from "../lib/providerDiscoveryReactQuery";
 import { resolveCurrentProjectTargetId } from "../lib/projectShortcutTargets";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { onSidebarAddProjectRequest } from "../lib/sidebarShortcuts";
@@ -106,13 +110,13 @@ import { dispatchThreadRename } from "../lib/threadRename";
 import { quotePosixShellArgument } from "../lib/shellQuote";
 import { DEFAULT_THREAD_TERMINAL_ID, type SidebarThreadSummary, type Thread } from "../types";
 import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
-import { ClaudeAI, Gemini, OpenAI } from "./Icons";
+import { ClaudeAI, Gemini, OpenAI, OpenCodeIcon } from "./Icons";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
 import { ThreadRunningSpinner } from "./ThreadRunningSpinner";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import { terminalRuntimeRegistry } from "./terminal/terminalRuntimeRegistry";
-import { SidebarSearchPalette } from "./SidebarSearchPalette";
+import { SidebarSearchPalette, type ImportProviderKind } from "./SidebarSearchPalette";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useThreadHandoff } from "../hooks/useThreadHandoff";
@@ -304,7 +308,6 @@ function buildThreadJumpLabelMap(input: {
   }
   return mapping.size > 0 ? mapping : EMPTY_THREAD_JUMP_LABELS;
 }
-
 function ProviderGlyph({ provider, className }: { provider: ProviderKind; className?: string }) {
   if (provider === "claudeAgent") {
     return <ClaudeAI aria-hidden="true" className={cn("text-foreground", className)} />;
@@ -312,9 +315,13 @@ function ProviderGlyph({ provider, className }: { provider: ProviderKind; classN
   if (provider === "gemini") {
     return <Gemini aria-hidden="true" className={cn("text-foreground", className)} />;
   }
+  if (provider === "opencode") {
+    return (
+      <OpenCodeIcon aria-hidden="true" className={cn("text-muted-foreground/70", className)} />
+    );
+  }
   return <OpenAI aria-hidden="true" className={cn("text-muted-foreground/60", className)} />;
 }
-
 function WorktreeBadgeGlyph({ className }: { className?: string }) {
   return <LuSplit aria-hidden="true" className={cn("rotate-90", className)} />;
 }
@@ -1934,7 +1941,7 @@ export default function Sidebar() {
   ]);
 
   const handleImportThread = useCallback(
-    async (provider: "codex" | "claudeAgent", externalId: string) => {
+    async (provider: ImportProviderKind, externalId: string) => {
       const api = readNativeApi();
       if (!api) {
         throw new Error("The app server is unavailable.");
@@ -1965,7 +1972,9 @@ export default function Sidebar() {
       const title =
         provider === "claudeAgent"
           ? `Imported Claude session${suffix ? ` ${suffix}` : ""}`
-          : `Imported Codex thread${suffix ? ` ${suffix}` : ""}`;
+          : provider === "opencode"
+            ? `Imported OpenCode session${suffix ? ` ${suffix}` : ""}`
+            : `Imported Codex thread${suffix ? ` ${suffix}` : ""}`;
       let createdThread = false;
 
       try {
@@ -4975,8 +4984,8 @@ export default function Sidebar() {
       {
         id: "import-thread",
         label: "Import thread from...",
-        description: "Attach a local thread to an existing Codex or Claude session.",
-        keywords: ["import", "resume", "thread", "session", "codex", "claude"],
+        description: "Attach a local thread to an existing provider session.",
+        keywords: ["import", "resume", "thread", "session", "codex", "claude", "opencode"],
         shortcutLabel: importThreadShortcutLabel,
       },
       {
@@ -5851,13 +5860,21 @@ function SidebarSearchPaletteController(props: {
   onAddProject: () => void;
   onOpenSettings: () => void;
   onOpenProject: (projectId: string) => void;
-  onImportThread: (provider: "codex" | "claudeAgent", externalId: string) => Promise<void>;
+  onImportThread: (provider: ImportProviderKind, externalId: string) => Promise<void>;
   onOpenThread: (threadId: string) => void;
 }) {
   const selectAllThreads = useMemo(() => createAllThreadsSelector(), []);
   const selectSidebarDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
+  const importProviderCapabilityQueries = useQueries({
+    queries: (["codex", "claudeAgent", "opencode"] as const).map((provider) =>
+      providerComposerCapabilitiesQueryOptions(provider),
+    ),
+  });
   const threads = useStore(selectAllThreads);
   const sidebarDisplayThreads = useStore(selectSidebarDisplayThreads);
+  const importProviders: ReadonlyArray<ImportProviderKind> = (
+    ["codex", "claudeAgent", "opencode"] as const
+  ).filter((provider, index) => supportsThreadImport(importProviderCapabilityQueries[index]?.data));
   const searchPaletteThreads = useMemo<SidebarSearchThread[]>(() => {
     const threadById = new Map(threads.map((thread) => [thread.id, thread] as const));
     return sidebarDisplayThreads.flatMap((threadSummary) => {
@@ -5899,6 +5916,7 @@ function SidebarSearchPaletteController(props: {
       onAddProject={props.onAddProject}
       onOpenSettings={props.onOpenSettings}
       onOpenProject={props.onOpenProject}
+      importProviders={importProviders}
       onImportThread={props.onImportThread}
       onOpenThread={props.onOpenThread}
     />

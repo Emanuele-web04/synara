@@ -7,9 +7,26 @@ import {
 
 describe("threadHandoff", () => {
   it("lists all supported handoff targets except the active provider", () => {
-    expect(resolveAvailableHandoffTargetProviders("codex")).toEqual(["claudeAgent", "gemini"]);
-    expect(resolveAvailableHandoffTargetProviders("claudeAgent")).toEqual(["codex", "gemini"]);
-    expect(resolveAvailableHandoffTargetProviders("gemini")).toEqual(["codex", "claudeAgent"]);
+    expect(resolveAvailableHandoffTargetProviders("codex")).toEqual([
+      "claudeAgent",
+      "gemini",
+      "opencode",
+    ]);
+    expect(resolveAvailableHandoffTargetProviders("claudeAgent")).toEqual([
+      "codex",
+      "gemini",
+      "opencode",
+    ]);
+    expect(resolveAvailableHandoffTargetProviders("gemini")).toEqual([
+      "codex",
+      "claudeAgent",
+      "opencode",
+    ]);
+    expect(resolveAvailableHandoffTargetProviders("opencode")).toEqual([
+      "codex",
+      "claudeAgent",
+      "gemini",
+    ]);
   });
 
   it("prefers sticky model selection for the chosen handoff target", () => {

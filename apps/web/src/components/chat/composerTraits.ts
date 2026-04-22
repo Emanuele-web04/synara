@@ -100,3 +100,19 @@ export function getComposerTraitSelection(
     ultrathinkPromptControlled,
   };
 }
+
+export function hasVisibleComposerTraitControls(
+  selection: Pick<
+    ReturnType<typeof getComposerTraitSelection>,
+    "caps" | "effort" | "thinkingEnabled"
+  >,
+  options?: {
+    includeFastMode?: boolean;
+  },
+): boolean {
+  return (
+    selection.effort !== null ||
+    selection.thinkingEnabled !== null ||
+    ((options?.includeFastMode ?? true) && selection.caps.supportsFastMode)
+  );
+}
