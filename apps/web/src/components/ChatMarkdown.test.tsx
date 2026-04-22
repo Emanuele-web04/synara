@@ -72,6 +72,22 @@ describe("ChatMarkdown", () => {
     expect(markup).not.toContain('class="katex"');
   });
 
+  it("keeps currency literal without swallowing later inline math", async () => {
+    const markup = await renderMarkdown("Price $5. Formula $x$ still renders.");
+
+    expect(markup).toContain("$5. Formula");
+    expect(markup).toContain('class="katex"');
+    expect(markup).not.toContain("$x$");
+  });
+
+  it("keeps all-caps dollar identifiers literal", async () => {
+    const markup = await renderMarkdown("Use $USD$ for price and $PATH$ for shell lookup.");
+
+    expect(markup).toContain("$USD$");
+    expect(markup).toContain("$PATH$");
+    expect(markup).not.toContain('class="katex"');
+  });
+
   it("keeps plan and diff surfaces routed through the shared renderer", () => {
     const planSidebarSource = readFileSync(new URL("./PlanSidebar.tsx", import.meta.url), "utf8");
     const proposedPlanCardSource = readFileSync(

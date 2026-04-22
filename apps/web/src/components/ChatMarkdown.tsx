@@ -106,6 +106,7 @@ const MARKDOWN_REHYPE_PLUGINS = [
   rehypeRestoreLiteralDollars,
 ];
 const INLINE_MATH_HINT_REGEX = /[\\^_=+\-*/<>()[\]{}]/;
+const ALL_CAPS_DOLLAR_IDENTIFIER_REGEX = /^[A-Z][A-Z0-9_]{1,31}$/;
 
 function isLineStart(value: string, index: number): boolean {
   return index === 0 || value[index - 1] === "\n";
@@ -193,16 +194,34 @@ function looksLikeInlineMath(content: string): boolean {
   if (trimmed.length === 0) {
     return false;
   }
-  if (INLINE_MATH_HINT_REGEX.test(trimmed)) {
-    return true;
+  if (ALL_CAPS_DOLLAR_IDENTIFIER_REGEX.test(trimmed)) {
+    return false;
   }
-  if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
+  if (INLINE_MATH_HINT_REGEX.test(trimmed)) {
     return true;
   }
   return /^[A-Za-z][A-Za-z0-9]{0,15}$/.test(trimmed);
 }
 
-function findNextUnescapedDollar(value: string, index: number): number {
+// Reject obvious literal/currency dollars before searching for a closing math delimiter.
+function canOpenInlineMath(value: string, index: number): boolean {
+  const next = value[index + 1];
+  if (!next || /\s|\d/.test(next)) {
+    return false;
+  }
+  return true;
+}
+
+// Markdown math delimiters should hug content; loose "$ " endings are treated as prose.
+function canCloseInlineMath(value: string, index: number): boolean {
+  const previous = value[index - 1];
+  if (!previous || /\s/.test(previous)) {
+    return false;
+  }
+  return true;
+}
+
+function findInlineMathClosingDollar(value: string, index: number): number {
   let cursor = index;
   while (cursor < value.length) {
     if (value[cursor] === "\\") {
@@ -210,7 +229,7 @@ function findNextUnescapedDollar(value: string, index: number): number {
       continue;
     }
     if (value[cursor] === "$") {
-      return cursor;
+      return canCloseInlineMath(value, cursor) ? cursor : -1;
     }
     cursor += 1;
   }
@@ -241,7 +260,13 @@ function protectLiteralDollarsInPlainText(value: string): string {
     }
 
     if (value[cursor] === "$") {
-      const closingIndex = findNextUnescapedDollar(value, cursor + 1);
+      if (!canOpenInlineMath(value, cursor)) {
+        result += LITERAL_DOLLAR_PLACEHOLDER;
+        cursor += 1;
+        continue;
+      }
+
+      const closingIndex = findInlineMathClosingDollar(value, cursor + 1);
       if (closingIndex === -1) {
         result += LITERAL_DOLLAR_PLACEHOLDER;
         cursor += 1;
