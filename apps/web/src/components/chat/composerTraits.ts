@@ -7,6 +7,7 @@ import {
   type ClaudeModelOptions,
   type CodexModelOptions,
   type GeminiModelOptions,
+  type OpenCodeModelOptions,
   type ProviderKind,
   type ProviderModelDescriptor,
 } from "@t3tools/contracts";
@@ -34,6 +35,9 @@ function getRawEffort(
   }
   if (provider === "claudeAgent") {
     return trimOrNull((modelOptions as ClaudeModelOptions | undefined)?.effort);
+  }
+  if (provider === "opencode") {
+    return trimOrNull((modelOptions as OpenCodeModelOptions | undefined)?.variant);
   }
   const caps = getModelCapabilities(provider, model);
   return getGeminiThinkingSelectionValue(caps, modelOptions as GeminiModelOptions | undefined);
@@ -107,14 +111,14 @@ export function getComposerTraitSelection(
 export function hasVisibleComposerTraitControls(
   selection: Pick<
     ReturnType<typeof getComposerTraitSelection>,
-    "caps" | "effort" | "thinkingEnabled" | "contextWindowOptions"
+    "caps" | "effortLevels" | "thinkingEnabled" | "contextWindowOptions"
   >,
   options?: {
     includeFastMode?: boolean;
   },
 ): boolean {
   return (
-    selection.effort !== null ||
+    selection.effortLevels.length > 0 ||
     selection.thinkingEnabled !== null ||
     selection.contextWindowOptions.length > 1 ||
     ((options?.includeFastMode ?? true) && selection.caps.supportsFastMode)

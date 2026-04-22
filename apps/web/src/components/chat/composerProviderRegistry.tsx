@@ -142,7 +142,26 @@ function getProviderStateFromCapabilities(
       break;
     }
     case "opencode": {
-      normalizedOptions = normalizeOpenCodeModelOptions(modelOptions?.opencode);
+      const providerOptions = modelOptions?.opencode;
+      rawEffort = trimOrNull(providerOptions?.variant);
+      const defaultReasoningEffort = getDefaultEffort(caps);
+      const reasoningVariant =
+        caps.reasoningEffortLevels.length > 0 &&
+        rawEffort &&
+        hasEffortLevel(caps, rawEffort) &&
+        rawEffort !== defaultReasoningEffort
+          ? rawEffort
+          : undefined;
+      const agent = trimOrNull(providerOptions?.agent);
+      if (caps.reasoningEffortLevels.length > 0) {
+        const nextOptions = {
+          ...(reasoningVariant ? { variant: reasoningVariant } : {}),
+          ...(agent ? { agent } : {}),
+        };
+        normalizedOptions = Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
+        break;
+      }
+      normalizedOptions = normalizeOpenCodeModelOptions(providerOptions);
       break;
     }
   }

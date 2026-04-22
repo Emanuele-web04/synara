@@ -37,7 +37,9 @@ import {
 import { OpenCodeAdapter, type OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
 import {
   buildOpenCodePermissionRules,
+  type OpenCodeCliModelDescriptor,
   type OpenCodeInventory,
+  type OpenCodeRuntimeShape,
   OpenCodeRuntime,
   OpenCodeRuntimeLive,
   OpenCodeRuntimeError,
@@ -96,6 +98,7 @@ interface OpenCodeMessageSnapshot {
 export interface OpenCodeAdapterLiveOptions {
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
+  readonly runtime?: OpenCodeRuntimeShape;
 }
 
 function nowIso(): string {
@@ -396,6 +399,12 @@ function updateProviderSession(
   return nextSession;
 }
 
+function clearActiveTurnState(context: OpenCodeSessionContext): void {
+  context.activeTurnId = undefined;
+  context.activeAgent = undefined;
+  context.activeVariant = undefined;
+}
+
 function extractResumeSessionId(resumeCursor: unknown): string | undefined {
   if (typeof resumeCursor === "string" && resumeCursor.trim().length > 0) {
     return resumeCursor.trim();
@@ -421,7 +430,18 @@ type OpenCodeModelInventory = {
       readonly source?: string;
       readonly env?: ReadonlyArray<string>;
       readonly options?: Record<string, unknown>;
-      readonly models: Record<string, { readonly id: string; readonly name: string }>;
+      readonly models: Record<
+        string,
+        {
+          readonly id: string;
+          readonly name: string;
+          readonly options?: Record<string, unknown>;
+          readonly capabilities?: {
+            readonly reasoning?: boolean;
+          };
+          readonly variants?: Record<string, Record<string, unknown>>;
+        }
+      >;
     }>;
   };
   readonly consoleState?: {
@@ -503,10 +523,145 @@ function compareOpenCodeModelDescriptors(left: OpenCodeModelDescriptor, right: O
   );
 }
 
+function trimNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizeOpenCodeReasoningDescriptors(input: {
+  readonly descriptors: ReadonlyArray<{
+    readonly value: string;
+    readonly label?: string;
+    readonly description?: string;
+  }>;
+  readonly defaultReasoningEffort?: string | undefined;
+}) {
+  const descriptors = Array.from(
+    new Map(
+      input.descriptors
+        .map((descriptor) => {
+          const value = descriptor.value.trim();
+          if (value.length === 0) {
+            return null;
+          }
+
+          const label = trimNonEmptyString(descriptor.label);
+          const description = trimNonEmptyString(descriptor.description);
+          return [
+            value,
+            {
+              value,
+              ...(label ? { label } : {}),
+              ...(description ? { description } : {}),
+            },
+          ] as const;
+        })
+        .filter((descriptor) => descriptor !== null),
+    ).values(),
+  );
+  const defaultReasoningEffort = trimNonEmptyString(input.defaultReasoningEffort);
+
+  return {
+    descriptors,
+    defaultReasoningEffort:
+      defaultReasoningEffort &&
+      descriptors.some((descriptor) => descriptor.value === defaultReasoningEffort)
+        ? defaultReasoningEffort
+        : undefined,
+  };
+}
+
+function inferOpenCodeDefaultReasoningEffort(
+  providerId: string,
+  descriptors: ReadonlyArray<{ readonly value: string }>,
+): string | undefined {
+  const values = descriptors.map((descriptor) => descriptor.value);
+  if (values.length === 1) {
+    return values[0];
+  }
+
+  const normalizedProviderId = providerId.trim().toLowerCase();
+  if (normalizedProviderId === "anthropic" || normalizedProviderId.startsWith("google")) {
+    return values.includes("high") ? "high" : undefined;
+  }
+  if (normalizedProviderId === "openai" || normalizedProviderId === "opencode") {
+    return values.includes("medium") ? "medium" : values.includes("high") ? "high" : undefined;
+  }
+  return undefined;
+}
+
+function resolveOpenCodeModelReasoningSupport(model: OpenCodeInventoryProvider["models"][string] | undefined) {
+  if (!model) {
+    return {
+      descriptors: [] as Array<{
+        readonly value: string;
+        readonly label?: string;
+        readonly description?: string;
+      }>,
+      defaultReasoningEffort: undefined as string | undefined,
+    };
+  }
+
+  const descriptors = Object.values(model.variants ?? {}).flatMap((variant) => {
+    const value =
+      trimNonEmptyString(variant.reasoningEffort) ?? trimNonEmptyString(variant.reasoning_effort);
+    if (!value) {
+      return [];
+    }
+
+    return [
+      {
+        value,
+        ...(trimNonEmptyString(variant.label) ? { label: trimNonEmptyString(variant.label) } : {}),
+        ...(trimNonEmptyString(variant.description)
+          ? { description: trimNonEmptyString(variant.description) }
+          : {}),
+      },
+    ];
+  });
+  if (descriptors.length > 0) {
+    return normalizeOpenCodeReasoningDescriptors({
+      descriptors,
+      defaultReasoningEffort:
+        trimNonEmptyString(model.options?.reasoningEffort) ??
+        trimNonEmptyString(model.options?.reasoning_effort),
+    });
+  }
+
+  if (model.capabilities?.reasoning !== true) {
+    return {
+      descriptors: [] as Array<{
+        readonly value: string;
+        readonly label?: string;
+        readonly description?: string;
+      }>,
+      defaultReasoningEffort: undefined as string | undefined,
+    };
+  }
+
+  return {
+    descriptors: [] as Array<{
+      readonly value: string;
+      readonly label?: string;
+      readonly description?: string;
+    }>,
+    defaultReasoningEffort: undefined as string | undefined,
+  };
+}
+
 function toOpenCodeModelDescriptor(input: {
   readonly slug: string;
   readonly name: string;
   readonly provider: Pick<OpenCodeInventoryProvider, "id" | "name">;
+  readonly model?: OpenCodeInventoryProvider["models"][string];
+  readonly cliModel?: Pick<
+    OpenCodeCliModelDescriptor,
+    "supportedReasoningEfforts" | "defaultReasoningEffort"
+  >;
 }): OpenCodeModelDescriptor | null {
   const name = input.name.trim();
   if (name.length === 0) {
@@ -514,11 +669,37 @@ function toOpenCodeModelDescriptor(input: {
   }
 
   const upstreamProviderName = input.provider.name.trim();
+  const reasoningSupport =
+    input.cliModel && input.cliModel.supportedReasoningEfforts.length > 0
+      ? {
+          descriptors: input.cliModel.supportedReasoningEfforts,
+          defaultReasoningEffort:
+            input.cliModel.defaultReasoningEffort ??
+            inferOpenCodeDefaultReasoningEffort(
+              input.provider.id,
+              input.cliModel.supportedReasoningEfforts,
+            ),
+        }
+      : (() => {
+          const resolved = resolveOpenCodeModelReasoningSupport(input.model);
+          return {
+            descriptors: resolved.descriptors,
+            defaultReasoningEffort:
+              resolved.defaultReasoningEffort ??
+              inferOpenCodeDefaultReasoningEffort(input.provider.id, resolved.descriptors),
+          };
+        })();
   return {
     slug: input.slug,
     name,
     upstreamProviderId: input.provider.id,
     ...(upstreamProviderName.length > 0 ? { upstreamProviderName } : {}),
+    ...(reasoningSupport.descriptors.length > 0
+      ? { supportedReasoningEfforts: reasoningSupport.descriptors }
+      : {}),
+    ...(reasoningSupport.defaultReasoningEffort
+      ? { defaultReasoningEffort: reasoningSupport.defaultReasoningEffort }
+      : {}),
   };
 }
 
@@ -534,6 +715,7 @@ export function flattenOpenCodeModels(input: {
             slug: `${provider.id}/${model.id}`,
             name: model.name,
             provider,
+            model,
           });
           return descriptor ? [descriptor] : [];
         }),
@@ -979,7 +1161,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             }
 
             if (event.properties.status.type === "idle" && turnId) {
-              context.activeTurnId = undefined;
+              clearActiveTurnState(context);
               updateProviderSession(context, { status: "ready" }, { clearActiveTurnId: true });
               yield* emit({
                 ...buildEventBase({ threadId: context.session.threadId, turnId, raw: event }),
@@ -995,7 +1177,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           case "session.error": {
             const message = sessionErrorMessage(event.properties.error);
             const activeTurnId = context.activeTurnId;
-            context.activeTurnId = undefined;
+            clearActiveTurnState(context);
             updateProviderSession(
               context,
               {
@@ -1291,9 +1473,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           Effect.mapError(toRequestError),
           Effect.tapError((requestError) =>
             Effect.gen(function* () {
-              context.activeTurnId = undefined;
-              context.activeAgent = undefined;
-              context.activeVariant = undefined;
+              clearActiveTurnState(context);
               updateProviderSession(
                 context,
                 {
@@ -1324,12 +1504,15 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
       const interruptTurn: OpenCodeAdapterShape["interruptTurn"] = Effect.fn("interruptTurn")(
         function* (threadId, turnId) {
           const context = ensureSessionContext(sessions, threadId);
+          const activeTurnId = turnId ?? context.activeTurnId;
           yield* runOpenCodeSdk("session.abort", () =>
             context.client.session.abort({ sessionID: context.openCodeSessionId }),
           ).pipe(Effect.mapError(toRequestError));
-          if (turnId ?? context.activeTurnId) {
+          clearActiveTurnState(context);
+          updateProviderSession(context, { status: "ready" }, { clearActiveTurnId: true });
+          if (activeTurnId) {
             yield* emit({
-              ...buildEventBase({ threadId, turnId: turnId ?? context.activeTurnId }),
+              ...buildEventBase({ threadId, turnId: activeTurnId }),
               type: "turn.aborted",
               payload: {
                 reason: "Interrupted by user.",
@@ -1641,6 +1824,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                       slug: model.slug,
                       name: model.name,
                       provider,
+                      model: provider.models[model.modelID],
+                      cliModel: model,
                     });
                     return descriptor ? [descriptor] : [];
                   })
@@ -1735,7 +1920,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         },
       } satisfies OpenCodeAdapterShape;
     }),
-  ).pipe(Layer.provide(OpenCodeRuntimeLive), Layer.provide(NodeServices.layer));
+  ).pipe(
+    Layer.provide(options?.runtime ? Layer.succeed(OpenCodeRuntime, options.runtime) : OpenCodeRuntimeLive),
+    Layer.provide(NodeServices.layer),
+  );
 }
 
 export const OpenCodeAdapterLive = makeOpenCodeAdapterLive();

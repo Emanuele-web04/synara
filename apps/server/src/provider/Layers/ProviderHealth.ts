@@ -43,6 +43,7 @@ import {
   parseCodexCliVersion,
 } from "../codexCliVersion";
 import { ServerConfig } from "../../config";
+import { isWindowsShellCommandMissingResult } from "../../shell-command-detection";
 import { normalizeGeminiCapabilityProbeResult, probeGeminiCapabilities } from "../geminiAcpProbe";
 import { ProviderHealth, type ProviderHealthShape } from "../Services/ProviderHealth";
 import {
@@ -568,6 +569,7 @@ const runCodexCommand = (args: ReadonlyArray<string>) =>
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const command = ChildProcess.make("codex", [...args], {
       shell: process.platform === "win32",
+      env: process.env,
     });
 
     const child = yield* spawner.spawn(command);
@@ -580,6 +582,10 @@ const runCodexCommand = (args: ReadonlyArray<string>) =>
       ],
       { concurrency: "unbounded" },
     );
+
+    if (isWindowsShellCommandMissingResult({ code: exitCode, stderr })) {
+      return yield* Effect.fail(new Error("spawn codex ENOENT"));
+    }
 
     return { stdout, stderr, code: exitCode } satisfies CommandResult;
   }).pipe(Effect.scoped);
@@ -589,6 +595,7 @@ const runClaudeCommand = (args: ReadonlyArray<string>) =>
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const command = ChildProcess.make("claude", [...args], {
       shell: process.platform === "win32",
+      env: process.env,
     });
 
     const child = yield* spawner.spawn(command);
@@ -601,6 +608,10 @@ const runClaudeCommand = (args: ReadonlyArray<string>) =>
       ],
       { concurrency: "unbounded" },
     );
+
+    if (isWindowsShellCommandMissingResult({ code: exitCode, stderr })) {
+      return yield* Effect.fail(new Error("spawn claude ENOENT"));
+    }
 
     return { stdout, stderr, code: exitCode } satisfies CommandResult;
   }).pipe(Effect.scoped);
@@ -610,6 +621,7 @@ const runGeminiCommand = (args: ReadonlyArray<string>) =>
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const command = ChildProcess.make("gemini", [...args], {
       shell: process.platform === "win32",
+      env: process.env,
     });
 
     const child = yield* spawner.spawn(command);
@@ -622,6 +634,10 @@ const runGeminiCommand = (args: ReadonlyArray<string>) =>
       ],
       { concurrency: "unbounded" },
     );
+
+    if (isWindowsShellCommandMissingResult({ code: exitCode, stderr })) {
+      return yield* Effect.fail(new Error("spawn gemini ENOENT"));
+    }
 
     return { stdout, stderr, code: exitCode } satisfies CommandResult;
   }).pipe(Effect.scoped);
@@ -631,6 +647,7 @@ const runOpenCodeCommand = (args: ReadonlyArray<string>) =>
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const command = ChildProcess.make("opencode", [...args], {
       shell: process.platform === "win32",
+      env: process.env,
     });
 
     const child = yield* spawner.spawn(command);
@@ -643,6 +660,10 @@ const runOpenCodeCommand = (args: ReadonlyArray<string>) =>
       ],
       { concurrency: "unbounded" },
     );
+
+    if (isWindowsShellCommandMissingResult({ code: exitCode, stderr })) {
+      return yield* Effect.fail(new Error("spawn opencode ENOENT"));
+    }
 
     return { stdout, stderr, code: exitCode } satisfies CommandResult;
   }).pipe(Effect.scoped);

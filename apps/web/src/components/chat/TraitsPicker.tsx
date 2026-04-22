@@ -67,7 +67,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     ultrathinkPromptControlled,
   } = getComposerTraitSelection(provider, model, prompt, modelOptions, runtimeModel);
   const hasVisibleControls = hasVisibleComposerTraitControls(
-    { caps, effort, thinkingEnabled, contextWindowOptions },
+    { caps, effortLevels, thinkingEnabled, contextWindowOptions },
     { includeFastMode },
   );
 
@@ -121,7 +121,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
 
   return (
     <>
-      {effort ? (
+      {effortLevels.length > 0 ? (
         <>
           <MenuGroup>
             <div className="px-2 pt-1.5 pb-1 font-medium text-muted-foreground text-xs">Effort</div>
@@ -130,7 +130,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
                 Remove Ultrathink from the prompt to change effort.
               </div>
             ) : null}
-            <MenuRadioGroup value={effort} onValueChange={handleEffortChange}>
+            <MenuRadioGroup value={effort ?? ""} onValueChange={handleEffortChange}>
               {effortLevels.map((option) => {
                 const item = (
                   <MenuRadioItem
@@ -285,7 +285,7 @@ export const TraitsPicker = memo(function TraitsPicker({
     ultrathinkPromptControlled,
   } = getComposerTraitSelection(provider, model, prompt, modelOptions, runtimeModel);
   const hasVisibleControls = hasVisibleComposerTraitControls(
-    { caps, effort, thinkingEnabled, contextWindowOptions },
+    { caps, effortLevels, thinkingEnabled, contextWindowOptions },
     { includeFastMode },
   );
 
@@ -304,6 +304,8 @@ export const TraitsPicker = memo(function TraitsPicker({
     ? "Ultrathink"
     : effortLabel
       ? effortLabel
+      : effortLevels.length > 0
+        ? "Thinking"
       : thinkingEnabled === null
         ? null
         : `Thinking ${thinkingEnabled ? "On" : "Off"}`;

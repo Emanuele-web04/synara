@@ -38,6 +38,7 @@ opencode/gpt-5-nano
         modelID: "gpt-5-nano",
         name: "GPT-5 Nano",
         variants: [],
+        supportedReasoningEfforts: [],
       },
       {
         slug: "openai/gpt-5.4",
@@ -45,6 +46,14 @@ opencode/gpt-5-nano
         modelID: "gpt-5.4",
         name: "GPT-5.4",
         variants: ["high", "low"],
+        supportedReasoningEfforts: [
+          {
+            value: "low",
+          },
+          {
+            value: "high",
+          },
+        ],
       },
     ]);
   });
@@ -63,6 +72,7 @@ opencode/minimax-m2.5-free
         modelID: "gpt-5.4",
         name: "gpt-5.4",
         variants: [],
+        supportedReasoningEfforts: [],
       },
       {
         slug: "opencode/minimax-m2.5-free",
@@ -70,6 +80,7 @@ opencode/minimax-m2.5-free
         modelID: "minimax-m2.5-free",
         name: "minimax-m2.5-free",
         variants: [],
+        supportedReasoningEfforts: [],
       },
     ]);
   });
@@ -97,6 +108,52 @@ openai/gpt-5.4
         modelID: "gpt-5.4",
         name: "GPT-5.4 Latest",
         variants: [],
+        supportedReasoningEfforts: [],
+      },
+    ]);
+  });
+
+  it("keeps verbose reasoning metadata from CLI output", () => {
+    const models = parseOpenCodeCliModelsOutput(`
+openai/gpt-5.4
+{
+  "id": "gpt-5.4",
+  "providerID": "openai",
+  "name": "GPT-5.4",
+  "options": {
+    "reasoningEffort": "medium"
+  },
+  "variants": {
+    "none": {
+      "reasoningEffort": "none"
+    },
+    "low": {
+      "reasoningEffort": "low"
+    },
+    "medium": {
+      "reasoningEffort": "medium"
+    },
+    "high": {
+      "reasoningEffort": "high"
+    }
+  }
+}
+`);
+
+    expect(models).toEqual([
+      {
+        slug: "openai/gpt-5.4",
+        providerID: "openai",
+        modelID: "gpt-5.4",
+        name: "GPT-5.4",
+        variants: ["high", "low", "medium", "none"],
+        supportedReasoningEfforts: [
+          { value: "none" },
+          { value: "low" },
+          { value: "medium" },
+          { value: "high" },
+        ],
+        defaultReasoningEffort: "medium",
       },
     ]);
   });

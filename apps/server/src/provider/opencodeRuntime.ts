@@ -33,6 +33,7 @@ import {
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { NetService } from "@t3tools/shared/Net";
+import { isWindowsShellCommandMissingResult } from "../shell-command-detection.ts";
 
 const OPENCODE_SERVER_READY_PREFIX = "opencode server listening";
 const DEFAULT_OPENCODE_SERVER_TIMEOUT_MS = 5_000;
@@ -108,6 +109,12 @@ export interface OpenCodeCliModelDescriptor {
   readonly modelID: string;
   readonly name: string;
   readonly variants: ReadonlyArray<string>;
+  readonly supportedReasoningEfforts: ReadonlyArray<{
+    readonly value: string;
+    readonly label?: string;
+    readonly description?: string;
+  }>;
+  readonly defaultReasoningEffort?: string;
 }
 
 export interface OpenCodePathInfo {
@@ -161,12 +168,6 @@ function parseServerUrlFromOutput(output: string): string | null {
     return match?.[1] ?? null;
   }
   return null;
-}
-
-function isWindowsCommandNotFound(code: number, stderr: string): boolean {
-  if (process.platform !== "win32") return false;
-  if (code === 9009) return true;
-  return /is not recognized as an internal or external command/i.test(stderr);
 }
 
 export function parseOpenCodeModelSlug(
@@ -304,6 +305,48 @@ function parseOpenCodeCliModelJson(
     .map((variant) => variant.trim())
     .filter((variant) => variant.length > 0)
     .toSorted((left, right) => left.localeCompare(right));
+  const supportedReasoningEfforts = Array.from(
+    new Map(
+      Object.values(variantsObject)
+        .flatMap((variant) => {
+          const variantObject =
+            variant && typeof variant === "object" && !Array.isArray(variant)
+              ? (variant as Record<string, unknown>)
+              : null;
+          if (!variantObject) {
+            return [];
+          }
+
+          const reasoningValue =
+            trimToNull(variantObject.reasoningEffort) ??
+            trimToNull(variantObject.reasoning_effort);
+          if (!reasoningValue) {
+            return [];
+          }
+
+          const label = trimToNull(variantObject.label) ?? undefined;
+          const description = trimToNull(variantObject.description) ?? undefined;
+          return [
+            [
+              reasoningValue,
+              {
+                value: reasoningValue,
+                ...(label ? { label } : {}),
+                ...(description ? { description } : {}),
+              },
+            ] as const,
+          ];
+        }),
+    ).values(),
+  );
+  const defaultReasoningEffort =
+    trimToNull(object.defaultReasoningEffort) ??
+    trimToNull(object.default_reasoning_effort) ??
+    (object.options && typeof object.options === "object" && !Array.isArray(object.options)
+      ? trimToNull((object.options as Record<string, unknown>).reasoningEffort) ??
+        trimToNull((object.options as Record<string, unknown>).reasoning_effort)
+      : null) ??
+    undefined;
 
   return {
     slug,
@@ -311,6 +354,8 @@ function parseOpenCodeCliModelJson(
     modelID,
     name,
     variants,
+    supportedReasoningEfforts,
+    ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
   };
 }
 
@@ -346,6 +391,7 @@ export function parseOpenCodeCliModelsOutput(
       modelID: parsedSlug.modelID,
       name: fallbackOpenCodeModelName(candidate, parsedSlug),
       variants: [],
+      supportedReasoningEfforts: [],
     };
 
     while (index < output.length && /\s/u.test(output[index]!)) {
@@ -525,7 +571,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
         { concurrency: "unbounded" },
       );
       const exitCode = Number(code);
-      if (isWindowsCommandNotFound(exitCode, stderr)) {
+      if (isWindowsShellCommandMissingResult({ code: exitCode, stderr })) {
         return yield* new OpenCodeRuntimeError({
           operation: "runOpenCodeCommand",
           detail: `spawn ${input.binaryPath} ENOENT`,

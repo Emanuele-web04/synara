@@ -18,6 +18,10 @@ import {
 
 function runtimeEffortLabel(value: string): string {
   switch (value) {
+    case "none":
+      return "None";
+    case "minimal":
+      return "Minimal";
     case "low":
       return "Low";
     case "medium":
@@ -27,7 +31,11 @@ function runtimeEffortLabel(value: string): string {
     case "xhigh":
       return "Extra High";
     default:
-      return value;
+      return value
+        .split(/[-_\s]+/u)
+        .filter((segment) => segment.length > 0)
+        .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+        .join(" ");
   }
 }
 
@@ -53,7 +61,7 @@ export function resolveRuntimeModelDescriptor(input: {
   });
 }
 
-// Reuses static capability flags but lets Codex effort menus follow runtime-discovered support/defaults.
+// Reuses static capability flags but lets runtime-discovered models override exposed effort menus.
 export function getRuntimeAwareModelCapabilities(input: {
   provider: ProviderKind;
   model: string | null | undefined;
@@ -61,7 +69,11 @@ export function getRuntimeAwareModelCapabilities(input: {
 }): ModelCapabilities {
   const staticCapabilities = getModelCapabilities(input.provider, input.model);
   const runtimeEfforts = input.runtimeModel?.supportedReasoningEfforts;
-  if (input.provider !== "codex" || !runtimeEfforts || runtimeEfforts.length === 0) {
+  if (
+    (input.provider !== "codex" && input.provider !== "opencode") ||
+    !runtimeEfforts ||
+    runtimeEfforts.length === 0
+  ) {
     return staticCapabilities;
   }
 
