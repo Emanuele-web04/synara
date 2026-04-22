@@ -294,6 +294,7 @@ import {
   renderProviderTraitsPicker,
 } from "./chat/composerProviderRegistry";
 import { getComposerTraitSelection } from "./chat/composerTraits";
+import { resolveRuntimeModelDescriptor } from "./chat/runtimeModelCapabilities";
 import { ProjectPicker } from "./chat/ProjectPicker";
 import { ProviderHealthBanner } from "./chat/ProviderHealthBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
@@ -1222,24 +1223,6 @@ export default function ChatView({
     projectModelSelection: activeProject?.defaultModelSelection,
     customModelsByProvider,
   });
-  const composerProviderState = useMemo(
-    () =>
-      getComposerProviderState({
-        provider: selectedProvider,
-        model: selectedModel,
-        prompt,
-        modelOptions: composerModelOptions,
-      }),
-    [composerModelOptions, prompt, selectedModel, selectedProvider],
-  );
-  const selectedPromptEffort = composerProviderState.promptEffort;
-  const selectedModelOptionsForDispatch = composerProviderState.modelOptionsForDispatch;
-  const selectedModelSelection = useMemo<ModelSelection>(
-    () => buildModelSelection(selectedProvider, selectedModel, selectedModelOptionsForDispatch),
-    [selectedModel, selectedModelOptionsForDispatch, selectedProvider],
-  );
-  const providerOptionsForDispatch = useMemo(() => getProviderStartOptions(settings), [settings]);
-  const selectedModelForPicker = selectedModel;
   const claudeDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({ provider: "claudeAgent" }),
   );
@@ -1255,6 +1238,46 @@ export default function ChatView({
     providerAgentsQueryOptions({ provider: "claudeAgent" }),
   );
   const codexDynamicAgentsQuery = useQuery(providerAgentsQueryOptions({ provider: "codex" }));
+  const runtimeModelsByProvider = useMemo(
+    () => ({
+      claudeAgent: claudeDynamicModelsQuery.data?.models ?? [],
+      codex: codexDynamicModelsQuery.data?.models ?? [],
+      gemini: geminiModelsQuery.data?.models ?? [],
+    }),
+    [
+      claudeDynamicModelsQuery.data?.models,
+      codexDynamicModelsQuery.data?.models,
+      geminiModelsQuery.data?.models,
+    ],
+  );
+  const selectedRuntimeModel = useMemo(
+    () =>
+      resolveRuntimeModelDescriptor({
+        provider: selectedProvider,
+        model: selectedModel,
+        runtimeModels: runtimeModelsByProvider[selectedProvider],
+      }),
+    [runtimeModelsByProvider, selectedModel, selectedProvider],
+  );
+  const composerProviderState = useMemo(
+    () =>
+      getComposerProviderState({
+        provider: selectedProvider,
+        model: selectedModel,
+        runtimeModel: selectedRuntimeModel,
+        prompt,
+        modelOptions: composerModelOptions,
+      }),
+    [composerModelOptions, prompt, selectedModel, selectedProvider, selectedRuntimeModel],
+  );
+  const selectedPromptEffort = composerProviderState.promptEffort;
+  const selectedModelOptionsForDispatch = composerProviderState.modelOptionsForDispatch;
+  const selectedModelSelection = useMemo<ModelSelection>(
+    () => buildModelSelection(selectedProvider, selectedModel, selectedModelOptionsForDispatch),
+    [selectedModel, selectedModelOptionsForDispatch, selectedProvider],
+  );
+  const providerOptionsForDispatch = useMemo(() => getProviderStartOptions(settings), [settings]);
+  const selectedModelForPicker = selectedModel;
   const modelOptionsByProvider = useMemo(() => {
     const staticOptions = getCustomModelOptionsByProvider(settings);
     const result = { ...staticOptions };
@@ -5566,6 +5589,7 @@ export default function ChatView({
     selectedModel,
     prompt,
     selectedProviderModelOptions,
+    selectedRuntimeModel,
   );
   const runtimeUsageContextWindow = useMemo(
     () =>
@@ -5588,6 +5612,7 @@ export default function ChatView({
     provider: selectedProvider,
     threadId,
     model: selectedModel,
+    runtimeModel: selectedRuntimeModel,
     modelOptions: selectedProviderModelOptions,
     prompt,
     includeFastMode: false,

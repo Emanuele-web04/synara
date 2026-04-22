@@ -75,8 +75,9 @@ export function seedDesktopUserDataProfileFromLegacy(input: {
   }
 
   const sourcePath =
-    input.legacyPaths.find((candidate) => FS.existsSync(candidate) && hasSeedableProfileData(candidate)) ??
-    null;
+    input.legacyPaths.find(
+      (candidate) => FS.existsSync(candidate) && hasSeedableProfileData(candidate),
+    ) ?? null;
   if (!sourcePath) {
     return {
       status: "legacy-missing",
@@ -126,5 +127,7 @@ export function seedDesktopUserDataProfileFromLegacy(input: {
 }
 
 function hasSeedableProfileData(profilePath: string): boolean {
-  return PROFILE_SEED_ENTRY_NAMES.some((entryName) => FS.existsSync(Path.join(profilePath, entryName)));
+  return PROFILE_SEED_ENTRY_NAMES.some((entryName) =>
+    FS.existsSync(Path.join(profilePath, entryName)),
+  );
 }

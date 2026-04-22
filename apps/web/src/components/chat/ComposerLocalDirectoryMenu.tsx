@@ -541,7 +541,8 @@ const UseCurrentFolderRow = memo(function UseCurrentFolderRow(props: {
       value="use-current-folder"
       className={cn(
         "cursor-pointer select-none gap-2 rounded-lg px-2 py-1 transition-colors hover:bg-[var(--color-background-elevated-secondary)]",
-        isHighlighted && "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]",
+        isHighlighted &&
+          "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]",
       )}
       onMouseDown={(event) => {
         event.preventDefault();
@@ -594,7 +595,8 @@ const LocalSearchRow = memo(function LocalSearchRow(props: {
       value={`search:${entry.kind}:${entry.path}`}
       className={cn(
         "cursor-pointer select-none gap-2 rounded-lg px-2 py-1 transition-colors hover:bg-[var(--color-background-elevated-secondary)]",
-        isHighlighted && "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]",
+        isHighlighted &&
+          "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]",
       )}
       onMouseDown={(event) => {
         event.preventDefault();
@@ -639,7 +641,8 @@ const LocalEntryRow = memo(function LocalEntryRow(props: {
       value={`${entry.kind}:${entry.path}`}
       className={cn(
         "cursor-pointer select-none gap-2 rounded-lg px-2 py-1 transition-colors hover:bg-[var(--color-background-elevated-secondary)]",
-        isHighlighted && "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]",
+        isHighlighted &&
+          "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]",
       )}
       onMouseDown={(event) => {
         event.preventDefault();

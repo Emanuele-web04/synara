@@ -5,6 +5,7 @@
 import { MessageCircleIcon, XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { type ChatAssistantSelectionAttachment } from "../../types";
+import { COMPOSER_ATTACHMENT_CHIP_CLASS_NAME } from "../composerInlineChip";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 interface AssistantSelectionsSummaryChipProps {
@@ -27,7 +28,8 @@ export function AssistantSelectionsSummaryChip(props: AssistantSelectionsSummary
         render={
           <span
             className={cn(
-              "group relative inline-flex min-w-0 max-w-full items-center rounded-full border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] p-0.5 text-[11px] font-medium text-[var(--color-text-foreground)] shadow-[0_1px_0_rgba(255,255,255,0.14)_inset]",
+              "group relative",
+              COMPOSER_ATTACHMENT_CHIP_CLASS_NAME,
               props.onRemove ? "pr-6" : "",
             )}
           >
@@ -38,7 +40,7 @@ export function AssistantSelectionsSummaryChip(props: AssistantSelectionsSummary
             {props.onRemove ? (
               <button
                 type="button"
-                className="pointer-events-none absolute right-0.5 inline-flex size-5 items-center justify-center rounded-full text-[var(--color-text-foreground-tertiary)] opacity-0 transition-all hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] group-hover:pointer-events-auto group-hover:opacity-100"
+                className="absolute right-0.5 inline-flex size-5 items-center justify-center rounded-full text-[var(--color-text-foreground-tertiary)] transition-all hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
                 aria-label="Remove selections"
                 onClick={(event) => {
                   event.preventDefault();

@@ -750,7 +750,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     correspondingUserMessageId != null &&
                     revertTurnCountByUserMessageId.has(correspondingUserMessageId);
                   return (
-                    <div className="mt-5 overflow-hidden rounded-lg border border-[color:var(--color-border-light)] bg-secondary">
+                    <div className="mt-5 overflow-hidden rounded-lg border border-[color:var(--color-border-light)] bg-[var(--composer-surface)]">
                       <div className="flex items-center justify-between gap-2 border-b border-[color:var(--color-border-light)] px-3 py-2">
                         <span
                           className="truncate font-normal text-foreground/92"
@@ -795,7 +795,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         </div>
                       </div>
                       {fileChangesExpanded && (
-                        <div className="bg-secondary">
+                        <div className="bg-[var(--composer-surface)]">
                           {checkpointFiles.map((file) => (
                             <button
                               key={file.path}

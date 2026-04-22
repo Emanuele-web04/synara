@@ -42,7 +42,7 @@ export default function TerminalWorkspaceTabs({
           className={cn(
             tabClassName,
             activeTab === "terminal"
-              ? "z-[1] border-border/70 bg-background text-foreground"
+              ? "z-[1] border-border/70 bg-[var(--composer-surface)] text-foreground"
               : "border-transparent bg-transparent text-muted-foreground hover:bg-background/55 hover:text-foreground",
           )}
           onClick={() => {
@@ -62,7 +62,7 @@ export default function TerminalWorkspaceTabs({
           className={cn(
             tabClassName,
             activeTab === "chat"
-              ? "z-[1] border-border/70 bg-background text-foreground"
+              ? "z-[1] border-border/70 bg-[var(--composer-surface)] text-foreground"
               : "border-transparent bg-transparent text-muted-foreground hover:bg-background/55 hover:text-foreground",
           )}
           onClick={() => {

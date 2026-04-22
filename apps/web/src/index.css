@@ -4,6 +4,7 @@
 
 @theme inline {
   --animate-skeleton: skeleton 2s -1s infinite linear;
+  --font-sans: var(--font-ui-family);
   --font-mono: var(--font-mono-family);
   --color-warning-foreground: var(--warning-foreground);
   --color-warning: var(--warning);
@@ -167,6 +168,31 @@
 }
 .theme-slider:hover::-moz-range-thumb {
   transform: scale(1.08);
+}
+
+/* Theme settings color picker: keep react-colorful aligned with the compact popover. */
+.theme-color-picker .react-colorful {
+  width: 100%;
+  height: 180px;
+}
+
+.theme-color-picker .react-colorful__saturation {
+  border-radius: 7px 7px 4px 4px;
+}
+
+.theme-color-picker .react-colorful__hue {
+  height: 18px;
+  margin-top: 10px;
+  border-radius: 999px;
+}
+
+.theme-color-picker .react-colorful__pointer {
+  width: 18px;
+  height: 18px;
+  border-width: 2px;
+  box-shadow:
+    0 1px 4px rgba(0, 0, 0, 0.32),
+    0 0 0 1px rgba(255, 255, 255, 0.42);
 }
 
 :root {
@@ -581,17 +607,18 @@ diffs-container {
 }
 
 /* In light mode the composer should stay close to the chat canvas, just slightly shaded.
-   Dark mode keeps the user-bubble surface treatment we aligned elsewhere. */
-.chat-composer-surface {
-  background: color-mix(
-    in srgb,
-    var(--color-background-surface-under) 97%,
-    white 3%
-  );
+   Dark mode keeps the user-bubble surface treatment we aligned elsewhere. The same
+   tone is reused for popover/menu/chip surfaces so they line up with the composer. */
+:root {
+  --composer-surface: color-mix(in srgb, var(--color-background-surface-under) 97%, white 3%);
 }
 
-.dark .chat-composer-surface {
-  background: var(--secondary);
+.dark {
+  --composer-surface: color-mix(in srgb, var(--background) 96%, var(--color-white));
+}
+
+.chat-composer-surface {
+  background: var(--composer-surface);
 }
 
 @keyframes ultrathink-rainbow {

@@ -319,4 +319,20 @@ describe("buildThemeCssVariables", () => {
     );
     expect(tokens.aliases["--color-token-input-background"]).toBe("rgba(36, 36, 38, 0.96)");
   });
+
+  it("uses the light-theme foreground color for the primary button background", () => {
+    const tokens = buildResolvedThemeTokens(
+      {
+        codeThemeId: "codex",
+        theme: DEFAULT_THEME_STATE.chromeThemes.light,
+      },
+      "light",
+    );
+
+    expect(tokens.derived.buttonPrimaryBackground).toBe(
+      DEFAULT_THEME_STATE.chromeThemes.light.ink,
+    );
+    expect(tokens.derived.textButtonPrimary).toBe(DEFAULT_THEME_STATE.chromeThemes.light.surface);
+    expect(tokens.derived.textButtonPrimary).not.toBe(tokens.derived.buttonPrimaryBackground);
+  });
 });

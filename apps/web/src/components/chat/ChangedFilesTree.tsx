@@ -88,9 +88,7 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
             )}
           </button>
           {isExpanded && (
-            <div>
-              {node.children.map((childNode) => renderTreeNode(childNode, depth + 1))}
-            </div>
+            <div>{node.children.map((childNode) => renderTreeNode(childNode, depth + 1))}</div>
           )}
         </div>
       );

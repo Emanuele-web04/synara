@@ -6,6 +6,10 @@
 export const COMPOSER_INLINE_CHIP_CLASS_NAME =
   "inline-flex max-w-full select-none items-center gap-0.5 rounded border border-[color:var(--color-border-light)] bg-[var(--sidebar-accent)] p-0.5 font-medium text-[11px] leading-[1.1] text-[var(--color-text-foreground)] align-middle";
 
+// Shared shell for composer attachment pills like image previews and text selections.
+export const COMPOSER_ATTACHMENT_CHIP_CLASS_NAME =
+  "inline-flex min-w-0 max-w-full items-center gap-0.5 rounded-full border border-[color:var(--color-border)] bg-[var(--composer-surface)] p-0.5 text-[11px] font-medium text-[var(--color-text-foreground)]";
+
 // Wrapper for file/folder mention chips. Mirrors the skill pill (same tint
 // and rounding) but with tighter padding and smaller text so a path chip
 // reads as a compact variant of a skill chip.

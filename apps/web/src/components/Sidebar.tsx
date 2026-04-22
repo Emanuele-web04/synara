@@ -967,7 +967,7 @@ function SidebarSegmentedPicker({
               className={cn(
                 "flex-1 rounded-sm px-2.5 py-1 text-[11.5px] font-medium tracking-tight transition-colors",
                 active
-                  ? "bg-[var(--color-background-elevated-primary-opaque)] text-[var(--color-text-foreground)] shadow-xs"
+                  ? "bg-[var(--composer-surface)] text-[var(--color-text-foreground)] shadow-xs"
                   : "text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]",
               )}
               onClick={() => onSelectView(view)}

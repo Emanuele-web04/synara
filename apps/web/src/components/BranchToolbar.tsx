@@ -87,9 +87,7 @@ export function RuntimeUsageControls({
           type="button"
           className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[length:var(--app-font-size-ui-xs,10px)] font-normal transition-colors hover:text-[var(--color-text-foreground)]"
           onClick={() =>
-            onRuntimeModeChange(
-              runtimeMode === "full-access" ? "approval-required" : "full-access",
-            )
+            onRuntimeModeChange(runtimeMode === "full-access" ? "approval-required" : "full-access")
           }
           title={
             runtimeMode === "full-access"

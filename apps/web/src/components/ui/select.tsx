@@ -140,14 +140,14 @@ function SelectPopup({
           {...props}
         >
           <SelectPrimitive.ScrollUpArrow
-            className="top-0 z-50 flex h-6 w-full cursor-default items-center justify-center before:pointer-events-none before:absolute before:inset-x-px before:top-px before:h-[200%] before:rounded-t-[calc(var(--radius-lg)-1px)] before:bg-linear-to-b before:from-50% before:from-popover"
+            className="top-0 z-50 flex h-6 w-full cursor-default items-center justify-center before:pointer-events-none before:absolute before:inset-x-px before:top-px before:h-[200%] before:rounded-t-[calc(var(--radius-lg)-1px)] before:bg-linear-to-b before:from-50% before:from-[var(--composer-surface)]"
             data-slot="select-scroll-up-arrow"
           >
             <ChevronUpIcon className="relative size-4.5 sm:size-4" />
           </SelectPrimitive.ScrollUpArrow>
           {/* Keep a hard popup viewport cap so long theme lists can always scroll
               fully to both edges even when the positioner reports a tight height. */}
-          <div className="relative min-w-(--anchor-width) max-h-[min(var(--available-height),28rem)] rounded-xl border border-[color:var(--color-border-light)] bg-[var(--color-background-surface-under)] shadow-xl">
+          <div className="relative min-w-(--anchor-width) max-h-[min(var(--available-height),28rem)] rounded-xl border border-[color:var(--color-border-light)] bg-[var(--composer-surface)] shadow-xl">
             <SelectPrimitive.List
               className={cn(
                 "max-h-[min(var(--available-height),28rem)] overflow-y-auto overscroll-contain p-1",
@@ -159,7 +159,7 @@ function SelectPopup({
             </SelectPrimitive.List>
           </div>
           <SelectPrimitive.ScrollDownArrow
-            className="bottom-0 z-50 flex h-6 w-full cursor-default items-center justify-center before:pointer-events-none before:absolute before:inset-x-px before:bottom-px before:h-[200%] before:rounded-b-[calc(var(--radius-lg)-1px)] before:bg-linear-to-t before:from-50% before:from-popover"
+            className="bottom-0 z-50 flex h-6 w-full cursor-default items-center justify-center before:pointer-events-none before:absolute before:inset-x-px before:bottom-px before:h-[200%] before:rounded-b-[calc(var(--radius-lg)-1px)] before:bg-linear-to-t before:from-50% before:from-[var(--composer-surface)]"
             data-slot="select-scroll-down-arrow"
           >
             <ChevronDownIcon className="relative size-4.5 sm:size-4" />

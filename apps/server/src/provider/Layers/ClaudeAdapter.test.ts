@@ -3211,66 +3211,63 @@ describe("ClaudeAdapterLive", () => {
     },
   );
 
-  it.effect(
-    "uses the requested Claude context window for in-flight usage snapshots",
-    () => {
-      const harness = makeHarness();
-      return Effect.gen(function* () {
-        const adapter = yield* ClaudeAdapter;
+  it.effect("uses the requested Claude context window for in-flight usage snapshots", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
 
-        const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 6).pipe(
-          Stream.runCollect,
-          Effect.forkChild,
-        );
-
-        const session = yield* adapter.startSession({
-          threadId: THREAD_ID,
-          provider: "claudeAgent",
-          runtimeMode: "full-access",
-        });
-        yield* adapter.sendTurn({
-          threadId: session.threadId,
-          input: "hello",
-          modelSelection: {
-            provider: "claudeAgent",
-            model: "claude-opus-4-6",
-            options: {
-              contextWindow: "1m",
-            },
-          },
-          attachments: [],
-        });
-
-        harness.query.emit({
-          type: "system",
-          subtype: "task_progress",
-          task_id: "task-usage-1m",
-          description: "Thinking through the larger context",
-          usage: {
-            total_tokens: 23_000,
-          },
-          session_id: "sdk-session-task-usage-1m",
-          uuid: "task-usage-progress-1m",
-        } as unknown as SDKMessage);
-
-        const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
-        const usageEvent = runtimeEvents.find((event) => event.type === "thread.token-usage.updated");
-        assert.equal(usageEvent?.type, "thread.token-usage.updated");
-        if (usageEvent?.type === "thread.token-usage.updated") {
-          assert.deepEqual(usageEvent.payload, {
-            usage: {
-              usedTokens: 23_000,
-              lastUsedTokens: 23_000,
-              maxTokens: 1_000_000,
-            },
-          });
-        }
-      }).pipe(
-        Effect.provideService(Random.Random, makeDeterministicRandomService()),
-        Effect.provide(harness.layer),
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 6).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
       );
-    },
-  );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "hello",
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-6",
+          options: {
+            contextWindow: "1m",
+          },
+        },
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "system",
+        subtype: "task_progress",
+        task_id: "task-usage-1m",
+        description: "Thinking through the larger context",
+        usage: {
+          total_tokens: 23_000,
+        },
+        session_id: "sdk-session-task-usage-1m",
+        uuid: "task-usage-progress-1m",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const usageEvent = runtimeEvents.find((event) => event.type === "thread.token-usage.updated");
+      assert.equal(usageEvent?.type, "thread.token-usage.updated");
+      if (usageEvent?.type === "thread.token-usage.updated") {
+        assert.deepEqual(usageEvent.payload, {
+          usage: {
+            usedTokens: 23_000,
+            lastUsedTokens: 23_000,
+            maxTokens: 1_000_000,
+          },
+        });
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
 
   it.effect(
     "preserves the 1m Claude context window when the final result reports 200k model usage",

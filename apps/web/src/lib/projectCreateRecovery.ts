@@ -106,12 +106,14 @@ export function findRecoverableProjectForDuplicateCreate<
   });
 }
 
-export async function waitForRecoverableProjectInReadModel(input: ProjectLookupInput & {
-  readonly loadSnapshot: () => Promise<OrchestrationReadModel | null>;
-  readonly repairSnapshot?: (() => Promise<OrchestrationReadModel | null>) | undefined;
-  readonly maxAttempts?: number;
-  readonly delayMs?: number;
-}): Promise<{
+export async function waitForRecoverableProjectInReadModel(
+  input: ProjectLookupInput & {
+    readonly loadSnapshot: () => Promise<OrchestrationReadModel | null>;
+    readonly repairSnapshot?: (() => Promise<OrchestrationReadModel | null>) | undefined;
+    readonly maxAttempts?: number;
+    readonly delayMs?: number;
+  },
+): Promise<{
   project: OrchestrationReadModel["projects"][number] | null;
   snapshot: OrchestrationReadModel | null;
 }> {

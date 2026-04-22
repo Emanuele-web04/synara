@@ -22,7 +22,7 @@ export function showConfirmDialogFallback(message: string): Promise<boolean> {
     // Popup
     const popup = document.createElement("div");
     popup.className =
-      "flex w-full max-w-[22rem] flex-col rounded-xl border border-border/55 bg-popover text-popover-foreground shadow-xl shadow-black/8";
+      "flex w-full max-w-[22rem] flex-col rounded-xl border border-[color:var(--color-border-light)] bg-[var(--composer-surface)] text-[var(--color-text-foreground)] shadow-xl";
     popup.style.cssText = "animation:scaleIn .15s ease-out";
 
     // Header
@@ -46,7 +46,7 @@ export function showConfirmDialogFallback(message: string): Promise<boolean> {
     // Footer
     const footer = document.createElement("div");
     footer.className =
-      "flex flex-col-reverse gap-2 border-t border-border/45 bg-muted/48 px-4 py-3 sm:flex-row sm:justify-end sm:rounded-b-[calc(var(--radius-xl)-1px)]";
+      "flex flex-col-reverse gap-2 border-t border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] px-4 py-3 sm:flex-row sm:justify-end sm:rounded-b-[calc(var(--radius-xl)-1px)]";
 
     function cleanup(result: boolean) {
       document.removeEventListener("keydown", onKeyDown);
@@ -73,7 +73,7 @@ export function showConfirmDialogFallback(message: string): Promise<boolean> {
     cancelBtn.type = "button";
     cancelBtn.textContent = "Cancel";
     cancelBtn.className =
-      "inline-flex h-8 min-w-20 cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-input bg-popover px-3 text-[13px] font-medium text-foreground outline-none transition-colors hover:bg-[var(--sidebar-accent)] focus-visible:ring-1 focus-visible:ring-ring/60";
+      "inline-flex h-8 min-w-20 cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] px-3 text-[13px] font-medium text-[var(--color-text-foreground)] outline-none transition-colors hover:bg-[var(--color-background-elevated-secondary)] focus-visible:ring-1 focus-visible:ring-ring/60";
     cancelBtn.addEventListener("click", () => cleanup(false));
 
     // Confirm button mirrors the chat send action's foreground-on-background treatment.

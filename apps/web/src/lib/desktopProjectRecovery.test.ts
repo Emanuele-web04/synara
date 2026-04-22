@@ -70,9 +70,7 @@ function makeThread(
   };
 }
 
-function makeSnapshot(
-  overrides: Partial<OrchestrationReadModel> = {},
-): OrchestrationReadModel {
+function makeSnapshot(overrides: Partial<OrchestrationReadModel> = {}): OrchestrationReadModel {
   return {
     snapshotSequence: 1,
     updatedAt: "2026-04-20T08:00:00.000Z",

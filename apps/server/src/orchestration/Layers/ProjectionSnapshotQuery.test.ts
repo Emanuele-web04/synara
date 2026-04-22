@@ -497,9 +497,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         assert.equal(chatProject.value.kind, "chat");
       }
 
-      const activeByWorkspaceRoot = yield* snapshotQuery.getActiveProjectByWorkspaceRoot(
-        "/Users/tester",
-      );
+      const activeByWorkspaceRoot =
+        yield* snapshotQuery.getActiveProjectByWorkspaceRoot("/Users/tester");
       assert.equal(activeByWorkspaceRoot._tag, "Some");
       if (activeByWorkspaceRoot._tag === "Some") {
         assert.equal(activeByWorkspaceRoot.value.kind, "chat");

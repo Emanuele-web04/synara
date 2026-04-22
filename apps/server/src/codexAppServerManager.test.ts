@@ -29,9 +29,7 @@ const approvalRequiredTurnOverrides = {
   sandboxPolicy: { type: "readOnly" },
 } as const;
 
-function createSendTurnHarness(
-  runtimeMode: "approval-required" | "full-access" = "full-access",
-) {
+function createSendTurnHarness(runtimeMode: "approval-required" | "full-access" = "full-access") {
   const manager = new CodexAppServerManager();
   const context = {
     session: {

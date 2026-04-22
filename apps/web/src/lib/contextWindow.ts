@@ -154,9 +154,8 @@ export function deriveSelectedContextWindowSnapshot(
     return null;
   }
   const maxTokens =
-    KNOWN_CONTEXT_WINDOW_MAX_TOKENS[
-      normalized as keyof typeof KNOWN_CONTEXT_WINDOW_MAX_TOKENS
-    ] ?? null;
+    KNOWN_CONTEXT_WINDOW_MAX_TOKENS[normalized as keyof typeof KNOWN_CONTEXT_WINDOW_MAX_TOKENS] ??
+    null;
   if (maxTokens === null) {
     return null;
   }

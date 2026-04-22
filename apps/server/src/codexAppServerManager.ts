@@ -1787,7 +1787,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
 
     const context = await this.resolveContextForDiscovery(threadId);
-    const response = await this.sendRequest<Record<string, unknown>>(context, "model/list", {});
+    const response = await this.sendRequest<Record<string, unknown>>(context, "model/list", {
+      cursor: null,
+      limit: 50,
+      includeHidden: false,
+    });
     const models = this.parseModelListResponse(response);
     const result: ProviderListModelsResult = {
       models,
@@ -3089,19 +3093,96 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const responseRecord = this.readObject(response);
     const resultRecord = this.readObject(responseRecord, "result") ?? responseRecord;
     const rawModels =
-      this.readArray(resultRecord, "models") ?? this.readArray(resultRecord, "data") ?? [];
+      this.readArray(resultRecord, "items") ??
+      this.readArray(resultRecord, "data") ??
+      this.readArray(resultRecord, "models") ??
+      [];
+    const seen = new Set<string>();
 
-    return rawModels
-      .map((value) => this.readObject(value))
-      .flatMap((model) => {
-        if (!model) return [];
-        const slug = this.readString(model, "id") ?? this.readString(model, "slug");
-        const name = this.readString(model, "name") ?? slug;
-        if (!slug || !name) {
-          return [];
-        }
-        return [{ slug, name }];
-      });
+    return rawModels.flatMap((value) => {
+      const model = this.readObject(value);
+      if (!model) {
+        return [];
+      }
+
+      const slug =
+        this.readString(model, "id") ??
+        this.readString(model, "slug") ??
+        this.readString(model, "model");
+      const trimmedSlug = slug?.trim();
+      if (!trimmedSlug) {
+        return [];
+      }
+
+      const name =
+        this.readString(model, "name") ??
+        this.readString(model, "displayName") ??
+        this.readString(model, "display_name") ??
+        trimmedSlug;
+      const trimmedName = name.trim();
+      if (!trimmedName || seen.has(trimmedSlug)) {
+        return [];
+      }
+
+      // Accept both DP Code's legacy string array and Remodex-style reasoning objects.
+      const supportedReasoningEfforts = Array.from(
+        new Map(
+          (
+            this.readArray(model, "supportedReasoningEfforts") ??
+            this.readArray(model, "supported_reasoning_efforts") ??
+            []
+          )
+            .flatMap((entry) => {
+              if (typeof entry === "string") {
+                const value = entry.trim();
+                return value.length > 0 ? [{ value }] : [];
+              }
+
+              const descriptor = this.readObject(entry);
+              if (!descriptor) {
+                return [];
+              }
+
+              const value =
+                this.readString(descriptor, "reasoningEffort") ??
+                this.readString(descriptor, "reasoning_effort") ??
+                this.readString(descriptor, "value");
+              const trimmedValue = value?.trim();
+              if (!trimmedValue) {
+                return [];
+              }
+
+              const label =
+                this.readString(descriptor, "description") ?? this.readString(descriptor, "label");
+              const trimmedLabel = label?.trim();
+              return [
+                {
+                  value: trimmedValue,
+                  ...(trimmedLabel ? { description: trimmedLabel } : {}),
+                },
+              ];
+            })
+            .map((descriptor) => [descriptor.value, descriptor] as const),
+        ).values(),
+      );
+      const defaultReasoningEffort =
+        this.readString(model, "defaultReasoningEffort") ??
+        this.readString(model, "default_reasoning_effort");
+      const trimmedDefaultReasoningEffort = defaultReasoningEffort?.trim();
+
+      seen.add(trimmedSlug);
+      return [
+        {
+          slug: trimmedSlug,
+          name: trimmedName,
+          ...(supportedReasoningEfforts.length > 0 ? { supportedReasoningEfforts } : {}),
+          ...(trimmedDefaultReasoningEffort &&
+          supportedReasoningEfforts.some((descriptor) => descriptor.value === trimmedDefaultReasoningEffort)
+            ? { defaultReasoningEffort: trimmedDefaultReasoningEffort }
+            : {}),
+        },
+      ];
+    });
   }
 }
 
