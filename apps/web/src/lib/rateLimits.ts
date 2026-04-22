@@ -380,6 +380,12 @@ export function deriveRateLimitLearnMoreHref(
   if (providers.size !== 1) return null;
 
   const [provider] = providers;
+  return deriveProviderUsageLearnMoreHref(provider);
+}
+
+export function deriveProviderUsageLearnMoreHref(
+  provider: string | null | undefined,
+): string | null {
   if (provider === "codex") return "https://platform.openai.com/usage";
   if (provider === "claudeAgent") {
     return "https://docs.anthropic.com/en/docs/about-claude/models#rate-limits";

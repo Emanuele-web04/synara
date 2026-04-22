@@ -105,6 +105,7 @@ import {
   deriveAssociatedWorktreeMetadata,
   workspaceRootsEqual,
 } from "@t3tools/shared/threadWorkspace";
+import { getProviderUsageSnapshot } from "./providerUsageSnapshot";
 import { TerminalThreadTitleTracker } from "./terminal/terminalThreadTitleTracker";
 
 /**
@@ -2096,6 +2097,11 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         return {
           worktrees: yield* listManagedWorktrees(),
         };
+
+      case WS_METHODS.serverGetProviderUsageSnapshot: {
+        const body = stripRequestTag(request.body);
+        return yield* getProviderUsageSnapshot(body);
+      }
 
       case WS_METHODS.serverTranscribeVoice: {
         const body = stripRequestTag(request.body);

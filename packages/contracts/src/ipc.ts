@@ -40,6 +40,8 @@ import type {
 import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
 import type {
   ServerConfig,
+  ServerGetProviderUsageSnapshotInput,
+  ServerGetProviderUsageSnapshotResult,
   ServerListWorktreesResult,
   ServerRefreshProvidersResult,
   ServerUpsertKeybindingInput,
@@ -333,6 +335,9 @@ export interface NativeApi {
     getConfig: () => Promise<ServerConfig>;
     refreshProviders: () => Promise<ServerRefreshProvidersResult>;
     listWorktrees: () => Promise<ServerListWorktreesResult>;
+    getProviderUsageSnapshot: (
+      input: ServerGetProviderUsageSnapshotInput,
+    ) => Promise<ServerGetProviderUsageSnapshotResult>;
     transcribeVoice: (
       input: ServerVoiceTranscriptionInput,
     ) => Promise<ServerVoiceTranscriptionResult>;

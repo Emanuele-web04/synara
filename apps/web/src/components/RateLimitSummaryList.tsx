@@ -19,15 +19,22 @@ export function RateLimitSummaryList({
   const rows = useMemo(() => deriveVisibleRateLimitRows(rateLimits), [rateLimits]);
 
   if (rows.length === 0) {
-    return <p className="text-xs text-muted-foreground">No rate limit data yet.</p>;
+    return (
+      <p className="text-[length:var(--app-font-size-chat-meta,10px)] text-muted-foreground">
+        No rate limit data yet.
+      </p>
+    );
   }
 
   return (
     <>
       {rows.map((row) => (
-        <div key={row.id} className="flex items-center justify-between text-xs">
+        <div
+          key={row.id}
+          className="flex items-center justify-between text-[length:var(--app-font-size-chat,12px)]"
+        >
           <span className="font-medium text-foreground">{row.label}</span>
-          <span className="flex items-center gap-2 tabular-nums text-muted-foreground">
+          <span className="flex items-center gap-2 tabular-nums text-[length:var(--app-font-size-chat-meta,10px)] text-muted-foreground">
             <span className="text-foreground">
               {formatRateLimitRemainingPercent(row.remainingPercent)}
             </span>

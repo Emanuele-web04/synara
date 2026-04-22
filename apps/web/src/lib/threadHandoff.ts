@@ -1,6 +1,8 @@
 import {
   DEFAULT_MODEL_BY_PROVIDER,
+  EventId,
   MessageId,
+  type OrchestrationThreadActivity,
   PROVIDER_DISPLAY_NAMES,
   type ModelSelection,
   type ProviderKind,
@@ -16,6 +18,12 @@ const HANDOFF_PROVIDER_ORDER: ReadonlyArray<ProviderKind> = [
   "gemini",
   "opencode",
 ];
+const IMPORTABLE_THREAD_ACTIVITY_KINDS = new Set([
+  "account.rate-limits.updated",
+  "account.rate-limited",
+  "context-window.updated",
+  "context-window.configured",
+]);
 
 function isImportableThreadMessage(
   message: Thread["messages"][number],
@@ -23,6 +31,12 @@ function isImportableThreadMessage(
   role: "user" | "assistant";
 } {
   return (message.role === "user" || message.role === "assistant") && message.streaming === false;
+}
+
+function isImportableThreadActivity(
+  activity: Thread["activities"][number],
+): activity is OrchestrationThreadActivity {
+  return IMPORTABLE_THREAD_ACTIVITY_KINDS.has(activity.kind);
 }
 
 export function resolveAvailableHandoffTargetProviders(
@@ -71,6 +85,18 @@ export function buildThreadHandoffImportedMessages(
           )
         : null;
     return attachments ? Object.assign(importedMessage, { attachments }) : importedMessage;
+  });
+}
+
+export function buildThreadHandoffImportedActivities(
+  thread: Pick<Thread, "activities">,
+): ReadonlyArray<OrchestrationThreadActivity> {
+  return thread.activities.filter(isImportableThreadActivity).map((activity) => {
+    const { sequence: _sequence, ...rest } = activity;
+    return {
+      ...rest,
+      id: EventId.makeUnsafe(randomUUID()),
+    };
   });
 }
 

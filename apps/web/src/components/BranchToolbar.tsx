@@ -4,15 +4,17 @@
 import type { ThreadId, RuntimeMode } from "@t3tools/contracts";
 import { deriveAssociatedWorktreeMetadata } from "@t3tools/shared/threadWorkspace";
 import { LuSplit } from "react-icons/lu";
-import { ChevronDownIcon, ChevronRightIcon, ExternalLinkIcon, HandoffIcon } from "~/lib/icons";
+import { ChevronDownIcon, ChevronRightIcon, HandoffIcon } from "~/lib/icons";
 import { FiThumbsUp } from "react-icons/fi";
 import { HiOutlineHandRaised } from "react-icons/hi2";
 import { PiLaptop } from "react-icons/pi";
 import { useCallback, useMemo, useRef, useState } from "react";
+import { useAppSettings } from "~/appSettings";
 
 import { newCommandId, cn } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { useComposerDraftStore } from "../composerDraftStore";
+import { useProviderUsageSummary } from "../hooks/useProviderUsageSummary";
 import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
 import { useStore } from "../store";
 import {
@@ -28,11 +30,10 @@ import {
 import { BranchToolbarBranchSelector } from "./BranchToolbarBranchSelector";
 import { ContextWindowMeter } from "./chat/ContextWindowMeter";
 import type { ContextWindowSnapshot } from "../lib/contextWindow";
+import { ProviderUsagePanelContent } from "./ProviderUsagePanelContent";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "./ui/collapsible";
 import type { ThreadWorkspacePatch } from "../types";
-import { deriveAccountRateLimits, deriveRateLimitLearnMoreHref } from "~/lib/rateLimits";
-import { RateLimitSummaryList } from "./RateLimitSummaryList";
 
 function WorktreeGlyph({ className }: { className?: string }) {
   return <LuSplit className={cn("rotate-90", className)} />;
@@ -142,6 +143,7 @@ export default function BranchToolbar({
   const draftThread = useComposerDraftStore((store) => store.getDraftThread(threadId));
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
   const threads = useStore(useRef(createAllThreadsSelector()).current);
+  const { settings } = useAppSettings();
 
   const serverThread = useStore(useMemo(() => createThreadSelector(threadId), [threadId]));
   const activeProjectId = serverThread?.projectId ?? draftThread?.projectId ?? null;
@@ -256,13 +258,11 @@ export default function BranchToolbar({
   const canSwitchToLocal = Boolean(!envLocked && effectiveEnvMode === "worktree");
   const showEnvPicker = effectiveEnvMode === "local" || canSwitchToLocal;
 
-  const rateLimits = useMemo(() => {
-    const derived = deriveAccountRateLimits(threads);
-    return activeProvider
-      ? derived.filter((rateLimit) => rateLimit.provider === activeProvider)
-      : derived;
-  }, [activeProvider, threads]);
-  const learnMoreHref = useMemo(() => deriveRateLimitLearnMoreHref(rateLimits), [rateLimits]);
+  const usageSummary = useProviderUsageSummary({
+    provider: activeProvider,
+    threads,
+    codexHomePath: settings.codexHomePath || null,
+  });
   const [rateLimitsOpen, setRateLimitsOpen] = useState(true);
   const [envPickerOpen, setEnvPickerOpen] = useState(false);
 
@@ -412,20 +412,15 @@ export default function BranchToolbar({
                     />
                   </CollapsibleTrigger>
                   <CollapsiblePanel>
-                    <div className="space-y-2 px-3 pb-1 pt-1">
-                      <RateLimitSummaryList rateLimits={rateLimits} />
-                      {learnMoreHref ? (
-                        <a
-                          href={learnMoreHref}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center gap-1 pt-0.5 text-[11px] text-[var(--color-text-foreground-secondary)] underline-offset-2 transition-colors hover:text-[var(--color-text-foreground)] hover:underline focus-visible:underline"
-                        >
-                          Learn more
-                          <ExternalLinkIcon className="size-3" />
-                        </a>
-                      ) : null}
-                    </div>
+                    <ProviderUsagePanelContent
+                      provider={activeProvider}
+                      rateLimits={usageSummary.rateLimits}
+                      usageLines={usageSummary.usageLines}
+                      isLoading={usageSummary.isLoading}
+                      learnMoreHref={usageSummary.learnMoreHref}
+                      showTitle={false}
+                      className="px-3 pb-1 pt-1"
+                    />
                   </CollapsiblePanel>
                 </Collapsible>
               </div>
