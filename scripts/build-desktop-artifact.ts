@@ -536,14 +536,16 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   const windowsAzureSignOptions =
     platform === "win" && signed ? yield* AzureTrustedSigningOptionsConfig : undefined;
 
+  const platformBuildConfigInput = {
+    platform,
+    target,
+    hasMacIconComposer,
+    ...(windowsAzureSignOptions ? { windowsAzureSignOptions } : {}),
+  } as const;
+
   Object.assign(
     buildConfig,
-    createDesktopPlatformBuildConfig({
-      platform,
-      target,
-      hasMacIconComposer,
-      windowsAzureSignOptions,
-    }),
+    createDesktopPlatformBuildConfig(platformBuildConfigInput),
   );
 
   return buildConfig;
