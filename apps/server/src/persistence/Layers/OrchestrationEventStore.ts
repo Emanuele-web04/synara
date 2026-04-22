@@ -84,7 +84,10 @@ function readTrimmedString(record: Record<string, unknown>, key: string): string
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function inferLegacyModelProvider(provider: unknown, model: string): "codex" | "claudeAgent" | "gemini" {
+function inferLegacyModelProvider(
+  provider: unknown,
+  model: string,
+): "codex" | "claudeAgent" | "gemini" {
   if (provider === "codex" || provider === "claudeAgent" || provider === "gemini") {
     return provider;
   }
@@ -153,7 +156,8 @@ function normalizeLegacyEventRow(row: PersistedEventRow): PersistedEventRow {
   ) {
     const nextPayload = { ...row.payload };
     const legacyModel =
-      readTrimmedString(row.payload, "model") ?? (row.type === "thread.created" ? "gpt-5.4" : undefined);
+      readTrimmedString(row.payload, "model") ??
+      (row.type === "thread.created" ? "gpt-5.4" : undefined);
     if (legacyModel !== undefined) {
       nextPayload.modelSelection = legacyModelSelection({
         provider: row.payload.provider,

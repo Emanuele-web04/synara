@@ -53,6 +53,7 @@ import {
   ProjectSearchLocalEntriesInput,
   ProjectWriteFileInput,
 } from "./project";
+import { FilesystemBrowseInput } from "./filesystem";
 import { OpenInEditorInput } from "./editor";
 import {
   ServerConfigUpdatedPayload,
@@ -81,6 +82,9 @@ export const WS_METHODS = {
   projectsSearchEntries: "projects.searchEntries",
   projectsSearchLocalEntries: "projects.searchLocalEntries",
   projectsWriteFile: "projects.writeFile",
+
+  // Filesystem browse methods
+  filesystemBrowse: "filesystem.browse",
 
   // Shell methods
   shellOpenInEditor: "shell.openInEditor",
@@ -172,6 +176,9 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.projectsSearchEntries, ProjectSearchEntriesInput),
   tagRequestBody(WS_METHODS.projectsSearchLocalEntries, ProjectSearchLocalEntriesInput),
   tagRequestBody(WS_METHODS.projectsWriteFile, ProjectWriteFileInput),
+
+  // Filesystem browse
+  tagRequestBody(WS_METHODS.filesystemBrowse, FilesystemBrowseInput),
 
   // Shell methods
   tagRequestBody(WS_METHODS.shellOpenInEditor, OpenInEditorInput),

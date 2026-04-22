@@ -37,7 +37,7 @@ export const ActivePlanCard = memo(function ActivePlanCard({
   const stepOccurrenceCount = new Map<string, number>();
 
   return (
-    <div className="overflow-hidden rounded-t-2xl border border-b-0 border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)]">
+    <div className="overflow-hidden rounded-t-2xl border border-b-0 border-[color:var(--color-border)] bg-[var(--color-background-surface-under)]">
       {/* Header */}
       <div className="flex items-center justify-between gap-2 px-2.5 py-2">
         <div className="flex min-w-0 items-center gap-1.5 text-[12px] text-muted-foreground/80">

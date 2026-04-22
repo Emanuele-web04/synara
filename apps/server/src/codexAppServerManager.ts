@@ -3179,7 +3179,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           name: trimmedName,
           ...(supportedReasoningEfforts.length > 0 ? { supportedReasoningEfforts } : {}),
           ...(trimmedDefaultReasoningEffort &&
-          supportedReasoningEfforts.some((descriptor) => descriptor.value === trimmedDefaultReasoningEffort)
+          supportedReasoningEfforts.some(
+            (descriptor) => descriptor.value === trimmedDefaultReasoningEffort,
+          )
             ? { defaultReasoningEffort: trimmedDefaultReasoningEffort }
             : {}),
         },

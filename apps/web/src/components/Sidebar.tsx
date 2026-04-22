@@ -101,7 +101,6 @@ import {
 } from "../lib/providerDiscoveryReactQuery";
 import { resolveCurrentProjectTargetId } from "../lib/projectShortcutTargets";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
-import { onSidebarAddProjectRequest } from "../lib/sidebarShortcuts";
 import { readNativeApi } from "../nativeApi";
 import { isHomeChatContainerProject, prewarmHomeChatProject } from "../lib/chatProjects";
 import { useComposerDraftStore } from "../composerDraftStore";
@@ -116,7 +115,11 @@ import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
 import { ThreadRunningSpinner } from "./ThreadRunningSpinner";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import { terminalRuntimeRegistry } from "./terminal/terminalRuntimeRegistry";
-import { SidebarSearchPalette, type ImportProviderKind } from "./SidebarSearchPalette";
+import {
+  SidebarSearchPalette,
+  type ImportProviderKind,
+  type SidebarSearchPaletteMode,
+} from "./SidebarSearchPalette";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useThreadHandoff } from "../hooks/useThreadHandoff";
@@ -190,6 +193,7 @@ import {
 import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { cn } from "~/lib/utils";
+import { getInitialBrowseQuery } from "~/lib/projectPaths";
 import {
   canCreateThreadHandoff,
   resolveAvailableHandoffTargetProviders,
@@ -1097,7 +1101,8 @@ export default function Sidebar() {
   const [addingProject, setAddingProject] = useState(false);
   const [newCwd, setNewCwd] = useState("");
   const [searchPaletteOpen, setSearchPaletteOpen] = useState(false);
-  const [searchPaletteMode, setSearchPaletteMode] = useState<"search" | "import">("search");
+  const [searchPaletteMode, setSearchPaletteMode] = useState<SidebarSearchPaletteMode>("search");
+  const [searchPaletteInitialQuery, setSearchPaletteInitialQuery] = useState<string | null>(null);
   const [isPickingFolder, setIsPickingFolder] = useState(false);
   const [showManualPathInput, setShowManualPathInput] = useState(false);
   const [isAddingProject, setIsAddingProject] = useState(false);
@@ -1741,7 +1746,7 @@ export default function Sidebar() {
   );
 
   const addProjectFromPath = useCallback(
-    async (rawCwd: string) => {
+    async (rawCwd: string, options: { createIfMissing?: boolean } = {}) => {
       const cwd = rawCwd.trim();
       if (!cwd || isAddingProject) return;
       const api = readNativeApi();
@@ -1773,6 +1778,7 @@ export default function Sidebar() {
           kind: "project",
           title,
           workspaceRoot: cwd,
+          createWorkspaceRootIfMissing: options.createIfMissing === true,
           defaultModelSelection: {
             provider: "codex",
             model: DEFAULT_MODEL_BY_PROVIDER.codex,
@@ -1827,12 +1833,10 @@ export default function Sidebar() {
           }
 
           setIsAddingProject(false);
-          setAddProjectError(ADD_PROJECT_EXISTING_SYNC_ERROR);
-          return;
+          throw new Error(ADD_PROJECT_EXISTING_SYNC_ERROR);
         }
         setIsAddingProject(false);
-        setAddProjectError(description);
-        return;
+        throw error instanceof Error ? error : new Error(description);
       }
     },
     [
@@ -1851,7 +1855,11 @@ export default function Sidebar() {
   );
 
   const handleAddProject = () => {
-    void addProjectFromPath(newCwd);
+    void addProjectFromPath(newCwd, { createIfMissing: true }).catch((error: unknown) => {
+      const description =
+        error instanceof Error ? error.message : "An error occurred while adding the project.";
+      setAddProjectError(description);
+    });
   };
 
   const canAddProject = newCwd.trim().length > 0 && !isAddingProject;
@@ -1887,15 +1895,6 @@ export default function Sidebar() {
     setShowManualPathInput(false);
     setAddingProject((prev) => !prev);
   }, []);
-
-  // Send the shortcut straight to the native picker when desktop APIs are available.
-  const handleShortcutAddProject = useCallback(() => {
-    if (isElectron) {
-      void handlePickFolder();
-      return;
-    }
-    handleStartAddProject();
-  }, [handlePickFolder, handleStartAddProject]);
 
   const currentProjectShortcutTargetId = useMemo(
     () => resolveCurrentProjectTargetId(projects, focusedProjectId),
@@ -4677,10 +4676,6 @@ export default function Sidebar() {
   }, [clearSelection, selectedThreadIds.size]);
 
   useEffect(() => {
-    return onSidebarAddProjectRequest(handleShortcutAddProject);
-  }, [handleShortcutAddProject]);
-
-  useEffect(() => {
     const clearThreadJumpHints = () => {
       setThreadJumpLabelByThreadId((current) =>
         current === EMPTY_THREAD_JUMP_LABELS ? current : EMPTY_THREAD_JUMP_LABELS,
@@ -4711,6 +4706,7 @@ export default function Sidebar() {
         event.preventDefault();
         event.stopPropagation();
         setSearchPaletteMode("search");
+        setSearchPaletteInitialQuery(null);
         setSearchPaletteOpen((prev) => !prev || searchPaletteMode !== "search");
         return;
       }
@@ -4749,13 +4745,23 @@ export default function Sidebar() {
         event.preventDefault();
         event.stopPropagation();
         setSearchPaletteMode("search");
+        setSearchPaletteInitialQuery(null);
         setSearchPaletteOpen((prev) => !prev || searchPaletteMode !== "search");
+        return;
+      }
+      if (command === "sidebar.addProject") {
+        event.preventDefault();
+        event.stopPropagation();
+        setSearchPaletteMode("search");
+        setSearchPaletteInitialQuery(getInitialBrowseQuery(homeDir));
+        setSearchPaletteOpen(true);
         return;
       }
       if (command === "sidebar.importThread") {
         event.preventDefault();
         event.stopPropagation();
         setSearchPaletteMode("import");
+        setSearchPaletteInitialQuery(null);
         setSearchPaletteOpen((prev) => !prev || searchPaletteMode !== "import");
         return;
       }
@@ -4827,6 +4833,7 @@ export default function Sidebar() {
     activeSidebarThreadId,
     keybindings,
     getCurrentSidebarShortcutContext,
+    homeDir,
     searchPaletteMode,
     threadJumpCommandByThreadId,
     threadJumpThreadIds,
@@ -5800,11 +5807,13 @@ export default function Sidebar() {
         <SidebarSearchPaletteController
           open={searchPaletteOpen}
           mode={searchPaletteMode}
+          initialBrowseQuery={searchPaletteInitialQuery}
           onModeChange={setSearchPaletteMode}
           onOpenChange={(open) => {
             setSearchPaletteOpen(open);
             if (!open) {
               setSearchPaletteMode("search");
+              setSearchPaletteInitialQuery(null);
             }
           }}
           actions={searchPaletteActions}
@@ -5812,7 +5821,8 @@ export default function Sidebar() {
           projectById={projectById}
           onCreateChat={() => void handleCreateHomeChat()}
           onCreateThread={handlePrimaryNewThread}
-          onAddProject={() => void handlePickFolder()}
+          onAddProjectPath={addProjectFromPath}
+          homeDir={homeDir}
           onOpenSettings={() => {
             void navigate({ to: "/settings" });
           }}
@@ -5829,15 +5839,17 @@ export default function Sidebar() {
 
 function SidebarSearchPaletteController(props: {
   open: boolean;
-  mode: "search" | "import";
-  onModeChange: (mode: "search" | "import") => void;
+  mode: SidebarSearchPaletteMode;
+  onModeChange: (mode: SidebarSearchPaletteMode) => void;
   onOpenChange: (open: boolean) => void;
   actions: readonly SidebarSearchAction[];
   projects: readonly SidebarSearchProject[];
   projectById: ReadonlyMap<ProjectId, { name: string; remoteName: string }>;
   onCreateChat: () => void;
   onCreateThread: () => void;
-  onAddProject: () => void;
+  onAddProjectPath: (path: string, options?: { createIfMissing?: boolean }) => Promise<void>;
+  homeDir: string | null;
+  initialBrowseQuery: string | null;
   onOpenSettings: () => void;
   onOpenProject: (projectId: string) => void;
   onImportThread: (provider: ImportProviderKind, externalId: string) => Promise<void>;
@@ -5893,7 +5905,9 @@ function SidebarSearchPaletteController(props: {
       threads={searchPaletteThreads}
       onCreateChat={props.onCreateChat}
       onCreateThread={props.onCreateThread}
-      onAddProject={props.onAddProject}
+      onAddProjectPath={props.onAddProjectPath}
+      homeDir={props.homeDir}
+      initialBrowseQuery={props.initialBrowseQuery}
       onOpenSettings={props.onOpenSettings}
       onOpenProject={props.onOpenProject}
       importProviders={importProviders}

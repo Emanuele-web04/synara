@@ -329,9 +329,7 @@ describe("buildThemeCssVariables", () => {
       "light",
     );
 
-    expect(tokens.derived.buttonPrimaryBackground).toBe(
-      DEFAULT_THEME_STATE.chromeThemes.light.ink,
-    );
+    expect(tokens.derived.buttonPrimaryBackground).toBe(DEFAULT_THEME_STATE.chromeThemes.light.ink);
     expect(tokens.derived.textButtonPrimary).toBe(DEFAULT_THEME_STATE.chromeThemes.light.surface);
     expect(tokens.derived.textButtonPrimary).not.toBe(tokens.derived.buttonPrimaryBackground);
   });
