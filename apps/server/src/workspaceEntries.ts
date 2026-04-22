@@ -1,9 +1,12 @@
 import fs from "node:fs/promises";
 import type { Dirent } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { runProcess } from "./processRunner";
 
 import {
+  FilesystemBrowseInput,
+  FilesystemBrowseResult,
   ProjectDirectoryEntry,
   ProjectFileSystemEntry,
   ProjectListDirectoriesInput,
@@ -15,6 +18,7 @@ import {
   ProjectSearchLocalEntriesInput,
   ProjectSearchLocalEntriesResult,
 } from "@t3tools/contracts";
+import { isExplicitRelativePath, isWindowsAbsolutePath } from "@t3tools/shared/path";
 
 const WORKSPACE_CACHE_TTL_MS = 15_000;
 const WORKSPACE_CACHE_MAX_KEYS = 4;
@@ -561,6 +565,62 @@ async function getWorkspaceIndex(cwd: string): Promise<WorkspaceIndex> {
 export function clearWorkspaceIndexCache(cwd: string): void {
   workspaceIndexCache.delete(cwd);
   inFlightWorkspaceIndexBuilds.delete(cwd);
+}
+
+function expandHomePath(input: string): string {
+  if (input === "~") {
+    return os.homedir();
+  }
+  if (input.startsWith("~/") || input.startsWith("~\\")) {
+    return path.join(os.homedir(), input.slice(2));
+  }
+  return input;
+}
+
+function resolveBrowseTarget(input: FilesystemBrowseInput): string {
+  if (process.platform !== "win32" && isWindowsAbsolutePath(input.partialPath)) {
+    throw new Error("Windows-style paths are only supported on Windows.");
+  }
+
+  if (!isExplicitRelativePath(input.partialPath)) {
+    return path.resolve(expandHomePath(input.partialPath));
+  }
+
+  if (!input.cwd) {
+    throw new Error("Relative filesystem browse paths require a current project.");
+  }
+
+  return path.resolve(expandHomePath(input.cwd), input.partialPath);
+}
+
+export async function browseWorkspaceEntries(
+  input: FilesystemBrowseInput,
+): Promise<FilesystemBrowseResult> {
+  const resolvedInputPath = resolveBrowseTarget(input);
+  const endsWithSeparator = /[\\/]$/.test(input.partialPath) || input.partialPath === "~";
+  const parentPath = endsWithSeparator ? resolvedInputPath : path.dirname(resolvedInputPath);
+  const prefix = endsWithSeparator ? "" : path.basename(resolvedInputPath);
+
+  const dirents = await fs.readdir(parentPath, { withFileTypes: true });
+
+  const showHidden = endsWithSeparator || prefix.startsWith(".");
+  const lowerPrefix = prefix.toLowerCase();
+
+  return {
+    parentPath,
+    entries: dirents
+      .filter(
+        (dirent) =>
+          dirent.isDirectory() &&
+          dirent.name.toLowerCase().startsWith(lowerPrefix) &&
+          (showHidden || !dirent.name.startsWith(".")),
+      )
+      .map((dirent) => ({
+        name: dirent.name,
+        fullPath: path.join(parentPath, dirent.name),
+      }))
+      .toSorted((left, right) => left.name.localeCompare(right.name)),
+  };
 }
 
 export async function searchWorkspaceEntries(

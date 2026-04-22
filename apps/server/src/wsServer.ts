@@ -65,6 +65,7 @@ import { GitManager } from "./git/Services/GitManager.ts";
 import { TerminalManager } from "./terminal/Services/Manager.ts";
 import { Keybindings } from "./keybindings";
 import {
+  browseWorkspaceEntries,
   listWorkspaceDirectories,
   searchLocalEntries,
   searchWorkspaceEntries,
@@ -627,15 +628,36 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const readiness = yield* makeServerReadiness;
 
   // Canonicalizes imported workspace roots once at the server boundary.
-  const canonicalizeProjectWorkspaceRoot = Effect.fnUntraced(function* (workspaceRoot: string) {
+  const canonicalizeProjectWorkspaceRoot = Effect.fnUntraced(function* (
+    workspaceRoot: string,
+    options: { readonly createIfMissing?: boolean } = {},
+  ) {
     const normalizedWorkspaceRoot = path.resolve(yield* expandHomePath(workspaceRoot.trim()));
-    const workspaceStat = yield* fileSystem
+    let workspaceStat = yield* fileSystem
       .stat(normalizedWorkspaceRoot)
       .pipe(Effect.catch(() => Effect.succeed(null)));
     if (!workspaceStat) {
-      return yield* new RouteRequestError({
-        message: `Project directory does not exist: ${normalizedWorkspaceRoot}`,
-      });
+      if (!options.createIfMissing) {
+        return yield* new RouteRequestError({
+          message: `Project directory does not exist: ${normalizedWorkspaceRoot}`,
+        });
+      }
+      yield* fileSystem.makeDirectory(normalizedWorkspaceRoot, { recursive: true }).pipe(
+        Effect.mapError(
+          () =>
+            new RouteRequestError({
+              message: `Failed to create project directory: ${normalizedWorkspaceRoot}`,
+            }),
+        ),
+      );
+      workspaceStat = yield* fileSystem
+        .stat(normalizedWorkspaceRoot)
+        .pipe(Effect.catch(() => Effect.succeed(null)));
+      if (!workspaceStat) {
+        return yield* new RouteRequestError({
+          message: `Failed to create project directory: ${normalizedWorkspaceRoot}`,
+        });
+      }
     }
     if (workspaceStat.type !== "Directory") {
       return yield* new RouteRequestError({
@@ -737,7 +759,10 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     if (input.command.type === "project.create") {
       return {
         ...input.command,
-        workspaceRoot: yield* canonicalizeProjectWorkspaceRoot(input.command.workspaceRoot),
+        workspaceRoot: yield* canonicalizeProjectWorkspaceRoot(input.command.workspaceRoot, {
+          createIfMissing: input.command.createWorkspaceRootIfMissing === true,
+        }),
+        createWorkspaceRootIfMissing: input.command.createWorkspaceRootIfMissing === true,
       } satisfies OrchestrationCommand;
     }
 
@@ -1745,6 +1770,17 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           catch: (cause) =>
             new RouteRequestError({
               message: `Failed to search workspace entries: ${String(cause)}`,
+            }),
+        });
+      }
+
+      case WS_METHODS.filesystemBrowse: {
+        const body = stripRequestTag(request.body);
+        return yield* Effect.tryPromise({
+          try: () => browseWorkspaceEntries(body),
+          catch: (cause) =>
+            new RouteRequestError({
+              message: `Failed to browse filesystem: ${cause instanceof Error ? cause.message : String(cause)}`,
             }),
         });
       }

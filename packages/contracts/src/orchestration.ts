@@ -568,6 +568,9 @@ export const ProjectCreateCommand = Schema.Struct({
   kind: Schema.optional(ProjectKind).pipe(Schema.withDecodingDefault(() => "project")),
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
+  createWorkspaceRootIfMissing: Schema.optional(Schema.Boolean).pipe(
+    Schema.withDecodingDefault(() => false),
+  ),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   createdAt: IsoDateTime,
 });
