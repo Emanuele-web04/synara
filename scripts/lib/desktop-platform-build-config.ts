@@ -78,9 +78,7 @@ export function createDesktopPlatformBuildConfig(
     win: {
       target: [input.target],
       icon: "icon.ico",
-      ...(input.windowsAzureSignOptions
-        ? { azureSignOptions: input.windowsAzureSignOptions }
-        : {}),
+      ...(input.windowsAzureSignOptions ? { azureSignOptions: input.windowsAzureSignOptions } : {}),
     },
   };
 }

@@ -22,6 +22,7 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./u
 import { Switch } from "./ui/switch";
 import { Textarea } from "./ui/textarea";
 import { toastManager } from "./ui/toast";
+import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { type ChromeTheme, type ThemeMode, type ThemeVariant, useTheme } from "../hooks/useTheme";
 import { cn } from "../lib/utils";
 import {
@@ -84,7 +85,7 @@ export function ThemePackEditor({
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(exportThemeString(variant));
+      await copyTextToClipboard(exportThemeString(variant));
       toastManager.add({
         type: "success",
         title: "Theme copied",
@@ -109,7 +110,6 @@ export function ThemePackEditor({
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:py-3.5">
         <div className="flex items-center gap-2">
           <h3 className="text-sm font-medium text-foreground">{titleLabel}</h3>
-          <ThemeSlotBadge isActive={isActive} mode={mode} variant={variant} />
           {!isPristine ? (
             <button
               type="button"
@@ -127,7 +127,7 @@ export function ThemePackEditor({
             onClick={() => void handleCopy()}
             className="rounded-md px-2 py-1 text-xs text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)]"
           >
-            Copy JSON
+            Copy
           </button>
           <Select
             value={pack.codeThemeId}
@@ -260,33 +260,6 @@ function ThemeRow({ label, children }: { label: string; children: React.ReactNod
       <span className="text-sm text-foreground/90">{label}</span>
       <div className="flex shrink-0 items-center gap-2">{children}</div>
     </div>
-  );
-}
-
-function ThemeSlotBadge({
-  isActive,
-  mode,
-  variant,
-}: {
-  isActive: boolean;
-  mode: ThemeMode;
-  variant: ThemeVariant;
-}) {
-  const label = isActive ? "Active now" : mode === "system" ? "Standby" : "Inactive";
-  const className = isActive
-    ? "border-[color:var(--color-border-focus)]/35 bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)]"
-    : "border-[color:var(--color-border)] bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground-secondary)]";
-
-  return (
-    <span
-      className={cn(
-        "inline-flex h-5 items-center rounded-full border px-2 text-[10px] font-medium tracking-[0.02em]",
-        className,
-      )}
-      title={isActive ? `${variant} is currently applied` : `${variant} slot preview`}
-    >
-      {label}
-    </span>
   );
 }
 

@@ -18,6 +18,7 @@ release/
 .idea/
 apps/web/.playwright
 apps/web/playwright-report
+.playwright-cli/
 apps/web/src/components/__screenshots__
 .vitest-*
 __screenshots__/
