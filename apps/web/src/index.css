@@ -501,6 +501,39 @@ label:has(> select#reasoning-effort) select {
   font-family: var(--font-chat-code-family);
 }
 
+.chat-markdown .katex,
+.chat-markdown .katex * {
+  color: inherit;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
+.chat-markdown .katex {
+  max-width: 100%;
+  font-size: 1em;
+  text-indent: 0;
+}
+
+.chat-markdown .katex-display {
+  max-width: 100%;
+  margin: 0.85rem 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.1rem 0 0.35rem;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+}
+
+.chat-markdown .katex-display > .katex {
+  display: inline-block;
+  min-width: max-content;
+  padding: 0 0.05rem;
+}
+
+.chat-markdown .katex-display::-webkit-scrollbar {
+  height: 6px;
+}
+
 .chat-markdown pre {
   max-width: 100%;
   overflow-x: auto;

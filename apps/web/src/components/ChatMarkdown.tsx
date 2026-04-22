@@ -22,7 +22,9 @@ import React, {
 import type { Components } from "react-markdown";
 import ReactMarkdown from "react-markdown";
 import { defaultUrlTransform } from "react-markdown";
+import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import { openInPreferredEditor } from "../editorPreferences";
 import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
@@ -69,6 +71,242 @@ const highlightedCodeCache = new LRUCache<string>(
   MAX_HIGHLIGHT_CACHE_MEMORY_BYTES,
 );
 const highlighterPromiseCache = new Map<string, Promise<DiffsHighlighter>>();
+const MARKDOWN_REMARK_PLUGINS = [remarkGfm, [remarkMath, { singleDollarTextMath: true }]];
+const LITERAL_DOLLAR_PLACEHOLDER = "CHATMARKDOWNLITERALDOLLARPLACEHOLDER";
+
+function restoreLiteralDollarsInNode(node: unknown): void {
+  if (!node || typeof node !== "object") {
+    return;
+  }
+
+  if (
+    "type" in node &&
+    node.type === "text" &&
+    "value" in node &&
+    typeof node.value === "string"
+  ) {
+    node.value = node.value.replaceAll(LITERAL_DOLLAR_PLACEHOLDER, "$");
+  }
+
+  if ("children" in node && Array.isArray(node.children)) {
+    for (const child of node.children) {
+      restoreLiteralDollarsInNode(child);
+    }
+  }
+}
+
+function rehypeRestoreLiteralDollars() {
+  return (tree: unknown) => {
+    restoreLiteralDollarsInNode(tree);
+  };
+}
+
+const MARKDOWN_REHYPE_PLUGINS = [
+  [rehypeKatex, { output: "htmlAndMathml", strict: false, throwOnError: false }],
+  rehypeRestoreLiteralDollars,
+];
+const INLINE_MATH_HINT_REGEX = /[\\^_=+\-*/<>()[\]{}]/;
+
+function isLineStart(value: string, index: number): boolean {
+  return index === 0 || value[index - 1] === "\n";
+}
+
+function matchFenceDelimiter(
+  value: string,
+  index: number,
+): { marker: "`" | "~"; length: number } | null {
+  if (!isLineStart(value, index)) {
+    return null;
+  }
+
+  const marker = value[index];
+  if (marker !== "`" && marker !== "~") {
+    return null;
+  }
+
+  let cursor = index;
+  while (value[cursor] === marker) {
+    cursor += 1;
+  }
+
+  return cursor - index >= 3 ? { marker, length: cursor - index } : null;
+}
+
+function findFenceEndIndex(
+  value: string,
+  index: number,
+  marker: "`" | "~",
+  length: number,
+): number {
+  let cursor = value.indexOf("\n", index);
+  if (cursor === -1) {
+    return value.length;
+  }
+  cursor += 1;
+
+  while (cursor < value.length) {
+    if (isLineStart(value, cursor) && value[cursor] === marker) {
+      let markerEnd = cursor;
+      while (value[markerEnd] === marker) {
+        markerEnd += 1;
+      }
+      if (markerEnd - cursor >= length) {
+        const lineEnd = value.indexOf("\n", markerEnd);
+        return lineEnd === -1 ? value.length : lineEnd + 1;
+      }
+    }
+
+    const nextLine = value.indexOf("\n", cursor);
+    if (nextLine === -1) {
+      return value.length;
+    }
+    cursor = nextLine + 1;
+  }
+
+  return value.length;
+}
+
+function findInlineCodeEndIndex(value: string, index: number, length: number): number {
+  let cursor = index + length;
+  while (cursor < value.length) {
+    if (value[cursor] !== "`") {
+      cursor += 1;
+      continue;
+    }
+
+    let markerEnd = cursor;
+    while (value[markerEnd] === "`") {
+      markerEnd += 1;
+    }
+
+    if (markerEnd - cursor === length) {
+      return markerEnd;
+    }
+    cursor = markerEnd;
+  }
+
+  return value.length;
+}
+
+function looksLikeInlineMath(content: string): boolean {
+  const trimmed = content.trim();
+  if (trimmed.length === 0) {
+    return false;
+  }
+  if (INLINE_MATH_HINT_REGEX.test(trimmed)) {
+    return true;
+  }
+  if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
+    return true;
+  }
+  return /^[A-Za-z][A-Za-z0-9]{0,15}$/.test(trimmed);
+}
+
+function findNextUnescapedDollar(value: string, index: number): number {
+  let cursor = index;
+  while (cursor < value.length) {
+    if (value[cursor] === "\\") {
+      cursor += 2;
+      continue;
+    }
+    if (value[cursor] === "$") {
+      return cursor;
+    }
+    cursor += 1;
+  }
+  return -1;
+}
+
+function protectLiteralDollarsInPlainText(value: string): string {
+  let result = "";
+  let cursor = 0;
+
+  while (cursor < value.length) {
+    if (value[cursor] === "\\" && value[cursor + 1] === "$") {
+      result += LITERAL_DOLLAR_PLACEHOLDER;
+      cursor += 2;
+      continue;
+    }
+
+    if (value.startsWith("$$", cursor)) {
+      const closingIndex = value.indexOf("$$", cursor + 2);
+      if (closingIndex === -1) {
+        result += `${LITERAL_DOLLAR_PLACEHOLDER}${LITERAL_DOLLAR_PLACEHOLDER}`;
+        cursor += 2;
+        continue;
+      }
+      result += value.slice(cursor, closingIndex + 2);
+      cursor = closingIndex + 2;
+      continue;
+    }
+
+    if (value[cursor] === "$") {
+      const closingIndex = findNextUnescapedDollar(value, cursor + 1);
+      if (closingIndex === -1) {
+        result += LITERAL_DOLLAR_PLACEHOLDER;
+        cursor += 1;
+        continue;
+      }
+
+      const content = value.slice(cursor + 1, closingIndex);
+      result += looksLikeInlineMath(content)
+        ? `$${content}$`
+        : `${LITERAL_DOLLAR_PLACEHOLDER}${content}${LITERAL_DOLLAR_PLACEHOLDER}`;
+      cursor = closingIndex + 1;
+      continue;
+    }
+
+    result += value[cursor];
+    cursor += 1;
+  }
+
+  return result;
+}
+
+// Tighten single-dollar math so currency and escaped dollars stay literal without touching code spans.
+function protectLiteralMarkdownDollars(value: string): string {
+  let result = "";
+  let cursor = 0;
+
+  while (cursor < value.length) {
+    const fenceDelimiter = matchFenceDelimiter(value, cursor);
+    if (fenceDelimiter) {
+      const fenceEndIndex = findFenceEndIndex(
+        value,
+        cursor,
+        fenceDelimiter.marker,
+        fenceDelimiter.length,
+      );
+      result += value.slice(cursor, fenceEndIndex);
+      cursor = fenceEndIndex;
+      continue;
+    }
+
+    if (value[cursor] === "`") {
+      let markerEnd = cursor;
+      while (value[markerEnd] === "`") {
+        markerEnd += 1;
+      }
+      const inlineCodeEndIndex = findInlineCodeEndIndex(value, cursor, markerEnd - cursor);
+      result += value.slice(cursor, inlineCodeEndIndex);
+      cursor = inlineCodeEndIndex;
+      continue;
+    }
+
+    let nextCodeIndex = cursor;
+    while (nextCodeIndex < value.length) {
+      if (value[nextCodeIndex] === "`" || matchFenceDelimiter(value, nextCodeIndex)) {
+        break;
+      }
+      nextCodeIndex += 1;
+    }
+
+    result += protectLiteralDollarsInPlainText(value.slice(cursor, nextCodeIndex));
+    cursor = nextCodeIndex;
+  }
+
+  return result;
+}
 
 function extractFenceLanguage(className: string | undefined): string {
   const match = className?.match(CODE_FENCE_LANGUAGE_REGEX);
@@ -250,6 +488,7 @@ function ChatMarkdown({
 }: ChatMarkdownProps) {
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
+  const normalizedText = useMemo(() => protectLiteralMarkdownDollars(text), [text]);
   const markdownUrlTransform = useCallback((href: string) => {
     return rewriteMarkdownFileUriHref(href) ?? defaultUrlTransform(href);
   }, []);
@@ -309,11 +548,12 @@ function ChatMarkdown({
       style={style}
     >
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={MARKDOWN_REMARK_PLUGINS}
+        rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
         components={markdownComponents}
         urlTransform={markdownUrlTransform}
       >
-        {text}
+        {normalizedText}
       </ReactMarkdown>
     </div>
   );

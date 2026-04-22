@@ -4,6 +4,7 @@ import { RouterProvider } from "@tanstack/react-router";
 import { createHashHistory, createBrowserHistory } from "@tanstack/react-router";
 
 import "@fontsource-variable/jetbrains-mono";
+import "katex/dist/katex.min.css";
 import "@xterm/xterm/css/xterm.css";
 import "./index.css";
 
