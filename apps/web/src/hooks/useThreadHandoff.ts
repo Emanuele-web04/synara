@@ -6,6 +6,7 @@ import { useAppSettings } from "../appSettings";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import {
+  buildThreadHandoffImportedActivities,
   buildThreadHandoffImportedMessages,
   canCreateThreadHandoff,
   resolveAvailableHandoffTargetProviders,
@@ -68,6 +69,7 @@ export function useThreadHandoff() {
       const nextThreadId = newThreadId();
       const createdAt = new Date().toISOString();
       const importedMessages = buildThreadHandoffImportedMessages(thread);
+      const importedActivities = buildThreadHandoffImportedActivities(thread);
       const { copyTransferableComposerState, stickyModelSelectionByProvider } =
         useComposerDraftStore.getState();
 
@@ -97,6 +99,16 @@ export function useThreadHandoff() {
         importedMessages: [...importedMessages],
         createdAt,
       });
+
+      for (const activity of importedActivities) {
+        await api.orchestration.dispatchCommand({
+          type: "thread.activity.append",
+          commandId: newCommandId(),
+          threadId: nextThreadId,
+          activity,
+          createdAt,
+        });
+      }
 
       copyTransferableComposerState(thread.id, nextThreadId);
 

@@ -73,6 +73,41 @@ export const ServerListWorktreesResult = Schema.Struct({
 });
 export type ServerListWorktreesResult = typeof ServerListWorktreesResult.Type;
 
+export const ServerProviderUsageLimit = Schema.Struct({
+  window: TrimmedNonEmptyString,
+  usedPercent: Schema.optional(
+    Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)).check(Schema.isLessThanOrEqualTo(100)),
+  ),
+  resetsAt: Schema.optional(IsoDateTime),
+  windowDurationMins: Schema.optional(NonNegativeInt),
+});
+export type ServerProviderUsageLimit = typeof ServerProviderUsageLimit.Type;
+
+export const ServerProviderUsageLine = Schema.Struct({
+  label: TrimmedNonEmptyString,
+  value: TrimmedNonEmptyString,
+  subtitle: Schema.optional(TrimmedNonEmptyString),
+});
+export type ServerProviderUsageLine = typeof ServerProviderUsageLine.Type;
+
+export const ServerProviderUsageSnapshot = Schema.Struct({
+  provider: ProviderKind,
+  updatedAt: IsoDateTime,
+  limits: Schema.Array(ServerProviderUsageLimit),
+  usageLines: Schema.Array(ServerProviderUsageLine),
+  source: TrimmedNonEmptyString,
+});
+export type ServerProviderUsageSnapshot = typeof ServerProviderUsageSnapshot.Type;
+
+export const ServerGetProviderUsageSnapshotInput = Schema.Struct({
+  provider: ProviderKind,
+  homePath: Schema.optional(TrimmedNonEmptyString),
+});
+export type ServerGetProviderUsageSnapshotInput = typeof ServerGetProviderUsageSnapshotInput.Type;
+
+export const ServerGetProviderUsageSnapshotResult = Schema.NullOr(ServerProviderUsageSnapshot);
+export type ServerGetProviderUsageSnapshotResult = typeof ServerGetProviderUsageSnapshotResult.Type;
+
 export const ServerVoiceTranscriptionInput = Schema.Struct({
   provider: ProviderKind,
   cwd: TrimmedNonEmptyString,

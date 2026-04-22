@@ -57,6 +57,7 @@ import { FilesystemBrowseInput } from "./filesystem";
 import { OpenInEditorInput } from "./editor";
 import {
   ServerConfigUpdatedPayload,
+  ServerGetProviderUsageSnapshotInput,
   ServerProviderStatusesUpdatedPayload,
   ServerVoiceTranscriptionInput,
 } from "./server";
@@ -118,6 +119,7 @@ export const WS_METHODS = {
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
   serverListWorktrees: "server.listWorktrees",
+  serverGetProviderUsageSnapshot: "server.getProviderUsageSnapshot",
   serverTranscribeVoice: "server.transcribeVoice",
   serverUpsertKeybinding: "server.upsertKeybinding",
 
@@ -212,6 +214,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.serverGetConfig, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverRefreshProviders, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverListWorktrees, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.serverGetProviderUsageSnapshot, ServerGetProviderUsageSnapshotInput),
   tagRequestBody(WS_METHODS.serverTranscribeVoice, ServerVoiceTranscriptionInput),
   tagRequestBody(WS_METHODS.serverUpsertKeybinding, KeybindingRule),
 
