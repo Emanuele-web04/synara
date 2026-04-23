@@ -5,7 +5,7 @@
 
 import { type ModelSlug, type ProviderKind, type ServerProviderStatus } from "@t3tools/contracts";
 import { resolveSelectableModel } from "@t3tools/shared/model";
-import { Fragment, memo, useCallback, useState } from "react";
+import { Fragment, memo, useCallback, useDeferredValue, useMemo, useState } from "react";
 import { type ProviderPickerKind, PROVIDER_OPTIONS } from "../../session-logic";
 import { formatProviderModelOptionName } from "../../providerModelOptions";
 import {
@@ -24,6 +24,7 @@ import {
 } from "../ui/menu";
 import { ClaudeAI, Gemini, Icon, OpenAI, OpenCodeIcon } from "../Icons";
 import { cn } from "~/lib/utils";
+import { PickerPanelShell } from "./PickerPanelShell";
 import { PickerTriggerButton } from "./PickerTriggerButton";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ShortcutKbd } from "../ui/shortcut-kbd";
@@ -87,6 +88,20 @@ function providerIconClassName(
     : fallbackClassName;
 }
 
+const OPENCODE_MODEL_SEARCH_THRESHOLD = 15;
+
+function buildOpenCodeModelSearchText(option: ProviderModelOption): string {
+  return [
+    option.name,
+    option.slug,
+    option.upstreamProviderName,
+    option.upstreamProviderId,
+  ]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .join(" ")
+    .toLowerCase();
+}
+
 export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   provider: ProviderKind;
   model: ModelSlug;
@@ -103,6 +118,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
 }) {
   const { onOpenChange, open } = props;
   const [uncontrolledMenuOpen, setUncontrolledMenuOpen] = useState(false);
+  const [openCodeSearchQuery, setOpenCodeSearchQuery] = useState("");
+  const deferredOpenCodeSearchQuery = useDeferredValue(openCodeSearchQuery);
   const activeProvider = props.lockedProvider ?? props.provider;
   const isMenuOpen = open ?? uncontrolledMenuOpen;
   const selectedProviderOptions = props.modelOptionsByProvider[activeProvider];
@@ -117,6 +134,9 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     (nextOpen: boolean) => {
       if (open === undefined) {
         setUncontrolledMenuOpen(nextOpen);
+      }
+      if (!nextOpen) {
+        setOpenCodeSearchQuery("");
       }
       onOpenChange?.(nextOpen);
     },
@@ -136,31 +156,60 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   };
 
   const renderModelRadioGroup = (provider: ProviderKind) => {
-    const groupedOptions = groupProviderModelOptions(props.modelOptionsByProvider[provider]);
+    const providerOptions = props.modelOptionsByProvider[provider];
+    const shouldShowOpenCodeSearch =
+      provider === "opencode" && providerOptions.length >= OPENCODE_MODEL_SEARCH_THRESHOLD;
+    const normalizedOpenCodeSearchQuery = deferredOpenCodeSearchQuery.trim().toLowerCase();
+    const filteredOptions =
+      shouldShowOpenCodeSearch && normalizedOpenCodeSearchQuery.length > 0
+        ? providerOptions.filter((option) =>
+            buildOpenCodeModelSearchText(option).includes(normalizedOpenCodeSearchQuery),
+          )
+        : providerOptions;
+    const groupedOptions = groupProviderModelOptions(filteredOptions);
+
+    const content =
+      groupedOptions.length > 0 ? (
+        <MenuRadioGroup
+          value={activeProvider === provider ? props.model : ""}
+          onValueChange={(value) => handleModelChange(provider, value)}
+        >
+          {groupedOptions.map((group, index) => (
+            <Fragment key={`${provider}:${group.key}`}>
+              <MenuGroup>
+                {group.label ? <MenuGroupLabel>{group.label}</MenuGroupLabel> : null}
+                {group.options.map((modelOption) => (
+                  <MenuRadioItem
+                    key={`${provider}:${modelOption.slug}`}
+                    value={modelOption.slug}
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    {modelOption.name}
+                  </MenuRadioItem>
+                ))}
+              </MenuGroup>
+              {index < groupedOptions.length - 1 ? <MenuSeparator /> : null}
+            </Fragment>
+          ))}
+        </MenuRadioGroup>
+      ) : (
+        <div className="px-2 py-2 text-muted-foreground text-sm">No matches</div>
+      );
+
+    if (!shouldShowOpenCodeSearch) {
+      return content;
+    }
 
     return (
-      <MenuRadioGroup
-        value={activeProvider === provider ? props.model : ""}
-        onValueChange={(value) => handleModelChange(provider, value)}
+      <PickerPanelShell
+        searchPlaceholder="Search models or providers"
+        query={openCodeSearchQuery}
+        onQueryChange={setOpenCodeSearchQuery}
+        stopSearchKeyPropagation
+        widthClassName="w-80"
       >
-        {groupedOptions.map((group, index) => (
-          <Fragment key={`${provider}:${group.key}`}>
-            <MenuGroup>
-              {group.label ? <MenuGroupLabel>{group.label}</MenuGroupLabel> : null}
-              {group.options.map((modelOption) => (
-                <MenuRadioItem
-                  key={`${provider}:${modelOption.slug}`}
-                  value={modelOption.slug}
-                  onClick={() => setMenuOpen(false)}
-                >
-                  {modelOption.name}
-                </MenuRadioItem>
-              ))}
-            </MenuGroup>
-            {index < groupedOptions.length - 1 ? <MenuSeparator /> : null}
-          </Fragment>
-        ))}
-      </MenuRadioGroup>
+        {content}
+      </PickerPanelShell>
     );
   };
 
