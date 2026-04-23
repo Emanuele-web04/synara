@@ -3,9 +3,11 @@ import { assert, describe, it } from "vitest";
 import {
   matchSidebarSearchActions,
   matchSidebarSearchProjects,
+  matchSidebarSearchThemes,
   matchSidebarSearchThreads,
   type SidebarSearchAction,
   type SidebarSearchProject,
+  type SidebarSearchTheme,
   type SidebarSearchThread,
 } from "./SidebarSearchPalette.logic";
 
@@ -42,6 +44,47 @@ const projects: SidebarSearchProject[] = [
     localName: "Docs",
     cwd: "/work/beta-repo",
     updatedAt: "2026-04-09T11:00:00.000Z",
+  },
+];
+
+const themes: SidebarSearchTheme[] = [
+  {
+    id: "theme-mode-system",
+    type: "mode",
+    label: "System",
+    description: "Match your OS appearance setting.",
+    keywords: ["appearance", "theme", "mode", "os"],
+    mode: "system",
+    isActive: true,
+  },
+  {
+    id: "theme-mode-dark",
+    type: "mode",
+    label: "Dark",
+    description: "Always use the dark theme.",
+    keywords: ["appearance", "theme", "mode", "night"],
+    mode: "dark",
+    isActive: false,
+  },
+  {
+    id: "theme-codex-dark",
+    type: "code-theme",
+    label: "Codex",
+    description: "Apply to the current dark theme slot.",
+    keywords: ["appearance", "theme", "dark"],
+    codeThemeId: "codex",
+    variant: "dark",
+    isActive: true,
+  },
+  {
+    id: "theme-linear-dark",
+    type: "code-theme",
+    label: "Linear",
+    description: "Apply to the current dark theme slot.",
+    keywords: ["appearance", "theme", "dark"],
+    codeThemeId: "linear",
+    variant: "dark",
+    isActive: false,
   },
 ];
 
@@ -103,6 +146,24 @@ describe("SidebarSearchPalette.logic", () => {
     assert.deepEqual(
       result.map((action) => action.id),
       ["new-thread", "plugins"],
+    );
+  });
+
+  it("keeps theme entries in source order for an empty query", () => {
+    const result = matchSidebarSearchThemes(themes, "");
+
+    assert.deepEqual(
+      result.map((theme) => theme.id),
+      ["theme-mode-system", "theme-mode-dark", "theme-codex-dark", "theme-linear-dark"],
+    );
+  });
+
+  it("matches themes by query relevance", () => {
+    const result = matchSidebarSearchThemes(themes, "dark");
+
+    assert.deepEqual(
+      result.map((theme) => theme.id),
+      ["theme-mode-dark", "theme-codex-dark", "theme-linear-dark"],
     );
   });
 
