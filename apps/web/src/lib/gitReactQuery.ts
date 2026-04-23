@@ -1,4 +1,4 @@
-import type { GitStackedAction } from "@t3tools/contracts";
+import type { GitStackedAction, ProviderStartOptions } from "@t3tools/contracts";
 import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "../nativeApi";
 import { buildPatchCacheKey } from "./diffRendering";
@@ -19,8 +19,18 @@ export const gitQueryKeys = {
     cacheScope: string | null,
     model: string | null,
     codexHomePath: string | null,
+    providerOptionsKey: string | null,
     patchKey: string | null,
-  ) => ["git", "diff-summary", cacheScope, model, codexHomePath, patchKey] as const,
+  ) =>
+    [
+      "git",
+      "diff-summary",
+      cacheScope,
+      model,
+      codexHomePath,
+      providerOptionsKey,
+      patchKey,
+    ] as const,
 };
 
 export const gitMutationKeys = {
@@ -117,6 +127,7 @@ export function gitSummarizeDiffQueryOptions(input: {
   patch: string | null;
   model?: string | null;
   codexHomePath?: string | null;
+  providerOptions?: ProviderStartOptions | null;
   enabled?: boolean;
 }) {
   // Cache summaries by patch hash so reopening the same diff does not regenerate it.
@@ -126,11 +137,14 @@ export function gitSummarizeDiffQueryOptions(input: {
       ? buildPatchCacheKey(normalizedPatch, "git-diff-summary")
       : null;
 
+  const providerOptionsKey = input.providerOptions ? JSON.stringify(input.providerOptions) : null;
+
   return queryOptions({
     queryKey: gitQueryKeys.diffSummary(
       input.cacheScope ?? input.cwd,
       input.model ?? null,
       input.codexHomePath ?? null,
+      providerOptionsKey,
       patchKey,
     ),
     queryFn: async () => {
@@ -143,6 +157,7 @@ export function gitSummarizeDiffQueryOptions(input: {
         patch: normalizedPatch,
         ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
         ...(input.model ? { textGenerationModel: input.model } : {}),
+        ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
       });
     },
     enabled:
@@ -194,6 +209,7 @@ export function gitRunStackedActionMutationOptions(input: {
   queryClient: QueryClient;
   model?: string | null;
   codexHomePath?: string | null;
+  providerOptions?: ProviderStartOptions | null;
 }) {
   return mutationOptions({
     mutationKey: gitMutationKeys.runStackedAction(input.cwd),
@@ -221,6 +237,7 @@ export function gitRunStackedActionMutationOptions(input: {
         ...(filePaths ? { filePaths } : {}),
         ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
         ...(input.model ? { textGenerationModel: input.model } : {}),
+        ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
       });
     },
     onSettled: async () => {

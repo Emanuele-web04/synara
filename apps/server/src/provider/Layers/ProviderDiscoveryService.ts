@@ -43,6 +43,8 @@ const disabledCapabilitiesForProvider = (
   supportsPluginMentions: false,
   supportsPluginDiscovery: false,
   supportsRuntimeModelList: false,
+  supportsThreadCompaction: false,
+  supportsThreadImport: false,
 });
 
 const make = Effect.gen(function* () {

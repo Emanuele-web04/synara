@@ -15,8 +15,8 @@ import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import {
   MAX_CHAT_FONT_SIZE_PX,
-  getAppModelOptions,
   getCustomModelsForProvider,
+  getGitTextGenerationModelOptions,
   MAX_CUSTOM_MODEL_LENGTH,
   MIN_CHAT_FONT_SIZE_PX,
   MODEL_PROVIDER_SETTINGS,
@@ -25,7 +25,7 @@ import {
   useAppSettings,
 } from "../appSettings";
 import { APP_VERSION } from "../branding";
-import { ClaudeAI, Gemini, OpenAI } from "../components/Icons";
+import { ClaudeAI, Gemini, OpenAI, OpenCodeIcon } from "../components/Icons";
 import { Button } from "../components/ui/button";
 import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
 import { Input } from "../components/ui/input";
@@ -115,7 +115,11 @@ const SIDEBAR_THREAD_SORT_ORDER_LABELS = {
   created_at: "Newest first",
 } as const;
 
-type InstallBinarySettingsKey = "claudeBinaryPath" | "codexBinaryPath" | "geminiBinaryPath";
+type InstallBinarySettingsKey =
+  | "claudeBinaryPath"
+  | "codexBinaryPath"
+  | "geminiBinaryPath"
+  | "openCodeBinaryPath";
 type InstallProviderSettings = {
   provider: ProviderKind;
   title: string;
@@ -125,6 +129,12 @@ type InstallProviderSettings = {
   homePathKey?: "codexHomePath";
   homePlaceholder?: string;
   homeDescription?: ReactNode;
+  serverUrlKey?: "openCodeServerUrl";
+  serverUrlPlaceholder?: string;
+  serverUrlDescription?: ReactNode;
+  serverPasswordKey?: "openCodeServerPassword";
+  serverPasswordPlaceholder?: string;
+  serverPasswordDescription?: ReactNode;
 };
 
 const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
@@ -163,6 +173,24 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
         Leave blank to use <code>gemini</code> from your PATH.
       </>
     ),
+  },
+  {
+    provider: "opencode",
+    title: "OpenCode",
+    binaryPathKey: "openCodeBinaryPath",
+    binaryPlaceholder: "OpenCode binary path",
+    binaryDescription: (
+      <>
+        Leave blank to use <code>opencode</code> from your PATH.
+      </>
+    ),
+    serverUrlKey: "openCodeServerUrl",
+    serverUrlPlaceholder: "http://127.0.0.1:4096",
+    serverUrlDescription:
+      "Optional existing OpenCode server URL. Leave blank to spawn a local server.",
+    serverPasswordKey: "openCodeServerPassword",
+    serverPasswordPlaceholder: "OpenCode server password",
+    serverPasswordDescription: "Optional password for an externally managed OpenCode server.",
   },
 ];
 
@@ -292,6 +320,9 @@ function SettingsRouteView() {
     codex: Boolean(settings.codexBinaryPath || settings.codexHomePath),
     claudeAgent: Boolean(settings.claudeBinaryPath),
     gemini: Boolean(settings.geminiBinaryPath),
+    opencode: Boolean(
+      settings.openCodeBinaryPath || settings.openCodeServerUrl || settings.openCodeServerPassword,
+    ),
   });
   const [selectedCustomModelProvider, setSelectedCustomModelProvider] =
     useState<ProviderKind>("codex");
@@ -301,6 +332,7 @@ function SettingsRouteView() {
     codex: "",
     claudeAgent: "",
     gemini: "",
+    opencode: "",
   });
   const [customModelErrorByProvider, setCustomModelErrorByProvider] = useState<
     Partial<Record<ProviderKind, string | null>>
@@ -314,6 +346,9 @@ function SettingsRouteView() {
   const codexHomePath = settings.codexHomePath;
   const claudeBinaryPath = settings.claudeBinaryPath;
   const geminiBinaryPath = settings.geminiBinaryPath;
+  const openCodeBinaryPath = settings.openCodeBinaryPath;
+  const openCodeServerUrl = settings.openCodeServerUrl;
+  const openCodeServerPassword = settings.openCodeServerPassword;
   const keybindingsConfigPath = serverConfigQuery.data?.keybindingsConfigPath ?? null;
   const availableEditors = serverConfigQuery.data?.availableEditors;
   const managedWorktrees = serverWorktreesQuery.data?.worktrees ?? [];
@@ -349,11 +384,7 @@ function SettingsRouteView() {
     return groups;
   }, []);
 
-  const gitTextGenerationModelOptions = getAppModelOptions(
-    "codex",
-    settings.customCodexModels,
-    settings.textGenerationModel,
-  );
+  const gitTextGenerationModelOptions = getGitTextGenerationModelOptions(settings);
   const currentGitTextGenerationModel =
     settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
   const defaultGitTextGenerationModel =
@@ -371,7 +402,8 @@ function SettingsRouteView() {
   const totalCustomModels =
     settings.customCodexModels.length +
     settings.customClaudeModels.length +
-    settings.customGeminiModels.length;
+    settings.customGeminiModels.length +
+    settings.customOpenCodeModels.length;
   const savedCustomModelRows = MODEL_PROVIDER_SETTINGS.flatMap((providerSettings) =>
     getCustomModelsForProvider(settings, providerSettings.provider).map((slug) => ({
       key: `${providerSettings.provider}:${slug}`,
@@ -387,7 +419,10 @@ function SettingsRouteView() {
     settings.claudeBinaryPath !== defaults.claudeBinaryPath ||
     settings.geminiBinaryPath !== defaults.geminiBinaryPath ||
     settings.codexBinaryPath !== defaults.codexBinaryPath ||
-    settings.codexHomePath !== defaults.codexHomePath;
+    settings.codexHomePath !== defaults.codexHomePath ||
+    settings.openCodeBinaryPath !== defaults.openCodeBinaryPath ||
+    settings.openCodeServerUrl !== defaults.openCodeServerUrl ||
+    settings.openCodeServerPassword !== defaults.openCodeServerPassword;
 
   const changedSettingLabels = [
     ...(theme !== "system" ? ["Theme"] : []),
@@ -428,7 +463,8 @@ function SettingsRouteView() {
     ...(isGitTextGenerationModelDirty ? ["Git writing model"] : []),
     ...(settings.customCodexModels.length > 0 ||
     settings.customClaudeModels.length > 0 ||
-    settings.customGeminiModels.length > 0
+    settings.customGeminiModels.length > 0 ||
+    settings.customOpenCodeModels.length > 0
       ? ["Custom models"]
       : []),
     ...(isInstallSettingsDirty ? ["Provider installs"] : []),
@@ -543,12 +579,14 @@ function SettingsRouteView() {
       codex: false,
       claudeAgent: false,
       gemini: false,
+      opencode: false,
     });
     setSelectedCustomModelProvider("codex");
     setCustomModelInputByProvider({
       codex: "",
       claudeAgent: "",
       gemini: "",
+      opencode: "",
     });
     setCustomModelErrorByProvider({});
     setShowAllCustomModels(false);
@@ -842,7 +880,14 @@ function SettingsRouteView() {
               <Select
                 value={settings.defaultProvider}
                 onValueChange={(value) => {
-                  if (value !== "codex" && value !== "claudeAgent" && value !== "gemini") return;
+                  if (
+                    value !== "codex" &&
+                    value !== "claudeAgent" &&
+                    value !== "gemini" &&
+                    value !== "opencode"
+                  ) {
+                    return;
+                  }
                   updateSettings({ defaultProvider: value });
                 }}
               >
@@ -853,14 +898,12 @@ function SettingsRouteView() {
                         <ClaudeAI className="size-3.5 text-foreground" />
                       ) : settings.defaultProvider === "gemini" ? (
                         <Gemini className="size-3.5 text-foreground" />
+                      ) : settings.defaultProvider === "opencode" ? (
+                        <OpenCodeIcon className="size-3.5 text-muted-foreground/70" />
                       ) : (
                         <OpenAI className="size-3.5" />
                       )}
-                      {settings.defaultProvider === "claudeAgent"
-                        ? PROVIDER_DISPLAY_NAMES.claudeAgent
-                        : settings.defaultProvider === "gemini"
-                          ? PROVIDER_DISPLAY_NAMES.gemini
-                          : PROVIDER_DISPLAY_NAMES.codex}
+                      {PROVIDER_DISPLAY_NAMES[settings.defaultProvider]}
                     </span>
                   </SelectValue>
                 </SelectTrigger>
@@ -881,6 +924,12 @@ function SettingsRouteView() {
                     <span className="flex items-center gap-2">
                       <Gemini className="size-3.5 text-foreground" />
                       Gemini
+                    </span>
+                  </SelectItem>
+                  <SelectItem hideIndicator value="opencode">
+                    <span className="flex items-center gap-2">
+                      <OpenCodeIcon className="size-3.5 text-muted-foreground/70" />
+                      OpenCode
                     </span>
                   </SelectItem>
                 </SelectPopup>
@@ -1723,6 +1772,7 @@ function SettingsRouteView() {
                       customCodexModels: defaults.customCodexModels,
                       customClaudeModels: defaults.customClaudeModels,
                       customGeminiModels: defaults.customGeminiModels,
+                      customOpenCodeModels: defaults.customOpenCodeModels,
                     });
                     setCustomModelErrorByProvider({});
                     setShowAllCustomModels(false);
@@ -1736,7 +1786,12 @@ function SettingsRouteView() {
                 <Select
                   value={selectedCustomModelProvider}
                   onValueChange={(value) => {
-                    if (value !== "codex" && value !== "claudeAgent" && value !== "gemini") {
+                    if (
+                      value !== "codex" &&
+                      value !== "claudeAgent" &&
+                      value !== "gemini" &&
+                      value !== "opencode"
+                    ) {
                       return;
                     }
                     setSelectedCustomModelProvider(value);
@@ -1861,11 +1916,15 @@ function SettingsRouteView() {
                       codexBinaryPath: defaults.codexBinaryPath,
                       codexHomePath: defaults.codexHomePath,
                       geminiBinaryPath: defaults.geminiBinaryPath,
+                      openCodeBinaryPath: defaults.openCodeBinaryPath,
+                      openCodeServerUrl: defaults.openCodeServerUrl,
+                      openCodeServerPassword: defaults.openCodeServerPassword,
                     });
                     setOpenInstallProviders({
                       codex: false,
                       claudeAgent: false,
                       gemini: false,
+                      opencode: false,
                     });
                   }}
                 />
@@ -1882,13 +1941,19 @@ function SettingsRouteView() {
                         settings.codexHomePath !== defaults.codexHomePath
                       : providerSettings.provider === "claudeAgent"
                         ? settings.claudeBinaryPath !== defaults.claudeBinaryPath
-                        : settings.geminiBinaryPath !== defaults.geminiBinaryPath;
+                        : providerSettings.provider === "gemini"
+                          ? settings.geminiBinaryPath !== defaults.geminiBinaryPath
+                          : settings.openCodeBinaryPath !== defaults.openCodeBinaryPath ||
+                            settings.openCodeServerUrl !== defaults.openCodeServerUrl ||
+                            settings.openCodeServerPassword !== defaults.openCodeServerPassword;
                   const binaryPathValue =
                     providerSettings.binaryPathKey === "claudeBinaryPath"
                       ? claudeBinaryPath
                       : providerSettings.binaryPathKey === "geminiBinaryPath"
                         ? geminiBinaryPath
-                        : codexBinaryPath;
+                        : providerSettings.binaryPathKey === "openCodeBinaryPath"
+                          ? openCodeBinaryPath
+                          : codexBinaryPath;
 
                   return (
                     <Collapsible
@@ -1946,7 +2011,9 @@ function SettingsRouteView() {
                                         ? { claudeBinaryPath: event.target.value }
                                         : providerSettings.binaryPathKey === "geminiBinaryPath"
                                           ? { geminiBinaryPath: event.target.value }
-                                          : { codexBinaryPath: event.target.value },
+                                          : providerSettings.binaryPathKey === "openCodeBinaryPath"
+                                            ? { openCodeBinaryPath: event.target.value }
+                                            : { codexBinaryPath: event.target.value },
                                     )
                                   }
                                   placeholder={providerSettings.binaryPlaceholder}
@@ -1980,6 +2047,62 @@ function SettingsRouteView() {
                                   {providerSettings.homeDescription ? (
                                     <span className="mt-1 block text-xs text-muted-foreground">
                                       {providerSettings.homeDescription}
+                                    </span>
+                                  ) : null}
+                                </label>
+                              ) : null}
+
+                              {providerSettings.serverUrlKey ? (
+                                <label
+                                  htmlFor={`provider-install-${providerSettings.serverUrlKey}`}
+                                  className="block"
+                                >
+                                  <span className="block text-xs font-medium text-foreground">
+                                    OpenCode server URL
+                                  </span>
+                                  <Input
+                                    id={`provider-install-${providerSettings.serverUrlKey}`}
+                                    className="mt-1"
+                                    value={openCodeServerUrl}
+                                    onChange={(event) =>
+                                      updateSettings({
+                                        openCodeServerUrl: event.target.value,
+                                      })
+                                    }
+                                    placeholder={providerSettings.serverUrlPlaceholder}
+                                    spellCheck={false}
+                                  />
+                                  {providerSettings.serverUrlDescription ? (
+                                    <span className="mt-1 block text-xs text-muted-foreground">
+                                      {providerSettings.serverUrlDescription}
+                                    </span>
+                                  ) : null}
+                                </label>
+                              ) : null}
+
+                              {providerSettings.serverPasswordKey ? (
+                                <label
+                                  htmlFor={`provider-install-${providerSettings.serverPasswordKey}`}
+                                  className="block"
+                                >
+                                  <span className="block text-xs font-medium text-foreground">
+                                    OpenCode server password
+                                  </span>
+                                  <Input
+                                    id={`provider-install-${providerSettings.serverPasswordKey}`}
+                                    className="mt-1"
+                                    value={openCodeServerPassword}
+                                    onChange={(event) =>
+                                      updateSettings({
+                                        openCodeServerPassword: event.target.value,
+                                      })
+                                    }
+                                    placeholder={providerSettings.serverPasswordPlaceholder}
+                                    spellCheck={false}
+                                  />
+                                  {providerSettings.serverPasswordDescription ? (
+                                    <span className="mt-1 block text-xs text-muted-foreground">
+                                      {providerSettings.serverPasswordDescription}
                                     </span>
                                   ) : null}
                                 </label>

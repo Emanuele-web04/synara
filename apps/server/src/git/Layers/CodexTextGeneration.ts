@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { Effect, FileSystem, Layer, Option, Path, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-import { DEFAULT_GIT_TEXT_GENERATION_MODEL, type ChatAttachment } from "@t3tools/contracts";
+import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "@t3tools/contracts";
 import { sanitizeGeneratedThreadTitle } from "@t3tools/shared/chatThreads";
 import { resolveCodexHome } from "@t3tools/shared/codexConfig";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
@@ -13,6 +13,7 @@ import { buildCodexProcessEnv } from "../../codexAppServerManager.ts";
 import { ServerConfig } from "../../config.ts";
 import { TextGenerationError } from "../Errors.ts";
 import {
+  CodexTextGeneration,
   type BranchNameGenerationInput,
   type BranchNameGenerationResult,
   type CommitMessageGenerationResult,
@@ -22,22 +23,23 @@ import {
   type TextGenerationShape,
   TextGeneration,
 } from "../Services/TextGeneration.ts";
+import {
+  buildBranchNamePrompt,
+  buildCommitMessagePrompt,
+  buildDiffSummaryPrompt,
+  buildPrContentPrompt,
+  buildThreadTitlePrompt,
+  sanitizeCommitSubject,
+  sanitizeDiffSummary,
+  sanitizePrTitle,
+  toJsonSchemaObject,
+} from "../textGenerationShared.ts";
 
 const CODEX_REASONING_EFFORT = "low";
 const CODEX_TIMEOUT_MS = 180_000;
 
-function toCodexOutputJsonSchema(schema: Schema.Top): unknown {
-  const document = Schema.toJsonSchemaDocument(schema);
-  if (document.definitions && Object.keys(document.definitions).length > 0) {
-    return {
-      ...document.schema,
-      $defs: document.definitions,
-    };
-  }
-  return document.schema;
-}
-
 function normalizeCodexError(
+  binaryPath: string,
   operation: string,
   error: unknown,
   fallback: string,
@@ -49,13 +51,13 @@ function normalizeCodexError(
   if (error instanceof Error) {
     const lower = error.message.toLowerCase();
     if (
-      error.message.includes("Command not found: codex") ||
-      lower.includes("spawn codex") ||
+      error.message.includes(`Command not found: ${binaryPath}`) ||
+      lower.includes(`spawn ${binaryPath.toLowerCase()}`) ||
       lower.includes("enoent")
     ) {
       return new TextGenerationError({
         operation,
-        detail: "Codex CLI (`codex`) is required but not available on PATH.",
+        detail: `Codex CLI (${binaryPath}) is required but not available.`,
         cause: error,
       });
     }
@@ -71,57 +73,6 @@ function normalizeCodexError(
     detail: fallback,
     cause: error,
   });
-}
-
-function limitSection(value: string, maxChars: number): string {
-  if (value.length <= maxChars) return value;
-  const truncated = value.slice(0, maxChars);
-  return `${truncated}\n\n[truncated]`;
-}
-
-function formatAttachmentMetadataLine(attachment: ChatAttachment): string {
-  if (attachment.type === "image") {
-    return `- ${attachment.name} (${attachment.mimeType}, ${attachment.sizeBytes} bytes)`;
-  }
-
-  const preview = limitSection(attachment.text.replace(/\s+/g, " ").trim(), 160);
-  return `- Assistant selection: ${preview}`;
-}
-
-function sanitizeCommitSubject(raw: string): string {
-  const singleLine = raw.trim().split(/\r?\n/g)[0]?.trim() ?? "";
-  const withoutTrailingPeriod = singleLine.replace(/[.]+$/g, "").trim();
-  if (withoutTrailingPeriod.length === 0) {
-    return "Update project files";
-  }
-
-  if (withoutTrailingPeriod.length <= 72) {
-    return withoutTrailingPeriod;
-  }
-  return withoutTrailingPeriod.slice(0, 72).trimEnd();
-}
-
-function sanitizePrTitle(raw: string): string {
-  const singleLine = raw.trim().split(/\r?\n/g)[0]?.trim() ?? "";
-  if (singleLine.length > 0) {
-    return singleLine;
-  }
-  return "Update project changes";
-}
-
-function sanitizeDiffSummary(raw: string): string {
-  const trimmed = raw.trim();
-  if (trimmed.length > 0) {
-    return trimmed;
-  }
-
-  return [
-    "## Summary",
-    "- Update the current diff.",
-    "",
-    "## Files Changed",
-    "- Not available.",
-  ].join("\n");
 }
 
 function sanitizeCodexConfigForTextGeneration(content: string): string {
@@ -179,7 +130,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
         }),
       ).pipe(
         Effect.mapError((cause) =>
-          normalizeCodexError(operation, cause, "Failed to collect process output"),
+          normalizeCodexError("codex", operation, cause, "Failed to collect process output"),
         ),
       );
       return text;
@@ -328,6 +279,8 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     cleanupPaths = [],
     codexHomePath,
     model,
+    modelSelection,
+    providerOptions,
   }: {
     operation:
       | "generateCommitMessage"
@@ -342,19 +295,23 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     cleanupPaths?: ReadonlyArray<string>;
     codexHomePath?: string;
     model?: string;
+    modelSelection?: BranchNameGenerationInput["modelSelection"];
+    providerOptions?: BranchNameGenerationInput["providerOptions"];
   }): Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]> =>
     Effect.gen(function* () {
+      const codexBinaryPath = resolveCodexBinaryPath(providerOptions);
+      const resolvedCodexHomePath = resolveCodexHomePath(codexHomePath, providerOptions);
       const schemaPath = yield* writeTempFile(
         operation,
         "codex-schema",
-        JSON.stringify(toCodexOutputJsonSchema(outputSchemaJson)),
+        JSON.stringify(toJsonSchemaObject(outputSchemaJson)),
       );
       const outputPath = yield* writeTempFile(operation, "codex-output", "");
-      const isolatedCodexHome = yield* prepareIsolatedCodexHome(operation, codexHomePath);
+      const isolatedCodexHome = yield* prepareIsolatedCodexHome(operation, resolvedCodexHomePath);
 
       const runCodexCommand = Effect.gen(function* () {
         const command = ChildProcess.make(
-          "codex",
+          codexBinaryPath,
           [
             "exec",
             "--ephemeral",
@@ -364,7 +321,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
             "-s",
             "read-only",
             "--model",
-            model ?? DEFAULT_GIT_TEXT_GENERATION_MODEL,
+            resolveCodexModel(model, modelSelection) ?? DEFAULT_GIT_TEXT_GENERATION_MODEL,
             "--config",
             `model_reasoning_effort="${CODEX_REASONING_EFFORT}"`,
             "--output-schema",
@@ -388,7 +345,12 @@ const makeCodexTextGeneration = Effect.gen(function* () {
           .spawn(command)
           .pipe(
             Effect.mapError((cause) =>
-              normalizeCodexError(operation, cause, "Failed to spawn Codex CLI process"),
+              normalizeCodexError(
+                codexBinaryPath,
+                operation,
+                cause,
+                "Failed to spawn Codex CLI process",
+              ),
             ),
           );
 
@@ -399,7 +361,12 @@ const makeCodexTextGeneration = Effect.gen(function* () {
             child.exitCode.pipe(
               Effect.map((value) => Number(value)),
               Effect.mapError((cause) =>
-                normalizeCodexError(operation, cause, "Failed to read Codex CLI exit code"),
+                normalizeCodexError(
+                  codexBinaryPath,
+                  operation,
+                  cause,
+                  "Failed to read Codex CLI exit code",
+                ),
               ),
             ),
           ],
@@ -472,39 +439,12 @@ const makeCodexTextGeneration = Effect.gen(function* () {
 
   const generateCommitMessage: TextGenerationShape["generateCommitMessage"] = (input) => {
     const wantsBranch = input.includeBranch === true;
-
-    const prompt = [
-      "You write concise git commit messages.",
-      wantsBranch
-        ? "Return a JSON object with keys: subject, body, branch."
-        : "Return a JSON object with keys: subject, body.",
-      "Rules:",
-      "- subject must be imperative, <= 72 chars, and no trailing period",
-      "- body can be empty string or short bullet points",
-      ...(wantsBranch
-        ? ["- branch must be a short semantic git branch fragment for this change"]
-        : []),
-      "- capture the primary user-visible or developer-visible change",
-      "",
-      `Branch: ${input.branch ?? "(detached)"}`,
-      "",
-      "Staged files:",
-      limitSection(input.stagedSummary, 6_000),
-      "",
-      "Staged patch:",
-      limitSection(input.stagedPatch, 40_000),
-    ].join("\n");
-
-    const outputSchemaJson = wantsBranch
-      ? Schema.Struct({
-          subject: Schema.String,
-          body: Schema.String,
-          branch: Schema.String,
-        })
-      : Schema.Struct({
-          subject: Schema.String,
-          body: Schema.String,
-        });
+    const { prompt, outputSchemaJson } = buildCommitMessagePrompt({
+      branch: input.branch,
+      stagedSummary: input.stagedSummary,
+      stagedPatch: input.stagedPatch,
+      includeBranch: wantsBranch,
+    });
 
     return runCodexJson({
       operation: "generateCommitMessage",
@@ -513,6 +453,8 @@ const makeCodexTextGeneration = Effect.gen(function* () {
       outputSchemaJson,
       ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
       ...(input.model ? { model: input.model } : {}),
+      ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
     }).pipe(
       Effect.map(
         (generated) =>
@@ -528,38 +470,23 @@ const makeCodexTextGeneration = Effect.gen(function* () {
   };
 
   const generatePrContent: TextGenerationShape["generatePrContent"] = (input) => {
-    const prompt = [
-      "You write GitHub pull request content.",
-      "Return a JSON object with keys: title, body.",
-      "Rules:",
-      "- title should be concise and specific",
-      "- body must be markdown and include headings '## Summary' and '## Testing'",
-      "- under Summary, provide short bullet points",
-      "- under Testing, include bullet points with concrete checks or 'Not run' where appropriate",
-      "",
-      `Base branch: ${input.baseBranch}`,
-      `Head branch: ${input.headBranch}`,
-      "",
-      "Commits:",
-      limitSection(input.commitSummary, 12_000),
-      "",
-      "Diff stat:",
-      limitSection(input.diffSummary, 12_000),
-      "",
-      "Diff patch:",
-      limitSection(input.diffPatch, 40_000),
-    ].join("\n");
+    const { prompt, outputSchemaJson } = buildPrContentPrompt({
+      baseBranch: input.baseBranch,
+      headBranch: input.headBranch,
+      commitSummary: input.commitSummary,
+      diffSummary: input.diffSummary,
+      diffPatch: input.diffPatch,
+    });
 
     return runCodexJson({
       operation: "generatePrContent",
       cwd: input.cwd,
       prompt,
-      outputSchemaJson: Schema.Struct({
-        title: Schema.String,
-        body: Schema.String,
-      }),
+      outputSchemaJson,
       ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
       ...(input.model ? { model: input.model } : {}),
+      ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
     }).pipe(
       Effect.map(
         (generated) =>
@@ -572,30 +499,19 @@ const makeCodexTextGeneration = Effect.gen(function* () {
   };
 
   const generateDiffSummary: TextGenerationShape["generateDiffSummary"] = (input) => {
-    const prompt = [
-      "You write GitHub-style engineering summaries for git diffs.",
-      "Return a JSON object with key: summary.",
-      "Rules:",
-      "- summary must be markdown",
-      "- include headings '## Summary' and '## Files Changed'",
-      "- under each heading, use concise bullet points",
-      "- describe only changes directly supported by the diff",
-      "- mention risks or follow-ups only when clearly implied by the patch",
-      "- do not invent tests, tickets, or product context",
-      "",
-      "Diff patch:",
-      limitSection(input.patch, 50_000),
-    ].join("\n");
+    const { prompt, outputSchemaJson } = buildDiffSummaryPrompt({
+      patch: input.patch,
+    });
 
     return runCodexJson({
       operation: "generateDiffSummary",
       cwd: input.cwd,
       prompt,
-      outputSchemaJson: Schema.Struct({
-        summary: Schema.String,
-      }),
+      outputSchemaJson,
       ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
       ...(input.model ? { model: input.model } : {}),
+      ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
     }).pipe(
       Effect.map(
         (generated) =>
@@ -612,38 +528,20 @@ const makeCodexTextGeneration = Effect.gen(function* () {
         "generateBranchName",
         input.attachments,
       );
-      const attachmentLines = (input.attachments ?? []).map(formatAttachmentMetadataLine);
-
-      const promptSections = [
-        "You generate concise git branch names.",
-        "Return a JSON object with key: branch.",
-        "Rules:",
-        "- Branch should describe the requested work from the user message.",
-        "- Keep it short and specific (2-6 words).",
-        "- Use plain words only, no issue prefixes and no punctuation-heavy text.",
-        "- If images are attached, use them as primary context for visual/UI issues.",
-        "",
-        "User message:",
-        limitSection(input.message, 8_000),
-      ];
-      if (attachmentLines.length > 0) {
-        promptSections.push(
-          "",
-          "Attachment metadata:",
-          limitSection(attachmentLines.join("\n"), 4_000),
-        );
-      }
-      const prompt = promptSections.join("\n");
+      const { prompt, outputSchemaJson } = buildBranchNamePrompt({
+        message: input.message,
+        ...(input.attachments ? { attachments: input.attachments } : {}),
+      });
 
       const generated = yield* runCodexJson({
         operation: "generateBranchName",
         cwd: input.cwd,
         prompt,
-        outputSchemaJson: Schema.Struct({
-          branch: Schema.String,
-        }),
+        outputSchemaJson,
         imagePaths,
         ...(input.model ? { model: input.model } : {}),
+        ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+        ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
       });
 
       return {
@@ -658,38 +556,20 @@ const makeCodexTextGeneration = Effect.gen(function* () {
         "generateThreadTitle",
         input.attachments,
       );
-      const attachmentLines = (input.attachments ?? []).map(formatAttachmentMetadataLine);
-
-      const promptSections = [
-        "You generate concise chat thread titles.",
-        "Return a JSON object with key: title.",
-        "Rules:",
-        "- Summarize the user's request in 2-4 words.",
-        "- Never exceed 4 words.",
-        "- Use a short noun or verb phrase, not a full sentence.",
-        "- Avoid quotes, markdown, emoji, and trailing punctuation.",
-        "- If images are attached, use them as primary context for the title.",
-        "",
-        "User message:",
-        limitSection(input.message, 8_000),
-      ];
-      if (attachmentLines.length > 0) {
-        promptSections.push(
-          "",
-          "Attachment metadata:",
-          limitSection(attachmentLines.join("\n"), 4_000),
-        );
-      }
+      const { prompt, outputSchemaJson } = buildThreadTitlePrompt({
+        message: input.message,
+        ...(input.attachments ? { attachments: input.attachments } : {}),
+      });
 
       const generated = yield* runCodexJson({
         operation: "generateThreadTitle",
         cwd: input.cwd,
-        prompt: promptSections.join("\n"),
-        outputSchemaJson: Schema.Struct({
-          title: Schema.String,
-        }),
+        prompt,
+        outputSchemaJson,
         imagePaths,
         ...(input.model ? { model: input.model } : {}),
+        ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+        ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
       });
 
       return {
@@ -706,5 +586,34 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     generateThreadTitle,
   } satisfies TextGenerationShape;
 });
+
+function resolveCodexBinaryPath(
+  providerOptions: BranchNameGenerationInput["providerOptions"] | undefined,
+): string {
+  return providerOptions?.codex?.binaryPath?.trim() || "codex";
+}
+
+function resolveCodexHomePath(
+  codexHomePath: string | undefined,
+  providerOptions: BranchNameGenerationInput["providerOptions"] | undefined,
+): string | undefined {
+  const resolved = codexHomePath?.trim() || providerOptions?.codex?.homePath?.trim();
+  return resolved && resolved.length > 0 ? resolved : undefined;
+}
+
+function resolveCodexModel(
+  model: string | undefined,
+  modelSelection: BranchNameGenerationInput["modelSelection"] | undefined,
+): string | undefined {
+  if (modelSelection?.provider === "codex") {
+    return modelSelection.model;
+  }
+  return model;
+}
+
+export const CodexTextGenerationServiceLive = Layer.effect(
+  CodexTextGeneration,
+  makeCodexTextGeneration,
+);
 
 export const CodexTextGenerationLive = Layer.effect(TextGeneration, makeCodexTextGeneration);

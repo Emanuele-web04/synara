@@ -11,16 +11,19 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import {
-  getGeminiThinkingSelectionValue,
   getDefaultEffort,
+  getGeminiThinkingSelectionValue,
   hasEffortLevel,
   isClaudeUltrathinkPrompt,
   normalizeClaudeModelOptions,
   normalizeGeminiModelOptions,
+  normalizeOpenCodeModelOptions,
+  resolveLabeledOptionValue,
   trimOrNull,
 } from "@t3tools/shared/model";
 import type { ReactNode } from "react";
 import { TraitsMenuContent, TraitsPicker } from "./TraitsPicker";
+import { getComposerTraitSelection, hasVisibleComposerTraitControls } from "./composerTraits";
 import { getRuntimeAwareModelCapabilities } from "./runtimeModelCapabilities";
 
 export type ComposerProviderStateInput = {
@@ -139,6 +142,26 @@ function getProviderStateFromCapabilities(
       normalizedOptions = normalizeGeminiModelOptions(model, providerOptions);
       break;
     }
+    case "opencode": {
+      const providerOptions = modelOptions?.opencode;
+      rawEffort = trimOrNull(providerOptions?.variant);
+      const variantOptions = caps.variantOptions ?? [];
+      const reasoningVariant =
+        rawEffort && variantOptions.some((option) => option.value === rawEffort)
+          ? rawEffort
+          : undefined;
+      const agent = trimOrNull(providerOptions?.agent);
+      if (variantOptions.length > 0) {
+        const nextOptions = {
+          ...(reasoningVariant ? { variant: reasoningVariant } : {}),
+          ...(agent ? { agent } : {}),
+        };
+        normalizedOptions = Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
+        break;
+      }
+      normalizedOptions = normalizeOpenCodeModelOptions(providerOptions);
+      break;
+    }
   }
 
   const draftEffort = trimOrNull(rawEffort);
@@ -147,11 +170,13 @@ function getProviderStateFromCapabilities(
     ? caps.promptInjectedEffortLevels.includes(draftEffort)
     : false;
   const promptEffort =
-    draftEffort && !isPromptInjected && hasEffortLevel(caps, draftEffort)
-      ? draftEffort
-      : defaultEffort && hasEffortLevel(caps, defaultEffort)
-        ? defaultEffort
-        : null;
+    provider === "opencode"
+      ? resolveLabeledOptionValue(caps.variantOptions, draftEffort)
+      : draftEffort && !isPromptInjected && hasEffortLevel(caps, draftEffort)
+        ? draftEffort
+        : defaultEffort && hasEffortLevel(caps, defaultEffort)
+          ? defaultEffort
+          : null;
 
   const ultrathinkActive =
     caps.promptInjectedEffortLevels.length > 0 && isClaudeUltrathinkPrompt(prompt);
@@ -184,6 +209,11 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
     renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("gemini", input),
     renderTraitsPicker: (input) => renderTraitsPickerForProvider("gemini", input),
   },
+  opencode: {
+    getState: (input) => getProviderStateFromCapabilities(input),
+    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("opencode", input),
+    renderTraitsPicker: (input) => renderTraitsPickerForProvider("opencode", input),
+  },
 };
 
 export function getComposerProviderState(input: ComposerProviderStateInput): ComposerProviderState {
@@ -200,6 +230,21 @@ export function renderProviderTraitsMenuContent(input: {
   includeFastMode?: boolean;
   onPromptChange: (prompt: string) => void;
 }): ReactNode {
+  const selection = getComposerTraitSelection(
+    input.provider,
+    input.model,
+    input.prompt,
+    input.modelOptions,
+    input.runtimeModel,
+  );
+  if (
+    !hasVisibleComposerTraitControls(
+      selection,
+      input.includeFastMode === undefined ? undefined : { includeFastMode: input.includeFastMode },
+    )
+  ) {
+    return null;
+  }
   return composerProviderRegistry[input.provider].renderTraitsMenuContent(input);
 }
 
@@ -216,5 +261,20 @@ export function renderProviderTraitsPicker(input: {
   shortcutLabel?: string | null;
   onPromptChange: (prompt: string) => void;
 }): ReactNode {
+  const selection = getComposerTraitSelection(
+    input.provider,
+    input.model,
+    input.prompt,
+    input.modelOptions,
+    input.runtimeModel,
+  );
+  if (
+    !hasVisibleComposerTraitControls(
+      selection,
+      input.includeFastMode === undefined ? undefined : { includeFastMode: input.includeFastMode },
+    )
+  ) {
+    return null;
+  }
   return composerProviderRegistry[input.provider].renderTraitsPicker(input);
 }

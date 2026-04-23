@@ -18,6 +18,10 @@ import {
 
 function runtimeEffortLabel(value: string): string {
   switch (value) {
+    case "none":
+      return "None";
+    case "minimal":
+      return "Minimal";
     case "low":
       return "Low";
     case "medium":
@@ -27,7 +31,11 @@ function runtimeEffortLabel(value: string): string {
     case "xhigh":
       return "Extra High";
     default:
-      return value;
+      return value
+        .split(/[-_\s]+/u)
+        .filter((segment) => segment.length > 0)
+        .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+        .join(" ");
   }
 }
 
@@ -53,7 +61,7 @@ export function resolveRuntimeModelDescriptor(input: {
   });
 }
 
-// Reuses static capability flags but lets Codex effort menus follow runtime-discovered support/defaults.
+// Reuses static capability flags but lets runtime-discovered models override exposed effort menus.
 export function getRuntimeAwareModelCapabilities(input: {
   provider: ProviderKind;
   model: string | null | undefined;
@@ -66,7 +74,11 @@ export function getRuntimeAwareModelCapabilities(input: {
       ? input.runtimeModel.supportsFastMode === true
       : staticCapabilities.supportsFastMode;
   const runtimeEfforts = input.runtimeModel?.supportedReasoningEfforts;
-  if (input.provider !== "codex" || !runtimeEfforts || runtimeEfforts.length === 0) {
+  if (
+    (input.provider !== "codex" && input.provider !== "opencode") ||
+    !runtimeEfforts ||
+    runtimeEfforts.length === 0
+  ) {
     return {
       ...staticCapabilities,
       supportsFastMode,
@@ -80,22 +92,25 @@ export function getRuntimeAwareModelCapabilities(input: {
       ? staticDefaultEffort
       : null);
 
-  const reasoningEffortLevels: EffortOption[] = runtimeEfforts.map((effort) => {
-    const nextEffort = {
-      value: effort.value,
-      label: runtimeEffortLabel(effort.value),
-    } satisfies Pick<EffortOption, "value" | "label">;
-    const description = trimOrNull(effort.description ?? effort.label);
-    return Object.assign(
-      nextEffort,
-      description ? { description } : {},
-      effort.value === runtimeDefaultEffort ? ({ isDefault: true } as const) : {},
-    );
-  });
+  const runtimeOptions: EffortOption[] = runtimeEfforts.map((effort) => ({
+    value: effort.value,
+    label: trimOrNull(effort.label) ?? runtimeEffortLabel(effort.value),
+    ...(trimOrNull(effort.description)
+      ? { description: trimOrNull(effort.description) ?? undefined }
+      : {}),
+    ...(effort.value === runtimeDefaultEffort ? { isDefault: true as const } : {}),
+  }));
+
+  if (input.provider === "opencode") {
+    return {
+      ...staticCapabilities,
+      variantOptions: runtimeOptions,
+    };
+  }
 
   return {
     ...staticCapabilities,
     supportsFastMode,
-    reasoningEffortLevels,
+    reasoningEffortLevels: runtimeOptions,
   };
 }

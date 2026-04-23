@@ -18,6 +18,7 @@ import {
 import Mime from "@effect/platform-node/Mime";
 import {
   CommandId,
+  DEFAULT_MODEL_BY_PROVIDER,
   DEFAULT_TERMINAL_ID,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   type ClientOrchestrationCommand,
@@ -379,6 +380,79 @@ function mapClaudeSessionMessages(input: {
       },
     ];
   });
+}
+
+function readOpenCodeSessionMessageText(parts: ReadonlyArray<unknown>): string {
+  return parts
+    .flatMap((part) => {
+      if (!part || typeof part !== "object") {
+        return [];
+      }
+      const candidate = part as {
+        readonly type?: unknown;
+        readonly text?: unknown;
+      };
+      return candidate.type === "text" && typeof candidate.text === "string"
+        ? [candidate.text]
+        : [];
+    })
+    .join("\n\n")
+    .trim();
+}
+
+function mapOpenCodeSnapshotMessages(input: {
+  readonly importedAt: string;
+  readonly threadId: ThreadId;
+  readonly turns: ReadonlyArray<{
+    readonly items: ReadonlyArray<unknown>;
+  }>;
+}): ReadonlyArray<ThreadHandoffImportedMessage> {
+  return input.turns.flatMap((turn, turnIndex) =>
+    turn.items.flatMap((item, itemIndex) => {
+      if (!item || typeof item !== "object") {
+        return [];
+      }
+
+      const candidate = item as {
+        readonly info?: {
+          readonly id?: unknown;
+          readonly role?: unknown;
+        };
+        readonly parts?: ReadonlyArray<unknown>;
+      };
+      const role =
+        candidate.info?.role === "user"
+          ? "user"
+          : candidate.info?.role === "assistant"
+            ? "assistant"
+            : null;
+      if (role === null) {
+        return [];
+      }
+
+      const text = readOpenCodeSessionMessageText(candidate.parts ?? []);
+      if (text.length === 0) {
+        return [];
+      }
+
+      const sourceId =
+        typeof candidate.info?.id === "string" && candidate.info.id.length > 0
+          ? candidate.info.id
+          : `${turnIndex}:${itemIndex}`;
+
+      return [
+        {
+          messageId: MessageId.makeUnsafe(
+            `import:${String(input.threadId)}:opencode:${turnIndex}:${itemIndex}:${sourceId}`,
+          ),
+          role,
+          text,
+          createdAt: input.importedAt,
+          updatedAt: input.importedAt,
+        },
+      ];
+    }),
+  );
 }
 
 function buildImportMessagesError(message: string): RouteRequestError {
@@ -1299,7 +1373,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         const bootstrapProjectTitle = path.basename(cwd) || "project";
         bootstrapProjectDefaultModelSelection = {
           provider: "codex" as const,
-          model: "gpt-5-codex",
+          model: DEFAULT_MODEL_BY_PROVIDER.codex,
         };
         yield* orchestrationEngine.dispatch({
           type: "project.create",
@@ -1315,7 +1389,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         bootstrapProjectId = existingProject.id;
         bootstrapProjectDefaultModelSelection = existingProject.defaultModelSelection ?? {
           provider: "codex" as const,
-          model: "gpt-5-codex",
+          model: DEFAULT_MODEL_BY_PROVIDER.codex,
         };
       }
 
@@ -1421,12 +1495,13 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     );
   });
 
-  const resolveImportedCodexThreadContext = Effect.fn(function* (input: {
+  const resolveImportedProviderThreadContext = Effect.fn(function* (input: {
+    readonly provider: "codex" | "opencode";
     readonly externalId: string;
     readonly projectWorkspaceRoot: string;
     readonly fallbackCwd?: string;
   }) {
-    const adapter = yield* providerAdapterRegistry.getByProvider("codex");
+    const adapter = yield* providerAdapterRegistry.getByProvider(input.provider);
     if (!adapter.readExternalThread) {
       return null;
     }
@@ -1572,6 +1647,34 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     });
   });
 
+  const importOpenCodeThreadHistory = Effect.fn(function* (input: {
+    readonly importedAt: string;
+    readonly threadId: ThreadId;
+  }) {
+    const adapter = yield* providerAdapterRegistry.getByProvider("opencode");
+    const snapshot = yield* adapter.readThread(input.threadId).pipe(
+      Effect.mapError((cause) =>
+        buildImportMessagesError(
+          cause instanceof Error && cause.message.length > 0
+            ? cause.message
+            : "Failed to read OpenCode session history.",
+        ),
+      ),
+    );
+
+    const importedMessages = mapOpenCodeSnapshotMessages({
+      threadId: input.threadId,
+      turns: snapshot.turns,
+      importedAt: input.importedAt,
+    });
+
+    yield* dispatchImportedMessages({
+      threadId: input.threadId,
+      messages: importedMessages,
+      createdAt: input.importedAt,
+    });
+  });
+
   const routeRequest = Effect.fnUntraced(function* (ws: WebSocket, request: WebSocketRequest) {
     switch (request.body._tag) {
       case ORCHESTRATION_WS_METHODS.getSnapshot:
@@ -1614,21 +1717,24 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         const externalId = body.externalId.trim();
         const project = readModel.projects.find((entry) => entry.id === thread.projectId);
 
-        const importedCodexContext =
-          thread.modelSelection.provider === "codex" && project
-            ? yield* resolveImportedCodexThreadContext({
+        const importedProviderContext =
+          (thread.modelSelection.provider === "codex" ||
+            thread.modelSelection.provider === "opencode") &&
+          project
+            ? yield* resolveImportedProviderThreadContext({
+                provider: thread.modelSelection.provider,
                 externalId,
                 projectWorkspaceRoot: project.workspaceRoot,
                 ...(cwd ? { fallbackCwd: cwd } : {}),
               })
             : null;
 
-        if (importedCodexContext?.patch) {
+        if (importedProviderContext?.patch) {
           yield* orchestrationEngine.dispatch({
             type: "thread.meta.update",
             commandId: CommandId.makeUnsafe(crypto.randomUUID()),
             threadId: thread.id,
-            ...importedCodexContext.patch,
+            ...importedProviderContext.patch,
           });
         }
 
@@ -1642,13 +1748,15 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         const session = yield* providerService.startSession(thread.id, {
           threadId: thread.id,
           provider: thread.modelSelection.provider,
-          ...((importedCodexContext?.runtimeCwd ?? cwd)
-            ? { cwd: importedCodexContext?.runtimeCwd ?? cwd }
+          ...((importedProviderContext?.runtimeCwd ?? cwd)
+            ? { cwd: importedProviderContext?.runtimeCwd ?? cwd }
             : {}),
           modelSelection: thread.modelSelection,
           resumeCursor:
             thread.modelSelection.provider === "claudeAgent"
               ? { resume: externalId }
+              : thread.modelSelection.provider === "opencode"
+                ? { openCodeSessionId: externalId }
               : { threadId: externalId },
           runtimeMode: thread.runtimeMode,
         });
@@ -1663,6 +1771,11 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
             threadId: thread.id,
             externalId,
             cwd,
+            importedAt: session.updatedAt,
+          });
+        } else if (thread.modelSelection.provider === "opencode") {
+          yield* importOpenCodeThreadHistory({
+            threadId: thread.id,
             importedAt: session.updatedAt,
           });
         }

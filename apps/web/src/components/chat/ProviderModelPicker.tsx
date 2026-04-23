@@ -5,11 +5,13 @@
 
 import { type ModelSlug, type ProviderKind, type ServerProviderStatus } from "@t3tools/contracts";
 import { resolveSelectableModel } from "@t3tools/shared/model";
-import { memo, useCallback, useState } from "react";
+import { Fragment, memo, useCallback, useDeferredValue, useMemo, useState } from "react";
 import { type ProviderPickerKind, PROVIDER_OPTIONS } from "../../session-logic";
+import { formatProviderModelOptionName } from "../../providerModelOptions";
 import {
   Menu,
   MenuGroup,
+  MenuGroupLabel,
   MenuItem,
   MenuPopup,
   MenuRadioGroup,
@@ -20,11 +22,13 @@ import {
   MenuSubTrigger,
   MenuTrigger,
 } from "../ui/menu";
-import { ClaudeAI, Gemini, Icon, OpenAI } from "../Icons";
+import { ClaudeAI, Gemini, Icon, OpenAI, OpenCodeIcon } from "../Icons";
 import { cn } from "~/lib/utils";
+import { PickerPanelShell } from "./PickerPanelShell";
 import { PickerTriggerButton } from "./PickerTriggerButton";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ShortcutKbd } from "../ui/shortcut-kbd";
+import { groupProviderModelOptions, type ProviderModelOption } from "../../providerModelOptions";
 
 function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): option is {
   value: ProviderKind;
@@ -38,6 +42,7 @@ const PROVIDER_ICON_BY_PROVIDER: Record<ProviderPickerKind, Icon> = {
   codex: OpenAI,
   claudeAgent: ClaudeAI,
   gemini: Gemini,
+  opencode: OpenCodeIcon,
 };
 
 function resolveLiveProviderAvailability(provider: ServerProviderStatus | undefined): {
@@ -83,12 +88,26 @@ function providerIconClassName(
     : fallbackClassName;
 }
 
+const OPENCODE_MODEL_SEARCH_THRESHOLD = 15;
+
+function buildOpenCodeModelSearchText(option: ProviderModelOption): string {
+  return [
+    option.name,
+    option.slug,
+    option.upstreamProviderName,
+    option.upstreamProviderId,
+  ]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .join(" ")
+    .toLowerCase();
+}
+
 export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   provider: ProviderKind;
   model: ModelSlug;
   lockedProvider: ProviderKind | null;
   providers?: ReadonlyArray<ServerProviderStatus>;
-  modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<{ slug: string; name: string }>>;
+  modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
   activeProviderIconClassName?: string;
   compact?: boolean;
   disabled?: boolean;
@@ -99,16 +118,25 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
 }) {
   const { onOpenChange, open } = props;
   const [uncontrolledMenuOpen, setUncontrolledMenuOpen] = useState(false);
+  const [openCodeSearchQuery, setOpenCodeSearchQuery] = useState("");
+  const deferredOpenCodeSearchQuery = useDeferredValue(openCodeSearchQuery);
   const activeProvider = props.lockedProvider ?? props.provider;
   const isMenuOpen = open ?? uncontrolledMenuOpen;
   const selectedProviderOptions = props.modelOptionsByProvider[activeProvider];
   const selectedModelLabel =
-    selectedProviderOptions.find((option) => option.slug === props.model)?.name ?? props.model;
+    selectedProviderOptions.find((option) => option.slug === props.model)?.name ??
+    formatProviderModelOptionName({
+      provider: activeProvider,
+      slug: props.model,
+    });
   const ProviderIcon = PROVIDER_ICON_BY_PROVIDER[activeProvider];
   const setMenuOpen = useCallback(
     (nextOpen: boolean) => {
       if (open === undefined) {
         setUncontrolledMenuOpen(nextOpen);
+      }
+      if (!nextOpen) {
+        setOpenCodeSearchQuery("");
       }
       onOpenChange?.(nextOpen);
     },
@@ -125,6 +153,65 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     if (!resolvedModel) return;
     props.onProviderModelChange(provider, resolvedModel);
     setMenuOpen(false);
+  };
+
+  const renderModelRadioGroup = (provider: ProviderKind) => {
+    const providerOptions = props.modelOptionsByProvider[provider];
+    const shouldShowOpenCodeSearch =
+      provider === "opencode" && providerOptions.length >= OPENCODE_MODEL_SEARCH_THRESHOLD;
+    const normalizedOpenCodeSearchQuery = deferredOpenCodeSearchQuery.trim().toLowerCase();
+    const filteredOptions =
+      shouldShowOpenCodeSearch && normalizedOpenCodeSearchQuery.length > 0
+        ? providerOptions.filter((option) =>
+            buildOpenCodeModelSearchText(option).includes(normalizedOpenCodeSearchQuery),
+          )
+        : providerOptions;
+    const groupedOptions = groupProviderModelOptions(filteredOptions);
+
+    const content =
+      groupedOptions.length > 0 ? (
+        <MenuRadioGroup
+          value={activeProvider === provider ? props.model : ""}
+          onValueChange={(value) => handleModelChange(provider, value)}
+        >
+          {groupedOptions.map((group, index) => (
+            <Fragment key={`${provider}:${group.key}`}>
+              <MenuGroup>
+                {group.label ? <MenuGroupLabel>{group.label}</MenuGroupLabel> : null}
+                {group.options.map((modelOption) => (
+                  <MenuRadioItem
+                    key={`${provider}:${modelOption.slug}`}
+                    value={modelOption.slug}
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    {modelOption.name}
+                  </MenuRadioItem>
+                ))}
+              </MenuGroup>
+              {index < groupedOptions.length - 1 ? <MenuSeparator /> : null}
+            </Fragment>
+          ))}
+        </MenuRadioGroup>
+      ) : (
+        <div className="px-2 py-2 text-muted-foreground text-sm">No matches</div>
+      );
+
+    if (!shouldShowOpenCodeSearch) {
+      return content;
+    }
+
+    return (
+      <PickerPanelShell
+        searchPlaceholder="Search models or providers"
+        query={openCodeSearchQuery}
+        onQueryChange={setOpenCodeSearchQuery}
+        stopSearchKeyPropagation
+        widthClassName="w-60"
+        bleedParentPadding
+      >
+        {content}
+      </PickerPanelShell>
+    );
   };
 
   return (
@@ -202,22 +289,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
       )}
       <MenuPopup align="start">
         {props.lockedProvider !== null ? (
-          <MenuGroup>
-            <MenuRadioGroup
-              value={props.model}
-              onValueChange={(value) => handleModelChange(props.lockedProvider!, value)}
-            >
-              {props.modelOptionsByProvider[props.lockedProvider].map((modelOption) => (
-                <MenuRadioItem
-                  key={`${props.lockedProvider}:${modelOption.slug}`}
-                  value={modelOption.slug}
-                  onClick={() => setMenuOpen(false)}
-                >
-                  {modelOption.name}
-                </MenuRadioItem>
-              ))}
-            </MenuRadioGroup>
-          </MenuGroup>
+          renderModelRadioGroup(props.lockedProvider)
         ) : (
           <>
             {AVAILABLE_PROVIDER_OPTIONS.map((option) => {
@@ -256,22 +328,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                     {option.label}
                   </MenuSubTrigger>
                   <MenuSubPopup className="[--available-height:min(24rem,70vh)]">
-                    <MenuGroup>
-                      <MenuRadioGroup
-                        value={props.provider === option.value ? props.model : ""}
-                        onValueChange={(value) => handleModelChange(option.value, value)}
-                      >
-                        {props.modelOptionsByProvider[option.value].map((modelOption) => (
-                          <MenuRadioItem
-                            key={`${option.value}:${modelOption.slug}`}
-                            value={modelOption.slug}
-                            onClick={() => setMenuOpen(false)}
-                          >
-                            {modelOption.name}
-                          </MenuRadioItem>
-                        ))}
-                      </MenuRadioGroup>
-                    </MenuGroup>
+                    {renderModelRadioGroup(option.value)}
                   </MenuSubPopup>
                 </MenuSub>
               );

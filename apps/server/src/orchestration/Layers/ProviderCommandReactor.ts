@@ -225,6 +225,38 @@ const make = Effect.gen(function* () {
   const editResendTurnStartKeys = new Set<string>();
   const drainingQueuedTurns = new Set<string>();
 
+  const resolveThreadTextGenerationInput = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly modelSelection?: ModelSelection;
+    readonly providerOptions?: ProviderStartOptions;
+  }) {
+    const thread = yield* resolveThread(input.threadId);
+    const modelSelection =
+      input.modelSelection ?? threadModelSelections.get(input.threadId) ?? thread?.modelSelection;
+    const providerOptions = input.providerOptions ?? threadProviderOptions.get(input.threadId);
+
+    if (modelSelection?.provider === "opencode") {
+      return {
+        modelSelection,
+        ...(providerOptions ? { providerOptions } : {}),
+      } as const;
+    }
+
+    if (modelSelection?.provider === "codex") {
+      return {
+        modelSelection,
+        ...(providerOptions ? { providerOptions } : {}),
+        ...(providerOptions?.codex?.homePath
+          ? { codexHomePath: providerOptions.codex.homePath }
+          : {}),
+      } as const;
+    }
+
+    return {
+      model: DEFAULT_GIT_TEXT_GENERATION_MODEL,
+    } as const;
+  });
+
   const appendProviderFailureActivity = (input: {
     readonly threadId: ThreadId;
     readonly kind:
@@ -881,6 +913,8 @@ const make = Effect.gen(function* () {
     readonly messageId: string;
     readonly messageText: string;
     readonly attachments?: ReadonlyArray<ChatAttachment>;
+    readonly modelSelection?: ModelSelection;
+    readonly providerOptions?: ProviderStartOptions;
   }) {
     if (!input.branch || !input.worktreePath) {
       return;
@@ -904,12 +938,17 @@ const make = Effect.gen(function* () {
     const oldBranch = input.branch;
     const cwd = input.worktreePath;
     const attachments = input.attachments ?? [];
+    const textGenerationInput = yield* resolveThreadTextGenerationInput({
+      threadId: input.threadId,
+      ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+    });
     yield* textGeneration
       .generateBranchName({
         cwd,
         message: input.messageText,
         ...(attachments.length > 0 ? { attachments } : {}),
-        model: DEFAULT_GIT_TEXT_GENERATION_MODEL,
+        ...textGenerationInput,
       })
       .pipe(
         Effect.catch((error) =>
@@ -954,6 +993,8 @@ const make = Effect.gen(function* () {
     readonly messageId: string;
     readonly messageText: string;
     readonly attachments?: ReadonlyArray<ChatAttachment>;
+    readonly modelSelection?: ModelSelection;
+    readonly providerOptions?: ProviderStartOptions;
   }) {
     const readModel = yield* orchestrationEngine.getReadModel();
     const thread = readModel.threads.find((entry) => entry.id === input.threadId);
@@ -980,12 +1021,17 @@ const make = Effect.gen(function* () {
       thread,
       projects: readModel.projects,
     });
+    const textGenerationInput = yield* resolveThreadTextGenerationInput({
+      threadId: input.threadId,
+      ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+    });
     const nextTitle = yield* textGeneration
       .generateThreadTitle({
         cwd: cwd ?? process.cwd(),
         message: input.messageText,
         ...(input.attachments?.length ? { attachments: input.attachments } : {}),
-        model: DEFAULT_GIT_TEXT_GENERATION_MODEL,
+        ...textGenerationInput,
       })
       .pipe(
         Effect.map((generated) => generated.title),
@@ -1043,12 +1089,24 @@ const make = Effect.gen(function* () {
       messageId: message.id,
       messageText: message.text,
       ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+      ...(event.payload.modelSelection !== undefined
+        ? { modelSelection: event.payload.modelSelection }
+        : {}),
+      ...(event.payload.providerOptions !== undefined
+        ? { providerOptions: event.payload.providerOptions }
+        : {}),
     }).pipe(Effect.forkScoped);
     yield* maybeGenerateAndRenameThreadTitleForFirstTurn({
       threadId: event.payload.threadId,
       messageId: message.id,
       messageText: message.text,
       ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+      ...(event.payload.modelSelection !== undefined
+        ? { modelSelection: event.payload.modelSelection }
+        : {}),
+      ...(event.payload.providerOptions !== undefined
+        ? { providerOptions: event.payload.providerOptions }
+        : {}),
     }).pipe(Effect.forkScoped);
     const immediateDispatchMode =
       event.payload.dispatchMode === "steer" &&

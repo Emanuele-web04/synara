@@ -33,7 +33,7 @@ import {
   shouldOfferCreateBranchPrompt,
   summarizeGitResult,
 } from "./GitActionsControl.logic";
-import { useAppSettings } from "~/appSettings";
+import { getProviderStartOptions, useAppSettings } from "~/appSettings";
 import { Button } from "~/components/ui/button";
 import { Checkbox } from "~/components/ui/checkbox";
 import {
@@ -269,6 +269,7 @@ function GitPickerMenuRow({ item }: { item: GitPickerMenuItem }) {
 
 export default function GitActionsControl({ gitCwd, activeThreadId }: GitActionsControlProps) {
   const { settings } = useAppSettings();
+  const providerOptions = useMemo(() => getProviderStartOptions(settings), [settings]);
   const activeThread = useStore(
     useMemo(() => createThreadSelector(activeThreadId), [activeThreadId]),
   );
@@ -339,6 +340,7 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
       queryClient,
       codexHomePath: settings.codexHomePath || null,
       model: settings.textGenerationModel ?? null,
+      ...(providerOptions ? { providerOptions } : {}),
     }),
   );
   const pullMutation = useMutation(gitPullMutationOptions({ cwd: gitCwd, queryClient }));

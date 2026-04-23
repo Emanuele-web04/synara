@@ -42,6 +42,7 @@ type SearchableModelOption = {
   searchSlug: string;
   searchName: string;
   searchProvider: string;
+  searchUpstreamProvider: string;
 };
 
 export function useComposerCommandMenuItems(input: {
@@ -234,11 +235,14 @@ export function useComposerCommandMenuItems(input: {
     }
 
     return searchableModelOptions
-      .filter(({ searchSlug, searchName, searchProvider }) => {
+      .filter(({ searchSlug, searchName, searchProvider, searchUpstreamProvider }) => {
         const query = composerTrigger.query.trim().toLowerCase();
         if (!query) return true;
         return (
-          searchSlug.includes(query) || searchName.includes(query) || searchProvider.includes(query)
+          searchSlug.includes(query) ||
+          searchName.includes(query) ||
+          searchProvider.includes(query) ||
+          searchUpstreamProvider.includes(query)
         );
       })
       .map(({ provider, providerLabel, slug, name }) => ({

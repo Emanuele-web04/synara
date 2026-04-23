@@ -27,7 +27,7 @@ import { TbExchange } from "react-icons/tb";
 
 import ChatView from "../components/ChatView";
 import BrowserPanel from "../components/BrowserPanel";
-import { ClaudeAI, Gemini, OpenAI } from "../components/Icons";
+import { ClaudeAI, Gemini, OpenAI, OpenCodeIcon } from "../components/Icons";
 import { DiffWorkerPoolProvider } from "../components/DiffWorkerPoolProvider";
 import {
   DiffPanelHeaderSkeleton,
@@ -508,6 +508,14 @@ function PickerProviderGlyph(props: { provider: ProviderKind; className?: string
   }
   if (props.provider === "gemini") {
     return <Gemini aria-hidden="true" className={cn("text-foreground", props.className)} />;
+  }
+  if (props.provider === "opencode") {
+    return (
+      <OpenCodeIcon
+        aria-hidden="true"
+        className={cn("text-muted-foreground/70", props.className)}
+      />
+    );
   }
 
   return <OpenAI aria-hidden="true" className={cn("text-muted-foreground/60", props.className)} />;

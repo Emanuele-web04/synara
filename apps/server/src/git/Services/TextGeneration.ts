@@ -8,7 +8,7 @@
  */
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
-import type { ChatAttachment } from "@t3tools/contracts";
+import type { ChatAttachment, ModelSelection, ProviderStartOptions } from "@t3tools/contracts";
 
 import type { TextGenerationError } from "../Errors.ts";
 
@@ -22,6 +22,10 @@ export interface CommitMessageGenerationInput {
   includeBranch?: boolean;
   /** Model to use for generation. Defaults to gpt-5.4-mini if not specified. */
   model?: string;
+  /** Optional provider-aware selection for providers that need more than a raw model slug. */
+  modelSelection?: ModelSelection;
+  /** Optional provider startup overrides, such as custom binary paths or server URLs. */
+  providerOptions?: ProviderStartOptions;
 }
 
 export interface CommitMessageGenerationResult {
@@ -41,6 +45,10 @@ export interface PrContentGenerationInput {
   codexHomePath?: string;
   /** Model to use for generation. Defaults to gpt-5.4-mini if not specified. */
   model?: string;
+  /** Optional provider-aware selection for providers that need more than a raw model slug. */
+  modelSelection?: ModelSelection;
+  /** Optional provider startup overrides, such as custom binary paths or server URLs. */
+  providerOptions?: ProviderStartOptions;
 }
 
 export interface PrContentGenerationResult {
@@ -54,6 +62,10 @@ export interface DiffSummaryGenerationInput {
   codexHomePath?: string;
   /** Model to use for generation. Defaults to gpt-5.4-mini if not specified. */
   model?: string;
+  /** Optional provider-aware selection for providers that need more than a raw model slug. */
+  modelSelection?: ModelSelection;
+  /** Optional provider startup overrides, such as custom binary paths or server URLs. */
+  providerOptions?: ProviderStartOptions;
 }
 
 export interface DiffSummaryGenerationResult {
@@ -66,6 +78,10 @@ export interface BranchNameGenerationInput {
   attachments?: ReadonlyArray<ChatAttachment> | undefined;
   /** Model to use for generation. Defaults to gpt-5.4-mini if not specified. */
   model?: string;
+  /** Optional provider-aware selection for providers that need more than a raw model slug. */
+  modelSelection?: ModelSelection;
+  /** Optional provider startup overrides, such as custom binary paths or server URLs. */
+  providerOptions?: ProviderStartOptions;
 }
 
 export interface BranchNameGenerationResult {
@@ -78,6 +94,10 @@ export interface ThreadTitleGenerationInput {
   attachments?: ReadonlyArray<ChatAttachment> | undefined;
   /** Model to use for generation. Defaults to gpt-5.4-mini if not specified. */
   model?: string;
+  /** Optional provider-aware selection for providers that need more than a raw model slug. */
+  modelSelection?: ModelSelection;
+  /** Optional provider startup overrides, such as custom binary paths or server URLs. */
+  providerOptions?: ProviderStartOptions;
 }
 
 export interface ThreadTitleGenerationResult {
@@ -133,6 +153,22 @@ export interface TextGenerationShape {
     input: ThreadTitleGenerationInput,
   ) => Effect.Effect<ThreadTitleGenerationResult, TextGenerationError>;
 }
+
+/**
+ * CodexTextGeneration - Provider-specific Codex implementation for git text generation.
+ */
+export class CodexTextGeneration extends ServiceMap.Service<
+  CodexTextGeneration,
+  TextGenerationShape
+>()("t3/git/Services/TextGeneration/CodexTextGeneration") {}
+
+/**
+ * OpenCodeTextGeneration - Provider-specific OpenCode implementation for git text generation.
+ */
+export class OpenCodeTextGeneration extends ServiceMap.Service<
+  OpenCodeTextGeneration,
+  TextGenerationShape
+>()("t3/git/Services/TextGeneration/OpenCodeTextGeneration") {}
 
 /**
  * TextGeneration - Service tag for commit and PR text generation.

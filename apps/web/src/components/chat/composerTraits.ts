@@ -7,6 +7,7 @@ import {
   type ClaudeModelOptions,
   type CodexModelOptions,
   type GeminiModelOptions,
+  type OpenCodeModelOptions,
   type ProviderKind,
   type ProviderModelDescriptor,
 } from "@t3tools/contracts";
@@ -18,6 +19,7 @@ import {
   hasEffortLevel,
   hasContextWindowOption,
   isClaudeUltrathinkPrompt,
+  resolveLabeledOptionValue,
   trimOrNull,
 } from "@t3tools/shared/model";
 
@@ -34,6 +36,9 @@ function getRawEffort(
   }
   if (provider === "claudeAgent") {
     return trimOrNull((modelOptions as ClaudeModelOptions | undefined)?.effort);
+  }
+  if (provider === "opencode") {
+    return trimOrNull((modelOptions as OpenCodeModelOptions | undefined)?.variant);
   }
   const caps = getModelCapabilities(provider, model);
   return getGeminiThinkingSelectionValue(caps, modelOptions as GeminiModelOptions | undefined);
@@ -58,8 +63,12 @@ export function getComposerTraitSelection(
   runtimeModel?: ProviderModelDescriptor,
 ) {
   const caps = getRuntimeAwareModelCapabilities({ provider, model, runtimeModel });
-  const effortLevels = caps.reasoningEffortLevels;
-  const defaultEffort = getDefaultEffort(caps);
+  const effortLevels =
+    provider === "opencode" ? (caps.variantOptions ?? []) : caps.reasoningEffortLevels;
+  const defaultEffort =
+    provider === "opencode"
+      ? resolveLabeledOptionValue(caps.variantOptions, null)
+      : getDefaultEffort(caps);
   const defaultContextWindow = getDefaultContextWindow(caps);
   const resolvedContextWindow = getRawContextWindow(provider, modelOptions);
   const resolvedEffort = getRawEffort(provider, model, modelOptions);
@@ -67,11 +76,13 @@ export function getComposerTraitSelection(
     ? caps.promptInjectedEffortLevels.includes(resolvedEffort)
     : false;
   const effort =
-    resolvedEffort && !isPromptInjected && hasEffortLevel(caps, resolvedEffort)
-      ? resolvedEffort
-      : defaultEffort && hasEffortLevel(caps, defaultEffort)
-        ? defaultEffort
-        : null;
+    provider === "opencode"
+      ? resolveLabeledOptionValue(caps.variantOptions, resolvedEffort)
+      : resolvedEffort && !isPromptInjected && hasEffortLevel(caps, resolvedEffort)
+        ? resolvedEffort
+        : defaultEffort && hasEffortLevel(caps, defaultEffort)
+          ? defaultEffort
+          : null;
 
   const thinkingEnabled = caps.supportsThinkingToggle
     ? ((modelOptions as ClaudeModelOptions | undefined)?.thinking ?? true)
@@ -102,4 +113,21 @@ export function getComposerTraitSelection(
     defaultContextWindow,
     ultrathinkPromptControlled,
   };
+}
+
+export function hasVisibleComposerTraitControls(
+  selection: Pick<
+    ReturnType<typeof getComposerTraitSelection>,
+    "caps" | "effortLevels" | "thinkingEnabled" | "contextWindowOptions"
+  >,
+  options?: {
+    includeFastMode?: boolean;
+  },
+): boolean {
+  return (
+    selection.effortLevels.length > 0 ||
+    selection.thinkingEnabled !== null ||
+    selection.contextWindowOptions.length > 1 ||
+    ((options?.includeFastMode ?? true) && selection.caps.supportsFastMode)
+  );
 }

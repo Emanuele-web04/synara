@@ -12,6 +12,7 @@ import {
   type ModelCapabilities,
   type ModelSelection,
   type ModelSlug,
+  type OpenCodeModelOptions,
   type ProviderKind,
   CodexReasoningEffort,
 } from "@t3tools/contracts";
@@ -20,6 +21,7 @@ const MODEL_SLUG_SET_BY_PROVIDER: Record<ProviderKind, ReadonlySet<ModelSlug>> =
   claudeAgent: new Set(MODEL_OPTIONS_BY_PROVIDER.claudeAgent.map((option) => option.slug)),
   codex: new Set(MODEL_OPTIONS_BY_PROVIDER.codex.map((option) => option.slug)),
   gemini: new Set(MODEL_OPTIONS_BY_PROVIDER.gemini.map((option) => option.slug)),
+  opencode: new Set(MODEL_OPTIONS_BY_PROVIDER.opencode.map((option) => option.slug)),
 };
 
 export interface SelectableModelOption {
@@ -246,6 +248,20 @@ export function getDefaultContextWindow(caps: ModelCapabilities): string | null 
   return caps.contextWindowOptions.find((option) => option.isDefault)?.value ?? null;
 }
 
+export function resolveLabeledOptionValue(
+  options: ReadonlyArray<{ value: string; isDefault?: boolean | undefined }> | undefined,
+  rawValue: string | null | undefined,
+): string | null {
+  const trimmedValue = trimOrNull(rawValue);
+  if (!options || options.length === 0) {
+    return trimmedValue;
+  }
+  if (trimmedValue && options.some((option) => option.value === trimmedValue)) {
+    return trimmedValue;
+  }
+  return options.find((option) => option.isDefault)?.value ?? options[0]?.value ?? null;
+}
+
 // ── Data-driven capability resolver ───────────────────────────────────
 
 export function getModelCapabilities(
@@ -436,6 +452,18 @@ export function normalizeGeminiModelOptions(
   }
 
   return nextOptions;
+}
+
+export function normalizeOpenCodeModelOptions(
+  modelOptions: OpenCodeModelOptions | null | undefined,
+): OpenCodeModelOptions | undefined {
+  const variant = trimOrNull(modelOptions?.variant);
+  const agent = trimOrNull(modelOptions?.agent);
+  const nextOptions: OpenCodeModelOptions = {
+    ...(variant ? { variant } : {}),
+    ...(agent ? { agent } : {}),
+  };
+  return Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
 }
 
 export function applyClaudePromptEffortPrefix(

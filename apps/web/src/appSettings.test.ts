@@ -12,6 +12,7 @@ import {
   getCustomModelsByProvider,
   getCustomModelsForProvider,
   getDefaultCustomModelsForProvider,
+  getGitTextGenerationModelOptions,
   getProviderStartOptions,
   MODEL_PROVIDER_SETTINGS,
   normalizeChatFontSizePx,
@@ -87,28 +88,74 @@ describe("getAppModelOptions", () => {
   });
 });
 
+describe("getGitTextGenerationModelOptions", () => {
+  it("merges codex and OpenCode model options for git writing settings", () => {
+    const options = getGitTextGenerationModelOptions({
+      customCodexModels: ["custom/codex-model"],
+      customOpenCodeModels: ["openrouter/gpt-oss-120b"],
+      textGenerationModel: "openai/gpt-5",
+    });
+
+    expect(options.some((option) => option.slug === "gpt-5.4-mini")).toBe(true);
+    expect(options.some((option) => option.slug === "openai/gpt-5")).toBe(true);
+    expect(options.some((option) => option.slug === "openrouter/gpt-oss-120b")).toBe(true);
+  });
+
+  it("preserves a currently selected transient git writing model", () => {
+    const options = getGitTextGenerationModelOptions({
+      customCodexModels: [],
+      customOpenCodeModels: [],
+      textGenerationModel: "openrouter/custom-model",
+    });
+
+    expect(options.at(-1)).toEqual({
+      slug: "openrouter/custom-model",
+      name: "Custom Model",
+      isCustom: true,
+    });
+  });
+
+  it("humanizes transient OpenCode git-writing models instead of showing the raw slug", () => {
+    const options = getGitTextGenerationModelOptions({
+      customCodexModels: [],
+      customOpenCodeModels: [],
+      textGenerationModel: "opencode-go/kimi-k2.6",
+    });
+
+    expect(options.at(-1)).toEqual({
+      slug: "opencode-go/kimi-k2.6",
+      name: "Kimi K2.6",
+      isCustom: true,
+    });
+  });
+});
+
 describe("resolveAppModelSelection", () => {
   it("preserves saved custom model slugs instead of falling back to the default", () => {
     expect(
       resolveAppModelSelection(
         "codex",
-        { codex: ["galapagos-alpha"], claudeAgent: [], gemini: [] },
+        { codex: ["galapagos-alpha"], claudeAgent: [], gemini: [], opencode: [] },
         "galapagos-alpha",
       ),
     ).toBe("galapagos-alpha");
   });
 
   it("falls back to the provider default when no model is selected", () => {
-    expect(resolveAppModelSelection("codex", { codex: [], claudeAgent: [], gemini: [] }, "")).toBe(
-      "gpt-5.5",
-    );
+    expect(
+      resolveAppModelSelection(
+        "codex",
+        { codex: [], claudeAgent: [], gemini: [], opencode: [] },
+        "",
+      ),
+    ).toBe("gpt-5.5");
   });
 
   it("resolves display names through the shared resolver", () => {
     expect(
       resolveAppModelSelection(
         "codex",
-        { codex: [], claudeAgent: [], gemini: [] },
+        { codex: [], claudeAgent: [], gemini: [], opencode: [] },
         "GPT-5.3 Codex",
       ),
     ).toBe("gpt-5.3-codex");
@@ -116,7 +163,11 @@ describe("resolveAppModelSelection", () => {
 
   it("resolves aliases through the shared resolver", () => {
     expect(
-      resolveAppModelSelection("claudeAgent", { codex: [], claudeAgent: [], gemini: [] }, "sonnet"),
+      resolveAppModelSelection(
+        "claudeAgent",
+        { codex: [], claudeAgent: [], gemini: [], opencode: [] },
+        "sonnet",
+      ),
     ).toBe("claude-sonnet-4-6");
   });
 
@@ -124,7 +175,7 @@ describe("resolveAppModelSelection", () => {
     expect(
       resolveAppModelSelection(
         "codex",
-        { codex: [], claudeAgent: [], gemini: [] },
+        { codex: [], claudeAgent: [], gemini: [], opencode: [] },
         "custom/selected-model",
       ),
     ).toBe("custom/selected-model");
@@ -175,6 +226,9 @@ describe("getProviderStartOptions", () => {
         codexBinaryPath: "",
         codexHomePath: "/Users/you/.codex",
         geminiBinaryPath: "/usr/local/bin/gemini",
+        openCodeBinaryPath: "",
+        openCodeServerPassword: "",
+        openCodeServerUrl: "",
       }),
     ).toEqual({
       claudeAgent: {
@@ -196,6 +250,9 @@ describe("getProviderStartOptions", () => {
         codexBinaryPath: "",
         codexHomePath: "",
         geminiBinaryPath: "",
+        openCodeBinaryPath: "",
+        openCodeServerPassword: "",
+        openCodeServerUrl: "",
       }),
     ).toBeUndefined();
   });
@@ -206,6 +263,7 @@ describe("provider-indexed custom model settings", () => {
     customCodexModels: ["custom/codex-model"],
     customClaudeModels: ["claude/custom-opus"],
     customGeminiModels: ["gemini/custom-flash"],
+    customOpenCodeModels: ["openrouter/gpt-oss-120b"],
   } as const;
 
   it("exports one provider config per provider", () => {
@@ -213,6 +271,7 @@ describe("provider-indexed custom model settings", () => {
       "codex",
       "claudeAgent",
       "gemini",
+      "opencode",
     ]);
   });
 
@@ -220,6 +279,7 @@ describe("provider-indexed custom model settings", () => {
     expect(getCustomModelsForProvider(settings, "codex")).toEqual(["custom/codex-model"]);
     expect(getCustomModelsForProvider(settings, "claudeAgent")).toEqual(["claude/custom-opus"]);
     expect(getCustomModelsForProvider(settings, "gemini")).toEqual(["gemini/custom-flash"]);
+    expect(getCustomModelsForProvider(settings, "opencode")).toEqual(["openrouter/gpt-oss-120b"]);
   });
 
   it("reads default custom models for each provider", () => {
@@ -227,6 +287,7 @@ describe("provider-indexed custom model settings", () => {
       customCodexModels: ["default/codex-model"],
       customClaudeModels: ["claude/default-opus"],
       customGeminiModels: ["gemini/default-flash"],
+      customOpenCodeModels: ["openai/gpt-5"],
     } as const;
 
     expect(getDefaultCustomModelsForProvider(defaults, "codex")).toEqual(["default/codex-model"]);
@@ -234,6 +295,7 @@ describe("provider-indexed custom model settings", () => {
       "claude/default-opus",
     ]);
     expect(getDefaultCustomModelsForProvider(defaults, "gemini")).toEqual(["gemini/default-flash"]);
+    expect(getDefaultCustomModelsForProvider(defaults, "opencode")).toEqual(["openai/gpt-5"]);
   });
 
   it("patches custom models for codex", () => {
@@ -254,11 +316,18 @@ describe("provider-indexed custom model settings", () => {
     });
   });
 
+  it("patches custom models for opencode", () => {
+    expect(patchCustomModels("opencode", ["openrouter/gpt-oss-120b"])).toEqual({
+      customOpenCodeModels: ["openrouter/gpt-oss-120b"],
+    });
+  });
+
   it("builds a complete provider-indexed custom model record", () => {
     expect(getCustomModelsByProvider(settings)).toEqual({
       codex: ["custom/codex-model"],
       claudeAgent: ["claude/custom-opus"],
       gemini: ["gemini/custom-flash"],
+      opencode: ["openrouter/gpt-oss-120b"],
     });
   });
 
@@ -274,6 +343,9 @@ describe("provider-indexed custom model settings", () => {
     expect(
       modelOptionsByProvider.gemini.some((option) => option.slug === "gemini/custom-flash"),
     ).toBe(true);
+    expect(
+      modelOptionsByProvider.opencode.some((option) => option.slug === "openrouter/gpt-oss-120b"),
+    ).toBe(true);
   });
 
   it("normalizes and deduplicates custom model options per provider", () => {
@@ -281,6 +353,11 @@ describe("provider-indexed custom model settings", () => {
       customCodexModels: ["  custom/codex-model ", "gpt-5.4", "custom/codex-model"],
       customClaudeModels: [" sonnet ", "claude/custom-opus", "claude/custom-opus"],
       customGeminiModels: [" auto-gemini-3 ", "gemini/custom-flash", "gemini/custom-flash"],
+      customOpenCodeModels: [
+        " openai/gpt-5 ",
+        "openrouter/gpt-oss-120b",
+        "openrouter/gpt-oss-120b",
+      ],
     });
 
     expect(
@@ -299,6 +376,9 @@ describe("provider-indexed custom model settings", () => {
     expect(modelOptionsByProvider.gemini.some((option) => option.slug === "auto-gemini-3")).toBe(
       true,
     );
+    expect(
+      modelOptionsByProvider.opencode.filter((option) => option.slug === "openrouter/gpt-oss-120b"),
+    ).toHaveLength(1);
   });
 });
 
@@ -329,6 +409,7 @@ describe("AppSettingsSchema", () => {
       customCodexModels: [],
       customClaudeModels: [],
       customGeminiModels: [],
+      customOpenCodeModels: [],
     });
   });
 });

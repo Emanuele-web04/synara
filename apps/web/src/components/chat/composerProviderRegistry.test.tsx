@@ -1,5 +1,38 @@
-import { describe, expect, it } from "vitest";
-import { getComposerProviderState } from "./composerProviderRegistry";
+import { type ProviderModelDescriptor, ThreadId } from "@t3tools/contracts";
+import { describe, expect, it, vi } from "vitest";
+import {
+  getComposerProviderState,
+  renderProviderTraitsMenuContent,
+  renderProviderTraitsPicker,
+} from "./composerProviderRegistry";
+
+const OPENCODE_RUNTIME_MODEL_WITH_REASONING: ProviderModelDescriptor = {
+  slug: "openai/gpt-5.4",
+  name: "GPT-5.4",
+  upstreamProviderId: "openai",
+  upstreamProviderName: "OpenAI",
+  supportedReasoningEfforts: [
+    { value: "none" },
+    { value: "low" },
+    { value: "medium" },
+    { value: "high" },
+    { value: "xhigh" },
+  ],
+  defaultReasoningEffort: "medium",
+};
+
+const OPENCODE_RUNTIME_MODEL_WITHOUT_DEFAULT: ProviderModelDescriptor = {
+  slug: "opencode/gpt-5-nano",
+  name: "GPT-5 Nano",
+  upstreamProviderId: "opencode",
+  upstreamProviderName: "OpenCode",
+  supportedReasoningEfforts: [
+    { value: "minimal" },
+    { value: "low" },
+    { value: "medium" },
+    { value: "high" },
+  ],
+};
 
 describe("getComposerProviderState", () => {
   it("returns codex defaults when no codex draft options exist", () => {
@@ -312,5 +345,113 @@ describe("getComposerProviderState", () => {
       promptEffort: "HIGH",
       modelOptionsForDispatch: undefined,
     });
+  });
+
+  it("does not render a traits picker for OpenCode models without exposed controls", () => {
+    const threadId = ThreadId.makeUnsafe("thread-opencode-traits-hidden");
+
+    const picker = renderProviderTraitsPicker({
+      provider: "opencode",
+      threadId,
+      model: "openrouter/gpt-oss-120b:free",
+      modelOptions: undefined,
+      prompt: "",
+      includeFastMode: false,
+      onPromptChange: vi.fn(),
+    });
+
+    const menuContent = renderProviderTraitsMenuContent({
+      provider: "opencode",
+      threadId,
+      model: "openrouter/gpt-oss-120b:free",
+      modelOptions: undefined,
+      prompt: "",
+      onPromptChange: vi.fn(),
+    });
+
+    expect(picker).toBeNull();
+    expect(menuContent).toBeNull();
+  });
+
+  it("keeps OpenCode runtime thinking selections on the variant field", () => {
+    const state = getComposerProviderState({
+      provider: "opencode",
+      model: "openai/gpt-5.4",
+      runtimeModel: OPENCODE_RUNTIME_MODEL_WITH_REASONING,
+      prompt: "",
+      modelOptions: {
+        opencode: {
+          variant: "xhigh",
+        },
+      },
+    });
+
+    expect(state).toEqual({
+      provider: "opencode",
+      promptEffort: "xhigh",
+      modelOptionsForDispatch: {
+        variant: "xhigh",
+      },
+    });
+  });
+
+  it("uses the runtime default thinking level for OpenCode trigger state", () => {
+    const state = getComposerProviderState({
+      provider: "opencode",
+      model: "openai/gpt-5.4",
+      runtimeModel: OPENCODE_RUNTIME_MODEL_WITH_REASONING,
+      prompt: "",
+      modelOptions: undefined,
+    });
+
+    expect(state).toEqual({
+      provider: "opencode",
+      promptEffort: "medium",
+      modelOptionsForDispatch: undefined,
+    });
+  });
+
+  it("falls back to the first OpenCode runtime variant when metadata omits a default", () => {
+    const state = getComposerProviderState({
+      provider: "opencode",
+      model: "opencode/gpt-5-nano",
+      runtimeModel: OPENCODE_RUNTIME_MODEL_WITHOUT_DEFAULT,
+      prompt: "",
+      modelOptions: undefined,
+    });
+
+    expect(state).toEqual({
+      provider: "opencode",
+      promptEffort: "minimal",
+      modelOptionsForDispatch: undefined,
+    });
+  });
+
+  it("renders OpenCode thinking controls when runtime metadata exposes levels without a default", () => {
+    const threadId = ThreadId.makeUnsafe("thread-opencode-runtime-thinking");
+
+    const picker = renderProviderTraitsPicker({
+      provider: "opencode",
+      threadId,
+      model: "opencode/gpt-5-nano",
+      runtimeModel: OPENCODE_RUNTIME_MODEL_WITHOUT_DEFAULT,
+      modelOptions: undefined,
+      prompt: "",
+      includeFastMode: false,
+      onPromptChange: vi.fn(),
+    });
+
+    const menuContent = renderProviderTraitsMenuContent({
+      provider: "opencode",
+      threadId,
+      model: "opencode/gpt-5-nano",
+      runtimeModel: OPENCODE_RUNTIME_MODEL_WITHOUT_DEFAULT,
+      modelOptions: undefined,
+      prompt: "",
+      onPromptChange: vi.fn(),
+    });
+
+    expect(picker).not.toBeNull();
+    expect(menuContent).not.toBeNull();
   });
 });

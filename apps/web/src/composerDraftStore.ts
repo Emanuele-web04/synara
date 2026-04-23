@@ -22,6 +22,7 @@ import { DeepMutable } from "effect/Types";
 import {
   getDefaultModel,
   normalizeModelSlug,
+  resolveSelectableModel,
   resolveModelSlugForProvider,
 } from "@t3tools/shared/model";
 import { useMemo } from "react";
@@ -660,7 +661,60 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
 }
 
 function normalizeProviderKind(value: unknown): ProviderKind | null {
-  return value === "codex" || value === "claudeAgent" || value === "gemini" ? value : null;
+  return value === "codex" || value === "claudeAgent" || value === "gemini" || value === "opencode"
+    ? value
+    : null;
+}
+
+function trimStringOrUndefined(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function makeModelSelection(
+  provider: ProviderKind,
+  model: string,
+  options?: ProviderModelOptions[ProviderKind],
+): ModelSelection {
+  switch (provider) {
+    case "codex":
+      return {
+        provider,
+        model,
+        ...(options
+          ? { options: options as Extract<ModelSelection, { provider: "codex" }>["options"] }
+          : {}),
+      };
+    case "claudeAgent":
+      return {
+        provider,
+        model,
+        ...(options
+          ? {
+              options: options as Extract<ModelSelection, { provider: "claudeAgent" }>["options"],
+            }
+          : {}),
+      };
+    case "gemini":
+      return {
+        provider,
+        model,
+        ...(options
+          ? { options: options as Extract<ModelSelection, { provider: "gemini" }>["options"] }
+          : {}),
+      };
+    case "opencode":
+      return {
+        provider,
+        model,
+        ...(options
+          ? { options: options as Extract<ModelSelection, { provider: "opencode" }>["options"] }
+          : {}),
+      };
+  }
 }
 
 function normalizeProviderModelOptions(
@@ -680,6 +734,10 @@ function normalizeProviderModelOptions(
   const geminiCandidate =
     candidate?.gemini && typeof candidate.gemini === "object"
       ? (candidate.gemini as Record<string, unknown>)
+      : null;
+  const openCodeCandidate =
+    candidate?.opencode && typeof candidate.opencode === "object"
+      ? (candidate.opencode as Record<string, unknown>)
       : null;
 
   const codexReasoningEffort: CodexReasoningEffort | undefined =
@@ -773,14 +831,23 @@ function normalizeProviderModelOptions(
           ...(geminiThinkingBudget !== undefined ? { thinkingBudget: geminiThinkingBudget } : {}),
         }
       : undefined;
-
-  if (!codex && !claude && !gemini) {
+  const openCodeVariant = trimStringOrUndefined(openCodeCandidate?.variant);
+  const openCodeAgent = trimStringOrUndefined(openCodeCandidate?.agent);
+  const opencode =
+    openCodeVariant !== undefined || openCodeAgent !== undefined
+      ? {
+          ...(openCodeVariant !== undefined ? { variant: openCodeVariant } : {}),
+          ...(openCodeAgent !== undefined ? { agent: openCodeAgent } : {}),
+        }
+      : undefined;
+  if (!codex && !claude && !gemini && !opencode) {
     return null;
   }
   return {
     ...(codex ? { codex } : {}),
     ...(claude ? { claudeAgent: claude } : {}),
     ...(gemini ? { gemini } : {}),
+    ...(opencode ? { opencode } : {}),
   };
 }
 
@@ -824,8 +891,12 @@ function normalizeModelSelection(
                 modelOptions?.claudeAgent?.contextWindow ?? inferredClaudeContextWindow,
             }
           : modelOptions?.claudeAgent
-        : modelOptions?.gemini;
-  return buildModelSelection(provider, model, options);
+        : provider === "gemini"
+          ? modelOptions?.gemini
+          : provider === "opencode"
+            ? modelOptions?.opencode
+            : undefined;
+  return makeModelSelection(provider, model, options);
 }
 
 // ── Legacy sync helpers (used only during migration from v2 storage) ──
@@ -838,7 +909,7 @@ function legacySyncModelSelectionOptions(
     return null;
   }
   const options = modelOptions?.[modelSelection.provider];
-  return buildModelSelection(modelSelection.provider, modelSelection.model, options);
+  return makeModelSelection(modelSelection.provider, modelSelection.model, options);
 }
 
 function legacyMergeModelSelectionIntoProviderModelOptions(
@@ -882,10 +953,10 @@ function legacyToModelSelectionByProvider(
   const result: Partial<Record<ProviderKind, ModelSelection>> = {};
   // Add entries from the options bag (for non-active providers)
   if (modelOptions) {
-    for (const provider of ["codex", "claudeAgent", "gemini"] as const) {
+    for (const provider of ["codex", "claudeAgent", "gemini", "opencode"] as const) {
       const options = modelOptions[provider];
       if (options && Object.keys(options).length > 0) {
-        result[provider] = buildModelSelection(
+        result[provider] = makeModelSelection(
           provider,
           modelSelection?.provider === provider ? modelSelection.model : getDefaultModel(provider),
           options,
@@ -909,21 +980,59 @@ export function deriveEffectiveComposerModelState(input: {
   threadModelSelection: ModelSelection | null | undefined;
   projectModelSelection: ModelSelection | null | undefined;
   customModelsByProvider: Record<ProviderKind, readonly string[]>;
+  availableModelOptionsByProvider?: Partial<
+    Record<ProviderKind, ReadonlyArray<{ slug: string; name: string }>>
+  >;
 }): EffectiveComposerModelState {
+  const resolveAvailableModel = (candidate: string | null | undefined): ModelSlug | null => {
+    const availableOptions = input.availableModelOptionsByProvider?.[input.selectedProvider];
+    if (!availableOptions || availableOptions.length === 0) {
+      return null;
+    }
+    return resolveSelectableModel(input.selectedProvider, candidate, availableOptions);
+  };
   const baseModel = resolveModelSlugForProvider(
     input.selectedProvider,
     input.threadModelSelection?.model ??
       input.projectModelSelection?.model ??
       getDefaultModel(input.selectedProvider),
   );
+  const persistedThreadModel =
+    input.threadModelSelection?.provider === input.selectedProvider
+      ? (normalizeModelSlug(input.threadModelSelection.model, input.selectedProvider) ??
+        input.threadModelSelection.model)
+      : null;
+  const persistedProjectModel =
+    input.projectModelSelection?.provider === input.selectedProvider
+      ? (normalizeModelSlug(input.projectModelSelection.model, input.selectedProvider) ??
+        input.projectModelSelection.model)
+      : null;
   const activeSelection = input.draft?.modelSelectionByProvider?.[input.selectedProvider];
-  const selectedModel = activeSelection?.model
+  const selectedDraftModel = activeSelection?.model
     ? resolveAppModelSelection(
         input.selectedProvider,
         input.customModelsByProvider,
         activeSelection.model,
       )
-    : baseModel;
+    : null;
+  const selectedModel =
+    resolveAvailableModel(activeSelection?.model) ??
+    resolveAvailableModel(
+      input.threadModelSelection?.provider === input.selectedProvider
+        ? input.threadModelSelection.model
+        : null,
+    ) ??
+    resolveAvailableModel(
+      input.projectModelSelection?.provider === input.selectedProvider
+        ? input.projectModelSelection.model
+        : null,
+    ) ??
+    resolveAvailableModel(selectedDraftModel) ??
+    persistedThreadModel ??
+    persistedProjectModel ??
+    input.availableModelOptionsByProvider?.[input.selectedProvider]?.[0]?.slug ??
+    selectedDraftModel ??
+    baseModel;
   const modelOptions =
     modelSelectionByProviderToOptions(input.draft?.modelSelectionByProvider) ??
     providerModelOptionsFromSelection(input.threadModelSelection) ??
@@ -948,7 +1057,7 @@ export function resolvePreferredComposerModelSelection(input: {
   defaultProvider?: ProviderKind | null | undefined;
 }): ModelSelection {
   const draftProviderWithSelection =
-    (["codex", "claudeAgent", "gemini"] as const).find(
+    (["codex", "claudeAgent", "gemini", "opencode"] as const).find(
       (provider) => input.draft?.modelSelectionByProvider?.[provider] !== undefined,
     ) ?? null;
   const preferredProvider =
@@ -2392,7 +2501,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
               nextMap[normalized.provider] = normalized;
             } else {
               // No options in selection → preserve existing options, update provider+model
-              nextMap[normalized.provider] = buildModelSelection(
+              nextMap[normalized.provider] = makeModelSelection(
                 normalized.provider,
                 normalized.model,
                 current?.options,
@@ -2432,13 +2541,13 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           }
           const base = existing ?? createEmptyThreadDraft();
           const nextMap = { ...base.modelSelectionByProvider };
-          for (const provider of ["codex", "claudeAgent", "gemini"] as const) {
+          for (const provider of ["codex", "claudeAgent", "gemini", "opencode"] as const) {
             // Only touch providers explicitly present in the input
             if (!normalizedOpts || !(provider in normalizedOpts)) continue;
             const opts = normalizedOpts[provider];
             const current = nextMap[provider];
             if (opts) {
-              nextMap[provider] = buildModelSelection(
+              nextMap[provider] = makeModelSelection(
                 provider,
                 current?.model ?? getDefaultModel(provider),
                 opts,
@@ -2490,7 +2599,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           const nextMap = { ...base.modelSelectionByProvider };
           const currentForProvider = nextMap[normalizedProvider];
           if (providerOpts) {
-            nextMap[normalizedProvider] = buildModelSelection(
+            nextMap[normalizedProvider] = makeModelSelection(
               normalizedProvider,
               currentForProvider?.model ?? fallbackModel,
               providerOpts,
@@ -2510,9 +2619,9 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             const stickyBase =
               nextStickyMap[normalizedProvider] ??
               base.modelSelectionByProvider[normalizedProvider] ??
-              buildModelSelection(normalizedProvider, fallbackModel);
+              makeModelSelection(normalizedProvider, fallbackModel);
             if (providerOpts) {
-              nextStickyMap[normalizedProvider] = buildModelSelection(
+              nextStickyMap[normalizedProvider] = makeModelSelection(
                 normalizedProvider,
                 stickyBase.model,
                 providerOpts,
@@ -3103,6 +3212,9 @@ export function useEffectiveComposerModelState(input: {
   threadModelSelection: ModelSelection | null | undefined;
   projectModelSelection: ModelSelection | null | undefined;
   customModelsByProvider: Record<ProviderKind, readonly string[]>;
+  availableModelOptionsByProvider?: Partial<
+    Record<ProviderKind, ReadonlyArray<{ slug: string; name: string }>>
+  >;
 }): EffectiveComposerModelState {
   const draft = useComposerThreadDraft(input.threadId);
 
@@ -3114,8 +3226,12 @@ export function useEffectiveComposerModelState(input: {
         threadModelSelection: input.threadModelSelection,
         projectModelSelection: input.projectModelSelection,
         customModelsByProvider: input.customModelsByProvider,
+        ...(input.availableModelOptionsByProvider !== undefined
+          ? { availableModelOptionsByProvider: input.availableModelOptionsByProvider }
+          : {}),
       }),
     [
+      input.availableModelOptionsByProvider,
       draft,
       input.customModelsByProvider,
       input.projectModelSelection,

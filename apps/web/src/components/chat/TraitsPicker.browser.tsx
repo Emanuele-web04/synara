@@ -5,6 +5,8 @@ import {
   ClaudeModelOptions,
   CodexModelOptions,
   DEFAULT_MODEL_BY_PROVIDER,
+  type OpenCodeModelOptions,
+  type ProviderModelDescriptor,
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -37,7 +39,7 @@ function ClaudeTraitsPickerHarness(props: {
     selectedProvider: "claudeAgent",
     threadModelSelection: props.fallbackModelSelection,
     projectModelSelection: null,
-    customModelsByProvider: { codex: [], claudeAgent: [], gemini: [] },
+    customModelsByProvider: { codex: [], claudeAgent: [], gemini: [], opencode: [] },
   });
   const handlePromptChange = useCallback(
     (nextPrompt: string) => {
@@ -437,6 +439,211 @@ describe("TraitsPicker (Codex)", () => {
     expect(useComposerDraftStore.getState().stickyModelSelectionByProvider.codex).toMatchObject({
       provider: "codex",
       options: { fastMode: true },
+    });
+  });
+});
+
+// ── OpenCode TraitsPicker tests ───────────────────────────────────────
+
+const OPENCODE_THREAD_ID = ThreadId.makeUnsafe("thread-opencode-traits");
+const OPENCODE_RUNTIME_MODEL_WITH_REASONING: ProviderModelDescriptor = {
+  slug: "openai/gpt-5.4",
+  name: "GPT-5.4",
+  upstreamProviderId: "openai",
+  upstreamProviderName: "OpenAI",
+  supportedReasoningEfforts: [
+    { value: "none" },
+    { value: "low" },
+    { value: "medium" },
+    { value: "high" },
+    { value: "xhigh" },
+  ],
+  defaultReasoningEffort: "medium",
+};
+
+const OPENCODE_RUNTIME_MODEL_WITHOUT_DEFAULT: ProviderModelDescriptor = {
+  slug: "opencode/gpt-5-nano",
+  name: "GPT-5 Nano",
+  upstreamProviderId: "opencode",
+  upstreamProviderName: "OpenCode",
+  supportedReasoningEfforts: [
+    { value: "minimal" },
+    { value: "low" },
+    { value: "medium" },
+    { value: "high" },
+  ],
+};
+
+function OpenCodeTraitsPickerHarness(props: {
+  model: string;
+  runtimeModel?: ProviderModelDescriptor;
+  fallbackModelSelection: ModelSelection | null;
+}) {
+  const prompt = useComposerThreadDraft(OPENCODE_THREAD_ID).prompt;
+  const setPrompt = useComposerDraftStore((store) => store.setPrompt);
+  const { modelOptions, selectedModel } = useEffectiveComposerModelState({
+    threadId: OPENCODE_THREAD_ID,
+    selectedProvider: "opencode",
+    threadModelSelection: props.fallbackModelSelection,
+    projectModelSelection: null,
+    customModelsByProvider: { codex: [], claudeAgent: [], gemini: [], opencode: [] },
+  });
+  const handlePromptChange = useCallback(
+    (nextPrompt: string) => {
+      setPrompt(OPENCODE_THREAD_ID, nextPrompt);
+    },
+    [setPrompt],
+  );
+
+  return (
+    <TraitsPicker
+      provider="opencode"
+      threadId={OPENCODE_THREAD_ID}
+      model={selectedModel ?? props.model}
+      runtimeModel={props.runtimeModel}
+      prompt={prompt}
+      modelOptions={modelOptions?.opencode}
+      onPromptChange={handlePromptChange}
+    />
+  );
+}
+
+async function mountOpenCodePicker(props?: {
+  model?: string;
+  options?: OpenCodeModelOptions;
+  runtimeModel?: ProviderModelDescriptor;
+  fallbackModelOptions?: OpenCodeModelOptions | null;
+}) {
+  const model = props?.model ?? DEFAULT_MODEL_BY_PROVIDER.opencode;
+  const draftsByThreadId: Record<ThreadId, ComposerThreadDraftState> = {
+    [OPENCODE_THREAD_ID]: {
+      prompt: "",
+      images: [],
+      nonPersistedImageIds: [],
+      persistedAttachments: [],
+      terminalContexts: [],
+      queuedTurns: [],
+      assistantSelections: [],
+      modelSelectionByProvider: {
+        opencode: {
+          provider: "opencode",
+          model,
+          ...(props?.options ? { options: props.options } : {}),
+        },
+      },
+      activeProvider: "opencode",
+      runtimeMode: null,
+      interactionMode: null,
+    },
+  };
+
+  useComposerDraftStore.setState({
+    draftsByThreadId,
+    draftThreadsByThreadId: {},
+    projectDraftThreadIdByProjectId: {},
+  });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const fallbackModelSelection: ModelSelection = {
+    provider: "opencode",
+    model,
+    ...(props?.fallbackModelOptions ? { options: props.fallbackModelOptions } : {}),
+  };
+  const screen = await render(
+    <OpenCodeTraitsPickerHarness
+      model={model}
+      runtimeModel={props?.runtimeModel}
+      fallbackModelSelection={fallbackModelSelection}
+    />,
+    { container: host },
+  );
+
+  const cleanup = async () => {
+    await screen.unmount();
+    host.remove();
+  };
+
+  return {
+    host,
+    [Symbol.asyncDispose]: cleanup,
+    cleanup,
+  };
+}
+
+describe("TraitsPicker (OpenCode)", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+    localStorage.removeItem(COMPOSER_DRAFT_STORAGE_KEY);
+    useComposerDraftStore.setState({
+      draftsByThreadId: {},
+      draftThreadsByThreadId: {},
+      projectDraftThreadIdByProjectId: {},
+      stickyModelSelectionByProvider: {},
+    });
+  });
+
+  it("does not render an empty traits trigger when the model exposes no controls", async () => {
+    await using mounted = await mountOpenCodePicker({
+      model: "openrouter/gpt-oss-120b:free",
+    });
+
+    await vi.waitFor(() => {
+      expect(mounted.host.textContent ?? "").toBe("");
+      expect(mounted.host.querySelector("button")).toBeNull();
+    });
+  });
+
+  it("shows the runtime default thinking level in the trigger label", async () => {
+    await using mounted = await mountOpenCodePicker({
+      model: "openai/gpt-5.4",
+      runtimeModel: OPENCODE_RUNTIME_MODEL_WITH_REASONING,
+    });
+
+    await vi.waitFor(() => {
+      const text = mounted.host.textContent ?? "";
+      expect(text).toContain("Medium");
+      expect(text).not.toMatch(/\bThinking\b/u);
+    });
+  });
+
+  it("falls back to the first runtime variant label when OpenCode does not expose a default", async () => {
+    await using mounted = await mountOpenCodePicker({
+      model: "opencode/gpt-5-nano",
+      runtimeModel: OPENCODE_RUNTIME_MODEL_WITHOUT_DEFAULT,
+    });
+
+    await vi.waitFor(() => {
+      const text = mounted.host.textContent ?? "";
+      expect(text).toContain("Minimal");
+      expect(text).not.toMatch(/\bThinking\b/u);
+    });
+  });
+
+  it("persists sticky OpenCode variants when the thinking level changes", async () => {
+    await using mounted = await mountOpenCodePicker({
+      model: "openai/gpt-5.4",
+      runtimeModel: OPENCODE_RUNTIME_MODEL_WITH_REASONING,
+    });
+
+    await page.getByRole("button").click();
+
+    await vi.waitFor(() => {
+      const text = document.body.textContent ?? "";
+      expect(text).toContain("Variant");
+      expect(text).toContain("High");
+    });
+
+    await page.getByRole("menuitemradio", { name: /^High$/u }).click();
+
+    expect(useComposerDraftStore.getState().stickyModelSelectionByProvider.opencode).toMatchObject({
+      provider: "opencode",
+      options: {
+        variant: "high",
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(mounted.host.textContent ?? "").toContain("High");
     });
   });
 });

@@ -112,7 +112,7 @@ const COMPOSER_SLASH_COMMAND_DEFINITIONS: Record<
   compact: {
     command: "compact",
     label: "/compact",
-    description: "Compact the current Codex thread to free context",
+    description: "Compact the current thread context to free space",
     source: "app",
   },
   model: {

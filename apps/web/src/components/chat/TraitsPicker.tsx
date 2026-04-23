@@ -24,7 +24,7 @@ import {
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { buildNextProviderOptions, type ProviderOptions } from "../../providerModelOptions";
 import { COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME } from "./composerPickerStyles";
-import { getComposerTraitSelection } from "./composerTraits";
+import { getComposerTraitSelection, hasVisibleComposerTraitControls } from "./composerTraits";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ShortcutKbd } from "../ui/shortcut-kbd";
 
@@ -66,6 +66,10 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     defaultContextWindow,
     ultrathinkPromptControlled,
   } = getComposerTraitSelection(provider, model, prompt, modelOptions, runtimeModel);
+  const hasVisibleControls = hasVisibleComposerTraitControls(
+    { caps, effortLevels, thinkingEnabled, contextWindowOptions },
+    { includeFastMode },
+  );
 
   const handleEffortChange = useCallback(
     (value: string) => {
@@ -85,6 +89,8 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
       const nextModelOptionsPatch =
         provider === "gemini"
           ? (geminiModelOptionsFromEffortValue(nextOption.value) ?? {})
+          : provider === "opencode"
+            ? { variant: nextOption.value }
           : provider === "codex"
             ? { reasoningEffort: nextOption.value }
             : { effort: nextOption.value };
@@ -111,22 +117,24 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     ],
   );
 
-  if (effort === null && thinkingEnabled === null && contextWindowOptions.length <= 1) {
+  if (!hasVisibleControls) {
     return null;
   }
 
   return (
     <>
-      {effort ? (
+      {effortLevels.length > 0 ? (
         <>
           <MenuGroup>
-            <div className="px-2 pt-1.5 pb-1 font-medium text-muted-foreground text-xs">Effort</div>
+            <div className="px-2 pt-1.5 pb-1 font-medium text-muted-foreground text-xs">
+              {provider === "opencode" ? "Variant" : "Effort"}
+            </div>
             {ultrathinkPromptControlled ? (
               <div className="px-2 pb-1.5 text-muted-foreground/80 text-xs">
                 Remove Ultrathink from the prompt to change effort.
               </div>
             ) : null}
-            <MenuRadioGroup value={effort} onValueChange={handleEffortChange}>
+            <MenuRadioGroup value={effort ?? ""} onValueChange={handleEffortChange}>
               {effortLevels.map((option) => {
                 const item = (
                   <MenuRadioItem
@@ -280,6 +288,14 @@ export const TraitsPicker = memo(function TraitsPicker({
     defaultContextWindow,
     ultrathinkPromptControlled,
   } = getComposerTraitSelection(provider, model, prompt, modelOptions, runtimeModel);
+  const hasVisibleControls = hasVisibleComposerTraitControls(
+    { caps, effortLevels, thinkingEnabled, contextWindowOptions },
+    { includeFastMode },
+  );
+
+  if (!hasVisibleControls) {
+    return null;
+  }
 
   const effortLabel = effort
     ? (effortLevels.find((l) => l.value === effort)?.label ?? effort)

@@ -12,7 +12,12 @@ import { type Thread } from "../types";
 import { stripEmbeddedAssistantSelections } from "./assistantSelections";
 import { randomUUID } from "./utils";
 
-const HANDOFF_PROVIDER_ORDER: ReadonlyArray<ProviderKind> = ["codex", "claudeAgent", "gemini"];
+const HANDOFF_PROVIDER_ORDER: ReadonlyArray<ProviderKind> = [
+  "codex",
+  "claudeAgent",
+  "gemini",
+  "opencode",
+];
 const IMPORTABLE_THREAD_ACTIVITY_KINDS = new Set([
   "account.rate-limits.updated",
   "account.rate-limited",

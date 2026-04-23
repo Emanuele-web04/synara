@@ -19,6 +19,7 @@ import { ProviderUnsupportedError } from "./provider/Errors";
 import { ProviderDiscoveryService } from "./provider/Services/ProviderDiscoveryService";
 
 import {
+  DEFAULT_MODEL_BY_PROVIDER,
   DEFAULT_TERMINAL_ID,
   EDITORS,
   EventId,
@@ -791,7 +792,7 @@ describe("WebSocket Server", () => {
           title: "bootstrap-workspace",
           defaultModelSelection: {
             provider: "codex",
-            model: "gpt-5-codex",
+            model: DEFAULT_MODEL_BY_PROVIDER.codex,
           },
         }),
       ]),
@@ -804,7 +805,7 @@ describe("WebSocket Server", () => {
           title: "New thread",
           modelSelection: {
             provider: "codex",
-            model: "gpt-5-codex",
+            model: DEFAULT_MODEL_BY_PROVIDER.codex,
           },
           branch: null,
           worktreePath: null,
@@ -2106,6 +2107,235 @@ describe("WebSocket Server", () => {
       { role: "assistant", text: "Picking up where we left off." },
     ]);
     expect(importedThread?.session?.status).toBe("ready");
+  });
+
+  it("backfills OpenCode history when importing a resumed session", async () => {
+    let startSessionInput: unknown;
+    const workspaceRoot = makeTempDir("t3code-ws-import-opencode-project-");
+    const worktreeRoot = path.join(workspaceRoot, "..", "import-opencode-worktree");
+    const worktreeNestedCwd = path.join(worktreeRoot, "apps", "web");
+    fs.mkdirSync(path.join(workspaceRoot, ".git", "worktrees", "import-opencode-worktree"), {
+      recursive: true,
+    });
+    fs.mkdirSync(worktreeNestedCwd, { recursive: true });
+    fs.writeFileSync(
+      path.join(worktreeRoot, ".git"),
+      `gitdir: ${path.join(workspaceRoot, ".git", "worktrees", "import-opencode-worktree")}\n`,
+      "utf8",
+    );
+    const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
+    const providerService: ProviderServiceShape = {
+      startSession: (_threadId, input) => {
+        startSessionInput = input;
+        return Effect.succeed({
+          provider: "opencode",
+          status: "ready",
+          runtimeMode: "full-access",
+          threadId: input.threadId,
+          createdAt: "2026-04-22T12:00:00.000Z",
+          updatedAt: "2026-04-22T12:00:00.000Z",
+        });
+      },
+      sendTurn: ({ threadId }) =>
+        Effect.succeed({
+          threadId,
+          turnId: asTurnId("provider-turn-1"),
+        }),
+      steerTurn: ({ threadId }) =>
+        Effect.succeed({
+          threadId,
+          turnId: asTurnId("provider-turn-steer-1"),
+        }),
+      startReview: () => unsupported(),
+      forkThread: () => Effect.succeed(null),
+      interruptTurn: () => unsupported(),
+      respondToRequest: () => unsupported(),
+      respondToUserInput: () => unsupported(),
+      stopSession: () => unsupported(),
+      listSessions: () => Effect.succeed([]),
+      getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
+      rollbackConversation: () => unsupported(),
+      compactThread: () => unsupported(),
+      streamEvents: Stream.empty,
+    };
+    const providerLayer = Layer.mergeAll(
+      Layer.succeed(ProviderService, providerService),
+      Layer.succeed(ProviderAdapterRegistry, {
+        getByProvider: (provider) =>
+          provider === "opencode"
+            ? Effect.succeed({
+                readExternalThread: () =>
+                  Effect.succeed({
+                    threadId: asThreadId("opencode-session-1"),
+                    turns: [],
+                    cwd: worktreeNestedCwd,
+                  }),
+                readThread: () =>
+                  Effect.succeed({
+                    threadId: asThreadId("import-opencode-thread-1"),
+                    turns: [
+                      {
+                        id: asTurnId("msg-user-1"),
+                        items: [
+                          {
+                            info: {
+                              id: "msg-user-1",
+                              role: "user",
+                            },
+                            parts: [{ type: "text", text: "Resume this OpenCode chat" }],
+                          },
+                        ],
+                      },
+                      {
+                        id: asTurnId("msg-assistant-1"),
+                        items: [
+                          {
+                            info: {
+                              id: "msg-assistant-1",
+                              role: "assistant",
+                            },
+                            parts: [{ type: "text", text: "OpenCode session restored." }],
+                          },
+                        ],
+                      },
+                    ],
+                  }),
+              } as never)
+            : Effect.fail(new ProviderUnsupportedError({ provider })),
+        listProviders: () => Effect.succeed([]),
+      }),
+      Layer.succeed(ProviderDiscoveryService, {
+        getComposerCapabilities: () =>
+          Effect.succeed({
+            provider: "opencode" as const,
+            supportsSkillMentions: false,
+            supportsSkillDiscovery: false,
+            supportsNativeSlashCommandDiscovery: false,
+            supportsPluginMentions: false,
+            supportsPluginDiscovery: false,
+            supportsRuntimeModelList: true,
+            supportsThreadImport: true,
+          }),
+        listSkills: () => Effect.succeed({ skills: [], source: "test", cached: false }),
+        listCommands: () => Effect.succeed({ commands: [], source: "test", cached: false }),
+        listPlugins: () =>
+          Effect.succeed({
+            marketplaces: [],
+            marketplaceLoadErrors: [],
+            remoteSyncError: null,
+            featuredPluginIds: [],
+            source: "test",
+            cached: false,
+          }),
+        readPlugin: () =>
+          Effect.succeed({
+            plugin: {
+              marketplaceName: "test-marketplace",
+              marketplacePath: "/test/marketplace.json",
+              summary: {
+                id: "plugin/test",
+                name: "test",
+                source: {
+                  type: "local",
+                  path: "/test/plugin",
+                },
+                installed: false,
+                enabled: false,
+                installPolicy: "AVAILABLE",
+                authPolicy: "ON_USE",
+              },
+              skills: [],
+              apps: [],
+              mcpServers: [],
+            },
+            source: "test",
+            cached: false,
+          }),
+        listModels: (_input) => Effect.succeed({ models: [], source: "test", cached: false }),
+        listAgents: () => Effect.succeed({ agents: [], source: "test", cached: false }),
+      }),
+    );
+
+    server = await createTestServer({
+      cwd: "/test",
+      providerLayer,
+    });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const [ws] = await connectAndAwaitWelcome(port);
+    connections.push(ws);
+
+    const createdAt = new Date().toISOString();
+    await sendRequest(ws, ORCHESTRATION_WS_METHODS.dispatchCommand, {
+      type: "project.create",
+      commandId: "cmd-import-opencode-project-create",
+      projectId: "project-import-opencode-1",
+      title: "Import OpenCode Project",
+      workspaceRoot,
+      defaultModelSelection: {
+        provider: "opencode",
+        model: "openai/gpt-5.4",
+      },
+      createdAt,
+    });
+    await sendRequest(ws, ORCHESTRATION_WS_METHODS.dispatchCommand, {
+      type: "thread.create",
+      commandId: "cmd-import-opencode-thread-create",
+      threadId: "import-opencode-thread-1",
+      projectId: "project-import-opencode-1",
+      title: "Imported OpenCode thread",
+      modelSelection: {
+        provider: "opencode",
+        model: "openai/gpt-5.4",
+      },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdAt,
+    });
+
+    const importResponse = await sendRequest(ws, ORCHESTRATION_WS_METHODS.importThread, {
+      threadId: "import-opencode-thread-1",
+      externalId: "opencode-session-1",
+    });
+    expect(importResponse.error).toBeUndefined();
+    expect(startSessionInput).toMatchObject({
+      threadId: "import-opencode-thread-1",
+      provider: "opencode",
+      cwd: worktreeNestedCwd,
+      resumeCursor: {
+        openCodeSessionId: "opencode-session-1",
+      },
+    });
+
+    const snapshotResponse = await sendRequest(ws, ORCHESTRATION_WS_METHODS.getSnapshot);
+    expect(snapshotResponse.error).toBeUndefined();
+    const snapshot = snapshotResponse.result as {
+      threads: Array<{
+        id: string;
+        messages: Array<{ role: string; text: string }>;
+        session: { status: string } | null;
+        envMode: string;
+        worktreePath: string | null;
+      }>;
+    };
+    const importedThread = snapshot.threads.find(
+      (thread) => thread.id === "import-opencode-thread-1",
+    );
+    expect(
+      importedThread?.messages.map((message) => ({
+        role: message.role,
+        text: message.text,
+      })),
+    ).toEqual([
+      { role: "user", text: "Resume this OpenCode chat" },
+      { role: "assistant", text: "OpenCode session restored." },
+    ]);
+    expect(importedThread?.session?.status).toBe("ready");
+    expect(importedThread?.envMode).toBe("worktree");
+    expect(importedThread?.worktreePath).toBe(worktreeRoot);
   });
 
   it("rejects Claude import when the session is not stored for the target workspace", async () => {
