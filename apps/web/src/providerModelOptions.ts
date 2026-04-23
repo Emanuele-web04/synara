@@ -1,3 +1,4 @@
+import { formatModelDisplayName } from "@t3tools/shared/model";
 import type {
   ClaudeModelOptions,
   ClaudeModelSelection,
@@ -27,8 +28,34 @@ export interface ProviderModelOptionGroup {
   options: ProviderModelOption[];
 }
 
+function humanizeModelIdentifier(value: string): string {
+  return value.replace(/[-_/]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 function modelOptionKey(option: Pick<ProviderModelOption, "slug">): string {
   return option.slug.trim().toLowerCase();
+}
+
+export function formatProviderModelOptionName(input: {
+  provider: ProviderKind;
+  slug: string;
+}): string {
+  const trimmedSlug = input.slug.trim();
+  if (trimmedSlug.length === 0) {
+    return trimmedSlug;
+  }
+
+  if (input.provider === "opencode") {
+    const modelIdentifier = trimmedSlug.includes("/")
+      ? trimmedSlug.slice(trimmedSlug.lastIndexOf("/") + 1)
+      : trimmedSlug;
+    const sharedDisplayName = formatModelDisplayName(modelIdentifier);
+    return sharedDisplayName && sharedDisplayName !== modelIdentifier
+      ? sharedDisplayName
+      : humanizeModelIdentifier(modelIdentifier);
+  }
+
+  return formatModelDisplayName(trimmedSlug) ?? trimmedSlug;
 }
 
 export function mergeProviderModelOptions(

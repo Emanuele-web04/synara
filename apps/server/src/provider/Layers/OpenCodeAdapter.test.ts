@@ -112,6 +112,57 @@ function createMockOpenCodeRuntime() {
   return { abortCalls, promptCalls, runtime };
 }
 
+function createSubscribedEventQueue() {
+  const pendingEvents: Array<unknown> = [];
+  let waitingResolver:
+    | ((result: IteratorResult<unknown>) => void)
+    | undefined;
+  let closed = false;
+
+  return {
+    push(event: unknown) {
+      if (closed) {
+        return;
+      }
+      if (waitingResolver) {
+        const resolve = waitingResolver;
+        waitingResolver = undefined;
+        resolve({ value: event, done: false });
+        return;
+      }
+      pendingEvents.push(event);
+    },
+    close() {
+      closed = true;
+      if (waitingResolver) {
+        const resolve = waitingResolver;
+        waitingResolver = undefined;
+        resolve({ value: undefined, done: true });
+      }
+    },
+    stream: {
+      [Symbol.asyncIterator]() {
+        return {
+          next: async (): Promise<IteratorResult<unknown>> => {
+            if (pendingEvents.length > 0) {
+              return {
+                value: pendingEvents.shift(),
+                done: false,
+              };
+            }
+            if (closed) {
+              return { value: undefined, done: true };
+            }
+            return await new Promise<IteratorResult<unknown>>((resolve) => {
+              waitingResolver = resolve;
+            });
+          },
+        };
+      },
+    },
+  };
+}
+
 describe("resolvePreferredOpenCodeModelProviders", () => {
   it("keeps explicit credential providers and OpenCode-managed providers together", () => {
     const providers = resolvePreferredOpenCodeModelProviders({
@@ -515,6 +566,142 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       type: "turn.aborted",
       payload: {
         reason: "Interrupted by user.",
+      },
+    });
+  });
+
+  it("replays assistant text when OpenCode sends delta before part snapshot and assistant role", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+    const client = runtime.runtime.createOpenCodeSdkClient({
+      baseUrl: "http://127.0.0.1:4099",
+      directory: process.cwd(),
+    }) as unknown as {
+      event: {
+        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
+      };
+    };
+    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 6)).pipe(
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-ordered-events"),
+          runtimeMode: "full-access",
+        });
+
+        const turn = yield* adapter.sendTurn({
+          threadId: asThreadId("thread-ordered-events"),
+          input: "hello",
+          attachments: [],
+          modelSelection: {
+            provider: "opencode",
+            model: "openai/gpt-5.4",
+          },
+        });
+
+        eventQueue.push({
+          type: "message.part.delta",
+          properties: {
+            sessionID: "opencode-session-1",
+            partID: "part-1",
+            delta: "Hello",
+          },
+        });
+        eventQueue.push({
+          type: "message.part.updated",
+          properties: {
+            sessionID: "opencode-session-1",
+            part: {
+              id: "part-1",
+              messageID: "assistant-message-1",
+              type: "text",
+              text: "",
+              time: {
+                start: 1,
+              },
+            },
+          },
+        });
+        eventQueue.push({
+          type: "message.updated",
+          properties: {
+            sessionID: "opencode-session-1",
+            info: {
+              id: "assistant-message-1",
+              role: "assistant",
+            },
+          },
+        });
+        eventQueue.push({
+          type: "message.part.updated",
+          properties: {
+            sessionID: "opencode-session-1",
+            part: {
+              id: "part-1",
+              messageID: "assistant-message-1",
+              type: "text",
+              text: "Hello",
+              time: {
+                start: 1,
+                end: 2,
+              },
+            },
+          },
+        });
+        eventQueue.push({
+          type: "session.status",
+          properties: {
+            sessionID: "opencode-session-1",
+            status: {
+              type: "idle",
+            },
+          },
+        });
+
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        eventQueue.close();
+
+        return { events, turn };
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(result.turn.turnId).toBeDefined();
+    expect(result.events.map((event) => event.type)).toEqual([
+      "session.started",
+      "thread.started",
+      "turn.started",
+      "content.delta",
+      "item.completed",
+      "turn.completed",
+    ]);
+    expect(result.events[3]).toMatchObject({
+      type: "content.delta",
+      payload: {
+        streamKind: "assistant_text",
+        delta: "Hello",
+      },
+    });
+    expect(result.events[4]).toMatchObject({
+      type: "item.completed",
+      payload: {
+        itemType: "assistant_message",
+        detail: "Hello",
       },
     });
   });

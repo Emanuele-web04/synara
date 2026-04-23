@@ -109,7 +109,21 @@ describe("getGitTextGenerationModelOptions", () => {
 
     expect(options.at(-1)).toEqual({
       slug: "openrouter/custom-model",
-      name: "openrouter/custom-model",
+      name: "Custom Model",
+      isCustom: true,
+    });
+  });
+
+  it("humanizes transient OpenCode git-writing models instead of showing the raw slug", () => {
+    const options = getGitTextGenerationModelOptions({
+      customCodexModels: [],
+      customOpenCodeModels: [],
+      textGenerationModel: "opencode-go/kimi-k2.6",
+    });
+
+    expect(options.at(-1)).toEqual({
+      slug: "opencode-go/kimi-k2.6",
+      name: "Kimi K2.6",
       isCustom: true,
     });
   });

@@ -29,7 +29,6 @@ import {
 } from "@t3tools/contracts";
 import {
   applyClaudePromptEffortPrefix,
-  formatModelDisplayName,
   getModelCapabilities,
   normalizeModelSlug,
 } from "@t3tools/shared/model";
@@ -342,6 +341,7 @@ import {
 import {
   buildModelSelection,
   buildNextProviderOptions,
+  formatProviderModelOptionName,
   type ProviderModelOption,
 } from "../providerModelOptions";
 import {
@@ -447,15 +447,6 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Turn a raw model slug like "gpt-5.3-codex-spark" into "GPT-5.3 Codex Spark". */
-function formatModelSlug(slug: string): string {
-  return slug
-    .replace(/^gpt-/i, "GPT-")
-    .replace(/^claude-/i, "Claude ")
-    .replace(/-/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
 function normalizeDynamicModelSlug(provider: ProviderKind, slug: string): string {
   if (provider === "claudeAgent") {
     const withoutContextSuffix = slug.replace(/\[[^\]]+\]$/u, "");
@@ -491,8 +482,10 @@ function mergeDynamicModelOptions(input: {
 
     const normalizedSlug = normalizeDynamicModelSlug(input.provider, dynamicModel.slug);
     const rawSlug = dynamicModel.slug.trim().toLowerCase();
-    const displayNameFallback =
-      formatModelDisplayName(normalizedSlug) ?? formatModelSlug(normalizedSlug);
+    const displayNameFallback = formatProviderModelOptionName({
+      provider: input.provider,
+      slug: normalizedSlug,
+    });
     if (dynamicNormalizedSlugs.has(normalizedSlug)) {
       continue;
     }

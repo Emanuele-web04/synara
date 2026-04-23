@@ -7,6 +7,7 @@ import { type ModelSlug, type ProviderKind, type ServerProviderStatus } from "@t
 import { resolveSelectableModel } from "@t3tools/shared/model";
 import { Fragment, memo, useCallback, useState } from "react";
 import { type ProviderPickerKind, PROVIDER_OPTIONS } from "../../session-logic";
+import { formatProviderModelOptionName } from "../../providerModelOptions";
 import {
   Menu,
   MenuGroup,
@@ -106,7 +107,11 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   const isMenuOpen = open ?? uncontrolledMenuOpen;
   const selectedProviderOptions = props.modelOptionsByProvider[activeProvider];
   const selectedModelLabel =
-    selectedProviderOptions.find((option) => option.slug === props.model)?.name ?? props.model;
+    selectedProviderOptions.find((option) => option.slug === props.model)?.name ??
+    formatProviderModelOptionName({
+      provider: activeProvider,
+      slug: props.model,
+    });
   const ProviderIcon = PROVIDER_ICON_BY_PROVIDER[activeProvider];
   const setMenuOpen = useCallback(
     (nextOpen: boolean) => {

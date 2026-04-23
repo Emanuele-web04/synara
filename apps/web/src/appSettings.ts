@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef } from "react";
 import { Option, Schema } from "effect";
 import { TrimmedNonEmptyString, ProviderKind, type ProviderStartOptions } from "@t3tools/contracts";
 import {
-  formatModelDisplayName,
   getDefaultModel,
   getModelOptions,
   normalizeModelSlug,
@@ -10,7 +9,7 @@ import {
 } from "@t3tools/shared/model";
 import { useLocalStorage } from "./hooks/useLocalStorage";
 import { EnvMode } from "./components/BranchToolbar.logic";
-import type { ProviderModelOption } from "./providerModelOptions";
+import { formatProviderModelOptionName, type ProviderModelOption } from "./providerModelOptions";
 
 const APP_SETTINGS_STORAGE_KEY = "t3code:app-settings:v1";
 const MAX_CUSTOM_MODEL_COUNT = 32;
@@ -255,7 +254,7 @@ export function getAppModelOptions(
     seen.add(slug);
     options.push({
       slug,
-      name: formatModelDisplayName(slug) ?? slug,
+      name: formatProviderModelOptionName({ provider, slug }),
       isCustom: true,
     });
   }
@@ -271,7 +270,7 @@ export function getAppModelOptions(
   ) {
     options.push({
       slug: normalizedSelectedModel,
-      name: formatModelDisplayName(normalizedSelectedModel) ?? normalizedSelectedModel,
+      name: formatProviderModelOptionName({ provider, slug: normalizedSelectedModel }),
       isCustom: true,
     });
   }
@@ -301,7 +300,7 @@ export function getGitTextGenerationModelOptions(
   if (selectedModel && !seen.has(selectedModel)) {
     deduped.push({
       slug: selectedModel,
-      name: selectedModel,
+      name: formatProviderModelOptionName({ provider: "opencode", slug: selectedModel }),
       isCustom: true,
     });
   }

@@ -75,6 +75,7 @@ interface OpenCodeSessionContext {
   readonly openCodeSessionId: string;
   readonly pendingPermissions: Map<string, PermissionRequest>;
   readonly pendingQuestions: Map<string, QuestionRequest>;
+  readonly pendingTextDeltasByPartId: Map<string, string>;
   readonly messageRoleById: Map<string, "user" | "assistant">;
   readonly partById: Map<string, Part>;
   readonly emittedTextByPartId: Map<string, string>;
@@ -319,6 +320,38 @@ function appendOpenCodeAssistantTextDelta(
     nextText: previousText + deltaToEmit,
     deltaToEmit,
   };
+}
+
+function bufferPendingTextDelta(
+  context: OpenCodeSessionContext,
+  partId: string,
+  delta: string,
+): void {
+  if (delta.length === 0) {
+    return;
+  }
+  const previousText = context.pendingTextDeltasByPartId.get(partId) ?? "";
+  const { nextText } = appendOpenCodeAssistantTextDelta(previousText, delta);
+  context.pendingTextDeltasByPartId.set(partId, nextText);
+}
+
+function applyPendingTextDeltaToPart(
+  context: OpenCodeSessionContext,
+  part: Part,
+): Part {
+  if (part.type !== "text" && part.type !== "reasoning") {
+    context.pendingTextDeltasByPartId.delete(part.id);
+    return part;
+  }
+
+  const pendingDelta = context.pendingTextDeltasByPartId.get(part.id);
+  if (!pendingDelta || pendingDelta.length === 0) {
+    return part;
+  }
+
+  const { nextText } = appendOpenCodeAssistantTextDelta(part.text, pendingDelta);
+  context.pendingTextDeltasByPartId.delete(part.id);
+  return nextText === part.text ? part : { ...part, text: nextText };
 }
 
 function isoFromEpochMs(value: number | undefined): string | undefined {
@@ -943,7 +976,11 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 if (part.messageID !== event.properties.info.id) {
                   continue;
                 }
-                yield* emitAssistantTextDelta(context, part, turnId, event);
+                const resolvedPart = applyPendingTextDeltaToPart(context, part);
+                if (resolvedPart !== part) {
+                  context.partById.set(resolvedPart.id, resolvedPart);
+                }
+                yield* emitAssistantTextDelta(context, resolvedPart, turnId, event);
               }
             }
             break;
@@ -955,31 +992,37 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           }
 
           case "message.part.delta": {
-            const existingPart = context.partById.get(event.properties.partID);
-            if (!existingPart) {
-              break;
-            }
-            const role = messageRoleForPart(context, existingPart);
-            if (role !== "assistant") {
-              break;
-            }
-            const streamKind = resolveTextStreamKind(existingPart);
             const delta = event.properties.delta;
             if (delta.length === 0) {
               break;
             }
+            const existingPart = context.partById.get(event.properties.partID);
+            if (!existingPart) {
+              bufferPendingTextDelta(context, event.properties.partID, delta);
+              break;
+            }
+            const resolvedPart = applyPendingTextDeltaToPart(context, existingPart);
+            if (resolvedPart !== existingPart) {
+              context.partById.set(event.properties.partID, resolvedPart);
+            }
+            const role = messageRoleForPart(context, resolvedPart);
+            if (role !== "assistant") {
+              bufferPendingTextDelta(context, event.properties.partID, delta);
+              break;
+            }
+            const streamKind = resolveTextStreamKind(resolvedPart);
             const previousText =
               context.emittedTextByPartId.get(event.properties.partID) ??
-              textFromPart(existingPart) ??
+              textFromPart(resolvedPart) ??
               "";
             const { nextText, deltaToEmit } = appendOpenCodeAssistantTextDelta(previousText, delta);
             if (deltaToEmit.length === 0) {
               break;
             }
             context.emittedTextByPartId.set(event.properties.partID, nextText);
-            if (existingPart.type === "text" || existingPart.type === "reasoning") {
+            if (resolvedPart.type === "text" || resolvedPart.type === "reasoning") {
               context.partById.set(event.properties.partID, {
-                ...existingPart,
+                ...resolvedPart,
                 text: nextText,
               });
             }
@@ -1000,7 +1043,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           }
 
           case "message.part.updated": {
-            const part = event.properties.part;
+            const part = applyPendingTextDeltaToPart(context, event.properties.part);
             context.partById.set(part.id, part);
             const messageRole = messageRoleForPart(context, part);
 
@@ -1365,6 +1408,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             openCodeSessionId: started.openCodeSessionId,
             pendingPermissions: new Map(),
             pendingQuestions: new Map(),
+            pendingTextDeltasByPartId: new Map(),
             partById: new Map(),
             emittedTextByPartId: new Map(),
             messageRoleById: new Map(),
