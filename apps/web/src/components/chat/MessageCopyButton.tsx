@@ -2,9 +2,8 @@ import { memo, useRef, type RefObject } from "react";
 import { CheckIcon, CopyIcon } from "~/lib/icons";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { cn } from "~/lib/utils";
-import { Button } from "../ui/button";
 import { anchoredToastManager } from "../ui/toast";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { MessageActionButton } from "./MessageActionButton";
 
 const ANCHORED_TOAST_TIMEOUT_MS = 1000;
 
@@ -47,32 +46,19 @@ export const MessageCopyButton = memo(function MessageCopyButton({
   });
 
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            type="button"
-            ref={ref}
-            size={size}
-            variant={variant}
-            disabled={isCopied}
-            className={cn(
-              size === "icon-xs" &&
-                variant === "ghost" &&
-                "size-auto rounded-none border-0 bg-transparent p-0 text-muted-foreground/55 shadow-none hover:bg-transparent hover:text-foreground focus-visible:ring-0 focus-visible:ring-offset-0",
-              className,
-            )}
-            onClick={() => copyToClipboard(text)}
-            title="Copy message"
-            aria-label="Copy message"
-          />
-        }
-      >
-        {isCopied ? <CheckIcon className="size-3 text-success" /> : <CopyIcon className="size-3" />}
-      </TooltipTrigger>
-      <TooltipPopup>
-        <p>Copy to clipboard</p>
-      </TooltipPopup>
-    </Tooltip>
+    <MessageActionButton
+      ref={ref}
+      label="Copy message"
+      tooltip="Copy to clipboard"
+      disabled={isCopied}
+      className={cn(variant === "outline" && "border", size === "xs" && "h-5 px-1.5", className)}
+      onClick={() => copyToClipboard(text)}
+    >
+      {isCopied ? (
+        <CheckIcon className="size-3.5 text-success" />
+      ) : (
+        <CopyIcon className="size-3.5" />
+      )}
+    </MessageActionButton>
   );
 });

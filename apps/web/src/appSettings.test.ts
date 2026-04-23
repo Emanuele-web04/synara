@@ -48,6 +48,7 @@ describe("getAppModelOptions", () => {
     const options = getAppModelOptions("codex", ["custom/internal-model"]);
 
     expect(options.map((option) => option.slug)).toEqual([
+      "gpt-5.5",
       "gpt-5.4",
       "gpt-5.4-mini",
       "gpt-5.3-codex",
@@ -147,7 +148,7 @@ describe("resolveAppModelSelection", () => {
         { codex: [], claudeAgent: [], gemini: [], opencode: [] },
         "",
       ),
-    ).toBe("gpt-5.4");
+    ).toBe("gpt-5.5");
   });
 
   it("resolves display names through the shared resolver", () => {

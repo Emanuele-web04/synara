@@ -1883,13 +1883,15 @@ const make = Effect.gen(function* () {
           if (thread.checkpoints.some((c) => c.turnId === turnId)) {
             // Already tracked; no-op.
           } else {
-            const assistantMessageId = MessageId.makeUnsafe(
-              `assistant:${event.itemId ?? event.turnId ?? event.eventId}`,
-            );
             const maxTurnCount = thread.checkpoints.reduce(
               (max, c) => Math.max(max, c.checkpointTurnCount),
               0,
             );
+            // Leave assistantMessageId undefined on the placeholder: the real
+            // capture performed by CheckpointReactor will resolve the actual
+            // assistant MessageId once the message is finalized. Emitting a
+            // synthetic id here would leak an incorrect key that can collide
+            // across turns and cause the diff card to render on the wrong row.
             yield* orchestrationEngine.dispatch({
               type: "thread.turn.diff.complete",
               commandId: providerCommandId(event, "thread-turn-diff-complete"),
@@ -1899,7 +1901,7 @@ const make = Effect.gen(function* () {
               checkpointRef: CheckpointRef.makeUnsafe(`provider-diff:${event.eventId}`),
               status: "missing",
               files: [],
-              assistantMessageId,
+              assistantMessageId: undefined,
               checkpointTurnCount: maxTurnCount + 1,
               createdAt: now,
             });

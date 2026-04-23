@@ -342,7 +342,7 @@ layer("016_CanonicalizeModelSelections", (it) => {
             title: "Ancient Thread",
             modelSelection: {
               provider: "codex",
-              model: "gpt-5.4",
+              model: "gpt-5.5",
             },
             runtimeMode: "full-access",
             interactionMode: "default",

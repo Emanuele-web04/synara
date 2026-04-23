@@ -10,6 +10,14 @@ describe("agentMentions", () => {
   it("shows one preferred alias per Codex model in autocomplete", () => {
     expect(getAgentMentionAutocompleteAliases("codex")).toEqual([
       {
+        alias: "5.5",
+        provider: "codex",
+        kind: "model",
+        model: "gpt-5.5",
+        displayName: "GPT-5.5",
+        color: "violet",
+      },
+      {
         alias: "5.4",
         provider: "codex",
         kind: "model",

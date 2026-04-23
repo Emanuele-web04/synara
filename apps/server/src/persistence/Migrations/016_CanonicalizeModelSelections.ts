@@ -226,7 +226,7 @@ export default Effect.gen(function* () {
     SET payload_json = json_set(
       payload_json,
       '$.modelSelection',
-      json(json_object('provider', 'codex', 'model', 'gpt-5.4'))
+      json(json_object('provider', 'codex', 'model', 'gpt-5.5'))
     )
     WHERE event_type = 'thread.created'
       AND json_type(payload_json, '$.modelSelection') IS NULL

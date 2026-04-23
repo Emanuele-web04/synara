@@ -7,6 +7,10 @@ import {
   deriveAssociatedWorktreeMetadata,
   deriveAssociatedWorktreeMetadataPatch,
 } from "@t3tools/shared/threadWorkspace";
+import {
+  collectTailTurnIds,
+  resolveTailUserMessageEditTarget,
+} from "@t3tools/shared/conversationEdit";
 import { Effect } from "effect";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
@@ -98,6 +102,24 @@ function deriveCommandAssociatedWorktreeMetadataPatch(input: {
       ? { associatedWorktreeRef: input.associatedWorktreeRef }
       : {}),
   });
+}
+
+function deriveConversationRollbackTarget(
+  messages: OrchestrationReadModel["threads"][number]["messages"],
+  messageId: string,
+): {
+  readonly role: OrchestrationReadModel["threads"][number]["messages"][number]["role"];
+  readonly removedTurnIds: ReadonlySet<string>;
+} | null {
+  const targetIndex = messages.findIndex((message) => message.id === messageId);
+  if (targetIndex < 0) {
+    return null;
+  }
+
+  return {
+    role: messages[targetIndex]!.role,
+    removedTurnIds: new Set(collectTailTurnIds({ messages, messageId })),
+  };
 }
 
 export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand")(function* ({
@@ -886,6 +908,88 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.conversation.rollback": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const rollbackTarget = deriveConversationRollbackTarget(thread.messages, command.messageId);
+      if (!rollbackTarget || rollbackTarget.role !== "user") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Conversation rollback must target an existing user message.",
+        });
+      }
+      if (command.numTurns <= 0 || rollbackTarget.removedTurnIds.size !== command.numTurns) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Conversation rollback requested ${command.numTurns} turn(s), but target message '${command.messageId}' would remove ${rollbackTarget.removedTurnIds.size} turn(s).`,
+        });
+      }
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.conversation-rollback-requested",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          numTurns: command.numTurns,
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.message.edit-and-resend": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const editTarget = resolveTailUserMessageEditTarget({
+        messages: thread.messages,
+        messageId: command.messageId,
+        activeTurnId:
+          thread.session?.status === "running" ? (thread.session.activeTurnId ?? null) : null,
+      });
+      if (!editTarget.editable) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Only the latest rollbackable user message can be edited and resent (${editTarget.reason}).`,
+        });
+      }
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.message-edit-resend-requested",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          text: command.text,
+          ...(command.modelSelection !== undefined
+            ? { modelSelection: command.modelSelection }
+            : {}),
+          ...(command.providerOptions !== undefined
+            ? { providerOptions: command.providerOptions }
+            : {}),
+          ...(command.assistantDeliveryMode !== undefined
+            ? { assistantDeliveryMode: command.assistantDeliveryMode }
+            : {}),
+          runtimeMode: command.runtimeMode,
+          interactionMode: command.interactionMode,
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
     case "thread.session.stop": {
       yield* requireThread({
         readModel,
@@ -1077,6 +1181,34 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           turnCount: command.turnCount,
+        },
+      };
+    }
+
+    case "thread.conversation.rollback.complete": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.conversation-rolled-back",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          numTurns: command.numTurns,
+          ...(command.removedTurnIds !== undefined
+            ? { removedTurnIds: command.removedTurnIds }
+            : {}),
+          ...(command.skipAttachmentPrune !== undefined
+            ? { skipAttachmentPrune: command.skipAttachmentPrune }
+            : {}),
         },
       };
     }

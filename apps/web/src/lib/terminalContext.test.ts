@@ -2,6 +2,7 @@ import { ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
+  appendOriginalTerminalContextBlock,
   appendTerminalContextsToPrompt,
   buildTerminalContextPreviewTitle,
   buildTerminalContextBlock,
@@ -68,6 +69,26 @@ describe("terminalContext", () => {
     expect(appendTerminalContextsToPrompt("Investigate this", [makeContext()])).toBe(
       [
         "Investigate this",
+        "",
+        "<terminal_context>",
+        "- Terminal 1 lines 12-13:",
+        "  12 | git status",
+        "  13 | On branch main",
+        "</terminal_context>",
+      ].join("\n"),
+    );
+  });
+
+  it("preserves the original terminal context block when editing display text", () => {
+    const originalPrompt = appendTerminalContextsToPrompt("Investigate this", [makeContext()]);
+    expect(
+      appendOriginalTerminalContextBlock({
+        editedPrompt: "Investigate this edited",
+        originalPrompt,
+      }),
+    ).toBe(
+      [
+        "Investigate this edited",
         "",
         "<terminal_context>",
         "- Terminal 1 lines 12-13:",

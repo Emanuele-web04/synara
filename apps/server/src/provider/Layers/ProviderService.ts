@@ -23,6 +23,7 @@ import {
   ProviderSteerTurnInput,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
+  ProviderStartOptions,
   type ProviderRuntimeEvent,
   type ProviderSession,
 } from "@t3tools/contracts";
@@ -126,13 +127,12 @@ function readPersistedModelSelection(
 
 function readPersistedProviderOptions(
   runtimePayload: ProviderRuntimeBinding["runtimePayload"],
-): Record<string, unknown> | undefined {
+): ProviderStartOptions | undefined {
   if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
     return undefined;
   }
   const raw = "providerOptions" in runtimePayload ? runtimePayload.providerOptions : undefined;
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
-  return raw as Record<string, unknown>;
+  return Schema.is(ProviderStartOptions)(raw) ? raw : undefined;
 }
 
 function readPersistedCwd(
@@ -312,9 +312,17 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           (persistedBinding?.provider === input.provider
             ? persistedBinding.resumeCursor
             : undefined);
+        const effectiveProviderOptions =
+          input.providerOptions ??
+          (persistedBinding?.provider === input.provider
+            ? readPersistedProviderOptions(persistedBinding.runtimePayload)
+            : undefined);
         const adapter = yield* registry.getByProvider(input.provider);
         const session = yield* adapter.startSession({
           ...input,
+          ...(effectiveProviderOptions !== undefined
+            ? { providerOptions: effectiveProviderOptions }
+            : {}),
           ...(effectiveResumeCursor !== undefined ? { resumeCursor: effectiveResumeCursor } : {}),
         });
 
@@ -327,7 +335,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
         yield* upsertSessionBinding(session, threadId, {
           modelSelection: input.modelSelection,
-          providerOptions: input.providerOptions,
+          providerOptions: effectiveProviderOptions,
         });
         yield* analytics.record("provider.session.started", {
           provider: session.provider,
@@ -659,6 +667,76 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         });
       });
 
+    const stopRuntimeSession: NonNullable<ProviderServiceShape["stopRuntimeSession"]> = (
+      rawInput,
+    ) =>
+      Effect.gen(function* () {
+        const input = yield* decodeInputOrValidationError({
+          operation: "ProviderService.stopRuntimeSession",
+          schema: ProviderStopSessionInput,
+          payload: rawInput,
+        });
+        const bindingOption = yield* directory.getBinding(input.threadId);
+        const binding = Option.getOrUndefined(bindingOption);
+        if (!binding) {
+          return;
+        }
+        const adapter = yield* registry.getByProvider(binding.provider);
+        const hasActiveSession = yield* adapter.hasSession(input.threadId);
+        if (hasActiveSession) {
+          yield* adapter.stopSession(input.threadId);
+        }
+        yield* directory.upsert({
+          threadId: input.threadId,
+          provider: binding.provider,
+          ...(binding.adapterKey !== undefined ? { adapterKey: binding.adapterKey } : {}),
+          ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
+          status: "stopped",
+          resumeCursor: binding.resumeCursor,
+          runtimePayload: {
+            activeTurnId: null,
+            lastRuntimeEvent: "provider.stopRuntimeSession",
+            lastRuntimeEventAt: new Date().toISOString(),
+          },
+        });
+        yield* analytics.record("provider.session.runtime_stopped", {
+          provider: binding.provider,
+        });
+      });
+
+    const clearSessionResumeCursor: NonNullable<
+      ProviderServiceShape["clearSessionResumeCursor"]
+    > = (rawInput) =>
+      Effect.gen(function* () {
+        const input = yield* decodeInputOrValidationError({
+          operation: "ProviderService.clearSessionResumeCursor",
+          schema: ProviderStopSessionInput,
+          payload: rawInput,
+        });
+        const bindingOption = yield* directory.getBinding(input.threadId);
+        const binding = Option.getOrUndefined(bindingOption);
+        if (!binding) {
+          return;
+        }
+        const adapter = yield* registry.getByProvider(binding.provider);
+        const hasActiveSession = yield* adapter.hasSession(input.threadId);
+        if (hasActiveSession) {
+          yield* adapter.stopSession(input.threadId);
+        }
+        yield* directory.upsert({
+          threadId: input.threadId,
+          provider: binding.provider,
+          ...(binding.adapterKey !== undefined ? { adapterKey: binding.adapterKey } : {}),
+          ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
+          status: "stopped",
+          resumeCursor: null,
+          runtimePayload: binding.runtimePayload,
+        });
+        yield* analytics.record("provider.session.resume_cursor_cleared", {
+          provider: binding.provider,
+        });
+      });
+
     const listSessions: ProviderServiceShape["listSessions"] = () =>
       Effect.gen(function* () {
         const sessionsByProvider = yield* Effect.forEach(adapters, (adapter) =>
@@ -808,6 +886,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       respondToRequest,
       respondToUserInput,
       stopSession,
+      stopRuntimeSession,
+      clearSessionResumeCursor,
       listSessions,
       getCapabilities,
       rollbackConversation,

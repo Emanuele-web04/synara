@@ -36,6 +36,10 @@
       "types": "./src/chatThreads.ts",
       "import": "./src/chatThreads.ts"
     },
+    "./conversationEdit": {
+      "types": "./src/conversationEdit.ts",
+      "import": "./src/conversationEdit.ts"
+    },
     "./schemaJson": {
       "types": "./src/schemaJson.ts",
       "import": "./src/schemaJson.ts"

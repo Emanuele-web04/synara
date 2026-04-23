@@ -180,6 +180,22 @@ const makeCheckpointStore = Effect.gen(function* () {
       Effect.map((commit) => commit !== null),
     );
 
+  const copyCheckpointRef: CheckpointStoreShape["copyCheckpointRef"] = (input) =>
+    Effect.gen(function* () {
+      const operation = "CheckpointStore.copyCheckpointRef";
+      const commitOid = yield* resolveCheckpointCommit(input.cwd, input.fromCheckpointRef);
+      if (!commitOid) {
+        return false;
+      }
+
+      yield* git.execute({
+        operation,
+        cwd: input.cwd,
+        args: ["update-ref", input.toCheckpointRef, commitOid],
+      });
+      return true;
+    });
+
   const restoreCheckpoint: CheckpointStoreShape["restoreCheckpoint"] = (input) =>
     Effect.gen(function* () {
       const operation = "CheckpointStore.restoreCheckpoint";
@@ -269,6 +285,7 @@ const makeCheckpointStore = Effect.gen(function* () {
   return {
     isGitRepository,
     captureCheckpoint,
+    copyCheckpointRef,
     hasCheckpointRef,
     restoreCheckpoint,
     diffCheckpoints,

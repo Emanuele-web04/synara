@@ -4,6 +4,7 @@
 // Exports: MessagesTimeline
 
 import { type MessageId, ThreadId, type TurnId } from "@t3tools/contracts";
+import { resolveLatestTailUserMessageEditTarget } from "@t3tools/shared/conversationEdit";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import {
   memo,
@@ -14,6 +15,7 @@ import {
   useState,
   type CSSProperties,
   type ComponentProps,
+  type KeyboardEvent,
   type RefObject,
   type ReactNode,
 } from "react";
@@ -42,6 +44,7 @@ import { ProposedPlanCard } from "./ProposedPlanCard";
 import { DiffStatLabel } from "./DiffStatLabel";
 import { FileEntryIcon } from "./FileEntryIcon";
 import { MentionChipIcon } from "./MentionChipIcon";
+import { MessageActionButton } from "./MessageActionButton";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { AssistantSelectionsSummaryChip } from "./AssistantSelectionsSummaryChip";
 import {
@@ -187,6 +190,8 @@ interface MessagesTimelineProps {
   onOpenThread?: (threadId: ThreadId) => void;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   onRevertUserMessage: (messageId: MessageId) => void;
+  onEditUserMessage?: (messageId: MessageId, text: string) => boolean | Promise<boolean>;
+  activeTurnId?: TurnId | null;
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onIsAtEndChange?: (isAtEnd: boolean) => void;
@@ -225,6 +230,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onOpenThread,
   revertTurnCountByUserMessageId,
   onRevertUserMessage,
+  onEditUserMessage,
+  activeTurnId,
   isRevertingCheckpoint,
   onImageExpand,
   onIsAtEndChange,
@@ -277,13 +284,24 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const [expandedUserMessagesById, setExpandedUserMessagesById] = useState<Record<string, boolean>>(
     {},
   );
+  const [editingUserMessageId, setEditingUserMessageId] = useState<MessageId | null>(null);
+  const [submittingEditedUserMessageId, setSubmittingEditedUserMessageId] =
+    useState<MessageId | null>(null);
   const timelineExtraData = useMemo(
     () => ({
+      editingUserMessageId,
       expandedFileChangesByTurnId,
       expandedUserMessagesById,
       expandedWorkGroupsState,
+      submittingEditedUserMessageId,
     }),
-    [expandedFileChangesByTurnId, expandedUserMessagesById, expandedWorkGroupsState],
+    [
+      editingUserMessageId,
+      expandedFileChangesByTurnId,
+      expandedUserMessagesById,
+      expandedWorkGroupsState,
+      submittingEditedUserMessageId,
+    ],
   );
   const fallbackListRef = useRef<LegendListRef | null>(null);
   const resolvedListRef = listRef ?? fallbackListRef;
@@ -308,6 +326,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     ],
   );
   const rows = useStableRows(rawRows);
+  const latestEditableUserMessageId = useMemo(() => {
+    const messages = rows.flatMap((row) => (row.kind === "message" ? [row.message] : []));
+    const editTarget = resolveLatestTailUserMessageEditTarget({
+      messages,
+      activeTurnId,
+    });
+    return editTarget.editable ? (editTarget.messageId as MessageId) : null;
+  }, [activeTurnId, rows]);
   const userMessageIdByAssistantMessageId = useMemo(() => {
     const map = new Map<MessageId, MessageId>();
     let lastUserMessageId: MessageId | null = null;
@@ -326,7 +352,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   useEffect(() => {
     const previousRowCount = previousRowCountRef.current;
     previousRowCountRef.current = rows.length;
-    if (previousRowCount > 0 || rows.length === 0 || !followLiveOutput) {
+    if (previousRowCount > 0 || rows.length === 0) {
       return;
     }
     onIsAtEndChange?.(true);
@@ -336,7 +362,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     return () => {
       window.cancelAnimationFrame(frameId);
     };
-  }, [followLiveOutput, onIsAtEndChange, resolvedListRef, rows.length]);
+  }, [onIsAtEndChange, resolvedListRef, rows.length]);
   const handleListScroll = useCallback<NonNullable<MessagesTimelineProps["onMessagesScroll"]>>(
     (event) => {
       onMessagesScroll?.(event);
@@ -353,6 +379,33 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       [turnId]: !(current[turnId] ?? true),
     }));
   }, []);
+  const cancelUserMessageEdit = useCallback(() => {
+    setEditingUserMessageId(null);
+  }, []);
+  const startUserMessageEdit = useCallback((messageId: MessageId) => {
+    setEditingUserMessageId(messageId);
+  }, []);
+  const submitUserMessageEdit = useCallback(
+    async (messageId: MessageId, text: string) => {
+      if (!onEditUserMessage) {
+        return;
+      }
+      const nextText = text.trim();
+      if (!nextText) {
+        return;
+      }
+      setSubmittingEditedUserMessageId(messageId);
+      try {
+        const saved = await onEditUserMessage(messageId, nextText);
+        if (saved) {
+          cancelUserMessageEdit();
+        }
+      } finally {
+        setSubmittingEditedUserMessageId(null);
+      }
+    },
+    [cancelUserMessageEdit, onEditUserMessage],
+  );
 
   const renderRowContent = (row: MessagesTimelineRow) => (
     <div
@@ -455,10 +508,21 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             terminalContexts.length === 0 &&
             hasOnlyInlineSkillChips(userMessagePreview.text);
           const canRevertAgentWork = typeof row.revertTurnCount === "number";
+          const isEditingThisMessage = editingUserMessageId === row.message.id;
+          const isSubmittingThisEdit = submittingEditedUserMessageId === row.message.id;
+          const showEditUserMessage =
+            Boolean(onEditUserMessage) &&
+            row.message.id === latestEditableUserMessageId &&
+            displayedUserMessage.copyText.trim().length > 0;
           const hasLeadingMedia = renderedAssistantSelections.length > 0 || userImages.length > 0;
           return (
             <div className="flex w-full justify-end">
-              <div className="group flex max-w-[80%] flex-col items-end gap-px">
+              <div
+                className={cn(
+                  "group flex flex-col items-end gap-px",
+                  isEditingThisMessage ? "w-full max-w-full" : "max-w-[80%]",
+                )}
+              >
                 {/* Keep user-message chrome outside the bubble so the message reads as one simple block. */}
                 <UserDispatchModeChip
                   dispatchMode={row.message.dispatchMode}
@@ -488,7 +552,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     ))}
                   </div>
                 )}
-                {showUserText && (
+                {isEditingThisMessage ? (
+                  <UserMessageEditForm
+                    key={row.message.id}
+                    initialValue={displayedUserMessage.copyText}
+                    disabled={isSubmittingThisEdit || isRevertingCheckpoint}
+                    chatTypographyStyle={chatTypographyStyle}
+                    onCancel={cancelUserMessageEdit}
+                    onSubmit={(text) => void submitUserMessageEdit(row.message.id, text)}
+                  />
+                ) : showUserText ? (
                   <div
                     className={cn(
                       "w-max max-w-full min-w-0 self-end rounded-lg bg-secondary px-3.5",
@@ -518,34 +591,46 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       </button>
                     )}
                   </div>
-                )}
-                <div className="flex items-center justify-end gap-1.5 pr-0.5">
-                  <div className="flex items-center gap-1 opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover:opacity-100">
-                    {displayedUserMessage.copyText && (
-                      <MessageCopyButton text={displayedUserMessage.copyText} />
-                    )}
-                    {canRevertAgentWork && (
-                      <Button
-                        type="button"
-                        size="icon-xs"
-                        variant="ghost"
-                        className="size-auto rounded-none border-0 bg-transparent p-0 text-muted-foreground/55 shadow-none hover:bg-transparent hover:text-foreground focus-visible:ring-0 focus-visible:ring-offset-0"
-                        disabled={isRevertingCheckpoint || isWorking}
+                ) : null}
+                {!isEditingThisMessage && (
+                  <div className="flex items-center justify-end gap-1.5 pr-0.5">
+                    <div className="flex items-center gap-1 opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover:opacity-100">
+                      {displayedUserMessage.copyText && (
+                        <MessageCopyButton text={displayedUserMessage.copyText} />
+                      )}
+                      {showEditUserMessage && (
+                        <MessageActionButton
+                          label="Edit message"
+                          tooltip="Edit and resend"
+                          disabled={isRevertingCheckpoint}
+                          className="disabled:text-muted-foreground/35"
+                          onClick={() => startUserMessageEdit(row.message.id)}
+                        >
+                          <SquarePenIcon className="size-3.5" />
+                        </MessageActionButton>
+                      )}
+                      <MessageActionButton
+                        label="Revert to this message"
+                        tooltip={
+                          canRevertAgentWork
+                            ? "Revert to this message"
+                            : "Undo becomes available after a reply is checkpointed"
+                        }
+                        disabled={!canRevertAgentWork || isRevertingCheckpoint || isWorking}
+                        className="disabled:text-muted-foreground/35"
                         onClick={() => onRevertUserMessage(row.message.id)}
-                        title="Revert to this message"
-                        aria-label="Revert to this message"
                       >
-                        <Undo2Icon className="size-3" />
-                      </Button>
-                    )}
+                        <Undo2Icon className="size-3.5" />
+                      </MessageActionButton>
+                    </div>
+                    <p
+                      className="font-system-ui text-right tabular-nums text-muted-foreground/45"
+                      style={{ fontSize: `${appTypographyScale.uiTimestampPx}px` }}
+                    >
+                      {formatShortTimestamp(row.message.createdAt, timestampFormat)}
+                    </p>
                   </div>
-                  <p
-                    className="font-system-ui text-right tabular-nums text-muted-foreground/45"
-                    style={{ fontSize: `${appTypographyScale.uiTimestampPx}px` }}
-                  >
-                    {formatShortTimestamp(row.message.createdAt, timestampFormat)}
-                  </p>
-                </div>
+                )}
               </div>
             </div>
           );
@@ -1194,6 +1279,97 @@ function hasOnlyInlineSkillChips(text: string): boolean {
 
   return skillCount > 0;
 }
+
+// Inline editor for replaying a user message after the following assistant turn is rolled back.
+const UserMessageEditForm = memo(function UserMessageEditForm(props: {
+  initialValue: string;
+  disabled: boolean;
+  chatTypographyStyle: CSSProperties;
+  onCancel: () => void;
+  onSubmit: (value: string) => void;
+}) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [draft, setDraft] = useState(props.initialValue);
+  const canSubmit = draft.trim().length > 0 && !props.disabled;
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) {
+      return;
+    }
+    textarea.focus();
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+  }, []);
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) {
+      return;
+    }
+    textarea.style.height = "auto";
+    textarea.style.height = `${textarea.scrollHeight}px`;
+  }, [draft]);
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      props.onCancel();
+      return;
+    }
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      if (canSubmit) {
+        props.onSubmit(draft);
+      }
+    }
+  };
+
+  return (
+    <form
+      className="w-full rounded-lg bg-secondary px-3.5 pt-[5.5px] pb-[7px]"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (canSubmit) {
+          props.onSubmit(draft);
+        }
+      }}
+    >
+      <textarea
+        ref={textareaRef}
+        value={draft}
+        disabled={props.disabled}
+        rows={1}
+        aria-label="Edit message"
+        className="max-h-60 min-h-0 w-full resize-none overflow-y-auto border-0 bg-transparent p-0 font-system-ui text-foreground outline-none placeholder:text-muted-foreground/45 disabled:opacity-70"
+        style={props.chatTypographyStyle}
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={handleKeyDown}
+      />
+      <div className="mt-2 flex justify-end gap-2">
+        <Button
+          type="button"
+          size="xs"
+          variant="outline"
+          className="rounded-full px-2.5"
+          style={props.chatTypographyStyle}
+          disabled={props.disabled}
+          onClick={props.onCancel}
+        >
+          Cancel
+        </Button>
+        <Button
+          type="submit"
+          size="xs"
+          className="rounded-full px-2.5"
+          style={props.chatTypographyStyle}
+          disabled={!canSubmit}
+        >
+          Send
+        </Button>
+      </div>
+    </form>
+  );
+});
 
 const UserMessageBody = memo(function UserMessageBody(props: {
   text: string;

@@ -68,13 +68,21 @@ export function getRuntimeAwareModelCapabilities(input: {
   runtimeModel?: ProviderModelDescriptor | undefined;
 }): ModelCapabilities {
   const staticCapabilities = getModelCapabilities(input.provider, input.model);
+  // Runtime discovery is authoritative when available; the static table is only a startup fallback.
+  const supportsFastMode =
+    input.provider === "codex" && input.runtimeModel
+      ? input.runtimeModel.supportsFastMode === true
+      : staticCapabilities.supportsFastMode;
   const runtimeEfforts = input.runtimeModel?.supportedReasoningEfforts;
   if (
     (input.provider !== "codex" && input.provider !== "opencode") ||
     !runtimeEfforts ||
     runtimeEfforts.length === 0
   ) {
-    return staticCapabilities;
+    return {
+      ...staticCapabilities,
+      supportsFastMode,
+    };
   }
 
   const staticDefaultEffort = getDefaultEffort(staticCapabilities);
@@ -102,6 +110,7 @@ export function getRuntimeAwareModelCapabilities(input: {
 
   return {
     ...staticCapabilities,
+    supportsFastMode,
     reasoningEffortLevels: runtimeOptions,
   };
 }

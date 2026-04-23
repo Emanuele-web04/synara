@@ -53,8 +53,10 @@ import {
   IconLockOpen,
   IconMaximize,
   IconMinimize,
+  IconDeviceLaptop,
   IconMessageCircle,
   IconMicrophone,
+  IconMoon,
   IconPalette,
   IconPaperclip,
   IconPinnedFilled,
@@ -68,6 +70,7 @@ import {
   IconSearch,
   IconSelector,
   IconSettings,
+  IconSun,
   IconTerminal,
   IconTerminal2,
   IconTextWrap,
@@ -219,6 +222,9 @@ export const RotateCcwIcon = adaptIcon(IconRotate2);
 export const Rows3Icon = adaptIcon(IconLayoutDistributeHorizontal);
 export const SearchIcon = adaptIcon(IconSearch);
 export const SettingsIcon = adaptIcon(IconSettings);
+export const SunIcon = adaptIcon(IconSun);
+export const MoonIcon = adaptIcon(IconMoon);
+export const DeviceLaptopIcon = adaptIcon(IconDeviceLaptop);
 export const StopIcon = adaptIcon(IconPlayerStop);
 export const SquarePenIcon = adaptIcon(IconEdit);
 export const SquareSplitHorizontal: LucideIcon = (props) => (

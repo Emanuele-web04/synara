@@ -157,7 +157,7 @@ function normalizeLegacyEventRow(row: PersistedEventRow): PersistedEventRow {
     const nextPayload = { ...row.payload };
     const legacyModel =
       readTrimmedString(row.payload, "model") ??
-      (row.type === "thread.created" ? "gpt-5.4" : undefined);
+      (row.type === "thread.created" ? "gpt-5.5" : undefined);
     if (legacyModel !== undefined) {
       nextPayload.modelSelection = legacyModelSelection({
         provider: row.payload.provider,

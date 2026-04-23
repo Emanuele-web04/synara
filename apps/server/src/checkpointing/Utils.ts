@@ -1,5 +1,5 @@
 import { Encoding } from "effect";
-import { CheckpointRef, ProjectId, type ThreadId } from "@t3tools/contracts";
+import { CheckpointRef, MessageId, ProjectId, type ThreadId, TurnId } from "@t3tools/contracts";
 import { resolveThreadWorkspaceCwd as resolveSharedThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
 
 export const CHECKPOINT_REFS_PREFIX = "refs/t3/checkpoints";
@@ -7,6 +7,24 @@ export const CHECKPOINT_REFS_PREFIX = "refs/t3/checkpoints";
 export function checkpointRefForThreadTurn(threadId: ThreadId, turnCount: number): CheckpointRef {
   return CheckpointRef.makeUnsafe(
     `${CHECKPOINT_REFS_PREFIX}/${Encoding.encodeBase64Url(threadId)}/turn/${turnCount}`,
+  );
+}
+
+export function checkpointRefForThreadMessageStart(
+  threadId: ThreadId,
+  messageId: MessageId,
+): CheckpointRef {
+  return CheckpointRef.makeUnsafe(
+    `${CHECKPOINT_REFS_PREFIX}/${Encoding.encodeBase64Url(threadId)}/message-start/${Encoding.encodeBase64Url(messageId)}`,
+  );
+}
+
+export function checkpointRefForThreadTurnStart(
+  threadId: ThreadId,
+  turnId: TurnId,
+): CheckpointRef {
+  return CheckpointRef.makeUnsafe(
+    `${CHECKPOINT_REFS_PREFIX}/${Encoding.encodeBase64Url(threadId)}/turn-start/${Encoding.encodeBase64Url(turnId)}`,
   );
 }
 

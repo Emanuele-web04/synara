@@ -36,7 +36,11 @@ import {
   ProviderService,
   type ProviderServiceShape,
 } from "../../provider/Services/ProviderService.ts";
-import { checkpointRefForThreadTurn } from "../../checkpointing/Utils.ts";
+import {
+  checkpointRefForThreadMessageStart,
+  checkpointRefForThreadTurn,
+  checkpointRefForThreadTurnStart,
+} from "../../checkpointing/Utils.ts";
 import { ServerConfig } from "../../config.ts";
 
 const asProjectId = (value: string): ProjectId => ProjectId.makeUnsafe(value);
@@ -118,6 +122,7 @@ async function waitForThread(
     checkpoints: ReadonlyArray<{
       checkpointTurnCount: number;
       assistantMessageId?: MessageId | null;
+      files?: ReadonlyArray<{ path: string }>;
     }>;
     activities: ReadonlyArray<{ kind: string }>;
   }) => boolean,
@@ -129,6 +134,7 @@ async function waitForThread(
     checkpoints: ReadonlyArray<{
       checkpointTurnCount: number;
       assistantMessageId?: MessageId | null;
+      files?: ReadonlyArray<{ path: string }>;
     }>;
     activities: ReadonlyArray<{ kind: string }>;
   }> => {
@@ -425,6 +431,121 @@ describe("CheckpointReactor", () => {
     ).toBe("v2\n");
   });
 
+  it("summarizes only files changed after each turn's start checkpoint", async () => {
+    const harness = await createHarness({ seedFilesystemCheckpoints: false });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const firstMessageId = MessageId.makeUnsafe("message-turn-a");
+    const secondMessageId = MessageId.makeUnsafe("message-turn-b");
+    const firstTurnId = asTurnId("turn-a");
+    const secondTurnId = asTurnId("turn-b");
+    const createdAt = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-a-start"),
+        threadId,
+        message: {
+          messageId: firstMessageId,
+          role: "user",
+          text: "create a",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt,
+      }),
+    );
+    await waitForGitRefExists(
+      harness.cwd,
+      checkpointRefForThreadMessageStart(threadId, firstMessageId),
+    );
+    harness.provider.emit({
+      type: "turn.started",
+      eventId: EventId.makeUnsafe("evt-turn-a-started"),
+      provider: "codex",
+      createdAt,
+      threadId,
+      turnId: firstTurnId,
+    });
+    await waitForGitRefExists(
+      harness.cwd,
+      checkpointRefForThreadTurnStart(threadId, firstTurnId),
+    );
+    fs.writeFileSync(path.join(harness.cwd, "a.txt"), "A\n", "utf8");
+    harness.provider.emit({
+      type: "turn.completed",
+      eventId: EventId.makeUnsafe("evt-turn-a-completed"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId,
+      turnId: firstTurnId,
+      payload: { state: "completed" },
+    });
+    await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.checkpoints.length === 1 &&
+        entry.checkpoints[0]?.files?.map((file) => file.path).includes("a.txt") === true,
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-b-start"),
+        threadId,
+        message: {
+          messageId: secondMessageId,
+          role: "user",
+          text: "create b",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    await waitForGitRefExists(
+      harness.cwd,
+      checkpointRefForThreadMessageStart(threadId, secondMessageId),
+    );
+    harness.provider.emit({
+      type: "turn.started",
+      eventId: EventId.makeUnsafe("evt-turn-b-started"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId,
+      turnId: secondTurnId,
+    });
+    await waitForGitRefExists(
+      harness.cwd,
+      checkpointRefForThreadTurnStart(threadId, secondTurnId),
+    );
+    fs.writeFileSync(path.join(harness.cwd, "b.txt"), "B\n", "utf8");
+    harness.provider.emit({
+      type: "turn.completed",
+      eventId: EventId.makeUnsafe("evt-turn-b-completed"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId,
+      turnId: secondTurnId,
+      payload: { state: "completed" },
+    });
+
+    const thread = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.checkpoints.length === 2 &&
+        entry.checkpoints.some(
+          (checkpoint) =>
+            checkpoint.checkpointTurnCount === 2 &&
+            checkpoint.files?.map((file) => file.path).join(",") === "b.txt",
+        ),
+    );
+
+    expect(thread.checkpoints.at(-1)?.files?.map((file) => file.path)).toEqual(["b.txt"]);
+  });
+
   it("waits briefly for the assistant message id before finalizing a completed turn checkpoint", async () => {
     const harness = await createHarness({ seedFilesystemCheckpoints: false });
     const turnId = asTurnId("turn-assistant-race");
@@ -496,7 +617,7 @@ describe("CheckpointReactor", () => {
     expect(thread.checkpoints[0]?.assistantMessageId).toBe(assistantMessageId);
   });
 
-  it("replaces placeholder assistant ids with the real assistant message id before capturing", async () => {
+  it("leaves placeholders unresolved until turn completion, then captures the real checkpoint", async () => {
     const harness = await createHarness({ seedFilesystemCheckpoints: false });
     const turnId = asTurnId("turn-placeholder-race");
     const assistantMessageId = MessageId.makeUnsafe("assistant:item-placeholder-real");
@@ -522,6 +643,26 @@ describe("CheckpointReactor", () => {
     await waitForGitRefExists(
       harness.cwd,
       checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 0),
+    );
+    await waitForGitRefExists(
+      harness.cwd,
+      checkpointRefForThreadMessageStart(
+        ThreadId.makeUnsafe("thread-1"),
+        MessageId.makeUnsafe("message-user-placeholder"),
+      ),
+    );
+
+    harness.provider.emit({
+      type: "turn.started",
+      eventId: EventId.makeUnsafe("evt-turn-started-placeholder-race"),
+      provider: "codex",
+      createdAt,
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      turnId,
+    });
+    await waitForGitRefExists(
+      harness.cwd,
+      checkpointRefForThreadTurnStart(ThreadId.makeUnsafe("thread-1"), turnId),
     );
 
     fs.writeFileSync(path.join(harness.cwd, "README.md"), "placeholder\n", "utf8");
@@ -555,15 +696,115 @@ describe("CheckpointReactor", () => {
       }),
     );
 
-    const thread = await waitForThread(harness.engine, (entry) =>
+    let thread = await waitForThread(harness.engine, (entry) =>
+      entry.checkpoints.some((checkpoint) => checkpoint.checkpointTurnCount === 1),
+    );
+
+    expect(thread.checkpoints[0]?.status).toBe("missing");
+    expect(thread.checkpoints[0]?.assistantMessageId).toBe(syntheticAssistantMessageId);
+    expect(
+      gitRefExists(harness.cwd, checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 1)),
+    ).toBe(false);
+
+    harness.provider.emit({
+      type: "turn.completed",
+      eventId: EventId.makeUnsafe("evt-turn-completed-placeholder-race"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      turnId,
+      payload: { state: "completed" },
+    });
+
+    thread = await waitForThread(harness.engine, (entry) =>
       entry.checkpoints.some(
         (checkpoint) =>
           checkpoint.checkpointTurnCount === 1 &&
+          checkpoint.status === "ready" &&
           checkpoint.assistantMessageId === assistantMessageId,
       ),
     );
 
     expect(thread.checkpoints[0]?.assistantMessageId).toBe(assistantMessageId);
+  });
+
+  it("does not freeze an early placeholder snapshot as the final turn checkpoint", async () => {
+    const harness = await createHarness({ seedFilesystemCheckpoints: false });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const turnId = asTurnId("turn-placeholder-final");
+    const messageId = MessageId.makeUnsafe("message-user-placeholder-final");
+    const createdAt = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-placeholder-final"),
+        threadId,
+        message: {
+          messageId,
+          role: "user",
+          text: "start turn",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt,
+      }),
+    );
+
+    harness.provider.emit({
+      type: "turn.started",
+      eventId: EventId.makeUnsafe("evt-turn-started-placeholder-final"),
+      provider: "codex",
+      createdAt,
+      threadId,
+      turnId,
+    });
+
+    await waitForGitRefExists(harness.cwd, checkpointRefForThreadTurnStart(threadId, turnId));
+
+    fs.writeFileSync(path.join(harness.cwd, "early.txt"), "early\n", "utf8");
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.diff.complete",
+        commandId: CommandId.makeUnsafe("cmd-turn-diff-early-placeholder"),
+        threadId,
+        turnId,
+        completedAt: createdAt,
+        checkpointRef: checkpointRefForThreadTurn(threadId, 1),
+        status: "missing",
+        files: [],
+        checkpointTurnCount: 1,
+        createdAt,
+      }),
+    );
+
+    fs.writeFileSync(path.join(harness.cwd, "late.txt"), "late\n", "utf8");
+    harness.provider.emit({
+      type: "turn.completed",
+      eventId: EventId.makeUnsafe("evt-turn-completed-placeholder-final"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId,
+      turnId,
+      payload: { state: "completed" },
+    });
+
+    const thread = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.checkpoints.some(
+          (checkpoint) =>
+            checkpoint.checkpointTurnCount === 1 &&
+            checkpoint.status === "ready" &&
+            checkpoint.files?.map((file) => file.path).sort().join(",") === "early.txt,late.txt",
+        ),
+    );
+
+    expect(thread.checkpoints[0]?.files?.map((file) => file.path).sort()).toEqual([
+      "early.txt",
+      "late.txt",
+    ]);
   });
 
   it("ignores auxiliary thread turn completion while primary turn is active", async () => {
