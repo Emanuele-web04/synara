@@ -1735,13 +1735,15 @@ describe("hasLiveTurnTailWork", () => {
 });
 
 describe("PROVIDER_OPTIONS", () => {
-  it("lists Codex, Claude, and Gemini as available providers", () => {
+  it("lists Codex, Claude, Gemini, and OpenCode as available providers", () => {
     const claude = PROVIDER_OPTIONS.find((option) => option.value === "claudeAgent");
     const gemini = PROVIDER_OPTIONS.find((option) => option.value === "gemini");
+    const opencode = PROVIDER_OPTIONS.find((option) => option.value === "opencode");
     expect(PROVIDER_OPTIONS).toEqual([
       { value: "codex", label: "Codex", available: true },
       { value: "claudeAgent", label: "Claude", available: true },
       { value: "gemini", label: "Gemini", available: true },
+      { value: "opencode", label: "OpenCode", available: true },
     ]);
     expect(claude).toEqual({
       value: "claudeAgent",
@@ -1751,6 +1753,11 @@ describe("PROVIDER_OPTIONS", () => {
     expect(gemini).toEqual({
       value: "gemini",
       label: "Gemini",
+      available: true,
+    });
+    expect(opencode).toEqual({
+      value: "opencode",
+      label: "OpenCode",
       available: true,
     });
   });
