@@ -19,6 +19,7 @@ import {
   hasEffortLevel,
   hasContextWindowOption,
   isClaudeUltrathinkPrompt,
+  resolveLabeledOptionValue,
   trimOrNull,
 } from "@t3tools/shared/model";
 
@@ -62,8 +63,12 @@ export function getComposerTraitSelection(
   runtimeModel?: ProviderModelDescriptor,
 ) {
   const caps = getRuntimeAwareModelCapabilities({ provider, model, runtimeModel });
-  const effortLevels = caps.reasoningEffortLevels;
-  const defaultEffort = getDefaultEffort(caps);
+  const effortLevels =
+    provider === "opencode" ? (caps.variantOptions ?? []) : caps.reasoningEffortLevels;
+  const defaultEffort =
+    provider === "opencode"
+      ? resolveLabeledOptionValue(caps.variantOptions, null)
+      : getDefaultEffort(caps);
   const defaultContextWindow = getDefaultContextWindow(caps);
   const resolvedContextWindow = getRawContextWindow(provider, modelOptions);
   const resolvedEffort = getRawEffort(provider, model, modelOptions);
@@ -71,11 +76,13 @@ export function getComposerTraitSelection(
     ? caps.promptInjectedEffortLevels.includes(resolvedEffort)
     : false;
   const effort =
-    resolvedEffort && !isPromptInjected && hasEffortLevel(caps, resolvedEffort)
-      ? resolvedEffort
-      : defaultEffort && hasEffortLevel(caps, defaultEffort)
-        ? defaultEffort
-        : null;
+    provider === "opencode"
+      ? resolveLabeledOptionValue(caps.variantOptions, resolvedEffort)
+      : resolvedEffort && !isPromptInjected && hasEffortLevel(caps, resolvedEffort)
+        ? resolvedEffort
+        : defaultEffort && hasEffortLevel(caps, defaultEffort)
+          ? defaultEffort
+          : null;
 
   const thinkingEnabled = caps.supportsThinkingToggle
     ? ((modelOptions as ClaudeModelOptions | undefined)?.thinking ?? true)

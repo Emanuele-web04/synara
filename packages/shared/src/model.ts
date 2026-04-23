@@ -248,6 +248,20 @@ export function getDefaultContextWindow(caps: ModelCapabilities): string | null 
   return caps.contextWindowOptions.find((option) => option.isDefault)?.value ?? null;
 }
 
+export function resolveLabeledOptionValue(
+  options: ReadonlyArray<{ value: string; isDefault?: boolean | undefined }> | undefined,
+  rawValue: string | null | undefined,
+): string | null {
+  const trimmedValue = trimOrNull(rawValue);
+  if (!options || options.length === 0) {
+    return trimmedValue;
+  }
+  if (trimmedValue && options.some((option) => option.value === trimmedValue)) {
+    return trimmedValue;
+  }
+  return options.find((option) => option.isDefault)?.value ?? options[0]?.value ?? null;
+}
+
 // ── Data-driven capability resolver ───────────────────────────────────
 
 export function getModelCapabilities(
