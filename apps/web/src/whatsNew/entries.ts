@@ -22,6 +22,48 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.0.36",
+    date: "Apr 24",
+    features: [
+      {
+        id: "gpt-5-5-available",
+        title: "GPT-5.5 is available",
+        description:
+          "GPT-5.5 is now in the model picker with the right default reasoning behavior, so you can move new Codex sessions onto the latest model directly from DP Code.",
+      },
+      {
+        id: "opencode-provider",
+        title: "OpenCode support is here",
+        description:
+          "OpenCode is now available as a provider, with runtime model discovery, session handling, provider settings, model search, variants, agents, and git text generation wired into the app.",
+      },
+      {
+        id: "model-picker-search-polish",
+        title: "Model search feels faster",
+        description:
+          "Large OpenCode model lists now get provider-aware search, clearer labels, automatic search focus, arrow-key navigation, and tighter picker clipping.",
+      },
+      {
+        id: "turn-start-diffs",
+        title: "Diffs now start from the turn",
+        description:
+          "Turn diffs use turn-start checkpoints, making changed-file views line up more closely with what the agent actually changed in the current turn.",
+      },
+      {
+        id: "chat-markdown-math",
+        title: "Chat markdown is smarter",
+        description:
+          "Math rendering was added to chat markdown, while literal dollar amounts stay intact so normal prices and currency snippets do not get misread as formulas.",
+      },
+      {
+        id: "theme-and-release-polish",
+        title: "More polish around search and releases",
+        description:
+          "Sidebar theme search, release verification, Windows signing config, and a handful of provider/model edge cases were tightened up for a smoother build and update path.",
+      },
+    ],
+  },
+  {
     version: "0.0.35",
     date: "Apr 22",
     features: [
