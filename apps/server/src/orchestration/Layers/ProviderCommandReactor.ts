@@ -4,6 +4,7 @@ import {
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
   EventId,
   type ModelSelection,
+  MessageId,
   type OrchestrationEvent,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   type ProviderMentionReference,
@@ -16,7 +17,7 @@ import {
   ThreadId,
   type ProviderSession,
   type RuntimeMode,
-  type TurnId,
+  TurnId,
 } from "@t3tools/contracts";
 import { Cache, Cause, Duration, Effect, Equal, Layer, Option, Schema, Stream } from "effect";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
@@ -24,14 +25,24 @@ import {
   buildPromptThreadTitleFallback,
   isGenericChatThreadTitle,
 } from "@t3tools/shared/chatThreads";
+import {
+  collectTailTurnIds,
+  resolveTailUserMessageEditTarget,
+} from "@t3tools/shared/conversationEdit";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
 import { resolveThreadWorkspaceState } from "@t3tools/shared/threadEnvironment";
 
-import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
+import {
+  checkpointRefForThreadMessageStart,
+  checkpointRefForThreadTurn,
+  resolveThreadWorkspaceCwd,
+} from "../../checkpointing/Utils.ts";
+import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { ProviderAdapterRequestError, ProviderServiceError } from "../../provider/Errors.ts";
 import { TextGeneration } from "../../git/Services/TextGeneration.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { clearWorkspaceIndexCache } from "../../workspaceEntries.ts";
 import { buildHandoffBootstrapText, hasNativeAssistantMessagesBefore } from "../handoff.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
@@ -50,6 +61,8 @@ type ProviderIntentEvent = Extract<
       | "thread.turn-interrupt-requested"
       | "thread.approval-response-requested"
       | "thread.user-input-response-requested"
+      | "thread.conversation-rollback-requested"
+      | "thread.message-edit-resend-requested"
       | "thread.session-stop-requested";
   }
 >;
@@ -131,6 +144,29 @@ function isUnknownPendingUserInputRequestError(cause: Cause.Cause<ProviderServic
   return Cause.pretty(cause).toLowerCase().includes("unknown pending user-input request");
 }
 
+function isStaleCodexResumeError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("thread/resume") &&
+    (normalized.includes("no rollout found") ||
+      normalized.includes("thread not found") ||
+      normalized.includes("missing thread") ||
+      normalized.includes("unknown thread"))
+  );
+}
+
+function isRollbackStillInProgressError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("rollback") &&
+    (normalized.includes("turn is in progress") ||
+      normalized.includes("turn in progress") ||
+      normalized.includes("active turn"))
+  );
+}
+
 function stalePendingRequestDetail(
   requestKind: "approval" | "user-input",
   requestId: string,
@@ -164,6 +200,7 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const providerService = yield* ProviderService;
+  const checkpointStore = yield* CheckpointStore;
   const git = yield* GitCore;
   const textGeneration = yield* TextGeneration;
   const handledTurnStartKeys = yield* Cache.make<string, true>({
@@ -185,6 +222,7 @@ const make = Effect.gen(function* () {
     string,
     Array<Extract<ProviderIntentEvent, { type: "thread.turn-queued" }>["payload"]>
   >();
+  const editResendTurnStartKeys = new Set<string>();
   const drainingQueuedTurns = new Set<string>();
 
   const appendProviderFailureActivity = (input: {
@@ -232,6 +270,31 @@ const make = Effect.gen(function* () {
       session: input.session,
       createdAt: input.createdAt,
     });
+
+  const setThreadSessionError = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly runtimeMode?: RuntimeMode;
+    readonly detail: string;
+    readonly createdAt: string;
+  }) {
+    const thread = yield* resolveThread(input.threadId);
+    if (!thread) {
+      return;
+    }
+    yield* setThreadSession({
+      threadId: input.threadId,
+      session: {
+        threadId: input.threadId,
+        status: "error",
+        providerName: thread.session?.providerName ?? thread.modelSelection.provider,
+        runtimeMode: input.runtimeMode ?? thread.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+        activeTurnId: null,
+        lastError: input.detail,
+        updatedAt: input.createdAt,
+      },
+      createdAt: input.createdAt,
+    });
+  });
 
   const resolveThread = Effect.fnUntraced(function* (threadId: ThreadId) {
     const readModel = yield* orchestrationEngine.getReadModel();
@@ -306,6 +369,176 @@ const make = Effect.gen(function* () {
       }
       return next;
     });
+
+  const removeQueuedTurnStart = (threadId: ThreadId, messageId: string) =>
+    Effect.sync(() => {
+      const existing = queuedTurnStartsByThread.get(threadId);
+      if (!existing || existing.length === 0) {
+        return false;
+      }
+      const next = existing.filter((payload) => payload.messageId !== messageId);
+      if (next.length === existing.length) {
+        return false;
+      }
+      if (next.length === 0) {
+        queuedTurnStartsByThread.delete(threadId);
+      } else {
+        queuedTurnStartsByThread.set(threadId, next);
+      }
+      return true;
+    });
+
+  const hasQueuedTurnStart = (threadId: ThreadId, messageId: string) =>
+    Effect.sync(
+      () =>
+        queuedTurnStartsByThread
+          .get(threadId)
+          ?.some((payload) => payload.messageId === messageId) ?? false,
+    );
+
+  const editResendTurnStartKey = (threadId: ThreadId, messageId: string) =>
+    `${threadId}:${messageId}`;
+
+  const clearEditResendTurnStartKeysForThread = (threadId: ThreadId) =>
+    Effect.sync(() => {
+      const prefix = `${threadId}:`;
+      for (const key of editResendTurnStartKeys) {
+        if (key.startsWith(prefix)) {
+          editResendTurnStartKeys.delete(key);
+        }
+      }
+    });
+
+  const removedTurnIdsFromMessage = (
+    messages: ReadonlyArray<{ readonly id: string; readonly turnId?: TurnId | null }>,
+    messageId: string,
+  ): TurnId[] => collectTailTurnIds<TurnId>({ messages, messageId });
+
+  const clearStaleProviderResumeState = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly cause: ProviderServiceError;
+  }) {
+    if (providerService.clearSessionResumeCursor) {
+      yield* providerService
+        .clearSessionResumeCursor({ threadId: input.threadId })
+        .pipe(Effect.catch(() => Effect.void));
+    } else {
+      yield* providerService
+        .stopSession({ threadId: input.threadId })
+        .pipe(Effect.catch(() => Effect.void));
+    }
+    yield* Effect.logWarning(
+      "provider command reactor cleared stale provider resume state during conversation rollback",
+      {
+        threadId: input.threadId,
+        cause: input.cause.message,
+      },
+    );
+  });
+
+  const rollbackProviderConversationForEdit = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly numTurns: number;
+  }) {
+    let attempt = 0;
+    while (true) {
+      let rollbackError: ProviderServiceError | null = null;
+      yield* providerService
+        .rollbackConversation({
+          threadId: input.threadId,
+          numTurns: input.numTurns,
+        })
+        .pipe(
+          Effect.catch((error) =>
+            Effect.sync(() => {
+              rollbackError = error;
+            }),
+          ),
+        );
+      if (rollbackError === null) {
+        return;
+      }
+      if (isStaleCodexResumeError(rollbackError)) {
+        yield* clearStaleProviderResumeState({
+          threadId: input.threadId,
+          cause: rollbackError,
+        });
+        return;
+      }
+      if (isRollbackStillInProgressError(rollbackError) && attempt < 30) {
+        attempt += 1;
+        yield* Effect.sleep(100);
+        continue;
+      }
+      return yield* Effect.fail(rollbackError);
+    }
+  });
+
+  const restoreWorkspaceBeforeEditReplay = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly removedTurnIds: ReadonlyArray<TurnId>;
+  }) {
+    if (input.removedTurnIds.length === 0) {
+      return;
+    }
+
+    const readModel = yield* orchestrationEngine.getReadModel();
+    const thread = readModel.threads.find((entry) => entry.id === input.threadId);
+    if (!thread) {
+      return;
+    }
+
+    const removedTurnIdSet = new Set(input.removedTurnIds);
+    const removedCheckpoints = thread.checkpoints.filter((checkpoint) =>
+      removedTurnIdSet.has(checkpoint.turnId),
+    );
+    if (removedCheckpoints.length === 0) {
+      return;
+    }
+
+    const firstRemovedTurnCount = removedCheckpoints.reduce(
+      (minTurnCount, checkpoint) => Math.min(minTurnCount, checkpoint.checkpointTurnCount),
+      Number.POSITIVE_INFINITY,
+    );
+    const targetTurnCount = Math.max(0, firstRemovedTurnCount - 1);
+    const cwd = resolveThreadWorkspaceCwd({
+      thread,
+      projects: readModel.projects,
+    });
+    if (!cwd) {
+      return;
+    }
+
+    const isGitWorkspace = yield* checkpointStore.isGitRepository(cwd);
+    if (!isGitWorkspace) {
+      return;
+    }
+
+    const targetCheckpointRef =
+      targetTurnCount === 0
+        ? checkpointRefForThreadTurn(input.threadId, 0)
+        : thread.checkpoints.find(
+            (checkpoint) => checkpoint.checkpointTurnCount === targetTurnCount,
+          )?.checkpointRef;
+    if (!targetCheckpointRef) {
+      return yield* Effect.fail(
+        new Error(`Checkpoint ref for edit replay turn ${targetTurnCount} is unavailable.`),
+      );
+    }
+
+    const restored = yield* checkpointStore.restoreCheckpoint({
+      cwd,
+      checkpointRef: targetCheckpointRef,
+      fallbackToHead: targetTurnCount === 0,
+    });
+    if (!restored) {
+      return yield* Effect.fail(
+        new Error(`Filesystem checkpoint is unavailable for edit replay turn ${targetTurnCount}.`),
+      );
+    }
+
+    clearWorkspaceIndexCache(cwd);
+  });
 
   const ensureSessionForThread = Effect.fnUntraced(function* (
     threadId: ThreadId,
@@ -563,6 +796,44 @@ const make = Effect.gen(function* () {
           : requestedModelSelection
         : input.modelSelection;
 
+    const captureMessageStartCheckpoint = Effect.gen(function* () {
+      if ((input.dispatchMode ?? "queue") === "steer") {
+        return;
+      }
+
+      const readModel = yield* orchestrationEngine.getReadModel();
+      const currentThread = readModel.threads.find((entry) => entry.id === input.threadId);
+      if (!currentThread) {
+        return;
+      }
+
+      const cwd = resolveThreadWorkspaceCwd({
+        thread: currentThread,
+        projects: readModel.projects,
+      });
+      if (!cwd || !(yield* checkpointStore.isGitRepository(cwd))) {
+        return;
+      }
+
+      // Capture before provider dispatch so the later turn diff is bounded by
+      // the user's submit moment, not an async runtime event.
+      yield* checkpointStore.captureCheckpoint({
+        cwd,
+        checkpointRef: checkpointRefForThreadMessageStart(
+          input.threadId,
+          MessageId.makeUnsafe(input.messageId),
+        ),
+      });
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("failed to capture provider turn start checkpoint", {
+          threadId: input.threadId,
+          messageId: input.messageId,
+          cause: Cause.pretty(cause),
+        }),
+      ),
+    );
+
     if (input.reviewTarget !== undefined) {
       yield* providerService.startReview({
         threadId: input.threadId,
@@ -579,6 +850,7 @@ const make = Effect.gen(function* () {
         ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
       });
     } else {
+      yield* captureMessageStartCheckpoint;
       yield* providerService.sendTurn({
         threadId: input.threadId,
         ...(normalizedInput ? { input: normalizedInput } : {}),
@@ -783,6 +1055,8 @@ const make = Effect.gen(function* () {
       (thread.session?.providerName ?? thread.modelSelection.provider) !== "codex"
         ? "queue"
         : event.payload.dispatchMode;
+    const editResendKey = editResendTurnStartKey(event.payload.threadId, event.payload.messageId);
+    const isEditResendTurn = editResendTurnStartKeys.has(editResendKey);
 
     yield* dispatchTurnForThread({
       threadId: event.payload.threadId,
@@ -809,17 +1083,27 @@ const make = Effect.gen(function* () {
     }).pipe(
       Effect.catchCause((cause) =>
         Effect.gen(function* () {
+          const detail = Cause.pretty(cause);
           yield* appendProviderFailureActivity({
             threadId: event.payload.threadId,
             kind: "provider.turn.start.failed",
             summary: "Provider turn start failed",
-            detail: Cause.pretty(cause),
+            detail,
             turnId: null,
             createdAt: event.payload.createdAt,
           });
+          if (isEditResendTurn) {
+            yield* setThreadSessionError({
+              threadId: event.payload.threadId,
+              runtimeMode: event.payload.runtimeMode,
+              detail,
+              createdAt: event.payload.createdAt,
+            });
+          }
           yield* drainQueuedTurnsForThread(event.payload.threadId);
         }),
       ),
+      Effect.ensuring(Effect.sync(() => editResendTurnStartKeys.delete(editResendKey))),
     );
   });
 
@@ -996,6 +1280,227 @@ const make = Effect.gen(function* () {
       );
   });
 
+  const processConversationRollbackRequested = Effect.fnUntraced(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.conversation-rollback-requested" }>,
+  ) {
+    if (event.payload.numTurns === 0) {
+      const thread = yield* resolveThread(event.payload.threadId);
+      yield* orchestrationEngine.dispatch({
+        type: "thread.conversation.rollback.complete",
+        commandId: serverCommandId("conversation-rollback-complete"),
+        threadId: event.payload.threadId,
+        messageId: event.payload.messageId,
+        numTurns: event.payload.numTurns,
+        removedTurnIds: thread
+          ? removedTurnIdsFromMessage(thread.messages, event.payload.messageId)
+          : [],
+        createdAt: event.payload.createdAt,
+      });
+      return;
+    }
+
+    const thread = yield* resolveThread(event.payload.threadId);
+    const providerThread = yield* resolveProviderSessionThread(event.payload.threadId);
+    if (
+      thread &&
+      providerThread?.session?.status === "running" &&
+      providerThread.session.activeTurnId !== null
+    ) {
+      const providerThreadId = resolveSubagentProviderThreadId(thread.id, providerThread.id);
+      yield* providerService.interruptTurn({
+        threadId: providerThread.id,
+        turnId: providerThread.session.activeTurnId,
+        ...(providerThreadId ? { providerThreadId } : {}),
+      });
+    }
+
+    yield* rollbackProviderConversationForEdit({
+      threadId: event.payload.threadId,
+      numTurns: event.payload.numTurns,
+    });
+    yield* orchestrationEngine.dispatch({
+      type: "thread.conversation.rollback.complete",
+      commandId: serverCommandId("conversation-rollback-complete"),
+      threadId: event.payload.threadId,
+      messageId: event.payload.messageId,
+      numTurns: event.payload.numTurns,
+      removedTurnIds: thread
+        ? removedTurnIdsFromMessage(thread.messages, event.payload.messageId)
+        : [],
+      createdAt: event.payload.createdAt,
+    });
+  });
+
+  const processMessageEditResendPayload = Effect.fnUntraced(function* (
+    payload: Extract<
+      ProviderIntentEvent,
+      { type: "thread.message-edit-resend-requested" }
+    >["payload"],
+    options?: {
+      readonly skipProviderRollback?: boolean;
+      readonly preserveQueuedTurns?: boolean;
+      readonly preserveThreadSession?: boolean;
+      readonly activeTurnId?: TurnId | null;
+    },
+  ) {
+    if (options?.preserveQueuedTurns !== true) {
+      queuedTurnStartsByThread.delete(payload.threadId);
+      yield* clearEditResendTurnStartKeysForThread(payload.threadId);
+    } else {
+      yield* removeQueuedTurnStart(payload.threadId, payload.messageId);
+    }
+    const originalThread = yield* resolveThread(payload.threadId);
+    const originalMessage = originalThread?.messages.find(
+      (message) => message.id === payload.messageId,
+    );
+    if (!originalThread || !originalMessage || originalMessage.role !== "user") {
+      return yield* Effect.fail(
+        new Error(`Cannot edit missing user message '${payload.messageId}'.`),
+      );
+    }
+    const editTarget = resolveTailUserMessageEditTarget({
+      messages: originalThread.messages,
+      messageId: payload.messageId,
+      activeTurnId:
+        options?.activeTurnId ??
+        (originalThread.session?.status === "running"
+          ? (originalThread.session.activeTurnId ?? null)
+          : null),
+    });
+    if (!editTarget.editable) {
+      return yield* Effect.fail(
+        new Error(
+          `Cannot edit non-tail user message '${payload.messageId}': ${editTarget.reason}.`,
+        ),
+      );
+    }
+    if (options?.skipProviderRollback !== true && editTarget.rollbackTurnCount > 0) {
+      yield* rollbackProviderConversationForEdit({
+        threadId: payload.threadId,
+        numTurns: editTarget.rollbackTurnCount,
+      });
+    }
+    yield* restoreWorkspaceBeforeEditReplay({
+      threadId: payload.threadId,
+      removedTurnIds: editTarget.removedTurnIds.map((turnId) => TurnId.makeUnsafe(turnId)),
+    });
+    yield* orchestrationEngine.dispatch({
+      type: "thread.conversation.rollback.complete",
+      commandId: serverCommandId("message-edit-rollback-complete"),
+      threadId: payload.threadId,
+      messageId: payload.messageId,
+      numTurns: editTarget.rollbackTurnCount,
+      removedTurnIds: editTarget.removedTurnIds.map((turnId) => TurnId.makeUnsafe(turnId)),
+      skipAttachmentPrune: true,
+      createdAt: payload.createdAt,
+    });
+
+    const thread = yield* resolveThread(payload.threadId);
+    if (thread && options?.preserveThreadSession !== true) {
+      yield* setThreadSession({
+        threadId: payload.threadId,
+        session: {
+          threadId: payload.threadId,
+          status: "starting",
+          providerName: thread.session?.providerName ?? thread.modelSelection.provider,
+          runtimeMode: payload.runtimeMode,
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: payload.createdAt,
+        },
+        createdAt: payload.createdAt,
+      });
+    }
+
+    editResendTurnStartKeys.add(editResendTurnStartKey(payload.threadId, payload.messageId));
+    yield* orchestrationEngine.dispatch({
+      type: "thread.turn.start",
+      commandId: serverCommandId("message-edit-resend-turn-start"),
+      threadId: payload.threadId,
+      message: {
+        messageId: payload.messageId,
+        role: "user",
+        text: payload.text,
+        attachments: originalMessage.attachments ?? [],
+        ...(originalMessage.skills !== undefined ? { skills: originalMessage.skills } : {}),
+        ...(originalMessage.mentions !== undefined ? { mentions: originalMessage.mentions } : {}),
+      },
+      ...(payload.modelSelection !== undefined ? { modelSelection: payload.modelSelection } : {}),
+      ...(payload.providerOptions !== undefined
+        ? { providerOptions: payload.providerOptions }
+        : {}),
+      ...(payload.assistantDeliveryMode !== undefined
+        ? { assistantDeliveryMode: payload.assistantDeliveryMode }
+        : {}),
+      dispatchMode: "queue",
+      runtimeMode: payload.runtimeMode,
+      interactionMode: payload.interactionMode,
+      createdAt: payload.createdAt,
+    });
+  });
+
+  const stopActiveProviderRuntimeForEdit = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+  }) {
+    if (providerService.stopRuntimeSession) {
+      yield* providerService.stopRuntimeSession({ threadId: input.threadId });
+      return;
+    }
+    yield* providerService.stopSession({ threadId: input.threadId });
+  });
+
+  const processMessageEditResendRequested = Effect.fnUntraced(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.message-edit-resend-requested" }>,
+  ) {
+    const thread = yield* resolveThread(event.payload.threadId);
+    const providerThread = yield* resolveProviderSessionThread(event.payload.threadId);
+    const activeTurnId =
+      providerThread?.session?.status === "running"
+        ? (providerThread.session.activeTurnId ?? null)
+        : null;
+    const isQueuedMessageEdit = yield* hasQueuedTurnStart(
+      event.payload.threadId,
+      event.payload.messageId,
+    );
+    if (thread && !isQueuedMessageEdit) {
+      yield* setThreadSession({
+        threadId: event.payload.threadId,
+        session: {
+          threadId: event.payload.threadId,
+          status: "starting",
+          providerName: thread.session?.providerName ?? thread.modelSelection.provider,
+          runtimeMode: event.payload.runtimeMode,
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: event.payload.createdAt,
+        },
+        createdAt: event.payload.createdAt,
+      });
+    }
+    if (
+      thread &&
+      providerThread?.session?.status === "running" &&
+      providerThread.session.activeTurnId !== null &&
+      !isQueuedMessageEdit
+    ) {
+      // Edits should replay from the last stable cursor, not wait for each
+      // provider's interrupt lifecycle to settle.
+      yield* stopActiveProviderRuntimeForEdit({ threadId: providerThread.id });
+      yield* processMessageEditResendPayload(event.payload, {
+        skipProviderRollback: true,
+        activeTurnId,
+      });
+      return;
+    }
+
+    yield* processMessageEditResendPayload(event.payload, {
+      ...(isQueuedMessageEdit ? { skipProviderRollback: true } : {}),
+      preserveQueuedTurns: isQueuedMessageEdit,
+      preserveThreadSession: isQueuedMessageEdit,
+      activeTurnId,
+    });
+  });
+
   const processSessionStopRequested = Effect.fnUntraced(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.session-stop-requested" }>,
   ) {
@@ -1006,6 +1511,7 @@ const make = Effect.gen(function* () {
     }
 
     queuedTurnStartsByThread.delete(thread.id);
+    yield* clearEditResendTurnStartKeysForThread(thread.id);
     drainingQueuedTurns.delete(thread.id);
 
     const now = event.payload.createdAt;
@@ -1128,6 +1634,21 @@ const make = Effect.gen(function* () {
         case "thread.user-input-response-requested":
           yield* processUserInputResponseRequested(event);
           return;
+        case "thread.conversation-rollback-requested":
+          yield* processConversationRollbackRequested(event);
+          return;
+        case "thread.message-edit-resend-requested":
+          yield* processMessageEditResendRequested(event).pipe(
+            Effect.catchCause((cause) =>
+              setThreadSessionError({
+                threadId: event.payload.threadId,
+                runtimeMode: event.payload.runtimeMode,
+                detail: Cause.pretty(cause),
+                createdAt: event.payload.createdAt,
+              }),
+            ),
+          );
+          return;
         case "thread.session-stop-requested":
           yield* processSessionStopRequested(event);
           return;
@@ -1173,6 +1694,8 @@ const make = Effect.gen(function* () {
         event.type !== "thread.turn-interrupt-requested" &&
         event.type !== "thread.approval-response-requested" &&
         event.type !== "thread.user-input-response-requested" &&
+        event.type !== "thread.conversation-rollback-requested" &&
+        event.type !== "thread.message-edit-resend-requested" &&
         event.type !== "thread.session-stop-requested"
       ) {
         return Effect.void;

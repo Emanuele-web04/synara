@@ -39,6 +39,13 @@ export type ResolvedAgentAlias = AgentAliasDefinition & {
 };
 
 const CODEX_AGENT_MENTION_ALIASES: Record<string, CodexAgentAliasDefinition> = {
+  "5.5": {
+    provider: "codex",
+    kind: "model",
+    model: "gpt-5.5",
+    displayName: "GPT-5.5",
+    color: "violet",
+  },
   "5.4": {
     provider: "codex",
     kind: "model",
@@ -214,7 +221,7 @@ export const AGENT_MENTION_ALIASES: Record<string, AgentAliasDefinition> = Objec
 );
 
 const AGENT_MENTION_AUTOCOMPLETE_ALIASES_BY_PROVIDER: Record<ProviderKind, readonly string[]> = {
-  codex: ["5.4", "mini", "5.3-codex", "spark", "5.2", "5.2-codex"],
+  codex: ["5.5", "5.4", "mini", "5.3-codex", "spark", "5.2", "5.2-codex"],
   claudeAgent: ["explore", "review", "build", "plan"],
   gemini: [],
 };

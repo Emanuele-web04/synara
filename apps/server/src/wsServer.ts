@@ -189,6 +189,7 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
       | "thread.activity-appended"
       | "thread.turn-diff-completed"
       | "thread.reverted"
+      | "thread.conversation-rolled-back"
       | "thread.session-set";
   }
 > {
@@ -198,6 +199,7 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
     event.type === "thread.activity-appended" ||
     event.type === "thread.turn-diff-completed" ||
     event.type === "thread.reverted" ||
+    event.type === "thread.conversation-rolled-back" ||
     event.type === "thread.session-set"
   );
 }

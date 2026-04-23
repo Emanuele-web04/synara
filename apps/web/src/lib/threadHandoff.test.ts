@@ -53,7 +53,7 @@ describe("threadHandoff", () => {
       }),
     ).toEqual({
       provider: "codex",
-      model: "gpt-5.4",
+      model: "gpt-5.5",
     });
   });
 });

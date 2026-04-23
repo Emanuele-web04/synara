@@ -3,6 +3,7 @@ import { it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
 
 import {
+  ClientOrchestrationCommand,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
   OrchestrationCommand,
@@ -35,6 +36,7 @@ const decodeOrchestrationProposedPlan = Schema.decodeUnknownEffect(Orchestration
 const decodeOrchestrationSession = Schema.decodeUnknownEffect(OrchestrationSession);
 const decodeThreadCreatedPayload = Schema.decodeUnknownEffect(ThreadCreatedPayload);
 const decodeThreadMetaUpdatedPayload = Schema.decodeUnknownEffect(ThreadMetaUpdatedPayload);
+const decodeClientOrchestrationCommand = Schema.decodeUnknownEffect(ClientOrchestrationCommand);
 const decodeOrchestrationCommand = Schema.decodeUnknownEffect(OrchestrationCommand);
 const decodeOrchestrationEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
 
@@ -74,6 +76,25 @@ it.effect("rejects thread turn diff when fromTurnCount > toTurnCount", () =>
       }),
     );
     assert.strictEqual(result._tag, "Failure");
+  }),
+);
+
+it.effect("keeps generic conversation rollback internal-only", () =>
+  Effect.gen(function* () {
+    const rollbackCommand = {
+      type: "thread.conversation.rollback",
+      commandId: "cmd-rollback",
+      threadId: "thread-1",
+      messageId: "message-1",
+      numTurns: 1,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    };
+
+    const clientResult = yield* Effect.exit(decodeClientOrchestrationCommand(rollbackCommand));
+    assert.strictEqual(clientResult._tag, "Failure");
+
+    const parsedInternal = yield* decodeOrchestrationCommand(rollbackCommand);
+    assert.strictEqual(parsedInternal.type, "thread.conversation.rollback");
   }),
 );
 

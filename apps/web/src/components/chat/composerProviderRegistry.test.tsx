@@ -61,6 +61,59 @@ describe("getComposerProviderState", () => {
     });
   });
 
+  it("preserves codex fast mode for runtime-discovered models that advertise support", () => {
+    const state = getComposerProviderState({
+      provider: "codex",
+      model: "gpt-5.6-preview",
+      runtimeModel: {
+        slug: "gpt-5.6-preview",
+        name: "GPT-5.6 Preview",
+        supportsFastMode: true,
+        supportedReasoningEfforts: [{ value: "low" }, { value: "medium" }, { value: "high" }],
+        defaultReasoningEffort: "medium",
+      },
+      prompt: "",
+      modelOptions: {
+        codex: {
+          fastMode: true,
+        },
+      },
+    });
+
+    expect(state).toEqual({
+      provider: "codex",
+      promptEffort: "medium",
+      modelOptionsForDispatch: {
+        fastMode: true,
+      },
+    });
+  });
+
+  it("drops codex fast mode when runtime discovery does not advertise support", () => {
+    const state = getComposerProviderState({
+      provider: "codex",
+      model: "gpt-5.4-mini",
+      runtimeModel: {
+        slug: "gpt-5.4-mini",
+        name: "GPT-5.4 Mini",
+        supportedReasoningEfforts: [{ value: "low" }, { value: "medium" }, { value: "high" }],
+        defaultReasoningEffort: "medium",
+      },
+      prompt: "",
+      modelOptions: {
+        codex: {
+          fastMode: true,
+        },
+      },
+    });
+
+    expect(state).toEqual({
+      provider: "codex",
+      promptEffort: "medium",
+      modelOptionsForDispatch: undefined,
+    });
+  });
+
   it("drops explicit codex default/off overrides from dispatch while keeping the selected effort label", () => {
     const state = getComposerProviderState({
       provider: "codex",

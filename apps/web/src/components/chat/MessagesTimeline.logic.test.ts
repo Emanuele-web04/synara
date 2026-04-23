@@ -1,10 +1,29 @@
+import { CheckpointRef, MessageId, TurnId } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 import {
+  buildTurnDiffSummaryByAssistantMessageId,
   computeMessageDurationStart,
   deriveTerminalAssistantMessageIds,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
 } from "./MessagesTimeline.logic";
+import type { TurnDiffSummary } from "../../types";
+
+function makeSummary(
+  overrides: Omit<Partial<TurnDiffSummary>, "turnId"> & { turnId: string },
+): TurnDiffSummary {
+  const { turnId, ...rest } = overrides;
+  return {
+    turnId: TurnId.makeUnsafe(turnId),
+    status: "ready",
+    completedAt: "2026-01-01T00:00:10Z",
+    files: [{ path: "src/app.ts", kind: "modified", additions: 1, deletions: 0 }],
+    checkpointRef: CheckpointRef.makeUnsafe(`checkpoint-${turnId}`),
+    checkpointTurnCount: 1,
+    assistantMessageId: null,
+    ...rest,
+  } as TurnDiffSummary;
+}
 
 describe("computeMessageDurationStart", () => {
   it("returns message createdAt when there is no preceding user message", () => {
@@ -171,6 +190,80 @@ describe("deriveTerminalAssistantMessageIds", () => {
         { id: "a3", role: "assistant", createdAt: "2026-01-01T00:00:04Z" },
       ]),
     ).toEqual(new Set(["a2", "a3"]));
+  });
+});
+
+describe("buildTurnDiffSummaryByAssistantMessageId", () => {
+  it("attaches each summary to the terminal assistant message of its turn by turnId", () => {
+    const result = buildTurnDiffSummaryByAssistantMessageId({
+      turnDiffSummaries: [makeSummary({ turnId: "turn-1" }), makeSummary({ turnId: "turn-2" })],
+      assistantMessages: [
+        { id: MessageId.makeUnsafe("a-turn-1"), turnId: TurnId.makeUnsafe("turn-1") },
+        { id: MessageId.makeUnsafe("a-turn-2"), turnId: TurnId.makeUnsafe("turn-2") },
+      ],
+    });
+
+    expect(result.get(MessageId.makeUnsafe("a-turn-1"))?.turnId).toBe(TurnId.makeUnsafe("turn-1"));
+    expect(result.get(MessageId.makeUnsafe("a-turn-2"))?.turnId).toBe(TurnId.makeUnsafe("turn-2"));
+    expect(result.size).toBe(2);
+  });
+
+  it("does not leak a summary to an unrelated message even when ids look similar", () => {
+    // Regression for the "Files changed on wrong thread" bug: before the fix,
+    // the server synthesized `assistant:<turnId>` ids that could collide with
+    // the real message id of a different turn. With the new turnId-scoped
+    // lookup, collisions cannot attach the card to the wrong message.
+    const result = buildTurnDiffSummaryByAssistantMessageId({
+      turnDiffSummaries: [makeSummary({ turnId: "turn-files-changed" })],
+      assistantMessages: [
+        { id: MessageId.makeUnsafe("a-unrelated"), turnId: TurnId.makeUnsafe("turn-no-changes") },
+      ],
+    });
+
+    expect(result.size).toBe(0);
+  });
+
+  it("ignores summaries for turns that have no rendered assistant message yet", () => {
+    const result = buildTurnDiffSummaryByAssistantMessageId({
+      turnDiffSummaries: [makeSummary({ turnId: "turn-1" })],
+      assistantMessages: [],
+    });
+
+    expect(result.size).toBe(0);
+  });
+
+  it("attaches the summary to the LAST assistant message of a turn when multiple exist", () => {
+    const result = buildTurnDiffSummaryByAssistantMessageId({
+      turnDiffSummaries: [makeSummary({ turnId: "turn-1" })],
+      assistantMessages: [
+        { id: MessageId.makeUnsafe("a-turn-1-first"), turnId: TurnId.makeUnsafe("turn-1") },
+        { id: MessageId.makeUnsafe("a-turn-1-last"), turnId: TurnId.makeUnsafe("turn-1") },
+      ],
+    });
+
+    expect(result.get(MessageId.makeUnsafe("a-turn-1-last"))?.turnId).toBe(
+      TurnId.makeUnsafe("turn-1"),
+    );
+    expect(result.has(MessageId.makeUnsafe("a-turn-1-first"))).toBe(false);
+    expect(result.size).toBe(1);
+  });
+
+  it("returns an empty map when there are no summaries", () => {
+    const result = buildTurnDiffSummaryByAssistantMessageId({
+      turnDiffSummaries: [],
+      assistantMessages: [{ id: MessageId.makeUnsafe("a-1"), turnId: TurnId.makeUnsafe("turn-1") }],
+    });
+
+    expect(result.size).toBe(0);
+  });
+
+  it("ignores assistant messages without a turnId", () => {
+    const result = buildTurnDiffSummaryByAssistantMessageId({
+      turnDiffSummaries: [makeSummary({ turnId: "turn-1" })],
+      assistantMessages: [{ id: MessageId.makeUnsafe("a-nullturn"), turnId: null }],
+    });
+
+    expect(result.size).toBe(0);
   });
 });
 

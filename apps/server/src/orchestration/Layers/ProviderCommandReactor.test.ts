@@ -33,6 +33,12 @@ import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { ProviderCommandReactorLive } from "./ProviderCommandReactor.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
+import { attachmentRelativePath } from "../../attachmentStore.ts";
+import { checkpointRefForThreadTurn } from "../../checkpointing/Utils.ts";
+import {
+  CheckpointStore,
+  type CheckpointStoreShape,
+} from "../../checkpointing/Services/CheckpointStore.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 const asProjectId = (value: string): ProjectId => ProjectId.makeUnsafe(value);
@@ -141,7 +147,7 @@ describe("ProviderCommandReactor", () => {
       runtimeSessions.push(session);
       return Effect.succeed(session);
     });
-    const sendTurn = vi.fn((_: unknown) =>
+    const sendTurn = vi.fn<ProviderServiceShape["sendTurn"]>((_: unknown) =>
       Effect.succeed({
         threadId: ThreadId.makeUnsafe("thread-1"),
         turnId: asTurnId("turn-1"),
@@ -159,7 +165,55 @@ describe("ProviderCommandReactor", () => {
     const interruptTurn = vi.fn((_: unknown) => Effect.void);
     const respondToRequest = vi.fn<ProviderServiceShape["respondToRequest"]>(() => Effect.void);
     const respondToUserInput = vi.fn<ProviderServiceShape["respondToUserInput"]>(() => Effect.void);
+    const rollbackConversation = vi.fn<ProviderServiceShape["rollbackConversation"]>(
+      () => Effect.void,
+    );
+    const restoreCheckpoint = vi.fn<CheckpointStoreShape["restoreCheckpoint"]>(() =>
+      Effect.succeed(true),
+    );
+    const isGitRepository = vi.fn<CheckpointStoreShape["isGitRepository"]>(() =>
+      Effect.succeed(false),
+    );
+    const checkpointStore: CheckpointStoreShape = {
+      isGitRepository,
+      captureCheckpoint: () => Effect.void,
+      copyCheckpointRef: () => Effect.succeed(true),
+      hasCheckpointRef: () => Effect.succeed(false),
+      restoreCheckpoint,
+      diffCheckpoints: () => Effect.succeed(""),
+      deleteCheckpointRefs: () => Effect.void,
+    };
     const stopSession = vi.fn((input: unknown) =>
+      Effect.sync(() => {
+        const threadId =
+          typeof input === "object" && input !== null && "threadId" in input
+            ? (input as { threadId?: ThreadId }).threadId
+            : undefined;
+        if (!threadId) {
+          return;
+        }
+        const index = runtimeSessions.findIndex((session) => session.threadId === threadId);
+        if (index >= 0) {
+          runtimeSessions.splice(index, 1);
+        }
+      }),
+    );
+    const stopRuntimeSession = vi.fn((input: unknown) =>
+      Effect.sync(() => {
+        const threadId =
+          typeof input === "object" && input !== null && "threadId" in input
+            ? (input as { threadId?: ThreadId }).threadId
+            : undefined;
+        if (!threadId) {
+          return;
+        }
+        const index = runtimeSessions.findIndex((session) => session.threadId === threadId);
+        if (index >= 0) {
+          runtimeSessions.splice(index, 1);
+        }
+      }),
+    );
+    const clearSessionResumeCursor = vi.fn((input: unknown) =>
       Effect.sync(() => {
         const threadId =
           typeof input === "object" && input !== null && "threadId" in input
@@ -213,12 +267,18 @@ describe("ProviderCommandReactor", () => {
       respondToRequest: respondToRequest as ProviderServiceShape["respondToRequest"],
       respondToUserInput: respondToUserInput as ProviderServiceShape["respondToUserInput"],
       stopSession: stopSession as ProviderServiceShape["stopSession"],
+      stopRuntimeSession: stopRuntimeSession as NonNullable<
+        ProviderServiceShape["stopRuntimeSession"]
+      >,
+      clearSessionResumeCursor: clearSessionResumeCursor as NonNullable<
+        ProviderServiceShape["clearSessionResumeCursor"]
+      >,
       listSessions: () => Effect.succeed(runtimeSessions),
       getCapabilities: (_provider) =>
         Effect.succeed({
           sessionModelSwitch: input?.sessionModelSwitch ?? "in-session",
         }),
-      rollbackConversation: () => unsupported(),
+      rollbackConversation,
       compactThread: () => unsupported(),
       streamEvents: Stream.fromPubSub(runtimeEventPubSub),
     };
@@ -232,6 +292,7 @@ describe("ProviderCommandReactor", () => {
     const layer = ProviderCommandReactorLive.pipe(
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(Layer.succeed(ProviderService, service)),
+      Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
       Layer.provideMerge(Layer.succeed(GitCore, { renameBranch } as unknown as GitCoreShape)),
       Layer.provideMerge(
         Layer.succeed(TextGeneration, {
@@ -288,7 +349,12 @@ describe("ProviderCommandReactor", () => {
       interruptTurn,
       respondToRequest,
       respondToUserInput,
+      rollbackConversation,
+      isGitRepository,
+      restoreCheckpoint,
       stopSession,
+      stopRuntimeSession,
+      clearSessionResumeCursor,
       renameBranch,
       generateBranchName,
       generateThreadTitle,
@@ -297,6 +363,580 @@ describe("ProviderCommandReactor", () => {
       emitRuntimeEvent,
     };
   }
+
+  async function seedRollbackTarget(
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    input: {
+      readonly messageId: MessageId;
+      readonly turnId: TurnId;
+      readonly createdAt: string;
+    },
+  ) {
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.messages.import",
+        commandId: CommandId.makeUnsafe(`cmd-import-${input.messageId}`),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messages: [
+          {
+            messageId: input.messageId,
+            role: "user",
+            text: "rollback target",
+            createdAt: input.createdAt,
+            updatedAt: input.createdAt,
+          },
+        ],
+        createdAt: input.createdAt,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.assistant.complete",
+        commandId: CommandId.makeUnsafe(`cmd-assistant-complete-${input.messageId}`),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: MessageId.makeUnsafe(`assistant-${input.messageId}`),
+        turnId: input.turnId,
+        createdAt: input.createdAt,
+      }),
+    );
+  }
+
+  it("rolls back provider conversation state for message edits", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    await seedRollbackTarget(harness, {
+      messageId: asMessageId("user-message-2"),
+      turnId: asTurnId("turn-rollback-2"),
+      createdAt: now,
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.conversation.rollback",
+        commandId: CommandId.makeUnsafe("cmd-conversation-rollback"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: asMessageId("user-message-2"),
+        numTurns: 1,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.rollbackConversation.mock.calls.length === 1);
+    expect(harness.rollbackConversation.mock.calls[0]?.[0]).toEqual({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      numTurns: 1,
+    });
+  });
+
+  it("interrupts the active provider turn before rolling back an edited message", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    await seedRollbackTarget(harness, {
+      messageId: asMessageId("user-message-active"),
+      turnId: asTurnId("turn-rollback-active"),
+      createdAt: now,
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-running-edit-rollback"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-active-edit"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.conversation.rollback",
+        commandId: CommandId.makeUnsafe("cmd-conversation-rollback-active"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: asMessageId("user-message-active"),
+        numTurns: 1,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.rollbackConversation.mock.calls.length === 1);
+    expect(harness.interruptTurn.mock.calls[0]?.[0]).toEqual({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      turnId: asTurnId("turn-active-edit"),
+    });
+    expect(harness.rollbackConversation.mock.calls[0]?.[0]).toEqual({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      numTurns: 1,
+    });
+  });
+
+  it("stops an active provider runtime and immediately resends an edited latest message", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const imageAttachment = {
+      type: "image" as const,
+      id: "edit-image-1",
+      name: "diagram.png",
+      mimeType: "image/png",
+      sizeBytes: 42,
+    };
+    const skill = {
+      name: "docs",
+      path: "/tmp/docs-skill",
+    };
+    const mention = {
+      name: "README.md",
+      path: "/tmp/project/README.md",
+    };
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-original-turn-start-for-edit"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-edit"),
+          role: "user",
+          text: "old prompt",
+          attachments: [imageAttachment],
+          skills: [skill],
+          mentions: [mention],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    harness.sendTurn.mockClear();
+    harness.startSession.mockClear();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-running-edit-resend"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-active-edit-resend"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.edit-and-resend",
+        commandId: CommandId.makeUnsafe("cmd-edit-and-resend"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: asMessageId("user-message-edit"),
+        text: "edited prompt",
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.stopRuntimeSession.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.stopRuntimeSession.mock.calls[0]?.[0]).toEqual({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+    });
+    expect(harness.interruptTurn.mock.calls.length).toBe(0);
+    expect(harness.rollbackConversation.mock.calls.length).toBe(0);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      input: "edited prompt",
+      attachments: [imageAttachment],
+      skills: [skill],
+      mentions: [mention],
+    });
+
+    const readModel = await Effect.runPromise(harness.engine.getReadModel());
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
+    expect(thread?.messages.map((message) => message.text)).toEqual(["edited prompt"]);
+    expect(thread?.messages[0]).toMatchObject({
+      attachments: [imageAttachment],
+      skills: [skill],
+      mentions: [mention],
+    });
+  });
+
+  it("keeps queued-message edits queued while an active provider turn continues", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-running-edit-queued"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-running-edit-queued"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-queued-before-edit"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("msg-queued-before-edit"),
+          role: "user",
+          text: "queued prompt",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+    await harness.drain();
+    harness.stopRuntimeSession.mockClear();
+    harness.rollbackConversation.mockClear();
+    harness.sendTurn.mockClear();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.edit-and-resend",
+        commandId: CommandId.makeUnsafe("cmd-edit-queued-message"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: asMessageId("msg-queued-before-edit"),
+        text: "edited queued prompt",
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+    await harness.drain();
+
+    expect(harness.stopRuntimeSession).not.toHaveBeenCalled();
+    expect(harness.rollbackConversation).not.toHaveBeenCalled();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+
+    await harness.emitRuntimeEvent({
+      type: "turn.completed",
+      eventId: asEventId("evt-turn-completed-edited-queue"),
+      provider: "codex",
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      createdAt: new Date().toISOString(),
+      turnId: asTurnId("turn-running-edit-queued"),
+      payload: {
+        state: "completed",
+      },
+      providerRefs: {},
+    } as ProviderRuntimeEvent);
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      input: "edited queued prompt",
+    });
+  });
+
+  it("preserves image attachment files while rolling back an edit resend", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const imageAttachment = {
+      type: "image" as const,
+      id: "thread-1-12345678-1234-1234-1234-123456789abc",
+      name: "diagram.png",
+      mimeType: "image/png",
+      sizeBytes: 4,
+    };
+    const attachmentPath = path.join(
+      harness.stateDir,
+      "attachments",
+      attachmentRelativePath(imageAttachment),
+    );
+    fs.mkdirSync(path.dirname(attachmentPath), { recursive: true });
+    fs.writeFileSync(attachmentPath, Buffer.from([1, 2, 3, 4]));
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-original-image-edit"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("msg-image-edit"),
+          role: "user",
+          text: "old image prompt",
+          attachments: [imageAttachment],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    harness.sendTurn.mockClear();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.assistant.complete",
+        commandId: CommandId.makeUnsafe("cmd-image-edit-assistant-complete"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: asMessageId("assistant-image-edit"),
+        turnId: asTurnId("turn-image-edit"),
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.edit-and-resend",
+        commandId: CommandId.makeUnsafe("cmd-edit-image-resend"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: asMessageId("msg-image-edit"),
+        text: "edited image prompt",
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(fs.existsSync(attachmentPath)).toBe(true);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      input: "edited image prompt",
+      attachments: [imageAttachment],
+    });
+  });
+
+  it("restores the previous filesystem checkpoint before resending a completed edit", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    harness.isGitRepository.mockImplementationOnce(() => Effect.succeed(true));
+
+    await seedRollbackTarget(harness, {
+      messageId: asMessageId("user-message-checkpoint-edit"),
+      turnId: asTurnId("turn-checkpoint-edit"),
+      createdAt: now,
+    });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.diff.complete",
+        commandId: CommandId.makeUnsafe("cmd-checkpoint-edit-complete"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        turnId: asTurnId("turn-checkpoint-edit"),
+        completedAt: now,
+        checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 1),
+        status: "ready",
+        files: [],
+        assistantMessageId: asMessageId("assistant-user-message-checkpoint-edit"),
+        checkpointTurnCount: 1,
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.edit-and-resend",
+        commandId: CommandId.makeUnsafe("cmd-edit-checkpoint-resend"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: asMessageId("user-message-checkpoint-edit"),
+        text: "edited checkpoint prompt",
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.restoreCheckpoint).toHaveBeenCalledWith({
+      cwd: "/tmp/provider-project",
+      checkpointRef: checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 0),
+      fallbackToHead: true,
+    });
+  });
+
+  it("clears the edit loading state when provider rollback fails before resend", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    harness.rollbackConversation.mockImplementationOnce(() =>
+      Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: "codex",
+          method: "thread/rollback",
+          detail: "rollback failed",
+        }),
+      ),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.messages.import",
+        commandId: CommandId.makeUnsafe("cmd-import-edit-rollback-failure"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messages: [
+          {
+            messageId: asMessageId("user-message-edit-fails"),
+            role: "user",
+            text: "old prompt",
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.assistant.complete",
+        commandId: CommandId.makeUnsafe("cmd-assistant-edit-rollback-failure"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: asMessageId("assistant-edit-rollback-failure"),
+        turnId: asTurnId("turn-edit-rollback-failure"),
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.edit-and-resend",
+        commandId: CommandId.makeUnsafe("cmd-edit-and-resend-rollback-fails"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: asMessageId("user-message-edit-fails"),
+        text: "edited prompt",
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      return readModel.threads[0]?.session?.status === "error";
+    });
+    const readModel = await Effect.runPromise(harness.engine.getReadModel());
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
+    expect(thread?.session?.status).toBe("error");
+    expect(thread?.session?.activeTurnId).toBeNull();
+    expect(thread?.session?.lastError).toContain("rollback failed");
+    expect(harness.sendTurn.mock.calls.length).toBe(0);
+  });
+
+  it("clears the edit loading state when edited turn start fails", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    harness.sendTurn.mockImplementationOnce(() =>
+      Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: "codex",
+          method: "turn/start",
+          detail: "turn start failed",
+        }),
+      ),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.messages.import",
+        commandId: CommandId.makeUnsafe("cmd-import-edit-start-failure"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messages: [
+          {
+            messageId: asMessageId("user-message-start-fails"),
+            role: "user",
+            text: "old prompt",
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.assistant.complete",
+        commandId: CommandId.makeUnsafe("cmd-assistant-edit-start-failure"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: asMessageId("assistant-edit-start-failure"),
+        turnId: asTurnId("turn-edit-start-failure"),
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.edit-and-resend",
+        commandId: CommandId.makeUnsafe("cmd-edit-and-resend-start-fails"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: asMessageId("user-message-start-fails"),
+        text: "edited prompt",
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      return readModel.threads[0]?.session?.status === "error";
+    });
+    const readModel = await Effect.runPromise(harness.engine.getReadModel());
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
+    expect(thread?.session?.status).toBe("error");
+    expect(thread?.session?.activeTurnId).toBeNull();
+    expect(thread?.session?.lastError).toContain("turn start failed");
+    expect(
+      thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed"),
+    ).toBe(true);
+  });
+
+  it("clears stale provider resume state and completes message edit rollback", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    await seedRollbackTarget(harness, {
+      messageId: asMessageId("user-message-stale"),
+      turnId: asTurnId("turn-rollback-stale"),
+      createdAt: now,
+    });
+    harness.rollbackConversation.mockImplementationOnce(() =>
+      Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: "codex",
+          method: "thread/rollback",
+          detail: "thread/resume failed: no rollout found for thread id 019db5ad",
+        }),
+      ),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.conversation.rollback",
+        commandId: CommandId.makeUnsafe("cmd-conversation-rollback-stale-resume"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: asMessageId("user-message-stale"),
+        numTurns: 1,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.clearSessionResumeCursor.mock.calls.length === 1);
+    expect(harness.clearSessionResumeCursor).toHaveBeenCalledWith({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+    });
+    expect(harness.stopSession.mock.calls.length).toBe(0);
+  });
 
   it("reacts to thread.turn.start by ensuring session and sending provider turn", async () => {
     const harness = await createHarness();

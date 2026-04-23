@@ -83,6 +83,29 @@ const GEMINI_2_5_CAPABILITIES: ModelCapabilities = {
   contextWindowOptions: [],
 };
 
+const CODEX_GPT_5_CAPABILITIES: ModelCapabilities = {
+  reasoningEffortLevels: [
+    { value: "low", label: "Low" },
+    { value: "medium", label: "Medium" },
+    { value: "high", label: "High", isDefault: true },
+    { value: "xhigh", label: "Extra High" },
+  ],
+  supportsFastMode: true,
+  supportsThinkingToggle: false,
+  promptInjectedEffortLevels: [],
+  contextWindowOptions: [],
+};
+
+const CODEX_GPT_5_5_CAPABILITIES: ModelCapabilities = {
+  ...CODEX_GPT_5_CAPABILITIES,
+  reasoningEffortLevels: [
+    { value: "low", label: "Low" },
+    { value: "medium", label: "Medium", isDefault: true },
+    { value: "high", label: "High" },
+    { value: "xhigh", label: "Extra High" },
+  ],
+};
+
 type ModelDefinition = {
   readonly slug: string;
   readonly name: string;
@@ -96,100 +119,39 @@ type ModelDefinition = {
 export const MODEL_OPTIONS_BY_PROVIDER = {
   codex: [
     {
+      slug: "gpt-5.5",
+      name: "GPT-5.5",
+      capabilities: CODEX_GPT_5_5_CAPABILITIES,
+    },
+    {
       slug: "gpt-5.4",
       name: "GPT-5.4",
-      capabilities: {
-        reasoningEffortLevels: [
-          { value: "low", label: "Low" },
-          { value: "medium", label: "Medium" },
-          { value: "high", label: "High", isDefault: true },
-          { value: "xhigh", label: "Extra High" },
-        ],
-        supportsFastMode: true,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
+      capabilities: CODEX_GPT_5_CAPABILITIES,
     },
     {
       slug: "gpt-5.4-mini",
       name: "GPT-5.4 Mini",
-      capabilities: {
-        reasoningEffortLevels: [
-          { value: "low", label: "Low" },
-          { value: "medium", label: "Medium" },
-          { value: "high", label: "High", isDefault: true },
-          { value: "xhigh", label: "Extra High" },
-        ],
-        supportsFastMode: true,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
+      capabilities: CODEX_GPT_5_CAPABILITIES,
     },
     {
       slug: "gpt-5.3-codex",
       name: "GPT-5.3 Codex",
-      capabilities: {
-        reasoningEffortLevels: [
-          { value: "low", label: "Low" },
-          { value: "medium", label: "Medium" },
-          { value: "high", label: "High", isDefault: true },
-          { value: "xhigh", label: "Extra High" },
-        ],
-        supportsFastMode: true,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
+      capabilities: CODEX_GPT_5_CAPABILITIES,
     },
     {
       slug: "gpt-5.3-codex-spark",
       name: "GPT-5.3 Codex Spark",
-      capabilities: {
-        reasoningEffortLevels: [
-          { value: "low", label: "Low" },
-          { value: "medium", label: "Medium" },
-          { value: "high", label: "High", isDefault: true },
-          { value: "xhigh", label: "Extra High" },
-        ],
-        supportsFastMode: true,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
+      capabilities: CODEX_GPT_5_CAPABILITIES,
     },
     {
       slug: "gpt-5.2-codex",
       name: "GPT-5.2 Codex",
-      capabilities: {
-        reasoningEffortLevels: [
-          { value: "low", label: "Low" },
-          { value: "medium", label: "Medium" },
-          { value: "high", label: "High", isDefault: true },
-          { value: "xhigh", label: "Extra High" },
-        ],
-        supportsFastMode: true,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
+      capabilities: CODEX_GPT_5_CAPABILITIES,
     },
     {
       slug: "gpt-5.2",
       name: "GPT-5.2",
-      capabilities: {
-        reasoningEffortLevels: [
-          { value: "low", label: "Low" },
-          { value: "medium", label: "Medium" },
-          { value: "high", label: "High", isDefault: true },
-          { value: "xhigh", label: "Extra High" },
-        ],
-        supportsFastMode: true,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
+      capabilities: CODEX_GPT_5_CAPABILITIES,
     },
   ],
   claudeAgent: [
@@ -369,7 +331,7 @@ type BuiltInModelSlug = (typeof MODEL_OPTIONS_BY_PROVIDER)[ProviderKind][number]
 export type ModelSlug = BuiltInModelSlug | (string & {});
 
 export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderKind, ModelSlug> = {
-  codex: "gpt-5.4",
+  codex: "gpt-5.5",
   claudeAgent: "claude-sonnet-4-6",
   gemini: "auto-gemini-3",
 };
@@ -381,6 +343,7 @@ export const DEFAULT_GIT_TEXT_GENERATION_MODEL = "gpt-5.4-mini" as const;
 
 export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string, ModelSlug>> = {
   codex: {
+    "5.5": "gpt-5.5",
     "5.4": "gpt-5.4",
     "5.3": "gpt-5.3-codex",
     "gpt-5.3": "gpt-5.3-codex",

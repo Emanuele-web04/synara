@@ -24,6 +24,7 @@ import { MessagesTimeline } from "./MessagesTimeline";
 
 interface ChatTranscriptPaneProps {
   activeThreadId: string;
+  activeTurnId?: TurnId | null;
   activeTurnInProgress: boolean;
   activeTurnStartedAt: string | null;
   chatFontSizePx: number;
@@ -52,6 +53,7 @@ interface ChatTranscriptPaneProps {
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   onOpenThread: (threadId: ThreadId) => void;
   onRevertUserMessage: (messageId: MessageId) => void;
+  onEditUserMessage?: (messageId: MessageId, text: string) => boolean | Promise<boolean>;
   onScrollToBottom: () => void;
   onToggleWorkGroup?: (groupId: string) => void;
   resolvedTheme: "light" | "dark";
@@ -66,6 +68,7 @@ interface ChatTranscriptPaneProps {
 
 export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   activeThreadId,
+  activeTurnId,
   activeTurnInProgress,
   activeTurnStartedAt,
   chatFontSizePx,
@@ -94,6 +97,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   onOpenTurnDiff,
   onOpenThread,
   onRevertUserMessage,
+  onEditUserMessage,
   onScrollToBottom,
   onToggleWorkGroup,
   resolvedTheme,
@@ -118,6 +122,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
           key={activeThreadId}
           hasMessages={hasMessages}
           isWorking={isWorking}
+          activeTurnId={activeTurnId ?? null}
           activeTurnInProgress={activeTurnInProgress}
           activeTurnStartedAt={activeTurnStartedAt}
           listRef={listRef}
@@ -129,6 +134,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
           onOpenThread={onOpenThread}
           revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
           onRevertUserMessage={onRevertUserMessage}
+          {...(onEditUserMessage ? { onEditUserMessage } : {})}
           isRevertingCheckpoint={isRevertingCheckpoint}
           onImageExpand={onExpandTimelineImage}
           followLiveOutput={followLiveOutput}

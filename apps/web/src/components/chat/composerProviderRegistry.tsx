@@ -119,7 +119,7 @@ function getProviderStateFromCapabilities(
         rawEffort && hasEffortLevel(caps, rawEffort) && rawEffort !== defaultReasoningEffort
           ? rawEffort
           : undefined;
-      const fastModeEnabled = providerOptions?.fastMode === true;
+      const fastModeEnabled = caps.supportsFastMode && providerOptions?.fastMode === true;
       const nextOptions = {
         ...(reasoningEffort ? { reasoningEffort } : {}),
         ...(fastModeEnabled ? { fastMode: true } : {}),

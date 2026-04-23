@@ -516,7 +516,11 @@ function EventRouter() {
 
     const queueDomainEvent = (event: OrchestrationEvent) => {
       pendingDomainEvents.push(event);
-      if (event.type === "thread.turn-diff-completed" || event.type === "thread.reverted") {
+      if (
+        event.type === "thread.turn-diff-completed" ||
+        event.type === "thread.reverted" ||
+        event.type === "thread.conversation-rolled-back"
+      ) {
         needsProviderInvalidation = true;
       }
       if (

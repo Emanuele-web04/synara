@@ -198,10 +198,184 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("flex w-full justify-end");
-    expect(markup).toContain("group flex max-w-[80%] flex-col items-end gap-px");
+    expect(markup).toContain("group flex flex-col items-end gap-px max-w-[80%]");
     expect(markup).toContain("w-max max-w-full min-w-0 self-end rounded-lg bg-secondary px-3.5");
     expect(markup).toContain("pt-[5.5px] pb-[7px]");
     expect(markup).toContain("text-muted-foreground/45");
+  });
+
+  it("renders edit beside copy for user messages", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        timelineEntries={[
+          {
+            id: "entry-editable-user",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-editable-user"),
+              role: "user",
+              text: "adjust this prompt",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+          {
+            id: "entry-editable-assistant",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:29.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-editable-assistant"),
+              role: "assistant",
+              text: "",
+              turnId: TurnId.makeUnsafe("turn-editable-user"),
+              createdAt: "2026-03-17T19:12:29.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={
+          new Map([[MessageId.makeUnsafe("message-editable-user"), 0]])
+        }
+        onRevertUserMessage={() => {}}
+        onEditUserMessage={() => true}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain('aria-label="Copy message"');
+    expect(markup).toContain('aria-label="Edit message"');
+    expect(markup).toContain('aria-label="Revert to this message"');
+    expect(markup).toContain("sidebar-icon-button");
+  });
+
+  it("keeps edit available and undo visible before a revert checkpoint exists", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        timelineEntries={[
+          {
+            id: "entry-user-no-checkpoint",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-user-no-checkpoint"),
+              role: "user",
+              text: "still waiting on undo",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+          {
+            id: "entry-assistant-no-checkpoint",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:29.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-assistant-no-checkpoint"),
+              role: "assistant",
+              text: "",
+              turnId: TurnId.makeUnsafe("turn-user-no-checkpoint"),
+              createdAt: "2026-03-17T19:12:29.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        onEditUserMessage={() => true}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain('aria-label="Revert to this message"');
+    expect(markup).toContain('aria-label="Edit message"');
+    expect(markup).not.toContain('title="Edit message"');
+    expect(markup).not.toContain('title="Revert to this message"');
+    expect(markup).toMatch(/<button[^>]*disabled=""[^>]*aria-label="Revert to this message"/);
+  });
+
+  it("keeps edit available while an assistant turn is running", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking
+        activeTurnInProgress
+        activeTurnId={TurnId.makeUnsafe("turn-user-running")}
+        activeTurnStartedAt="2026-03-17T19:12:30.000Z"
+        timelineEntries={[
+          {
+            id: "entry-user-running",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-user-running"),
+              role: "user",
+              text: "change this while it runs",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:32.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={
+          new Map([[MessageId.makeUnsafe("message-user-running"), 1]])
+        }
+        onRevertUserMessage={() => {}}
+        onEditUserMessage={() => true}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    const editButtonMarkup = markup.match(/<button[^>]*aria-label="Edit message"[^>]*>/)?.[0] ?? "";
+    expect(markup).toContain('aria-label="Edit message"');
+    expect(editButtonMarkup).not.toContain('disabled=""');
+    expect(markup).not.toContain('title="Edit message"');
+    expect(markup).toMatch(/<button[^>]*disabled=""[^>]*aria-label="Revert to this message"/);
   });
 
   it("renders a steering chip above steered user messages", async () => {

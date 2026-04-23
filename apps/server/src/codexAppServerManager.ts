@@ -234,7 +234,7 @@ const RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS = [
   "unknown thread",
   "does not exist",
 ];
-const CODEX_DEFAULT_MODEL = "gpt-5.3-codex";
+const CODEX_DEFAULT_MODEL = "gpt-5.5";
 const CODEX_SPARK_MODEL = "gpt-5.3-codex-spark";
 const CODEX_SPARK_DISABLED_PLAN_TYPES = new Set<CodexPlanType>(["free", "go", "plus"]);
 const CODEX_PROCESS_SHELL_ENV_NAMES = ["PATH", "SSH_AUTH_SOCK"] as const;
@@ -2770,6 +2770,16 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     return typeof candidate === "boolean" ? candidate : undefined;
   }
 
+  private readFirstBoolean(value: unknown, keys: readonly string[]): boolean | undefined {
+    for (const key of keys) {
+      const candidate = this.readBoolean(value, key);
+      if (candidate !== undefined) {
+        return candidate;
+      }
+    }
+    return undefined;
+  }
+
   private isExitedReviewModeNotification(notification: JsonRpcNotification): boolean {
     if (notification.method !== "item/completed") {
       return false;
@@ -3169,6 +3179,22 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         this.readString(model, "defaultReasoningEffort") ??
         this.readString(model, "default_reasoning_effort");
       const trimmedDefaultReasoningEffort = defaultReasoningEffort?.trim();
+      const additionalSpeedTiers =
+        this.readArray(model, "additionalSpeedTiers") ??
+        this.readArray(model, "additional_speed_tiers") ??
+        [];
+      const hasFastSpeedTier = additionalSpeedTiers.some(
+        (tier) => typeof tier === "string" && tier.trim().toLowerCase() === "fast",
+      );
+      const supportsFastMode =
+        this.readFirstBoolean(model, [
+          "supportsFastMode",
+          "supports_fast_mode",
+          "fastMode",
+          "fast_mode",
+          "fastServiceTier",
+          "fast_service_tier",
+        ]) ?? (hasFastSpeedTier ? true : undefined);
 
       seen.add(trimmedSlug);
       return [
@@ -3182,6 +3208,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           )
             ? { defaultReasoningEffort: trimmedDefaultReasoningEffort }
             : {}),
+          ...(supportsFastMode !== undefined ? { supportsFastMode } : {}),
         },
       ];
     });

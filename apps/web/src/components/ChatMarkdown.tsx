@@ -71,7 +71,16 @@ const highlightedCodeCache = new LRUCache<string>(
   MAX_HIGHLIGHT_CACHE_MEMORY_BYTES,
 );
 const highlighterPromiseCache = new Map<string, Promise<DiffsHighlighter>>();
-const MARKDOWN_REMARK_PLUGINS = [remarkGfm, [remarkMath, { singleDollarTextMath: true }]];
+type MarkdownRemarkPlugins = NonNullable<
+  React.ComponentProps<typeof ReactMarkdown>["remarkPlugins"]
+>;
+type MarkdownRehypePlugins = NonNullable<
+  React.ComponentProps<typeof ReactMarkdown>["rehypePlugins"]
+>;
+const MARKDOWN_REMARK_PLUGINS: MarkdownRemarkPlugins = [
+  remarkGfm,
+  [remarkMath, { singleDollarTextMath: true }],
+];
 const LITERAL_DOLLAR_PLACEHOLDER = "CHATMARKDOWNLITERALDOLLARPLACEHOLDER";
 
 function restoreLiteralDollarsInNode(node: unknown): void {
@@ -79,12 +88,7 @@ function restoreLiteralDollarsInNode(node: unknown): void {
     return;
   }
 
-  if (
-    "type" in node &&
-    node.type === "text" &&
-    "value" in node &&
-    typeof node.value === "string"
-  ) {
+  if ("type" in node && node.type === "text" && "value" in node && typeof node.value === "string") {
     node.value = node.value.replaceAll(LITERAL_DOLLAR_PLACEHOLDER, "$");
   }
 
@@ -101,7 +105,7 @@ function rehypeRestoreLiteralDollars() {
   };
 }
 
-const MARKDOWN_REHYPE_PLUGINS = [
+const MARKDOWN_REHYPE_PLUGINS: MarkdownRehypePlugins = [
   [rehypeKatex, { output: "htmlAndMathml", strict: false, throwOnError: false }],
   rehypeRestoreLiteralDollars,
 ];

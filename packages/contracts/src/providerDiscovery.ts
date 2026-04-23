@@ -228,6 +228,7 @@ export const ProviderModelDescriptor = Schema.Struct({
   // the legacy string array and Remodex-style reasoning objects uniformly.
   supportedReasoningEfforts: Schema.optional(Schema.Array(ProviderReasoningEffortDescriptor)),
   defaultReasoningEffort: Schema.optional(TrimmedNonEmptyString),
+  supportsFastMode: Schema.optional(Schema.Boolean),
 });
 export type ProviderModelDescriptor = typeof ProviderModelDescriptor.Type;
 

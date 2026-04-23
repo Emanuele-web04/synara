@@ -3,7 +3,7 @@
 // Layer: Web chat presentation helpers
 // Exports: row derivation, structural sharing, copy/timer helpers
 
-import { type MessageId } from "@t3tools/contracts";
+import { type MessageId, type TurnId } from "@t3tools/contracts";
 import { type TimelineEntry, type WorkLogEntry } from "../../session-logic";
 import { normalizeCompactToolLabel as normalizeCompactToolLabelValue } from "../../lib/toolCallLabel";
 import { type ChatMessage, type ProposedPlan, type TurnDiffSummary } from "../../types";
@@ -88,6 +88,37 @@ export function resolveAssistantMessageCopyState({
     text: normalizedText,
     visible: showCopyButton && normalizedText !== null && !streaming,
   };
+}
+
+// Builds the "Files changed" lookup keyed by the terminal assistant message id
+// of each turn. Scoping by turnId (not by summary.assistantMessageId) prevents
+// turn-diff placeholders from attaching a card to the wrong row when ids are
+// missing, synthetic, or temporarily stale across reconnects.
+export function buildTurnDiffSummaryByAssistantMessageId(input: {
+  turnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
+  assistantMessages: ReadonlyArray<{ id: MessageId; turnId: TurnId | null }>;
+}): Map<MessageId, TurnDiffSummary> {
+  const byMessageId = new Map<MessageId, TurnDiffSummary>();
+  if (input.turnDiffSummaries.length === 0) return byMessageId;
+
+  const summaryByTurnId = new Map<string, TurnDiffSummary>();
+  for (const summary of input.turnDiffSummaries) {
+    summaryByTurnId.set(summary.turnId, summary);
+  }
+
+  const terminalAssistantMessageIdByTurnId = new Map<string, MessageId>();
+  for (const message of input.assistantMessages) {
+    if (!message.turnId) continue;
+    terminalAssistantMessageIdByTurnId.set(message.turnId, message.id);
+  }
+
+  for (const [turnId, messageId] of terminalAssistantMessageIdByTurnId) {
+    const summary = summaryByTurnId.get(turnId);
+    if (summary) {
+      byMessageId.set(messageId, summary);
+    }
+  }
+  return byMessageId;
 }
 
 export function deriveTerminalAssistantMessageIds(

@@ -106,6 +106,22 @@ export interface ProviderServiceShape {
   ) => Effect.Effect<void, ProviderServiceError>;
 
   /**
+   * Stop only the live adapter process/session while preserving the persisted
+   * provider binding and resume cursor for a subsequent restart.
+   */
+  readonly stopRuntimeSession?: (input: {
+    readonly threadId: ThreadId;
+  }) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
+   * Forget a stale provider-native resume cursor while preserving local routing
+   * metadata such as provider options and runtime mode.
+   */
+  readonly clearSessionResumeCursor?: (input: {
+    readonly threadId: ThreadId;
+  }) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
    * List active provider sessions.
    *
    * Aggregates runtime session lists from all registered adapters.

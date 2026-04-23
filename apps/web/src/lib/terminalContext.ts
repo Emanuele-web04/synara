@@ -221,6 +221,19 @@ export function appendTerminalContextsToPrompt(
   return trimmedPrompt.length > 0 ? `${trimmedPrompt}\n\n${contextBlock}` : contextBlock;
 }
 
+export function appendOriginalTerminalContextBlock(input: {
+  editedPrompt: string;
+  originalPrompt: string;
+}): string {
+  const match = TRAILING_TERMINAL_CONTEXT_BLOCK_PATTERN.exec(input.originalPrompt);
+  if (!match) {
+    return input.editedPrompt.trim();
+  }
+  const contextBlock = input.originalPrompt.slice(match.index).trim();
+  const editedPrompt = input.editedPrompt.trim();
+  return editedPrompt.length > 0 ? `${editedPrompt}\n\n${contextBlock}` : contextBlock;
+}
+
 export function extractTrailingTerminalContexts(prompt: string): ExtractedTerminalContexts {
   const match = TRAILING_TERMINAL_CONTEXT_BLOCK_PATTERN.exec(prompt);
   if (!match) {

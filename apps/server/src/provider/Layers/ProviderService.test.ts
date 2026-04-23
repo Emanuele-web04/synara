@@ -840,6 +840,190 @@ routing.layer("ProviderServiceLive routing", (it) => {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }).pipe(Effect.provide(NodeServices.layer)),
   );
+
+  it.effect("clears stale resume cursor while preserving provider options for fresh restart", () =>
+    Effect.gen(function* () {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3-provider-service-clear-"));
+      const dbPath = path.join(tempDir, "orchestration.sqlite");
+      const persistenceLayer = makeSqlitePersistenceLive(dbPath);
+      const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
+        Layer.provide(persistenceLayer),
+      );
+      const providerOptions = {
+        codex: {
+          homePath: "/tmp/custom-codex-home",
+          binaryPath: "/usr/local/bin/codex",
+        },
+      };
+
+      const firstCodex = makeFakeCodexAdapter("codex");
+      const firstRegistry: typeof ProviderAdapterRegistry.Service = {
+        getByProvider: (provider) =>
+          provider === "codex"
+            ? Effect.succeed(firstCodex.adapter)
+            : Effect.fail(new ProviderUnsupportedError({ provider })),
+        listProviders: () => Effect.succeed(["codex"]),
+      };
+      const firstDirectoryLayer = ProviderSessionDirectoryLive.pipe(
+        Layer.provide(runtimeRepositoryLayer),
+      );
+      const firstProviderLayer = makeProviderServiceLive().pipe(
+        Layer.provide(Layer.succeed(ProviderAdapterRegistry, firstRegistry)),
+        Layer.provide(firstDirectoryLayer),
+        Layer.provide(AnalyticsService.layerTest),
+      );
+
+      const initial = yield* Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const session = yield* provider.startSession(asThreadId("thread-clear-resume"), {
+          provider: "codex",
+          threadId: asThreadId("thread-clear-resume"),
+          cwd: "/tmp/project-clear-resume",
+          providerOptions,
+          runtimeMode: "full-access",
+        });
+        assert.equal(typeof provider.clearSessionResumeCursor, "function");
+        if (provider.clearSessionResumeCursor) {
+          yield* provider.clearSessionResumeCursor({ threadId: session.threadId });
+        }
+        return session;
+      }).pipe(Effect.provide(firstProviderLayer));
+
+      const secondCodex = makeFakeCodexAdapter("codex");
+      const secondRegistry: typeof ProviderAdapterRegistry.Service = {
+        getByProvider: (provider) =>
+          provider === "codex"
+            ? Effect.succeed(secondCodex.adapter)
+            : Effect.fail(new ProviderUnsupportedError({ provider })),
+        listProviders: () => Effect.succeed(["codex"]),
+      };
+      const secondDirectoryLayer = ProviderSessionDirectoryLive.pipe(
+        Layer.provide(runtimeRepositoryLayer),
+      );
+      const secondProviderLayer = makeProviderServiceLive().pipe(
+        Layer.provide(Layer.succeed(ProviderAdapterRegistry, secondRegistry)),
+        Layer.provide(secondDirectoryLayer),
+        Layer.provide(AnalyticsService.layerTest),
+      );
+
+      yield* Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        yield* provider.startSession(initial.threadId, {
+          provider: "codex",
+          threadId: initial.threadId,
+          cwd: "/tmp/project-clear-resume",
+          runtimeMode: "full-access",
+        });
+      }).pipe(Effect.provide(secondProviderLayer));
+
+      assert.equal(secondCodex.startSession.mock.calls.length, 1);
+      const restartedInput = secondCodex.startSession.mock.calls[0]?.[0];
+      assert.equal(typeof restartedInput === "object" && restartedInput !== null, true);
+      if (restartedInput && typeof restartedInput === "object") {
+        const startPayload = restartedInput as {
+          providerOptions?: unknown;
+          resumeCursor?: unknown;
+        };
+        assert.deepEqual(startPayload.providerOptions, providerOptions);
+        assert.equal(startPayload.resumeCursor, null);
+      }
+
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("stops the live runtime while preserving resume cursor and provider options", () =>
+    Effect.gen(function* () {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3-provider-service-stop-runtime-"));
+      const dbPath = path.join(tempDir, "orchestration.sqlite");
+      const persistenceLayer = makeSqlitePersistenceLive(dbPath);
+      const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
+        Layer.provide(persistenceLayer),
+      );
+      const providerOptions = {
+        claudeAgent: {
+          binaryPath: "/usr/local/bin/claude",
+          permissionMode: "acceptEdits",
+        },
+      };
+
+      const firstClaude = makeFakeCodexAdapter("claudeAgent");
+      const firstRegistry: typeof ProviderAdapterRegistry.Service = {
+        getByProvider: (provider) =>
+          provider === "claudeAgent"
+            ? Effect.succeed(firstClaude.adapter)
+            : Effect.fail(new ProviderUnsupportedError({ provider })),
+        listProviders: () => Effect.succeed(["claudeAgent"]),
+      };
+      const firstDirectoryLayer = ProviderSessionDirectoryLive.pipe(
+        Layer.provide(runtimeRepositoryLayer),
+      );
+      const firstProviderLayer = makeProviderServiceLive().pipe(
+        Layer.provide(Layer.succeed(ProviderAdapterRegistry, firstRegistry)),
+        Layer.provide(firstDirectoryLayer),
+        Layer.provide(AnalyticsService.layerTest),
+      );
+
+      const initial = yield* Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const session = yield* provider.startSession(asThreadId("thread-stop-runtime"), {
+          provider: "claudeAgent",
+          threadId: asThreadId("thread-stop-runtime"),
+          cwd: "/tmp/project-stop-runtime",
+          providerOptions,
+          runtimeMode: "full-access",
+        });
+        assert.equal(typeof provider.stopRuntimeSession, "function");
+        if (provider.stopRuntimeSession) {
+          yield* provider.stopRuntimeSession({ threadId: session.threadId });
+        }
+        return session;
+      }).pipe(Effect.provide(firstProviderLayer));
+
+      assert.equal(firstClaude.stopSession.mock.calls.length, 1);
+
+      const secondClaude = makeFakeCodexAdapter("claudeAgent");
+      const secondRegistry: typeof ProviderAdapterRegistry.Service = {
+        getByProvider: (provider) =>
+          provider === "claudeAgent"
+            ? Effect.succeed(secondClaude.adapter)
+            : Effect.fail(new ProviderUnsupportedError({ provider })),
+        listProviders: () => Effect.succeed(["claudeAgent"]),
+      };
+      const secondDirectoryLayer = ProviderSessionDirectoryLive.pipe(
+        Layer.provide(runtimeRepositoryLayer),
+      );
+      const secondProviderLayer = makeProviderServiceLive().pipe(
+        Layer.provide(Layer.succeed(ProviderAdapterRegistry, secondRegistry)),
+        Layer.provide(secondDirectoryLayer),
+        Layer.provide(AnalyticsService.layerTest),
+      );
+
+      yield* Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        yield* provider.startSession(initial.threadId, {
+          provider: "claudeAgent",
+          threadId: initial.threadId,
+          cwd: "/tmp/project-stop-runtime",
+          runtimeMode: "full-access",
+        });
+      }).pipe(Effect.provide(secondProviderLayer));
+
+      assert.equal(secondClaude.startSession.mock.calls.length, 1);
+      const restartedInput = secondClaude.startSession.mock.calls[0]?.[0];
+      assert.equal(typeof restartedInput === "object" && restartedInput !== null, true);
+      if (restartedInput && typeof restartedInput === "object") {
+        const startPayload = restartedInput as {
+          providerOptions?: unknown;
+          resumeCursor?: unknown;
+        };
+        assert.deepEqual(startPayload.providerOptions, providerOptions);
+        assert.deepEqual(startPayload.resumeCursor, initial.resumeCursor);
+      }
+
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
 });
 
 const fanout = makeProviderServiceLayer();

@@ -21,6 +21,12 @@ export interface CaptureCheckpointInput {
   readonly checkpointRef: CheckpointRef;
 }
 
+export interface CopyCheckpointRefInput {
+  readonly cwd: string;
+  readonly fromCheckpointRef: CheckpointRef;
+  readonly toCheckpointRef: CheckpointRef;
+}
+
 export interface RestoreCheckpointInput {
   readonly cwd: string;
   readonly checkpointRef: CheckpointRef;
@@ -56,6 +62,15 @@ export interface CheckpointStoreShape {
   readonly captureCheckpoint: (
     input: CaptureCheckpointInput,
   ) => Effect.Effect<void, CheckpointStoreError>;
+
+  /**
+   * Copy an existing checkpoint commit to another hidden ref.
+   *
+   * Used to bind a pre-send message snapshot to the provider turn id once known.
+   */
+  readonly copyCheckpointRef: (
+    input: CopyCheckpointRefInput,
+  ) => Effect.Effect<boolean, CheckpointStoreError>;
 
   /**
    * Check whether a checkpoint ref exists.

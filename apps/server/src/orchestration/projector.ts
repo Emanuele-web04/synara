@@ -20,6 +20,7 @@ import {
   ThreadInteractionModeSetPayload,
   ThreadMetaUpdatedPayload,
   ThreadProposedPlanUpsertedPayload,
+  ThreadConversationRolledBackPayload,
   ThreadRuntimeModeSetPayload,
   ThreadUnarchivedPayload,
   ThreadRevertedPayload,
@@ -35,6 +36,10 @@ function checkpointStatusToLatestTurnState(status: "ready" | "missing" | "error"
   if (status === "error") return "error" as const;
   if (status === "missing") return "interrupted" as const;
   return "completed" as const;
+}
+
+function isProviderDiffPlaceholderRef(checkpointRef: string | null | undefined): boolean {
+  return checkpointRef?.startsWith("provider-diff:") === true;
 }
 
 function isTerminalLatestTurn(
@@ -145,6 +150,27 @@ function retainThreadProposedPlansAfterRevert(
   return proposedPlans.filter(
     (proposedPlan) => proposedPlan.turnId === null || retainedTurnIds.has(proposedPlan.turnId),
   );
+}
+
+function rollbackThreadMessagesFromMessage(
+  messages: ReadonlyArray<OrchestrationMessage>,
+  messageId: string,
+): {
+  readonly messages: ReadonlyArray<OrchestrationMessage>;
+  readonly removedTurnIds: ReadonlySet<string>;
+} {
+  const targetIndex = messages.findIndex((message) => message.id === messageId);
+  if (targetIndex < 0) {
+    return { messages, removedTurnIds: new Set() };
+  }
+
+  const removedMessages = messages.slice(targetIndex);
+  return {
+    messages: messages.slice(0, targetIndex),
+    removedTurnIds: new Set(
+      removedMessages.flatMap((message) => (message.turnId === null ? [] : [message.turnId])),
+    ),
+  };
 }
 
 function compareThreadActivities(
@@ -619,24 +645,41 @@ export function projectEvent(
           .toSorted((left, right) => left.checkpointTurnCount - right.checkpointTurnCount)
           .slice(-MAX_THREAD_CHECKPOINTS);
 
+        // Preserve the previous latestTurn assistantMessageId when the
+        // incoming payload has none. Turn-diff placeholders can fire before
+        // the assistant message is finalized — they must not erase a real id
+        // that thread.message-sent has already recorded.
+        const preservedAssistantMessageId =
+          payload.assistantMessageId ??
+          (thread.latestTurn?.turnId === payload.turnId
+            ? thread.latestTurn.assistantMessageId
+            : null);
+        const latestTurn =
+          isProviderDiffPlaceholderRef(payload.checkpointRef) &&
+          payload.status === "missing" &&
+          thread.latestTurn?.turnId === payload.turnId &&
+          thread.latestTurn.state === "running"
+            ? thread.latestTurn
+            : {
+                turnId: payload.turnId,
+                state: checkpointStatusToLatestTurnState(payload.status),
+                requestedAt:
+                  thread.latestTurn?.turnId === payload.turnId
+                    ? thread.latestTurn.requestedAt
+                    : payload.completedAt,
+                startedAt:
+                  thread.latestTurn?.turnId === payload.turnId
+                    ? (thread.latestTurn.startedAt ?? payload.completedAt)
+                    : payload.completedAt,
+                completedAt: payload.completedAt,
+                assistantMessageId: preservedAssistantMessageId,
+              };
+
         return {
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             checkpoints,
-            latestTurn: {
-              turnId: payload.turnId,
-              state: checkpointStatusToLatestTurnState(payload.status),
-              requestedAt:
-                thread.latestTurn?.turnId === payload.turnId
-                  ? thread.latestTurn.requestedAt
-                  : payload.completedAt,
-              startedAt:
-                thread.latestTurn?.turnId === payload.turnId
-                  ? (thread.latestTurn.startedAt ?? payload.completedAt)
-                  : payload.completedAt,
-              completedAt: payload.completedAt,
-              assistantMessageId: payload.assistantMessageId,
-            },
+            latestTurn,
             updatedAt: event.occurredAt,
           }),
         };
@@ -687,6 +730,63 @@ export function projectEvent(
               proposedPlans,
               activities,
               latestTurn,
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.conversation-rolled-back":
+      return decodeForEvent(
+        ThreadConversationRolledBackPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          if (payload.numTurns === 0) {
+            return nextBase;
+          }
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+
+          const rollback = rollbackThreadMessagesFromMessage(thread.messages, payload.messageId);
+          if (rollback.messages === thread.messages) {
+            return nextBase;
+          }
+
+          const checkpoints = thread.checkpoints
+            .filter((checkpoint) => !rollback.removedTurnIds.has(checkpoint.turnId))
+            .toSorted((left, right) => left.checkpointTurnCount - right.checkpointTurnCount)
+            .slice(-MAX_THREAD_CHECKPOINTS);
+          const proposedPlans = thread.proposedPlans
+            .filter((plan) => plan.turnId === null || !rollback.removedTurnIds.has(plan.turnId))
+            .slice(-200);
+          const activities = thread.activities.filter(
+            (activity) => activity.turnId === null || !rollback.removedTurnIds.has(activity.turnId),
+          );
+          const latestCheckpoint = checkpoints.at(-1) ?? null;
+
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              checkpoints,
+              messages: rollback.messages.slice(-MAX_THREAD_MESSAGES),
+              proposedPlans,
+              activities,
+              latestTurn:
+                latestCheckpoint === null
+                  ? null
+                  : {
+                      turnId: latestCheckpoint.turnId,
+                      state: checkpointStatusToLatestTurnState(latestCheckpoint.status),
+                      requestedAt: latestCheckpoint.completedAt,
+                      startedAt: latestCheckpoint.completedAt,
+                      completedAt: latestCheckpoint.completedAt,
+                      assistantMessageId: latestCheckpoint.assistantMessageId,
+                    },
               updatedAt: event.occurredAt,
             }),
           };

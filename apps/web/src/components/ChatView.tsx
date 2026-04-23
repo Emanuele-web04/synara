@@ -33,6 +33,7 @@ import {
   getModelCapabilities,
   normalizeModelSlug,
 } from "@t3tools/shared/model";
+import { resolveTailUserMessageEditTarget } from "@t3tools/shared/conversationEdit";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import {
   buildPromptThreadTitleFallback,
@@ -167,7 +168,6 @@ import {
   MAX_TERMINALS_PER_GROUP,
   type ChatMessage,
   type Thread,
-  type TurnDiffSummary,
 } from "../types";
 import { useTheme } from "../hooks/useTheme";
 import { useThreadWorkspaceHandoff } from "../hooks/useThreadWorkspaceHandoff";
@@ -237,6 +237,7 @@ import {
   useEffectiveComposerModelState,
 } from "../composerDraftStore";
 import {
+  appendOriginalTerminalContextBlock,
   appendTerminalContextsToPrompt,
   IMAGE_ONLY_BOOTSTRAP_PROMPT,
   formatTerminalContextLabel,
@@ -270,6 +271,7 @@ import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./Compose
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { ChatHeader } from "./chat/ChatHeader";
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
+import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimeline.logic";
 import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
 import { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { AVAILABLE_PROVIDER_OPTIONS, ProviderModelPicker } from "./chat/ProviderModelPicker";
@@ -787,7 +789,7 @@ export default function ChatView({
     Record<ThreadId, string | null>
   >({});
   const [localDispatch, setLocalDispatch] = useState<LocalDispatchSnapshot | null>(null);
-  const [isConnecting, _setIsConnecting] = useState(false);
+  const [isLocalConnecting, _setIsLocalConnecting] = useState(false);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [respondingRequestIds, setRespondingRequestIds] = useState<ApprovalRequestId[]>([]);
@@ -1333,6 +1335,7 @@ export default function ChatView({
     [lockedProvider, modelOptionsByProvider],
   );
   const phase = derivePhase(activeThread?.session ?? null);
+  const isConnecting = isLocalConnecting || phase === "connecting";
   const rawWorkLogEntries = useMemo(
     () => deriveWorkLogEntries(threadActivities, activeLatestTurn?.turnId ?? undefined),
     [activeLatestTurn?.turnId, threadActivities],
@@ -1743,13 +1746,16 @@ export default function ChatView({
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
     useTurnDiffSummaries(activeThread);
   const turnDiffSummaryByAssistantMessageId = useMemo(() => {
-    const byMessageId = new Map<MessageId, TurnDiffSummary>();
-    for (const summary of turnDiffSummaries) {
-      if (!summary.assistantMessageId) continue;
-      byMessageId.set(summary.assistantMessageId, summary);
+    const assistantMessages: { id: MessageId; turnId: TurnId | null }[] = [];
+    for (const message of timelineMessages) {
+      if (message.role !== "assistant") continue;
+      assistantMessages.push({ id: message.id, turnId: message.turnId ?? null });
     }
-    return byMessageId;
-  }, [turnDiffSummaries]);
+    return buildTurnDiffSummaryByAssistantMessageId({
+      turnDiffSummaries,
+      assistantMessages,
+    });
+  }, [turnDiffSummaries, timelineMessages]);
   const revertTurnCountByUserMessageId = useMemo(() => {
     const byUserMessageId = new Map<MessageId, number>();
     for (let index = 0; index < timelineEntries.length; index += 1) {
@@ -3213,7 +3219,11 @@ export default function ChatView({
 
   // Scroll helpers stay list-owned so transcript updates stop bouncing through
   // a separate measurement/controller loop during streaming.
+  // Guards isAtEndRef from flipping during reflow-induced scroll events that
+  // fire immediately after an explicit scrollToEnd.
+  const programmaticScrollUntilRef = useRef(0);
   const scrollToEnd = useCallback((animated = false) => {
+    programmaticScrollUntilRef.current = performance.now() + 200;
     legendListRef.current?.scrollToEnd?.({ animated });
   }, []);
   const transcriptMessageCount = useMemo(
@@ -3222,6 +3232,7 @@ export default function ChatView({
   );
   const onIsAtEndChange = useCallback((isAtEnd: boolean) => {
     if (isAtEndRef.current === isAtEnd) return;
+    if (!isAtEnd && performance.now() < programmaticScrollUntilRef.current) return;
     isAtEndRef.current = isAtEnd;
     if (isAtEnd) {
       showScrollDebouncer.current.cancel();
@@ -3282,7 +3293,8 @@ export default function ChatView({
     if (!isAtEndRef.current) {
       return;
     }
-    // Re-apply the bottom stick after the next message row actually mounts.
+    // Re-apply the bottom stick only for real transcript messages; tool/work
+    // rows can arrive quickly and should not churn scroll/layout work.
     const frameId = window.requestAnimationFrame(() => {
       scrollToEnd(false);
     });
@@ -4815,11 +4827,10 @@ export default function ChatView({
       },
     ]);
     // Mark the transcript as anchored before the optimistic row lands so the
-    // list keeps following the active tail automatically.
+    // re-snap effect on row count change pulls us to the new tail.
     isAtEndRef.current = true;
     showScrollDebouncer.current.cancel();
     setShowScrollToBottom(false);
-    scrollToEnd(false);
 
     setThreadError(threadIdForSend, null);
     if (expiredTerminalContextCount > 0) {
@@ -5254,7 +5265,6 @@ export default function ChatView({
     isAtEndRef.current = true;
     showScrollDebouncer.current.cancel();
     setShowScrollToBottom(false);
-    scrollToEnd(false);
 
     try {
       await persistThreadSettingsForNextTurn({
@@ -5321,6 +5331,98 @@ export default function ChatView({
       return false;
     }
   }
+
+  const onEditUserMessage = useCallback(
+    async (messageId: MessageId, text: string): Promise<boolean> => {
+      const api = readNativeApi();
+      if (!api || !activeThread || !isServerThread || isRevertingCheckpoint) {
+        return false;
+      }
+      const editTarget = resolveTailUserMessageEditTarget({
+        messages: activeThread.messages,
+        messageId,
+        activeTurnId:
+          activeThread.session?.orchestrationStatus === "running"
+            ? (activeThread.session.activeTurnId ?? null)
+            : null,
+      });
+      if (!editTarget.editable) {
+        setThreadError(activeThread.id, "Only the latest rollbackable user message can be edited.");
+        return false;
+      }
+      const originalMessage = activeThread.messages[editTarget.messageIndex];
+      if (!originalMessage || originalMessage.role !== "user") {
+        setThreadError(activeThread.id, "Only the latest rollbackable user message can be edited.");
+        return false;
+      }
+      if (isSendBusy || isConnecting || sendInFlightRef.current) {
+        setThreadError(activeThread.id, "Wait for the current send to start before editing.");
+        return false;
+      }
+
+      setIsRevertingCheckpoint(true);
+      setThreadError(activeThread.id, null);
+      const messageCreatedAt = new Date().toISOString();
+      const editedTextWithOriginalContext = appendOriginalTerminalContextBlock({
+        editedPrompt: text,
+        originalPrompt: originalMessage.text,
+      });
+      const outgoingMessageText = formatOutgoingPrompt({
+        provider: selectedProvider,
+        model: selectedModel,
+        effort: selectedPromptEffort,
+        text: editedTextWithOriginalContext,
+      });
+      try {
+        await persistThreadSettingsForNextTurn({
+          threadId: activeThread.id,
+          createdAt: messageCreatedAt,
+          modelSelection: selectedModelSelection,
+          runtimeMode,
+          interactionMode,
+        });
+        await api.orchestration.dispatchCommand({
+          type: "thread.message.edit-and-resend",
+          commandId: newCommandId(),
+          threadId: activeThread.id,
+          messageId,
+          text: outgoingMessageText,
+          modelSelection: selectedModelSelection,
+          ...(providerOptionsForDispatch ? { providerOptions: providerOptionsForDispatch } : {}),
+          assistantDeliveryMode: settings.enableAssistantStreaming ? "streaming" : "buffered",
+          runtimeMode,
+          interactionMode,
+          createdAt: messageCreatedAt,
+        });
+        return true;
+      } catch (err) {
+        setThreadError(
+          activeThread.id,
+          err instanceof Error ? err.message : "Failed to edit message.",
+        );
+        return false;
+      } finally {
+        setIsRevertingCheckpoint(false);
+      }
+    },
+    [
+      activeThread,
+      isConnecting,
+      isRevertingCheckpoint,
+      isSendBusy,
+      isServerThread,
+      interactionMode,
+      persistThreadSettingsForNextTurn,
+      providerOptionsForDispatch,
+      runtimeMode,
+      selectedModel,
+      selectedModelSelection,
+      selectedPromptEffort,
+      selectedProvider,
+      setThreadError,
+      settings.enableAssistantStreaming,
+    ],
+  );
 
   const onSendRef = useRef(onSend);
   const onSubmitPlanFollowUpRef = useRef(onSubmitPlanFollowUp);
@@ -7130,6 +7232,7 @@ export default function ChatView({
             ) : (
               <ChatTranscriptPane
                 activeThreadId={activeThread.id}
+                activeTurnId={activeThread.session?.activeTurnId ?? null}
                 hasMessages={timelineEntries.length > 0}
                 isWorking={isWorking}
                 activeTurnInProgress={activeTurnInProgress}
@@ -7143,6 +7246,7 @@ export default function ChatView({
                 onOpenThread={onNavigateToThread}
                 revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                 onRevertUserMessage={onRevertUserMessage}
+                onEditUserMessage={onEditUserMessage}
                 isRevertingCheckpoint={isRevertingCheckpoint}
                 onExpandTimelineImage={onExpandTimelineImage}
                 followLiveOutput={hasStreamingAssistantText}

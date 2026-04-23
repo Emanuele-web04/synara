@@ -8,7 +8,11 @@ import { Effect, Layer, Option, Schema } from "effect";
 
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { CheckpointInvariantError, CheckpointUnavailableError } from "../Errors.ts";
-import { checkpointRefForThreadTurn, resolveThreadWorkspaceCwd } from "../Utils.ts";
+import {
+  checkpointRefForThreadTurn,
+  checkpointRefForThreadTurnStart,
+  resolveThreadWorkspaceCwd,
+} from "../Utils.ts";
 import { CheckpointStore } from "../Services/CheckpointStore.ts";
 import {
   CheckpointDiffQuery,
@@ -83,12 +87,35 @@ const make = Effect.gen(function* () {
         });
       }
 
-      const fromCheckpointRef =
+      const toCheckpoint = threadContext.value.checkpoints.find(
+        (checkpoint) => checkpoint.checkpointTurnCount === input.toTurnCount,
+      );
+      if (!toCheckpoint) {
+        return yield* new CheckpointUnavailableError({
+          threadId: input.threadId,
+          turnCount: input.toTurnCount,
+          detail: `Checkpoint ref is unavailable for turn ${input.toTurnCount}.`,
+        });
+      }
+
+      const fromCheckpoint =
         input.fromTurnCount === 0
-          ? checkpointRefForThreadTurn(input.threadId, 0)
+          ? null
           : threadContext.value.checkpoints.find(
               (checkpoint) => checkpoint.checkpointTurnCount === input.fromTurnCount,
-            )?.checkpointRef;
+            );
+      if (fromCheckpoint?.status === "missing") {
+        return yield* new CheckpointUnavailableError({
+          threadId: input.threadId,
+          turnCount: input.fromTurnCount,
+          detail: `Checkpoint diff is not available yet for turn ${input.fromTurnCount}.`,
+        });
+      }
+
+      let fromCheckpointRef =
+        input.fromTurnCount === 0
+          ? checkpointRefForThreadTurn(input.threadId, 0)
+          : fromCheckpoint?.checkpointRef;
       if (!fromCheckpointRef) {
         return yield* new CheckpointUnavailableError({
           threadId: input.threadId,
@@ -97,15 +124,26 @@ const make = Effect.gen(function* () {
         });
       }
 
-      const toCheckpointRef = threadContext.value.checkpoints.find(
-        (checkpoint) => checkpoint.checkpointTurnCount === input.toTurnCount,
-      )?.checkpointRef;
-      if (!toCheckpointRef) {
+      const toCheckpointRef = toCheckpoint.checkpointRef;
+      if (toCheckpoint.status === "missing") {
         return yield* new CheckpointUnavailableError({
           threadId: input.threadId,
           turnCount: input.toTurnCount,
-          detail: `Checkpoint ref is unavailable for turn ${input.toTurnCount}.`,
+          detail: `Checkpoint diff is not available yet for turn ${input.toTurnCount}.`,
         });
+      }
+      if (input.toTurnCount === input.fromTurnCount + 1) {
+        const turnStartCheckpointRef = checkpointRefForThreadTurnStart(
+          input.threadId,
+          toCheckpoint.turnId,
+        );
+        const turnStartExists = yield* checkpointStore.hasCheckpointRef({
+          cwd: workspaceCwd,
+          checkpointRef: turnStartCheckpointRef,
+        });
+        if (turnStartExists) {
+          fromCheckpointRef = turnStartCheckpointRef;
+        }
       }
 
       const [fromExists, toExists] = yield* Effect.all(

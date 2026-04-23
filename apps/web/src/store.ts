@@ -2292,6 +2292,10 @@ function checkpointStatusToLatestTurnState(
   return "completed";
 }
 
+function isProviderDiffPlaceholderRef(checkpointRef: string | null | undefined): boolean {
+  return checkpointRef?.startsWith("provider-diff:") === true;
+}
+
 // Preserve proposed-plan linkage across live turn updates until the snapshot catches up.
 function buildLatestTurn(params: {
   previous: Thread["latestTurn"];
@@ -2457,6 +2461,29 @@ function retainThreadProposedPlansAfterRevert(
   );
 }
 
+function rollbackThreadMessagesFromMessage(
+  messages: ReadonlyArray<ChatMessage>,
+  messageId: string,
+): {
+  readonly messages: ChatMessage[];
+  readonly removedTurnIds: ReadonlySet<string>;
+} {
+  const targetIndex = messages.findIndex((message) => message.id === messageId);
+  if (targetIndex < 0) {
+    return { messages: [...messages], removedTurnIds: new Set() };
+  }
+
+  const removedMessages = messages.slice(targetIndex);
+  return {
+    messages: messages.slice(0, targetIndex),
+    removedTurnIds: new Set(
+      removedMessages.flatMap((message) =>
+        message.turnId === undefined || message.turnId === null ? [] : [message.turnId],
+      ),
+    ),
+  };
+}
+
 function applyTurnDiffSummaryToThread(
   thread: Thread,
   summary: Thread["turnDiffSummaries"][number],
@@ -2474,18 +2501,34 @@ function applyTurnDiffSummaryToThread(
       )
     : sortTurnDiffSummaries([...thread.turnDiffSummaries, nextSummary]);
 
+  const isActivePlaceholder =
+    isProviderDiffPlaceholderRef(nextSummary.checkpointRef) &&
+    nextSummary.status === "missing" &&
+    thread.latestTurn?.turnId === nextSummary.turnId &&
+    thread.latestTurn.state === "running";
   const latestTurn =
     thread.latestTurn === null || thread.latestTurn.turnId === nextSummary.turnId
-      ? buildLatestTurn({
-          previous: thread.latestTurn,
-          turnId: nextSummary.turnId,
-          state: checkpointStatusToLatestTurnState(nextSummary.status),
-          requestedAt: thread.latestTurn?.requestedAt ?? nextSummary.completedAt,
-          startedAt: thread.latestTurn?.startedAt ?? nextSummary.completedAt,
-          completedAt: nextSummary.completedAt,
-          assistantMessageId: nextSummary.assistantMessageId ?? null,
-          sourceProposedPlan: thread.pendingSourceProposedPlan,
-        })
+      ? isActivePlaceholder
+        ? thread.latestTurn
+        : buildLatestTurn({
+            previous: thread.latestTurn,
+            turnId: nextSummary.turnId,
+            state: checkpointStatusToLatestTurnState(nextSummary.status),
+            requestedAt: thread.latestTurn?.requestedAt ?? nextSummary.completedAt,
+            startedAt: thread.latestTurn?.startedAt ?? nextSummary.completedAt,
+            completedAt: nextSummary.completedAt,
+            // Prefer the incoming assistantMessageId when present; otherwise keep
+            // the previous one from the same turn. Turn-diff events may arrive
+            // before the message has been finalized and carry a null id — they
+            // must not erase a real id already recorded by thread.message-sent.
+            assistantMessageId:
+              nextSummary.assistantMessageId ??
+              (thread.latestTurn?.turnId === nextSummary.turnId
+                ? thread.latestTurn.assistantMessageId
+                : null) ??
+              null,
+            sourceProposedPlan: thread.pendingSourceProposedPlan,
+          })
       : thread.latestTurn;
 
   if (
@@ -2584,7 +2627,13 @@ function mergeStreamingMessage(
   incomingMessage: ChatMessage,
 ): ChatMessage | null {
   let nextText: string;
-  if (incomingMessage.streaming || incomingMessage.text.length === 0) {
+  if (
+    existingMessage.role === "user" &&
+    incomingMessage.role === "user" &&
+    !incomingMessage.streaming
+  ) {
+    nextText = incomingMessage.text;
+  } else if (incomingMessage.streaming || incomingMessage.text.length === 0) {
     nextText = `${existingMessage.text}${incomingMessage.text}`;
   } else if (incomingMessage.text.startsWith(existingMessage.text)) {
     nextText = incomingMessage.text;
@@ -3173,6 +3222,68 @@ function applyOrchestrationEvent(
             ...thread,
             turnDiffSummaries,
             messages,
+            proposedPlans,
+            activities,
+            pendingSourceProposedPlan: undefined,
+            latestTurn:
+              latestCheckpoint === null
+                ? null
+                : {
+                    turnId: latestCheckpoint.turnId,
+                    state: checkpointStatusToLatestTurnState(latestCheckpoint.status),
+                    requestedAt: latestCheckpoint.completedAt,
+                    startedAt: latestCheckpoint.completedAt,
+                    completedAt: latestCheckpoint.completedAt,
+                    assistantMessageId: latestCheckpoint.assistantMessageId ?? null,
+                  },
+            updatedAt:
+              (thread.updatedAt ?? thread.createdAt) > event.occurredAt
+                ? thread.updatedAt
+                : event.occurredAt,
+          };
+        },
+        options,
+      );
+
+    case "thread.conversation-rolled-back":
+      if (event.payload.numTurns === 0) {
+        return state;
+      }
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          const rollback = rollbackThreadMessagesFromMessage(
+            thread.messages,
+            event.payload.messageId,
+          );
+          const removedTurnIds = new Set([
+            ...rollback.removedTurnIds,
+            ...(event.payload.removedTurnIds ?? []),
+          ]);
+          if (rollback.messages.length === thread.messages.length && removedTurnIds.size === 0) {
+            return thread;
+          }
+
+          const turnDiffSummaries = thread.turnDiffSummaries
+            .filter((entry) => !removedTurnIds.has(entry.turnId))
+            .toSorted(
+              (left, right) =>
+                (left.checkpointTurnCount ?? Number.MAX_SAFE_INTEGER) -
+                (right.checkpointTurnCount ?? Number.MAX_SAFE_INTEGER),
+            );
+          const proposedPlans = thread.proposedPlans.filter(
+            (plan) => plan.turnId === null || !removedTurnIds.has(plan.turnId),
+          );
+          const activities = thread.activities.filter(
+            (activity) => activity.turnId === null || !removedTurnIds.has(activity.turnId),
+          );
+          const latestCheckpoint = turnDiffSummaries.at(-1) ?? null;
+
+          return {
+            ...thread,
+            turnDiffSummaries,
+            messages: rollback.messages.slice(-MAX_THREAD_MESSAGES),
             proposedPlans,
             activities,
             pendingSourceProposedPlan: undefined,

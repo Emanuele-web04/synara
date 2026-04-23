@@ -4370,7 +4370,7 @@ export default function Sidebar() {
           <SidebarMenuButton
             ref={isManualProjectSorting ? dragHandleProps?.setActivatorNodeRef : undefined}
             size="sm"
-            className={`h-7.5 gap-2 rounded-lg px-2 py-0.5 text-left text-[length:var(--app-font-size-ui,12px)] font-normal transition-[padding] duration-150 ease-out hover:bg-[var(--sidebar-accent)] group-hover/project-header:bg-[var(--sidebar-accent)] group-hover/project-header:pr-[4.75rem] group-hover/project-header:text-[var(--sidebar-accent-foreground)] group-focus-within/project-header:pr-[4.75rem] ${
+            className={`h-8 gap-2 rounded-md px-2 py-0.5 text-left text-[length:var(--app-font-size-ui,12px)] font-normal transition-[padding] duration-150 ease-out hover:bg-[var(--sidebar-accent)] group-hover/project-header:bg-[var(--sidebar-accent)] group-hover/project-header:pr-[4.75rem] group-hover/project-header:text-[var(--sidebar-accent-foreground)] group-focus-within/project-header:pr-[4.75rem] ${
               isManualProjectSorting ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
             }`}
             {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.attributes : {})}

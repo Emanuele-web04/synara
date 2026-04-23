@@ -2390,7 +2390,7 @@ describe("ProviderRuntimeIngestion", () => {
       (entry: ProviderRuntimeTestCheckpoint) => entry.turnId === "turn-p1",
     );
     expect(checkpoint?.status).toBe("missing");
-    expect(checkpoint?.assistantMessageId).toBe("assistant:item-p1-assistant");
+    expect(checkpoint?.assistantMessageId).toBeNull();
     expect(checkpoint?.checkpointRef).toBe("provider-diff:evt-turn-diff-updated");
   });
 

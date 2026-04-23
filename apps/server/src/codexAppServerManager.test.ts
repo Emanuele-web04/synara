@@ -432,7 +432,7 @@ describe("resolveCodexModelForAccount", () => {
         planType: "plus",
         sparkEnabled: false,
       }),
-    ).toBe("gpt-5.3-codex");
+    ).toBe("gpt-5.5");
   });
 
   it("keeps spark for supported plans", () => {
@@ -897,6 +897,78 @@ describe("steerTurn", () => {
 });
 
 describe("CodexAppServerManager discovery", () => {
+  it("normalizes model/list fast mode metadata from runtime discovery", async () => {
+    const manager = new CodexAppServerManager();
+    const context = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId: "thread_1",
+        runtimeMode: "full-access",
+        model: "gpt-5.5",
+        resumeCursor: { threadId: "thread_1" },
+        createdAt: "2026-02-10T00:00:00.000Z",
+        updatedAt: "2026-02-10T00:00:00.000Z",
+      },
+      account: {
+        type: "unknown",
+        planType: null,
+        sparkEnabled: true,
+      },
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+    };
+
+    vi.spyOn(
+      manager as unknown as {
+        resolveContextForDiscovery: (threadId?: string) => unknown;
+      },
+      "resolveContextForDiscovery",
+    ).mockReturnValue(context);
+    const sendRequest = vi
+      .spyOn(
+        manager as unknown as {
+          sendRequest: (...args: unknown[]) => Promise<unknown>;
+        },
+        "sendRequest",
+      )
+      .mockResolvedValue({
+        result: {
+          items: [
+            {
+              id: "gpt-5.5",
+              name: "GPT-5.5",
+              supported_reasoning_efforts: ["low", "medium", "high", "xhigh"],
+              default_reasoning_effort: "medium",
+              additionalSpeedTiers: ["fast"],
+            },
+          ],
+        },
+      });
+
+    const result = await manager.listModels("thread_1");
+
+    expect(sendRequest).toHaveBeenCalledWith(context, "model/list", {
+      cursor: null,
+      limit: 50,
+      includeHidden: false,
+    });
+    expect(result.models).toEqual([
+      {
+        slug: "gpt-5.5",
+        name: "GPT-5.5",
+        supportedReasoningEfforts: [
+          { value: "low" },
+          { value: "medium" },
+          { value: "high" },
+          { value: "xhigh" },
+        ],
+        defaultReasoningEffort: "medium",
+        supportsFastMode: true,
+      },
+    ]);
+  });
+
   it("uses a cwd-scoped discovery session instead of an unrelated active session", async () => {
     const manager = new CodexAppServerManager();
     const activeContext = {

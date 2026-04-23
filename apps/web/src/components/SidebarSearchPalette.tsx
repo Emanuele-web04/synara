@@ -163,9 +163,7 @@ function hasTokenEqual(query: string, token: string): boolean {
 // Treat any token of length >= 2 that is a prefix of `keyword` as a match,
 // so typing `th` / `the` already starts surfacing theme actions.
 function hasTokenPrefixOf(query: string, keyword: string): boolean {
-  return queryTokens(query).some(
-    (token) => token.length >= 2 && keyword.startsWith(token),
-  );
+  return queryTokens(query).some((token) => token.length >= 2 && keyword.startsWith(token));
 }
 
 // Keep the palette quiet by default, then expose one focused appearance action
@@ -948,9 +946,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                     </CommandGroup>
                   ) : null}
 
-                  {showThemeSection && matchedProjects.length > 0 ? (
-                    <CommandSeparator />
-                  ) : null}
+                  {showThemeSection && matchedProjects.length > 0 ? <CommandSeparator /> : null}
 
                   {showThemeSection ? (
                     <>
@@ -1015,7 +1011,9 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                                   {themeItem.label}
                                 </span>
                                 <span className="shrink-0 text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/72">
-                                  {resolvedTheme === "dark" ? "Dark color theme" : "Light color theme"}
+                                  {resolvedTheme === "dark"
+                                    ? "Dark color theme"
+                                    : "Light color theme"}
                                 </span>
                                 <span
                                   className="flex size-3.5 shrink-0 items-center justify-center"
