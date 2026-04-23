@@ -206,7 +206,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         query={openCodeSearchQuery}
         onQueryChange={setOpenCodeSearchQuery}
         stopSearchKeyPropagation
-        widthClassName="w-80"
+        widthClassName="w-60"
+        bleedParentPadding
       >
         {content}
       </PickerPanelShell>
