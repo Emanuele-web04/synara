@@ -18,6 +18,7 @@ import {
   normalizeClaudeModelOptions,
   normalizeGeminiModelOptions,
   normalizeOpenCodeModelOptions,
+  resolveLabeledOptionValue,
   trimOrNull,
 } from "@t3tools/shared/model";
 import type { ReactNode } from "react";
@@ -144,16 +145,13 @@ function getProviderStateFromCapabilities(
     case "opencode": {
       const providerOptions = modelOptions?.opencode;
       rawEffort = trimOrNull(providerOptions?.variant);
-      const defaultReasoningEffort = getDefaultEffort(caps);
+      const variantOptions = caps.variantOptions ?? [];
       const reasoningVariant =
-        caps.reasoningEffortLevels.length > 0 &&
-        rawEffort &&
-        hasEffortLevel(caps, rawEffort) &&
-        rawEffort !== defaultReasoningEffort
+        rawEffort && variantOptions.some((option) => option.value === rawEffort)
           ? rawEffort
           : undefined;
       const agent = trimOrNull(providerOptions?.agent);
-      if (caps.reasoningEffortLevels.length > 0) {
+      if (variantOptions.length > 0) {
         const nextOptions = {
           ...(reasoningVariant ? { variant: reasoningVariant } : {}),
           ...(agent ? { agent } : {}),
@@ -172,11 +170,13 @@ function getProviderStateFromCapabilities(
     ? caps.promptInjectedEffortLevels.includes(draftEffort)
     : false;
   const promptEffort =
-    draftEffort && !isPromptInjected && hasEffortLevel(caps, draftEffort)
-      ? draftEffort
-      : defaultEffort && hasEffortLevel(caps, defaultEffort)
-        ? defaultEffort
-        : null;
+    provider === "opencode"
+      ? resolveLabeledOptionValue(caps.variantOptions, draftEffort)
+      : draftEffort && !isPromptInjected && hasEffortLevel(caps, draftEffort)
+        ? draftEffort
+        : defaultEffort && hasEffortLevel(caps, defaultEffort)
+          ? defaultEffort
+          : null;
 
   const ultrathinkActive =
     caps.promptInjectedEffortLevels.length > 0 && isClaudeUltrathinkPrompt(prompt);

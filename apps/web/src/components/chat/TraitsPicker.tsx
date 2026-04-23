@@ -89,6 +89,8 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
       const nextModelOptionsPatch =
         provider === "gemini"
           ? (geminiModelOptionsFromEffortValue(nextOption.value) ?? {})
+          : provider === "opencode"
+            ? { variant: nextOption.value }
           : provider === "codex"
             ? { reasoningEffort: nextOption.value }
             : { effort: nextOption.value };
@@ -124,7 +126,9 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
       {effortLevels.length > 0 ? (
         <>
           <MenuGroup>
-            <div className="px-2 pt-1.5 pb-1 font-medium text-muted-foreground text-xs">Effort</div>
+            <div className="px-2 pt-1.5 pb-1 font-medium text-muted-foreground text-xs">
+              {provider === "opencode" ? "Variant" : "Effort"}
+            </div>
             {ultrathinkPromptControlled ? (
               <div className="px-2 pb-1.5 text-muted-foreground/80 text-xs">
                 Remove Ultrathink from the prompt to change effort.
@@ -304,8 +308,6 @@ export const TraitsPicker = memo(function TraitsPicker({
     ? "Ultrathink"
     : effortLabel
       ? effortLabel
-      : effortLevels.length > 0
-        ? "Thinking"
       : thinkingEnabled === null
         ? null
         : `Thinking ${thinkingEnabled ? "On" : "Off"}`;

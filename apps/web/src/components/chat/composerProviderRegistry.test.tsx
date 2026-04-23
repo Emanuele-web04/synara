@@ -21,6 +21,19 @@ const OPENCODE_RUNTIME_MODEL_WITH_REASONING: ProviderModelDescriptor = {
   defaultReasoningEffort: "medium",
 };
 
+const OPENCODE_RUNTIME_MODEL_WITHOUT_DEFAULT: ProviderModelDescriptor = {
+  slug: "opencode/gpt-5-nano",
+  name: "GPT-5 Nano",
+  upstreamProviderId: "opencode",
+  upstreamProviderName: "OpenCode",
+  supportedReasoningEfforts: [
+    { value: "minimal" },
+    { value: "low" },
+    { value: "medium" },
+    { value: "high" },
+  ],
+};
+
 describe("getComposerProviderState", () => {
   it("returns codex defaults when no codex draft options exist", () => {
     const state = getComposerProviderState({
@@ -345,14 +358,30 @@ describe("getComposerProviderState", () => {
     });
   });
 
+  it("falls back to the first OpenCode runtime variant when metadata omits a default", () => {
+    const state = getComposerProviderState({
+      provider: "opencode",
+      model: "opencode/gpt-5-nano",
+      runtimeModel: OPENCODE_RUNTIME_MODEL_WITHOUT_DEFAULT,
+      prompt: "",
+      modelOptions: undefined,
+    });
+
+    expect(state).toEqual({
+      provider: "opencode",
+      promptEffort: "minimal",
+      modelOptionsForDispatch: undefined,
+    });
+  });
+
   it("renders OpenCode thinking controls when runtime metadata exposes levels without a default", () => {
     const threadId = ThreadId.makeUnsafe("thread-opencode-runtime-thinking");
 
     const picker = renderProviderTraitsPicker({
       provider: "opencode",
       threadId,
-      model: "openai/gpt-5.4",
-      runtimeModel: OPENCODE_RUNTIME_MODEL_WITH_REASONING,
+      model: "opencode/gpt-5-nano",
+      runtimeModel: OPENCODE_RUNTIME_MODEL_WITHOUT_DEFAULT,
       modelOptions: undefined,
       prompt: "",
       includeFastMode: false,
@@ -362,8 +391,8 @@ describe("getComposerProviderState", () => {
     const menuContent = renderProviderTraitsMenuContent({
       provider: "opencode",
       threadId,
-      model: "openai/gpt-5.4",
-      runtimeModel: OPENCODE_RUNTIME_MODEL_WITH_REASONING,
+      model: "opencode/gpt-5-nano",
+      runtimeModel: OPENCODE_RUNTIME_MODEL_WITHOUT_DEFAULT,
       modelOptions: undefined,
       prompt: "",
       onPromptChange: vi.fn(),
