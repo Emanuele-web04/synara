@@ -10,6 +10,7 @@ export function PickerPanelShell(props: {
   searchPlaceholder?: string;
   query?: string;
   onQueryChange?: (query: string) => void;
+  stopSearchKeyPropagation?: boolean;
   children: ReactNode;
   footer?: ReactNode;
   widthClassName?: string;
@@ -18,6 +19,7 @@ export function PickerPanelShell(props: {
     searchPlaceholder = "Search",
     query = "",
     onQueryChange,
+    stopSearchKeyPropagation = false,
     children,
     footer,
     widthClassName = "w-72",
@@ -35,6 +37,9 @@ export function PickerPanelShell(props: {
             placeholder={searchPlaceholder}
             value={query}
             onChange={(event) => onQueryChange(event.target.value)}
+            onKeyDownCapture={
+              stopSearchKeyPropagation ? (event) => event.stopPropagation() : undefined
+            }
           />
         </div>
       ) : null}

@@ -36,11 +36,22 @@ const MODEL_OPTIONS_BY_PROVIDER = {
   ],
 } as const satisfies Record<ProviderKind, ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>>;
 
+const MANY_OPENCODE_MODELS = Array.from({ length: 16 }, (_, index) => ({
+  slug: `${index % 2 === 0 ? "openai" : "anthropic"}/model-${index + 1}` as ModelSlug,
+  name: `${index % 2 === 0 ? "GPT" : "Claude"} ${index + 1}`,
+  upstreamProviderId: index % 2 === 0 ? "openai" : "anthropic",
+  upstreamProviderName: index % 2 === 0 ? "OpenAI" : "Anthropic",
+})) satisfies ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>;
+
 async function mountPicker(props: {
   provider: ProviderKind;
   model: ModelSlug;
   lockedProvider: ProviderKind | null;
   providers?: ReadonlyArray<ServerProviderStatus>;
+  modelOptionsByProvider?: Record<
+    ProviderKind,
+    ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>
+  >;
 }) {
   const host = document.createElement("div");
   document.body.append(host);
@@ -50,7 +61,7 @@ async function mountPicker(props: {
       provider={props.provider}
       model={props.model}
       lockedProvider={props.lockedProvider}
-      modelOptionsByProvider={MODEL_OPTIONS_BY_PROVIDER}
+      modelOptionsByProvider={props.modelOptionsByProvider ?? MODEL_OPTIONS_BY_PROVIDER}
       {...(props.providers ? { providers: props.providers } : {})}
       onProviderModelChange={onProviderModelChange}
     />,
@@ -150,6 +161,54 @@ describe("ProviderModelPicker", () => {
         expect(text).toContain("OpenAI");
         expect(text).toContain("GPT-5");
       });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows OpenCode search when the provider has at least fifteen models", async () => {
+    const mounted = await mountPicker({
+      provider: "opencode",
+      model: MANY_OPENCODE_MODELS[0]!.slug,
+      lockedProvider: "opencode",
+      modelOptionsByProvider: {
+        ...MODEL_OPTIONS_BY_PROVIDER,
+        opencode: MANY_OPENCODE_MODELS,
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+
+      await expect
+        .element(page.getByPlaceholder("Search models or providers"))
+        .toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("filters OpenCode models by upstream provider name", async () => {
+    const mounted = await mountPicker({
+      provider: "opencode",
+      model: MANY_OPENCODE_MODELS[0]!.slug,
+      lockedProvider: "opencode",
+      modelOptionsByProvider: {
+        ...MODEL_OPTIONS_BY_PROVIDER,
+        opencode: MANY_OPENCODE_MODELS,
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+      await page.getByPlaceholder("Search models or providers").fill("Anthropic");
+
+      await vi.waitFor(() => {
+        expect(document.body.textContent ?? "").toContain("Claude 2");
+      });
+
+      await expect.element(page.getByRole("menuitemradio", { name: "Claude 2" })).toBeInTheDocument();
+      await expect.element(page.getByRole("menuitemradio", { name: "GPT 1" })).not.toBeInTheDocument();
     } finally {
       await mounted.cleanup();
     }
