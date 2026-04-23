@@ -5,7 +5,7 @@
 
 import { type ModelSlug, type ProviderKind, type ServerProviderStatus } from "@t3tools/contracts";
 import { resolveSelectableModel } from "@t3tools/shared/model";
-import { Fragment, memo, useCallback, useDeferredValue, useMemo, useState } from "react";
+import { Fragment, memo, useCallback, useDeferredValue, useState } from "react";
 import { type ProviderPickerKind, PROVIDER_OPTIONS } from "../../session-logic";
 import { formatProviderModelOptionName } from "../../providerModelOptions";
 import {

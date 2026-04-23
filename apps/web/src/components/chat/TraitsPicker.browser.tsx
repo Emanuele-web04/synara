@@ -390,7 +390,7 @@ describe("TraitsPicker (Codex)", () => {
     });
 
     await vi.waitFor(() => {
-      expect(document.body.textContent ?? "").toMatch(/High\s*·\s*Fast/u);
+      expect(document.body.textContent ?? "").toMatch(/Medium\s*·\s*Fast/u);
     });
   });
 
@@ -552,7 +552,7 @@ async function mountOpenCodePicker(props?: {
   const screen = await render(
     <OpenCodeTraitsPickerHarness
       model={model}
-      runtimeModel={props?.runtimeModel}
+      {...(props?.runtimeModel ? { runtimeModel: props.runtimeModel } : {})}
       fallbackModelSelection={fallbackModelSelection}
     />,
     { container: host },

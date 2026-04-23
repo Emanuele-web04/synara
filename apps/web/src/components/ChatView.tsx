@@ -1309,7 +1309,10 @@ export default function ChatView({
         composerModelHintByProvider.opencode,
       ),
     };
-    const result = { ...staticOptions };
+    const result: Record<
+      ProviderKind,
+      ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>
+    > = { ...staticOptions };
 
     const dynamicSources: Record<ProviderKind, typeof claudeDynamicModelsQuery.data> = {
       claudeAgent: claudeDynamicModelsQuery.data,
@@ -1326,9 +1329,13 @@ export default function ChatView({
           staticOptions: staticOptions[provider],
           dynamicModels: dynamicModels.map((model) => ({
             slug: model.slug,
-            name: model.name,
-            upstreamProviderId: model.upstreamProviderId,
-            upstreamProviderName: model.upstreamProviderName,
+            ...(model.name !== undefined ? { name: model.name } : {}),
+            ...(model.upstreamProviderId !== undefined
+              ? { upstreamProviderId: model.upstreamProviderId }
+              : {}),
+            ...(model.upstreamProviderName !== undefined
+              ? { upstreamProviderName: model.upstreamProviderName }
+              : {}),
           })),
         });
       }
