@@ -98,10 +98,10 @@ function createMockOpenCodeRuntime() {
         external: true,
       }),
     runOpenCodeCommand: () => unexpectedOperation("runOpenCodeCommand"),
-    createOpenCodeSdkClient: () => client as OpencodeClient,
+    createOpenCodeSdkClient: () => client as unknown as OpencodeClient,
     loadOpenCodeInventory: () =>
       Effect.succeed({
-        providerList: { connected: [], all: [] },
+        providerList: { connected: [], all: [], default: {} },
         agents: [],
         consoleState: null,
       }),

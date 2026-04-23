@@ -646,13 +646,13 @@ function resolveOpenCodeModelReasoningSupport(model: OpenCodeInventoryProvider["
       return [];
     }
 
+    const label = trimNonEmptyString(variant.label);
+    const description = trimNonEmptyString(variant.description);
     return [
       {
         value,
-        ...(trimNonEmptyString(variant.label) ? { label: trimNonEmptyString(variant.label) } : {}),
-        ...(trimNonEmptyString(variant.description)
-          ? { description: trimNonEmptyString(variant.description) }
-          : {}),
+        ...(label ? { label } : {}),
+        ...(description ? { description } : {}),
       },
     ];
   });
@@ -1639,9 +1639,18 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
           return buildOpenCodeThreadSnapshot({
             threadId,
-            messages: (messages.data ?? []).filter(
-              (entry): entry is OpenCodeMessageSnapshot =>
-                entry.info.role === "user" || entry.info.role === "assistant",
+            messages: (messages.data ?? []).flatMap((entry) =>
+              entry.info.role === "user" || entry.info.role === "assistant"
+                ? [
+                    {
+                      info: {
+                        id: entry.info.id,
+                        role: entry.info.role,
+                      },
+                      parts: entry.parts,
+                    } satisfies OpenCodeMessageSnapshot,
+                  ]
+                : [],
             ),
             cwd: context.directory,
           });
@@ -1676,9 +1685,18 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
             return buildOpenCodeThreadSnapshot({
               threadId: ThreadId.makeUnsafe(input.externalThreadId),
-              messages: (messages.data ?? []).filter(
-                (entry): entry is OpenCodeMessageSnapshot =>
-                  entry.info.role === "user" || entry.info.role === "assistant",
+              messages: (messages.data ?? []).flatMap((entry) =>
+                entry.info.role === "user" || entry.info.role === "assistant"
+                  ? [
+                      {
+                        info: {
+                          id: entry.info.id,
+                          role: entry.info.role,
+                        },
+                        parts: entry.parts,
+                      } satisfies OpenCodeMessageSnapshot,
+                    ]
+                  : [],
               ),
               cwd: session.data?.directory ?? directory,
             });
@@ -1868,7 +1886,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                       slug: model.slug,
                       name: model.name,
                       provider,
-                      model: provider.models[model.modelID],
+                      ...(provider.models[model.modelID]
+                        ? { model: provider.models[model.modelID] }
+                        : {}),
                       cliModel: model,
                     });
                     return descriptor ? [descriptor] : [];

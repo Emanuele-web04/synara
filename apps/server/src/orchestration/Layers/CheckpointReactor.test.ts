@@ -121,6 +121,7 @@ async function waitForThread(
     latestTurn: { turnId: string } | null;
     checkpoints: ReadonlyArray<{
       checkpointTurnCount: number;
+      status: "ready" | "missing" | "error";
       assistantMessageId?: MessageId | null;
       files?: ReadonlyArray<{ path: string }>;
     }>;
@@ -133,6 +134,7 @@ async function waitForThread(
     latestTurn: { turnId: string } | null;
     checkpoints: ReadonlyArray<{
       checkpointTurnCount: number;
+      status: "ready" | "missing" | "error";
       assistantMessageId?: MessageId | null;
       files?: ReadonlyArray<{ path: string }>;
     }>;
@@ -280,6 +282,7 @@ describe("CheckpointReactor", () => {
       Layer.provideMerge(CheckpointStoreLive.pipe(Layer.provide(GitCoreLive))),
       Layer.provideMerge(ServerConfigLayer),
       Layer.provideMerge(NodeServices.layer),
+      Layer.provideMerge(SqlitePersistenceMemory),
     );
 
     runtime = ManagedRuntime.make(layer);
