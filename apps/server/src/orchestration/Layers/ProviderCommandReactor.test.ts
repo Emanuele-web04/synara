@@ -239,6 +239,7 @@ describe("ProviderCommandReactor", () => {
             : "renamed-branch",
       }),
     );
+    const publishBranch = vi.fn(() => Effect.void);
     const generateBranchName = vi.fn<TextGenerationShape["generateBranchName"]>(() =>
       Effect.fail(
         new TextGenerationError({
@@ -293,7 +294,9 @@ describe("ProviderCommandReactor", () => {
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(Layer.succeed(ProviderService, service)),
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
-      Layer.provideMerge(Layer.succeed(GitCore, { renameBranch } as unknown as GitCoreShape)),
+      Layer.provideMerge(
+        Layer.succeed(GitCore, { renameBranch, publishBranch } as unknown as GitCoreShape),
+      ),
       Layer.provideMerge(
         Layer.succeed(TextGeneration, {
           generateBranchName,
@@ -356,6 +359,7 @@ describe("ProviderCommandReactor", () => {
       stopRuntimeSession,
       clearSessionResumeCursor,
       renameBranch,
+      publishBranch,
       generateBranchName,
       generateThreadTitle,
       stateDir,
@@ -1159,6 +1163,7 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.generateBranchName.mock.calls.length === 1);
     await waitFor(() => harness.renameBranch.mock.calls.length === 1);
+    await waitFor(() => harness.publishBranch.mock.calls.length === 1);
 
     await waitFor(async () => {
       const readModel = await Effect.runPromise(harness.engine.getReadModel());

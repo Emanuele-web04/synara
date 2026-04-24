@@ -773,6 +773,37 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("publishes a new branch and sets upstream when requested", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        const remote = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* git(remote, ["init", "--bare"]);
+        yield* git(tmp, ["remote", "add", "origin", remote]);
+
+        yield* (yield* GitCore).createBranch({
+          cwd: tmp,
+          branch: "feature/published-branch",
+          publish: true,
+        });
+
+        expect(
+          yield* git(tmp, ["rev-parse", "--abbrev-ref", "feature/published-branch@{upstream}"]),
+        ).toBe("origin/feature/published-branch");
+        expect(
+          yield* git(remote, [
+            "show-ref",
+            "--verify",
+            "--quiet",
+            "refs/heads/feature/published-branch",
+          ]).pipe(
+            Effect.as(true),
+            Effect.catch(() => Effect.succeed(false)),
+          ),
+        ).toBe(true);
+      }),
+    );
+
     it.effect("throws when branch already exists", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();

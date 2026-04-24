@@ -136,6 +136,7 @@ export function BranchToolbarBranchSelector({
     () => dedupeRemoteBranchesWithLocalMatches(branchesQuery.data?.branches ?? []),
     [branchesQuery.data?.branches],
   );
+  const hasOriginRemote = branchesQuery.data?.hasOriginRemote ?? false;
   const currentGitBranch =
     branchStatusQuery.data?.branch ?? branches.find((branch) => branch.current)?.name ?? null;
   const canonicalActiveBranch = resolveBranchToolbarValue({
@@ -273,7 +274,7 @@ export function BranchToolbarBranchSelector({
       setOptimisticBranch(name);
 
       try {
-        await api.git.createBranch({ cwd: branchCwd, branch: name });
+        await api.git.createBranch({ cwd: branchCwd, branch: name, publish: hasOriginRemote });
         try {
           await api.git.checkout({ cwd: branchCwd, branch: name });
         } catch (error) {

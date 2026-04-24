@@ -966,16 +966,30 @@ const make = Effect.gen(function* () {
           return Effect.flatMap(
             git.renameBranch({ cwd, oldBranch, newBranch: targetBranch }),
             (renamed) =>
-              orchestrationEngine.dispatch({
-                type: "thread.meta.update",
-                commandId: serverCommandId("worktree-branch-rename"),
-                threadId: input.threadId,
-                branch: renamed.branch,
-                worktreePath: cwd,
-                associatedWorktreePath: cwd,
-                associatedWorktreeBranch: renamed.branch,
-                associatedWorktreeRef: renamed.branch,
-              }),
+              git
+                .publishBranch({ cwd, branch: renamed.branch })
+                .pipe(
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("provider command reactor failed to publish renamed branch", {
+                      threadId: input.threadId,
+                      cwd,
+                      branch: renamed.branch,
+                      cause: Cause.pretty(cause),
+                    }),
+                  ),
+                  Effect.flatMap(() =>
+                    orchestrationEngine.dispatch({
+                      type: "thread.meta.update",
+                      commandId: serverCommandId("worktree-branch-rename"),
+                      threadId: input.threadId,
+                      branch: renamed.branch,
+                      worktreePath: cwd,
+                      associatedWorktreePath: cwd,
+                      associatedWorktreeBranch: renamed.branch,
+                      associatedWorktreeRef: renamed.branch,
+                    }),
+                  ),
+                ),
           );
         }),
         Effect.catchCause((cause) =>

@@ -134,6 +134,11 @@ export interface GitSetBranchUpstreamInput {
   remoteBranch: string;
 }
 
+export interface GitPublishBranchInput {
+  cwd: string;
+  branch: string;
+}
+
 /**
  * GitCoreShape - Service API for low-level Git repository interactions.
  */
@@ -270,6 +275,11 @@ export interface GitCoreShape {
    * Create a local branch.
    */
   readonly createBranch: (input: GitCreateBranchInput) => Effect.Effect<void, GitCommandError>;
+
+  /**
+   * Publish a local branch and set upstream tracking.
+   */
+  readonly publishBranch: (input: GitPublishBranchInput) => Effect.Effect<void, GitCommandError>;
 
   /**
    * Checkout an existing branch and refresh its upstream metadata in background.

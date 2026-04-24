@@ -2335,6 +2335,20 @@ The local stash entry was kept for recovery.`,
       (yield* readHeadRef(worktree.worktree.path)) ??
       ("ref" in worktree.worktree ? worktree.worktree.ref : worktree.worktree.branch);
     const materializedWorktreeBranch = materializedWorktreeStatus.branch ?? null;
+    if (materializedWorktreeBranch) {
+      // Publishing is best-effort: handoff should still succeed for local-only repositories.
+      yield* gitCore
+        .publishBranch({ cwd: worktree.worktree.path, branch: materializedWorktreeBranch })
+        .pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("GitManager.handoffThread could not publish worktree branch", {
+              cwd: worktree.worktree.path,
+              branch: materializedWorktreeBranch,
+              reason: error.message,
+            }),
+          ),
+        );
+    }
     const changesTransferred = sourceStash.hadChanges;
     const handoffSummary =
       foregroundBranchAfterHandoff && foregroundBranchAfterHandoff !== sourceBranch

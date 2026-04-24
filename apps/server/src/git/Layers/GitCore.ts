@@ -1906,10 +1906,38 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         return { branch: targetBranch };
       });
 
+    // Publish branch refs immediately so GitHub-backed workflows can see new worktree branches.
+    const publishBranch: GitCoreShape["publishBranch"] = (input) =>
+      Effect.gen(function* () {
+        const remoteName = yield* resolvePushRemoteName(input.cwd, input.branch);
+        if (!remoteName) {
+          return yield* createGitCommandError(
+            "GitCore.publishBranch",
+            input.cwd,
+            ["push", "-u", "<remote>", input.branch],
+            "Cannot publish branch because no git remote is configured for this repository.",
+          );
+        }
+        yield* executeGit(
+          "GitCore.publishBranch",
+          input.cwd,
+          ["push", "-u", remoteName, input.branch],
+          {
+            timeoutMs: 30_000,
+            fallbackErrorMessage: "git branch publish failed",
+          },
+        );
+      }).pipe(Effect.asVoid);
+
     const createBranch: GitCoreShape["createBranch"] = (input) =>
-      executeGit("GitCore.createBranch", input.cwd, ["branch", input.branch], {
-        timeoutMs: 10_000,
-        fallbackErrorMessage: "git branch create failed",
+      Effect.gen(function* () {
+        yield* executeGit("GitCore.createBranch", input.cwd, ["branch", input.branch], {
+          timeoutMs: 10_000,
+          fallbackErrorMessage: "git branch create failed",
+        });
+        if (input.publish === true) {
+          yield* publishBranch({ cwd: input.cwd, branch: input.branch });
+        }
       }).pipe(Effect.asVoid);
 
     const checkoutBranch: GitCoreShape["checkoutBranch"] = (input) =>
@@ -2032,6 +2060,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       removeWorktree,
       renameBranch,
       createBranch,
+      publishBranch,
       checkoutBranch,
       initRepo,
       listLocalBranchNames,

@@ -916,7 +916,7 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
       });
 
       try {
-        await api.git.createBranch({ cwd: gitCwd, branch: trimmedName });
+        await api.git.createBranch({ cwd: gitCwd, branch: trimmedName, publish: hasOriginRemote });
         await api.git.checkout({ cwd: gitCwd, branch: trimmedName });
         if (activeThreadId) {
           void api.orchestration
@@ -963,6 +963,7 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
       activeThread?.worktreePath,
       activeThreadId,
       gitCwd,
+      hasOriginRemote,
       normalizedCurrentBranchName,
       queryClient,
       setThreadWorkspaceAction,
