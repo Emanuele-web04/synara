@@ -180,9 +180,7 @@ describe("ProviderModelPicker", () => {
     try {
       await page.getByRole("button").click();
 
-      await expect
-        .element(page.getByPlaceholder("Search models or providers"))
-        .toBeInTheDocument();
+      await expect.element(page.getByPlaceholder("Search models or providers")).toBeInTheDocument();
     } finally {
       await mounted.cleanup();
     }
@@ -207,8 +205,12 @@ describe("ProviderModelPicker", () => {
         expect(document.body.textContent ?? "").toContain("Claude 2");
       });
 
-      await expect.element(page.getByRole("menuitemradio", { name: "Claude 2" })).toBeInTheDocument();
-      await expect.element(page.getByRole("menuitemradio", { name: "GPT 1" })).not.toBeInTheDocument();
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "Claude 2" }))
+        .toBeInTheDocument();
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "GPT 1" }))
+        .not.toBeInTheDocument();
     } finally {
       await mounted.cleanup();
     }

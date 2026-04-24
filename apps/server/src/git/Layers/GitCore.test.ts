@@ -3,7 +3,7 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { Effect, FileSystem, Layer, PlatformError, Scope } from "effect";
+import { Effect, FileSystem, Layer, PlatformError, Schema, Scope } from "effect";
 import { describe, expect, vi } from "vitest";
 
 import { GitCoreLive, makeGitCore } from "./GitCore.ts";
@@ -767,7 +767,7 @@ it.layer(TestLayer)("git integration", (it) => {
         if (result._tag === "Failure") {
           const error = result.failure;
           expect(error).toBeInstanceOf(GitCheckoutDirtyWorktreeError);
-          if (error instanceof GitCheckoutDirtyWorktreeError) {
+          if (Schema.is(GitCheckoutDirtyWorktreeError)(error)) {
             expect(error.branch).toBe("other");
             expect(error.conflictingFiles).toContain("README.md");
             expect(error.message).toContain("Uncommitted changes block checkout to other:");
@@ -802,6 +802,32 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("drops only the temporary stash it created after a successful reapply", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+
+        yield* core.createBranch({ cwd: tmp, branch: "feature" });
+        yield* core.checkoutBranch({ cwd: tmp, branch: "feature" });
+        yield* writeTextFile(path.join(tmp, "feature.txt"), "feature content\n");
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "add feature file"]);
+        yield* core.checkoutBranch({ cwd: tmp, branch: initialBranch });
+
+        yield* writeTextFile(path.join(tmp, "kept.txt"), "existing stash\n");
+        yield* git(tmp, ["stash", "push", "-u", "-m", "pre-existing stash"]);
+        yield* writeTextFile(path.join(tmp, "README.md"), "dirty changes\n");
+
+        yield* core.stashAndCheckout({ cwd: tmp, branch: "feature" });
+
+        const stashList = yield* git(tmp, ["stash", "list"]);
+        expect(stashList).toContain("pre-existing stash");
+        expect(stashList).not.toContain("dpcode: stash before switching to feature");
+        expect(yield* readTextFile(path.join(tmp, "README.md"))).toBe("dirty changes\n");
+      }),
+    );
+
     it.effect("keeps the stash when reapplying dirty changes conflicts", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
@@ -822,7 +848,11 @@ it.layer(TestLayer)("git integration", (it) => {
         );
 
         expect(result._tag).toBe("Failure");
-        expect((yield* git(tmp, ["stash", "list"]))).toContain(
+        const branches = yield* core.listBranches({ cwd: tmp });
+        expect(branches.branches.find((branch) => branch.current)?.name).toBe("conflicting");
+        expect(yield* readTextFile(path.join(tmp, "README.md"))).toBe("conflicting content\n");
+        expect((yield* git(tmp, ["status", "--short"])).trim()).toBe("");
+        expect(yield* git(tmp, ["stash", "list"])).toContain(
           "dpcode: stash before switching to conflicting",
         );
       }),

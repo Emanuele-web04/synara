@@ -5,10 +5,7 @@ import { Effect, Fiber, Layer, Stream } from "effect";
 import { describe, it, expect } from "vitest";
 
 import { ServerConfig } from "../../config.ts";
-import {
-  OpenCodeRuntimeError,
-  type OpenCodeRuntimeShape,
-} from "../opencodeRuntime.ts";
+import { OpenCodeRuntimeError, type OpenCodeRuntimeShape } from "../opencodeRuntime.ts";
 import { OpenCodeAdapter } from "../Services/OpenCodeAdapter.ts";
 import {
   flattenOpenCodeModels,
@@ -114,9 +111,7 @@ function createMockOpenCodeRuntime() {
 
 function createSubscribedEventQueue() {
   const pendingEvents: Array<unknown> = [];
-  let waitingResolver:
-    | ((result: IteratorResult<unknown>) => void)
-    | undefined;
+  let waitingResolver: ((result: IteratorResult<unknown>) => void) | undefined;
   let closed = false;
 
   return {

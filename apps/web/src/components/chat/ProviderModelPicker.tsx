@@ -91,12 +91,7 @@ function providerIconClassName(
 const OPENCODE_MODEL_SEARCH_THRESHOLD = 15;
 
 function buildOpenCodeModelSearchText(option: ProviderModelOption): string {
-  return [
-    option.name,
-    option.slug,
-    option.upstreamProviderName,
-    option.upstreamProviderId,
-  ]
+  return [option.name, option.slug, option.upstreamProviderName, option.upstreamProviderId]
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
     .join(" ")
     .toLowerCase();

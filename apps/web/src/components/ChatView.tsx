@@ -652,9 +652,7 @@ const terminalContextIdListsEqual = (
 ): boolean =>
   contexts.length === ids.length && contexts.every((context, index) => context.id === ids[index]);
 
-function ComposerControlSkeleton(props: {
-  widthClassName: string;
-}) {
+function ComposerControlSkeleton(props: { widthClassName: string }) {
   return (
     <div
       aria-hidden="true"
@@ -1412,7 +1410,8 @@ export default function ChatView({
       ? selectedModelForPicker
       : (normalizeModelSlug(selectedModelForPicker, selectedProvider) ?? selectedModelForPicker);
   }, [modelOptionsByProvider, selectedModelForPicker, selectedProvider]);
-  const persistedComposerModelSelection = activeThread?.modelSelection ?? activeProject?.defaultModelSelection ?? null;
+  const persistedComposerModelSelection =
+    activeThread?.modelSelection ?? activeProject?.defaultModelSelection ?? null;
   const draftModelSelectionForSelectedProvider =
     composerDraft.modelSelectionByProvider[selectedProvider] ?? null;
   const selectedProviderModelsQuery = providerModelsQueryByProvider[selectedProvider];
@@ -1440,8 +1439,11 @@ export default function ChatView({
             searchSlug: slug.toLowerCase(),
             searchName: name.toLowerCase(),
             searchProvider: option.label.toLowerCase(),
-            searchUpstreamProvider:
-              (upstreamProviderName ?? upstreamProviderId ?? "").toLowerCase(),
+            searchUpstreamProvider: (
+              upstreamProviderName ??
+              upstreamProviderId ??
+              ""
+            ).toLowerCase(),
           }),
         ),
       ),
@@ -5822,9 +5824,7 @@ export default function ChatView({
     onPromptChange: setPromptFromTraits,
   });
   const composerModelPickerControl = showComposerModelBootstrapSkeleton ? (
-    <ComposerControlSkeleton
-      widthClassName={isComposerFooterCompact ? "w-28" : "w-32 sm:w-36"}
-    />
+    <ComposerControlSkeleton widthClassName={isComposerFooterCompact ? "w-28" : "w-32 sm:w-36"} />
   ) : (
     <ProviderModelPicker
       compact={isComposerFooterCompact}

@@ -471,10 +471,7 @@ describe("CheckpointReactor", () => {
       threadId,
       turnId: firstTurnId,
     });
-    await waitForGitRefExists(
-      harness.cwd,
-      checkpointRefForThreadTurnStart(threadId, firstTurnId),
-    );
+    await waitForGitRefExists(harness.cwd, checkpointRefForThreadTurnStart(threadId, firstTurnId));
     fs.writeFileSync(path.join(harness.cwd, "a.txt"), "A\n", "utf8");
     harness.provider.emit({
       type: "turn.completed",
@@ -520,10 +517,7 @@ describe("CheckpointReactor", () => {
       threadId,
       turnId: secondTurnId,
     });
-    await waitForGitRefExists(
-      harness.cwd,
-      checkpointRefForThreadTurnStart(threadId, secondTurnId),
-    );
+    await waitForGitRefExists(harness.cwd, checkpointRefForThreadTurnStart(threadId, secondTurnId));
     fs.writeFileSync(path.join(harness.cwd, "b.txt"), "B\n", "utf8");
     harness.provider.emit({
       type: "turn.completed",
@@ -793,15 +787,16 @@ describe("CheckpointReactor", () => {
       payload: { state: "completed" },
     });
 
-    const thread = await waitForThread(
-      harness.engine,
-      (entry) =>
-        entry.checkpoints.some(
-          (checkpoint) =>
-            checkpoint.checkpointTurnCount === 1 &&
-            checkpoint.status === "ready" &&
-            checkpoint.files?.map((file) => file.path).sort().join(",") === "early.txt,late.txt",
-        ),
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.checkpoints.some(
+        (checkpoint) =>
+          checkpoint.checkpointTurnCount === 1 &&
+          checkpoint.status === "ready" &&
+          checkpoint.files
+            ?.map((file) => file.path)
+            .sort()
+            .join(",") === "early.txt,late.txt",
+      ),
     );
 
     expect(thread.checkpoints[0]?.files?.map((file) => file.path).sort()).toEqual([

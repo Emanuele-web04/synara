@@ -209,7 +209,8 @@ function resolveOpenCodeDataDirectory(homeDirectory: string): string {
     return join(appDataDirectory, "opencode");
   }
 
-  const xdgDataHome = trimToNull(process.env.XDG_DATA_HOME) ?? join(homeDirectory, ".local", "share");
+  const xdgDataHome =
+    trimToNull(process.env.XDG_DATA_HOME) ?? join(homeDirectory, ".local", "share");
   return join(xdgDataHome, "opencode");
 }
 
@@ -217,9 +218,7 @@ export function resolveOpenCodeAuthFilePath(pathInfo: Pick<OpenCodePathInfo, "ho
   return join(resolveOpenCodeDataDirectory(pathInfo.home), "auth.json");
 }
 
-export function parseOpenCodeCredentialProviderIDs(
-  content: string,
-): ReadonlyArray<string> {
+export function parseOpenCodeCredentialProviderIDs(content: string): ReadonlyArray<string> {
   const parsed = JSON.parse(content) as unknown;
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return [];
@@ -307,44 +306,42 @@ function parseOpenCodeCliModelJson(
     .toSorted((left, right) => left.localeCompare(right));
   const supportedReasoningEfforts = Array.from(
     new Map(
-      Object.values(variantsObject)
-        .flatMap((variant) => {
-          const variantObject =
-            variant && typeof variant === "object" && !Array.isArray(variant)
-              ? (variant as Record<string, unknown>)
-              : null;
-          if (!variantObject) {
-            return [];
-          }
+      Object.values(variantsObject).flatMap((variant) => {
+        const variantObject =
+          variant && typeof variant === "object" && !Array.isArray(variant)
+            ? (variant as Record<string, unknown>)
+            : null;
+        if (!variantObject) {
+          return [];
+        }
 
-          const reasoningValue =
-            trimToNull(variantObject.reasoningEffort) ??
-            trimToNull(variantObject.reasoning_effort);
-          if (!reasoningValue) {
-            return [];
-          }
+        const reasoningValue =
+          trimToNull(variantObject.reasoningEffort) ?? trimToNull(variantObject.reasoning_effort);
+        if (!reasoningValue) {
+          return [];
+        }
 
-          const label = trimToNull(variantObject.label) ?? undefined;
-          const description = trimToNull(variantObject.description) ?? undefined;
-          return [
-            [
-              reasoningValue,
-              {
-                value: reasoningValue,
-                ...(label ? { label } : {}),
-                ...(description ? { description } : {}),
-              },
-            ] as const,
-          ];
-        }),
+        const label = trimToNull(variantObject.label) ?? undefined;
+        const description = trimToNull(variantObject.description) ?? undefined;
+        return [
+          [
+            reasoningValue,
+            {
+              value: reasoningValue,
+              ...(label ? { label } : {}),
+              ...(description ? { description } : {}),
+            },
+          ] as const,
+        ];
+      }),
     ).values(),
   );
   const defaultReasoningEffort =
     trimToNull(object.defaultReasoningEffort) ??
     trimToNull(object.default_reasoning_effort) ??
     (object.options && typeof object.options === "object" && !Array.isArray(object.options)
-      ? trimToNull((object.options as Record<string, unknown>).reasoningEffort) ??
-        trimToNull((object.options as Record<string, unknown>).reasoning_effort)
+      ? (trimToNull((object.options as Record<string, unknown>).reasoningEffort) ??
+        trimToNull((object.options as Record<string, unknown>).reasoning_effort))
       : null) ??
     undefined;
 
@@ -375,9 +372,7 @@ export function parseOpenCodeCliModelsOutput(
 
     const lineEnd = output.indexOf("\n", index);
     const nextLineIndex = lineEnd === -1 ? output.length : lineEnd + 1;
-    const candidate = output
-      .slice(index, lineEnd === -1 ? output.length : lineEnd)
-      .trim();
+    const candidate = output.slice(index, lineEnd === -1 ? output.length : lineEnd).trim();
     index = nextLineIndex;
 
     const parsedSlug = parseOpenCodeModelSlug(candidate);
@@ -444,7 +439,9 @@ function toListModelsCommandError(input: {
 
 function supportsVerboseModelsCommandFailure(stdout: string, stderr: string): boolean {
   const combined = `${stdout}\n${stderr}`.toLowerCase();
-  return combined.includes("unknown argument: verbose") || combined.includes("unknown option: verbose");
+  return (
+    combined.includes("unknown argument: verbose") || combined.includes("unknown option: verbose")
+  );
 }
 
 export function openCodeQuestionId(
@@ -792,7 +789,11 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
     Effect.all([loadProviders(client), loadAgents(client), loadConsoleState(client)], {
       concurrency: "unbounded",
     }).pipe(
-      Effect.map(([providerList, agents, consoleState]) => ({ providerList, agents, consoleState })),
+      Effect.map(([providerList, agents, consoleState]) => ({
+        providerList,
+        agents,
+        consoleState,
+      })),
     );
 
   const loadOpenCodePaths = (client: OpencodeClient) =>

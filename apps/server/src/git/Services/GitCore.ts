@@ -298,12 +298,16 @@ export interface GitCoreShape {
   /**
    * Read metadata for the latest stash entry.
    */
-  readonly stashInfo: (input: GitStashInfoInput) => Effect.Effect<GitStashInfoResult, GitCommandError>;
+  readonly stashInfo: (
+    input: GitStashInfoInput,
+  ) => Effect.Effect<GitStashInfoResult, GitCommandError>;
 
   /**
    * Remove the repository index lock file after Git reports a stale lock.
    */
-  readonly removeIndexLock: (input: GitRemoveIndexLockInput) => Effect.Effect<void, GitCommandError>;
+  readonly removeIndexLock: (
+    input: GitRemoveIndexLockInput,
+  ) => Effect.Effect<void, GitCommandError>;
 
   /**
    * Initialize a repository in the provided directory.

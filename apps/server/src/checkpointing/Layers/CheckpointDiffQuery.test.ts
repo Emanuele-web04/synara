@@ -111,11 +111,7 @@ describe("CheckpointDiffQueryLive", () => {
     );
 
     const expectedFromRef = checkpointRefForThreadTurnStart(threadId, TurnId.makeUnsafe("turn-1"));
-    expect(hasCheckpointRefCalls).toEqual([
-      expectedFromRef,
-      expectedFromRef,
-      toCheckpointRef,
-    ]);
+    expect(hasCheckpointRefCalls).toEqual([expectedFromRef, expectedFromRef, toCheckpointRef]);
     expect(diffCheckpointsCalls).toEqual([
       {
         cwd: "/tmp/workspace",

@@ -1652,15 +1652,17 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     readonly threadId: ThreadId;
   }) {
     const adapter = yield* providerAdapterRegistry.getByProvider("opencode");
-    const snapshot = yield* adapter.readThread(input.threadId).pipe(
-      Effect.mapError((cause) =>
-        buildImportMessagesError(
-          cause instanceof Error && cause.message.length > 0
-            ? cause.message
-            : "Failed to read OpenCode session history.",
+    const snapshot = yield* adapter
+      .readThread(input.threadId)
+      .pipe(
+        Effect.mapError((cause) =>
+          buildImportMessagesError(
+            cause instanceof Error && cause.message.length > 0
+              ? cause.message
+              : "Failed to read OpenCode session history.",
+          ),
         ),
-      ),
-    );
+      );
 
     const importedMessages = mapOpenCodeSnapshotMessages({
       threadId: input.threadId,
@@ -1757,7 +1759,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
               ? { resume: externalId }
               : thread.modelSelection.provider === "opencode"
                 ? { openCodeSessionId: externalId }
-              : { threadId: externalId },
+                : { threadId: externalId },
           runtimeMode: thread.runtimeMode,
         });
 

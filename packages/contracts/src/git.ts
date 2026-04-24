@@ -1,6 +1,7 @@
 import { Option, Schema } from "effect";
 import { NonNegativeInt, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas";
 import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "./model";
+import { ProviderStartOptions } from "./orchestration";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 
@@ -97,6 +98,7 @@ export const GitSummarizeDiffInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   patch: Schema.String,
   codexHomePath: Schema.optional(TrimmedNonEmptyStringSchema),
+  providerOptions: Schema.optional(ProviderStartOptions),
   textGenerationModel: Schema.optional(TrimmedNonEmptyStringSchema).pipe(
     Schema.withConstructorDefault(() => Option.some(DEFAULT_GIT_TEXT_GENERATION_MODEL)),
   ),
@@ -113,6 +115,7 @@ export const GitRunStackedActionInput = Schema.Struct({
     Schema.Array(TrimmedNonEmptyStringSchema).check(Schema.isMinLength(1)),
   ),
   codexHomePath: Schema.optional(TrimmedNonEmptyStringSchema),
+  providerOptions: Schema.optional(ProviderStartOptions),
   textGenerationModel: Schema.optional(TrimmedNonEmptyStringSchema).pipe(
     Schema.withConstructorDefault(() => Option.some(DEFAULT_GIT_TEXT_GENERATION_MODEL)),
   ),

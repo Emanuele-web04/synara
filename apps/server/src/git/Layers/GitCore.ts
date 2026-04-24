@@ -334,6 +334,18 @@ function parseNonEmptyLineList(input: string): string[] {
     .filter((line) => line.length > 0);
 }
 
+type StashEntry = {
+  ref: string;
+  hash: string;
+};
+
+function parseStashEntries(input: string): StashEntry[] {
+  return parseNonEmptyLineList(input).flatMap((line) => {
+    const [ref, hash] = line.split(" ");
+    return ref && hash ? [{ ref, hash }] : [];
+  });
+}
+
 function quoteGitCommand(args: ReadonlyArray<string>): string {
   return `git ${args.join(" ")}`;
 }
@@ -750,6 +762,25 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       executeGit(operation, cwd, args, { allowNonZeroExit }).pipe(
         Effect.map((result) => result.stdout),
       );
+
+    const listStashEntries = (
+      operation: string,
+      cwd: string,
+    ): Effect.Effect<StashEntry[], GitCommandError> =>
+      executeGit(operation, cwd, ["stash", "list", "--format=%gd %H"], {
+        timeoutMs: 10_000,
+      }).pipe(Effect.map((result) => parseStashEntries(result.stdout)));
+
+    const dropStashByHash = (cwd: string, hash: string): Effect.Effect<void, GitCommandError> =>
+      Effect.gen(function* () {
+        const entries = yield* listStashEntries("GitCore.dropStashByHash.list", cwd);
+        const entry = entries.find((candidate) => candidate.hash === hash);
+        if (!entry) return;
+        yield* executeGit("GitCore.dropStashByHash.drop", cwd, ["stash", "drop", entry.ref], {
+          timeoutMs: 10_000,
+          fallbackErrorMessage: "git stash drop failed",
+        });
+      });
 
     const branchExists = (cwd: string, branch: string): Effect.Effect<boolean, GitCommandError> =>
       executeGit(
@@ -2012,11 +2043,16 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
     const checkoutBranch: GitCoreShape["checkoutBranch"] = (input) =>
       Effect.gen(function* () {
         const checkoutArgs = yield* resolveCheckoutBranchArgs(input);
-        const result = yield* executeGit("GitCore.checkoutBranch.checkout", input.cwd, checkoutArgs, {
-          timeoutMs: 10_000,
-          allowNonZeroExit: true,
-          fallbackErrorMessage: "git checkout failed",
-        });
+        const result = yield* executeGit(
+          "GitCore.checkoutBranch.checkout",
+          input.cwd,
+          checkoutArgs,
+          {
+            timeoutMs: 10_000,
+            allowNonZeroExit: true,
+            fallbackErrorMessage: "git checkout failed",
+          },
+        );
         if (result.code !== 0) {
           const conflictingFiles = parseDirtyWorktreeFiles(result.stderr);
           if (conflictingFiles) {
@@ -2043,12 +2079,10 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
     const stashAndCheckout: GitCoreShape["stashAndCheckout"] = (input) =>
       Effect.gen(function* () {
-        const stashBefore = yield* executeGit(
+        const stashBefore = yield* listStashEntries(
           "GitCore.stashAndCheckout.stashListBefore",
           input.cwd,
-          ["stash", "list", "--format=%gd"],
-          { timeoutMs: 10_000 },
-        ).pipe(Effect.map((result) => parseNonEmptyLineList(result.stdout)));
+        );
 
         yield* executeGit(
           "GitCore.stashAndCheckout.stashPush",
@@ -2060,54 +2094,74 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           },
         );
 
-        const stashAfter = yield* executeGit(
+        const stashAfter = yield* listStashEntries(
           "GitCore.stashAndCheckout.stashListAfter",
           input.cwd,
-          ["stash", "list", "--format=%gd"],
-          { timeoutMs: 10_000 },
-        ).pipe(Effect.map((result) => parseNonEmptyLineList(result.stdout)));
-        const stashCreated = stashAfter.length > stashBefore.length;
+        );
+        const stashBeforeHashes = new Set(stashBefore.map((entry) => entry.hash));
+        const createdStash =
+          stashAfter.find((entry) => !stashBeforeHashes.has(entry.hash)) ??
+          (stashAfter.length > stashBefore.length ? stashAfter[0] : undefined);
 
         const checkoutResult = yield* Effect.exit(checkoutBranch(input));
         if (Exit.isFailure(checkoutResult)) {
-          if (stashCreated) {
-            yield* executeGit(
-              "GitCore.stashAndCheckout.restoreAfterCheckoutFailure",
+          if (createdStash) {
+            const restoreResult = yield* executeGit(
+              "GitCore.stashAndCheckout.restoreAfterCheckoutFailure.apply",
               input.cwd,
-              ["stash", "pop"],
+              ["stash", "apply", createdStash.hash],
               { timeoutMs: 30_000, allowNonZeroExit: true },
-            ).pipe(Effect.ignore);
+            );
+            if (restoreResult.code === 0) {
+              yield* dropStashByHash(input.cwd, createdStash.hash).pipe(
+                Effect.catchTag("GitCommandError", (error) =>
+                  Effect.logWarning(
+                    `Could not drop restored stash ${createdStash.hash}: ${error.message}`,
+                  ),
+                ),
+              );
+            }
           }
           return yield* Effect.failCause(checkoutResult.cause);
         }
 
-        if (!stashCreated) return;
+        if (!createdStash) return;
 
-        const popResult = yield* executeGit(
-          "GitCore.stashAndCheckout.stashPop",
+        // Apply first, then drop only after success so failed/conflicted reapplies keep the stash intact.
+        const applyResult = yield* executeGit(
+          "GitCore.stashAndCheckout.stashApply",
           input.cwd,
-          ["stash", "pop"],
+          ["stash", "apply", createdStash.hash],
           { timeoutMs: 30_000, allowNonZeroExit: true },
         );
-        if (popResult.code === 0) return;
+        if (applyResult.code === 0) {
+          yield* dropStashByHash(input.cwd, createdStash.hash).pipe(
+            Effect.catchTag("GitCommandError", (error) =>
+              Effect.logWarning(
+                `Could not drop reapplied stash ${createdStash.hash}: ${error.message}`,
+              ),
+            ),
+          );
+          return;
+        }
 
         yield* executeGit(
-          "GitCore.stashAndCheckout.abortConflictedPop",
+          "GitCore.stashAndCheckout.abortConflictedApply",
           input.cwd,
           ["reset", "--hard"],
           { timeoutMs: 30_000, allowNonZeroExit: true },
         ).pipe(Effect.ignore);
         yield* executeGit(
-          "GitCore.stashAndCheckout.cleanConflictedPop",
+          "GitCore.stashAndCheckout.cleanConflictedApply",
           input.cwd,
           ["clean", "-fd"],
           { timeoutMs: 30_000, allowNonZeroExit: true },
         ).pipe(Effect.ignore);
 
         return yield* createGitCommandError(
-          "GitCore.stashAndCheckout.stashPop",
+          "GitCore.stashAndCheckout.stashApply",
           input.cwd,
-          ["stash", "pop"],
+          ["stash", "apply", createdStash.hash],
           "Stash could not be applied. Your changes are still saved in the stash.",
         );
       });
@@ -2120,15 +2174,13 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
     const stashInfo: GitCoreShape["stashInfo"] = (input) =>
       Effect.gen(function* () {
-        const stashLine = (
-          yield* runGitStdout("GitCore.stashInfo.list", input.cwd, [
-            "stash",
-            "list",
-            "-n",
-            "1",
-            "--format=%gd%x09%gs",
-          ])
-        ).trim();
+        const stashLine = (yield* runGitStdout("GitCore.stashInfo.list", input.cwd, [
+          "stash",
+          "list",
+          "-n",
+          "1",
+          "--format=%gd%x09%gs",
+        ])).trim();
         const separatorIndex = stashLine.indexOf("\t");
         const stashRef =
           separatorIndex >= 0 ? stashLine.slice(0, separatorIndex).trim() : stashLine.trim();
@@ -2184,17 +2236,19 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         const lockPath = nodePath.isAbsolute(rawLockPath)
           ? rawLockPath
           : nodePath.resolve(input.cwd, rawLockPath);
-        yield* fileSystem.remove(lockPath).pipe(
-          Effect.catch((cause) =>
-            createGitCommandError(
-              "GitCore.removeIndexLock",
-              input.cwd,
-              ["rm", lockPath],
-              cause.message,
-              cause,
+        yield* fileSystem
+          .remove(lockPath)
+          .pipe(
+            Effect.mapError((cause) =>
+              createGitCommandError(
+                "GitCore.removeIndexLock",
+                input.cwd,
+                ["rm", lockPath],
+                cause.message,
+                cause,
+              ),
             ),
-          ),
-        );
+          );
       });
 
     const initRepo: GitCoreShape["initRepo"] = (input) =>

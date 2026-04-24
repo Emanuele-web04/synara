@@ -116,13 +116,7 @@ export function useThreadHandoff() {
 
       return nextThreadId;
     },
-    [
-      navigate,
-      projects,
-      serverConfigQuery.data?.providers,
-      settings,
-      syncServerReadModel,
-    ],
+    [navigate, projects, serverConfigQuery.data?.providers, settings, syncServerReadModel],
   );
 
   return {
