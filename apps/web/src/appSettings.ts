@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { Option, Schema } from "effect";
 import { TrimmedNonEmptyString, ProviderKind, type ProviderStartOptions } from "@t3tools/contracts";
 import {
@@ -196,6 +196,10 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     customGeminiModels: normalizeCustomModelSlugs(settings.customGeminiModels, "gemini"),
     customOpenCodeModels: normalizeCustomModelSlugs(settings.customOpenCodeModels, "opencode"),
   };
+}
+
+export function normalizeStoredAppSettings(settings: AppSettings): AppSettings {
+  return normalizeAppSettings(settings);
 }
 
 export function getCustomModelsForProvider(
@@ -405,6 +409,16 @@ export function useAppSettings() {
     DEFAULT_APP_SETTINGS,
     AppSettingsSchema,
   );
+  const normalizedStoredSettingsRef = useRef(false);
+
+  useEffect(() => {
+    if (normalizedStoredSettingsRef.current) {
+      return;
+    }
+    normalizedStoredSettingsRef.current = true;
+
+    setSettings((previous) => normalizeStoredAppSettings(previous));
+  }, [setSettings]);
 
   const updateSettings = useCallback(
     (patch: Partial<AppSettings>) => {

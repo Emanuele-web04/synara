@@ -17,6 +17,7 @@ import {
   MODEL_PROVIDER_SETTINGS,
   normalizeChatFontSizePx,
   normalizeCustomModelSlugs,
+  normalizeStoredAppSettings,
   patchCustomModels,
   resolveAppModelSelection,
 } from "./appSettings";
@@ -207,6 +208,24 @@ describe("sidebar sort defaults", () => {
 
   it("defaults thread sorting to updated_at", () => {
     expect(DEFAULT_SIDEBAR_THREAD_SORT_ORDER).toBe("updated_at");
+  });
+});
+
+describe("normalizeStoredAppSettings", () => {
+  it("preserves an explicitly stored updated_at project sort order", () => {
+    const decodedSettings = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema))(
+      JSON.stringify({
+        sidebarProjectSortOrder: "updated_at",
+        chatFontSizePx: 99,
+        customCodexModels: [" custom/internal-model ", "gpt-5.4", "custom/internal-model"],
+      }),
+    );
+
+    expect(normalizeStoredAppSettings(decodedSettings)).toMatchObject({
+      sidebarProjectSortOrder: "updated_at",
+      chatFontSizePx: 18,
+      customCodexModels: ["custom/internal-model"],
+    });
   });
 });
 
