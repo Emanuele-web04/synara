@@ -40,7 +40,7 @@ import {
 import { Switch } from "../components/ui/switch";
 import { toastManager } from "../components/ui/toast";
 import { ThemePackEditor } from "../components/ThemePackEditor";
-import { SidebarInset } from "../components/ui/sidebar";
+import { SidebarHeaderTrigger, SidebarInset } from "../components/ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { isElectron } from "../env";
@@ -1152,8 +1152,21 @@ function SettingsRouteView() {
           />
 
           <div className="space-y-3 pt-1">
-            <ThemePackEditor variant="light" isActive={resolvedTheme === "light"} mode={theme} />
-            <ThemePackEditor variant="dark" isActive={resolvedTheme === "dark"} mode={theme} />
+            {(resolvedTheme === "dark"
+              ? (["dark", "light"] as const)
+              : (["light", "dark"] as const)
+            ).map(
+              (variant) => (
+                <ThemePackEditor
+                  key={variant}
+                  variant={variant}
+                  isActive={resolvedTheme === variant}
+                  mode={theme}
+                  uiFontOverrideActive={settings.uiFontFamily.trim().length > 0}
+                  codeFontOverrideActive={settings.chatCodeFontFamily.trim().length > 0}
+                />
+              ),
+            )}
           </div>
 
           <SettingsRow

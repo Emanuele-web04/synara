@@ -35,8 +35,6 @@ import {
 } from "~/lib/providerAvailability";
 import { toastManager } from "~/components/ui/toast";
 import { Sidebar, SidebarProvider, SidebarRail, useSidebar } from "~/components/ui/sidebar";
-import { useChatCodeFont } from "~/hooks/useChatCodeFont";
-import { useUIFont } from "~/hooks/useUIFont";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_SIDEBAR_WIDTH_STORAGE_KEY = "chat_thread_sidebar_width";
@@ -362,8 +360,6 @@ const SIDEBAR_INNER_CLASS = {
 } as const;
 
 function ChatRouteLayout() {
-  useChatCodeFont();
-  useUIFont();
   const { settings } = useAppSettings();
   const side = settings.sidebarSide;
 

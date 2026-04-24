@@ -48,7 +48,9 @@ import { TaskCompletionNotifications } from "../notifications/taskCompletion";
 import { useWorkspaceStore, workspaceThreadId } from "../workspaceStore";
 import { useRetainedThreadDetailIds } from "../threadDetailSubscriptionRetention";
 import { useAppTypography } from "../hooks/useAppTypography";
+import { useChatCodeFont } from "../hooks/useChatCodeFont";
 import { useTheme } from "../hooks/useTheme";
+import { useUIFont } from "../hooks/useUIFont";
 import { invalidateGitQueries } from "../lib/gitReactQuery";
 import { hasLiveThreadsWithMissingProjects } from "../lib/desktopProjectRecovery";
 import { parseDiffRouteSearch } from "../diffRouteSearch";
@@ -67,7 +69,9 @@ export const Route = createRootRouteWithContext<{
 
 function RootRouteView() {
   useAppTypography();
+  useChatCodeFont();
   useTheme();
+  useUIFont();
 
   if (!readNativeApi()) {
     return (

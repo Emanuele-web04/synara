@@ -5166,34 +5166,56 @@ export default function Sidebar() {
     setAllProjectsExpanded(true);
   }, [allProjectsExpanded, collapseProjectsExcept, focusedProjectId, setAllProjectsExpanded]);
 
+  const brandWordmark = (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <div className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 font-system-ui">
+            <div className="flex min-w-0 items-center gap-1">
+              <T3Wordmark />
+              <span className="truncate text-[14px] font-normal tracking-tight text-foreground/82">
+                Code
+              </span>
+            </div>
+          </div>
+        }
+      />
+      <TooltipPopup side="bottom" sideOffset={2}>
+        Version {APP_VERSION}
+      </TooltipPopup>
+    </Tooltip>
+  );
+
+  const titlebarControls = (
+    <div className="hidden shrink-0 items-center gap-0.5 md:flex">
+      <AppNavigationButtons className="ms-0" />
+      <SidebarTrigger
+        className="size-7 shrink-0 text-muted-foreground/75 hover:text-foreground"
+        aria-label="Toggle thread sidebar"
+      />
+    </div>
+  );
+
+  const headerControls = (
+    <div className="ml-auto hidden shrink-0 items-center gap-0.5 md:flex">
+      <AppNavigationButtons className="ms-0" />
+      <SidebarTrigger
+        className="size-7 shrink-0 text-muted-foreground/75 hover:text-foreground"
+        aria-label="Toggle thread sidebar"
+      />
+    </div>
+  );
+
   const wordmark = (
     <div className="flex w-full items-center gap-1.5">
       <SidebarTrigger className="shrink-0 md:hidden" />
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <div className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 font-system-ui">
-              <div className="flex min-w-0 items-center gap-1">
-                <T3Wordmark />
-                <span className="truncate text-[14px] font-normal tracking-tight text-foreground/82">
-                  Code
-                </span>
-              </div>
-            </div>
-          }
-        />
-        <TooltipPopup side="bottom" sideOffset={2}>
-          Version {APP_VERSION}
-        </TooltipPopup>
-      </Tooltip>
-      <div className="ml-auto hidden shrink-0 items-center gap-0.5 md:flex">
-        <SidebarTrigger
-          className="size-7 shrink-0 text-muted-foreground/75 hover:text-foreground"
-          aria-label="Toggle thread sidebar"
-        />
-        <AppNavigationButtons className="ms-0" />
-      </div>
+      {brandWordmark}
+      {headerControls}
     </div>
+  );
+
+  const sidebarBrand = (
+    <div className="flex min-w-0 px-4 pt-3 pb-2">{brandWordmark}</div>
   );
 
   return (
@@ -5206,7 +5228,7 @@ export default function Sidebar() {
               appSettings.sidebarSide === "left" && "pl-[90px]",
             )}
           >
-            {wordmark}
+            {titlebarControls}
           </SidebarHeader>
         </>
       ) : (
@@ -5314,6 +5336,7 @@ export default function Sidebar() {
           </SidebarGroup>
         ) : (
           <>
+            {isElectron ? sidebarBrand : null}
             <SidebarSegmentedPicker
               activeView={isOnWorkspace ? "workspace" : "threads"}
               onSelectView={handleSidebarViewChange}

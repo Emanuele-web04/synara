@@ -5,6 +5,7 @@
 
 import { useEffect } from "react";
 import { useAppSettings } from "../appSettings";
+import { normalizeFontFamilyCssValue } from "../lib/fontFamily";
 
 const CHAT_CODE_FONT_OVERRIDE_VARIABLE = "--app-font-chat-code-override";
 
@@ -13,11 +14,9 @@ export function useChatCodeFont() {
   const chatCodeFontFamily = settings.chatCodeFontFamily;
 
   useEffect(() => {
-    if (chatCodeFontFamily.trim()) {
-      document.documentElement.style.setProperty(
-        CHAT_CODE_FONT_OVERRIDE_VARIABLE,
-        chatCodeFontFamily.trim(),
-      );
+    const cssFontFamily = normalizeFontFamilyCssValue(chatCodeFontFamily);
+    if (cssFontFamily) {
+      document.documentElement.style.setProperty(CHAT_CODE_FONT_OVERRIDE_VARIABLE, cssFontFamily);
     } else {
       document.documentElement.style.removeProperty(CHAT_CODE_FONT_OVERRIDE_VARIABLE);
     }

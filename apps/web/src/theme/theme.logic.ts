@@ -4,6 +4,7 @@
 // Exports: Theme types, normalization helpers, import/export utilities, and CSS variable builders.
 
 import { THEME_SEED_CATALOG } from "./theme.seed.generated";
+import { normalizeFontFamilyCssValue } from "../lib/fontFamily";
 
 export type ThemeMode = "light" | "dark" | "system";
 export type ThemeVariant = "light" | "dark";
@@ -722,8 +723,8 @@ export function buildThemeCssVariables(
     "--sidebar-foreground": readCodexVariable("--color-text-foreground"),
     "--success": pack.theme.semanticColors.diffAdded,
     "--success-foreground": pack.theme.surface,
-    "--theme-font-code-family": pack.theme.fonts.code ?? "",
-    "--theme-font-ui-family": pack.theme.fonts.ui ?? "",
+    "--theme-font-code-family": normalizeFontFamilyCssValue(pack.theme.fonts.code) ?? "",
+    "--theme-font-ui-family": normalizeFontFamilyCssValue(pack.theme.fonts.ui) ?? "",
     "--warning": warningColor,
     "--warning-foreground": pack.theme.surface,
   };
