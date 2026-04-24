@@ -408,6 +408,22 @@ function sessionErrorMessage(error: unknown): string {
     : "OpenCode session failed.";
 }
 
+function isOpenCodeContextOverflowError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  if ("name" in error && error.name === "ContextOverflowError") {
+    return true;
+  }
+  const data = "data" in error && error.data && typeof error.data === "object" ? error.data : null;
+  const message = data && "message" in data ? data.message : undefined;
+  return (
+    typeof message === "string" &&
+    /context|token/i.test(message) &&
+    /overflow|too large|maximum context|context length|size limit/i.test(message)
+  );
+}
+
 function updateProviderSession(
   context: OpenCodeSessionContext,
   patch: Partial<ProviderSession>,
@@ -845,6 +861,59 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         event: { readonly observedAt: string; readonly event: Record<string, unknown> },
       ) => writeNativeEvent(threadId, event).pipe(Effect.catchCause(() => Effect.void));
 
+      const emitContextCompactionProgress = Effect.fn("emitContextCompactionProgress")(function* (
+        context: OpenCodeSessionContext,
+        input: {
+          readonly turnId?: TurnId | undefined;
+          readonly detail?: string | undefined;
+          readonly raw?: unknown;
+          readonly data?: unknown;
+        },
+      ) {
+        yield* emit({
+          ...buildEventBase({
+            threadId: context.session.threadId,
+            turnId: input.turnId,
+            raw: input.raw,
+          }),
+          type: "item.updated",
+          payload: {
+            itemType: "context_compaction",
+            status: "inProgress",
+            detail: input.detail ?? "Compacting context",
+            ...(input.data !== undefined ? { data: input.data } : {}),
+          },
+        });
+      });
+
+      const emitContextCompacted = Effect.fn("emitContextCompacted")(function* (
+        context: OpenCodeSessionContext,
+        input: {
+          readonly turnId?: TurnId | undefined;
+          readonly raw?: unknown;
+        },
+      ) {
+        updateProviderSession(
+          context,
+          {
+            status: context.activeTurnId ? "running" : "ready",
+          },
+          { clearLastError: true },
+        );
+        yield* emit({
+          ...buildEventBase({
+            threadId: context.session.threadId,
+            turnId: input.turnId,
+            raw: input.raw,
+          }),
+          type: "thread.state.changed",
+          payload: {
+            state: "compacted",
+            detail: { source: PROVIDER },
+          },
+        });
+      });
+
       const emitUnexpectedExit = Effect.fn("emitUnexpectedExit")(function* (
         context: OpenCodeSessionContext,
         message: string,
@@ -1089,6 +1158,21 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               appendTurnItem(context, turnId, part);
               yield* emit(runtimeEvent);
             }
+
+            if (part.type === "compaction") {
+              yield* emitContextCompactionProgress(context, {
+                turnId,
+                raw: event,
+                detail: part.overflow
+                  ? "Compacting context after provider context overflow"
+                  : "Compacting context",
+                data: {
+                  auto: part.auto,
+                  ...(part.overflow !== undefined ? { overflow: part.overflow } : {}),
+                  ...(part.tail_start_id ? { tailStartId: part.tail_start_id } : {}),
+                },
+              });
+            }
             break;
           }
 
@@ -1217,8 +1301,31 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             break;
           }
 
+          case "session.compacted": {
+            yield* emitContextCompacted(context, { turnId, raw: event });
+            break;
+          }
+
           case "session.error": {
             const message = sessionErrorMessage(event.properties.error);
+            if (isOpenCodeContextOverflowError(event.properties.error)) {
+              updateProviderSession(
+                context,
+                {
+                  status: "running",
+                },
+                { clearLastError: true },
+              );
+              yield* emitContextCompactionProgress(context, {
+                turnId,
+                raw: event,
+                detail: message,
+                data: {
+                  state: "context_overflow",
+                },
+              });
+              break;
+            }
             const activeTurnId = context.activeTurnId;
             clearActiveTurnState(context);
             updateProviderSession(
