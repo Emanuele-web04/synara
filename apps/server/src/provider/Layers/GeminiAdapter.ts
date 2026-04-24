@@ -54,6 +54,7 @@ import {
 import { probeGeminiCapabilities } from "../geminiAcpProbe.ts";
 import { GeminiAdapter, type GeminiAdapterShape } from "../Services/GeminiAdapter.ts";
 import { asArray, asNumber, asRecord, asString, trimToUndefined } from "../geminiValue.ts";
+import { extractProposedPlanMarkdown, withProviderPlanModePrompt } from "../planMode.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const PROVIDER = "gemini" as const;
@@ -132,6 +133,7 @@ interface GeminiRecordedItem {
 interface GeminiTurnState {
   readonly turnId: TurnId;
   readonly startedAt: string;
+  readonly interactionMode: "default" | "plan";
   readonly assistantItemId: RuntimeItemId;
   reasoningItemId: RuntimeItemId | undefined;
   readonly items: GeminiRecordedItem[];
@@ -1134,6 +1136,29 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
     }
 
     if (turnState.assistantTextStarted) {
+      const proposedPlanMarkdown =
+        result.state === "completed" && turnState.interactionMode === "plan"
+          ? extractProposedPlanMarkdown(turnState.assistantText)
+          : undefined;
+      if (proposedPlanMarkdown) {
+        yield* offerRuntimeEvent({
+          ...makeEventBase(context),
+          turnId: turnState.turnId,
+          itemId: turnState.assistantItemId,
+          type: "turn.proposed.completed",
+          payload: {
+            planMarkdown: proposedPlanMarkdown,
+          },
+          raw: {
+            source: "gemini.acp.message",
+            method: "assistant/proposed-plan-block",
+            payload: {
+              text: turnState.assistantText,
+            },
+          },
+        });
+      }
+
       yield* offerRuntimeEvent({
         ...makeEventBase(context),
         turnId: turnState.turnId,
@@ -1967,10 +1992,16 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
   ) {
     const blocks: Array<Record<string, unknown>> = [];
 
-    if (trimToUndefined(input.input)) {
+    const promptText = trimToUndefined(
+      withProviderPlanModePrompt({
+        text: input.input?.trim() ?? "",
+        interactionMode: input.interactionMode,
+      }),
+    );
+    if (promptText) {
       blocks.push({
         type: "text",
-        text: trimToUndefined(input.input),
+        text: promptText,
       });
     }
 
@@ -2202,6 +2233,7 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
     context.turnState = {
       turnId,
       startedAt: new Date().toISOString(),
+      interactionMode: input.interactionMode === "plan" ? "plan" : "default",
       assistantItemId: RuntimeItemId.makeUnsafe(`gemini-assistant-${crypto.randomUUID()}`),
       reasoningItemId: undefined,
       items: [],

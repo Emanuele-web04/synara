@@ -52,6 +52,7 @@ import {
   toOpenCodeQuestionAnswers,
   type OpenCodeServerConnection,
 } from "../opencodeRuntime.ts";
+import { extractProposedPlanMarkdown, withProviderPlanModePrompt } from "../planMode.ts";
 
 const PROVIDER = "opencode" as const;
 
@@ -82,6 +83,7 @@ interface OpenCodeSessionContext {
   readonly completedAssistantPartIds: Set<string>;
   readonly turns: Array<OpenCodeTurnSnapshot>;
   activeTurnId: TurnId | undefined;
+  activeInteractionMode: "default" | "plan" | undefined;
   activeAgent: string | undefined;
   activeVariant: string | undefined;
   readonly stopped: Ref.Ref<boolean>;
@@ -447,6 +449,7 @@ function updateProviderSession(
 
 function clearActiveTurnState(context: OpenCodeSessionContext): void {
   context.activeTurnId = undefined;
+  context.activeInteractionMode = undefined;
   context.activeAgent = undefined;
   context.activeVariant = undefined;
 }
@@ -994,6 +997,25 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           !context.completedAssistantPartIds.has(part.id)
         ) {
           context.completedAssistantPartIds.add(part.id);
+          const proposedPlanMarkdown =
+            context.activeInteractionMode === "plan"
+              ? extractProposedPlanMarkdown(latestText)
+              : undefined;
+          if (proposedPlanMarkdown && turnId) {
+            yield* emit({
+              ...buildEventBase({
+                threadId: context.session.threadId,
+                turnId,
+                itemId: part.id,
+                createdAt: isoFromEpochMs(part.time.end),
+                raw,
+              }),
+              type: "turn.proposed.completed",
+              payload: {
+                planMarkdown: proposedPlanMarkdown,
+              },
+            });
+          }
           yield* emit({
             ...buildEventBase({
               threadId: context.session.threadId,
@@ -1523,6 +1545,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             completedAssistantPartIds: new Set(),
             turns: [],
             activeTurnId: undefined,
+            activeInteractionMode: undefined,
             activeAgent: undefined,
             activeVariant: undefined,
             stopped: yield* Ref.make(false),
@@ -1568,7 +1591,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           });
         }
 
-        const text = input.input?.trim();
+        const text = withProviderPlanModePrompt({
+          text: input.input?.trim() ?? "",
+          interactionMode: input.interactionMode,
+        }).trim();
         const fileParts = toOpenCodeFileParts({
           attachments: input.attachments,
           resolveAttachmentPath: (attachment) =>
@@ -1592,6 +1618,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             : undefined;
 
         context.activeTurnId = turnId;
+        context.activeInteractionMode = input.interactionMode === "plan" ? "plan" : "default";
         context.activeAgent = agent ?? (input.interactionMode === "plan" ? "plan" : undefined);
         context.activeVariant = variant;
         updateProviderSession(

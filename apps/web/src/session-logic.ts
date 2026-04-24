@@ -17,6 +17,7 @@ import {
   decodeSubagentReceiverThreadIds,
 } from "@t3tools/shared/subagents";
 import { deriveReadableToolTitle, normalizeCompactToolLabel } from "./lib/toolCallLabel";
+import { stripProposedPlanBlocksFromText } from "./proposedPlan";
 
 import type {
   ChatMessage,
@@ -1354,12 +1355,31 @@ export function deriveTimelineEntries(
   proposedPlans: ProposedPlan[],
   workEntries: WorkLogEntry[],
 ): TimelineEntry[] {
-  const messageRows: TimelineEntry[] = messages.map((message) => ({
-    id: message.id,
-    kind: "message",
-    createdAt: message.createdAt,
-    message,
-  }));
+  const proposedPlanTurnIds = new Set(
+    proposedPlans.flatMap((proposedPlan) => (proposedPlan.turnId ? [proposedPlan.turnId] : [])),
+  );
+  const messageRows: TimelineEntry[] = messages.flatMap((message) => {
+    const displayMessage =
+      message.role === "assistant" && message.turnId && proposedPlanTurnIds.has(message.turnId)
+        ? { ...message, text: stripProposedPlanBlocksFromText(message.text) }
+        : message;
+    if (
+      displayMessage.role === "assistant" &&
+      displayMessage.text.length === 0 &&
+      displayMessage.turnId &&
+      proposedPlanTurnIds.has(displayMessage.turnId)
+    ) {
+      return [];
+    }
+    return [
+      {
+        id: displayMessage.id,
+        kind: "message",
+        createdAt: displayMessage.createdAt,
+        message: displayMessage,
+      },
+    ];
+  });
   const proposedPlanRows: TimelineEntry[] = proposedPlans.map((proposedPlan) => ({
     id: proposedPlan.id,
     kind: "proposed-plan",

@@ -89,6 +89,7 @@ import {
   ProviderAdapterValidationError,
   type ProviderAdapterError,
 } from "../Errors.ts";
+import { extractProposedPlanMarkdown, withProviderPlanModePrompt } from "../planMode.ts";
 import { ClaudeAdapter, type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
@@ -118,6 +119,7 @@ interface ClaudeResumeState {
 interface ClaudeTurnState {
   readonly turnId: TurnId;
   readonly startedAt: string;
+  readonly interactionMode: "default" | "plan";
   readonly items: Array<unknown>;
   readonly assistantTextBlocks: Map<number, AssistantTextBlockState>;
   readonly assistantTextBlockOrder: Array<AssistantTextBlockState>;
@@ -740,7 +742,10 @@ function buildPromptText(input: ProviderSendTurnInput): string {
       : requestedEffort && hasEffortLevel(caps, requestedEffort)
         ? requestedEffort
         : null;
-  return applyClaudePromptEffortPrefix(basePrompt, promptEffort);
+  return withProviderPlanModePrompt({
+    text: applyClaudePromptEffortPrefix(basePrompt, promptEffort),
+    interactionMode: input.interactionMode,
+  });
 }
 
 function buildUserMessage(input: {
@@ -2227,6 +2232,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           context.turnState = {
             turnId,
             startedAt,
+            interactionMode: "default",
             items: [],
             assistantTextBlocks: new Map(),
             assistantTextBlockOrder: [],
@@ -2284,6 +2290,19 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               toolUseId: typeof toolUse.id === "string" ? toolUse.id : undefined,
               rawSource: "claude.sdk.message",
               rawMethod: "claude/assistant",
+              rawPayload: message,
+            });
+          }
+
+          const taggedPlanMarkdown =
+            context.turnState?.interactionMode === "plan"
+              ? extractProposedPlanMarkdown(extractTextContent(content))
+              : undefined;
+          if (taggedPlanMarkdown) {
+            yield* emitProposedPlanCompleted(context, {
+              planMarkdown: taggedPlanMarkdown,
+              rawSource: "claude.sdk.message",
+              rawMethod: "claude/assistant/proposed-plan-block",
               rawPayload: message,
             });
           }
@@ -3390,6 +3409,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         const turnState: ClaudeTurnState = {
           turnId,
           startedAt: yield* nowIso,
+          interactionMode: input.interactionMode === "plan" ? "plan" : "default",
           items: [],
           assistantTextBlocks: new Map(),
           assistantTextBlockOrder: [],
