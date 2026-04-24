@@ -1652,15 +1652,17 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     readonly threadId: ThreadId;
   }) {
     const adapter = yield* providerAdapterRegistry.getByProvider("opencode");
-    const snapshot = yield* adapter.readThread(input.threadId).pipe(
-      Effect.mapError((cause) =>
-        buildImportMessagesError(
-          cause instanceof Error && cause.message.length > 0
-            ? cause.message
-            : "Failed to read OpenCode session history.",
+    const snapshot = yield* adapter
+      .readThread(input.threadId)
+      .pipe(
+        Effect.mapError((cause) =>
+          buildImportMessagesError(
+            cause instanceof Error && cause.message.length > 0
+              ? cause.message
+              : "Failed to read OpenCode session history.",
+          ),
         ),
-      ),
-    );
+      );
 
     const importedMessages = mapOpenCodeSnapshotMessages({
       threadId: input.threadId,
@@ -1757,7 +1759,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
               ? { resume: externalId }
               : thread.modelSelection.provider === "opencode"
                 ? { openCodeSessionId: externalId }
-              : { threadId: externalId },
+                : { threadId: externalId },
           runtimeMode: thread.runtimeMode,
         });
 
@@ -2025,6 +2027,26 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       case WS_METHODS.gitCheckout: {
         const body = stripRequestTag(request.body);
         return yield* Effect.scoped(git.checkoutBranch(body));
+      }
+
+      case WS_METHODS.gitStashAndCheckout: {
+        const body = stripRequestTag(request.body);
+        return yield* Effect.scoped(git.stashAndCheckout(body));
+      }
+
+      case WS_METHODS.gitStashDrop: {
+        const body = stripRequestTag(request.body);
+        return yield* git.stashDrop(body);
+      }
+
+      case WS_METHODS.gitStashInfo: {
+        const body = stripRequestTag(request.body);
+        return yield* git.stashInfo(body);
+      }
+
+      case WS_METHODS.gitRemoveIndexLock: {
+        const body = stripRequestTag(request.body);
+        return yield* git.removeIndexLock(body);
       }
 
       case WS_METHODS.gitInit: {

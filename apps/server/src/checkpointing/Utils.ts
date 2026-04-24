@@ -19,10 +19,7 @@ export function checkpointRefForThreadMessageStart(
   );
 }
 
-export function checkpointRefForThreadTurnStart(
-  threadId: ThreadId,
-  turnId: TurnId,
-): CheckpointRef {
+export function checkpointRefForThreadTurnStart(threadId: ThreadId, turnId: TurnId): CheckpointRef {
   return CheckpointRef.makeUnsafe(
     `${CHECKPOINT_REFS_PREFIX}/${Encoding.encodeBase64Url(threadId)}/turn-start/${Encoding.encodeBase64Url(turnId)}`,
   );
