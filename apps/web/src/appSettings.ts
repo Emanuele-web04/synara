@@ -35,7 +35,6 @@ type CustomModelSettingsKey =
   | "customClaudeModels"
   | "customGeminiModels"
   | "customOpenCodeModels";
-const LEGACY_DEFAULT_SIDEBAR_PROJECT_SORT_ORDER: SidebarProjectSortOrder = "updated_at";
 export type ProviderCustomModelConfig = {
   provider: ProviderKind;
   settingsKey: CustomModelSettingsKey;
@@ -197,6 +196,10 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     customGeminiModels: normalizeCustomModelSlugs(settings.customGeminiModels, "gemini"),
     customOpenCodeModels: normalizeCustomModelSlugs(settings.customOpenCodeModels, "opencode"),
   };
+}
+
+export function normalizeStoredAppSettings(settings: AppSettings): AppSettings {
+  return normalizeAppSettings(settings);
 }
 
 export function getCustomModelsForProvider(
@@ -406,26 +409,15 @@ export function useAppSettings() {
     DEFAULT_APP_SETTINGS,
     AppSettingsSchema,
   );
-  const migratedLegacyProjectSortRef = useRef(false);
+  const normalizedStoredSettingsRef = useRef(false);
 
   useEffect(() => {
-    if (migratedLegacyProjectSortRef.current) {
+    if (normalizedStoredSettingsRef.current) {
       return;
     }
-    migratedLegacyProjectSortRef.current = true;
+    normalizedStoredSettingsRef.current = true;
 
-    setSettings((previous) => {
-      const normalized = normalizeAppSettings(previous);
-      if (normalized.sidebarProjectSortOrder !== LEGACY_DEFAULT_SIDEBAR_PROJECT_SORT_ORDER) {
-        return normalized;
-      }
-
-      // Preserve folder muscle memory for older installs that inherited the recency-based default.
-      return {
-        ...normalized,
-        sidebarProjectSortOrder: DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
-      };
-    });
+    setSettings((previous) => normalizeStoredAppSettings(previous));
   }, [setSettings]);
 
   const updateSettings = useCallback(
