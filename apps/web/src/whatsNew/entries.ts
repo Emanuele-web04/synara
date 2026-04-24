@@ -22,6 +22,42 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.0.37",
+    date: "Apr 25",
+    features: [
+      {
+        id: "branch-switch-recovery",
+        title: "Branch switching is much safer",
+        description:
+          "DP Code now handles messy branch switches with clearer recovery actions, recreated stashes, unpublished branch publishing, and stronger checks around conflicts and local work.",
+      },
+      {
+        id: "plan-mode-proposals",
+        title: "Plan mode proposals show up properly",
+        description:
+          "Proposed plans from providers are now parsed and surfaced as first-class UI state, so planning turns feel more predictable instead of blending into ordinary assistant output.",
+      },
+      {
+        id: "desktop-navigation-controls",
+        title: "Desktop navigation controls landed",
+        description:
+          "The desktop app now has app-level back and forward navigation controls, making it easier to move around DP Code without losing your place.",
+      },
+      {
+        id: "sidebar-sort-stability",
+        title: "Sidebar ordering stays put",
+        description:
+          "Stored sidebar sort preferences are preserved on load, fixing cases where project and thread ordering could unexpectedly reset.",
+      },
+      {
+        id: "font-consistency",
+        title: "Fonts are more consistent",
+        description:
+          "Theme and chat font handling now share one normalization path, tightening up typography across the chat UI, model controls, and theme settings.",
+      },
+    ],
+  },
+  {
     version: "0.0.36",
     date: "Apr 24",
     features: [
