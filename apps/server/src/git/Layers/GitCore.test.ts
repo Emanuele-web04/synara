@@ -8,7 +8,7 @@ import { describe, expect, vi } from "vitest";
 
 import { GitCoreLive, makeGitCore } from "./GitCore.ts";
 import { GitCore, type GitCoreShape } from "../Services/GitCore.ts";
-import { GitCommandError } from "../Errors.ts";
+import { GitCheckoutDirtyWorktreeError, GitCommandError } from "../Errors.ts";
 import { type ProcessRunResult, runProcess } from "../../processRunner.ts";
 import { ServerConfig } from "../../config.ts";
 
@@ -37,6 +37,15 @@ function writeTextFile(
   return Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     yield* fileSystem.writeFileString(filePath, contents);
+  });
+}
+
+function readTextFile(
+  filePath: string,
+): Effect.Effect<string, PlatformError.PlatformError, FileSystem.FileSystem> {
+  return Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    return yield* fileSystem.readFileString(filePath);
   });
 }
 
@@ -755,6 +764,124 @@ it.layer(TestLayer)("git integration", (it) => {
           (yield* GitCore).checkoutBranch({ cwd: tmp, branch: "other" }),
         );
         expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") {
+          const error = result.failure;
+          expect(error).toBeInstanceOf(GitCheckoutDirtyWorktreeError);
+          if (error instanceof GitCheckoutDirtyWorktreeError) {
+            expect(error.branch).toBe("other");
+            expect(error.conflictingFiles).toContain("README.md");
+            expect(error.message).toContain("Uncommitted changes block checkout to other:");
+          }
+        }
+      }),
+    );
+  });
+
+  describe("stashAndCheckout", () => {
+    it.effect("stashes dirty changes, switches branches, and reapplies the stash", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+
+        yield* core.createBranch({ cwd: tmp, branch: "feature" });
+        yield* core.checkoutBranch({ cwd: tmp, branch: "feature" });
+        yield* writeTextFile(path.join(tmp, "feature.txt"), "feature content\n");
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "add feature file"]);
+        yield* core.checkoutBranch({ cwd: tmp, branch: initialBranch });
+
+        yield* writeTextFile(path.join(tmp, "README.md"), "dirty changes\n");
+
+        yield* core.stashAndCheckout({ cwd: tmp, branch: "feature" });
+
+        const branches = yield* core.listBranches({ cwd: tmp });
+        expect(branches.branches.find((branch) => branch.current)?.name).toBe("feature");
+        expect(yield* readTextFile(path.join(tmp, "README.md"))).toBe("dirty changes\n");
+        expect((yield* git(tmp, ["stash", "list"])).trim()).toBe("");
+      }),
+    );
+
+    it.effect("keeps the stash when reapplying dirty changes conflicts", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+
+        yield* core.createBranch({ cwd: tmp, branch: "conflicting" });
+        yield* core.checkoutBranch({ cwd: tmp, branch: "conflicting" });
+        yield* writeTextFile(path.join(tmp, "README.md"), "conflicting content\n");
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "conflicting change"]);
+        yield* core.checkoutBranch({ cwd: tmp, branch: initialBranch });
+
+        yield* writeTextFile(path.join(tmp, "README.md"), "local edits that will conflict\n");
+
+        const result = yield* Effect.result(
+          core.stashAndCheckout({ cwd: tmp, branch: "conflicting" }),
+        );
+
+        expect(result._tag).toBe("Failure");
+        expect((yield* git(tmp, ["stash", "list"]))).toContain(
+          "dpcode: stash before switching to conflicting",
+        );
+      }),
+    );
+  });
+
+  describe("stashDrop", () => {
+    it.effect("reads the top stash details", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        const core = yield* GitCore;
+        const { initialBranch } = yield* initRepoWithCommit(tmp);
+
+        yield* writeTextFile(path.join(tmp, "README.md"), "stashed changes\n");
+        yield* writeTextFile(path.join(tmp, "new-file.txt"), "new file\n");
+        yield* git(tmp, ["stash", "push", "-u", "-m", "test stash"]);
+
+        const info = yield* core.stashInfo({ cwd: tmp });
+
+        expect(info.cwd).toBe(tmp);
+        expect(info.branch).toBe(initialBranch);
+        expect(info.stashRef).toBe("stash@{0}");
+        expect(info.message).toContain("test stash");
+        expect(info.files).toContain("README.md");
+        expect(info.files).toContain("new-file.txt");
+      }),
+    );
+
+    it.effect("drops the top stash entry", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        const core = yield* GitCore;
+        yield* initRepoWithCommit(tmp);
+
+        yield* writeTextFile(path.join(tmp, "README.md"), "stashed changes\n");
+        yield* git(tmp, ["stash", "push", "-m", "test stash"]);
+        expect(yield* git(tmp, ["stash", "list"])).toContain("test stash");
+
+        yield* core.stashDrop({ cwd: tmp });
+
+        expect((yield* git(tmp, ["stash", "list"])).trim()).toBe("");
+      }),
+    );
+  });
+
+  describe("removeIndexLock", () => {
+    it.effect("removes the repository index lock path reported by git", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        const core = yield* GitCore;
+        yield* initRepoWithCommit(tmp);
+
+        const lockPath = path.join(tmp, ".git", "index.lock");
+        yield* writeTextFile(lockPath, "");
+        expect(existsSync(lockPath)).toBe(true);
+
+        yield* core.removeIndexLock({ cwd: tmp });
+
+        expect(existsSync(lockPath)).toBe(false);
       }),
     );
   });

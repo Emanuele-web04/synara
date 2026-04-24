@@ -18,10 +18,15 @@ import type {
   GitPullResult,
   GitReadWorkingTreeDiffInput,
   GitReadWorkingTreeDiffResult,
+  GitRemoveIndexLockInput,
   GitRemoveWorktreeInput,
   GitResolvePullRequestResult,
   GitRunStackedActionInput,
   GitRunStackedActionResult,
+  GitStashAndCheckoutInput,
+  GitStashDropInput,
+  GitStashInfoInput,
+  GitStashInfoResult,
   GitStatusInput,
   GitStatusResult,
   GitSummarizeDiffInput,
@@ -309,6 +314,10 @@ export interface NativeApi {
     removeWorktree: (input: GitRemoveWorktreeInput) => Promise<void>;
     createBranch: (input: GitCreateBranchInput) => Promise<void>;
     checkout: (input: GitCheckoutInput) => Promise<void>;
+    stashAndCheckout: (input: GitStashAndCheckoutInput) => Promise<void>;
+    stashDrop: (input: GitStashDropInput) => Promise<void>;
+    stashInfo: (input: GitStashInfoInput) => Promise<GitStashInfoResult>;
+    removeIndexLock: (input: GitRemoveIndexLockInput) => Promise<void>;
     init: (input: GitInitInput) => Promise<void>;
     handoffThread: (input: GitHandoffThreadInput) => Promise<GitHandoffThreadResult>;
     resolvePullRequest: (input: GitPullRequestRefInput) => Promise<GitResolvePullRequestResult>;

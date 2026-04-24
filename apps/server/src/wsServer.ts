@@ -2027,6 +2027,26 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         return yield* Effect.scoped(git.checkoutBranch(body));
       }
 
+      case WS_METHODS.gitStashAndCheckout: {
+        const body = stripRequestTag(request.body);
+        return yield* Effect.scoped(git.stashAndCheckout(body));
+      }
+
+      case WS_METHODS.gitStashDrop: {
+        const body = stripRequestTag(request.body);
+        return yield* git.stashDrop(body);
+      }
+
+      case WS_METHODS.gitStashInfo: {
+        const body = stripRequestTag(request.body);
+        return yield* git.stashInfo(body);
+      }
+
+      case WS_METHODS.gitRemoveIndexLock: {
+        const body = stripRequestTag(request.body);
+        return yield* git.removeIndexLock(body);
+      }
+
       case WS_METHODS.gitInit: {
         const body = stripRequestTag(request.body);
         return yield* git.initRepo(body);

@@ -1,19 +1,22 @@
 "use client";
 
-import { Toast } from "@base-ui/react/toast";
+import { Toast, type ToastObject } from "@base-ui/react/toast";
 import { useEffect, useMemo, type CSSProperties } from "react";
 import { useParams, useSearch } from "@tanstack/react-router";
 import { ThreadId } from "@t3tools/contracts";
 import {
   CircleAlertIcon,
   CircleCheckIcon,
+  CheckIcon,
+  CopyIcon,
   InfoIcon,
   LoaderCircleIcon,
   TriangleAlertIcon,
 } from "~/lib/icons";
 
 import { cn } from "~/lib/utils";
-import { buttonVariants } from "~/components/ui/button";
+import { Button, buttonVariants } from "~/components/ui/button";
+import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { buildVisibleToastLayout, shouldHideCollapsedToastContent } from "./toast.logic";
 import { parseDiffRouteSearch } from "../../diffRouteSearch";
 import { selectSplitView, useSplitViewStore } from "../../splitViewStore";
@@ -24,6 +27,7 @@ import {
 
 type ThreadToastData = {
   allowCrossThreadVisibility?: boolean;
+  copyText?: string;
   threadId?: ThreadId | null;
   tooltipStyle?: boolean;
   dismissAfterVisibleMs?: number;
@@ -160,6 +164,47 @@ function ThreadToastVisibleAutoDismiss({
   return null;
 }
 
+function ToastActions({
+  actionProps,
+  copyText,
+}: {
+  actionProps: ToastObject<ThreadToastData>["actionProps"];
+  copyText: string | undefined;
+}) {
+  const { copyToClipboard, isCopied } = useCopyToClipboard();
+
+  if (!actionProps && !copyText) return null;
+
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+      {copyText && (
+        <Button
+          aria-label={isCopied ? "Copied error message" : "Copy error message"}
+          className="self-start"
+          onClick={() => {
+            copyToClipboard(copyText, undefined);
+          }}
+          size="xs"
+          title={isCopied ? "Copied error message" : "Copy error message"}
+          variant="outline"
+        >
+          {isCopied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
+          <span>{isCopied ? "Copied" : "Copy"}</span>
+        </Button>
+      )}
+      {actionProps && (
+        <Toast.Action
+          {...actionProps}
+          className={cn(buttonVariants({ size: "xs" }), "self-start", actionProps.className)}
+          data-slot="toast-action"
+        >
+          {actionProps.children}
+        </Toast.Action>
+      )}
+    </div>
+  );
+}
+
 function ToastProvider({ children, position = "top-right", ...props }: ToastProviderProps) {
   return (
     <Toast.Provider toastManager={toastManager} {...props}>
@@ -286,40 +331,31 @@ function Toasts({ position = "top-right" }: { position: ToastPosition }) {
               />
               <Toast.Content
                 className={cn(
-                  "pointer-events-auto flex items-center justify-between gap-1.5 overflow-hidden px-3.5 py-3 text-sm transition-opacity duration-250 data-expanded:opacity-100",
+                  "pointer-events-auto flex items-start gap-2 overflow-hidden px-3.5 py-3 text-sm transition-opacity duration-250 data-expanded:opacity-100",
                   hideCollapsedContent &&
                     "not-data-expanded:pointer-events-none not-data-expanded:opacity-0",
                 )}
               >
-                <div className="flex min-w-0 flex-1 gap-2">
-                  {Icon && (
-                    <div
-                      className="[&>svg]:h-lh [&>svg]:w-4 [&_svg]:pointer-events-none [&_svg]:shrink-0"
-                      data-slot="toast-icon"
-                    >
-                      <Icon className="in-data-[type=loading]:animate-spin in-data-[type=error]:text-destructive in-data-[type=info]:text-info in-data-[type=success]:text-success in-data-[type=warning]:text-warning in-data-[type=loading]:opacity-80" />
-                    </div>
-                  )}
-
-                  <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                    <Toast.Title
-                      className="min-w-0 break-words font-medium"
-                      data-slot="toast-title"
-                    />
-                    <Toast.Description
-                      className="min-w-0 break-words text-muted-foreground"
-                      data-slot="toast-description"
-                    />
-                  </div>
-                </div>
-                {toast.actionProps && (
-                  <Toast.Action
-                    className={cn(buttonVariants({ size: "xs" }), "shrink-0")}
-                    data-slot="toast-action"
+                {Icon && (
+                  <div
+                    className="[&>svg]:h-lh [&>svg]:w-4 [&_svg]:pointer-events-none [&_svg]:shrink-0"
+                    data-slot="toast-icon"
                   >
-                    {toast.actionProps.children}
-                  </Toast.Action>
+                    <Icon className="in-data-[type=loading]:animate-spin in-data-[type=error]:text-destructive in-data-[type=info]:text-info in-data-[type=success]:text-success in-data-[type=warning]:text-warning in-data-[type=loading]:opacity-80" />
+                  </div>
                 )}
+
+                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <Toast.Title
+                    className="min-w-0 break-words font-medium"
+                    data-slot="toast-title"
+                  />
+                  <Toast.Description
+                    className="min-w-0 break-words text-muted-foreground"
+                    data-slot="toast-description"
+                  />
+                  <ToastActions actionProps={toast.actionProps} copyText={toast.data?.copyText} />
+                </div>
               </Toast.Content>
             </Toast.Root>
           );
@@ -379,36 +415,30 @@ function AnchoredToasts() {
                       <Toast.Title data-slot="toast-title" />
                     </Toast.Content>
                   ) : (
-                    <Toast.Content className="pointer-events-auto flex items-center justify-between gap-1.5 overflow-hidden px-3.5 py-3 text-sm">
-                      <div className="flex min-w-0 flex-1 gap-2">
-                        {Icon && (
-                          <div
-                            className="[&>svg]:h-lh [&>svg]:w-4 [&_svg]:pointer-events-none [&_svg]:shrink-0"
-                            data-slot="toast-icon"
-                          >
-                            <Icon className="in-data-[type=loading]:animate-spin in-data-[type=error]:text-destructive in-data-[type=info]:text-info in-data-[type=success]:text-success in-data-[type=warning]:text-warning in-data-[type=loading]:opacity-80" />
-                          </div>
-                        )}
-
-                        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                          <Toast.Title
-                            className="min-w-0 break-words font-medium"
-                            data-slot="toast-title"
-                          />
-                          <Toast.Description
-                            className="min-w-0 break-words text-muted-foreground"
-                            data-slot="toast-description"
-                          />
-                        </div>
-                      </div>
-                      {toast.actionProps && (
-                        <Toast.Action
-                          className={cn(buttonVariants({ size: "xs" }), "shrink-0")}
-                          data-slot="toast-action"
+                    <Toast.Content className="pointer-events-auto flex items-start gap-2 overflow-hidden px-3.5 py-3 text-sm">
+                      {Icon && (
+                        <div
+                          className="[&>svg]:h-lh [&>svg]:w-4 [&_svg]:pointer-events-none [&_svg]:shrink-0"
+                          data-slot="toast-icon"
                         >
-                          {toast.actionProps.children}
-                        </Toast.Action>
+                          <Icon className="in-data-[type=loading]:animate-spin in-data-[type=error]:text-destructive in-data-[type=info]:text-info in-data-[type=success]:text-success in-data-[type=warning]:text-warning in-data-[type=loading]:opacity-80" />
+                        </div>
                       )}
+
+                      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                        <Toast.Title
+                          className="min-w-0 break-words font-medium"
+                          data-slot="toast-title"
+                        />
+                        <Toast.Description
+                          className="min-w-0 break-words text-muted-foreground"
+                          data-slot="toast-description"
+                        />
+                        <ToastActions
+                          actionProps={toast.actionProps}
+                          copyText={toast.data?.copyText}
+                        />
+                      </div>
                     </Toast.Content>
                   )}
                 </Toast.Root>

@@ -19,12 +19,17 @@ import type {
   GitListBranchesInput,
   GitListBranchesResult,
   GitPullResult,
+  GitRemoveIndexLockInput,
   GitRemoveWorktreeInput,
+  GitStashAndCheckoutInput,
+  GitStashDropInput,
+  GitStashInfoInput,
+  GitStashInfoResult,
   GitStatusInput,
   GitStatusResult,
 } from "@t3tools/contracts";
 
-import type { GitCommandError } from "../Errors.ts";
+import type { GitCheckoutDirtyWorktreeError, GitCommandError } from "../Errors.ts";
 
 export interface ExecuteGitInput {
   readonly operation: string;
@@ -276,7 +281,29 @@ export interface GitCoreShape {
    */
   readonly checkoutBranch: (
     input: GitCheckoutInput,
-  ) => Effect.Effect<void, GitCommandError, Scope.Scope>;
+  ) => Effect.Effect<void, GitCommandError | GitCheckoutDirtyWorktreeError, Scope.Scope>;
+
+  /**
+   * Stash local changes, checkout a branch, and re-apply the stash.
+   */
+  readonly stashAndCheckout: (
+    input: GitStashAndCheckoutInput,
+  ) => Effect.Effect<void, GitCommandError | GitCheckoutDirtyWorktreeError, Scope.Scope>;
+
+  /**
+   * Drop the latest stash entry.
+   */
+  readonly stashDrop: (input: GitStashDropInput) => Effect.Effect<void, GitCommandError>;
+
+  /**
+   * Read metadata for the latest stash entry.
+   */
+  readonly stashInfo: (input: GitStashInfoInput) => Effect.Effect<GitStashInfoResult, GitCommandError>;
+
+  /**
+   * Remove the repository index lock file after Git reports a stale lock.
+   */
+  readonly removeIndexLock: (input: GitRemoveIndexLockInput) => Effect.Effect<void, GitCommandError>;
 
   /**
    * Initialize a repository in the provided directory.

@@ -16,6 +16,23 @@ export class GitCommandError extends Schema.TaggedErrorClass<GitCommandError>()(
 }
 
 /**
+ * GitCheckoutDirtyWorktreeError - Checkout would overwrite local files.
+ */
+export class GitCheckoutDirtyWorktreeError extends Schema.TaggedErrorClass<GitCheckoutDirtyWorktreeError>()(
+  "GitCheckoutDirtyWorktreeError",
+  {
+    branch: Schema.String,
+    cwd: Schema.String,
+    conflictingFiles: Schema.Array(Schema.String),
+  },
+) {
+  override get message(): string {
+    const fileList = this.conflictingFiles.map((file) => `  - ${file}`).join("\n");
+    return `Uncommitted changes block checkout to ${this.branch}:\n${fileList}`;
+  }
+}
+
+/**
  * GitHubCliError - GitHub CLI execution or authentication failed.
  */
 export class GitHubCliError extends Schema.TaggedErrorClass<GitHubCliError>()("GitHubCliError", {
@@ -63,5 +80,6 @@ export class GitManagerError extends Schema.TaggedErrorClass<GitManagerError>()(
 export type GitManagerServiceError =
   | GitManagerError
   | GitCommandError
+  | GitCheckoutDirtyWorktreeError
   | GitHubCliError
   | TextGenerationError;

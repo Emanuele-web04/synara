@@ -1,8 +1,8 @@
 // Purpose: Branch/worktree picker for the chat toolbar.
 // Coordinates branch checkout/create actions and decorates rows with git metadata.
 // Depends on: git React Query helpers, native API mutations, and toolbar selection rules.
-import type { GitBranch, GitStatusResult } from "@t3tools/contracts";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import type { GitBranch, GitStashInfoResult, GitStatusResult, NativeApi } from "@t3tools/contracts";
+import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronDownIcon, PlusIcon } from "~/lib/icons";
 import { GoGitBranch } from "react-icons/go";
@@ -68,8 +68,240 @@ interface BranchToolbarBranchSelectorProps {
   onComposerFocusRequest?: () => void;
 }
 
+type StashDiscardDialogState = {
+  cwd: string;
+  error: string | null;
+  info: GitStashInfoResult | null;
+  loading: boolean;
+};
+
 function toBranchActionErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "An error occurred.";
+}
+
+const DIRTY_WORKTREE_ERROR_PATTERN =
+  /Uncommitted changes block checkout to ([^:\n]+):\s*\n((?:\s*-\s*.+(?:\n|$))+)/;
+const STASH_CONFLICT_PATTERN = /Stash could not be applied|Stash applied with merge conflicts/;
+const UNRESOLVED_INDEX_PATTERN = /you need to resolve your current index/i;
+const GIT_INDEX_LOCK_PATTERN =
+  /(?:Unable to create '([^']*\.git\/index\.lock)'|Another git process seems to be running|\.git\/index\.lock.*File exists)/i;
+const GIT_INDEX_WRITE_PATTERN = /could not write index/i;
+let activeBranchRecoveryToastId: ReturnType<typeof toastManager.add> | null = null;
+
+function closeActiveBranchRecoveryToast(): void {
+  if (!activeBranchRecoveryToastId) return;
+  toastManager.close(activeBranchRecoveryToastId);
+  activeBranchRecoveryToastId = null;
+}
+
+function addBranchRecoveryToast(input: Parameters<typeof toastManager.add>[0]) {
+  closeActiveBranchRecoveryToast();
+  activeBranchRecoveryToastId = toastManager.add(input);
+  return activeBranchRecoveryToastId;
+}
+
+function parseDirtyWorktreeError(error: unknown): { branch: string; files: string[] } | null {
+  const detail = error instanceof Error ? error.message : String(error);
+  const match = DIRTY_WORKTREE_ERROR_PATTERN.exec(detail);
+  if (!match?.[1] || !match[2]) return null;
+  const files = match[2]
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*-\s*/, "").trim())
+    .filter((line) => line.length > 0);
+  if (files.length === 0) return null;
+  return {
+    branch: match[1].trim(),
+    files,
+  };
+}
+
+function isStashConflictError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return STASH_CONFLICT_PATTERN.test(message);
+}
+
+function isUnresolvedIndexError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return UNRESOLVED_INDEX_PATTERN.test(message);
+}
+
+function parseGitIndexLockError(error: unknown): { lockPath: string | null } | null {
+  const message = error instanceof Error ? error.message : String(error);
+  const match = GIT_INDEX_LOCK_PATTERN.exec(message);
+  if (!match) return null;
+  return {
+    lockPath: match[1]?.trim() || null,
+  };
+}
+
+function isGitIndexWriteError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return GIT_INDEX_WRITE_PATTERN.test(message);
+}
+
+function formatDirtyWorktreeDescription(files: string[]): string {
+  const basenames = files.map((file) => file.split("/").pop() ?? file);
+  if (basenames.length <= 3) {
+    return `${basenames.join(", ")} ${basenames.length === 1 ? "has" : "have"} uncommitted changes. Commit or stash before switching.`;
+  }
+  const remaining = basenames.length - 2;
+  return `${basenames.slice(0, 2).join(", ")} and ${remaining} other file${remaining === 1 ? "" : "s"} have uncommitted changes. Commit or stash before switching.`;
+}
+
+function handleCheckoutError(
+  error: unknown,
+  input: {
+    api: NativeApi;
+    branch: string;
+    cwd: string;
+    fallbackTitle: string;
+    onSuccess: () => void;
+    queryClient: QueryClient;
+    runBranchAction: (action: () => Promise<void>) => void;
+    onRequestDiscardStash: (input: { cwd: string }) => void;
+  },
+): void {
+  const retryStashAndCheckout = async (): Promise<void> => {
+    await input.api.git.stashAndCheckout({ cwd: input.cwd, branch: input.branch });
+    await invalidateGitQueries(input.queryClient);
+    input.onSuccess();
+  };
+
+  const addGitIndexLockToast = (error: unknown): void => {
+    const lockError = parseGitIndexLockError(error);
+    if (!lockError) return;
+    const lockFileLabel = lockError.lockPath
+      ? lockError.lockPath.split("/").slice(-2).join("/")
+      : ".git/index.lock";
+    addBranchRecoveryToast({
+      type: "error",
+      title: "Git index is locked.",
+      description: `${lockFileLabel} already exists. Close any running Git operation, remove the stale lock file if none is running, then retry.`,
+      data: { copyText: toBranchActionErrorMessage(error) },
+      actionProps: {
+        children: "Remove lock & retry",
+        onClick: () => {
+          input.runBranchAction(async () => {
+            try {
+              await input.api.git.removeIndexLock({ cwd: input.cwd });
+              await retryStashAndCheckout();
+            } catch (retryError) {
+              handleCheckoutError(retryError, input);
+            }
+          });
+        },
+      },
+    });
+  };
+
+  const addGitIndexWriteToast = (error: unknown): void => {
+    addBranchRecoveryToast({
+      type: "error",
+      title: "Git index could not be written.",
+      description:
+        "Git could not update the repository index. Retry after any current Git operation finishes.",
+      data: { copyText: toBranchActionErrorMessage(error) },
+      actionProps: {
+        children: "Retry stash & switch",
+        onClick: () => {
+          input.runBranchAction(async () => {
+            try {
+              await retryStashAndCheckout();
+            } catch (retryError) {
+              handleCheckoutError(retryError, input);
+            }
+          });
+        },
+      },
+    });
+  };
+
+  const dirtyWorktree = parseDirtyWorktreeError(error);
+  if (dirtyWorktree) {
+    const copyText = toBranchActionErrorMessage(error);
+    const dirtyToastId = addBranchRecoveryToast({
+      type: "warning",
+      title: "Uncommitted changes block checkout.",
+      description: formatDirtyWorktreeDescription(dirtyWorktree.files),
+      data: { copyText },
+      actionProps: {
+        children: "Stash & Switch",
+        onClick: () => {
+          closeActiveBranchRecoveryToast();
+          input.runBranchAction(async () => {
+            try {
+              await retryStashAndCheckout();
+            } catch (stashError) {
+              if (parseGitIndexLockError(stashError)) {
+                addGitIndexLockToast(stashError);
+                return;
+              }
+              if (isGitIndexWriteError(stashError)) {
+                addGitIndexWriteToast(stashError);
+                return;
+              }
+              if (isStashConflictError(stashError)) {
+                await invalidateGitQueries(input.queryClient);
+                input.onSuccess();
+                const stashConflictToastId = addBranchRecoveryToast({
+                  type: "warning",
+                  title: "Changes saved, but not reapplied.",
+                  description:
+                    "DP Code switched branches and kept your changes in a stash because they could not be restored onto this branch cleanly.",
+                  data: { copyText: toBranchActionErrorMessage(stashError) },
+                  actionProps: {
+                    children: "Discard stash",
+                    className:
+                      "border-destructive bg-destructive text-white shadow-destructive/24 hover:bg-destructive/90",
+                    onClick: () => {
+                      closeActiveBranchRecoveryToast();
+                      input.onRequestDiscardStash({ cwd: input.cwd });
+                    },
+                  },
+                });
+                return;
+              }
+              if (parseDirtyWorktreeError(stashError)) {
+                addBranchRecoveryToast({
+                  type: "error",
+                  title: "Cannot switch branches.",
+                  description:
+                    "Some conflicting files are not covered by git stash, such as ignored files. Move or remove them before switching.",
+                  data: { copyText: toBranchActionErrorMessage(stashError) },
+                });
+                return;
+              }
+              addBranchRecoveryToast({
+                type: "error",
+                title: "Failed to stash and switch.",
+                description: toBranchActionErrorMessage(stashError),
+                data: { copyText: toBranchActionErrorMessage(stashError) },
+              });
+            }
+          });
+        },
+      },
+    });
+    return;
+  }
+
+  if (parseGitIndexLockError(error)) {
+    addGitIndexLockToast(error);
+    return;
+  }
+  if (isGitIndexWriteError(error)) {
+    addGitIndexWriteToast(error);
+    return;
+  }
+
+  addBranchRecoveryToast({
+    type: "error",
+    title: isUnresolvedIndexError(error)
+      ? "Unresolved conflicts in the repository."
+      : input.fallbackTitle,
+    description: toBranchActionErrorMessage(error),
+    data: { copyText: toBranchActionErrorMessage(error) },
+  });
 }
 
 function getBranchTriggerLabel(input: {
@@ -180,6 +412,10 @@ export function BranchToolbarBranchSelector({
     (_currentBranch: string | null, optimisticBranch: string | null) => optimisticBranch,
   );
   const [isBranchActionPending, startBranchActionTransition] = useTransition();
+  const [stashDiscardDialog, setStashDiscardDialog] = useState<StashDiscardDialogState | null>(
+    null,
+  );
+  const [isDroppingStash, setIsDroppingStash] = useState(false);
   const shouldVirtualizeBranchList = filteredBranchPickerItems.length > 40;
 
   const runBranchAction = (action: () => Promise<void>) => {
@@ -194,6 +430,51 @@ export function BranchToolbarBranchSelector({
     setIsBranchMenuOpen(false);
     setIsCreateBranchDialogOpen(true);
   }, [canPrefillCreateBranch, hasExactBranchMatch, trimmedBranchQuery]);
+
+  const openStashDiscardDialog = useCallback((input: { cwd: string }) => {
+    const api = readNativeApi();
+    setStashDiscardDialog({
+      cwd: input.cwd,
+      error: api ? null : "Native API is unavailable.",
+      info: null,
+      loading: Boolean(api),
+    });
+    if (!api) return;
+    void api.git.stashInfo({ cwd: input.cwd }).then(
+      (info) => {
+        setStashDiscardDialog((current) =>
+          current?.cwd === input.cwd ? { ...current, error: null, info, loading: false } : current,
+        );
+      },
+      (error) => {
+        setStashDiscardDialog((current) =>
+          current?.cwd === input.cwd
+            ? {
+                ...current,
+                error: toBranchActionErrorMessage(error),
+                info: null,
+                loading: false,
+              }
+            : current,
+        );
+      },
+    );
+  }, []);
+
+  const discardStashFromDialog = useCallback(() => {
+    const dialog = stashDiscardDialog;
+    const api = readNativeApi();
+    if (!dialog || !api || isDroppingStash) return;
+    setIsDroppingStash(true);
+    runBranchAction(async () => {
+      try {
+        await api.git.stashDrop({ cwd: dialog.cwd });
+        setStashDiscardDialog(null);
+      } finally {
+        setIsDroppingStash(false);
+      }
+    });
+  }, [isDroppingStash, runBranchAction, stashDiscardDialog]);
 
   const selectBranch = (branch: GitBranch) => {
     const api = readNativeApi();
@@ -237,10 +518,21 @@ export function BranchToolbarBranchSelector({
         await api.git.checkout({ cwd: selectionTarget.checkoutCwd, branch: branch.name });
         await invalidateGitQueries(queryClient);
       } catch (error) {
-        toastManager.add({
-          type: "error",
-          title: "Failed to checkout branch.",
-          description: toBranchActionErrorMessage(error),
+        handleCheckoutError(error, {
+          api,
+          branch: branch.name,
+          cwd: selectionTarget.checkoutCwd,
+          fallbackTitle: "Failed to checkout branch.",
+          onSuccess: () => {
+            setOptimisticBranch(selectedBranchName);
+            onSetThreadWorkspace({
+              branch: selectedBranchName,
+              worktreePath: selectionTarget.nextWorktreePath,
+            });
+          },
+          queryClient,
+          runBranchAction,
+          onRequestDiscardStash: openStashDiscardDialog,
         });
         return;
       }
@@ -277,10 +569,23 @@ export function BranchToolbarBranchSelector({
         try {
           await api.git.checkout({ cwd: branchCwd, branch: name });
         } catch (error) {
-          toastManager.add({
-            type: "error",
-            title: "Failed to checkout branch.",
-            description: toBranchActionErrorMessage(error),
+          handleCheckoutError(error, {
+            api,
+            branch: name,
+            cwd: branchCwd,
+            fallbackTitle: "Failed to checkout branch.",
+            onSuccess: () => {
+              setOptimisticBranch(name);
+              onSetThreadWorkspace({
+                branch: name,
+                worktreePath: activeWorktreePath,
+              });
+              setBranchQuery("");
+              setCreateBranchName("");
+            },
+            queryClient,
+            runBranchAction,
+            onRequestDiscardStash: openStashDiscardDialog,
           });
           return;
         }
@@ -611,6 +916,102 @@ export function BranchToolbarBranchSelector({
               </DialogFooter>
             </form>
           </DialogPanel>
+        </DialogPopup>
+      </Dialog>
+      <Dialog
+        open={stashDiscardDialog !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setStashDiscardDialog(null);
+            setIsDroppingStash(false);
+          }
+        }}
+      >
+        <DialogPopup className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Discard saved stash?</DialogTitle>
+            <DialogDescription>
+              This will permanently drop the stash entry that preserved your uncommitted changes.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogPanel className="space-y-4">
+            {stashDiscardDialog?.loading ? (
+              <p className="text-muted-foreground text-sm">Loading stash details...</p>
+            ) : stashDiscardDialog?.error ? (
+              <p className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-destructive text-sm">
+                {stashDiscardDialog.error}
+              </p>
+            ) : stashDiscardDialog?.info ? (
+              <>
+                <div className="grid gap-2 rounded-lg border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] p-3 text-sm">
+                  <div className="flex min-w-0 gap-2">
+                    <span className="w-20 shrink-0 text-muted-foreground">Branch</span>
+                    <span className="min-w-0 truncate font-medium">
+                      {stashDiscardDialog.info.branch ?? currentGitBranch ?? "Detached HEAD"}
+                    </span>
+                  </div>
+                  <div className="flex min-w-0 gap-2">
+                    <span className="w-20 shrink-0 text-muted-foreground">Worktree</span>
+                    <span className="min-w-0 truncate font-mono text-xs">
+                      {stashDiscardDialog.info.cwd}
+                    </span>
+                  </div>
+                  <div className="flex min-w-0 gap-2">
+                    <span className="w-20 shrink-0 text-muted-foreground">Stash</span>
+                    <span className="min-w-0 truncate font-mono text-xs">
+                      {stashDiscardDialog.info.stashRef}
+                    </span>
+                  </div>
+                  <div className="flex min-w-0 gap-2">
+                    <span className="w-20 shrink-0 text-muted-foreground">Name</span>
+                    <span className="min-w-0 truncate">{stashDiscardDialog.info.message}</span>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <p className="font-medium text-sm">
+                    Changed files ({stashDiscardDialog.info.files.length})
+                  </p>
+                  {stashDiscardDialog.info.files.length > 0 ? (
+                    <ul className="max-h-48 overflow-auto rounded-lg border border-[color:var(--color-border-light)] bg-[var(--color-background-control-opaque)] py-1">
+                      {stashDiscardDialog.info.files.map((file) => (
+                        <li
+                          className="truncate px-3 py-1 font-mono text-muted-foreground text-xs"
+                          key={file}
+                          title={file}
+                        >
+                          {file}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="rounded-lg border border-[color:var(--color-border-light)] px-3 py-2 text-muted-foreground text-sm">
+                      Git did not report changed file names for this stash.
+                    </p>
+                  )}
+                </div>
+              </>
+            ) : null}
+          </DialogPanel>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              type="button"
+              onClick={() => {
+                setStashDiscardDialog(null);
+                setIsDroppingStash(false);
+              }}
+            >
+              Keep stash
+            </Button>
+            <Button
+              variant="destructive"
+              type="button"
+              disabled={!stashDiscardDialog?.info || isDroppingStash}
+              onClick={discardStashFromDialog}
+            >
+              {isDroppingStash ? "Discarding..." : "Discard stash"}
+            </Button>
+          </DialogFooter>
         </DialogPopup>
       </Dialog>
     </Combobox>
