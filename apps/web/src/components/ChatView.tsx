@@ -273,6 +273,7 @@ import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./Compose
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { ChatHeader } from "./chat/ChatHeader";
 import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationControls";
+import { SidebarHeaderTrigger } from "./ui/sidebar";
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
 import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimeline.logic";
 import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";

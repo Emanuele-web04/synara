@@ -20,7 +20,7 @@ const PROPOSED_PLAN_BLOCK_REGEX = /<proposed_plan>\s*([\s\S]*?)\s*<\/proposed_pl
 
 export function withProviderPlanModePrompt(input: {
   readonly text: string;
-  readonly interactionMode?: "default" | "plan";
+  readonly interactionMode?: "default" | "plan" | undefined;
 }): string {
   if (input.interactionMode !== "plan") {
     return input.text;
