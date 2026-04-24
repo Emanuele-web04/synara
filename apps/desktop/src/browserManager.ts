@@ -253,6 +253,7 @@ export class DesktopBrowserManager {
   private window: BrowserWindow | null = null;
   private activeThreadId: ThreadId | null = null;
   private activeBounds: BrowserPanelBounds | null = null;
+  private activeBoundsThreadId: ThreadId | null = null;
   private attachedRuntimeKey: string | null = null;
   private attachedBoundsSignature: string | null = null;
   private readonly states = new Map<ThreadId, ThreadBrowserState>();
@@ -287,8 +288,11 @@ export class DesktopBrowserManager {
   setWindow(window: BrowserWindow | null): void {
     this.window = window;
     if (window) {
-      if (this.activeThreadId && this.activeBounds) {
-        this.attachActiveTab(this.activeThreadId, this.activeBounds);
+      const bounds = this.activeThreadId
+        ? this.getVisibleBoundsForThread(this.activeThreadId)
+        : null;
+      if (this.activeThreadId && bounds) {
+        this.attachActiveTab(this.activeThreadId, bounds);
       }
       return;
     }
@@ -325,6 +329,7 @@ export class DesktopBrowserManager {
     this.window = null;
     this.activeThreadId = null;
     this.activeBounds = null;
+    this.activeBoundsThreadId = null;
     this.attachedBoundsSignature = null;
     this.runtimeSyncFlushScheduled = false;
   }
@@ -338,7 +343,7 @@ export class DesktopBrowserManager {
   }
 
   getBrowserUseSnapshot(): BrowserUseSnapshot | null {
-    if (!this.activeThreadId) {
+    if (!this.activeThreadId || !this.getVisibleBoundsForThread(this.activeThreadId)) {
       return null;
     }
     const state = this.states.get(this.activeThreadId);
@@ -359,6 +364,7 @@ export class DesktopBrowserManager {
 
     if (
       this.activeBounds &&
+      this.activeBoundsThreadId === input.threadId &&
       (this.activeThreadId === null || this.activeThreadId === input.threadId)
     ) {
       this.activateThread(input.threadId, this.activeBounds);
@@ -378,6 +384,7 @@ export class DesktopBrowserManager {
       this.detachAttachedRuntime();
       this.activeThreadId = null;
     }
+    this.clearActiveBoundsForThread(input.threadId);
 
     this.destroyThreadRuntimes(input.threadId);
 
@@ -394,13 +401,14 @@ export class DesktopBrowserManager {
 
   hide(input: BrowserThreadInput): void {
     const state = this.states.get(input.threadId);
-    if (!state?.open) {
-      return;
-    }
-
     if (this.activeThreadId === input.threadId) {
       this.detachAttachedRuntime();
       this.activeThreadId = null;
+    }
+    this.clearActiveBoundsForThread(input.threadId);
+
+    if (!state?.open) {
+      return;
     }
 
     this.scheduleThreadSuspend(input.threadId);
@@ -417,7 +425,7 @@ export class DesktopBrowserManager {
     const nextBoundsSignature = browserBoundsSignature(nextBounds);
     const activeTabId = this.getActiveTab(state)?.id ?? null;
     const activeRuntimeKey = activeTabId ? buildRuntimeKey(input.threadId, activeTabId) : null;
-    this.activeBounds = nextBounds;
+    this.setActiveBounds(input.threadId, nextBounds);
 
     if (!state.open || nextBounds === null) {
       if (this.activeThreadId === input.threadId) {
@@ -471,8 +479,9 @@ export class DesktopBrowserManager {
       // thread-wide runtime sync from the old live page state.
       const runtime = this.ensureLiveRuntime(input.threadId, tab.id);
       this.clearSuspendTimer(input.threadId);
-      if (state.activeTabId === tab.id && this.activeBounds) {
-        this.attachRuntime(runtime, this.activeBounds);
+      const bounds = this.getVisibleBoundsForThread(input.threadId);
+      if (state.activeTabId === tab.id && bounds) {
+        this.attachRuntime(runtime, bounds);
       }
       void this.loadTab(input.threadId, tab.id, { force: true, runtime });
     }
@@ -520,10 +529,11 @@ export class DesktopBrowserManager {
 
     if (this.activeThreadId === input.threadId) {
       this.resumeThread(input.threadId);
-      if (state.activeTabId === tab.id && this.activeBounds) {
+      const bounds = this.getVisibleBoundsForThread(input.threadId);
+      if (state.activeTabId === tab.id && bounds) {
         this.ensureLiveRuntime(input.threadId, tab.id);
         void this.loadTab(input.threadId, tab.id, { force: true });
-        this.attachActiveTab(input.threadId, this.activeBounds);
+        this.attachActiveTab(input.threadId, bounds);
       }
     } else {
       tab.status = "suspended";
@@ -553,6 +563,7 @@ export class DesktopBrowserManager {
         this.detachAttachedRuntime();
         this.activeThreadId = null;
       }
+      this.clearActiveBoundsForThread(input.threadId);
       this.markThreadStateChanged(input.threadId);
       this.emitState(input.threadId);
       return this.snapshotThreadState(input.threadId, state);
@@ -562,8 +573,9 @@ export class DesktopBrowserManager {
       state.activeTabId = nextTabs[Math.max(0, nextTabs.length - 1)]?.id ?? null;
     }
 
-    if (this.activeThreadId === input.threadId && this.activeBounds) {
-      this.attachActiveTab(input.threadId, this.activeBounds);
+    const bounds = this.getVisibleBoundsForThread(input.threadId);
+    if (this.activeThreadId === input.threadId && bounds) {
+      this.attachActiveTab(input.threadId, bounds);
     }
 
     syncThreadLastError(state);
@@ -584,8 +596,9 @@ export class DesktopBrowserManager {
 
     if (this.activeThreadId === input.threadId) {
       this.resumeThread(input.threadId);
-      if (this.activeBounds) {
-        this.attachActiveTab(input.threadId, this.activeBounds);
+      const bounds = this.getVisibleBoundsForThread(input.threadId);
+      if (bounds) {
+        this.attachActiveTab(input.threadId, bounds);
       }
     }
 
@@ -604,8 +617,9 @@ export class DesktopBrowserManager {
 
     this.resumeThread(input.threadId);
     const runtime = this.ensureLiveRuntime(input.threadId, tab.id);
-    if (this.activeBounds) {
-      this.attachActiveTab(input.threadId, this.activeBounds);
+    const bounds = this.getVisibleBoundsForThread(input.threadId);
+    if (bounds) {
+      this.attachActiveTab(input.threadId, bounds);
     }
     runtime.view.webContents.openDevTools({ mode: "detach" });
   }
@@ -630,8 +644,9 @@ export class DesktopBrowserManager {
     const webContents = runtime.view.webContents;
     const expectedUrl = normalizeUrlInput(tab.lastCommittedUrl ?? tab.url);
     const currentUrl = webContents.getURL();
-    if (this.activeBounds) {
-      this.attachActiveTab(input.threadId, this.activeBounds);
+    const bounds = this.getVisibleBoundsForThread(input.threadId);
+    if (bounds) {
+      this.attachActiveTab(input.threadId, bounds);
     }
 
     if (tab.status === "suspended" || currentUrl.length === 0 || currentUrl !== expectedUrl) {
@@ -690,8 +705,9 @@ export class DesktopBrowserManager {
     this.resumeThread(input.threadId);
     const runtime = this.ensureLiveRuntime(input.threadId, tab.id);
     const webContents = runtime.view.webContents;
-    if (this.activeBounds) {
-      this.attachActiveTab(input.threadId, this.activeBounds);
+    const bounds = this.getVisibleBoundsForThread(input.threadId);
+    if (bounds) {
+      this.attachActiveTab(input.threadId, bounds);
     }
 
     if (tab.status === "suspended") {
@@ -726,7 +742,7 @@ export class DesktopBrowserManager {
 
     this.resumeThread(input.threadId);
     const runtime = this.ensureLiveRuntime(input.threadId, tab.id);
-    if (this.activeBounds) {
+    if (this.activeBounds && this.activeBoundsThreadId === input.threadId) {
       this.activateThread(input.threadId, this.activeBounds);
     }
 
@@ -770,8 +786,30 @@ export class DesktopBrowserManager {
 
     this.activeThreadId = threadId;
     this.activeBounds = bounds;
+    this.activeBoundsThreadId = threadId;
     this.resumeThread(threadId);
     this.attachActiveTab(threadId, bounds);
+  }
+
+  private setActiveBounds(threadId: ThreadId, bounds: BrowserPanelBounds | null): void {
+    if (!bounds) {
+      this.clearActiveBoundsForThread(threadId);
+      return;
+    }
+    this.activeBounds = bounds;
+    this.activeBoundsThreadId = threadId;
+  }
+
+  private clearActiveBoundsForThread(threadId: ThreadId): void {
+    if (this.activeBoundsThreadId !== threadId) {
+      return;
+    }
+    this.activeBounds = null;
+    this.activeBoundsThreadId = null;
+  }
+
+  private getVisibleBoundsForThread(threadId: ThreadId): BrowserPanelBounds | null {
+    return this.activeBoundsThreadId === threadId ? this.activeBounds : null;
   }
 
   private resumeThread(threadId: ThreadId): void {
@@ -1051,8 +1089,9 @@ export class DesktopBrowserManager {
           url,
           activate: true,
         });
-        if (this.activeThreadId === threadId && this.activeBounds) {
-          this.attachActiveTab(threadId, this.activeBounds);
+        const bounds = this.getVisibleBoundsForThread(threadId);
+        if (this.activeThreadId === threadId && bounds) {
+          this.attachActiveTab(threadId, bounds);
         }
         return { action: "deny" };
       }
@@ -1114,8 +1153,9 @@ export class DesktopBrowserManager {
         this.markThreadStateChanged(threadId);
         this.emitState(threadId);
       }
-      if (this.activeThreadId === threadId && this.activeBounds) {
-        this.attachActiveTab(threadId, this.activeBounds);
+      const bounds = this.getVisibleBoundsForThread(threadId);
+      if (this.activeThreadId === threadId && bounds) {
+        this.attachActiveTab(threadId, bounds);
       }
     });
 
