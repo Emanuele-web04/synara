@@ -25,6 +25,7 @@ import {
   useAppSettings,
 } from "../appSettings";
 import { APP_VERSION } from "../branding";
+import { SidebarHeaderNavigationControls } from "../components/SidebarHeaderNavigationControls";
 import { ClaudeAI, Gemini, OpenAI, OpenCodeIcon } from "../components/Icons";
 import { Button } from "../components/ui/button";
 import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
@@ -39,7 +40,7 @@ import {
 import { Switch } from "../components/ui/switch";
 import { toastManager } from "../components/ui/toast";
 import { ThemePackEditor } from "../components/ThemePackEditor";
-import { SidebarHeaderTrigger, SidebarInset } from "../components/ui/sidebar";
+import { SidebarInset } from "../components/ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { isElectron } from "../env";
@@ -2252,7 +2253,7 @@ function SettingsRouteView() {
               settings.sidebarSide === "right" && "pl-[90px]",
             )}
           >
-            <SidebarHeaderTrigger className="size-7 shrink-0" />
+            <SidebarHeaderNavigationControls />
             <span className="text-xs font-medium tracking-wide text-muted-foreground/70">
               Settings
             </span>

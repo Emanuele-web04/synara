@@ -110,6 +110,7 @@ import { quotePosixShellArgument } from "../lib/shellQuote";
 import { DEFAULT_THREAD_TERMINAL_ID, type SidebarThreadSummary, type Thread } from "../types";
 import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
 import { ClaudeAI, Gemini, OpenAI, OpenCodeIcon } from "./Icons";
+import { AppNavigationButtons } from "./AppNavigationButtons";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
 import { ThreadRunningSpinner } from "./ThreadRunningSpinner";
@@ -1134,6 +1135,7 @@ export default function Sidebar() {
   const [lastThreadRoute, setLastThreadRoute] = useState(
     () => readSidebarUiState().lastThreadRoute,
   );
+  const [optimisticActiveThreadId, setOptimisticActiveThreadId] = useState<ThreadId | null>(null);
   const [expandedSubagentParentIds, setExpandedSubagentParentIds] = useState<ReadonlySet<ThreadId>>(
     () => new Set(),
   );
@@ -1158,7 +1160,10 @@ export default function Sidebar() {
   // Keep every platform on the same explicit submit path so desktop picker
   // results do not depend on a separate immediate-add branch.
   const shouldShowProjectPathEntry = addingProject;
-  const activeSidebarThreadId = activeSplitView?.sourceThreadId ?? routeThreadId;
+  const routeActiveSidebarThreadId = activeSplitView?.sourceThreadId ?? routeThreadId;
+  const activeSidebarThreadId = optimisticActiveThreadId ?? routeActiveSidebarThreadId;
+  const visualActiveSidebarThreadId =
+    optimisticActiveThreadId ?? (!activeSplitView ? routeThreadId : null);
   const selectSidebarThreads = useMemo(() => createSidebarThreadSummariesSelector(), []);
   const selectSidebarDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
   const sidebarThreads = useStore(selectSidebarThreads);
@@ -1202,6 +1207,24 @@ export default function Sidebar() {
       }),
     [dismissedThreadStatusKeyByThreadId],
   );
+
+  useEffect(() => {
+    if (!optimisticActiveThreadId) {
+      return;
+    }
+    if (routeActiveSidebarThreadId === optimisticActiveThreadId) {
+      setOptimisticActiveThreadId(null);
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      setOptimisticActiveThreadId((current) =>
+        current === optimisticActiveThreadId ? null : current,
+      );
+    }, 1_500);
+    return () => window.clearTimeout(timeout);
+  }, [optimisticActiveThreadId, routeActiveSidebarThreadId]);
+
   const clearThreadNotification = useCallback(
     (threadId: ThreadId) => {
       const thread = sidebarThreadSummaryById[threadId];
@@ -2072,6 +2095,16 @@ export default function Sidebar() {
       };
     },
     [openRenameThreadDialog],
+  );
+
+  const primeThreadActivation = useCallback(
+    (event: ReactPointerEvent<HTMLElement>, threadId: ThreadId) => {
+      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+        return;
+      }
+      setOptimisticActiveThreadId(threadId);
+    },
+    [],
   );
 
   /**
@@ -3000,6 +3033,8 @@ export default function Sidebar() {
 
   const activateThread = useCallback(
     (threadId: ThreadId) => {
+      // Mark the row active immediately; route rendering can do heavier chat work after this.
+      setOptimisticActiveThreadId(threadId);
       if (selectedThreadIds.size > 0) {
         clearSelection();
       }
@@ -3032,6 +3067,7 @@ export default function Sidebar() {
       openTerminalThreadPage,
       selectedThreadIds.size,
       setSelectionAnchor,
+      setOptimisticActiveThreadId,
       splitViews,
       terminalStateByThreadId,
     ],
@@ -3786,7 +3822,7 @@ export default function Sidebar() {
     });
     const terminalCount = threadTerminalState.terminalIds.length;
     const isPendingArchiveConfirmation = pendingArchiveConfirmationThreadId === thread.id;
-    const isActive = !activeSplitView && routeThreadId === thread.id;
+    const isActive = visualActiveSidebarThreadId === thread.id;
     const projectLabel = resolvePinnedThreadProjectLabel(thread.projectId);
     const rightMetaChips = resolveThreadRowMetaChips({
       thread,
@@ -3816,6 +3852,7 @@ export default function Sidebar() {
               ? "bg-[var(--sidebar-accent-active)] text-[var(--sidebar-accent-foreground)]"
               : "text-foreground/72 hover:bg-[var(--sidebar-accent)]",
           )}
+          onPointerDown={(event) => primeThreadActivation(event, thread.id)}
           onClick={() => activateThread(thread.id)}
           onDoubleClick={(event) => {
             event.preventDefault();
@@ -3957,7 +3994,7 @@ export default function Sidebar() {
     const threadTerminalState = selectThreadTerminalState(terminalStateByThreadId, thread.id);
     const threadEntryPoint = threadTerminalState.entryPoint;
     const isPendingArchiveConfirmation = pendingArchiveConfirmationThreadId === thread.id;
-    const isActive = !activeSplitView && routeThreadId === thread.id;
+    const isActive = visualActiveSidebarThreadId === thread.id;
     const isPinned = pinnedThreadIdSet.has(thread.id);
     const isSelected = selectedThreadIds.has(thread.id);
     const isHighlighted = isActive || isSelected;
@@ -4072,6 +4109,7 @@ export default function Sidebar() {
               canToggleSubagents,
             })
           }
+          onPointerDown={(event) => primeThreadActivation(event, thread.id)}
           onDoubleClick={(event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -5148,10 +5186,13 @@ export default function Sidebar() {
           Version {APP_VERSION}
         </TooltipPopup>
       </Tooltip>
-      <SidebarTrigger
-        className="hidden size-7 shrink-0 text-muted-foreground/75 hover:text-foreground md:inline-flex ml-auto"
-        aria-label="Toggle thread sidebar"
-      />
+      <div className="ml-auto hidden shrink-0 items-center gap-0.5 md:flex">
+        <SidebarTrigger
+          className="size-7 shrink-0 text-muted-foreground/75 hover:text-foreground"
+          aria-label="Toggle thread sidebar"
+        />
+        <AppNavigationButtons className="ms-0" />
+      </div>
     </div>
   );
 

@@ -584,7 +584,6 @@ function SplitPaneSurface(props: {
       >
         {props.threadId ? (
           <ChatView
-            key={`${props.splitView.id}:${props.pane}:${props.threadId}`}
             threadId={props.threadId}
             paneScopeId={paneScopeId}
             surfaceMode="split"
@@ -1142,7 +1141,6 @@ function SingleChatSurface(props: {
       <div className="flex h-dvh min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
         <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground">
           <ChatView
-            key={props.threadId}
             threadId={props.threadId}
             panelState={panelState}
             onToggleDiffPanel={() =>
@@ -1179,7 +1177,6 @@ function SingleChatSurface(props: {
     <>
       <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground">
         <ChatView
-          key={props.threadId}
           threadId={props.threadId}
           panelState={panelState}
           onToggleDiffPanel={() =>

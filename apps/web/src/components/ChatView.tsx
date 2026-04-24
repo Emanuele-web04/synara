@@ -210,7 +210,6 @@ import {
   projectScriptIdFromCommand,
   setupProjectScript,
 } from "~/projectScripts";
-import { SidebarHeaderTrigger } from "./ui/sidebar";
 import { newCommandId, newMessageId, newProjectId, newThreadId } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import {
@@ -273,6 +272,7 @@ import {
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { ChatHeader } from "./chat/ChatHeader";
+import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationControls";
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
 import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimeline.logic";
 import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
@@ -6589,7 +6589,7 @@ export default function ChatView({
               settings.sidebarSide === "right" && "pl-[90px]",
             )}
           >
-            <SidebarHeaderTrigger className="size-7 shrink-0" />
+            <SidebarHeaderNavigationControls />
             <span className="text-xs text-muted-foreground/50">No active thread</span>
           </div>
         )}

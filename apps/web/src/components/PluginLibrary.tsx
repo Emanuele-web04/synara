@@ -55,7 +55,8 @@ import {
 } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "./ui/input-group";
-import { SidebarHeaderTrigger, SidebarInset } from "./ui/sidebar";
+import { SidebarInset } from "./ui/sidebar";
+import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationControls";
 import { Skeleton } from "./ui/skeleton";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -524,7 +525,7 @@ export function PluginLibrary() {
       <div className="flex h-full flex-col">
         {/* ── Top nav ───────────────────────────────────────────────────── */}
         <div className="flex shrink-0 items-center gap-3 border-b border-border px-4 sm:px-6">
-          <SidebarHeaderTrigger className="size-7 shrink-0" />
+          <SidebarHeaderNavigationControls />
           <div className="flex items-end gap-3">
             <TabButton
               label="Plugins"

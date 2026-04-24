@@ -23,9 +23,10 @@ import { Button } from "../ui/button";
 import { Badge } from "../ui/badge";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { SidebarHeaderNavigationControls } from "../SidebarHeaderNavigationControls";
 import ProjectScriptsControl, { type NewProjectScriptInput } from "../ProjectScriptsControl";
 import { Toggle } from "../ui/toggle";
-import { SidebarHeaderTrigger, useSidebar } from "../ui/sidebar";
+import { useSidebar } from "../ui/sidebar";
 import { isElectron } from "~/env";
 import { cn } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
@@ -178,7 +179,7 @@ export const ChatHeader = memo(function ChatHeader({
           !isMobile && state === "collapsed" ? "gap-4" : "gap-2 sm:gap-3",
         )}
       >
-        <SidebarHeaderTrigger className="size-7 shrink-0" />
+        <SidebarHeaderNavigationControls />
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <div className="flex min-w-0 flex-1 flex-col">
             {threadBreadcrumbs.length > 0 ? (
