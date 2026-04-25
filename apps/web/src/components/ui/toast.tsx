@@ -12,6 +12,7 @@ import {
   InfoIcon,
   LoaderCircleIcon,
   TriangleAlertIcon,
+  XIcon,
 } from "~/lib/icons";
 
 import { cn } from "~/lib/utils";
@@ -205,6 +206,19 @@ function ToastActions({
   );
 }
 
+function ToastCloseButton() {
+  return (
+    <Toast.Close
+      aria-label="Dismiss toast"
+      className="absolute top-2 right-2 inline-flex size-6 items-center justify-center rounded-md text-muted-foreground opacity-70 transition-colors hover:bg-muted hover:text-foreground hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      data-slot="toast-close"
+      title="Dismiss toast"
+    >
+      <XIcon className="size-3.5" />
+    </Toast.Close>
+  );
+}
+
 function ToastProvider({ children, position = "top-right", ...props }: ToastProviderProps) {
   return (
     <Toast.Provider toastManager={toastManager} {...props}>
@@ -331,7 +345,7 @@ function Toasts({ position = "top-right" }: { position: ToastPosition }) {
               />
               <Toast.Content
                 className={cn(
-                  "pointer-events-auto flex items-start gap-2 overflow-hidden px-3.5 py-3 text-sm transition-opacity duration-250 data-expanded:opacity-100",
+                  "pointer-events-auto relative flex items-start gap-2 overflow-hidden px-3.5 py-3 pr-10 text-sm transition-opacity duration-250 data-expanded:opacity-100",
                   hideCollapsedContent &&
                     "not-data-expanded:pointer-events-none not-data-expanded:opacity-0",
                 )}
@@ -356,6 +370,7 @@ function Toasts({ position = "top-right" }: { position: ToastPosition }) {
                   />
                   <ToastActions actionProps={toast.actionProps} copyText={toast.data?.copyText} />
                 </div>
+                <ToastCloseButton />
               </Toast.Content>
             </Toast.Root>
           );
@@ -415,7 +430,7 @@ function AnchoredToasts() {
                       <Toast.Title data-slot="toast-title" />
                     </Toast.Content>
                   ) : (
-                    <Toast.Content className="pointer-events-auto flex items-start gap-2 overflow-hidden px-3.5 py-3 text-sm">
+                    <Toast.Content className="pointer-events-auto relative flex items-start gap-2 overflow-hidden px-3.5 py-3 pr-10 text-sm">
                       {Icon && (
                         <div
                           className="[&>svg]:h-lh [&>svg]:w-4 [&_svg]:pointer-events-none [&_svg]:shrink-0"
@@ -439,6 +454,7 @@ function AnchoredToasts() {
                           copyText={toast.data?.copyText}
                         />
                       </div>
+                      <ToastCloseButton />
                     </Toast.Content>
                   )}
                 </Toast.Root>

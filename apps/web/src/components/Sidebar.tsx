@@ -6,6 +6,7 @@ import {
   ArrowLeftIcon,
   ChevronDownIcon,
   ChevronRightIcon,
+  FlagIcon,
   FolderIcon,
   GitPullRequestIcon,
   type LucideIcon,
@@ -72,6 +73,12 @@ import {
 import { isElectron } from "../env";
 import { APP_VERSION } from "../branding";
 import { showConfirmDialogFallback } from "../confirmDialogFallback";
+import {
+  FEATURE_FLAGS,
+  setFeatureFlagEnabled,
+  useFeatureFlags,
+  type ToggleFeatureFlagId,
+} from "../featureFlags";
 import { isMacPlatform, newCommandId, newProjectId, newThreadId, randomUUID } from "../lib/utils";
 import { persistAppStateNow, useStore } from "../store";
 import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
@@ -146,7 +153,18 @@ import {
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
 import { Kbd, KbdGroup } from "./ui/kbd";
-import { Menu, MenuGroup, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
+import {
+  Menu,
+  MenuCheckboxItem,
+  MenuGroup,
+  MenuGroupLabel,
+  MenuItem,
+  MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSeparator,
+  MenuTrigger,
+} from "./ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import {
   SidebarContent,
@@ -1070,6 +1088,7 @@ export default function Sidebar() {
   const isOnSettings = useLocation({ select: (loc) => loc.pathname === "/settings" });
   const isOnWorkspace = pathname.startsWith("/workspace");
   const { settings: appSettings, updateSettings } = useAppSettings();
+  const featureFlags = useFeatureFlags();
   const { handleNewThread } = useHandleNewThread();
   const { handleNewChat } = useHandleNewChat();
   const { createThreadHandoff } = useThreadHandoff();
@@ -5166,6 +5185,32 @@ export default function Sidebar() {
     setAllProjectsExpanded(true);
   }, [allProjectsExpanded, collapseProjectsExcept, focusedProjectId, setAllProjectsExpanded]);
 
+  const triggerActionFailedToasts = useCallback(() => {
+    const copyText =
+      "Error: Git command failed in /Users/ibrahime/Documents/Projects/dpcode\n\n" +
+      "Command: git push upstream main\n" +
+      "fatal: unable to access upstream remote for local debug toast preview";
+    const toastData = {
+      copyText,
+      ...(featureFlags["persist-action-failed-debug-toasts"]
+        ? {}
+        : { dismissAfterVisibleMs: 30_000 }),
+    };
+
+    toastManager.add({
+      type: "error",
+      title: "Action failed",
+      description: "Error: Git command failed in /Users/ibrahime/Documents/Projects/dpcode",
+      data: toastData,
+    });
+    toastManager.add({
+      type: "error",
+      title: "Action failed",
+      description: "Error: Git command failed in /Users/ibrahime/Documents/Projects/dpcode",
+      data: toastData,
+    });
+  }, [featureFlags]);
+
   const brandWordmark = (
     <Tooltip>
       <TooltipTrigger
@@ -5214,9 +5259,7 @@ export default function Sidebar() {
     </div>
   );
 
-  const sidebarBrand = (
-    <div className="flex min-w-0 px-4 pt-3 pb-2">{brandWordmark}</div>
-  );
+  const sidebarBrand = <div className="flex min-w-0 px-4 pt-3 pb-2">{brandWordmark}</div>;
 
   return (
     <>
@@ -5802,50 +5845,58 @@ export default function Sidebar() {
         ) : null}
         <SidebarMenu>
           <SidebarMenuItem>
-            <div className="flex items-center gap-2">
-              {!isOnSettings && (
-                <SidebarMenuButton
-                  size="default"
-                  className="h-8 flex-1 gap-2.5 rounded-lg px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 hover:bg-[var(--sidebar-accent)]"
-                  onClick={() => void navigate({ to: "/settings" })}
-                >
-                  <SettingsIcon className="size-[15px]" />
-                  <span>Settings</span>
-                </SidebarMenuButton>
-              )}
-              {showDesktopUpdateButton ? (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <button
-                        type="button"
-                        aria-label={desktopUpdateTooltip}
-                        aria-disabled={desktopUpdateButtonDisabled || undefined}
-                        disabled={desktopUpdateButtonDisabled}
-                        className={desktopUpdateRowButtonClasses}
-                        onClick={handleDesktopUpdateButtonClick}
-                      >
-                        <span className="flex min-w-0 flex-1 flex-col leading-tight">
-                          <span className="truncate text-[10px] font-semibold">
-                            {desktopUpdateButtonPresentation.label}
+            <div className="flex flex-col gap-1">
+              {!isOnSettings ? (
+                <FeatureFlagsMenu
+                  values={featureFlags}
+                  onTriggerActionFailedToasts={triggerActionFailedToasts}
+                />
+              ) : null}
+              <div className="flex items-center gap-2">
+                {!isOnSettings && (
+                  <SidebarMenuButton
+                    size="default"
+                    className="h-8 flex-1 gap-2.5 rounded-lg px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 hover:bg-[var(--sidebar-accent)]"
+                    onClick={() => void navigate({ to: "/settings" })}
+                  >
+                    <SettingsIcon className="size-[15px]" />
+                    <span>Settings</span>
+                  </SidebarMenuButton>
+                )}
+                {showDesktopUpdateButton ? (
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <button
+                          type="button"
+                          aria-label={desktopUpdateTooltip}
+                          aria-disabled={desktopUpdateButtonDisabled || undefined}
+                          disabled={desktopUpdateButtonDisabled}
+                          className={desktopUpdateRowButtonClasses}
+                          onClick={handleDesktopUpdateButtonClick}
+                        >
+                          <span className="flex min-w-0 flex-1 flex-col leading-tight">
+                            <span className="truncate text-[10px] font-semibold">
+                              {desktopUpdateButtonPresentation.label}
+                            </span>
+                            {desktopUpdateButtonPresentation.secondaryLabel ? (
+                              <span className="truncate text-[9px] text-white/80">
+                                {desktopUpdateButtonPresentation.secondaryLabel}
+                              </span>
+                            ) : null}
                           </span>
-                          {desktopUpdateButtonPresentation.secondaryLabel ? (
-                            <span className="truncate text-[9px] text-white/80">
-                              {desktopUpdateButtonPresentation.secondaryLabel}
+                          {desktopUpdateButtonPresentation.progressPercent !== null ? (
+                            <span className="rounded-full bg-white/20 px-1.5 py-0.5 text-[9px] font-semibold tabular-nums text-white/95">
+                              {desktopUpdateButtonPresentation.progressPercent}%
                             </span>
                           ) : null}
-                        </span>
-                        {desktopUpdateButtonPresentation.progressPercent !== null ? (
-                          <span className="rounded-full bg-white/20 px-1.5 py-0.5 text-[9px] font-semibold tabular-nums text-white/95">
-                            {desktopUpdateButtonPresentation.progressPercent}%
-                          </span>
-                        ) : null}
-                      </button>
-                    }
-                  />
-                  <TooltipPopup side="top">{desktopUpdateTooltip}</TooltipPopup>
-                </Tooltip>
-              ) : null}
+                        </button>
+                      }
+                    />
+                    <TooltipPopup side="top">{desktopUpdateTooltip}</TooltipPopup>
+                  </Tooltip>
+                ) : null}
+              </div>
             </div>
           </SidebarMenuItem>
         </SidebarMenu>
@@ -5898,6 +5949,76 @@ export default function Sidebar() {
         />
       ) : null}
     </>
+  );
+}
+
+function FeatureFlagsMenu({
+  values,
+  onTriggerActionFailedToasts,
+}: {
+  values: Record<ToggleFeatureFlagId, boolean>;
+  onTriggerActionFailedToasts: () => void;
+}) {
+  return (
+    <Menu>
+      <MenuTrigger
+        render={
+          <SidebarMenuButton
+            size="default"
+            className="h-8 flex-1 gap-2.5 rounded-lg px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 hover:bg-[var(--sidebar-accent)]"
+          />
+        }
+      >
+        <FlagIcon className="size-[15px]" />
+        <span>Feature flags</span>
+      </MenuTrigger>
+      <MenuPopup
+        align="start"
+        side="top"
+        className="min-w-72 rounded-lg border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] shadow-lg"
+      >
+        <MenuGroup>
+          <MenuGroupLabel>Local feature flags</MenuGroupLabel>
+          {FEATURE_FLAGS.map((flag) => {
+            if (flag.kind === "action") {
+              return (
+                <MenuItem key={flag.id} onClick={onTriggerActionFailedToasts} className="py-2">
+                  <div className="flex min-w-0 flex-col gap-0.5">
+                    <span>{flag.label}</span>
+                    <span className="text-[length:var(--app-font-size-ui-xs,10px)] leading-4 text-muted-foreground/70">
+                      {flag.description}
+                    </span>
+                  </div>
+                </MenuItem>
+              );
+            }
+
+            return (
+              <MenuCheckboxItem
+                key={flag.id}
+                checked={values[flag.id]}
+                onCheckedChange={(checked) => {
+                  setFeatureFlagEnabled(flag.id, Boolean(checked));
+                }}
+                variant="switch"
+                className="py-2"
+              >
+                <div className="flex min-w-0 flex-col gap-0.5">
+                  <span>{flag.label}</span>
+                  <span className="text-[length:var(--app-font-size-ui-xs,10px)] leading-4 text-muted-foreground/70">
+                    {flag.description}
+                  </span>
+                </div>
+              </MenuCheckboxItem>
+            );
+          })}
+        </MenuGroup>
+        <MenuSeparator />
+        <div className="px-2 py-1.5 text-[length:var(--app-font-size-ui-xs,10px)] leading-4 text-muted-foreground/58">
+          Stored only in this browser profile.
+        </div>
+      </MenuPopup>
+    </Menu>
   );
 }
 
