@@ -1162,8 +1162,6 @@ function SettingsRouteView() {
                   variant={variant}
                   isActive={resolvedTheme === variant}
                   mode={theme}
-                  uiFontOverrideActive={settings.uiFontFamily.trim().length > 0}
-                  codeFontOverrideActive={settings.chatCodeFontFamily.trim().length > 0}
                 />
               ),
             )}

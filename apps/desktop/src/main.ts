@@ -284,6 +284,19 @@ function cancelBackendReadinessWait(): void {
   backendReadinessAbortController = null;
 }
 
+async function reserveBackendEndpoint(reason: string): Promise<void> {
+  backendPort = await Effect.service(NetService).pipe(
+    Effect.flatMap((net) => net.reserveLoopbackPort()),
+    Effect.provide(NetService.layer),
+    Effect.runPromise,
+  );
+  backendHttpUrl = `http://127.0.0.1:${backendPort}`;
+  backendWsUrl = `ws://127.0.0.1:${backendPort}/?token=${encodeURIComponent(backendAuthToken)}`;
+  process.env.DPCODE_DESKTOP_WS_URL = backendWsUrl;
+  process.env.T3CODE_DESKTOP_WS_URL = backendWsUrl;
+  writeDesktopLogHeader(`${reason} resolved backend endpoint port=${backendPort}`);
+}
+
 async function waitForBackendWindowReady(baseUrl: string): Promise<"listening" | "http"> {
   return await waitForBackendStartupReady({
     listeningPromise: backendListeningDetector?.promise ?? null,
@@ -1360,8 +1373,27 @@ function scheduleBackendRestart(reason: string): void {
 
   restartTimer = setTimeout(() => {
     restartTimer = null;
-    startBackend();
+    void restartBackendAfterCrash(reason);
   }, delayMs);
+}
+
+async function restartBackendAfterCrash(reason: string): Promise<void> {
+  if (isQuitting || backendProcess) {
+    return;
+  }
+
+  cancelBackendReadinessWait();
+  try {
+    await reserveBackendEndpoint("backend restart");
+  } catch (error) {
+    scheduleBackendRestart(
+      `failed to reserve restart port after ${reason}: ${formatErrorMessage(error)}`,
+    );
+    return;
+  }
+
+  startBackend();
+  ensureInitialBackendWindowOpen(backendHttpUrl);
 }
 
 function startBackend(): void {
@@ -1889,18 +1921,8 @@ if (!hasSingleInstanceLock) {
 
 async function bootstrap(): Promise<void> {
   writeDesktopLogHeader("bootstrap start");
-  backendPort = await Effect.service(NetService).pipe(
-    Effect.flatMap((net) => net.reserveLoopbackPort()),
-    Effect.provide(NetService.layer),
-    Effect.runPromise,
-  );
-  writeDesktopLogHeader(`reserved backend port via NetService port=${backendPort}`);
   backendAuthToken = Crypto.randomBytes(24).toString("hex");
-  backendHttpUrl = `http://127.0.0.1:${backendPort}`;
-  backendWsUrl = `ws://127.0.0.1:${backendPort}/?token=${encodeURIComponent(backendAuthToken)}`;
-  process.env.DPCODE_DESKTOP_WS_URL = backendWsUrl;
-  process.env.T3CODE_DESKTOP_WS_URL = backendWsUrl;
-  writeDesktopLogHeader(`bootstrap resolved websocket url=${backendWsUrl}`);
+  await reserveBackendEndpoint("bootstrap");
 
   registerIpcHandlers();
   writeDesktopLogHeader("bootstrap ipc handlers registered");

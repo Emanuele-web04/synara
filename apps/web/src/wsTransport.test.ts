@@ -18,7 +18,10 @@ class MockWebSocket {
   readonly sent: string[] = [];
   private readonly listeners = new Map<WsEventType, Set<WsListener>>();
 
-  constructor(_url: string) {
+  readonly url: string;
+
+  constructor(url: string) {
+    this.url = url;
     sockets.push(this);
   }
 
@@ -66,6 +69,7 @@ function getSocket(): MockWebSocket {
 }
 
 beforeEach(() => {
+  vi.useRealTimers();
   sockets.length = 0;
 
   Object.defineProperty(globalThis, "window", {
@@ -82,6 +86,7 @@ beforeEach(() => {
 afterEach(() => {
   globalThis.WebSocket = originalWebSocket;
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe("WsTransport", () => {
@@ -251,6 +256,30 @@ describe("WsTransport", () => {
     socket.close();
 
     await expect(requestPromise).rejects.toThrow("WebSocket connection closed.");
+    transport.dispose();
+  });
+
+  it("refreshes the desktop bridge websocket URL before reconnecting", async () => {
+    vi.useFakeTimers();
+    const getWsUrl = vi
+      .fn()
+      .mockReturnValueOnce("ws://127.0.0.1:53036/?token=old")
+      .mockReturnValue("ws://127.0.0.1:53037/?token=new");
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        location: { hostname: "localhost", port: "3020" },
+        desktopBridge: { getWsUrl },
+      },
+    });
+
+    const transport = new WsTransport();
+    expect(sockets[0]?.url).toBe("ws://127.0.0.1:53036/?token=old");
+
+    sockets[0]?.close();
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(sockets[1]?.url).toBe("ws://127.0.0.1:53037/?token=new");
     transport.dispose();
   });
 });

@@ -85,7 +85,10 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
   );
 
   useEffect(() => {
-    setWorkspaceHomeDir(serverConfigQuery.data?.homeDir);
+    if (!serverConfigQuery.data?.homeDir) {
+      return;
+    }
+    setWorkspaceHomeDir(serverConfigQuery.data.homeDir);
   }, [serverConfigQuery.data?.homeDir, setWorkspaceHomeDir]);
 
   useEffect(() => {

@@ -61,22 +61,30 @@ export class WsTransport {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
   private state: TransportState = "connecting";
-  private readonly url: string;
+  private url: string;
+  private readonly explicitUrl: string | null;
 
   constructor(url?: string) {
+    this.explicitUrl = url ?? null;
+    this.url = "";
+    this.connect();
+  }
+
+  private resolveUrl(): string {
+    if (this.explicitUrl) {
+      return this.explicitUrl;
+    }
+
     const bridgeUrl = window.desktopBridge?.getWsUrl();
     const envUrl = import.meta.env.VITE_WS_URL as string | undefined;
     if (window.desktopBridge && (!bridgeUrl || bridgeUrl.length === 0)) {
       console.warn("Desktop bridge did not provide a WebSocket URL; falling back to web env URL.");
     }
-    this.url =
-      url ??
-      (bridgeUrl && bridgeUrl.length > 0
-        ? bridgeUrl
-        : envUrl && envUrl.length > 0
-          ? envUrl
-          : `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname}:${window.location.port}`);
-    this.connect();
+    return bridgeUrl && bridgeUrl.length > 0
+      ? bridgeUrl
+      : envUrl && envUrl.length > 0
+        ? envUrl
+        : `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname}:${window.location.port}`;
   }
 
   async request<T = unknown>(
@@ -178,6 +186,9 @@ export class WsTransport {
     }
 
     this.state = this.reconnectAttempt > 0 ? "reconnecting" : "connecting";
+    // Desktop may restart the backend on a fresh port after startup failure.
+    // Refresh the bridge URL on every connection attempt so reconnects can follow it.
+    this.url = this.resolveUrl();
     const ws = new WebSocket(this.url);
 
     ws.addEventListener("open", () => {

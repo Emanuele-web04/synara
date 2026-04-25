@@ -34,10 +34,8 @@ import {
 } from "../theme/theme.logic";
 
 type ThemePackEditorProps = {
-  codeFontOverrideActive?: boolean;
   isActive?: boolean;
   mode?: ThemeMode;
-  uiFontOverrideActive?: boolean;
   variant: ThemeVariant;
 };
 
@@ -45,11 +43,9 @@ const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 const COLOR_PICKER_COMMIT_DELAY_MS = 220;
 
 export function ThemePackEditor({
-  codeFontOverrideActive = false,
   variant,
   isActive = false,
   mode = "system",
-  uiFontOverrideActive = false,
 }: ThemePackEditorProps) {
   const {
     darkTheme,
@@ -225,11 +221,6 @@ export function ThemePackEditor({
               ariaLabel={`${titleLabel} UI font`}
               onChange={(next) => updateThemeFonts(variant, { ui: next.length > 0 ? next : null })}
             />
-            {uiFontOverrideActive ? (
-              <span className="max-w-44 text-right text-[10px] leading-tight text-muted-foreground/70">
-                Custom UI font below overrides this.
-              </span>
-            ) : null}
           </div>
         </ThemeRow>
 
@@ -244,11 +235,6 @@ export function ThemePackEditor({
                 updateThemeFonts(variant, { code: next.length > 0 ? next : null })
               }
             />
-            {codeFontOverrideActive ? (
-              <span className="max-w-44 text-right text-[10px] leading-tight text-muted-foreground/70">
-                Custom code font below overrides this.
-              </span>
-            ) : null}
           </div>
         </ThemeRow>
 
