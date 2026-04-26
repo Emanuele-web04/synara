@@ -176,7 +176,7 @@ interface CodexAccountSnapshot {
 }
 
 interface CodexVoiceTranscriptionAuthContext {
-  readonly authMethod: "chatgpt" | "chatgptAuthTokens";
+  readonly authMethod: "apikey" | "chatgpt" | "chatgptAuthTokens";
   readonly token: string;
 }
 
@@ -1888,18 +1888,36 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     // Voice transcription should always resolve auth from a fresh discovery context
     // instead of reusing a possibly stale thread-bound session token.
     const context = await this.getOrCreateDiscoverySession(input.cwd?.trim() || process.cwd());
-    const response = await this.sendRequest<Record<string, unknown>>(context, "getAuthStatus", {
-      includeToken: true,
-      refreshToken: input.refreshToken,
-    });
-    const authMethod = this.readString(response, "authMethod");
-    const token = this.readString(response, "authToken");
+    const readAuthStatus = async (refreshToken: boolean) => {
+      const response = await this.sendRequest<Record<string, unknown>>(context, "getAuthStatus", {
+        includeToken: true,
+        refreshToken,
+      });
+      const authMethod = this.readString(response, "authMethod");
+      return {
+        authMethod,
+        token:
+          this.readString(response, "authToken") ??
+          (authMethod === "apikey" ? this.readString(process.env.OPENAI_API_KEY) : null),
+      };
+    };
+
+    let { authMethod, token } = await readAuthStatus(input.refreshToken);
+    if (!token && !input.refreshToken) {
+      ({ authMethod, token } = await readAuthStatus(true));
+    }
 
     if (!token) {
-      throw new Error("No ChatGPT session token is available. Sign in to ChatGPT in Codex.");
+      throw new Error(
+        authMethod === "apikey"
+          ? "No OpenAI API key is available for voice transcription."
+          : "No ChatGPT session token is available. Sign in to ChatGPT in Codex.",
+      );
     }
-    if (authMethod !== "chatgpt" && authMethod !== "chatgptAuthTokens") {
-      throw new Error("Voice transcription requires a ChatGPT-authenticated Codex session.");
+    if (authMethod !== "apikey" && authMethod !== "chatgpt" && authMethod !== "chatgptAuthTokens") {
+      throw new Error(
+        "Voice transcription requires a ChatGPT-authenticated Codex session or OpenAI API key.",
+      );
     }
 
     return {
