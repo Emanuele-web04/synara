@@ -26,6 +26,7 @@ import {
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
   type TerminalContextDraft,
 } from "~/lib/terminalContext";
+import { formatComposerMentionToken } from "~/lib/composerMentions";
 import { basenameOfPath } from "~/file-icons";
 import {
   COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME,
@@ -178,7 +179,7 @@ export class ComposerMentionNode extends TextNode {
 
   constructor(path: string, kind: MentionChipKind = "path", key?: NodeKey) {
     const normalizedPath = path.startsWith("@") ? path.slice(1) : path;
-    super(`@${normalizedPath}`, key);
+    super(formatComposerMentionToken(normalizedPath), key);
     this.__path = normalizedPath;
     this.__kind = kind;
   }
