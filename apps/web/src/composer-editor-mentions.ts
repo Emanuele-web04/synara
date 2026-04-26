@@ -8,6 +8,7 @@ import {
   extractComposerMentionPath,
 } from "./lib/composerMentions";
 import { resolveAgentAlias } from "@t3tools/contracts";
+import type { ProviderMentionReference } from "@t3tools/contracts";
 
 export type ComposerPromptSegment =
   | {
@@ -17,6 +18,7 @@ export type ComposerPromptSegment =
   | {
       type: "mention";
       path: string;
+      kind?: "path" | "plugin";
     }
   | {
       type: "skill";
@@ -156,6 +158,7 @@ function splitTextIntoPromptSegments(
   text: string,
   options: {
     includeTrailingTokenAtEnd: boolean;
+    mentionReferences?: ReadonlyArray<ProviderMentionReference>;
   },
 ): ComposerPromptSegment[] {
   const segments: ComposerPromptSegment[] = [];
@@ -180,7 +183,17 @@ function splitTextIntoPromptSegments(
         color: match.color,
       });
     } else if (match.kind === "mention") {
-      segments.push({ type: "mention", path: match.value });
+      const isPluginMention =
+        options.mentionReferences?.some(
+          (mention) =>
+            mention.name.toLowerCase() === match.value.toLowerCase() ||
+            mention.path.toLowerCase() === match.value.toLowerCase(),
+        ) ?? false;
+      segments.push(
+        isPluginMention
+          ? { type: "mention", path: match.value, kind: "plugin" }
+          : { type: "mention", path: match.value },
+      );
     } else {
       const skillSegment: ComposerPromptSegment = match.skillPrefix
         ? { type: "skill", name: match.value, prefix: match.skillPrefix }
@@ -207,6 +220,7 @@ export function splitPromptIntoDisplaySegments(prompt: string): ComposerPromptSe
 export function splitPromptIntoComposerSegments(
   prompt: string,
   terminalContexts: ReadonlyArray<TerminalContextDraft> = [],
+  mentionReferences: ReadonlyArray<ProviderMentionReference> = [],
 ): ComposerPromptSegment[] {
   if (!prompt) {
     return [];
@@ -225,6 +239,7 @@ export function splitPromptIntoComposerSegments(
       segments.push(
         ...splitTextIntoPromptSegments(prompt.slice(textCursor, index), {
           includeTrailingTokenAtEnd: false,
+          mentionReferences,
         }),
       );
     }
@@ -240,6 +255,7 @@ export function splitPromptIntoComposerSegments(
     segments.push(
       ...splitTextIntoPromptSegments(prompt.slice(textCursor), {
         includeTrailingTokenAtEnd: false,
+        mentionReferences,
       }),
     );
   }

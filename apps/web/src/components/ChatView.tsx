@@ -6866,6 +6866,7 @@ export default function ChatView({
                     ? composerTerminalContexts
                     : []
                 }
+                mentionReferences={selectedComposerMentions}
                 onRemoveTerminalContext={removeComposerTerminalContextFromDraft}
                 onChange={onPromptChange}
                 onCommandKeyDown={onComposerCommandKey}
@@ -7579,6 +7580,7 @@ export default function ChatView({
                                 ? composerTerminalContexts
                                 : []
                             }
+                            mentionReferences={selectedComposerMentions}
                             onRemoveTerminalContext={removeComposerTerminalContextFromDraft}
                             onChange={onPromptChange}
                             onCommandKeyDown={onComposerCommandKey}

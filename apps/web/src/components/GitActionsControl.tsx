@@ -119,7 +119,6 @@ interface RunGitActionWithToastInput {
 interface GitPickerMenuItem {
   id: "push" | "pr" | "sync" | "commit";
   label: string;
-  description: string;
   disabled: boolean;
   disabledReason: string | null;
   icon: GitActionIconName | "sync";
@@ -255,14 +254,11 @@ function GitQuickActionIcon({ quickAction }: { quickAction: GitQuickAction }) {
 
 function GitPickerMenuRow({ item }: { item: GitPickerMenuItem }) {
   return (
-    <MenuItem className="items-center" disabled={item.disabled} onClick={item.onSelect}>
+    <MenuItem disabled={item.disabled} onClick={item.onSelect}>
       <span className="shrink-0 [&>svg]:size-3.5">
         <GitPickerItemIcon icon={item.icon} />
       </span>
-      <span className="flex flex-col gap-0.5">
-        <span>{item.label}</span>
-        <span className="text-[10px] text-muted-foreground">{item.description}</span>
-      </span>
+      <span>{item.label}</span>
     </MenuItem>
   );
 }
@@ -995,8 +991,6 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
     [openCommitDialog, openExistingPr],
   );
 
-  // Present git workflows as descriptive picker rows so the header menu reads
-  // more like a task launcher than a terse list of low-context verbs.
   const gitPickerMenuItems = useMemo<GitPickerMenuItem[]>(() => {
     const items: GitPickerMenuItem[] = [];
     const commitMenuItem = gitActionMenuItems.find((item) => item.id === "commit");
@@ -1007,7 +1001,6 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
       items.push({
         id: "commit",
         label: commitMenuItem.label,
-        description: "Review files and save a local commit",
         disabled: commitMenuItem.disabled,
         disabledReason: getMenuActionDisabledReason({
           item: commitMenuItem,
@@ -1024,9 +1017,6 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
       items.push({
         id: "push",
         label: pushMenuItem.label,
-        description: isDefaultBranch
-          ? "Commit local changes if needed, then push to the current branch"
-          : "Push local commits to the current branch",
         disabled: pushMenuItem.disabled,
         disabledReason: getMenuActionDisabledReason({
           item: pushMenuItem,
@@ -1043,10 +1033,6 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
       items.push({
         id: "pr",
         label: prMenuItem.label,
-        description:
-          prMenuItem.kind === "open_pr"
-            ? "Open the existing PR for this branch"
-            : "Create PR from current branch",
         disabled: prMenuItem.disabled,
         disabledReason: getMenuActionDisabledReason({
           item: prMenuItem,
@@ -1064,7 +1050,6 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
     gitActionMenuItems,
     gitStatusForActions,
     hasOriginRemote,
-    isDefaultBranch,
     isGitActionRunning,
     openDialogForMenuItem,
   ]);
@@ -1189,10 +1174,11 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
             </MenuTrigger>
             <MenuPopup
               align="end"
-              className="w-64 rounded-lg border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] shadow-lg"
+              side="bottom"
+              className="w-50 rounded-lg border-[color:var(--color-border)] bg-[var(--composer-surface)] shadow-lg"
             >
               <MenuGroup>
-                <MenuGroupLabel>Push & Deploy</MenuGroupLabel>
+                <MenuGroupLabel>Git actions</MenuGroupLabel>
                 {gitPickerMenuItems.map((item) => {
                   const menuRow = <GitPickerMenuRow item={item} />;
                   if (item.disabled && item.disabledReason) {

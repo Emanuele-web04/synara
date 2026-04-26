@@ -9,7 +9,7 @@
 import { memo } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { getFileIconUrlForEntry, inferEntryKindFromPath } from "~/file-icons";
-import { FileIcon } from "~/lib/icons";
+import { FileIcon, PlugIcon } from "~/lib/icons";
 import { COMPOSER_INLINE_MENTION_CHIP_ICON_CLASS_NAME } from "../composerInlineChip";
 import { FolderClosed } from "../FolderClosed";
 import { FileEntryIcon } from "./FileEntryIcon";
@@ -20,6 +20,11 @@ const FOLDER_CLOSED_ICON_SVG = renderToStaticMarkup(
 const FILE_ICON_SVG = renderToStaticMarkup(
   <FileIcon aria-hidden="true" className={COMPOSER_INLINE_MENTION_CHIP_ICON_CLASS_NAME} />,
 );
+const PLUG_ICON_SVG = renderToStaticMarkup(
+  <PlugIcon aria-hidden="true" className={COMPOSER_INLINE_MENTION_CHIP_ICON_CLASS_NAME} />,
+);
+
+export type MentionChipKind = "path" | "plugin";
 
 function createStaticIconSpan(svg: string): HTMLSpanElement {
   const span = document.createElement("span");
@@ -32,7 +37,11 @@ function createStaticIconSpan(svg: string): HTMLSpanElement {
 export const MentionChipIcon = memo(function MentionChipIcon(props: {
   path: string;
   theme: "light" | "dark";
+  kind?: MentionChipKind;
 }) {
+  if (props.kind === "plugin" || props.path.startsWith("plugin://")) {
+    return <PlugIcon className={COMPOSER_INLINE_MENTION_CHIP_ICON_CLASS_NAME} />;
+  }
   const kind = inferEntryKindFromPath(props.path);
   if (kind === "directory") {
     return <FolderClosed className={COMPOSER_INLINE_MENTION_CHIP_ICON_CLASS_NAME} />;
@@ -49,7 +58,14 @@ export const MentionChipIcon = memo(function MentionChipIcon(props: {
   );
 });
 
-export function createMentionChipIconElement(path: string, theme: "light" | "dark"): HTMLElement {
+export function createMentionChipIconElement(
+  path: string,
+  theme: "light" | "dark",
+  kind: MentionChipKind = "path",
+): HTMLElement {
+  if (kind === "plugin" || path.startsWith("plugin://")) {
+    return createStaticIconSpan(PLUG_ICON_SVG);
+  }
   if (inferEntryKindFromPath(path) === "directory") {
     return createStaticIconSpan(FOLDER_CLOSED_ICON_SVG);
   }

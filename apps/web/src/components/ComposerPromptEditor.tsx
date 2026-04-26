@@ -55,6 +55,7 @@ import {
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
   type TerminalContextDraft,
 } from "~/lib/terminalContext";
+import type { ProviderMentionReference } from "@t3tools/contracts";
 import { cn } from "~/lib/utils";
 import {
   ComposerMentionNode,
@@ -95,6 +96,10 @@ function terminalContextSignature(contexts: ReadonlyArray<TerminalContextDraft>)
       ].join("\u001f"),
     )
     .join("\u001e");
+}
+
+function mentionReferencesSignature(mentions: ReadonlyArray<ProviderMentionReference>): string {
+  return mentions.map((mention) => `${mention.name}\u0000${mention.path}`).join("\u0001");
 }
 
 function clampExpandedCursor(value: string, cursor: number): number {
@@ -417,16 +422,17 @@ function $appendTextWithLineBreaks(parent: ElementNode, text: string): void {
 function $setComposerEditorPrompt(
   prompt: string,
   terminalContexts: ReadonlyArray<TerminalContextDraft>,
+  mentionReferences: ReadonlyArray<ProviderMentionReference> = [],
 ): void {
   const root = $getRoot();
   root.clear();
   const paragraph = $createParagraphNode();
   root.append(paragraph);
 
-  const segments = splitPromptIntoComposerSegments(prompt, terminalContexts);
+  const segments = splitPromptIntoComposerSegments(prompt, terminalContexts, mentionReferences);
   for (const segment of segments) {
     if (segment.type === "mention") {
-      paragraph.append($createComposerMentionNode(segment.path));
+      paragraph.append($createComposerMentionNode(segment.path, segment.kind));
       continue;
     }
     if (segment.type === "skill") {
@@ -474,6 +480,7 @@ interface ComposerPromptEditorProps {
   value: string;
   cursor: number;
   terminalContexts: ReadonlyArray<TerminalContextDraft>;
+  mentionReferences?: ReadonlyArray<ProviderMentionReference>;
   disabled: boolean;
   placeholder: string;
   className?: string;
@@ -724,6 +731,7 @@ function ComposerPromptEditorInner({
   value,
   cursor,
   terminalContexts,
+  mentionReferences = [],
   disabled,
   placeholder,
   className,
@@ -738,6 +746,8 @@ function ComposerPromptEditorInner({
   const initialCursor = clampCollapsedComposerCursor(value, cursor);
   const terminalContextsSignature = terminalContextSignature(terminalContexts);
   const terminalContextsSignatureRef = useRef(terminalContextsSignature);
+  const mentionsSignature = mentionReferencesSignature(mentionReferences);
+  const mentionsSignatureRef = useRef(mentionsSignature);
   const snapshotRef = useRef({
     value,
     cursor: initialCursor,
@@ -762,10 +772,12 @@ function ComposerPromptEditorInner({
     const normalizedCursor = clampCollapsedComposerCursor(value, cursor);
     const previousSnapshot = snapshotRef.current;
     const contextsChanged = terminalContextsSignatureRef.current !== terminalContextsSignature;
+    const mentionsChanged = mentionsSignatureRef.current !== mentionsSignature;
     if (
       previousSnapshot.value === value &&
       previousSnapshot.cursor === normalizedCursor &&
-      !contextsChanged
+      !contextsChanged &&
+      !mentionsChanged
     ) {
       return;
     }
@@ -777,18 +789,20 @@ function ComposerPromptEditorInner({
       terminalContextIds: terminalContexts.map((context) => context.id),
     };
     terminalContextsSignatureRef.current = terminalContextsSignature;
+    mentionsSignatureRef.current = mentionsSignature;
 
     const rootElement = editor.getRootElement();
     const isFocused = Boolean(rootElement && document.activeElement === rootElement);
-    if (previousSnapshot.value === value && !contextsChanged && !isFocused) {
+    if (previousSnapshot.value === value && !contextsChanged && !mentionsChanged && !isFocused) {
       return;
     }
 
     isApplyingControlledUpdateRef.current = true;
     editor.update(() => {
-      const shouldRewriteEditorState = previousSnapshot.value !== value || contextsChanged;
+      const shouldRewriteEditorState =
+        previousSnapshot.value !== value || contextsChanged || mentionsChanged;
       if (shouldRewriteEditorState) {
-        $setComposerEditorPrompt(value, terminalContexts);
+        $setComposerEditorPrompt(value, terminalContexts, mentionReferences);
       }
       if (shouldRewriteEditorState || isFocused) {
         $setSelectionAtComposerOffset(normalizedCursor);
@@ -797,7 +811,15 @@ function ComposerPromptEditorInner({
     queueMicrotask(() => {
       isApplyingControlledUpdateRef.current = false;
     });
-  }, [cursor, editor, terminalContexts, terminalContextsSignature, value]);
+  }, [
+    cursor,
+    editor,
+    mentionReferences,
+    mentionsSignature,
+    terminalContexts,
+    terminalContextsSignature,
+    value,
+  ]);
 
   const focusAt = useCallback(
     (nextCursor: number) => {
@@ -972,6 +994,7 @@ export const ComposerPromptEditor = forwardRef<
     value,
     cursor,
     terminalContexts,
+    mentionReferences,
     disabled,
     placeholder,
     className,
@@ -984,6 +1007,7 @@ export const ComposerPromptEditor = forwardRef<
 ) {
   const initialValueRef = useRef(value);
   const initialTerminalContextsRef = useRef(terminalContexts);
+  const initialMentionReferencesRef = useRef(mentionReferences ?? []);
   const initialConfig = useMemo<InitialConfigType>(
     () => ({
       namespace: "t3tools-composer-editor",
@@ -995,7 +1019,11 @@ export const ComposerPromptEditor = forwardRef<
         ComposerAgentMentionNode,
       ],
       editorState: () => {
-        $setComposerEditorPrompt(initialValueRef.current, initialTerminalContextsRef.current);
+        $setComposerEditorPrompt(
+          initialValueRef.current,
+          initialTerminalContextsRef.current,
+          initialMentionReferencesRef.current,
+        );
       },
       onError: (error) => {
         throw error;
@@ -1010,6 +1038,7 @@ export const ComposerPromptEditor = forwardRef<
         value={value}
         cursor={cursor}
         terminalContexts={terminalContexts}
+        mentionReferences={mentionReferences}
         disabled={disabled}
         placeholder={placeholder}
         onRemoveTerminalContext={onRemoveTerminalContext}

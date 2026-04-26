@@ -1155,16 +1155,14 @@ function SettingsRouteView() {
             {(resolvedTheme === "dark"
               ? (["dark", "light"] as const)
               : (["light", "dark"] as const)
-            ).map(
-              (variant) => (
-                <ThemePackEditor
-                  key={variant}
-                  variant={variant}
-                  isActive={resolvedTheme === variant}
-                  mode={theme}
-                />
-              ),
-            )}
+            ).map((variant) => (
+              <ThemePackEditor
+                key={variant}
+                variant={variant}
+                isActive={resolvedTheme === variant}
+                mode={theme}
+              />
+            ))}
           </div>
 
           <SettingsRow

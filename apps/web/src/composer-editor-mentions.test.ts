@@ -15,6 +15,20 @@ describe("splitPromptIntoComposerSegments", () => {
     ]);
   });
 
+  it("marks selected provider mention references as plugin mentions", () => {
+    expect(
+      splitPromptIntoComposerSegments(
+        "Use @browser please",
+        [],
+        [{ name: "browser", path: "plugin://browser@openai-bundled" }],
+      ),
+    ).toEqual([
+      { type: "text", text: "Use " },
+      { type: "mention", path: "browser", kind: "plugin" },
+      { type: "text", text: " please" },
+    ]);
+  });
+
   it("does not convert an incomplete trailing mention token", () => {
     expect(splitPromptIntoComposerSegments("Inspect @AGENTS.md")).toEqual([
       { type: "text", text: "Inspect @AGENTS.md" },

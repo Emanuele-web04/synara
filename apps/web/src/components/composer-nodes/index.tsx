@@ -38,12 +38,13 @@ import {
   formatComposerSkillChipLabel,
 } from "../composerInlineChip";
 import { ComposerPendingTerminalContextChip } from "../chat/ComposerPendingTerminalContexts";
-import { createMentionChipIconElement } from "../chat/MentionChipIcon";
+import { createMentionChipIconElement, type MentionChipKind } from "../chat/MentionChipIcon";
 
 // ── Serialized Types ──────────────────────────────────────────────────
 
 export type SerializedComposerMentionNode = Spread<
   {
+    kind?: MentionChipKind;
     path: string;
     type: "composer-mention";
     version: 1;
@@ -85,12 +86,16 @@ function resolvedThemeFromDocument(): "light" | "dark" {
   return document.documentElement.classList.contains("dark") ? "dark" : "light";
 }
 
-function renderMentionChipDom(container: HTMLElement, pathValue: string): void {
+function renderMentionChipDom(
+  container: HTMLElement,
+  pathValue: string,
+  kind: MentionChipKind,
+): void {
   container.textContent = "";
   container.style.setProperty("user-select", "none");
   container.style.setProperty("-webkit-user-select", "none");
 
-  const icon = createMentionChipIconElement(pathValue, resolvedThemeFromDocument());
+  const icon = createMentionChipIconElement(pathValue, resolvedThemeFromDocument(), kind);
 
   const label = document.createElement("span");
   label.className = COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME;
@@ -156,6 +161,7 @@ function renderAgentMentionChipDom(container: HTMLElement, alias: string, color:
 // ── ComposerMentionNode ───────────────────────────────────────────────
 
 export class ComposerMentionNode extends TextNode {
+  __kind: MentionChipKind;
   __path: string;
 
   static override getType(): string {
@@ -163,22 +169,24 @@ export class ComposerMentionNode extends TextNode {
   }
 
   static override clone(node: ComposerMentionNode): ComposerMentionNode {
-    return new ComposerMentionNode(node.__path, node.__key);
+    return new ComposerMentionNode(node.__path, node.__kind, node.__key);
   }
 
   static override importJSON(serializedNode: SerializedComposerMentionNode): ComposerMentionNode {
-    return $createComposerMentionNode(serializedNode.path);
+    return $createComposerMentionNode(serializedNode.path, serializedNode.kind);
   }
 
-  constructor(path: string, key?: NodeKey) {
+  constructor(path: string, kind: MentionChipKind = "path", key?: NodeKey) {
     const normalizedPath = path.startsWith("@") ? path.slice(1) : path;
     super(`@${normalizedPath}`, key);
     this.__path = normalizedPath;
+    this.__kind = kind;
   }
 
   override exportJSON(): SerializedComposerMentionNode {
     return {
       ...super.exportJSON(),
+      kind: this.__kind,
       path: this.__path,
       type: "composer-mention",
       version: 1,
@@ -190,7 +198,7 @@ export class ComposerMentionNode extends TextNode {
     dom.className = COMPOSER_INLINE_MENTION_CHIP_CLASS_NAME;
     dom.contentEditable = "false";
     dom.setAttribute("spellcheck", "false");
-    renderMentionChipDom(dom, this.__path);
+    renderMentionChipDom(dom, this.__path, this.__kind);
     return dom;
   }
 
@@ -200,8 +208,12 @@ export class ComposerMentionNode extends TextNode {
     _config: EditorConfig,
   ): boolean {
     dom.contentEditable = "false";
-    if (prevNode.__text !== this.__text || prevNode.__path !== this.__path) {
-      renderMentionChipDom(dom, this.__path);
+    if (
+      prevNode.__text !== this.__text ||
+      prevNode.__path !== this.__path ||
+      prevNode.__kind !== this.__kind
+    ) {
+      renderMentionChipDom(dom, this.__path, this.__kind);
     }
     return false;
   }
@@ -223,8 +235,11 @@ export class ComposerMentionNode extends TextNode {
   }
 }
 
-export function $createComposerMentionNode(path: string): ComposerMentionNode {
-  return $applyNodeReplacement(new ComposerMentionNode(path));
+export function $createComposerMentionNode(
+  path: string,
+  kind: MentionChipKind = "path",
+): ComposerMentionNode {
+  return $applyNodeReplacement(new ComposerMentionNode(path, kind));
 }
 
 // ── ComposerSkillNode ─────────────────────────────────────────────────
