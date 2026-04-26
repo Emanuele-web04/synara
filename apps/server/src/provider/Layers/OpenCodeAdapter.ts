@@ -10,6 +10,7 @@ import {
   type ProviderSession,
   RuntimeItemId,
   RuntimeRequestId,
+  type ThreadTokenUsageSnapshot,
   ThreadId,
   type ToolLifecycleItemType,
   TurnId,
@@ -18,6 +19,7 @@ import {
 import { Cause, Effect, Exit, Layer, Queue, Ref, Scope, Stream } from "effect";
 import type {
   Agent,
+  AssistantMessage,
   OpencodeClient,
   Part,
   PermissionRequest,
@@ -82,6 +84,10 @@ interface OpenCodeSessionContext {
   readonly emittedTextByPartId: Map<string, string>;
   readonly completedAssistantPartIds: Set<string>;
   readonly turns: Array<OpenCodeTurnSnapshot>;
+  readonly modelContextLimitBySlug: Map<string, number>;
+  lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
+  lastEmittedTokenUsageKey: string | undefined;
+  latestTurnCostUsd: number | undefined;
   activeTurnId: TurnId | undefined;
   activeInteractionMode: "default" | "plan" | undefined;
   activeAgent: string | undefined;
@@ -452,6 +458,7 @@ function clearActiveTurnState(context: OpenCodeSessionContext): void {
   context.activeInteractionMode = undefined;
   context.activeAgent = undefined;
   context.activeVariant = undefined;
+  context.latestTurnCostUsd = undefined;
 }
 
 function extractResumeSessionId(resumeCursor: unknown): string | undefined {
@@ -488,6 +495,10 @@ type OpenCodeModelInventory = {
           readonly capabilities?: {
             readonly reasoning?: boolean;
           };
+          readonly limit?: {
+            readonly context?: number;
+            readonly output?: number;
+          };
           readonly variants?: Record<string, Record<string, unknown>>;
         }
       >;
@@ -500,6 +511,150 @@ type OpenCodeModelInventory = {
 
 type OpenCodeInventoryProvider = OpenCodeModelInventory["providerList"]["all"][number];
 type OpenCodeModelDescriptor = ProviderListModelsResult["models"][number];
+
+function asNonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === "number" &&
+    Number.isFinite(value) &&
+    Number.isInteger(value) &&
+    value >= 0
+    ? value
+    : undefined;
+}
+
+function asPositiveInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value > 0
+    ? value
+    : undefined;
+}
+
+function asFiniteNonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+type OpenCodeAssistantTokens = AssistantMessage["tokens"];
+
+interface NormalizedOpenCodeTokens {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly reasoningOutputTokens: number;
+  readonly cacheReadTokens: number;
+  readonly cacheWriteTokens: number;
+}
+
+function readOpenCodeTokens(tokens: unknown): NormalizedOpenCodeTokens | undefined {
+  if (!tokens || typeof tokens !== "object" || Array.isArray(tokens)) {
+    return undefined;
+  }
+  const tokenRecord = tokens as Partial<OpenCodeAssistantTokens>;
+  const inputTokens = asNonNegativeInteger(tokenRecord.input);
+  const outputTokens = asNonNegativeInteger(tokenRecord.output);
+  const reasoningOutputTokens = asNonNegativeInteger(tokenRecord.reasoning);
+  const cacheReadTokens = asNonNegativeInteger(tokenRecord.cache?.read);
+  const cacheWriteTokens = asNonNegativeInteger(tokenRecord.cache?.write);
+  if (
+    inputTokens === undefined ||
+    outputTokens === undefined ||
+    reasoningOutputTokens === undefined ||
+    cacheReadTokens === undefined ||
+    cacheWriteTokens === undefined
+  ) {
+    return undefined;
+  }
+
+  return {
+    inputTokens,
+    outputTokens,
+    reasoningOutputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+  };
+}
+
+export function normalizeOpenCodeTokenUsage(
+  tokens: unknown,
+  maxTokens?: number | undefined,
+): ThreadTokenUsageSnapshot | undefined {
+  const normalizedTokens = readOpenCodeTokens(tokens);
+  if (!normalizedTokens) {
+    return undefined;
+  }
+
+  const { inputTokens, outputTokens, reasoningOutputTokens, cacheReadTokens, cacheWriteTokens } =
+    normalizedTokens;
+  const cachedInputTokens = cacheReadTokens + cacheWriteTokens;
+  const totalProcessedTokens =
+    inputTokens + cachedInputTokens + outputTokens + reasoningOutputTokens;
+  if (totalProcessedTokens <= 0) {
+    return undefined;
+  }
+
+  const normalizedMaxTokens = asPositiveInteger(maxTokens);
+  const usedTokens =
+    normalizedMaxTokens !== undefined
+      ? Math.min(totalProcessedTokens, normalizedMaxTokens)
+      : totalProcessedTokens;
+
+  return {
+    usedTokens,
+    totalProcessedTokens,
+    ...(normalizedMaxTokens !== undefined ? { maxTokens: normalizedMaxTokens } : {}),
+    inputTokens,
+    cachedInputTokens,
+    outputTokens,
+    reasoningOutputTokens,
+    lastUsedTokens: usedTokens,
+    lastInputTokens: inputTokens,
+    lastCachedInputTokens: cachedInputTokens,
+    lastOutputTokens: outputTokens,
+    lastReasoningOutputTokens: reasoningOutputTokens,
+  };
+}
+
+function buildOpenCodeTokenUsageKey(input: {
+  readonly messageId: string;
+  readonly tokens: OpenCodeAssistantTokens;
+  readonly maxTokens?: number | undefined;
+}): string | undefined {
+  const normalizedTokens = readOpenCodeTokens(input.tokens);
+  if (!normalizedTokens) {
+    return undefined;
+  }
+
+  const { inputTokens, outputTokens, reasoningOutputTokens, cacheReadTokens, cacheWriteTokens } =
+    normalizedTokens;
+  return [
+    input.messageId,
+    inputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    outputTokens,
+    reasoningOutputTokens,
+    asPositiveInteger(input.maxTokens) ?? "",
+  ].join(":");
+}
+
+function buildOpenCodeModelContextLimitMap(inventory: OpenCodeModelInventory): Map<string, number> {
+  const limits = new Map<string, number>();
+  for (const provider of inventory.providerList.all) {
+    for (const model of Object.values(provider.models)) {
+      const contextLimit = asPositiveInteger(model.limit?.context);
+      if (contextLimit !== undefined) {
+        limits.set(`${provider.id}/${model.id}`, contextLimit);
+      }
+    }
+  }
+  return limits;
+}
+
+function replaceModelContextLimits(
+  context: OpenCodeSessionContext,
+  limits: ReadonlyMap<string, number>,
+): void {
+  context.modelContextLimitBySlug.clear();
+  for (const [slug, limit] of limits) {
+    context.modelContextLimitBySlug.set(slug, limit);
+  }
+}
 
 function isOpenCodeManagedProvider(provider: OpenCodeInventoryProvider) {
   const normalizedId = provider.id.trim().toLowerCase();
@@ -1064,6 +1219,48 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           case "message.updated": {
             context.messageRoleById.set(event.properties.info.id, event.properties.info.role);
             if (event.properties.info.role === "assistant") {
+              const assistantMessage = event.properties.info;
+              const selectedModel = context.session.model;
+              const maxTokens =
+                selectedModel !== undefined
+                  ? context.modelContextLimitBySlug.get(selectedModel)
+                  : undefined;
+              const normalizedUsage = normalizeOpenCodeTokenUsage(
+                assistantMessage.tokens,
+                maxTokens,
+              );
+              const usageKey =
+                normalizedUsage !== undefined
+                  ? buildOpenCodeTokenUsageKey({
+                      messageId: assistantMessage.id,
+                      tokens: assistantMessage.tokens,
+                      maxTokens,
+                    })
+                  : undefined;
+              const cost = asFiniteNonNegativeNumber(assistantMessage.cost);
+              if (cost !== undefined) {
+                context.latestTurnCostUsd = cost;
+              }
+              if (
+                normalizedUsage !== undefined &&
+                usageKey !== undefined &&
+                usageKey !== context.lastEmittedTokenUsageKey
+              ) {
+                context.lastKnownTokenUsage = normalizedUsage;
+                context.lastEmittedTokenUsageKey = usageKey;
+                yield* emit({
+                  ...buildEventBase({
+                    threadId: context.session.threadId,
+                    turnId,
+                    raw: event,
+                  }),
+                  type: "thread.token-usage.updated",
+                  payload: {
+                    usage: normalizedUsage,
+                  },
+                });
+              }
+
               for (const part of context.partById.values()) {
                 if (part.messageID !== event.properties.info.id) {
                   continue;
@@ -1311,6 +1508,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             }
 
             if (event.properties.status.type === "idle" && turnId) {
+              const totalCostUsd = context.latestTurnCostUsd;
               clearActiveTurnState(context);
               updateProviderSession(context, { status: "ready" }, { clearActiveTurnId: true });
               yield* emit({
@@ -1318,6 +1516,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 type: "turn.completed",
                 payload: {
                   state: "completed",
+                  ...(totalCostUsd !== undefined ? { totalCostUsd } : {}),
                 },
               });
             }
@@ -1518,6 +1717,12 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           }
 
           const createdAt = nowIso();
+          const modelContextLimitBySlug = yield* openCodeRuntime
+            .loadOpenCodeInventory(started.client)
+            .pipe(
+              Effect.map(buildOpenCodeModelContextLimitMap),
+              Effect.catchCause(() => Effect.succeed(new Map<string, number>())),
+            );
           const session: ProviderSession = {
             provider: PROVIDER,
             status: "ready",
@@ -1544,6 +1749,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             messageRoleById: new Map(),
             completedAssistantPartIds: new Set(),
             turns: [],
+            modelContextLimitBySlug,
+            lastKnownTokenUsage: undefined,
+            lastEmittedTokenUsageKey: undefined,
+            latestTurnCostUsd: undefined,
             activeTurnId: undefined,
             activeInteractionMode: undefined,
             activeAgent: undefined,
@@ -1966,6 +2175,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             const inventory = yield* openCodeRuntime
               .loadOpenCodeInventory(activeContext.client)
               .pipe(Effect.mapError(toRequestError));
+            replaceModelContextLimits(activeContext, buildOpenCodeModelContextLimitMap(inventory));
             const credentialProviderIDs = yield* openCodeRuntime.loadOpenCodeCredentialProviderIDs(
               activeContext.client,
             );

@@ -1,48 +1,107 @@
 import { ThreadId } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import type { OpencodeClient } from "@opencode-ai/sdk/v2";
+import type { Model, OpencodeClient, Provider } from "@opencode-ai/sdk/v2";
 import { Effect, Fiber, Layer, Stream } from "effect";
 import { describe, it, expect } from "vitest";
 
 import { ServerConfig } from "../../config.ts";
-import { OpenCodeRuntimeError, type OpenCodeRuntimeShape } from "../opencodeRuntime.ts";
+import {
+  OpenCodeRuntimeError,
+  type OpenCodeInventory,
+  type OpenCodeRuntimeShape,
+} from "../opencodeRuntime.ts";
 import { OpenCodeAdapter } from "../Services/OpenCodeAdapter.ts";
 import {
   flattenOpenCodeModels,
   makeOpenCodeAdapterLive,
+  normalizeOpenCodeTokenUsage,
   resolvePreferredOpenCodeModelProviders,
 } from "./OpenCodeAdapter.ts";
 
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
 
+type TestModelInput = Omit<Partial<Model>, "capabilities"> &
+  Pick<Model, "id" | "name"> & {
+    readonly capabilities?: Partial<Model["capabilities"]>;
+  };
+
 function makeProvider(input: {
   id: string;
   name: string;
-  source?: string;
+  source?: Provider["source"];
   env?: ReadonlyArray<string>;
-  models?: Record<
-    string,
-    {
-      readonly id: string;
-      readonly name: string;
-      readonly options?: Record<string, unknown>;
-      readonly capabilities?: {
-        readonly reasoning?: boolean;
-      };
-      readonly variants?: Record<string, Record<string, unknown>>;
-    }
-  >;
-}) {
+  models?: Record<string, TestModelInput>;
+}): Provider {
   return {
     id: input.id,
     name: input.name,
-    ...(input.source ? { source: input.source } : {}),
-    ...(input.env ? { env: input.env } : {}),
-    models: input.models ?? {},
+    source: input.source ?? "api",
+    env: input.env ? [...input.env] : [],
+    options: {},
+    models: Object.fromEntries(
+      Object.entries(input.models ?? {}).map(([modelId, model]) => [
+        modelId,
+        makeModel({
+          providerID: input.id,
+          ...model,
+        }),
+      ]),
+    ),
   };
 }
 
-function createMockOpenCodeRuntime() {
+function makeModel(input: Omit<TestModelInput, "providerID"> & Pick<Model, "providerID">): Model {
+  const capabilities: Model["capabilities"] = {
+    temperature: true,
+    reasoning: false,
+    attachment: true,
+    toolcall: true,
+    input: {
+      text: true,
+      audio: false,
+      image: true,
+      video: false,
+      pdf: true,
+    },
+    output: {
+      text: true,
+      audio: false,
+      image: false,
+      video: false,
+      pdf: false,
+    },
+    interleaved: false,
+    ...input.capabilities,
+  };
+
+  return {
+    id: input.id,
+    providerID: input.providerID,
+    api: input.api ?? { id: "openai", url: "https://api.openai.com/v1", npm: "@ai-sdk/openai" },
+    name: input.name,
+    capabilities,
+    cost: input.cost ?? {
+      input: 1,
+      output: 1,
+      cache: {
+        read: 0,
+        write: 0,
+      },
+    },
+    limit: input.limit ?? {
+      context: 128_000,
+      output: 8_192,
+    },
+    status: input.status ?? "active",
+    options: input.options ?? {},
+    headers: input.headers ?? {},
+    release_date: input.release_date ?? "2026-01-01",
+    ...(input.family ? { family: input.family } : {}),
+    ...(input.variants ? { variants: input.variants } : {}),
+  };
+}
+
+function createMockOpenCodeRuntime(input?: { readonly inventory?: OpenCodeInventory }) {
   const abortCalls: Array<{ sessionID: string }> = [];
   const promptCalls: Array<Record<string, unknown>> = [];
   const emptySubscription = {
@@ -97,11 +156,13 @@ function createMockOpenCodeRuntime() {
     runOpenCodeCommand: () => unexpectedOperation("runOpenCodeCommand"),
     createOpenCodeSdkClient: () => client as unknown as OpencodeClient,
     loadOpenCodeInventory: () =>
-      Effect.succeed({
-        providerList: { connected: [], all: [], default: {} },
-        agents: [],
-        consoleState: null,
-      }),
+      Effect.succeed(
+        input?.inventory ?? {
+          providerList: { connected: [], all: [], default: {} },
+          agents: [],
+          consoleState: null,
+        },
+      ),
     listOpenCodeCliModels: () => Effect.succeed([]),
     loadOpenCodeCredentialProviderIDs: () => Effect.succeed([]),
   };
@@ -157,6 +218,180 @@ function createSubscribedEventQueue() {
     },
   };
 }
+
+function makeInventoryWithContextLimit(input: {
+  readonly providerId?: string;
+  readonly modelId?: string;
+  readonly contextLimit?: number;
+}): OpenCodeInventory {
+  const providerId = input.providerId ?? "openai";
+  const modelId = input.modelId ?? "gpt-5.4";
+  return {
+    providerList: {
+      connected: [providerId],
+      all: [
+        makeProvider({
+          id: providerId,
+          name: "OpenAI",
+          source: "api",
+          models: {
+            [modelId]: {
+              id: modelId,
+              name: "GPT-5.4",
+              limit: {
+                context: input.contextLimit ?? 200_000,
+                output: 8_192,
+              },
+            },
+          },
+        }),
+      ],
+      default: {},
+    },
+    agents: [],
+    consoleState: null,
+  };
+}
+
+function assistantMessageUpdated(input?: {
+  readonly id?: string;
+  readonly tokens?: {
+    readonly input: number;
+    readonly output: number;
+    readonly reasoning: number;
+    readonly cache: {
+      readonly read: number;
+      readonly write: number;
+    };
+  };
+  readonly cost?: number;
+}) {
+  return {
+    type: "message.updated",
+    properties: {
+      sessionID: "opencode-session-1",
+      info: {
+        id: input?.id ?? "assistant-message-usage",
+        role: "assistant",
+        tokens: input?.tokens ?? {
+          input: 120,
+          output: 80,
+          reasoning: 30,
+          cache: {
+            read: 10,
+            write: 5,
+          },
+        },
+        cost: input?.cost ?? 0.1234,
+      },
+    },
+  };
+}
+
+function idleStatusEvent() {
+  return {
+    type: "session.status",
+    properties: {
+      sessionID: "opencode-session-1",
+      status: {
+        type: "idle",
+      },
+    },
+  };
+}
+
+describe("normalizeOpenCodeTokenUsage", () => {
+  it("converts OpenCode assistant tokens into a context usage snapshot", () => {
+    expect(
+      normalizeOpenCodeTokenUsage(
+        {
+          input: 100,
+          output: 50,
+          reasoning: 25,
+          cache: {
+            read: 10,
+            write: 5,
+          },
+        },
+        200_000,
+      ),
+    ).toEqual({
+      usedTokens: 190,
+      totalProcessedTokens: 190,
+      maxTokens: 200_000,
+      inputTokens: 100,
+      cachedInputTokens: 15,
+      outputTokens: 50,
+      reasoningOutputTokens: 25,
+      lastUsedTokens: 190,
+      lastInputTokens: 100,
+      lastCachedInputTokens: 15,
+      lastOutputTokens: 50,
+      lastReasoningOutputTokens: 25,
+    });
+  });
+
+  it("returns undefined for missing, malformed, negative, infinite, or all-zero usage", () => {
+    const validBase = {
+      input: 1,
+      output: 1,
+      reasoning: 1,
+      cache: {
+        read: 1,
+        write: 1,
+      },
+    };
+
+    expect(normalizeOpenCodeTokenUsage(undefined)).toBeUndefined();
+    expect(normalizeOpenCodeTokenUsage({ ...validBase, input: -1 })).toBeUndefined();
+    expect(
+      normalizeOpenCodeTokenUsage({ ...validBase, output: Number.POSITIVE_INFINITY }),
+    ).toBeUndefined();
+    expect(
+      normalizeOpenCodeTokenUsage({ ...validBase, cache: { read: Number.NaN, write: 1 } }),
+    ).toBeUndefined();
+    expect(
+      normalizeOpenCodeTokenUsage({
+        input: 0,
+        output: 0,
+        reasoning: 0,
+        cache: {
+          read: 0,
+          write: 0,
+        },
+      }),
+    ).toBeUndefined();
+    expect(
+      normalizeOpenCodeTokenUsage({
+        input: 1,
+        output: 1,
+        reasoning: 1,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("clamps used tokens to the model context limit while preserving total processed tokens", () => {
+    expect(
+      normalizeOpenCodeTokenUsage(
+        {
+          input: 150,
+          output: 75,
+          reasoning: 50,
+          cache: {
+            read: 25,
+            write: 25,
+          },
+        },
+        200,
+      ),
+    ).toMatchObject({
+      usedTokens: 200,
+      totalProcessedTokens: 325,
+      maxTokens: 200,
+      lastUsedTokens: 200,
+    });
+  });
+});
 
 describe("resolvePreferredOpenCodeModelProviders", () => {
   it("keeps explicit credential providers and OpenCode-managed providers together", () => {
@@ -895,5 +1130,311 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         detail: "<proposed_plan>\n# Not a DP Code plan\n</proposed_plan>",
       },
     });
+  });
+
+  it("emits context usage from OpenCode assistant message updates", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime({
+      inventory: makeInventoryWithContextLimit({ contextLimit: 200_000 }),
+    });
+    const client = runtime.runtime.createOpenCodeSdkClient({
+      baseUrl: "http://127.0.0.1:4099",
+      directory: process.cwd(),
+    }) as unknown as {
+      event: {
+        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
+      };
+    };
+    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 5)).pipe(
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-usage-events"),
+          runtimeMode: "full-access",
+        });
+
+        const turn = yield* adapter.sendTurn({
+          threadId: asThreadId("thread-usage-events"),
+          input: "count tokens",
+          attachments: [],
+          modelSelection: {
+            provider: "opencode",
+            model: "openai/gpt-5.4",
+          },
+        });
+
+        eventQueue.push(assistantMessageUpdated());
+        eventQueue.push(idleStatusEvent());
+
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        eventQueue.close();
+        return { events, turn };
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    const usageEvent = result.events.find((event) => event.type === "thread.token-usage.updated");
+    expect(usageEvent).toMatchObject({
+      type: "thread.token-usage.updated",
+      turnId: result.turn.turnId,
+      payload: {
+        usage: {
+          usedTokens: 245,
+          totalProcessedTokens: 245,
+          inputTokens: 120,
+          cachedInputTokens: 15,
+          outputTokens: 80,
+          reasoningOutputTokens: 30,
+          maxTokens: 200_000,
+          lastUsedTokens: 245,
+          lastInputTokens: 120,
+          lastCachedInputTokens: 15,
+          lastOutputTokens: 80,
+          lastReasoningOutputTokens: 30,
+        },
+      },
+      raw: {
+        source: "opencode.sdk.event",
+      },
+    });
+    expect(result.events.at(-1)).toMatchObject({
+      type: "turn.completed",
+      payload: {
+        state: "completed",
+        totalCostUsd: 0.1234,
+      },
+    });
+  });
+
+  it("does not emit duplicate usage for identical assistant message updates", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime({
+      inventory: makeInventoryWithContextLimit({ contextLimit: 200_000 }),
+    });
+    const client = runtime.runtime.createOpenCodeSdkClient({
+      baseUrl: "http://127.0.0.1:4099",
+      directory: process.cwd(),
+    }) as unknown as {
+      event: {
+        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
+      };
+    };
+    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+
+    const events = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 5)).pipe(
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-usage-dedup"),
+          runtimeMode: "full-access",
+        });
+
+        yield* adapter.sendTurn({
+          threadId: asThreadId("thread-usage-dedup"),
+          input: "count tokens",
+          attachments: [],
+          modelSelection: {
+            provider: "opencode",
+            model: "openai/gpt-5.4",
+          },
+        });
+
+        eventQueue.push(assistantMessageUpdated());
+        eventQueue.push(assistantMessageUpdated());
+        eventQueue.push(idleStatusEvent());
+
+        const runtimeEvents = Array.from(yield* Fiber.join(eventsFiber));
+        eventQueue.close();
+        return runtimeEvents;
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(events.filter((event) => event.type === "thread.token-usage.updated")).toHaveLength(1);
+  });
+
+  it("emits usage without max tokens when the selected model limit is unknown", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+    const client = runtime.runtime.createOpenCodeSdkClient({
+      baseUrl: "http://127.0.0.1:4099",
+      directory: process.cwd(),
+    }) as unknown as {
+      event: {
+        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
+      };
+    };
+    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+
+    const events = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 5)).pipe(
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-usage-unknown-limit"),
+          runtimeMode: "full-access",
+        });
+
+        yield* adapter.sendTurn({
+          threadId: asThreadId("thread-usage-unknown-limit"),
+          input: "count tokens",
+          attachments: [],
+          modelSelection: {
+            provider: "opencode",
+            model: "openai/gpt-5.4",
+          },
+        });
+
+        eventQueue.push(assistantMessageUpdated());
+        eventQueue.push(idleStatusEvent());
+
+        const runtimeEvents = Array.from(yield* Fiber.join(eventsFiber));
+        eventQueue.close();
+        return runtimeEvents;
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    const usageEvent = events.find((event) => event.type === "thread.token-usage.updated");
+    expect(usageEvent).toMatchObject({
+      type: "thread.token-usage.updated",
+      payload: {
+        usage: {
+          usedTokens: 245,
+          totalProcessedTokens: 245,
+        },
+      },
+    });
+    expect(
+      usageEvent?.type === "thread.token-usage.updated" && usageEvent.payload.usage,
+    ).not.toHaveProperty("maxTokens");
+  });
+
+  it("ignores malformed and zero-token assistant usage updates", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+    const client = runtime.runtime.createOpenCodeSdkClient({
+      baseUrl: "http://127.0.0.1:4099",
+      directory: process.cwd(),
+    }) as unknown as {
+      event: {
+        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
+      };
+    };
+    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+
+    const events = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-usage-zero"),
+          runtimeMode: "full-access",
+        });
+
+        yield* adapter.sendTurn({
+          threadId: asThreadId("thread-usage-zero"),
+          input: "count tokens",
+          attachments: [],
+          modelSelection: {
+            provider: "opencode",
+            model: "openai/gpt-5.4",
+          },
+        });
+
+        eventQueue.push(
+          assistantMessageUpdated({
+            tokens: {
+              input: 0,
+              output: 0,
+              reasoning: 0,
+              cache: {
+                read: 0,
+                write: 0,
+              },
+            },
+          }),
+        );
+        eventQueue.push(
+          assistantMessageUpdated({
+            id: "assistant-message-malformed",
+            tokens: {
+              input: Number.NaN,
+              output: 1,
+              reasoning: 1,
+              cache: {
+                read: 1,
+                write: 1,
+              },
+            },
+          }),
+        );
+        eventQueue.push(idleStatusEvent());
+
+        const runtimeEvents = Array.from(yield* Fiber.join(eventsFiber));
+        eventQueue.close();
+        return runtimeEvents;
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "session.started",
+      "thread.started",
+      "turn.started",
+      "turn.completed",
+    ]);
   });
 });
