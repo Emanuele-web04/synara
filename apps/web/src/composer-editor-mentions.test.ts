@@ -18,13 +18,13 @@ describe("splitPromptIntoComposerSegments", () => {
   it("marks selected provider mention references as plugin mentions", () => {
     expect(
       splitPromptIntoComposerSegments(
-        "Use @browser please",
+        "Use @Gmail please",
         [],
-        [{ name: "browser", path: "plugin://browser@openai-bundled" }],
+        [{ name: "gmail", path: "plugin://gmail@openai-curated" }],
       ),
     ).toEqual([
       { type: "text", text: "Use " },
-      { type: "mention", path: "browser", kind: "plugin" },
+      { type: "mention", path: "Gmail", kind: "plugin" },
       { type: "text", text: " please" },
     ]);
   });

@@ -6312,7 +6312,7 @@ export default function ChatView({
         applyComposerTriggerReplacement({
           snapshot,
           trigger,
-          base: `@${item.plugin.name} `,
+          base: `@${item.label} `,
           onApplied: () => {
             setSelectedComposerMentions((existing) => {
               const nextMention = item.mention;
