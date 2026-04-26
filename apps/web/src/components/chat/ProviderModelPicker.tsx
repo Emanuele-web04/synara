@@ -5,7 +5,8 @@
 
 import { type ModelSlug, type ProviderKind, type ServerProviderStatus } from "@t3tools/contracts";
 import { resolveSelectableModel } from "@t3tools/shared/model";
-import { Fragment, memo, useCallback, useDeferredValue, useState } from "react";
+import * as Schema from "effect/Schema";
+import { Fragment, memo, useCallback, useDeferredValue, useMemo, useState } from "react";
 import { type ProviderPickerKind, PROVIDER_OPTIONS } from "../../session-logic";
 import { formatProviderModelOptionName } from "../../providerModelOptions";
 import {
@@ -28,7 +29,13 @@ import { PickerPanelShell } from "./PickerPanelShell";
 import { PickerTriggerButton } from "./PickerTriggerButton";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ShortcutKbd } from "../ui/shortcut-kbd";
-import { groupProviderModelOptions, type ProviderModelOption } from "../../providerModelOptions";
+import {
+  groupProviderModelOptions,
+  groupProviderModelOptionsWithFavorites,
+  type ProviderModelOption,
+} from "../../providerModelOptions";
+import { useLocalStorage } from "../../hooks/useLocalStorage";
+import { StarFilledIcon, StarIcon } from "../../lib/icons";
 
 function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): option is {
   value: ProviderKind;
@@ -89,6 +96,8 @@ function providerIconClassName(
 }
 
 const OPENCODE_MODEL_SEARCH_THRESHOLD = 15;
+const OPENCODE_FAVORITE_MODEL_STORAGE_KEY = "dpcode:opencode-favourite-models:v1";
+const OpenCodeFavoriteModelSlugs = Schema.Array(Schema.String);
 
 function buildOpenCodeModelSearchText(option: ProviderModelOption): string {
   return [option.name, option.slug, option.upstreamProviderName, option.upstreamProviderId]
@@ -114,9 +123,18 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   const { onOpenChange, open } = props;
   const [uncontrolledMenuOpen, setUncontrolledMenuOpen] = useState(false);
   const [openCodeSearchQuery, setOpenCodeSearchQuery] = useState("");
+  const [openCodeFavoriteModelSlugs, setOpenCodeFavoriteModelSlugs] = useLocalStorage(
+    OPENCODE_FAVORITE_MODEL_STORAGE_KEY,
+    [],
+    OpenCodeFavoriteModelSlugs,
+  );
   const deferredOpenCodeSearchQuery = useDeferredValue(openCodeSearchQuery);
   const activeProvider = props.lockedProvider ?? props.provider;
   const isMenuOpen = open ?? uncontrolledMenuOpen;
+  const openCodeFavoriteModelSlugSet = useMemo(
+    () => new Set(openCodeFavoriteModelSlugs),
+    [openCodeFavoriteModelSlugs],
+  );
   const selectedProviderOptions = props.modelOptionsByProvider[activeProvider];
   const selectedModelLabel =
     selectedProviderOptions.find((option) => option.slug === props.model)?.name ??
@@ -149,6 +167,19 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     props.onProviderModelChange(provider, resolvedModel);
     setMenuOpen(false);
   };
+  const toggleOpenCodeFavorite = useCallback(
+    (slug: string) => {
+      setOpenCodeFavoriteModelSlugs((current) => {
+        const normalizedCurrent = Array.from(
+          new Set(current.filter((entry) => entry.trim().length > 0)),
+        );
+        return normalizedCurrent.includes(slug)
+          ? normalizedCurrent.filter((entry) => entry !== slug)
+          : [...normalizedCurrent, slug];
+      });
+    },
+    [setOpenCodeFavoriteModelSlugs],
+  );
 
   const renderModelRadioGroup = (provider: ProviderKind) => {
     const providerOptions = props.modelOptionsByProvider[provider];
@@ -161,7 +192,13 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
             buildOpenCodeModelSearchText(option).includes(normalizedOpenCodeSearchQuery),
           )
         : providerOptions;
-    const groupedOptions = groupProviderModelOptions(filteredOptions);
+    const groupedOptions =
+      provider === "opencode"
+        ? groupProviderModelOptionsWithFavorites({
+            options: filteredOptions,
+            favoriteSlugs: openCodeFavoriteModelSlugSet,
+          })
+        : groupProviderModelOptions(filteredOptions);
 
     const content =
       groupedOptions.length > 0 ? (
@@ -173,15 +210,51 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
             <Fragment key={`${provider}:${group.key}`}>
               <MenuGroup>
                 {group.label ? <MenuGroupLabel>{group.label}</MenuGroupLabel> : null}
-                {group.options.map((modelOption) => (
-                  <MenuRadioItem
-                    key={`${provider}:${modelOption.slug}`}
-                    value={modelOption.slug}
-                    onClick={() => setMenuOpen(false)}
-                  >
-                    {modelOption.name}
-                  </MenuRadioItem>
-                ))}
+                {group.options.map((modelOption) => {
+                  const isOpenCodeFavorite =
+                    provider === "opencode" && openCodeFavoriteModelSlugSet.has(modelOption.slug);
+                  return (
+                    <MenuRadioItem
+                      key={`${provider}:${modelOption.slug}`}
+                      value={modelOption.slug}
+                      onClick={() => setMenuOpen(false)}
+                    >
+                      {provider === "opencode" ? (
+                        <span className="flex min-w-0 items-center gap-2">
+                          <span className="min-w-0 flex-1 truncate">{modelOption.name}</span>
+                          <button
+                            type="button"
+                            aria-label={
+                              isOpenCodeFavorite
+                                ? `Remove ${modelOption.name} from favourites`
+                                : `Add ${modelOption.name} to favourites`
+                            }
+                            className={cn(
+                              "-me-2 inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground/55 transition-colors hover:bg-[var(--color-background-elevated-tertiary)] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/60",
+                              isOpenCodeFavorite && "text-amber-300 hover:text-amber-200",
+                            )}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              toggleOpenCodeFavorite(modelOption.slug);
+                            }}
+                            onPointerDown={(event) => {
+                              event.stopPropagation();
+                            }}
+                          >
+                            {isOpenCodeFavorite ? (
+                              <StarFilledIcon aria-hidden="true" className="size-3.5" />
+                            ) : (
+                              <StarIcon aria-hidden="true" className="size-3.5" />
+                            )}
+                          </button>
+                        </span>
+                      ) : (
+                        modelOption.name
+                      )}
+                    </MenuRadioItem>
+                  );
+                })}
               </MenuGroup>
               {index < groupedOptions.length - 1 ? <MenuSeparator /> : null}
             </Fragment>
