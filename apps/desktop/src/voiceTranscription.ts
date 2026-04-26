@@ -15,12 +15,8 @@ import type {
 export const SERVER_TRANSCRIBE_VOICE_CHANNEL = "desktop:server-transcribe-voice";
 
 const CHATGPT_TRANSCRIPTIONS_URL = "https://chatgpt.com/backend-api/transcribe";
-const OPENAI_AUDIO_TRANSCRIPTIONS_URL = "https://api.openai.com/v1/audio/transcriptions";
-const OPENAI_TRANSCRIPTION_MODEL = "gpt-4o-transcribe";
 const MAX_VOICE_AUDIO_BYTES = 10 * 1024 * 1024;
 const MAX_VOICE_DURATION_MS = 120_000;
-
-type DesktopVoiceAuthKind = "chatgptSession" | "openaiApiKey";
 
 // --- Input validation ------------------------------------------------------
 
@@ -83,7 +79,7 @@ function readNonEmptyString(value: unknown): string | null {
 
 async function resolveDesktopVoiceAuth(
   cwd: string,
-): Promise<{ token: string; authKind: DesktopVoiceAuthKind; transcriptionUrl: string }> {
+): Promise<{ token: string; transcriptionUrl: string }> {
   return new Promise((resolve, reject) => {
     const child = ChildProcess.spawn("codex", ["app-server"], {
       cwd,
@@ -102,11 +98,7 @@ async function resolveDesktopVoiceAuth(
       child.kill();
       reject(error);
     };
-    const resolveOnce = (value: {
-      token: string;
-      authKind: DesktopVoiceAuthKind;
-      transcriptionUrl: string;
-    }) => {
+    const resolveOnce = (value: { token: string; transcriptionUrl: string }) => {
       if (settled) {
         return;
       }
@@ -156,35 +148,22 @@ async function resolveDesktopVoiceAuth(
             ? (message.result as Record<string, unknown>)
             : null;
         const authMethod = readNonEmptyString(result?.authMethod);
-        const token =
-          readNonEmptyString(result?.authToken) ??
-          (authMethod === "apikey" ? readNonEmptyString(process.env.OPENAI_API_KEY) : null);
+        const token = readNonEmptyString(result?.authToken);
         if (!token) {
           rejectOnce(
-            new Error(
-              authMethod === "apikey"
-                ? "No OpenAI API key is available for voice transcription."
-                : "No ChatGPT session token is available. Sign in to ChatGPT in Codex.",
-            ),
+            new Error("No ChatGPT session token is available. Sign in to ChatGPT in Codex."),
           );
           return;
         }
-        if (
-          authMethod !== "apikey" &&
-          authMethod !== "chatgpt" &&
-          authMethod !== "chatgptAuthTokens"
-        ) {
+        if (authMethod !== "chatgpt" && authMethod !== "chatgptAuthTokens") {
           rejectOnce(
-            new Error(
-              "Voice transcription requires a ChatGPT-authenticated Codex session or OpenAI API key.",
-            ),
+            new Error("Voice transcription requires a ChatGPT-authenticated Codex session."),
           );
           return;
         }
 
         resolveOnce({
           token,
-          authKind: authMethod === "apikey" ? "openaiApiKey" : "chatgptSession",
           transcriptionUrl:
             readNonEmptyString(result?.transcriptionUrl) ?? CHATGPT_TRANSCRIPTIONS_URL,
         });
@@ -219,29 +198,18 @@ async function requestDesktopVoiceTranscription(input: {
   readonly audioBuffer: Buffer;
   readonly mimeType: string;
   readonly token: string;
-  readonly authKind: DesktopVoiceAuthKind;
   readonly transcriptionUrl: string;
 }): Promise<{ statusCode: number; body: string }> {
   const boundary = `DPCodeVoice-${Crypto.randomUUID()}`;
-  const modelPart =
-    input.authKind === "openaiApiKey"
-      ? Buffer.from(
-          `--${boundary}\r\nContent-Disposition: form-data; name="model"\r\n\r\n${OPENAI_TRANSCRIPTION_MODEL}\r\n`,
-          "utf8",
-        )
-      : Buffer.alloc(0);
-  const filePartPreamble = Buffer.from(
+  const preamble = Buffer.from(
     `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="voice.wav"\r\nContent-Type: ${input.mimeType}\r\n\r\n`,
     "utf8",
   );
   const closing = Buffer.from(`\r\n--${boundary}--\r\n`, "utf8");
-  const body = Buffer.concat([modelPart, filePartPreamble, input.audioBuffer, closing]);
+  const body = Buffer.concat([preamble, input.audioBuffer, closing]);
 
   return new Promise((resolve, reject) => {
-    const requestUrl =
-      input.authKind === "openaiApiKey"
-        ? OPENAI_AUDIO_TRANSCRIPTIONS_URL
-        : (readNonEmptyString(input.transcriptionUrl) ?? CHATGPT_TRANSCRIPTIONS_URL);
+    const requestUrl = readNonEmptyString(input.transcriptionUrl) ?? CHATGPT_TRANSCRIPTIONS_URL;
     const request = net.request({
       method: "POST",
       url: requestUrl,
@@ -273,11 +241,7 @@ async function requestDesktopVoiceTranscription(input: {
   });
 }
 
-function readVoiceResponseErrorMessage(
-  statusCode: number,
-  body: string,
-  authKind: DesktopVoiceAuthKind,
-): string {
+function readVoiceResponseErrorMessage(statusCode: number, body: string): string {
   try {
     const payload = JSON.parse(body) as { error?: { message?: unknown }; message?: unknown };
     const providerMessage =
@@ -290,15 +254,9 @@ function readVoiceResponseErrorMessage(
   }
 
   if (statusCode === 401) {
-    if (authKind === "openaiApiKey") {
-      return "Your OpenAI API key was rejected while transcribing the voice note.";
-    }
     return "Your ChatGPT login has expired. Sign in again.";
   }
   if (statusCode === 403) {
-    if (authKind === "openaiApiKey") {
-      return "OpenAI rejected the transcription request for this API key.";
-    }
     return "ChatGPT rejected the transcription request. Your Codex login is present, but this desktop upload was forbidden.";
   }
 
@@ -316,13 +274,10 @@ async function transcribeVoiceViaDesktopBridge(
     audioBuffer,
     mimeType: input.mimeType,
     token: auth.token,
-    authKind: auth.authKind,
     transcriptionUrl: auth.transcriptionUrl,
   });
   if (response.statusCode < 200 || response.statusCode >= 300) {
-    throw new Error(
-      readVoiceResponseErrorMessage(response.statusCode, response.body, auth.authKind),
-    );
+    throw new Error(readVoiceResponseErrorMessage(response.statusCode, response.body));
   }
 
   const payload = JSON.parse(response.body) as { text?: unknown; transcript?: unknown };

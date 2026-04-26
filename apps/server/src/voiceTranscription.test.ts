@@ -1,5 +1,5 @@
 // FILE: voiceTranscription.test.ts
-// Purpose: Verifies voice transcription backend selection without contacting OpenAI.
+// Purpose: Verifies ChatGPT-session voice transcription behavior without contacting OpenAI.
 // Layer: Server test
 // Exports: Vitest cases
 // Depends on: voiceTranscription utility and mocked fetch responses.
@@ -20,17 +20,15 @@ const baseRequest: ServerVoiceTranscriptionInput = {
   audioBase64: WAV_BASE64,
 };
 
-function okFetch(): typeof fetch {
-  return vi.fn(async () => new Response(JSON.stringify({ text: "hello" }), { status: 200 }));
-}
-
 describe("transcribeVoiceWithChatGptSession", () => {
-  it("uses the ChatGPT transcription backend for ChatGPT auth", async () => {
-    const fetchImpl = okFetch();
+  it("uses the ChatGPT transcription backend", async () => {
+    const fetchImpl = vi.fn(
+      async () => new Response(JSON.stringify({ text: "hello" }), { status: 200 }),
+    ) as unknown as typeof fetch;
 
     await transcribeVoiceWithChatGptSession({
       request: baseRequest,
-      resolveAuth: async () => ({ token: "chatgpt-token", authMethod: "chatgpt" }),
+      resolveAuth: async () => ({ token: "chatgpt-token" }),
       fetchImpl,
     });
 
@@ -39,17 +37,23 @@ describe("transcribeVoiceWithChatGptSession", () => {
     expect((init?.body as FormData).get("model")).toBeNull();
   });
 
-  it("uses the official audio transcription API for API key auth", async () => {
-    const fetchImpl = okFetch();
+  it("refreshes the ChatGPT session once when the upload is unauthorized", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("{}", { status: 401 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ text: "hello" }), { status: 200 }));
+    const resolveAuth = vi.fn(async (refreshToken: boolean) => ({
+      token: refreshToken ? "fresh-chatgpt-token" : "stale-chatgpt-token",
+    }));
 
     await transcribeVoiceWithChatGptSession({
       request: baseRequest,
-      resolveAuth: async () => ({ token: "sk-test", authMethod: "apikey" }),
-      fetchImpl,
+      resolveAuth,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
     });
 
-    const [url, init] = vi.mocked(fetchImpl).mock.calls[0] ?? [];
-    expect(url).toBe("https://api.openai.com/v1/audio/transcriptions");
-    expect((init?.body as FormData).get("model")).toBe("gpt-4o-transcribe");
+    expect(resolveAuth).toHaveBeenNthCalledWith(1, false);
+    expect(resolveAuth).toHaveBeenNthCalledWith(2, true);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 });

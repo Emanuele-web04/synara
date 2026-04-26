@@ -1,8 +1,8 @@
 // FILE: voiceTranscription.ts
-// Purpose: Validates Remodex-style WAV payloads and proxies them to voice transcription.
+// Purpose: Validates Remodex-style WAV payloads and proxies them to ChatGPT transcription.
 // Layer: Server utility
 // Exports: transcribeVoiceWithChatGptSession
-// Depends on: OpenAI API keys or ChatGPT session auth supplied by Codex app-server callers.
+// Depends on: ChatGPT session auth supplied by Codex app-server callers.
 
 import { Buffer } from "node:buffer";
 
@@ -12,20 +12,15 @@ import type {
 } from "@t3tools/contracts";
 
 const CHATGPT_TRANSCRIPTIONS_URL = "https://chatgpt.com/backend-api/transcribe";
-const OPENAI_AUDIO_TRANSCRIPTIONS_URL = "https://api.openai.com/v1/audio/transcriptions";
-const OPENAI_TRANSCRIPTION_MODEL = "gpt-4o-transcribe";
 const MAX_AUDIO_BYTES = 10 * 1024 * 1024;
 const MAX_DURATION_MS = 120_000;
 
 export interface ChatGptVoiceAuthContext {
   readonly token: string;
-  readonly authMethod?: string;
   readonly transcriptionUrl?: string;
 }
 
-type VoiceTranscriptionAuthKind = "chatgptSession" | "openaiApiKey";
-
-// Validate the captured WAV clip and retry once if the credential needs a refresh.
+// Validate the captured WAV clip and retry once if the ChatGPT session needs a refresh.
 export async function transcribeVoiceWithChatGptSession(input: {
   readonly request: ServerVoiceTranscriptionInput;
   readonly resolveAuth: (refreshToken: boolean) => Promise<ChatGptVoiceAuthContext>;
@@ -38,31 +33,27 @@ export async function transcribeVoiceWithChatGptSession(input: {
 
   const audioBuffer = decodeVoiceAudio(input.request);
   let auth = await input.resolveAuth(false);
-  let authKind = resolveVoiceTranscriptionAuthKind(auth);
   let response = await requestTranscription({
     fetchImpl,
     audioBuffer,
     mimeType: input.request.mimeType,
     token: auth.token,
-    authKind,
     ...(auth.transcriptionUrl ? { transcriptionUrl: auth.transcriptionUrl } : {}),
   });
 
   if (response.status === 401 || response.status === 403) {
     auth = await input.resolveAuth(true);
-    authKind = resolveVoiceTranscriptionAuthKind(auth);
     response = await requestTranscription({
       fetchImpl,
       audioBuffer,
       mimeType: input.request.mimeType,
       token: auth.token,
-      authKind,
       ...(auth.transcriptionUrl ? { transcriptionUrl: auth.transcriptionUrl } : {}),
     });
   }
 
   if (!response.ok) {
-    throw new Error(await readTranscriptionErrorMessage(response, authKind));
+    throw new Error(await readTranscriptionErrorMessage(response));
   }
 
   const payload = (await response.json().catch(() => null)) as {
@@ -75,13 +66,6 @@ export async function transcribeVoiceWithChatGptSession(input: {
   }
 
   return { text };
-}
-
-// Codex may expose either a ChatGPT session token or an API key; route each to the matching API.
-function resolveVoiceTranscriptionAuthKind(
-  auth: ChatGptVoiceAuthContext,
-): VoiceTranscriptionAuthKind {
-  return auth.authMethod === "apikey" ? "openaiApiKey" : "chatgptSession";
 }
 
 // Keep the server-side contract strict so the private backend only sees normalized clips.
@@ -123,21 +107,12 @@ async function requestTranscription(input: {
   readonly audioBuffer: Buffer;
   readonly mimeType: string;
   readonly token: string;
-  readonly authKind: VoiceTranscriptionAuthKind;
   readonly transcriptionUrl?: string;
 }): Promise<Response> {
   const formData = new FormData();
-  if (input.authKind === "openaiApiKey") {
-    formData.append("model", OPENAI_TRANSCRIPTION_MODEL);
-  }
   formData.append("file", new Blob([input.audioBuffer], { type: input.mimeType }), "voice.wav");
 
-  const url =
-    input.authKind === "openaiApiKey"
-      ? OPENAI_AUDIO_TRANSCRIPTIONS_URL
-      : (input.transcriptionUrl ?? CHATGPT_TRANSCRIPTIONS_URL);
-
-  return input.fetchImpl(url, {
+  return input.fetchImpl(input.transcriptionUrl ?? CHATGPT_TRANSCRIPTIONS_URL, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${input.token}`,
@@ -146,10 +121,7 @@ async function requestTranscription(input: {
   });
 }
 
-async function readTranscriptionErrorMessage(
-  response: Response,
-  authKind: VoiceTranscriptionAuthKind,
-): Promise<string> {
+async function readTranscriptionErrorMessage(response: Response): Promise<string> {
   let errorMessage = `Transcription failed with status ${response.status}.`;
   try {
     const payload = (await response.json()) as {
@@ -166,9 +138,6 @@ async function readTranscriptionErrorMessage(
   }
 
   if (response.status === 401 || response.status === 403) {
-    if (authKind === "openaiApiKey") {
-      return "Your OpenAI API key was rejected while transcribing the voice note.";
-    }
     return "Your ChatGPT login has expired. Sign in again.";
   }
 

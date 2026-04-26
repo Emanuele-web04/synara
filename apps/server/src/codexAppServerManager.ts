@@ -176,7 +176,7 @@ interface CodexAccountSnapshot {
 }
 
 interface CodexVoiceTranscriptionAuthContext {
-  readonly authMethod: "apikey" | "chatgpt" | "chatgptAuthTokens";
+  readonly authMethod: "chatgpt" | "chatgptAuthTokens";
   readonly token: string;
 }
 
@@ -1896,9 +1896,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const authMethod = this.readString(response, "authMethod");
       return {
         authMethod,
-        token:
-          this.readString(response, "authToken") ??
-          (authMethod === "apikey" ? this.readString(process.env.OPENAI_API_KEY) : null),
+        token: this.readString(response, "authToken"),
       };
     };
 
@@ -1908,15 +1906,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
 
     if (!token) {
-      throw new Error(
-        authMethod === "apikey"
-          ? "No OpenAI API key is available for voice transcription."
-          : "No ChatGPT session token is available. Sign in to ChatGPT in Codex.",
-      );
+      throw new Error("No ChatGPT session token is available. Sign in to ChatGPT in Codex.");
     }
-    if (authMethod !== "apikey" && authMethod !== "chatgpt" && authMethod !== "chatgptAuthTokens") {
+    if (authMethod !== "chatgpt" && authMethod !== "chatgptAuthTokens") {
       throw new Error(
-        "Voice transcription requires a ChatGPT-authenticated Codex session or OpenAI API key.",
+        "Voice transcription requires a ChatGPT-authenticated Codex session.",
       );
     }
 
