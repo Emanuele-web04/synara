@@ -6,7 +6,6 @@ import {
   ArrowLeftIcon,
   ChevronDownIcon,
   ChevronRightIcon,
-  FlagIcon,
   FolderIcon,
   GitPullRequestIcon,
   type LucideIcon,
@@ -73,12 +72,6 @@ import {
 import { isElectron } from "../env";
 import { APP_VERSION } from "../branding";
 import { showConfirmDialogFallback } from "../confirmDialogFallback";
-import {
-  FEATURE_FLAGS,
-  setFeatureFlagEnabled,
-  useFeatureFlags,
-  type ToggleFeatureFlagId,
-} from "../featureFlags";
 import { isMacPlatform, newCommandId, newProjectId, newThreadId, randomUUID } from "../lib/utils";
 import { persistAppStateNow, useStore } from "../store";
 import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
@@ -118,6 +111,7 @@ import { DEFAULT_THREAD_TERMINAL_ID, type SidebarThreadSummary, type Thread } fr
 import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
 import { ClaudeAI, Gemini, OpenAI, OpenCodeIcon } from "./Icons";
 import { AppNavigationButtons } from "./AppNavigationButtons";
+import { DebugFeatureFlagsMenu } from "./DebugFeatureFlagsMenu";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
 import { ThreadRunningSpinner } from "./ThreadRunningSpinner";
@@ -155,14 +149,11 @@ import { Button } from "./ui/button";
 import { Kbd, KbdGroup } from "./ui/kbd";
 import {
   Menu,
-  MenuCheckboxItem,
   MenuGroup,
-  MenuGroupLabel,
   MenuItem,
   MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
-  MenuSeparator,
   MenuTrigger,
 } from "./ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
@@ -266,6 +257,7 @@ const SIDEBAR_LIST_ANIMATION_OPTIONS = {
 } as const;
 const EMPTY_THREAD_JUMP_LABELS = new Map<ThreadId, string>();
 const EMPTY_SHORTCUT_PARTS: readonly string[] = [];
+const DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY = "dpcode:show-debug-feature-flags-menu";
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS = 6;
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS = 50;
 const ADD_PROJECT_EXISTING_SYNC_ERROR =
@@ -280,6 +272,17 @@ const PROJECT_CONTEXT_MENU_COPY_PATH_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
 const PROJECT_CONTEXT_MENU_ARCHIVE_ICON = renderToStaticMarkup(<HiOutlineArchiveBox />);
 const PROJECT_CONTEXT_MENU_DELETE_THREADS_ICON = renderToStaticMarkup(<Trash2 />);
+
+// Debug-only local controls stay reusable, but require an explicit dev/browser opt-in.
+function shouldShowDebugFeatureFlagsMenu(): boolean {
+  if (!import.meta.env.DEV || typeof window === "undefined") return false;
+
+  try {
+    return window.localStorage.getItem(DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
 
 function threadJumpLabelMapsEqual(
   left: ReadonlyMap<ThreadId, string>,
@@ -1088,7 +1091,6 @@ export default function Sidebar() {
   const isOnSettings = useLocation({ select: (loc) => loc.pathname === "/settings" });
   const isOnWorkspace = pathname.startsWith("/workspace");
   const { settings: appSettings, updateSettings } = useAppSettings();
-  const featureFlags = useFeatureFlags();
   const { handleNewThread } = useHandleNewThread();
   const { handleNewChat } = useHandleNewChat();
   const { createThreadHandoff } = useThreadHandoff();
@@ -5185,32 +5187,6 @@ export default function Sidebar() {
     setAllProjectsExpanded(true);
   }, [allProjectsExpanded, collapseProjectsExcept, focusedProjectId, setAllProjectsExpanded]);
 
-  const triggerActionFailedToasts = useCallback(() => {
-    const copyText =
-      "Error: Git command failed in /Users/ibrahime/Documents/Projects/dpcode\n\n" +
-      "Command: git push upstream main\n" +
-      "fatal: unable to access upstream remote for local debug toast preview";
-    const toastData = {
-      copyText,
-      ...(featureFlags["persist-action-failed-debug-toasts"]
-        ? {}
-        : { dismissAfterVisibleMs: 30_000 }),
-    };
-
-    toastManager.add({
-      type: "error",
-      title: "Action failed",
-      description: "Error: Git command failed in /Users/ibrahime/Documents/Projects/dpcode",
-      data: toastData,
-    });
-    toastManager.add({
-      type: "error",
-      title: "Action failed",
-      description: "Error: Git command failed in /Users/ibrahime/Documents/Projects/dpcode",
-      data: toastData,
-    });
-  }, [featureFlags]);
-
   const brandWordmark = (
     <Tooltip>
       <TooltipTrigger
@@ -5846,11 +5822,8 @@ export default function Sidebar() {
         <SidebarMenu>
           <SidebarMenuItem>
             <div className="flex flex-col gap-1">
-              {!isOnSettings ? (
-                <FeatureFlagsMenu
-                  values={featureFlags}
-                  onTriggerActionFailedToasts={triggerActionFailedToasts}
-                />
+              {shouldShowDebugFeatureFlagsMenu() && !isOnSettings ? (
+                <DebugFeatureFlagsMenu />
               ) : null}
               <div className="flex items-center gap-2">
                 {!isOnSettings && (
@@ -5949,76 +5922,6 @@ export default function Sidebar() {
         />
       ) : null}
     </>
-  );
-}
-
-function FeatureFlagsMenu({
-  values,
-  onTriggerActionFailedToasts,
-}: {
-  values: Record<ToggleFeatureFlagId, boolean>;
-  onTriggerActionFailedToasts: () => void;
-}) {
-  return (
-    <Menu>
-      <MenuTrigger
-        render={
-          <SidebarMenuButton
-            size="default"
-            className="h-8 flex-1 gap-2.5 rounded-lg px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 hover:bg-[var(--sidebar-accent)]"
-          />
-        }
-      >
-        <FlagIcon className="size-[15px]" />
-        <span>Feature flags</span>
-      </MenuTrigger>
-      <MenuPopup
-        align="start"
-        side="top"
-        className="min-w-72 rounded-lg border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] shadow-lg"
-      >
-        <MenuGroup>
-          <MenuGroupLabel>Local feature flags</MenuGroupLabel>
-          {FEATURE_FLAGS.map((flag) => {
-            if (flag.kind === "action") {
-              return (
-                <MenuItem key={flag.id} onClick={onTriggerActionFailedToasts} className="py-2">
-                  <div className="flex min-w-0 flex-col gap-0.5">
-                    <span>{flag.label}</span>
-                    <span className="text-[length:var(--app-font-size-ui-xs,10px)] leading-4 text-muted-foreground/70">
-                      {flag.description}
-                    </span>
-                  </div>
-                </MenuItem>
-              );
-            }
-
-            return (
-              <MenuCheckboxItem
-                key={flag.id}
-                checked={values[flag.id]}
-                onCheckedChange={(checked) => {
-                  setFeatureFlagEnabled(flag.id, Boolean(checked));
-                }}
-                variant="switch"
-                className="py-2"
-              >
-                <div className="flex min-w-0 flex-col gap-0.5">
-                  <span>{flag.label}</span>
-                  <span className="text-[length:var(--app-font-size-ui-xs,10px)] leading-4 text-muted-foreground/70">
-                    {flag.description}
-                  </span>
-                </div>
-              </MenuCheckboxItem>
-            );
-          })}
-        </MenuGroup>
-        <MenuSeparator />
-        <div className="px-2 py-1.5 text-[length:var(--app-font-size-ui-xs,10px)] leading-4 text-muted-foreground/58">
-          Stored only in this browser profile.
-        </div>
-      </MenuPopup>
-    </Menu>
   );
 }
 
