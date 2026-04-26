@@ -1007,7 +1007,9 @@ export const ComposerPromptEditor = forwardRef<
 ) {
   const initialValueRef = useRef(value);
   const initialTerminalContextsRef = useRef(terminalContexts);
-  const initialMentionReferencesRef = useRef(mentionReferences ?? []);
+  // Normalize once at the wrapper boundary so the inner editor can treat mention refs as concrete.
+  const normalizedMentionReferences = mentionReferences ?? [];
+  const initialMentionReferencesRef = useRef(normalizedMentionReferences);
   const initialConfig = useMemo<InitialConfigType>(
     () => ({
       namespace: "t3tools-composer-editor",
@@ -1038,7 +1040,7 @@ export const ComposerPromptEditor = forwardRef<
         value={value}
         cursor={cursor}
         terminalContexts={terminalContexts}
-        mentionReferences={mentionReferences}
+        mentionReferences={normalizedMentionReferences}
         disabled={disabled}
         placeholder={placeholder}
         onRemoveTerminalContext={onRemoveTerminalContext}

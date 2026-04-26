@@ -33,9 +33,9 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
       },
       {
         id: "api-key-voice-transcription",
-        title: "API-key transcription works again",
+        title: "Voice transcription setup is smoother",
         description:
-          "OpenAI API-key voice transcription is wired through, so local setups that use an API key can still turn spoken prompts into composer text.",
+          "Voice transcription setup was tightened so spoken prompts can flow into the composer more reliably in supported ChatGPT sessions.",
       },
       {
         id: "composer-mention-labels",
