@@ -22,6 +22,48 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.0.38",
+    date: "Apr 26",
+    features: [
+      {
+        id: "chatgpt-voice-transcription",
+        title: "Voice transcription is scoped more carefully",
+        description:
+          "Voice transcription now stays on ChatGPT sessions, avoiding confusing provider mismatches while keeping dictation available where it is supported.",
+      },
+      {
+        id: "api-key-voice-transcription",
+        title: "API-key transcription works again",
+        description:
+          "OpenAI API-key voice transcription is wired through, so local setups that use an API key can still turn spoken prompts into composer text.",
+      },
+      {
+        id: "composer-mention-labels",
+        title: "Mentions keep their names",
+        description:
+          "Composer replacements now preserve mention labels, so referenced files, apps, and tools remain readable after the prompt text is normalized.",
+      },
+      {
+        id: "plugin-mentions",
+        title: "Plugin mentions are handled in prompts",
+        description:
+          "Plugin references can now flow through composer prompts cleanly, making connected-tool context less brittle when you hand work to an agent.",
+      },
+      {
+        id: "toast-feature-flags",
+        title: "Toast behavior can be feature-flagged",
+        description:
+          "Toast notifications picked up feature-flag wiring, giving DP Code a safer way to roll notification changes forward or back.",
+      },
+      {
+        id: "desktop-bridge-reconnects",
+        title: "Desktop reconnects are steadier",
+        description:
+          "The desktop bridge now refreshes reconnects more reliably and preserves the workspace home directory, reducing drift after desktop runtime restarts.",
+      },
+    ],
+  },
+  {
     version: "0.0.37",
     date: "Apr 25",
     features: [
