@@ -14,7 +14,6 @@ import {
   getSidebarThreadIdsToPrewarm,
   getRenderedThreadsForSidebarProject,
   groupSidebarThreadsByProjectId,
-  groupSplitViewsByProjectId,
   getUnpinnedThreadsForSidebar,
   getVisibleSidebarThreadIds,
   getVisibleThreadsForProject,
@@ -24,7 +23,6 @@ import {
   pruneExpandedProjectThreadListsForCollapsedProjects,
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadEnvMode,
-  resolveSidebarRestorableThreadRoute,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
   shouldPrunePinnedThreads,
@@ -40,7 +38,6 @@ import {
   type SidebarThreadSummary,
   type Thread,
 } from "../types";
-import type { SplitView } from "../splitViewStore";
 
 function makeLatestTurn(overrides?: {
   completedAt?: string | null;
@@ -114,34 +111,6 @@ describe("resolveSidebarNewThreadEnvMode", () => {
         defaultEnvMode: "worktree",
       }),
     ).toBe("local");
-  });
-});
-
-describe("resolveSidebarRestorableThreadRoute", () => {
-  it("returns the last thread route when the thread still exists", () => {
-    expect(
-      resolveSidebarRestorableThreadRoute({
-        lastThreadRoute: {
-          threadId: "thread-123",
-          splitViewId: "split-456",
-        },
-        availableThreadIds: new Set(["thread-123", "thread-789"]),
-      }),
-    ).toEqual({
-      threadId: "thread-123",
-      splitViewId: "split-456",
-    });
-  });
-
-  it("returns null when the remembered thread no longer exists", () => {
-    expect(
-      resolveSidebarRestorableThreadRoute({
-        lastThreadRoute: {
-          threadId: "thread-123",
-        },
-        availableThreadIds: new Set(["thread-789"]),
-      }),
-    ).toBeNull();
   });
 });
 
@@ -876,6 +845,30 @@ describe("getSidebarThreadIdsToPrewarm", () => {
       }),
     ).toEqual([ThreadId.makeUnsafe("thread-1"), ThreadId.makeUnsafe("thread-2")]);
   });
+
+  it("prioritizes the active thread neighborhood before filling the limit", () => {
+    expect(
+      getSidebarThreadIdsToPrewarm({
+        visibleThreadIds: [
+          ThreadId.makeUnsafe("thread-1"),
+          ThreadId.makeUnsafe("thread-2"),
+          ThreadId.makeUnsafe("thread-3"),
+          ThreadId.makeUnsafe("thread-4"),
+          ThreadId.makeUnsafe("thread-5"),
+          ThreadId.makeUnsafe("thread-6"),
+        ],
+        activeThreadId: ThreadId.makeUnsafe("thread-5"),
+        limit: 5,
+        neighborRadius: 1,
+      }),
+    ).toEqual([
+      ThreadId.makeUnsafe("thread-4"),
+      ThreadId.makeUnsafe("thread-5"),
+      ThreadId.makeUnsafe("thread-6"),
+      ThreadId.makeUnsafe("thread-1"),
+      ThreadId.makeUnsafe("thread-2"),
+    ]);
+  });
 });
 
 function makeProject(overrides: Partial<Project> = {}): Project {
@@ -956,61 +949,34 @@ function makeSidebarThreadSummary(
   };
 }
 
-function makeSplitView(overrides: Partial<SplitView> = {}): SplitView {
-  return {
-    id: "split-1",
-    sourceThreadId: ThreadId.makeUnsafe("thread-1"),
-    ownerProjectId: ProjectId.makeUnsafe("project-1"),
-    leftThreadId: ThreadId.makeUnsafe("thread-1"),
-    rightThreadId: null,
-    focusedPane: "right",
-    ratio: 0.5,
-    leftPanel: {
-      panel: null,
-      diffTurnId: null,
-      diffFilePath: null,
-      hasOpenedPanel: false,
-      lastOpenPanel: "browser",
-    },
-    rightPanel: {
-      panel: null,
-      diffTurnId: null,
-      diffFilePath: null,
-      hasOpenedPanel: false,
-      lastOpenPanel: "browser",
-    },
-    createdAt: "2026-03-09T10:00:00.000Z",
-    updatedAt: "2026-03-09T10:00:00.000Z",
-    ...overrides,
-  };
-}
-
 describe("deriveSidebarProjectData", () => {
-  it("replaces a thread row with its split view entry", () => {
+  it("shows split member threads as normal project rows", () => {
     const project = makeProject();
-    const threadOne = makeSidebarThreadSummary({
-      id: ThreadId.makeUnsafe("thread-1"),
-      title: "One",
+    const sourceThread = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-source"),
+      title: "Source",
     });
-    const threadTwo = makeSidebarThreadSummary({
-      id: ThreadId.makeUnsafe("thread-2"),
-      title: "Two",
+    const droppedThread = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-dropped"),
+      title: "Dropped",
       createdAt: "2026-03-09T10:05:00.000Z",
       updatedAt: "2026-03-09T10:05:00.000Z",
     });
-    const splitView = makeSplitView({
-      sourceThreadId: threadOne.id,
-      ownerProjectId: project.id,
-      leftThreadId: threadOne.id,
+    const standaloneThread = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-standalone"),
+      title: "Standalone",
+      createdAt: "2026-03-09T10:10:00.000Z",
+      updatedAt: "2026-03-09T10:10:00.000Z",
     });
 
     const data = deriveSidebarProjectData({
       projects: [project],
-      sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId([threadOne, threadTwo]),
-      splitViewsByProjectId: groupSplitViewsByProjectId([splitView]),
-      splitViewBySourceThreadId: new Map([[splitView.sourceThreadId, splitView]]),
+      sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId([
+        sourceThread,
+        droppedThread,
+        standaloneThread,
+      ]),
       pinnedThreadIds: [],
-      pinnedThreadIdSet: new Set(),
       expandedParentThreadIds: new Set(),
       expandedThreadListProjectCwds: new Set(),
       normalizeProjectCwd: (cwd) => cwd,
@@ -1019,14 +985,9 @@ describe("deriveSidebarProjectData", () => {
     });
 
     expect(data.get(project.id)?.visibleEntries).toEqual([
-      expect.objectContaining({
-        kind: "split",
-        rowId: splitView.sourceThreadId,
-      }),
-      expect.objectContaining({
-        kind: "thread",
-        rowId: threadTwo.id,
-      }),
+      expect.objectContaining({ kind: "thread", rowId: sourceThread.id }),
+      expect.objectContaining({ kind: "thread", rowId: droppedThread.id }),
+      expect.objectContaining({ kind: "thread", rowId: standaloneThread.id }),
     ]);
   });
 
@@ -1056,10 +1017,7 @@ describe("deriveSidebarProjectData", () => {
         threadTwo,
         threadThree,
       ]),
-      splitViewsByProjectId: groupSplitViewsByProjectId([]),
-      splitViewBySourceThreadId: new Map(),
       pinnedThreadIds: [],
-      pinnedThreadIdSet: new Set(),
       expandedParentThreadIds: new Set(),
       expandedThreadListProjectCwds: new Set(),
       normalizeProjectCwd: (cwd) => cwd,
@@ -1089,10 +1047,7 @@ describe("deriveSidebarProjectData", () => {
     const data = deriveSidebarProjectData({
       projects: [project],
       sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId([threadOne]),
-      splitViewsByProjectId: groupSplitViewsByProjectId([]),
-      splitViewBySourceThreadId: new Map(),
       pinnedThreadIds: [],
-      pinnedThreadIdSet: new Set(),
       expandedParentThreadIds: new Set(),
       expandedThreadListProjectCwds: new Set(),
       normalizeProjectCwd: (cwd) => cwd,

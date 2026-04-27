@@ -6,6 +6,7 @@ import "@fontsource-variable/jetbrains-mono";
 import "katex/dist/katex.min.css";
 import "@xterm/xterm/css/xterm.css";
 import "./index.css";
+import "./storageKeyMigration";
 
 import { appHistory } from "./appNavigation";
 import { getRouter } from "./router";

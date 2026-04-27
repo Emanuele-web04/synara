@@ -15,7 +15,7 @@ interface PinnedThreadsStoreState {
   prunePinnedThreads: (threadIds: readonly ThreadId[]) => void;
 }
 
-const PINNED_THREADS_STORAGE_KEY = "t3code:pinned-threads:v1";
+const PINNED_THREADS_STORAGE_KEY = "dpcode:pinned-threads:v1";
 
 function normalizePinnedThreadIds(threadIds: readonly ThreadId[]): ThreadId[] {
   const seen = new Set<ThreadId>();

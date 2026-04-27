@@ -72,32 +72,53 @@ function makeDraftThread(overrides: Partial<DraftThreadState> = {}): DraftThread
   };
 }
 
-function makeSplitView(overrides: Partial<SplitView> = {}): SplitView {
+interface SplitViewLayoutOverrides {
+  firstThreadId?: ThreadId | null;
+  secondThreadId?: ThreadId | null;
+  focusedSide?: "first" | "second";
+}
+
+function makeSplitView(overrides: SplitViewLayoutOverrides = {}): SplitView {
+  const firstLeaf = {
+    kind: "leaf" as const,
+    id: "pane-first",
+    threadId: overrides.firstThreadId === undefined ? THREAD_A : overrides.firstThreadId,
+    panel: {
+      panel: null,
+      diffTurnId: null,
+      diffFilePath: null,
+      hasOpenedPanel: false,
+      lastOpenPanel: "browser" as const,
+    },
+  };
+  const secondLeaf = {
+    kind: "leaf" as const,
+    id: "pane-second",
+    threadId: overrides.secondThreadId === undefined ? THREAD_B : overrides.secondThreadId,
+    panel: {
+      panel: null,
+      diffTurnId: null,
+      diffFilePath: null,
+      hasOpenedPanel: false,
+      lastOpenPanel: "browser" as const,
+    },
+  };
+  const focusedSide = overrides.focusedSide ?? "second";
   return {
     id: "split-1",
     sourceThreadId: THREAD_A,
     ownerProjectId: PROJECT_ID,
-    leftThreadId: THREAD_A,
-    rightThreadId: THREAD_B,
-    focusedPane: "right",
-    ratio: 0.5,
-    leftPanel: {
-      panel: null,
-      diffTurnId: null,
-      diffFilePath: null,
-      hasOpenedPanel: false,
-      lastOpenPanel: "browser",
+    root: {
+      kind: "split",
+      id: "split-root",
+      direction: "horizontal",
+      first: firstLeaf,
+      second: secondLeaf,
+      ratio: 0.5,
     },
-    rightPanel: {
-      panel: null,
-      diffTurnId: null,
-      diffFilePath: null,
-      hasOpenedPanel: false,
-      lastOpenPanel: "browser",
-    },
+    focusedPaneId: focusedSide === "first" ? firstLeaf.id : secondLeaf.id,
     createdAt: "2026-04-07T10:00:00.000Z",
     updatedAt: "2026-04-07T10:00:00.000Z",
-    ...overrides,
   };
 }
 
@@ -120,8 +141,8 @@ describe("resolveFocusedChatContext", () => {
     const context = resolveFocusedChatContext({
       routeThreadId: THREAD_A,
       splitView: makeSplitView({
-        rightThreadId: null,
-        focusedPane: "right",
+        secondThreadId: null,
+        focusedSide: "second",
       }),
       threads: [makeThread(THREAD_A)],
       projects: [makeProject()],
@@ -138,8 +159,8 @@ describe("resolveFocusedChatContext", () => {
     const context = resolveFocusedChatContext({
       routeThreadId: THREAD_A,
       splitView: makeSplitView({
-        rightThreadId: draftThreadId,
-        focusedPane: "right",
+        secondThreadId: draftThreadId,
+        focusedSide: "second",
       }),
       threads: [makeThread(THREAD_A)],
       projects: [makeProject()],

@@ -83,13 +83,17 @@ const MARKDOWN_REMARK_PLUGINS: MarkdownRemarkPlugins = [
 ];
 const LITERAL_DOLLAR_PLACEHOLDER = "CHATMARKDOWNLITERALDOLLARPLACEHOLDER";
 
+function restoreLiteralDollarPlaceholders(value: string): string {
+  return value.replaceAll(LITERAL_DOLLAR_PLACEHOLDER, "$");
+}
+
 function restoreLiteralDollarsInNode(node: unknown): void {
   if (!node || typeof node !== "object") {
     return;
   }
 
   if ("type" in node && node.type === "text" && "value" in node && typeof node.value === "string") {
-    node.value = node.value.replaceAll(LITERAL_DOLLAR_PLACEHOLDER, "$");
+    node.value = restoreLiteralDollarPlaceholders(node.value);
   }
 
   if ("children" in node && Array.isArray(node.children)) {
@@ -292,6 +296,99 @@ function protectLiteralDollarsInPlainText(value: string): string {
   return result;
 }
 
+function findMarkdownBracketEnd(value: string, startIndex: number): number {
+  let depth = 0;
+  let cursor = startIndex;
+
+  while (cursor < value.length) {
+    if (value[cursor] === "\\") {
+      cursor += 2;
+      continue;
+    }
+    if (value[cursor] === "[") {
+      depth += 1;
+    } else if (value[cursor] === "]") {
+      depth -= 1;
+      if (depth === 0) {
+        return cursor;
+      }
+    }
+    cursor += 1;
+  }
+
+  return -1;
+}
+
+function findMarkdownParenEnd(value: string, startIndex: number): number {
+  let depth = 0;
+  let cursor = startIndex;
+
+  while (cursor < value.length) {
+    if (value[cursor] === "\\") {
+      cursor += 2;
+      continue;
+    }
+    if (value[cursor] === "(") {
+      depth += 1;
+    } else if (value[cursor] === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        return cursor;
+      }
+    }
+    cursor += 1;
+  }
+
+  return -1;
+}
+
+function findInlineMarkdownLinkEnd(value: string, index: number): number {
+  const bracketStart = value[index] === "!" && value[index + 1] === "[" ? index + 1 : index;
+  if (value[bracketStart] !== "[") {
+    return -1;
+  }
+
+  const bracketEnd = findMarkdownBracketEnd(value, bracketStart);
+  if (bracketEnd === -1 || value[bracketEnd + 1] !== "(") {
+    return -1;
+  }
+
+  const parenEnd = findMarkdownParenEnd(value, bracketEnd + 1);
+  return parenEnd === -1 ? -1 : parenEnd + 1;
+}
+
+function protectLiteralDollarsInMarkdownLinks(value: string): string {
+  let result = "";
+  let cursor = 0;
+
+  while (cursor < value.length) {
+    const isLinkStart =
+      value[cursor] === "[" || (value[cursor] === "!" && value[cursor + 1] === "[");
+    if (!isLinkStart) {
+      const nextLinkStart = value.indexOf("[", cursor);
+      const nextImageStart = value.indexOf("![", cursor);
+      const candidates = [nextLinkStart, nextImageStart].filter((candidate) => candidate >= 0);
+      const nextIndex = candidates.length > 0 ? Math.min(...candidates) : value.length;
+      result += protectLiteralDollarsInPlainText(value.slice(cursor, nextIndex));
+      cursor = nextIndex;
+      continue;
+    }
+
+    const linkEnd = findInlineMarkdownLinkEnd(value, cursor);
+    if (linkEnd === -1) {
+      result += protectLiteralDollarsInPlainText(value[cursor] ?? "");
+      cursor += 1;
+      continue;
+    }
+
+    // Inline links are parsed after math, so protect route params like `_chat.$threadId.tsx`.
+    result += value.slice(cursor, linkEnd).replaceAll("$", LITERAL_DOLLAR_PLACEHOLDER);
+    cursor = linkEnd;
+  }
+
+  return result;
+}
+
 // Tighten single-dollar math so currency and escaped dollars stay literal without touching code spans.
 function protectLiteralMarkdownDollars(value: string): string {
   let result = "";
@@ -330,7 +427,7 @@ function protectLiteralMarkdownDollars(value: string): string {
       nextCodeIndex += 1;
     }
 
-    result += protectLiteralDollarsInPlainText(value.slice(cursor, nextCodeIndex));
+    result += protectLiteralDollarsInMarkdownLinks(value.slice(cursor, nextCodeIndex));
     cursor = nextCodeIndex;
   }
 
@@ -519,20 +616,22 @@ function ChatMarkdown({
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const normalizedText = useMemo(() => protectLiteralMarkdownDollars(text), [text]);
   const markdownUrlTransform = useCallback((href: string) => {
-    return rewriteMarkdownFileUriHref(href) ?? defaultUrlTransform(href);
+    const restoredHref = restoreLiteralDollarPlaceholders(href);
+    return rewriteMarkdownFileUriHref(restoredHref) ?? defaultUrlTransform(restoredHref);
   }, []);
   const markdownComponents = useMemo<Components>(
     () => ({
       a({ node: _node, href, ...props }) {
-        const targetPath = resolveMarkdownFileLinkTarget(href, cwd);
+        const restoredHref = href ? restoreLiteralDollarPlaceholders(href) : href;
+        const targetPath = resolveMarkdownFileLinkTarget(restoredHref, cwd);
         if (!targetPath) {
-          return <a {...props} href={href} target="_blank" rel="noopener noreferrer" />;
+          return <a {...props} href={restoredHref} target="_blank" rel="noopener noreferrer" />;
         }
 
         return (
           <a
             {...props}
-            href={href}
+            href={restoredHref}
             onClick={(event) => {
               event.preventDefault();
               event.stopPropagation();

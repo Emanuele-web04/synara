@@ -1,7 +1,22 @@
+// FILE: NodePTY.ts
+// Purpose: Provides the Node.js-backed PTY adapter used by terminal sessions.
+// Layer: Terminal infrastructure
+// Depends on: node-pty native bindings, Effect layers, PTY service contract
+
 import { createRequire } from "node:module";
 
 import { Effect, FileSystem, Layer, Path } from "effect";
-import { PtyAdapter, PtyAdapterShape, PtyExitEvent, PtyProcess } from "../Services/PTY";
+import {
+  PtyAdapter,
+  PtyAdapterShape,
+  PtyExitEvent,
+  PtyProcess,
+  PtySpawnInput,
+  PtySpawnError,
+} from "../Services/PTY";
+
+type NodePtyModule = typeof import("node-pty");
+type NodePtyLoader = () => Promise<NodePtyModule>;
 
 let didEnsureSpawnHelperExecutable = false;
 
@@ -92,34 +107,58 @@ class NodePtyProcess implements PtyProcess {
   }
 }
 
-export const layer = Layer.effect(
-  PtyAdapter,
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
+// Creates the adapter layer with an injectable loader so startup/lazy-load behavior is testable.
+export const makeNodePtyLayer = (loadNodePtyModule: NodePtyLoader = () => import("node-pty")) =>
+  Layer.effect(
+    PtyAdapter,
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
 
-    const nodePty = yield* Effect.promise(() => import("node-pty"));
+      // Load node-pty lazily so a bad packaged native binding cannot crash server startup.
+      const loadNodePty = yield* Effect.cached(
+        Effect.tryPromise({
+          try: loadNodePtyModule,
+          catch: (cause) =>
+            new PtySpawnError({
+              adapter: "node-pty",
+              message: "Failed to load node-pty native module",
+              cause,
+            }),
+        }),
+      );
+      const ensureNodePtySpawnHelperExecutableCached = yield* Effect.cached(
+        ensureNodePtySpawnHelperExecutable().pipe(
+          Effect.provideService(FileSystem.FileSystem, fs),
+          Effect.provideService(Path.Path, path),
+          Effect.orElseSucceed(() => undefined),
+        ),
+      );
 
-    const ensureNodePtySpawnHelperExecutableCached = yield* Effect.cached(
-      ensureNodePtySpawnHelperExecutable().pipe(
-        Effect.provideService(FileSystem.FileSystem, fs),
-        Effect.provideService(Path.Path, path),
-        Effect.orElseSucceed(() => undefined),
-      ),
-    );
+      return {
+        spawn: Effect.fn(function* (input: PtySpawnInput) {
+          const nodePty = yield* loadNodePty;
+          yield* ensureNodePtySpawnHelperExecutableCached;
+          const ptyProcess = yield* Effect.try({
+            try: () =>
+              nodePty.spawn(input.shell, input.args ?? [], {
+                cwd: input.cwd,
+                cols: input.cols,
+                rows: input.rows,
+                env: input.env,
+                name: globalThis.process.platform === "win32" ? "xterm-color" : "xterm-256color",
+              }),
+            catch: (cause) =>
+              new PtySpawnError({
+                adapter: "node-pty",
+                message: "Failed to spawn PTY process",
+                cause,
+              }),
+          });
+          return new NodePtyProcess(ptyProcess);
+        }),
+      } satisfies PtyAdapterShape;
+    }),
+  );
 
-    return {
-      spawn: Effect.fn(function* (input) {
-        yield* ensureNodePtySpawnHelperExecutableCached;
-        const ptyProcess = nodePty.spawn(input.shell, input.args ?? [], {
-          cwd: input.cwd,
-          cols: input.cols,
-          rows: input.rows,
-          env: input.env,
-          name: globalThis.process.platform === "win32" ? "xterm-color" : "xterm-256color",
-        });
-        return new NodePtyProcess(ptyProcess);
-      }),
-    } satisfies PtyAdapterShape;
-  }),
-);
+export const layer = makeNodePtyLayer();

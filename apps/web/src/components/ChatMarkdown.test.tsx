@@ -62,6 +62,19 @@ describe("ChatMarkdown", () => {
     expect(markup.match(/class="katex"/g) ?? []).toHaveLength(1);
   });
 
+  it("keeps dollar signs in markdown file links from becoming math", async () => {
+    const source =
+      "Files touched:\n\n- [_chat.$threadId.tsx](/Users/julius/project/apps/web/src/routes/_chat.$threadId.tsx:1192)";
+    const markup = await renderMarkdown(source, "/Users/julius/project");
+
+    expect(markup).toContain(
+      'href="/Users/julius/project/apps/web/src/routes/_chat.$threadId.tsx:1192"',
+    );
+    expect(markup).toContain("_chat.$threadId.tsx");
+    expect(markup).not.toContain('class="katex"');
+    expect(markup).not.toContain("CHATMARKDOWNLITERALDOLLARPLACEHOLDER");
+  });
+
   it("does not turn ordinary dollar text or escaped dollars into math", async () => {
     const markup = await renderMarkdown(
       "It costs $5 to $10 per seat. Escape \\$E=mc^2\\$ when you want literal TeX.",

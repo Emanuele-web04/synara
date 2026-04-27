@@ -5,6 +5,7 @@ import {
   getRetainedThreadDetailIdsSnapshot,
   resetRetainedThreadDetailSubscriptionsForTests,
   retainThreadDetailSubscription,
+  subscribeRetainedThreadDetailIdChanges,
 } from "./threadDetailSubscriptionRetention";
 
 describe("threadDetailSubscriptionRetention", () => {
@@ -43,6 +44,22 @@ describe("threadDetailSubscriptionRetention", () => {
     vi.advanceTimersByTime(15 * 60 * 1000);
 
     expect(getRetainedThreadDetailIdsSnapshot()).toEqual([]);
+  });
+
+  it("notifies imperative listeners when retained ids change", () => {
+    vi.useFakeTimers();
+    const threadId = ThreadId.makeUnsafe("thread-listener");
+    const snapshots: ThreadId[][] = [];
+    const unsubscribe = subscribeRetainedThreadDetailIdChanges((threadIds) => {
+      snapshots.push([...threadIds]);
+    });
+
+    const release = retainThreadDetailSubscription(threadId);
+    release();
+    vi.advanceTimersByTime(15 * 60 * 1000);
+    unsubscribe();
+
+    expect(snapshots).toEqual([[threadId], []]);
   });
 
   it("cancels eviction when a thread is retained again before timeout", () => {

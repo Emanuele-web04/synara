@@ -81,7 +81,7 @@ describe("Sidebar.uiState", () => {
 
   it("ignores malformed persisted project thread list entries", () => {
     window.localStorage.setItem(
-      "t3code:sidebar-ui:v1",
+      "dpcode:sidebar-ui:v1",
       JSON.stringify({
         chatSectionExpanded: true,
         chatThreadListExpanded: false,
@@ -115,7 +115,7 @@ describe("Sidebar.uiState", () => {
 
   it("drops malformed persisted last thread routes", () => {
     window.localStorage.setItem(
-      "t3code:sidebar-ui:v1",
+      "dpcode:sidebar-ui:v1",
       JSON.stringify({
         lastThreadRoute: {
           threadId: 42,

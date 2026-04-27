@@ -53,7 +53,7 @@ interface ThreadTerminalState {
   activeTerminalGroupId: string;
 }
 
-const TERMINAL_STATE_STORAGE_KEY = "t3code:terminal-state:v1";
+const TERMINAL_STATE_STORAGE_KEY = "dpcode:terminal-state:v1";
 
 function normalizeTerminalIds(terminalIds: string[]): string[] {
   const ids = [...new Set(terminalIds.map((id) => id.trim()).filter((id) => id.length > 0))];
