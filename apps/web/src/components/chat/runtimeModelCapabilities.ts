@@ -15,6 +15,7 @@ import {
   normalizeModelSlug,
   trimOrNull,
 } from "@t3tools/shared/model";
+import { normalizeCursorModelVariantBaseId } from "../../cursorModelVariants";
 
 function runtimeEffortLabel(value: string): string {
   switch (value) {
@@ -57,7 +58,14 @@ export function resolveRuntimeModelDescriptor(input: {
 
   return runtimeModels.find((candidate) => {
     const normalizedCandidate = normalizeModelSlug(candidate.slug, provider) ?? candidate.slug;
-    return normalizedCandidate === normalizedModel;
+    if (normalizedCandidate === normalizedModel) {
+      return true;
+    }
+    return (
+      provider === "cursor" &&
+      normalizeCursorModelVariantBaseId(normalizedCandidate) ===
+        normalizeCursorModelVariantBaseId(normalizedModel)
+    );
   });
 }
 
@@ -70,18 +78,28 @@ export function getRuntimeAwareModelCapabilities(input: {
   const staticCapabilities = getModelCapabilities(input.provider, input.model);
   // Runtime discovery is authoritative when available; the static table is only a startup fallback.
   const supportsFastMode =
-    input.provider === "codex" && input.runtimeModel
+    (input.provider === "codex" || input.provider === "cursor") && input.runtimeModel
       ? input.runtimeModel.supportsFastMode === true
       : staticCapabilities.supportsFastMode;
+  const supportsThinkingToggle =
+    input.runtimeModel?.supportsThinkingToggle ?? staticCapabilities.supportsThinkingToggle;
+  const contextWindowOptions =
+    input.runtimeModel?.contextWindowOptions?.map((option) => ({
+      value: option.value,
+      label: option.label,
+      ...(option.isDefault === true ? { isDefault: true as const } : {}),
+    })) ?? staticCapabilities.contextWindowOptions;
   const runtimeEfforts = input.runtimeModel?.supportedReasoningEfforts;
   if (
-    (input.provider !== "codex" && input.provider !== "opencode") ||
+    (input.provider !== "codex" && input.provider !== "cursor" && input.provider !== "opencode") ||
     !runtimeEfforts ||
     runtimeEfforts.length === 0
   ) {
     return {
       ...staticCapabilities,
       supportsFastMode,
+      supportsThinkingToggle,
+      contextWindowOptions,
     };
   }
 
@@ -106,12 +124,16 @@ export function getRuntimeAwareModelCapabilities(input: {
     return {
       ...staticCapabilities,
       variantOptions: runtimeOptions,
+      supportsThinkingToggle,
+      contextWindowOptions,
     };
   }
 
   return {
     ...staticCapabilities,
     supportsFastMode,
+    supportsThinkingToggle,
+    contextWindowOptions,
     reasoningEffortLevels: runtimeOptions,
   };
 }

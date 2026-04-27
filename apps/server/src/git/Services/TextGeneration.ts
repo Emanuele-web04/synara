@@ -171,6 +171,14 @@ export class OpenCodeTextGeneration extends ServiceMap.Service<
 >()("t3/git/Services/TextGeneration/OpenCodeTextGeneration") {}
 
 /**
+ * CursorTextGeneration - Provider-specific Cursor implementation for git text generation.
+ */
+export class CursorTextGeneration extends ServiceMap.Service<
+  CursorTextGeneration,
+  TextGenerationShape
+>()("t3/git/Services/TextGeneration/CursorTextGeneration") {}
+
+/**
  * TextGeneration - Service tag for commit and PR text generation.
  */
 export class TextGeneration extends ServiceMap.Service<TextGeneration, TextGenerationShape>()(

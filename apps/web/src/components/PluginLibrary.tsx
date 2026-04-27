@@ -26,7 +26,7 @@ import {
   SiStripe,
   SiVercel,
 } from "react-icons/si";
-import { ClaudeAI, Gemini, OpenCodeIcon } from "./Icons";
+import { ClaudeAI, CursorIcon, Gemini, OpenCodeIcon } from "./Icons";
 import { useStore } from "~/store";
 import {
   buildPluginSearchBlob,
@@ -79,12 +79,14 @@ type PluginBrandArtwork = {
 const PROVIDER_ICON: Record<ProviderKind, React.FC<React.SVGProps<SVGSVGElement>>> = {
   codex: HammerIcon,
   claudeAgent: ClaudeAI,
+  cursor: CursorIcon,
   gemini: Gemini,
   opencode: OpenCodeIcon,
 };
 const PROVIDER_DISCOVERY_ORDER: ReadonlyArray<ProviderKind> = [
   "codex",
   "claudeAgent",
+  "cursor",
   "gemini",
   "opencode",
 ];
@@ -385,6 +387,7 @@ export function PluginLibrary() {
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const codexCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("codex"));
   const claudeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("claudeAgent"));
+  const cursorCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("cursor"));
   const geminiCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("gemini"));
   const openCodeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("opencode"));
 
@@ -398,6 +401,10 @@ export function PluginLibrary() {
         plugins: supportsPluginDiscovery(claudeCapabilitiesQuery.data),
         skills: supportsSkillDiscovery(claudeCapabilitiesQuery.data),
       },
+      cursor: {
+        plugins: supportsPluginDiscovery(cursorCapabilitiesQuery.data),
+        skills: supportsSkillDiscovery(cursorCapabilitiesQuery.data),
+      },
       gemini: {
         plugins: supportsPluginDiscovery(geminiCapabilitiesQuery.data),
         skills: supportsSkillDiscovery(geminiCapabilitiesQuery.data),
@@ -410,6 +417,7 @@ export function PluginLibrary() {
     [
       claudeCapabilitiesQuery.data,
       codexCapabilitiesQuery.data,
+      cursorCapabilitiesQuery.data,
       geminiCapabilitiesQuery.data,
       openCodeCapabilitiesQuery.data,
     ],

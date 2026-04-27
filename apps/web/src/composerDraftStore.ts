@@ -1,6 +1,7 @@
 import {
   type ClaudeCodeEffort,
   type CodexReasoningEffort,
+  type CursorModelOptions,
   type GeminiThinkingBudget,
   type GeminiThinkingLevel,
   type ModelSlug,
@@ -661,7 +662,11 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
 }
 
 function normalizeProviderKind(value: unknown): ProviderKind | null {
-  return value === "codex" || value === "claudeAgent" || value === "gemini" || value === "opencode"
+  return value === "codex" ||
+    value === "claudeAgent" ||
+    value === "cursor" ||
+    value === "gemini" ||
+    value === "opencode"
     ? value
     : null;
 }
@@ -698,6 +703,14 @@ function makeModelSelection(
             }
           : {}),
       };
+    case "cursor":
+      return {
+        provider,
+        model,
+        ...(options
+          ? { options: options as Extract<ModelSelection, { provider: "cursor" }>["options"] }
+          : {}),
+      };
     case "gemini":
       return {
         provider,
@@ -730,6 +743,10 @@ function normalizeProviderModelOptions(
   const claudeCandidate =
     candidate?.claudeAgent && typeof candidate.claudeAgent === "object"
       ? (candidate.claudeAgent as Record<string, unknown>)
+      : null;
+  const cursorCandidate =
+    candidate?.cursor && typeof candidate.cursor === "object"
+      ? (candidate.cursor as Record<string, unknown>)
       : null;
   const geminiCandidate =
     candidate?.gemini && typeof candidate.gemini === "object"
@@ -805,6 +822,35 @@ function normalizeProviderModelOptions(
           ...(claudeEffort !== undefined ? { effort: claudeEffort } : {}),
           ...(claudeFastMode !== undefined ? { fastMode: claudeFastMode } : {}),
           ...(claudeContextWindow !== undefined ? { contextWindow: claudeContextWindow } : {}),
+      }
+      : undefined;
+
+  const cursorReasoningEffort = trimStringOrUndefined(cursorCandidate?.reasoningEffort);
+  const cursorFastMode =
+    cursorCandidate?.fastMode === true
+      ? true
+      : cursorCandidate?.fastMode === false
+        ? false
+        : undefined;
+  const cursorThinking =
+    cursorCandidate?.thinking === true
+      ? true
+      : cursorCandidate?.thinking === false
+        ? false
+        : undefined;
+  const cursorContextWindow = trimStringOrUndefined(cursorCandidate?.contextWindow);
+  const cursor: CursorModelOptions | undefined =
+    cursorReasoningEffort !== undefined ||
+    cursorFastMode !== undefined ||
+    cursorThinking !== undefined ||
+    cursorContextWindow !== undefined
+      ? {
+          ...(cursorReasoningEffort !== undefined
+            ? { reasoningEffort: cursorReasoningEffort }
+            : {}),
+          ...(cursorFastMode !== undefined ? { fastMode: cursorFastMode } : {}),
+          ...(cursorThinking !== undefined ? { thinking: cursorThinking } : {}),
+          ...(cursorContextWindow !== undefined ? { contextWindow: cursorContextWindow } : {}),
         }
       : undefined;
 
@@ -840,12 +886,13 @@ function normalizeProviderModelOptions(
           ...(openCodeAgent !== undefined ? { agent: openCodeAgent } : {}),
         }
       : undefined;
-  if (!codex && !claude && !gemini && !opencode) {
+  if (!codex && !claude && !cursor && !gemini && !opencode) {
     return null;
   }
   return {
     ...(codex ? { codex } : {}),
     ...(claude ? { claudeAgent: claude } : {}),
+    ...(cursor ? { cursor } : {}),
     ...(gemini ? { gemini } : {}),
     ...(opencode ? { opencode } : {}),
   };
@@ -893,9 +940,11 @@ function normalizeModelSelection(
           : modelOptions?.claudeAgent
         : provider === "gemini"
           ? modelOptions?.gemini
-          : provider === "opencode"
-            ? modelOptions?.opencode
-            : undefined;
+          : provider === "cursor"
+            ? modelOptions?.cursor
+            : provider === "opencode"
+              ? modelOptions?.opencode
+              : undefined;
   return makeModelSelection(provider, model, options);
 }
 
@@ -953,7 +1002,7 @@ function legacyToModelSelectionByProvider(
   const result: Partial<Record<ProviderKind, ModelSelection>> = {};
   // Add entries from the options bag (for non-active providers)
   if (modelOptions) {
-    for (const provider of ["codex", "claudeAgent", "gemini", "opencode"] as const) {
+    for (const provider of ["codex", "claudeAgent", "cursor", "gemini", "opencode"] as const) {
       const options = modelOptions[provider];
       if (options && Object.keys(options).length > 0) {
         result[provider] = makeModelSelection(
@@ -1057,7 +1106,7 @@ export function resolvePreferredComposerModelSelection(input: {
   defaultProvider?: ProviderKind | null | undefined;
 }): ModelSelection {
   const draftProviderWithSelection =
-    (["codex", "claudeAgent", "gemini", "opencode"] as const).find(
+    (["codex", "claudeAgent", "cursor", "gemini", "opencode"] as const).find(
       (provider) => input.draft?.modelSelectionByProvider?.[provider] !== undefined,
     ) ?? null;
   const preferredProvider =
@@ -2541,7 +2590,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           }
           const base = existing ?? createEmptyThreadDraft();
           const nextMap = { ...base.modelSelectionByProvider };
-          for (const provider of ["codex", "claudeAgent", "gemini", "opencode"] as const) {
+          for (const provider of ["codex", "claudeAgent", "cursor", "gemini", "opencode"] as const) {
             // Only touch providers explicitly present in the input
             if (!normalizedOpts || !(provider in normalizedOpts)) continue;
             const opts = normalizedOpts[provider];

@@ -16,6 +16,10 @@ const MODEL_OPTIONS_BY_PROVIDER = {
     { slug: "gpt-5-codex", name: "GPT-5 Codex" },
     { slug: "gpt-5.3-codex", name: "GPT-5.3 Codex" },
   ],
+  cursor: [
+    { slug: "auto", name: "Auto" },
+    { slug: "composer-2", name: "Composer 2" },
+  ],
   gemini: [
     { slug: "auto-gemini-3", name: "Auto Gemini 3" },
     { slug: "gemini-2.5-pro", name: "Gemini 2.5 Pro" },
@@ -39,6 +43,13 @@ const MODEL_OPTIONS_BY_PROVIDER = {
 const MANY_OPENCODE_MODELS = Array.from({ length: 16 }, (_, index) => ({
   slug: `${index % 2 === 0 ? "openai" : "anthropic"}/model-${index + 1}` as ModelSlug,
   name: `${index % 2 === 0 ? "GPT" : "Claude"} ${index + 1}`,
+  upstreamProviderId: index % 2 === 0 ? "openai" : "anthropic",
+  upstreamProviderName: index % 2 === 0 ? "OpenAI" : "Anthropic",
+})) satisfies ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>;
+
+const MANY_CURSOR_MODELS = Array.from({ length: 16 }, (_, index) => ({
+  slug: `cursor-model-${index + 1}` as ModelSlug,
+  name: `${index % 2 === 0 ? "GPT" : "Claude"} Cursor ${index + 1}`,
   upstreamProviderId: index % 2 === 0 ? "openai" : "anthropic",
   upstreamProviderName: index % 2 === 0 ? "OpenAI" : "Anthropic",
 })) satisfies ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>;
@@ -210,6 +221,36 @@ describe("ProviderModelPicker", () => {
         .toBeInTheDocument();
       await expect
         .element(page.getByRole("menuitemradio", { name: "GPT 1" }))
+        .not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("filters Cursor models by upstream provider name", async () => {
+    const mounted = await mountPicker({
+      provider: "cursor",
+      model: MANY_CURSOR_MODELS[0]!.slug,
+      lockedProvider: "cursor",
+      modelOptionsByProvider: {
+        ...MODEL_OPTIONS_BY_PROVIDER,
+        cursor: MANY_CURSOR_MODELS,
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+      await page.getByPlaceholder("Search models or providers").fill("Anthropic");
+
+      await vi.waitFor(() => {
+        expect(document.body.textContent ?? "").toContain("Claude Cursor 2");
+      });
+
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "Claude Cursor 2" }))
+        .toBeInTheDocument();
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "GPT Cursor 1" }))
         .not.toBeInTheDocument();
     } finally {
       await mounted.cleanup();

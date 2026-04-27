@@ -15,6 +15,7 @@ import { randomUUID } from "./utils";
 const HANDOFF_PROVIDER_ORDER: ReadonlyArray<ProviderKind> = [
   "codex",
   "claudeAgent",
+  "cursor",
   "gemini",
   "opencode",
 ];

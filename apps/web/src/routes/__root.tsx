@@ -725,6 +725,9 @@ function EventRouter() {
         queryKey: ["provider-discovery", "models", "opencode"],
       });
       void queryClient.invalidateQueries({
+        queryKey: ["provider-discovery", "models", "cursor"],
+      });
+      void queryClient.invalidateQueries({
         queryKey: providerDiscoveryQueryKeys.agents("opencode"),
       });
     });

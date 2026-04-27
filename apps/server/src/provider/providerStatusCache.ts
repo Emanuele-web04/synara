@@ -12,6 +12,7 @@ import { Cause, Effect, FileSystem, Path, Schema } from "effect";
 const PROVIDER_STATUS_CACHE_IDS = [
   "codex",
   "claudeAgent",
+  "cursor",
   "gemini",
   "opencode",
 ] as const satisfies ReadonlyArray<ServerProviderStatus["provider"]>;

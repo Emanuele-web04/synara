@@ -27,7 +27,7 @@ import { TbExchange } from "react-icons/tb";
 
 import ChatView from "../components/ChatView";
 import BrowserPanel from "../components/BrowserPanel";
-import { ClaudeAI, Gemini, OpenAI, OpenCodeIcon } from "../components/Icons";
+import { ClaudeAI, CursorIcon, Gemini, OpenAI, OpenCodeIcon } from "../components/Icons";
 import { DiffWorkerPoolProvider } from "../components/DiffWorkerPoolProvider";
 import {
   DiffPanelHeaderSkeleton,
@@ -505,6 +505,9 @@ function SplitPaneEmptyState(props: {
 function PickerProviderGlyph(props: { provider: ProviderKind; className?: string }) {
   if (props.provider === "claudeAgent") {
     return <ClaudeAI aria-hidden="true" className={cn("text-foreground", props.className)} />;
+  }
+  if (props.provider === "cursor") {
+    return <CursorIcon aria-hidden="true" className={cn("text-foreground", props.className)} />;
   }
   if (props.provider === "gemini") {
     return <Gemini aria-hidden="true" className={cn("text-foreground", props.className)} />;

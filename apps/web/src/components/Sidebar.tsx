@@ -111,7 +111,7 @@ import { dispatchThreadRename } from "../lib/threadRename";
 import { quotePosixShellArgument } from "../lib/shellQuote";
 import { DEFAULT_THREAD_TERMINAL_ID, type SidebarThreadSummary, type Thread } from "../types";
 import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
-import { ClaudeAI, Gemini, OpenAI, OpenCodeIcon } from "./Icons";
+import { ClaudeAI, CursorIcon, Gemini, OpenAI, OpenCodeIcon } from "./Icons";
 import { AppNavigationButtons } from "./AppNavigationButtons";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
@@ -359,6 +359,9 @@ function ProviderGlyph({ provider, className }: { provider: ProviderKind; classN
   }
   if (provider === "gemini") {
     return <Gemini aria-hidden="true" className={cn("text-foreground", className)} />;
+  }
+  if (provider === "cursor") {
+    return <CursorIcon aria-hidden="true" className={cn("text-foreground", className)} />;
   }
   if (provider === "opencode") {
     return (
@@ -2016,6 +2019,8 @@ export default function Sidebar() {
       const title =
         provider === "claudeAgent"
           ? `Imported Claude session${suffix ? ` ${suffix}` : ""}`
+          : provider === "cursor"
+            ? `Imported Cursor session${suffix ? ` ${suffix}` : ""}`
           : provider === "opencode"
             ? `Imported OpenCode session${suffix ? ` ${suffix}` : ""}`
             : `Imported Codex thread${suffix ? ` ${suffix}` : ""}`;
@@ -5052,7 +5057,7 @@ export default function Sidebar() {
         id: "import-thread",
         label: "Import thread from...",
         description: "Attach a local thread to an existing provider session.",
-        keywords: ["import", "resume", "thread", "session", "codex", "claude", "opencode"],
+        keywords: ["import", "resume", "thread", "session", "codex", "claude", "cursor", "opencode"],
         shortcutLabel: importThreadShortcutLabel,
       },
       {
@@ -5969,14 +5974,14 @@ function SidebarSearchPaletteController(props: {
   const selectAllThreads = useMemo(() => createAllThreadsSelector(), []);
   const selectSidebarDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
   const importProviderCapabilityQueries = useQueries({
-    queries: (["codex", "claudeAgent", "opencode"] as const).map((provider) =>
+    queries: (["codex", "claudeAgent", "cursor", "opencode"] as const).map((provider) =>
       providerComposerCapabilitiesQueryOptions(provider),
     ),
   });
   const threads = useStore(selectAllThreads);
   const sidebarDisplayThreads = useStore(selectSidebarDisplayThreads);
   const importProviders: ReadonlyArray<ImportProviderKind> = (
-    ["codex", "claudeAgent", "opencode"] as const
+    ["codex", "claudeAgent", "cursor", "opencode"] as const
   ).filter((provider, index) => supportsThreadImport(importProviderCapabilityQueries[index]?.data));
   const searchPaletteThreads = useMemo<SidebarSearchThread[]>(() => {
     const threadById = new Map(threads.map((thread) => [thread.id, thread] as const));

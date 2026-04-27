@@ -6,6 +6,7 @@
 import {
   type ClaudeModelOptions,
   type CodexModelOptions,
+  type CursorModelOptions,
   type GeminiModelOptions,
   type OpenCodeModelOptions,
   type ProviderKind,
@@ -37,6 +38,9 @@ function getRawEffort(
   if (provider === "claudeAgent") {
     return trimOrNull((modelOptions as ClaudeModelOptions | undefined)?.effort);
   }
+  if (provider === "cursor") {
+    return trimOrNull((modelOptions as CursorModelOptions | undefined)?.reasoningEffort);
+  }
   if (provider === "opencode") {
     return trimOrNull((modelOptions as OpenCodeModelOptions | undefined)?.variant);
   }
@@ -48,10 +52,43 @@ function getRawContextWindow(
   provider: ProviderKind,
   modelOptions: ProviderOptions | null | undefined,
 ): string | null {
-  if (provider !== "claudeAgent") {
+  if (provider !== "claudeAgent" && provider !== "cursor") {
     return null;
   }
-  return trimOrNull((modelOptions as ClaudeModelOptions | undefined)?.contextWindow);
+  return provider === "claudeAgent"
+    ? trimOrNull((modelOptions as ClaudeModelOptions | undefined)?.contextWindow)
+    : trimOrNull((modelOptions as CursorModelOptions | undefined)?.contextWindow);
+}
+
+function getCursorBooleanModelParameter(
+  model: string | null | undefined,
+  key: "fast" | "thinking",
+): boolean | null {
+  const slug = typeof model === "string" ? model.trim().toLowerCase() : "";
+  const match = typeof model === "string" ? model.match(/\[([^\]]*)\]$/u) : null;
+  if (!match?.[1]) {
+    if (key === "fast" && slug.endsWith("-fast")) {
+      return true;
+    }
+    if (key === "thinking" && slug.includes("-thinking")) {
+      return true;
+    }
+    return null;
+  }
+  for (const part of match[1].split(",")) {
+    const [rawKey, rawValue] = part.split("=");
+    if (rawKey?.trim() !== key) {
+      continue;
+    }
+    const value = rawValue?.trim().toLowerCase();
+    if (value === "true") {
+      return true;
+    }
+    if (value === "false") {
+      return false;
+    }
+  }
+  return null;
 }
 
 // Resolve the currently selected composer traits from capabilities plus draft overrides.
@@ -85,12 +122,17 @@ export function getComposerTraitSelection(
           : null;
 
   const thinkingEnabled = caps.supportsThinkingToggle
-    ? ((modelOptions as ClaudeModelOptions | undefined)?.thinking ?? true)
+    ? provider === "cursor"
+      ? ((modelOptions as CursorModelOptions | undefined)?.thinking ??
+        getCursorBooleanModelParameter(model, "thinking") ??
+        true)
+      : ((modelOptions as ClaudeModelOptions | undefined)?.thinking ?? true)
     : null;
 
   const fastModeEnabled =
     caps.supportsFastMode &&
-    (modelOptions as { fastMode?: boolean } | undefined)?.fastMode === true;
+    ((modelOptions as { fastMode?: boolean } | undefined)?.fastMode ??
+      (provider === "cursor" ? getCursorBooleanModelParameter(model, "fast") : false)) === true;
 
   const contextWindowOptions = caps.contextWindowOptions;
   const contextWindow =

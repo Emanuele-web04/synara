@@ -3,6 +3,7 @@ import { Effect, Layer } from "effect";
 import { parseOpenCodeModelSlug } from "../../provider/opencodeRuntime.ts";
 import {
   CodexTextGeneration,
+  CursorTextGeneration,
   OpenCodeTextGeneration,
   type TextGenerationShape,
   TextGeneration,
@@ -23,13 +24,18 @@ function shouldUseOpenCode(input: {
 
 const makeProviderTextGeneration = Effect.gen(function* () {
   const codexTextGeneration = yield* CodexTextGeneration;
+  const cursorTextGeneration = yield* CursorTextGeneration;
   const openCodeTextGeneration = yield* OpenCodeTextGeneration;
 
   const resolveImplementation = (input: {
     readonly model?: string;
     readonly modelSelection?: { provider: string };
-  }): TextGenerationShape =>
-    shouldUseOpenCode(input) ? openCodeTextGeneration : codexTextGeneration;
+  }): TextGenerationShape => {
+    if (input.modelSelection?.provider === "cursor") {
+      return cursorTextGeneration;
+    }
+    return shouldUseOpenCode(input) ? openCodeTextGeneration : codexTextGeneration;
+  };
 
   return {
     generateCommitMessage: (input) => resolveImplementation(input).generateCommitMessage(input),

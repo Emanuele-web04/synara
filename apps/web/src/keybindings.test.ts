@@ -174,6 +174,11 @@ const DEFAULT_BINDINGS = compile([
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
   {
+    shortcut: modShortcut("r", { altKey: true }),
+    command: "chat.newCursor",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
+  {
     shortcut: modShortcut("g", { altKey: true }),
     command: "chat.newGemini",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
@@ -751,6 +756,13 @@ describe("chat/editor shortcuts", () => {
       "chat.newCodex",
     );
     assert.strictEqual(
+      resolveShortcutCommand(event({ key: "r", metaKey: true, altKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "chat.newCursor",
+    );
+    assert.strictEqual(
       resolveShortcutCommand(event({ key: "g", metaKey: true, altKey: true }), DEFAULT_BINDINGS, {
         platform: "MacIntel",
         context: { terminalFocus: false },
@@ -778,6 +790,17 @@ describe("chat/editor shortcuts", () => {
         },
       ),
       "chat.newCodex",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ code: "KeyR", key: "®", metaKey: true, altKey: true }),
+        DEFAULT_BINDINGS,
+        {
+          platform: "MacIntel",
+          context: { terminalFocus: false },
+        },
+      ),
+      "chat.newCursor",
     );
     assert.strictEqual(
       resolveShortcutCommand(
@@ -992,6 +1015,7 @@ describe("resolveShortcutCommand", () => {
       (binding) =>
         binding.command !== "chat.newClaude" &&
         binding.command !== "chat.newCodex" &&
+        binding.command !== "chat.newCursor" &&
         binding.command !== "chat.newGemini",
     );
 
@@ -1008,6 +1032,13 @@ describe("resolveShortcutCommand", () => {
         context: { terminalFocus: false },
       }),
       "chat.newCodex",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "r", metaKey: true, altKey: true }), legacyBindings, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "chat.newCursor",
     );
     assert.strictEqual(
       resolveShortcutCommand(event({ key: "g", metaKey: true, altKey: true }), legacyBindings, {
@@ -1037,6 +1068,17 @@ describe("resolveShortcutCommand", () => {
         },
       ),
       "chat.newCodex",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ code: "KeyR", key: "®", metaKey: true, altKey: true }),
+        legacyBindings,
+        {
+          platform: "MacIntel",
+          context: { terminalFocus: false },
+        },
+      ),
+      "chat.newCursor",
     );
     assert.strictEqual(
       resolveShortcutCommand(

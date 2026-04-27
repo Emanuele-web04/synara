@@ -331,6 +331,8 @@ import {
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useComposerSlashCommands } from "../hooks/useComposerSlashCommands";
+import { useFeatureFlags } from "../featureFlags";
+import { collapseCursorModelVariants } from "../cursorModelVariants";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import {
   canCreateThreadHandoff,
@@ -518,7 +520,8 @@ function mergeDynamicModelOptions(input: {
     (model) => !("isCustom" in model) || model.isCustom !== true,
   );
   const missingStaticBuiltIns =
-    input.provider === "opencode" && normalizedDynamicOptions.length > 0
+    (input.provider === "opencode" || input.provider === "cursor") &&
+    normalizedDynamicOptions.length > 0
       ? []
       : staticBuiltInModels.filter((model) => !dynamicNormalizedSlugs.has(model.slug));
 
@@ -1242,6 +1245,8 @@ export default function ChatView({
   voiceThreadIdRef.current = threadId;
   voiceProviderRef.current = selectedProvider;
   const customModelsByProvider = useMemo(() => getCustomModelsByProvider(settings), [settings]);
+  const featureFlags = useFeatureFlags();
+  const showExpandedCursorModelVariants = featureFlags["show-expanded-cursor-model-variants"];
   const composerModelHintByProvider = useMemo<Record<ProviderKind, string | null>>(() => {
     const threadModelSelection = activeThread?.modelSelection ?? null;
     const projectModelSelection = activeProject?.defaultModelSelection ?? null;
@@ -1255,6 +1260,7 @@ export default function ChatView({
     return {
       codex: resolveHint("codex"),
       claudeAgent: resolveHint("claudeAgent"),
+      cursor: resolveHint("cursor"),
       gemini: resolveHint("gemini"),
       opencode: resolveHint("opencode"),
     };
@@ -1267,6 +1273,14 @@ export default function ChatView({
     providerModelsQueryOptions({ provider: "claudeAgent" }),
   );
   const codexDynamicModelsQuery = useQuery(providerModelsQueryOptions({ provider: "codex" }));
+  const cursorDynamicModelsQuery = useQuery(
+    providerModelsQueryOptions({
+      provider: "cursor",
+      binaryPath: settings.cursorBinaryPath || null,
+      apiEndpoint: settings.cursorApiEndpoint || null,
+      enabled: selectedProvider === "cursor" || lockedProvider === "cursor",
+    }),
+  );
   const geminiModelsQuery = useQuery(
     providerModelsQueryOptions({
       provider: "gemini",
@@ -1285,6 +1299,13 @@ export default function ChatView({
   );
   const codexDynamicAgentsQuery = useQuery(providerAgentsQueryOptions({ provider: "codex" }));
   const openCodeDynamicAgentsQuery = useQuery(providerAgentsQueryOptions({ provider: "opencode" }));
+  const cursorRuntimeModels = useMemo(
+    () =>
+      showExpandedCursorModelVariants
+        ? (cursorDynamicModelsQuery.data?.models ?? [])
+        : collapseCursorModelVariants(cursorDynamicModelsQuery.data?.models ?? []),
+    [cursorDynamicModelsQuery.data?.models, showExpandedCursorModelVariants],
+  );
   const modelOptionsByProvider = useMemo(() => {
     const staticOptions: Record<ProviderKind, ReturnType<typeof getAppModelOptions>> = {
       codex: getAppModelOptions(
@@ -1296,6 +1317,11 @@ export default function ChatView({
         "claudeAgent",
         customModelsByProvider.claudeAgent,
         composerModelHintByProvider.claudeAgent,
+      ),
+      cursor: getAppModelOptions(
+        "cursor",
+        customModelsByProvider.cursor,
+        composerModelHintByProvider.cursor,
       ),
       gemini: getAppModelOptions(
         "gemini",
@@ -1316,11 +1342,15 @@ export default function ChatView({
     const dynamicSources: Record<ProviderKind, typeof claudeDynamicModelsQuery.data> = {
       claudeAgent: claudeDynamicModelsQuery.data,
       codex: codexDynamicModelsQuery.data,
+      cursor:
+        cursorDynamicModelsQuery.data === undefined
+          ? undefined
+          : { ...cursorDynamicModelsQuery.data, models: cursorRuntimeModels },
       gemini: geminiModelsQuery.data,
       opencode: openCodeDynamicModelsQuery.data,
     };
 
-    for (const provider of ["claudeAgent", "codex", "gemini", "opencode"] as const) {
+    for (const provider of ["claudeAgent", "codex", "cursor", "gemini", "opencode"] as const) {
       const dynamicModels = dynamicSources[provider]?.models;
       if (dynamicModels && dynamicModels.length > 0) {
         result[provider] = mergeDynamicModelOptions({
@@ -1345,6 +1375,8 @@ export default function ChatView({
     claudeDynamicModelsQuery.data,
     composerModelHintByProvider,
     codexDynamicModelsQuery.data,
+    cursorDynamicModelsQuery.data,
+    cursorRuntimeModels,
     customModelsByProvider,
     geminiModelsQuery.data,
     openCodeDynamicModelsQuery.data,
@@ -1361,12 +1393,14 @@ export default function ChatView({
     () => ({
       claudeAgent: claudeDynamicModelsQuery.data?.models ?? [],
       codex: codexDynamicModelsQuery.data?.models ?? [],
+      cursor: cursorRuntimeModels,
       gemini: geminiModelsQuery.data?.models ?? [],
       opencode: openCodeDynamicModelsQuery.data?.models ?? [],
     }),
     [
       claudeDynamicModelsQuery.data?.models,
       codexDynamicModelsQuery.data?.models,
+      cursorRuntimeModels,
       geminiModelsQuery.data?.models,
       openCodeDynamicModelsQuery.data?.models,
     ],
@@ -1374,6 +1408,7 @@ export default function ChatView({
   const providerModelsQueryByProvider = {
     claudeAgent: claudeDynamicModelsQuery,
     codex: codexDynamicModelsQuery,
+    cursor: cursorDynamicModelsQuery,
     gemini: geminiModelsQuery,
     opencode: openCodeDynamicModelsQuery,
   } as const;
@@ -1417,8 +1452,9 @@ export default function ChatView({
     composerDraft.modelSelectionByProvider[selectedProvider] ?? null;
   const selectedProviderModelsQuery = providerModelsQueryByProvider[selectedProvider];
   const providerModelsLoading =
-    selectedProviderModelsQuery.isLoading ||
-    (selectedProviderModelsQuery.isFetching && selectedProviderModelsQuery.data === undefined);
+    selectedProviderModelsQuery !== undefined &&
+    (selectedProviderModelsQuery.isLoading ||
+      (selectedProviderModelsQuery.isFetching && selectedProviderModelsQuery.data === undefined));
   const showComposerModelBootstrapSkeleton = shouldShowComposerModelBootstrapSkeleton({
     selectedProvider,
     selectedModel,
@@ -5758,6 +5794,12 @@ export default function ChatView({
         model: resolvedModel,
       };
       setComposerDraftModelSelection(activeThread.id, nextModelSelection);
+      if (provider === "cursor" && !showExpandedCursorModelVariants) {
+        setComposerDraftProviderModelOptions(activeThread.id, provider, undefined, {
+          persistSticky: true,
+          model: resolvedModel,
+        });
+      }
       setStickyComposerModelSelection(nextModelSelection);
       scheduleComposerFocus();
     },
@@ -5766,7 +5808,9 @@ export default function ChatView({
       lockedProvider,
       scheduleComposerFocus,
       setComposerDraftModelSelection,
+      setComposerDraftProviderModelOptions,
       setStickyComposerModelSelection,
+      showExpandedCursorModelVariants,
       customModelsByProvider,
     ],
   );
@@ -5818,7 +5862,7 @@ export default function ChatView({
     runtimeModel: selectedRuntimeModel,
     modelOptions: selectedProviderModelOptions,
     prompt,
-    includeFastMode: false,
+    includeFastMode: selectedProvider === "cursor",
     open: isTraitsPickerOpen,
     onOpenChange: handleTraitsPickerOpenChange,
     shortcutLabel: traitsPickerShortcutLabel,

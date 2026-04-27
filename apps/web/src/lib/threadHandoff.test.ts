@@ -9,22 +9,32 @@ describe("threadHandoff", () => {
   it("lists all supported handoff targets except the active provider", () => {
     expect(resolveAvailableHandoffTargetProviders("codex")).toEqual([
       "claudeAgent",
+      "cursor",
       "gemini",
       "opencode",
     ]);
     expect(resolveAvailableHandoffTargetProviders("claudeAgent")).toEqual([
       "codex",
+      "cursor",
+      "gemini",
+      "opencode",
+    ]);
+    expect(resolveAvailableHandoffTargetProviders("cursor")).toEqual([
+      "codex",
+      "claudeAgent",
       "gemini",
       "opencode",
     ]);
     expect(resolveAvailableHandoffTargetProviders("gemini")).toEqual([
       "codex",
       "claudeAgent",
+      "cursor",
       "opencode",
     ]);
     expect(resolveAvailableHandoffTargetProviders("opencode")).toEqual([
       "codex",
       "claudeAgent",
+      "cursor",
       "gemini",
     ]);
   });

@@ -92,6 +92,16 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Start a fresh thread with Codex selected.",
   },
   {
+    command: "chat.newCursor",
+    label: "New Cursor thread",
+    description: "Start a fresh thread with Cursor selected.",
+  },
+  {
+    command: "chat.newGemini",
+    label: "New Gemini thread",
+    description: "Start a fresh thread with Gemini selected.",
+  },
+  {
     command: "chat.split",
     label: "Split chat",
     description: "Open the current conversation in a second pane.",
