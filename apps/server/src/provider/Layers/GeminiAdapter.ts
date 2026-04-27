@@ -1588,18 +1588,18 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
         yield* offerRuntimeEvent({
           ...makeEventBase(context),
           turnId: context.turnState.turnId,
-          type: "turn.plan.updated",
+          type: "turn.tasks.updated",
           payload: {
-            plan: entries
+            tasks: entries
               .map((entry) => {
-                const planEntry = asRecord(entry);
-                const step = trimToUndefined(planEntry?.content);
-                const status = trimToUndefined(planEntry?.status);
-                if (!step || !status) {
+                const taskEntry = asRecord(entry);
+                const task = trimToUndefined(taskEntry?.content);
+                const status = trimToUndefined(taskEntry?.status);
+                if (!task || !status) {
                   return null;
                 }
                 return {
-                  step,
+                  task,
                   status:
                     status === "in_progress"
                       ? "inProgress"
@@ -1611,7 +1611,7 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
               .filter(
                 (
                   entry,
-                ): entry is { step: string; status: "pending" | "inProgress" | "completed" } =>
+                ): entry is { task: string; status: "pending" | "inProgress" | "completed" } =>
                   entry !== null,
               ),
           },

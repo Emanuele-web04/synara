@@ -133,7 +133,7 @@ import {
   derivePhase,
   deriveTimelineEntries,
   deriveActiveWorkStartedAt,
-  deriveActivePlanState,
+  deriveActiveTaskListState,
   deriveActiveBackgroundTasksState,
   findSidebarProposedPlan,
   findLatestProposedPlan,
@@ -293,7 +293,7 @@ import { ComposerVoiceButton } from "./chat/ComposerVoiceButton";
 import { ComposerVoiceRecorderBar } from "./chat/ComposerVoiceRecorderBar";
 import { ComposerReferenceAttachments } from "./chat/ComposerReferenceAttachments";
 import { TranscriptSelectionActionLayer } from "./chat/TranscriptSelectionActionLayer";
-import { ActivePlanCard } from "./chat/ActivePlanCard";
+import { ActiveTaskListCard } from "./chat/ActiveTaskListCard";
 import { useTranscriptAssistantSelectionAction } from "./chat/useTranscriptAssistantSelectionAction";
 import {
   getComposerProviderState,
@@ -1582,11 +1582,11 @@ export default function ChatView({
     ],
   );
   const planSidebarLabel = sidebarProposedPlan || interactionMode === "plan" ? "Plan" : "Tasks";
-  const activePlan = useMemo(
+  const activeTaskList = useMemo(
     () =>
       latestTurnSettled
         ? null
-        : deriveActivePlanState(threadActivities, activeLatestTurn?.turnId ?? undefined),
+        : deriveActiveTaskListState(threadActivities, activeLatestTurn?.turnId ?? undefined),
     [activeLatestTurn?.turnId, latestTurnSettled, threadActivities],
   );
   const activeBackgroundTasks = useMemo(
@@ -3251,13 +3251,13 @@ export default function ChatView({
     setPlanSidebarOpen((open) => {
       if (open) {
         planSidebarDismissedForTurnRef.current =
-          activePlan?.turnId ?? sidebarProposedPlan?.turnId ?? "__dismissed__";
+          activeTaskList?.turnId ?? sidebarProposedPlan?.turnId ?? "__dismissed__";
       } else {
         planSidebarDismissedForTurnRef.current = null;
       }
       return !open;
     });
-  }, [activePlan?.turnId, sidebarProposedPlan?.turnId]);
+  }, [activeTaskList?.turnId, sidebarProposedPlan?.turnId]);
   const setPlanMode = useCallback(
     (enabled: boolean) => {
       handleInteractionModeChange(enabled ? "plan" : "default");
@@ -6678,17 +6678,17 @@ export default function ChatView({
       : {}),
   };
 
-  // Composer layout keeps the plan card and footer actions in one render path so
+  // Composer layout keeps the task list and footer actions in one render path so
   // follow-up prompts and normal chat mode stay visually in sync.
-  const planCardAboveComposer = Boolean(activePlan && !planSidebarOpen);
+  const taskListAboveComposer = Boolean(activeTaskList && !planSidebarOpen);
 
   const composerSection = (
     <>
-      {activePlan && !planSidebarOpen ? (
+      {activeTaskList && !planSidebarOpen ? (
         <div className="mx-auto w-full max-w-3xl">
           <div className="mx-auto w-11/12">
-            <ActivePlanCard
-              activePlan={activePlan}
+            <ActiveTaskListCard
+              activeTaskList={activeTaskList}
               backgroundTaskCount={activeBackgroundTasks?.activeCount ?? 0}
               onOpenSidebar={() => setPlanSidebarOpen(true)}
             />
@@ -6710,7 +6710,7 @@ export default function ChatView({
                 data-testid="queued-follow-up-row"
                 className={cn(
                   "chat-composer-surface flex items-center gap-2 border border-b-0 border-[color:var(--color-border)] px-2.5 py-2 text-[12px] shadow-[0_1px_0_rgba(255,255,255,0.03)_inset]",
-                  queuedTurnIndex === 0 && !planCardAboveComposer
+                  queuedTurnIndex === 0 && !taskListAboveComposer
                     ? "rounded-t-2xl"
                     : "rounded-none",
                 )}
@@ -6958,7 +6958,7 @@ export default function ChatView({
                         </>
                       ) : null}
 
-                      {activePlan || sidebarProposedPlan || planSidebarOpen ? (
+                      {activeTaskList || sidebarProposedPlan || planSidebarOpen ? (
                         <>
                           <Separator
                             orientation="vertical"
@@ -7393,11 +7393,11 @@ export default function ChatView({
                     isGitRepo ? "pb-1" : "pb-2.5 sm:pb-3",
                   )}
                 >
-                  {activePlan && !planSidebarOpen ? (
+                  {activeTaskList && !planSidebarOpen ? (
                     <div className="mx-auto w-full max-w-3xl">
                       <div className="mx-auto w-11/12">
-                        <ActivePlanCard
-                          activePlan={activePlan}
+                        <ActiveTaskListCard
+                          activeTaskList={activeTaskList}
                           backgroundTaskCount={activeBackgroundTasks?.activeCount ?? 0}
                           onOpenSidebar={() => setPlanSidebarOpen(true)}
                         />
@@ -7419,7 +7419,7 @@ export default function ChatView({
                             data-testid="queued-follow-up-row"
                             className={cn(
                               "chat-composer-surface flex items-center gap-2 border border-b-0 border-[color:var(--color-border)] px-2.5 py-2 text-[12px] shadow-[0_1px_0_rgba(255,255,255,0.03)_inset]",
-                              queuedTurnIndex === 0 && !planCardAboveComposer
+                              queuedTurnIndex === 0 && !taskListAboveComposer
                                 ? "rounded-t-2xl"
                                 : "rounded-none",
                             )}
@@ -7677,7 +7677,7 @@ export default function ChatView({
                                     </>
                                   ) : null}
 
-                                  {activePlan || sidebarProposedPlan || planSidebarOpen ? (
+                                  {activeTaskList || sidebarProposedPlan || planSidebarOpen ? (
                                     <>
                                       <Separator
                                         orientation="vertical"
@@ -7972,7 +7972,7 @@ export default function ChatView({
         {/* Plan sidebar */}
         {planSidebarOpen ? (
           <PlanSidebar
-            activePlan={activePlan}
+            activeTaskList={activeTaskList}
             activeProposedPlan={sidebarProposedPlan}
             markdownCwd={threadWorkspaceCwd ?? undefined}
             workspaceRoot={activeProject?.cwd ?? undefined}
@@ -7980,7 +7980,7 @@ export default function ChatView({
             onClose={() => {
               setPlanSidebarOpen(false);
               // Track that the user explicitly dismissed for this turn so auto-open won't fight them.
-              const turnKey = activePlan?.turnId ?? sidebarProposedPlan?.turnId ?? null;
+              const turnKey = activeTaskList?.turnId ?? sidebarProposedPlan?.turnId ?? null;
               if (turnKey) {
                 planSidebarDismissedForTurnRef.current = turnKey;
               }

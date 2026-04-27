@@ -2277,17 +2277,17 @@ describe("ProviderRuntimeIngestion", () => {
     });
 
     harness.emit({
-      type: "turn.plan.updated",
-      eventId: asEventId("evt-turn-plan-updated"),
+      type: "turn.tasks.updated",
+      eventId: asEventId("evt-turn-tasks-updated"),
       provider: "codex",
       createdAt: now,
       threadId: asThreadId("thread-1"),
       turnId: asTurnId("turn-p1"),
       payload: {
-        explanation: "Working through the plan",
-        plan: [
-          { step: "Inspect files", status: "completed" },
-          { step: "Apply patch", status: "in_progress" },
+        explanation: "Working through the tasks",
+        tasks: [
+          { task: "Inspect files", status: "completed" },
+          { task: "Apply patch", status: "inProgress" },
         ],
       },
     });
@@ -2340,7 +2340,7 @@ describe("ProviderRuntimeIngestion", () => {
       (entry) =>
         entry.title === "Renamed by provider" &&
         entry.activities.some(
-          (activity: ProviderRuntimeTestActivity) => activity.kind === "turn.plan.updated",
+          (activity: ProviderRuntimeTestActivity) => activity.kind === "turn.tasks.updated",
         ) &&
         entry.activities.some(
           (activity: ProviderRuntimeTestActivity) => activity.kind === "tool.updated",
@@ -2355,15 +2355,15 @@ describe("ProviderRuntimeIngestion", () => {
 
     expect(thread.title).toBe("Renamed by provider");
 
-    const planActivity = thread.activities.find(
-      (activity: ProviderRuntimeTestActivity) => activity.id === "evt-turn-plan-updated",
+    const taskActivity = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) => activity.id === "evt-turn-tasks-updated",
     );
-    const planPayload =
-      planActivity?.payload && typeof planActivity.payload === "object"
-        ? (planActivity.payload as Record<string, unknown>)
+    const taskPayload =
+      taskActivity?.payload && typeof taskActivity.payload === "object"
+        ? (taskActivity.payload as Record<string, unknown>)
         : undefined;
-    expect(planActivity?.kind).toBe("turn.plan.updated");
-    expect(Array.isArray(planPayload?.plan)).toBe(true);
+    expect(taskActivity?.kind).toBe("turn.tasks.updated");
+    expect(Array.isArray(taskPayload?.tasks)).toBe(true);
 
     const toolUpdate = thread.activities.find(
       (activity: ProviderRuntimeTestActivity) => activity.id === "evt-item-updated",

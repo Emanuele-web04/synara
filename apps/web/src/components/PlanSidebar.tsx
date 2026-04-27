@@ -13,7 +13,7 @@ import {
   PanelRightCloseIcon,
 } from "~/lib/icons";
 import { cn } from "~/lib/utils";
-import type { ActivePlanState } from "../session-logic";
+import type { ActiveTaskListState } from "../session-logic";
 import type { LatestProposedPlanState } from "../session-logic";
 import { formatTimestamp } from "../timestampFormat";
 import {
@@ -51,7 +51,7 @@ function stepStatusIcon(status: string): React.ReactNode {
 }
 
 interface PlanSidebarProps {
-  activePlan: ActivePlanState | null;
+  activeTaskList: ActiveTaskListState | null;
   activeProposedPlan: LatestProposedPlanState | null;
   markdownCwd: string | undefined;
   workspaceRoot: string | undefined;
@@ -60,7 +60,7 @@ interface PlanSidebarProps {
 }
 
 const PlanSidebar = memo(function PlanSidebar({
-  activePlan,
+  activeTaskList,
   activeProposedPlan,
   markdownCwd,
   workspaceRoot,
@@ -128,9 +128,9 @@ const PlanSidebar = memo(function PlanSidebar({
           >
             Plan
           </Badge>
-          {activePlan ? (
+          {activeTaskList ? (
             <span className="text-[11px] text-muted-foreground/60">
-              {formatTimestamp(activePlan.createdAt, timestampFormat)}
+              {formatTimestamp(activeTaskList.createdAt, timestampFormat)}
             </span>
           ) : null}
         </div>
@@ -179,41 +179,41 @@ const PlanSidebar = memo(function PlanSidebar({
       <ScrollArea className="min-h-0 flex-1">
         <div className="p-3 space-y-4">
           {/* Explanation */}
-          {activePlan?.explanation ? (
+          {activeTaskList?.explanation ? (
             <p className="text-[13px] leading-relaxed text-muted-foreground/80">
-              {activePlan.explanation}
+              {activeTaskList.explanation}
             </p>
           ) : null}
 
-          {/* Plan Steps */}
-          {activePlan && activePlan.steps.length > 0 ? (
+          {/* Tasks */}
+          {activeTaskList && activeTaskList.tasks.length > 0 ? (
             <div className="space-y-1">
               <p className="mb-2 text-[10px] font-semibold tracking-widest text-muted-foreground/40 uppercase">
                 Steps
               </p>
-              {activePlan.steps.map((step) => (
+              {activeTaskList.tasks.map((task) => (
                 <div
-                  key={`${step.status}:${step.step}`}
+                  key={`${task.status}:${task.task}`}
                   className={cn(
                     "flex items-start gap-2.5 rounded-lg px-2.5 py-2 transition-colors duration-200",
-                    step.status === "inProgress" &&
+                    task.status === "inProgress" &&
                       "bg-[color-mix(in_srgb,var(--color-accent-blue)_5%,transparent)]",
-                    step.status === "completed" &&
+                    task.status === "completed" &&
                       "bg-[color-mix(in_srgb,var(--success)_5%,transparent)]",
                   )}
                 >
-                  <div className="mt-0.5">{stepStatusIcon(step.status)}</div>
+                  <div className="mt-0.5">{stepStatusIcon(task.status)}</div>
                   <p
                     className={cn(
                       "text-[13px] leading-snug",
-                      step.status === "completed"
+                      task.status === "completed"
                         ? "text-muted-foreground/50 line-through decoration-muted-foreground/20"
-                        : step.status === "inProgress"
+                        : task.status === "inProgress"
                           ? "text-foreground/90"
                           : "text-muted-foreground/70",
                     )}
                   >
-                    {step.step}
+                    {task.task}
                   </p>
                 </div>
               ))}
@@ -250,7 +250,7 @@ const PlanSidebar = memo(function PlanSidebar({
           ) : null}
 
           {/* Empty state */}
-          {!activePlan && !planMarkdown ? (
+          {!activeTaskList && !planMarkdown ? (
             <div className="flex flex-col items-center justify-center py-12 text-center">
               <p className="text-[13px] text-muted-foreground/40">No active plan yet.</p>
               <p className="mt-1 text-[11px] text-muted-foreground/30">

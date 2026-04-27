@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import {
   deriveActiveBackgroundTasksState,
   deriveActiveWorkStartedAt,
-  deriveActivePlanState,
+  deriveActiveTaskListState,
   hasLiveLatestTurn,
   hasLiveTurnTailWork,
   PROVIDER_OPTIONS,
@@ -305,40 +305,40 @@ describe("derivePendingUserInputs", () => {
   });
 });
 
-describe("deriveActivePlanState", () => {
+describe("deriveActiveTaskListState", () => {
   it("returns the latest plan update for the active turn", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
         id: "plan-old",
         createdAt: "2026-02-23T00:00:01.000Z",
-        kind: "turn.plan.updated",
-        summary: "Plan updated",
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
         tone: "info",
         turnId: "turn-1",
         payload: {
           explanation: "Initial plan",
-          plan: [{ step: "Inspect code", status: "pending" }],
+          tasks: [{ task: "Inspect code", status: "pending" }],
         },
       }),
       makeActivity({
         id: "plan-latest",
         createdAt: "2026-02-23T00:00:02.000Z",
-        kind: "turn.plan.updated",
-        summary: "Plan updated",
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
         tone: "info",
         turnId: "turn-1",
         payload: {
           explanation: "Refined plan",
-          plan: [{ step: "Implement Codex user input", status: "inProgress" }],
+          tasks: [{ task: "Implement Codex user input", status: "inProgress" }],
         },
       }),
     ];
 
-    expect(deriveActivePlanState(activities, TurnId.makeUnsafe("turn-1"))).toEqual({
+    expect(deriveActiveTaskListState(activities, TurnId.makeUnsafe("turn-1"))).toEqual({
       createdAt: "2026-02-23T00:00:02.000Z",
       turnId: "turn-1",
       explanation: "Refined plan",
-      steps: [{ step: "Implement Codex user input", status: "inProgress" }],
+      tasks: [{ task: "Implement Codex user input", status: "inProgress" }],
     });
   });
 
@@ -347,20 +347,20 @@ describe("deriveActivePlanState", () => {
       makeActivity({
         id: "plan-from-turn-1",
         createdAt: "2026-02-23T00:00:01.000Z",
-        kind: "turn.plan.updated",
-        summary: "Plan updated",
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
         tone: "info",
         turnId: "turn-1",
         payload: {
-          plan: [{ step: "Write tests", status: "inProgress" }],
+          tasks: [{ task: "Write tests", status: "inProgress" }],
         },
       }),
     ];
 
-    expect(deriveActivePlanState(activities, TurnId.makeUnsafe("turn-2"))).toEqual({
+    expect(deriveActiveTaskListState(activities, TurnId.makeUnsafe("turn-2"))).toEqual({
       createdAt: "2026-02-23T00:00:01.000Z",
       turnId: "turn-1",
-      steps: [{ step: "Write tests", status: "inProgress" }],
+      tasks: [{ task: "Write tests", status: "inProgress" }],
     });
   });
 
@@ -369,17 +369,17 @@ describe("deriveActivePlanState", () => {
       makeActivity({
         id: "completed-plan-from-turn-1",
         createdAt: "2026-02-23T00:00:01.000Z",
-        kind: "turn.plan.updated",
-        summary: "Plan updated",
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
         tone: "info",
         turnId: "turn-1",
         payload: {
-          plan: [{ step: "Write tests", status: "completed" }],
+          tasks: [{ task: "Write tests", status: "completed" }],
         },
       }),
     ];
 
-    expect(deriveActivePlanState(activities, TurnId.makeUnsafe("turn-2"))).toBeNull();
+    expect(deriveActiveTaskListState(activities, TurnId.makeUnsafe("turn-2"))).toBeNull();
   });
 
   it("does not revive an unfinished prior-turn plan once that turn has completed", () => {
@@ -387,14 +387,14 @@ describe("deriveActivePlanState", () => {
       makeActivity({
         id: "unfinished-plan-from-turn-1",
         createdAt: "2026-02-23T00:00:01.000Z",
-        kind: "turn.plan.updated",
-        summary: "Plan updated",
+        kind: "turn.tasks.updated",
+        summary: "Tasks updated",
         tone: "info",
         turnId: "turn-1",
         payload: {
-          plan: [
-            { step: "Inspect theme implementation", status: "pending" },
-            { step: "Patch token plumbing", status: "pending" },
+          tasks: [
+            { task: "Inspect theme implementation", status: "pending" },
+            { task: "Patch token plumbing", status: "pending" },
           ],
         },
       }),
@@ -411,7 +411,7 @@ describe("deriveActivePlanState", () => {
       }),
     ];
 
-    expect(deriveActivePlanState(activities, TurnId.makeUnsafe("turn-2"))).toBeNull();
+    expect(deriveActiveTaskListState(activities, TurnId.makeUnsafe("turn-2"))).toBeNull();
   });
 });
 

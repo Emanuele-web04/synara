@@ -1628,13 +1628,13 @@ describe("ClaudeAdapterLive", () => {
       } as unknown as SDKMessage);
 
       const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
-      const planEvent = runtimeEvents.find((event) => event.type === "turn.plan.updated");
-      assert.equal(planEvent?.type, "turn.plan.updated");
-      if (planEvent?.type === "turn.plan.updated") {
-        assert.deepEqual(planEvent.payload.plan, [
-          { step: "Inspecting files", status: "inProgress" },
-          { step: "Patch UI", status: "pending" },
-          { step: "Run checks", status: "completed" },
+      const taskEvent = runtimeEvents.find((event) => event.type === "turn.tasks.updated");
+      assert.equal(taskEvent?.type, "turn.tasks.updated");
+      if (taskEvent?.type === "turn.tasks.updated") {
+        assert.deepEqual(taskEvent.payload.tasks, [
+          { task: "Inspecting files", status: "inProgress" },
+          { task: "Patch UI", status: "pending" },
+          { task: "Run checks", status: "completed" },
         ]);
       }
     }).pipe(
@@ -1643,7 +1643,7 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("updates shared turn plans from Claude TodoWrite json deltas", () => {
+  it.effect("updates shared turn task lists from Claude TodoWrite json deltas", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -1699,12 +1699,12 @@ describe("ClaudeAdapterLive", () => {
       } as unknown as SDKMessage);
 
       const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
-      const planEvent = runtimeEvents.findLast((event) => event.type === "turn.plan.updated");
-      assert.equal(planEvent?.type, "turn.plan.updated");
-      if (planEvent?.type === "turn.plan.updated") {
-        assert.deepEqual(planEvent.payload.plan, [
-          { step: "Inspect files", status: "pending" },
-          { step: "Patching UI", status: "inProgress" },
+      const taskEvent = runtimeEvents.findLast((event) => event.type === "turn.tasks.updated");
+      assert.equal(taskEvent?.type, "turn.tasks.updated");
+      if (taskEvent?.type === "turn.tasks.updated") {
+        assert.deepEqual(taskEvent.payload.tasks, [
+          { task: "Inspect files", status: "pending" },
+          { task: "Patching UI", status: "inProgress" },
         ]);
       }
     }).pipe(

@@ -6,9 +6,9 @@ import { ProviderRuntimeEvent } from "./providerRuntime";
 const decodeRuntimeEvent = Schema.decodeUnknownSync(ProviderRuntimeEvent);
 
 describe("ProviderRuntimeEvent", () => {
-  it("decodes turn.plan.updated for plan rendering", () => {
+  it("decodes turn.tasks.updated for task-list rendering", () => {
     const parsed = decodeRuntimeEvent({
-      type: "turn.plan.updated",
+      type: "turn.tasks.updated",
       eventId: "event-1",
       provider: "claudeAgent",
       sessionId: "runtime-session-1",
@@ -17,19 +17,19 @@ describe("ProviderRuntimeEvent", () => {
       turnId: "turn-1",
       payload: {
         explanation: "Implement schema updates",
-        plan: [
-          { step: "Define event union", status: "completed" },
-          { step: "Wire adapter mapping", status: "inProgress" },
+        tasks: [
+          { task: "Define event union", status: "completed" },
+          { task: "Wire adapter mapping", status: "inProgress" },
         ],
       },
     });
 
-    expect(parsed.type).toBe("turn.plan.updated");
-    if (parsed.type !== "turn.plan.updated") {
-      throw new Error("expected turn.plan.updated");
+    expect(parsed.type).toBe("turn.tasks.updated");
+    if (parsed.type !== "turn.tasks.updated") {
+      throw new Error("expected turn.tasks.updated");
     }
-    expect(parsed.payload.plan).toHaveLength(2);
-    expect(parsed.payload.plan[1]?.status).toBe("inProgress");
+    expect(parsed.payload.tasks).toHaveLength(2);
+    expect(parsed.payload.tasks[1]?.status).toBe("inProgress");
   });
 
   it("decodes proposed-plan completion events", () => {

@@ -1437,4 +1437,78 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       "turn.completed",
     ]);
   });
+
+  it("maps OpenCode todo updates into shared turn tasks", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+    const client = runtime.runtime.createOpenCodeSdkClient({
+      baseUrl: "http://127.0.0.1:4099",
+      directory: process.cwd(),
+    }) as unknown as {
+      event: {
+        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
+      };
+    };
+    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+
+    const events = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-todo-updated"),
+          runtimeMode: "full-access",
+        });
+
+        yield* adapter.sendTurn({
+          threadId: asThreadId("thread-todo-updated"),
+          input: "work through todos",
+          attachments: [],
+          modelSelection: {
+            provider: "opencode",
+            model: "openai/gpt-5.4",
+          },
+        });
+
+        eventQueue.push({
+          type: "todo.updated",
+          properties: {
+            sessionID: "opencode-session-1",
+            todos: [
+              { content: "Inspect OpenCode events", status: "completed", priority: "high" },
+              { content: "Wire todo updates", status: "in_progress", priority: "medium" },
+              { content: "Report back", status: "pending", priority: "low" },
+            ],
+          },
+        });
+
+        const runtimeEvents = Array.from(yield* Fiber.join(eventsFiber));
+        eventQueue.close();
+        return runtimeEvents;
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    const taskEvent = events.find((event) => event.type === "turn.tasks.updated");
+    expect(taskEvent?.type).toBe("turn.tasks.updated");
+    if (taskEvent?.type === "turn.tasks.updated") {
+      expect(taskEvent.payload.tasks).toEqual([
+        { task: "Inspect OpenCode events", status: "completed" },
+        { task: "Wire todo updates", status: "inProgress" },
+        { task: "Report back", status: "pending" },
+      ]);
+    }
+  });
 });

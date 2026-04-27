@@ -573,22 +573,22 @@ function createSnapshotWithActiveInlinePlan(): OrchestrationReadModel {
               {
                 id: EventId.makeUnsafe("activity-inline-plan"),
                 createdAt: isoAt(1_002),
-                kind: "turn.plan.updated",
-                summary: "Plan updated",
+                kind: "turn.tasks.updated",
+                summary: "Tasks updated",
                 tone: "info",
                 turnId: activeTurnId,
                 payload: {
-                  plan: [
+                  tasks: [
                     {
-                      step: "Inspecting ChatView boundaries",
+                      task: "Inspecting ChatView boundaries",
                       status: "inProgress",
                     },
                     {
-                      step: "Patch the shared checklist receiver",
+                      task: "Patch the shared checklist receiver",
                       status: "pending",
                     },
                     {
-                      step: "Run final validation",
+                      task: "Run final validation",
                       status: "completed",
                     },
                   ],

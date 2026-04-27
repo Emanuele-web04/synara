@@ -24,6 +24,7 @@ import type {
   Part,
   PermissionRequest,
   QuestionRequest,
+  Todo,
 } from "@opencode-ai/sdk/v2";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
@@ -248,10 +249,16 @@ function ensureSessionContext(
 ): OpenCodeSessionContext {
   const session = sessions.get(threadId);
   if (!session) {
-    throw new ProviderAdapterSessionNotFoundError({ provider: PROVIDER, threadId });
+    throw new ProviderAdapterSessionNotFoundError({
+      provider: PROVIDER,
+      threadId,
+    });
   }
   if (Ref.getUnsafe(session.stopped)) {
-    throw new ProviderAdapterSessionClosedError({ provider: PROVIDER, threadId });
+    throw new ProviderAdapterSessionClosedError({
+      provider: PROVIDER,
+      threadId,
+    });
   }
   return session;
 }
@@ -267,6 +274,45 @@ function normalizeQuestionRequest(request: QuestionRequest): ReadonlyArray<UserI
     })),
     ...(question.multiple ? { multiSelect: true } : {}),
   }));
+}
+
+function normalizeOpenCodeTodoStatus(value: unknown): "pending" | "inProgress" | "completed" {
+  if (value === "completed") {
+    return "completed";
+  }
+  if (value === "in_progress") {
+    return "inProgress";
+  }
+  return "pending";
+}
+
+function normalizeOpenCodeTodoTasks(todos: ReadonlyArray<Todo>): {
+  readonly tasks: ReadonlyArray<{
+    readonly task: string;
+    readonly status: "pending" | "inProgress" | "completed";
+  }>;
+} | null {
+  const tasks = todos
+    .map((todo) => {
+      const task = todo.content.trim();
+      if (task.length === 0) {
+        return null;
+      }
+      return {
+        task,
+        status: normalizeOpenCodeTodoStatus(todo.status),
+      };
+    })
+    .filter(
+      (
+        task,
+      ): task is {
+        readonly task: string;
+        readonly status: "pending" | "inProgress" | "completed";
+      } => task !== null,
+    );
+
+  return tasks.length > 0 ? { tasks } : null;
 }
 
 function resolveTextStreamKind(part: Part | undefined): "assistant_text" | "reasoning_text" {
@@ -1013,11 +1059,17 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         Queue.offer(runtimeEvents, event).pipe(Effect.asVoid);
       const writeNativeEvent = (
         threadId: ThreadId,
-        event: { readonly observedAt: string; readonly event: Record<string, unknown> },
+        event: {
+          readonly observedAt: string;
+          readonly event: Record<string, unknown>;
+        },
       ) => (nativeEventLogger ? nativeEventLogger.write(event, threadId) : Effect.void);
       const writeNativeEventBestEffort = (
         threadId: ThreadId,
-        event: { readonly observedAt: string; readonly event: Record<string, unknown> },
+        event: {
+          readonly observedAt: string;
+          readonly event: Record<string, unknown>;
+        },
       ) => writeNativeEvent(threadId, event).pipe(Effect.catchCause(() => Effect.void));
 
       const emitContextCompactionProgress = Effect.fn("emitContextCompactionProgress")(function* (
@@ -1100,7 +1152,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           },
         }).pipe(Effect.ignore);
         yield* runOpenCodeSdk("session.abort", () =>
-          context.client.session.abort({ sessionID: context.openCodeSessionId }),
+          context.client.session.abort({
+            sessionID: context.openCodeSessionId,
+          }),
         ).pipe(Effect.ignore({ log: true }));
         yield* Scope.close(context.sessionScope, Exit.void);
       });
@@ -1490,14 +1544,38 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             break;
           }
 
+          case "todo.updated": {
+            const tasksPayload = normalizeOpenCodeTodoTasks(event.properties.todos);
+            if (!tasksPayload) {
+              break;
+            }
+            yield* emit({
+              ...buildEventBase({
+                threadId: context.session.threadId,
+                turnId,
+                raw: event,
+              }),
+              type: "turn.tasks.updated",
+              payload: tasksPayload,
+            });
+            break;
+          }
+
           case "session.status": {
             if (event.properties.status.type === "busy") {
-              updateProviderSession(context, { status: "running", activeTurnId: turnId });
+              updateProviderSession(context, {
+                status: "running",
+                activeTurnId: turnId,
+              });
             }
 
             if (event.properties.status.type === "retry") {
               yield* emit({
-                ...buildEventBase({ threadId: context.session.threadId, turnId, raw: event }),
+                ...buildEventBase({
+                  threadId: context.session.threadId,
+                  turnId,
+                  raw: event,
+                }),
                 type: "runtime.warning",
                 payload: {
                   message: event.properties.status.message,
@@ -1512,7 +1590,11 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               clearActiveTurnState(context);
               updateProviderSession(context, { status: "ready" }, { clearActiveTurnId: true });
               yield* emit({
-                ...buildEventBase({ threadId: context.session.threadId, turnId, raw: event }),
+                ...buildEventBase({
+                  threadId: context.session.threadId,
+                  turnId,
+                  raw: event,
+                }),
                 type: "turn.completed",
                 payload: {
                   state: "completed",
@@ -1573,7 +1655,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               });
             }
             yield* emit({
-              ...buildEventBase({ threadId: context.session.threadId, raw: event }),
+              ...buildEventBase({
+                threadId: context.session.threadId,
+                raw: event,
+              }),
               type: "runtime.error",
               payload: {
                 message,
@@ -1710,7 +1795,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           const raceWinner = sessions.get(input.threadId);
           if (raceWinner) {
             yield* runOpenCodeSdk("session.abort", () =>
-              started.client.session.abort({ sessionID: started.openCodeSessionId }),
+              started.client.session.abort({
+                sessionID: started.openCodeSessionId,
+              }),
             ).pipe(Effect.ignore);
             yield* Scope.close(started.sessionScope, Exit.void).pipe(Effect.ignore);
             return raceWinner.session;
@@ -1807,7 +1894,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         const fileParts = toOpenCodeFileParts({
           attachments: input.attachments,
           resolveAttachmentPath: (attachment) =>
-            resolveAttachmentPath({ attachmentsDir: serverConfig.attachmentsDir, attachment }),
+            resolveAttachmentPath({
+              attachmentsDir: serverConfig.attachmentsDir,
+              attachment,
+            }),
         });
         if ((!text || text.length === 0) && fileParts.length === 0) {
           return yield* new ProviderAdapterValidationError({
@@ -1894,7 +1984,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           const context = ensureSessionContext(sessions, threadId);
           const activeTurnId = turnId ?? context.activeTurnId;
           yield* runOpenCodeSdk("session.abort", () =>
-            context.client.session.abort({ sessionID: context.openCodeSessionId }),
+            context.client.session.abort({
+              sessionID: context.openCodeSessionId,
+            }),
           ).pipe(Effect.mapError(toRequestError));
           clearActiveTurnState(context);
           updateProviderSession(context, { status: "ready" }, { clearActiveTurnId: true });
@@ -1978,7 +2070,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         function* (threadId) {
           const context = ensureSessionContext(sessions, threadId);
           const messages = yield* runOpenCodeSdk("session.messages", () =>
-            context.client.session.messages({ sessionID: context.openCodeSessionId }),
+            context.client.session.messages({
+              sessionID: context.openCodeSessionId,
+            }),
           ).pipe(Effect.mapError(toRequestError));
 
           return buildOpenCodeThreadSnapshot({
@@ -2049,7 +2143,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         function* (threadId, numTurns) {
           const context = ensureSessionContext(sessions, threadId);
           const messages = yield* runOpenCodeSdk("session.messages", () =>
-            context.client.session.messages({ sessionID: context.openCodeSessionId }),
+            context.client.session.messages({
+              sessionID: context.openCodeSessionId,
+            }),
           ).pipe(Effect.mapError(toRequestError));
 
           const assistantMessages = (messages.data ?? []).filter(
@@ -2179,7 +2275,11 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             const credentialProviderIDs = yield* openCodeRuntime.loadOpenCodeCredentialProviderIDs(
               activeContext.client,
             );
-            return yield* fn({ client: activeContext.client, inventory, credentialProviderIDs });
+            return yield* fn({
+              client: activeContext.client,
+              inventory,
+              credentialProviderIDs,
+            });
           }
 
           return yield* Effect.scoped(
