@@ -43,6 +43,21 @@ const MANY_OPENCODE_MODELS = Array.from({ length: 16 }, (_, index) => ({
   upstreamProviderName: index % 2 === 0 ? "OpenAI" : "Anthropic",
 })) satisfies ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>;
 
+const OPENCODE_FAVORITE_SORT_MODELS = [
+  {
+    slug: "anthropic/claude-favorite-sort" as ModelSlug,
+    name: "Claude Favorite Sort",
+    upstreamProviderId: "anthropic",
+    upstreamProviderName: "Anthropic",
+  },
+  {
+    slug: "openai/gpt-favorite-sort" as ModelSlug,
+    name: "GPT Favorite Sort",
+    upstreamProviderId: "openai",
+    upstreamProviderName: "OpenAI",
+  },
+] satisfies ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>;
+
 async function mountPicker(props: {
   provider: ProviderKind;
   model: ModelSlug;
@@ -80,6 +95,7 @@ async function mountPicker(props: {
 describe("ProviderModelPicker", () => {
   afterEach(() => {
     document.body.innerHTML = "";
+    localStorage.clear();
   });
 
   it("shows provider submenus when provider switching is allowed", async () => {
@@ -211,6 +227,46 @@ describe("ProviderModelPicker", () => {
       await expect
         .element(page.getByRole("menuitemradio", { name: "GPT 1" }))
         .not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows favourited OpenCode models in their own top category", async () => {
+    const mounted = await mountPicker({
+      provider: "opencode",
+      model: "anthropic/claude-favorite-sort",
+      lockedProvider: "opencode",
+      modelOptionsByProvider: {
+        ...MODEL_OPTIONS_BY_PROVIDER,
+        opencode: OPENCODE_FAVORITE_SORT_MODELS,
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+
+      await vi.waitFor(() => {
+        const text = document.body.textContent ?? "";
+        expect(text.indexOf("Anthropic")).toBeLessThan(text.indexOf("OpenAI"));
+      });
+
+      await page.getByRole("button", { name: "Add GPT Favorite Sort to favourites" }).click();
+
+      await vi.waitFor(() => {
+        const text = document.body.textContent ?? "";
+        expect(text.indexOf("Favourites")).toBeLessThan(text.indexOf("Anthropic"));
+        expect(text.indexOf("GPT Favorite Sort")).toBeGreaterThan(text.indexOf("Favourites"));
+        expect(text.indexOf("GPT Favorite Sort")).toBeLessThan(text.indexOf("Anthropic"));
+      });
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "GPT Favorite Sort" }))
+        .toBeInTheDocument();
+      expect(
+        Array.from(document.querySelectorAll('[role="menuitemradio"]')).filter((element) =>
+          element.textContent?.includes("GPT Favorite Sort"),
+        ),
+      ).toHaveLength(1);
     } finally {
       await mounted.cleanup();
     }

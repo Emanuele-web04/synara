@@ -71,6 +71,8 @@ import {
   IconSearch,
   IconSelector,
   IconSettings,
+  IconStar,
+  IconStarFilled,
   IconSun,
   IconTerminal,
   IconTerminal2,
@@ -224,6 +226,8 @@ export const RotateCcwIcon = adaptIcon(IconRotate2);
 export const Rows3Icon = adaptIcon(IconLayoutDistributeHorizontal);
 export const SearchIcon = adaptIcon(IconSearch);
 export const SettingsIcon = adaptIcon(IconSettings);
+export const StarIcon = adaptIcon(IconStar);
+export const StarFilledIcon = adaptIcon(IconStarFilled);
 export const SunIcon = adaptIcon(IconSun);
 export const MoonIcon = adaptIcon(IconMoon);
 export const DeviceLaptopIcon = adaptIcon(IconDeviceLaptop);
