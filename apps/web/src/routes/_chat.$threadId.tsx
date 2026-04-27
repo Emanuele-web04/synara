@@ -25,7 +25,6 @@ import {
   useState,
 } from "react";
 import { Schema } from "effect";
-import { TbExchange } from "react-icons/tb";
 
 import ChatView from "../components/ChatView";
 import BrowserPanel from "../components/BrowserPanel";
@@ -106,6 +105,7 @@ const SPLIT_RATIO_MIN = 0.25;
 const SPLIT_RATIO_MAX = 0.75;
 
 const allowAnySplitDirection = (_direction: SplitDirection) => true;
+const noop = () => {};
 
 function clampSplitRatio(value: number): number {
   if (!Number.isFinite(value)) return 0.5;
@@ -701,55 +701,87 @@ function PaneRenderer(props: {
   );
 }
 
-function SplitPaneChatMountSkeleton() {
+function ChatMountSkeleton() {
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background [contain:layout_style_paint]">
-      <div className="flex h-[52px] shrink-0 items-center border-b border-[color:var(--color-border-light)] px-4">
-        <div className="h-4 w-40 rounded-full bg-muted" />
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground [contain:layout_style_paint]">
+      {/* Mirrors the real chat shell so route changes paint immediately while ChatView mounts
+          on the next frames. */}
+      <div className="flex h-[52px] shrink-0 items-center gap-3 border-b border-[color:var(--color-border-light)] px-4">
+        <div className="size-5 rounded-full bg-muted" />
+        <div className="min-w-0 flex-1 space-y-1.5">
+          <div className="h-3.5 w-44 max-w-[48%] rounded-full bg-muted" />
+          <div className="h-2 w-24 max-w-[32%] rounded-full bg-muted/65" />
+        </div>
+        <div className="hidden items-center gap-1.5 sm:flex">
+          <div className="size-7 rounded-md border border-[color:var(--color-border-light)] bg-muted/35" />
+          <div className="size-7 rounded-md border border-[color:var(--color-border-light)] bg-muted/35" />
+        </div>
       </div>
       <div className="flex min-h-0 flex-1 flex-col justify-end gap-3 px-5 py-4">
-        <div className="h-12 w-4/5 rounded-xl bg-muted" />
-        <div className="ml-auto h-10 w-3/5 rounded-xl bg-muted" />
-        <div className="h-16 w-5/6 rounded-xl bg-muted" />
+        <div className="max-w-[82%] space-y-2 rounded-2xl border border-[color:var(--color-border-light)] bg-muted/22 p-3">
+          <div className="h-2.5 w-11/12 rounded-full bg-muted/75" />
+          <div className="h-2.5 w-7/12 rounded-full bg-muted/60" />
+        </div>
+        <div className="ml-auto max-w-[70%] space-y-2 rounded-2xl bg-muted/45 p-3">
+          <div className="h-2.5 w-48 max-w-full rounded-full bg-muted-foreground/14" />
+          <div className="h-2.5 w-32 max-w-[78%] rounded-full bg-muted-foreground/12" />
+        </div>
+        <div className="max-w-[88%] space-y-2 rounded-2xl border border-[color:var(--color-border-light)] bg-muted/22 p-3">
+          <div className="h-2.5 w-full rounded-full bg-muted/75" />
+          <div className="h-2.5 w-10/12 rounded-full bg-muted/60" />
+          <div className="h-2.5 w-5/12 rounded-full bg-muted/50" />
+        </div>
       </div>
       <div className="shrink-0 border-t border-[color:var(--color-border-light)] p-3">
-        <div className="h-16 rounded-2xl bg-muted" />
+        <div className="rounded-2xl border border-[color:var(--color-border-light)] bg-background p-3 shadow-xs">
+          <div className="h-3 w-40 max-w-[50%] rounded-full bg-muted" />
+          <div className="mt-8 flex items-center justify-between">
+            <div className="h-2.5 w-24 rounded-full bg-muted/65" />
+            <div className="size-7 rounded-full bg-muted" />
+          </div>
+        </div>
       </div>
     </div>
   );
 }
 
-function DeferredSplitPaneChatView(props: {
+function DeferredChatView(props: {
   threadId: ThreadIdType;
   paneScopeId: string;
-  deferInitialMount: boolean;
+  deferMount: boolean;
+  surfaceMode: "single" | "split";
   isFocusedPane: boolean;
   panelState: SplitViewPanePanelState;
   onToggleDiff: () => void;
   onToggleBrowser: () => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
-  onMaximize: () => void;
-  onMounted: () => void;
+  onSplitSurface?: () => void;
+  onMaximize?: () => void;
+  onChangeThread?: () => void;
+  onMounted?: () => void;
 }) {
-  const onMounted = props.onMounted;
-  const [canMountChatView, setCanMountChatView] = useState(!props.deferInitialMount);
+  const onMounted = props.onMounted ?? noop;
+  const mountKey = `${props.paneScopeId}:${props.threadId}`;
+  const [readyMountKey, setReadyMountKey] = useState<string | null>(() =>
+    props.deferMount ? null : mountKey,
+  );
+  const canMountChatView = !props.deferMount || readyMountKey === mountKey;
 
   useEffect(() => {
-    if (!props.deferInitialMount) {
-      setCanMountChatView(true);
+    if (!props.deferMount) {
       return;
     }
-    setCanMountChatView(false);
+    setReadyMountKey(null);
     let firstFrame = 0;
     let secondFrame = 0;
     firstFrame = window.requestAnimationFrame(() => {
-      secondFrame = window.requestAnimationFrame(() => setCanMountChatView(true));
+      secondFrame = window.requestAnimationFrame(() => setReadyMountKey(mountKey));
     });
     return () => {
       window.cancelAnimationFrame(firstFrame);
       window.cancelAnimationFrame(secondFrame);
     };
-  }, [props.deferInitialMount, props.paneScopeId, props.threadId]);
+  }, [mountKey, props.deferMount]);
 
   useEffect(() => {
     if (canMountChatView) {
@@ -758,7 +790,7 @@ function DeferredSplitPaneChatView(props: {
   }, [canMountChatView, onMounted]);
 
   if (!canMountChatView) {
-    return <SplitPaneChatMountSkeleton />;
+    return <ChatMountSkeleton />;
   }
 
   return (
@@ -766,13 +798,15 @@ function DeferredSplitPaneChatView(props: {
       key={props.paneScopeId}
       threadId={props.threadId}
       paneScopeId={props.paneScopeId}
-      surfaceMode="split"
+      surfaceMode={props.surfaceMode}
       isFocusedPane={props.isFocusedPane}
       panelState={props.panelState}
       onToggleDiffPanel={props.onToggleDiff}
       onToggleBrowserPanel={props.onToggleBrowser}
       onOpenTurnDiffPanel={props.onOpenTurnDiff}
+      onSplitSurface={props.onSplitSurface}
       onMaximizeSurface={props.onMaximize}
+      onChangeThreadInSplitPane={props.onChangeThread}
     />
   );
 }
@@ -829,28 +863,11 @@ function SplitPaneSurface(props: {
   );
 
   return (
-    <div className="group relative flex min-h-0 min-w-0 flex-1 bg-background [contain:layout_style_paint]">
-      {props.threadId ? (
-        <div className="pointer-events-none absolute right-3 top-[3.75rem] z-20 sm:right-5 sm:top-[4.25rem]">
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="outline"
-            aria-label={`Choose chat for split pane ${props.paneId}`}
-            title="Choose chat"
-            className={cn(
-              "pointer-events-auto transition-opacity",
-              !props.isFocused ? "opacity-0 group-hover:opacity-100" : "",
-            )}
-            onClick={(event) => {
-              event.stopPropagation();
-              props.onChooseThread();
-            }}
-          >
-            <TbExchange className="size-4" />
-          </Button>
-        </div>
-      ) : null}
+    <div
+      className={cn(
+        "group relative flex min-h-0 min-w-0 flex-1 bg-background [contain:layout_style_paint]",
+      )}
+    >
       <ChatPaneDropOverlay
         paneScopeId={paneScopeId}
         canDropInDirection={props.canDropInDirection}
@@ -867,16 +884,18 @@ function SplitPaneSurface(props: {
           onMouseDown={props.onFocus}
         >
           {props.threadId ? (
-            <DeferredSplitPaneChatView
+            <DeferredChatView
               threadId={props.threadId}
               paneScopeId={paneScopeId}
-              deferInitialMount={props.deferChatMount}
+              deferMount={props.deferChatMount}
+              surfaceMode="split"
               isFocusedPane={props.isFocused}
               panelState={props.panelState}
               onToggleDiff={props.onToggleDiff}
               onToggleBrowser={props.onToggleBrowser}
               onOpenTurnDiff={props.onOpenTurnDiff}
               onMaximize={props.onMaximize}
+              onChangeThread={props.onChooseThread}
               onMounted={props.onChatMounted}
             />
           ) : (
@@ -902,6 +921,12 @@ function SplitPaneSurface(props: {
         panelState={props.panelState}
         onUpdatePanelState={props.onUpdatePanelState}
       />
+      {!props.isFocused ? (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 z-10 bg-foreground/[0.030] transition-opacity duration-150"
+        />
+      ) : null}
     </div>
   );
 }
@@ -920,7 +945,6 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
   const dropThreadOnPane = useSplitViewStore((store) => store.dropThreadOnPane);
   const removeSplitView = useSplitViewStore((store) => store.removeSplitView);
   const [threadPickerPaneId, setThreadPickerPaneId] = useState<PaneId | null>(null);
-  const mountedChatPaneIdsRef = useRef(new Set<PaneId>());
   const {
     splitView: activeSplitView,
     focusedThreadId,
@@ -1154,7 +1178,7 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
   );
 
   if (!activeSplitView) {
-    return null;
+    return <ChatMountSkeleton />;
   }
 
   const chooseThreadForPane = (threadId: ThreadIdType, paneOverride?: PaneId) => {
@@ -1193,8 +1217,6 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
 
   const renderLeaf = ({ leaf }: { leaf: LeafPane }): ReactNode => {
     const isFocused = leaf.id === activeSplitView.focusedPaneId;
-    const shouldDeferChatMount =
-      isFocused && leaf.threadId !== null && !mountedChatPaneIdsRef.current.has(leaf.id);
     const excluded = new Set<ThreadIdType>(splitThreadIds);
     return (
       <SplitPaneSurface
@@ -1204,7 +1226,7 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
         threadId={leaf.threadId}
         panelState={leaf.panel}
         isFocused={isFocused}
-        deferChatMount={shouldDeferChatMount}
+        deferChatMount={false}
         canDropInDirection={(direction) =>
           canSubdividePane(activeSplitView.root, leaf.id, direction)
         }
@@ -1224,9 +1246,7 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
           setThreadPickerPaneId(leaf.id);
         }}
         onSelectThread={(threadId) => chooseThreadForPane(threadId, leaf.id)}
-        onChatMounted={() => {
-          mountedChatPaneIdsRef.current.add(leaf.id);
-        }}
+        onChatMounted={noop}
         onDropThread={(payload) => handleDropThreadOnPane(leaf.id, payload)}
       />
     );
@@ -1463,16 +1483,20 @@ function SingleChatSurface(props: {
           className="flex h-full min-h-0 min-w-0 flex-1"
         >
           <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground">
-            <ChatView
+            <DeferredChatView
               threadId={props.threadId}
+              paneScopeId="single"
+              deferMount={false}
+              surfaceMode="single"
+              isFocusedPane
               panelState={panelState}
-              onToggleDiffPanel={() =>
+              onToggleDiff={() =>
                 updatePanelState(resolveToggledChatPanelPatch(panelState, "diff"))
               }
-              onToggleBrowserPanel={() =>
+              onToggleBrowser={() =>
                 updatePanelState(resolveToggledChatPanelPatch(panelState, "browser"))
               }
-              onOpenTurnDiffPanel={(turnId, filePath) =>
+              onOpenTurnDiff={(turnId, filePath) =>
                 updatePanelState({
                   panel: "diff",
                   diffTurnId: turnId,
@@ -1507,16 +1531,20 @@ function SingleChatSurface(props: {
         className="flex h-dvh min-h-0 min-w-0 flex-1"
       >
         <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground">
-          <ChatView
+          <DeferredChatView
             threadId={props.threadId}
+            paneScopeId="single"
+            deferMount={false}
+            surfaceMode="single"
+            isFocusedPane
             panelState={panelState}
-            onToggleDiffPanel={() =>
+            onToggleDiff={() =>
               updatePanelState(resolveToggledChatPanelPatch(panelState, "diff"))
             }
-            onToggleBrowserPanel={() =>
+            onToggleBrowser={() =>
               updatePanelState(resolveToggledChatPanelPatch(panelState, "browser"))
             }
-            onOpenTurnDiffPanel={(turnId, filePath) =>
+            onOpenTurnDiff={(turnId, filePath) =>
               updatePanelState({
                 panel: "diff",
                 diffTurnId: turnId,
@@ -1595,7 +1623,7 @@ function ChatThreadRouteView() {
   }, [handleNewChat, navigate, routeThreadExists, search, splitView, threadId, threadsHydrated]);
 
   if (!threadsHydrated) {
-    return null;
+    return <ChatMountSkeleton />;
   }
 
   if (splitView && search.splitViewId) {
@@ -1603,7 +1631,7 @@ function ChatThreadRouteView() {
   }
 
   if (!routeThreadExists) {
-    return null;
+    return <ChatMountSkeleton />;
   }
 
   return <SingleChatSurface threadId={threadId} search={search} projectId={activeProjectId} />;

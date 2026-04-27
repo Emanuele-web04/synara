@@ -14,7 +14,6 @@ import {
   getSidebarThreadIdsToPrewarm,
   getRenderedThreadsForSidebarProject,
   groupSidebarThreadsByProjectId,
-  groupSplitViewsByProjectId,
   getUnpinnedThreadsForSidebar,
   getVisibleSidebarThreadIds,
   getVisibleThreadsForProject,
@@ -40,7 +39,6 @@ import {
   type SidebarThreadSummary,
   type Thread,
 } from "../types";
-import type { SplitView } from "../splitViewStore";
 
 function makeLatestTurn(overrides?: {
   completedAt?: string | null;
@@ -876,6 +874,30 @@ describe("getSidebarThreadIdsToPrewarm", () => {
       }),
     ).toEqual([ThreadId.makeUnsafe("thread-1"), ThreadId.makeUnsafe("thread-2")]);
   });
+
+  it("prioritizes the active thread neighborhood before filling the limit", () => {
+    expect(
+      getSidebarThreadIdsToPrewarm({
+        visibleThreadIds: [
+          ThreadId.makeUnsafe("thread-1"),
+          ThreadId.makeUnsafe("thread-2"),
+          ThreadId.makeUnsafe("thread-3"),
+          ThreadId.makeUnsafe("thread-4"),
+          ThreadId.makeUnsafe("thread-5"),
+          ThreadId.makeUnsafe("thread-6"),
+        ],
+        activeThreadId: ThreadId.makeUnsafe("thread-5"),
+        limit: 5,
+        neighborRadius: 1,
+      }),
+    ).toEqual([
+      ThreadId.makeUnsafe("thread-4"),
+      ThreadId.makeUnsafe("thread-5"),
+      ThreadId.makeUnsafe("thread-6"),
+      ThreadId.makeUnsafe("thread-1"),
+      ThreadId.makeUnsafe("thread-2"),
+    ]);
+  });
 });
 
 function makeProject(overrides: Partial<Project> = {}): Project {
@@ -956,221 +978,25 @@ function makeSidebarThreadSummary(
   };
 }
 
-function makeSplitView(overrides: Partial<SplitView> = {}): SplitView {
-  const sourceThreadId = (overrides.sourceThreadId ?? ThreadId.makeUnsafe("thread-1")) as ThreadId;
-  const ownerProjectId = (overrides.ownerProjectId ??
-    ProjectId.makeUnsafe("project-1")) as ProjectId;
-  const firstLeaf = {
-    kind: "leaf" as const,
-    id: "pane-first",
-    threadId: sourceThreadId,
-    panel: {
-      panel: null,
-      diffTurnId: null,
-      diffFilePath: null,
-      hasOpenedPanel: false,
-      lastOpenPanel: "browser" as const,
-    },
-  };
-  const secondLeaf = {
-    kind: "leaf" as const,
-    id: "pane-second",
-    threadId: null,
-    panel: {
-      panel: null,
-      diffTurnId: null,
-      diffFilePath: null,
-      hasOpenedPanel: false,
-      lastOpenPanel: "browser" as const,
-    },
-  };
-  const root = {
-    kind: "split" as const,
-    id: "split-root",
-    direction: "horizontal" as const,
-    first: firstLeaf,
-    second: secondLeaf,
-    ratio: 0.5,
-  };
-
-  return {
-    id: "split-1",
-    sourceThreadId,
-    ownerProjectId,
-    root,
-    focusedPaneId: secondLeaf.id,
-    createdAt: "2026-03-09T10:00:00.000Z",
-    updatedAt: "2026-03-09T10:00:00.000Z",
-    ...overrides,
-  };
-}
-
 describe("deriveSidebarProjectData", () => {
-  it("replaces a thread row with its split view entry", () => {
+  it("shows split member threads as normal project rows", () => {
     const project = makeProject();
-    const threadOne = makeSidebarThreadSummary({
-      id: ThreadId.makeUnsafe("thread-1"),
-      title: "One",
-    });
-    const threadTwo = makeSidebarThreadSummary({
-      id: ThreadId.makeUnsafe("thread-2"),
-      title: "Two",
-      createdAt: "2026-03-09T10:05:00.000Z",
-      updatedAt: "2026-03-09T10:05:00.000Z",
-    });
-    const splitView = makeSplitView({
-      sourceThreadId: threadOne.id,
-      ownerProjectId: project.id,
-    });
-
-    const data = deriveSidebarProjectData({
-      projects: [project],
-      sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId([threadOne, threadTwo]),
-      splitViewsByProjectId: groupSplitViewsByProjectId([splitView]),
-      splitViewBySourceThreadId: new Map([[splitView.sourceThreadId, splitView]]),
-      pinnedThreadIds: [],
-      pinnedThreadIdSet: new Set(),
-      expandedParentThreadIds: new Set(),
-      expandedThreadListProjectCwds: new Set(),
-      normalizeProjectCwd: (cwd) => cwd,
-      activeSidebarThreadId: undefined,
-      previewLimit: 5,
-    });
-
-    expect(data.get(project.id)?.visibleEntries).toEqual([
-      expect.objectContaining({
-        kind: "split",
-        rowId: splitView.sourceThreadId,
-      }),
-      expect.objectContaining({
-        kind: "thread",
-        rowId: threadTwo.id,
-      }),
-    ]);
-  });
-
-  it("keeps a split view visible after its source thread is gone", () => {
-    const project = makeProject();
-    const deletedSourceThreadId = ThreadId.makeUnsafe("thread-deleted-source");
-    const remainingThread = makeSidebarThreadSummary({
-      id: ThreadId.makeUnsafe("thread-remaining"),
-      title: "Remaining",
-    });
-    const splitView = makeSplitView({
-      sourceThreadId: deletedSourceThreadId,
-      ownerProjectId: project.id,
-    });
-
-    const data = deriveSidebarProjectData({
-      projects: [project],
-      sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId([remainingThread]),
-      splitViewsByProjectId: groupSplitViewsByProjectId([splitView]),
-      splitViewBySourceThreadId: new Map(),
-      pinnedThreadIds: [],
-      pinnedThreadIdSet: new Set(),
-      expandedParentThreadIds: new Set(),
-      expandedThreadListProjectCwds: new Set(),
-      normalizeProjectCwd: (cwd) => cwd,
-      activeSidebarThreadId: undefined,
-      previewLimit: 5,
-    });
-
-    expect(data.get(project.id)?.visibleEntries).toEqual([
-      expect.objectContaining({
-        kind: "thread",
-        rowId: remainingThread.id,
-      }),
-      expect.objectContaining({
-        kind: "split",
-        rowId: deletedSourceThreadId,
-      }),
-    ]);
-  });
-
-  it("keeps an active orphaned split visible when the project preview is collapsed", () => {
-    const project = makeProject();
-    const deletedSourceThreadId = ThreadId.makeUnsafe("thread-deleted-source");
-    const firstThread = makeSidebarThreadSummary({
-      id: ThreadId.makeUnsafe("thread-first"),
-      title: "First",
-    });
-    const secondThread = makeSidebarThreadSummary({
-      id: ThreadId.makeUnsafe("thread-second"),
-      title: "Second",
-      createdAt: "2026-03-09T10:05:00.000Z",
-      updatedAt: "2026-03-09T10:05:00.000Z",
-    });
-    const splitView = makeSplitView({
-      sourceThreadId: deletedSourceThreadId,
-      ownerProjectId: project.id,
-    });
-
-    const data = deriveSidebarProjectData({
-      projects: [project],
-      sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId([firstThread, secondThread]),
-      splitViewsByProjectId: groupSplitViewsByProjectId([splitView]),
-      splitViewBySourceThreadId: new Map(),
-      pinnedThreadIds: [],
-      pinnedThreadIdSet: new Set(),
-      expandedParentThreadIds: new Set(),
-      expandedThreadListProjectCwds: new Set(),
-      normalizeProjectCwd: (cwd) => cwd,
-      activeSidebarThreadId: deletedSourceThreadId,
-      previewLimit: 1,
-    });
-
-    expect(data.get(project.id)).toMatchObject({
-      activeEntryId: deletedSourceThreadId,
-      visibleEntries: expect.arrayContaining([
-        expect.objectContaining({
-          kind: "split",
-          rowId: deletedSourceThreadId,
-        }),
-      ]),
-    });
-  });
-
-  it("hides additional split-view leaf threads from the regular project list to avoid duplicates", () => {
-    // The split's `secondLeaf` is now bound to `threadTwo`, simulating a chat that the user
-    // dragged into the split. That thread must not also appear as a standalone row in the
-    // sidebar -- it lives only inside the split-chats group.
-    const project = makeProject();
-    const sourceThreadId = ThreadId.makeUnsafe("thread-source");
-    const droppedThreadId = ThreadId.makeUnsafe("thread-dropped");
-    const standaloneThreadId = ThreadId.makeUnsafe("thread-standalone");
     const sourceThread = makeSidebarThreadSummary({
-      id: sourceThreadId,
+      id: ThreadId.makeUnsafe("thread-source"),
       title: "Source",
     });
     const droppedThread = makeSidebarThreadSummary({
-      id: droppedThreadId,
+      id: ThreadId.makeUnsafe("thread-dropped"),
       title: "Dropped",
       createdAt: "2026-03-09T10:05:00.000Z",
       updatedAt: "2026-03-09T10:05:00.000Z",
     });
     const standaloneThread = makeSidebarThreadSummary({
-      id: standaloneThreadId,
+      id: ThreadId.makeUnsafe("thread-standalone"),
       title: "Standalone",
       createdAt: "2026-03-09T10:10:00.000Z",
       updatedAt: "2026-03-09T10:10:00.000Z",
     });
-    const baseSplitView = makeSplitView({
-      sourceThreadId,
-      ownerProjectId: project.id,
-    });
-    const splitView: SplitView = {
-      ...baseSplitView,
-      root:
-        baseSplitView.root.kind === "split"
-          ? {
-              ...baseSplitView.root,
-              second:
-                baseSplitView.root.second.kind === "leaf"
-                  ? { ...baseSplitView.root.second, threadId: droppedThreadId }
-                  : baseSplitView.root.second,
-            }
-          : baseSplitView.root,
-    };
 
     const data = deriveSidebarProjectData({
       projects: [project],
@@ -1179,42 +1005,7 @@ describe("deriveSidebarProjectData", () => {
         droppedThread,
         standaloneThread,
       ]),
-      splitViewsByProjectId: groupSplitViewsByProjectId([splitView]),
-      splitViewBySourceThreadId: new Map([[splitView.sourceThreadId, splitView]]),
       pinnedThreadIds: [],
-      pinnedThreadIdSet: new Set(),
-      expandedParentThreadIds: new Set(),
-      expandedThreadListProjectCwds: new Set(),
-      normalizeProjectCwd: (cwd) => cwd,
-      activeSidebarThreadId: undefined,
-      previewLimit: 5,
-    });
-
-    const visibleEntries = data.get(project.id)?.visibleEntries ?? [];
-    expect(visibleEntries).toEqual([
-      expect.objectContaining({ kind: "split", rowId: sourceThreadId }),
-      expect.objectContaining({ kind: "thread", rowId: standaloneThreadId }),
-    ]);
-    expect(
-      visibleEntries.some((entry) => entry.kind === "thread" && entry.rowId === droppedThreadId),
-    ).toBe(false);
-  });
-
-  it("does not hide orphaned splits because of stale pinned source state", () => {
-    const project = makeProject();
-    const deletedSourceThreadId = ThreadId.makeUnsafe("thread-deleted-source");
-    const splitView = makeSplitView({
-      sourceThreadId: deletedSourceThreadId,
-      ownerProjectId: project.id,
-    });
-
-    const data = deriveSidebarProjectData({
-      projects: [project],
-      sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId([]),
-      splitViewsByProjectId: groupSplitViewsByProjectId([splitView]),
-      splitViewBySourceThreadId: new Map(),
-      pinnedThreadIds: [deletedSourceThreadId],
-      pinnedThreadIdSet: new Set([deletedSourceThreadId]),
       expandedParentThreadIds: new Set(),
       expandedThreadListProjectCwds: new Set(),
       normalizeProjectCwd: (cwd) => cwd,
@@ -1223,10 +1014,9 @@ describe("deriveSidebarProjectData", () => {
     });
 
     expect(data.get(project.id)?.visibleEntries).toEqual([
-      expect.objectContaining({
-        kind: "split",
-        rowId: deletedSourceThreadId,
-      }),
+      expect.objectContaining({ kind: "thread", rowId: sourceThread.id }),
+      expect.objectContaining({ kind: "thread", rowId: droppedThread.id }),
+      expect.objectContaining({ kind: "thread", rowId: standaloneThread.id }),
     ]);
   });
 
@@ -1256,10 +1046,7 @@ describe("deriveSidebarProjectData", () => {
         threadTwo,
         threadThree,
       ]),
-      splitViewsByProjectId: groupSplitViewsByProjectId([]),
-      splitViewBySourceThreadId: new Map(),
       pinnedThreadIds: [],
-      pinnedThreadIdSet: new Set(),
       expandedParentThreadIds: new Set(),
       expandedThreadListProjectCwds: new Set(),
       normalizeProjectCwd: (cwd) => cwd,
@@ -1289,10 +1076,7 @@ describe("deriveSidebarProjectData", () => {
     const data = deriveSidebarProjectData({
       projects: [project],
       sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId([threadOne]),
-      splitViewsByProjectId: groupSplitViewsByProjectId([]),
-      splitViewBySourceThreadId: new Map(),
       pinnedThreadIds: [],
-      pinnedThreadIdSet: new Set(),
       expandedParentThreadIds: new Set(),
       expandedThreadListProjectCwds: new Set(),
       normalizeProjectCwd: (cwd) => cwd,

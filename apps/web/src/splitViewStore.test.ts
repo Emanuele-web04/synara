@@ -390,6 +390,96 @@ describe("splitViewStore", () => {
     expect(snapshot(splitViewId).focusedPaneId).toBe(previousFocusedPaneId);
   });
 
+  it("replacePaneThread reanchors a split when clearing the source pane", () => {
+    const store = useSplitViewStore.getState();
+    const splitViewId = store.createFromDrop({
+      sourceThreadId: THREAD_A,
+      ownerProjectId: PROJECT_ID,
+      droppedThreadId: THREAD_B,
+      direction: "horizontal",
+      side: "second",
+    });
+    const sourcePaneId = findLeafIdForThread(snapshot(splitViewId), THREAD_A);
+
+    store.replacePaneThread(splitViewId, sourcePaneId, null);
+
+    const nextState = useSplitViewStore.getState();
+    const splitView = snapshot(splitViewId);
+    expect(splitView.sourceThreadId).toBe(THREAD_B);
+    expect(nextState.splitViewIdBySourceThreadId[THREAD_A]).toBeUndefined();
+    expect(nextState.splitViewIdBySourceThreadId[THREAD_B]).toBe(splitViewId);
+    expect(resolvePreferredSplitViewIdForThread({ ...nextState, threadId: THREAD_A })).toBeNull();
+  });
+
+  it("replacePaneThread reanchors a split when replacing the source pane", () => {
+    const store = useSplitViewStore.getState();
+    const splitViewId = store.createFromDrop({
+      sourceThreadId: THREAD_A,
+      ownerProjectId: PROJECT_ID,
+      droppedThreadId: THREAD_B,
+      direction: "horizontal",
+      side: "second",
+    });
+    const sourcePaneId = findLeafIdForThread(snapshot(splitViewId), THREAD_A);
+
+    store.replacePaneThread(splitViewId, sourcePaneId, THREAD_C);
+
+    const nextState = useSplitViewStore.getState();
+    const splitView = snapshot(splitViewId);
+    expect(splitView.sourceThreadId).toBe(THREAD_C);
+    expect(resolveSplitViewThreadIds(splitView).toSorted()).toEqual(
+      [THREAD_B, THREAD_C].toSorted(),
+    );
+    expect(nextState.splitViewIdBySourceThreadId[THREAD_A]).toBeUndefined();
+    expect(nextState.splitViewIdBySourceThreadId[THREAD_C]).toBe(splitViewId);
+    expect(resolvePreferredSplitViewIdForThread({ ...nextState, threadId: THREAD_C })).toBe(
+      splitViewId,
+    );
+  });
+
+  it("replacePaneThread does not steal another split's source mapping", () => {
+    const store = useSplitViewStore.getState();
+    const splitViewId = store.createFromDrop({
+      sourceThreadId: THREAD_A,
+      ownerProjectId: PROJECT_ID,
+      droppedThreadId: THREAD_B,
+      direction: "horizontal",
+      side: "second",
+    });
+    const otherSplitId = store.createFromThread({
+      sourceThreadId: THREAD_C,
+      ownerProjectId: PROJECT_ID,
+    });
+    const sourcePaneId = findLeafIdForThread(snapshot(splitViewId), THREAD_A);
+
+    store.replacePaneThread(splitViewId, sourcePaneId, THREAD_C);
+
+    const nextState = useSplitViewStore.getState();
+    const splitView = snapshot(splitViewId);
+    expect(splitView.sourceThreadId).toBe(THREAD_B);
+    expect(resolveSplitViewThreadIds(splitView).toSorted()).toEqual(
+      [THREAD_B, THREAD_C].toSorted(),
+    );
+    expect(nextState.splitViewIdBySourceThreadId[THREAD_A]).toBeUndefined();
+    expect(nextState.splitViewIdBySourceThreadId[THREAD_B]).toBe(splitViewId);
+    expect(nextState.splitViewIdBySourceThreadId[THREAD_C]).toBe(otherSplitId);
+  });
+
+  it("replacePaneThread removes a split when clearing its last populated pane", () => {
+    const store = useSplitViewStore.getState();
+    const splitViewId = store.createFromThread({
+      sourceThreadId: THREAD_A,
+      ownerProjectId: PROJECT_ID,
+    });
+    const sourcePaneId = findLeafIdForThread(snapshot(splitViewId), THREAD_A);
+
+    store.replacePaneThread(splitViewId, sourcePaneId, null);
+
+    const nextState = useSplitViewStore.getState();
+    expect(nextState.splitViewsById[splitViewId]).toBeUndefined();
+    expect(nextState.splitViewIdBySourceThreadId[THREAD_A]).toBeUndefined();
+  });
+
   it("removeThreadFromSplitViews collapses the tree, drops orphaned splits, and reseats focus", () => {
     const store = useSplitViewStore.getState();
     const firstSplitId = store.createFromThread({

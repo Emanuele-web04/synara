@@ -282,6 +282,22 @@ function updateSplitView(
   };
 }
 
+// Re-anchor only to threads that are not already the source of another split view.
+function resolveNextSourceThreadId(input: {
+  root: Pane;
+  splitViewId: SplitViewId;
+  splitViewIdBySourceThreadId: Record<string, SplitViewId | undefined>;
+}): ThreadId | null {
+  for (const leaf of collectLeaves(input.root)) {
+    if (!leaf.threadId) continue;
+    const existingSourceSplitId = input.splitViewIdBySourceThreadId[leaf.threadId];
+    if (!existingSourceSplitId || existingSourceSplitId === input.splitViewId) {
+      return leaf.threadId;
+    }
+  }
+  return null;
+}
+
 // --- selectors ---
 
 // Returns the threadId of the focused leaf, falling back to the first non-empty leaf when the
@@ -421,19 +437,74 @@ export const useSplitViewStore = create<SplitViewStore>()(
           };
         }),
       replacePaneThread: (splitViewId, paneId, threadId) =>
-        set((state) =>
-          updateSplitView(state, splitViewId, (splitView) => {
+        set((state) => {
+          const existing = state.splitViewsById[splitViewId];
+          if (!existing) return state;
+          let nextSourceThreadId: ThreadId | null = existing.sourceThreadId;
+          let shouldRemoveSplitView = false;
+          const nextState = updateSplitView(state, splitViewId, (splitView) => {
             const leaf = findLeafPaneById(splitView.root, paneId);
             if (!leaf) return splitView;
             if (leaf.threadId === threadId) return splitView;
             const nextLeaf: LeafPane = { ...leaf, threadId };
+            const nextRoot = replacePaneInTree(splitView.root, paneId, nextLeaf);
+            const hasAnyThread = collectLeaves(nextRoot).some(
+              (nextLeaf) => nextLeaf.threadId !== null,
+            );
+            if (!hasAnyThread) {
+              shouldRemoveSplitView = true;
+            }
+            if (leaf.threadId === splitView.sourceThreadId) {
+              nextSourceThreadId = resolveNextSourceThreadId({
+                root: nextRoot,
+                splitViewId,
+                splitViewIdBySourceThreadId: state.splitViewIdBySourceThreadId,
+              });
+              if (nextSourceThreadId === null) {
+                shouldRemoveSplitView = true;
+              }
+            }
             return {
               ...splitView,
-              root: replacePaneInTree(splitView.root, paneId, nextLeaf),
+              sourceThreadId: nextSourceThreadId ?? splitView.sourceThreadId,
+              root: nextRoot,
               updatedAt: resolveUpdatedAt(),
             };
-          }),
-        ),
+          });
+          if (nextState === state) return state;
+
+          if (shouldRemoveSplitView) {
+            const nextSplitViewsById = { ...nextState.splitViewsById };
+            const nextSplitViewIdBySourceThreadId = { ...nextState.splitViewIdBySourceThreadId };
+            delete nextSplitViewsById[splitViewId];
+            if (nextSplitViewIdBySourceThreadId[existing.sourceThreadId] === splitViewId) {
+              delete nextSplitViewIdBySourceThreadId[existing.sourceThreadId];
+            }
+            return {
+              splitViewsById: nextSplitViewsById,
+              splitViewIdBySourceThreadId: nextSplitViewIdBySourceThreadId,
+            };
+          }
+
+          const updated = nextState.splitViewsById[splitViewId];
+          if (
+            !updated ||
+            nextSourceThreadId === null ||
+            nextSourceThreadId === existing.sourceThreadId
+          ) {
+            return nextState;
+          }
+
+          const nextSplitViewIdBySourceThreadId = { ...nextState.splitViewIdBySourceThreadId };
+          if (nextSplitViewIdBySourceThreadId[existing.sourceThreadId] === splitViewId) {
+            delete nextSplitViewIdBySourceThreadId[existing.sourceThreadId];
+          }
+          nextSplitViewIdBySourceThreadId[nextSourceThreadId] = splitViewId;
+          return {
+            ...nextState,
+            splitViewIdBySourceThreadId: nextSplitViewIdBySourceThreadId,
+          };
+        }),
       dropThreadOnPane: ({ splitViewId, targetPaneId, direction, side, threadId }) => {
         const stateBefore = get();
         const splitView = stateBefore.splitViewsById[splitViewId];
