@@ -113,7 +113,6 @@ import { DEFAULT_THREAD_TERMINAL_ID, type SidebarThreadSummary, type Thread } fr
 import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
 import { ClaudeAI, Gemini, OpenAI, OpenCodeIcon } from "./Icons";
 import { AppNavigationButtons } from "./AppNavigationButtons";
-import { readDebugFeatureFlagsMenuVisibility } from "./debugFeatureFlagsMenuVisibility";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
 import { ThreadRunningSpinner } from "./ThreadRunningSpinner";
@@ -259,6 +258,7 @@ const SIDEBAR_LIST_ANIMATION_OPTIONS = {
 } as const;
 const EMPTY_THREAD_JUMP_LABELS = new Map<ThreadId, string>();
 const EMPTY_SHORTCUT_PARTS: readonly string[] = [];
+const DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY = "dpcode:show-debug-feature-flags-menu";
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS = 6;
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS = 50;
 const ADD_PROJECT_EXISTING_SYNC_ERROR =
@@ -278,6 +278,32 @@ const PROJECT_CONTEXT_MENU_COPY_PATH_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
 const PROJECT_CONTEXT_MENU_ARCHIVE_ICON = renderToStaticMarkup(<HiOutlineArchiveBox />);
 const PROJECT_CONTEXT_MENU_DELETE_THREADS_ICON = renderToStaticMarkup(<Trash2 />);
+
+function isLoopbackHostname(hostname: string): boolean {
+  const normalizedHostname = hostname.trim().toLowerCase().replace(/\.$/, "");
+
+  return (
+    normalizedHostname === "localhost" ||
+    normalizedHostname === "127.0.0.1" ||
+    normalizedHostname === "::1" ||
+    normalizedHostname === "[::1]"
+  );
+}
+
+function shouldShowDebugFeatureFlagsMenu(): boolean {
+  if (!import.meta.env.DEV || typeof window === "undefined") {
+    return false;
+  }
+
+  try {
+    return (
+      isLoopbackHostname(window.location.hostname) &&
+      window.localStorage.getItem(DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY) === "true"
+    );
+  } catch {
+    return false;
+  }
+}
 
 function threadJumpLabelMapsEqual(
   left: ReadonlyMap<ThreadId, string>,
@@ -5817,7 +5843,7 @@ export default function Sidebar() {
         <SidebarMenu>
           <SidebarMenuItem>
             <div className="flex flex-col gap-1">
-              {DebugFeatureFlagsMenu && readDebugFeatureFlagsMenuVisibility() && !isOnSettings ? (
+              {DebugFeatureFlagsMenu && shouldShowDebugFeatureFlagsMenu() && !isOnSettings ? (
                 <Suspense fallback={null}>
                   <DebugFeatureFlagsMenu />
                 </Suspense>
