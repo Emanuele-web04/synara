@@ -826,6 +826,7 @@ export default function ChatView({
   const [pendingUserInputQuestionIndexByRequestId, setPendingUserInputQuestionIndexByRequestId] =
     useState<Record<string, number>>({});
   const [planSidebarOpen, setPlanSidebarOpen] = useState(false);
+  const [activeTaskListCompact, setActiveTaskListCompact] = useState(false);
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
   const [composerCommandPicker, setComposerCommandPicker] = useState<
     null | "fork-target" | "review-target"
@@ -6685,11 +6686,13 @@ export default function ChatView({
   const composerSection = (
     <>
       {activeTaskList && !planSidebarOpen ? (
-        <div className="mx-auto w-full max-w-3xl">
-          <div className="mx-auto w-11/12">
+        <div className="pointer-events-none mx-auto w-full max-w-3xl">
+          <div className="pointer-events-auto mx-auto w-11/12">
             <ActiveTaskListCard
               activeTaskList={activeTaskList}
               backgroundTaskCount={activeBackgroundTasks?.activeCount ?? 0}
+              compact={activeTaskListCompact}
+              onCompactChange={setActiveTaskListCompact}
               onOpenSidebar={() => setPlanSidebarOpen(true)}
             />
           </div>
@@ -7393,17 +7396,6 @@ export default function ChatView({
                     isGitRepo ? "pb-1" : "pb-2.5 sm:pb-3",
                   )}
                 >
-                  {activeTaskList && !planSidebarOpen ? (
-                    <div className="mx-auto w-full max-w-3xl">
-                      <div className="mx-auto w-11/12">
-                        <ActiveTaskListCard
-                          activeTaskList={activeTaskList}
-                          backgroundTaskCount={activeBackgroundTasks?.activeCount ?? 0}
-                          onOpenSidebar={() => setPlanSidebarOpen(true)}
-                        />
-                      </div>
-                    </div>
-                  ) : null}
                   <form
                     ref={composerFormRef}
                     onSubmit={onSend}
@@ -7411,6 +7403,19 @@ export default function ChatView({
                     data-chat-composer-form="true"
                     data-chat-pane-scope={paneScopeId}
                   >
+                    {activeTaskList && !planSidebarOpen ? (
+                      <div className="pointer-events-none absolute inset-x-0 bottom-full z-20">
+                        <div className="pointer-events-auto mx-auto w-11/12">
+                          <ActiveTaskListCard
+                            activeTaskList={activeTaskList}
+                            backgroundTaskCount={activeBackgroundTasks?.activeCount ?? 0}
+                            compact={activeTaskListCompact}
+                            onCompactChange={setActiveTaskListCompact}
+                            onOpenSidebar={() => setPlanSidebarOpen(true)}
+                          />
+                        </div>
+                      </div>
+                    ) : null}
                     {queuedComposerTurns.length > 0 ? (
                       <div className="mx-auto flex w-11/12 flex-col">
                         {queuedComposerTurns.map((queuedTurn, queuedTurnIndex) => (
