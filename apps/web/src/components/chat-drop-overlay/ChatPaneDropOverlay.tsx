@@ -26,8 +26,8 @@ export interface ThreadDragPayload {
 export type DropZone = "top" | "bottom" | "left" | "right";
 
 export interface ThreadDropRules {
-  excludedThreadIds?: ReadonlySet<ThreadId>;
-  ownerProjectId?: ProjectId | null;
+  excludedThreadIds?: ReadonlySet<ThreadId> | undefined;
+  ownerProjectId?: ProjectId | null | undefined;
 }
 
 const DROP_ZONE_PREVIEW_CLASS: Record<DropZone, string> = {
@@ -36,7 +36,8 @@ const DROP_ZONE_PREVIEW_CLASS: Record<DropZone, string> = {
   left: "top-0 bottom-0 left-0 w-1/2",
   right: "top-0 bottom-0 right-0 w-1/2",
 };
-const DROP_ZONE_PREVIEW_BASE_CLASS = "absolute m-1 rounded-xl bg-info/18 ring-1 ring-inset ring-info/65";
+const DROP_ZONE_PREVIEW_BASE_CLASS =
+  "absolute m-1 rounded-xl bg-info/18 ring-1 ring-inset ring-info/65";
 const EMPTY_RECT = { left: 0, top: 0, width: 0, height: 0 };
 const EDGE_REGION_FRACTION = 1 / 3;
 
@@ -270,14 +271,17 @@ export function ChatPaneDropOverlay(props: ChatPaneDropOverlayProps) {
     [getAllowedZoneForEvent, setPreviewZone],
   );
 
-  const handleDragLeave = useCallback((event: ReactDragEvent<HTMLDivElement>) => {
-    if (!isThreadDrag(event)) return;
-    const wrapper = wrapperRef.current;
-    if (!wrapper) return;
-    const related = event.relatedTarget as Node | null;
-    if (related && wrapper.contains(related)) return;
-    resetOverlayState();
-  }, [resetOverlayState]);
+  const handleDragLeave = useCallback(
+    (event: ReactDragEvent<HTMLDivElement>) => {
+      if (!isThreadDrag(event)) return;
+      const wrapper = wrapperRef.current;
+      if (!wrapper) return;
+      const related = event.relatedTarget as Node | null;
+      if (related && wrapper.contains(related)) return;
+      resetOverlayState();
+    },
+    [resetOverlayState],
+  );
 
   const handleDrop = useCallback(
     (event: ReactDragEvent<HTMLDivElement>) => {
@@ -294,13 +298,7 @@ export function ChatPaneDropOverlay(props: ChatPaneDropOverlayProps) {
       const { direction, side } = dropZoneToDirectionSide(zone);
       onDrop({ ...payload, direction, side });
     },
-    [
-      excludedThreadIds,
-      getZoneForEvent,
-      onDrop,
-      ownerProjectId,
-      resetOverlayState,
-    ],
+    [excludedThreadIds, getZoneForEvent, onDrop, ownerProjectId, resetOverlayState],
   );
 
   useEffect(() => {
@@ -319,10 +317,7 @@ export function ChatPaneDropOverlay(props: ChatPaneDropOverlayProps) {
       onDrop={handleDrop}
     >
       {children}
-      <div
-        className="pointer-events-none absolute inset-0 z-50"
-        data-chat-pane-drop-zones="true"
-      >
+      <div className="pointer-events-none absolute inset-0 z-50" data-chat-pane-drop-zones="true">
         <div ref={previewRef} data-chat-pane-drop-zone-active="true" />
       </div>
     </div>

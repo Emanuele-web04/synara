@@ -1130,6 +1130,76 @@ describe("deriveSidebarProjectData", () => {
     });
   });
 
+  it("hides additional split-view leaf threads from the regular project list to avoid duplicates", () => {
+    // The split's `secondLeaf` is now bound to `threadTwo`, simulating a chat that the user
+    // dragged into the split. That thread must not also appear as a standalone row in the
+    // sidebar -- it lives only inside the split-chats group.
+    const project = makeProject();
+    const sourceThreadId = ThreadId.makeUnsafe("thread-source");
+    const droppedThreadId = ThreadId.makeUnsafe("thread-dropped");
+    const standaloneThreadId = ThreadId.makeUnsafe("thread-standalone");
+    const sourceThread = makeSidebarThreadSummary({
+      id: sourceThreadId,
+      title: "Source",
+    });
+    const droppedThread = makeSidebarThreadSummary({
+      id: droppedThreadId,
+      title: "Dropped",
+      createdAt: "2026-03-09T10:05:00.000Z",
+      updatedAt: "2026-03-09T10:05:00.000Z",
+    });
+    const standaloneThread = makeSidebarThreadSummary({
+      id: standaloneThreadId,
+      title: "Standalone",
+      createdAt: "2026-03-09T10:10:00.000Z",
+      updatedAt: "2026-03-09T10:10:00.000Z",
+    });
+    const baseSplitView = makeSplitView({
+      sourceThreadId,
+      ownerProjectId: project.id,
+    });
+    const splitView: SplitView = {
+      ...baseSplitView,
+      root:
+        baseSplitView.root.kind === "split"
+          ? {
+              ...baseSplitView.root,
+              second:
+                baseSplitView.root.second.kind === "leaf"
+                  ? { ...baseSplitView.root.second, threadId: droppedThreadId }
+                  : baseSplitView.root.second,
+            }
+          : baseSplitView.root,
+    };
+
+    const data = deriveSidebarProjectData({
+      projects: [project],
+      sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId([
+        sourceThread,
+        droppedThread,
+        standaloneThread,
+      ]),
+      splitViewsByProjectId: groupSplitViewsByProjectId([splitView]),
+      splitViewBySourceThreadId: new Map([[splitView.sourceThreadId, splitView]]),
+      pinnedThreadIds: [],
+      pinnedThreadIdSet: new Set(),
+      expandedParentThreadIds: new Set(),
+      expandedThreadListProjectCwds: new Set(),
+      normalizeProjectCwd: (cwd) => cwd,
+      activeSidebarThreadId: undefined,
+      previewLimit: 5,
+    });
+
+    const visibleEntries = data.get(project.id)?.visibleEntries ?? [];
+    expect(visibleEntries).toEqual([
+      expect.objectContaining({ kind: "split", rowId: sourceThreadId }),
+      expect.objectContaining({ kind: "thread", rowId: standaloneThreadId }),
+    ]);
+    expect(
+      visibleEntries.some((entry) => entry.kind === "thread" && entry.rowId === droppedThreadId),
+    ).toBe(false);
+  });
+
   it("does not hide orphaned splits because of stale pinned source state", () => {
     const project = makeProject();
     const deletedSourceThreadId = ThreadId.makeUnsafe("thread-deleted-source");

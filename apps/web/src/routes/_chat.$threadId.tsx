@@ -1205,7 +1205,9 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
         panelState={leaf.panel}
         isFocused={isFocused}
         deferChatMount={shouldDeferChatMount}
-        canDropInDirection={(direction) => canSubdividePane(activeSplitView.root, leaf.id, direction)}
+        canDropInDirection={(direction) =>
+          canSubdividePane(activeSplitView.root, leaf.id, direction)
+        }
         excludedThreadIds={excluded}
         ownerProjectId={activeSplitView.ownerProjectId}
         threads={selectableThreads}

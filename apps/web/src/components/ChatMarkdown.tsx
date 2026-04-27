@@ -376,7 +376,7 @@ function protectLiteralDollarsInMarkdownLinks(value: string): string {
 
     const linkEnd = findInlineMarkdownLinkEnd(value, cursor);
     if (linkEnd === -1) {
-      result += protectLiteralDollarsInPlainText(value[cursor]);
+      result += protectLiteralDollarsInPlainText(value[cursor] ?? "");
       cursor += 1;
       continue;
     }

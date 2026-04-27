@@ -20,11 +20,12 @@ import { autoAnimate } from "@formkit/auto-animate";
 import { FiGitBranch, FiPlus } from "react-icons/fi";
 import { GoRepoForked } from "react-icons/go";
 import { HiOutlineArchiveBox, HiOutlineCheckCircle, HiOutlineFolderOpen } from "react-icons/hi2";
-import { BsChat } from "react-icons/bs";
+import { BsChat, BsLayoutSplit } from "react-icons/bs";
 import { TbArrowsDiagonal, TbArrowsDiagonalMinimize2, TbCursorText } from "react-icons/tb";
 import { IoFilter } from "react-icons/io5";
 import { LuMessageSquareDashed, LuSplit } from "react-icons/lu";
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -260,6 +261,7 @@ const SIDEBAR_LIST_ANIMATION_OPTIONS = {
 } as const;
 const EMPTY_THREAD_JUMP_LABELS = new Map<ThreadId, string>();
 const EMPTY_SHORTCUT_PARTS: readonly string[] = [];
+const EMPTY_THREAD_ID_LIST: readonly ThreadId[] = [];
 const DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY = "dpcode:show-debug-feature-flags-menu";
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS = 6;
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS = 50;
@@ -1161,6 +1163,11 @@ export default function Sidebar() {
   );
   const [optimisticActiveThreadId, setOptimisticActiveThreadId] = useState<ThreadId | null>(null);
   const [expandedSubagentParentIds, setExpandedSubagentParentIds] = useState<ReadonlySet<ThreadId>>(
+    () => new Set(),
+  );
+  // Split chat groups default to expanded; we only track ids that the user has explicitly collapsed
+  // so newly-created splits open without any persisted state nudging them shut.
+  const [collapsedSplitViewGroupIds, setCollapsedSplitViewGroupIds] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
   const autoRevealedSubagentThreadIdRef = useRef<ThreadId | null>(null);
@@ -3602,6 +3609,36 @@ export default function Sidebar() {
     });
   }, []);
 
+  const toggleSplitViewGroupCollapsed = useCallback((splitViewId: string) => {
+    setCollapsedSplitViewGroupIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(splitViewId)) {
+        next.delete(splitViewId);
+      } else {
+        next.add(splitViewId);
+      }
+      return next;
+    });
+  }, []);
+
+  // Prune collapsed-group entries for split views that no longer exist so the Set does not
+  // accumulate stale ids across long sessions.
+  useEffect(() => {
+    setCollapsedSplitViewGroupIds((previous) => {
+      if (previous.size === 0) return previous;
+      let changed = false;
+      const next = new Set<string>();
+      for (const splitViewId of previous) {
+        if (splitViewsById[splitViewId]) {
+          next.add(splitViewId);
+        } else {
+          changed = true;
+        }
+      }
+      return changed ? next : previous;
+    });
+  }, [splitViewsById]);
+
   const handleThreadClick = useCallback(
     (
       event: MouseEvent,
@@ -4015,11 +4052,18 @@ export default function Sidebar() {
     depth = 0,
     childCount = 0,
     isExpanded = false,
+    splitContext?: { splitView: SplitView; paneId: PaneId },
   ) {
     const threadTerminalState = selectThreadTerminalState(terminalStateByThreadId, thread.id);
     const threadEntryPoint = threadTerminalState.entryPoint;
     const isPendingArchiveConfirmation = pendingArchiveConfirmationThreadId === thread.id;
-    const isActive = visualActiveSidebarThreadId === thread.id;
+    // When the row represents a leaf inside a split-chats group, "active" means the split is the
+    // routed surface AND this leaf is the focused pane. Falling back to the thread-id check would
+    // either over-highlight (same thread referenced in multiple splits) or under-highlight.
+    const isActive = splitContext
+      ? routeSearch.splitViewId === splitContext.splitView.id &&
+        splitContext.splitView.focusedPaneId === splitContext.paneId
+      : visualActiveSidebarThreadId === thread.id;
     const isPinned = pinnedThreadIdSet.has(thread.id);
     const isSelected = selectedThreadIds.has(thread.id);
     const isHighlighted = isActive || isSelected;
@@ -4075,8 +4119,12 @@ export default function Sidebar() {
       ? "border-[color:var(--color-border)] bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
       : "border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground-secondary)] hover:border-[color:var(--color-border)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]";
 
+    const rowKey = splitContext
+      ? `split-leaf:${splitContext.splitView.id}:${splitContext.paneId}`
+      : thread.id;
+
     return (
-      <SidebarMenuSubItem key={thread.id} className="group/thread-row w-full" data-thread-item>
+      <SidebarMenuSubItem key={rowKey} className="group/thread-row w-full" data-thread-item>
         <ThreadPinToggleButton
           pinned={isPinned}
           presentation="overlay"
@@ -4145,12 +4193,17 @@ export default function Sidebar() {
               );
             }
           }}
-          onClick={(event) =>
+          onClick={(event) => {
+            if (splitContext) {
+              event.stopPropagation();
+              activateSplitPane(splitContext.splitView, splitContext.paneId);
+              return;
+            }
             handleThreadClick(event, thread.id, orderedProjectThreadIds, {
               isActive,
               canToggleSubagents,
-            })
-          }
+            });
+          }}
           onPointerDown={(event) => primeThreadActivation(event, thread.id)}
           onDoubleClick={(event) => {
             event.preventDefault();
@@ -4161,10 +4214,22 @@ export default function Sidebar() {
           onKeyDown={(event) => {
             if (event.key !== "Enter" && event.key !== " ") return;
             event.preventDefault();
+            if (splitContext) {
+              activateSplitPane(splitContext.splitView, splitContext.paneId);
+              return;
+            }
             activateThread(thread.id);
           }}
           onContextMenu={(event) => {
             event.preventDefault();
+            if (splitContext) {
+              event.stopPropagation();
+              void handleSplitContextMenu(splitContext.splitView, splitContext.paneId, {
+                x: event.clientX,
+                y: event.clientY,
+              });
+              return;
+            }
             if (selectedThreadIds.size > 0 && selectedThreadIds.has(thread.id)) {
               void handleMultiSelectContextMenu({
                 x: event.clientX,
@@ -4374,86 +4439,106 @@ export default function Sidebar() {
     } = projectSidebarData;
     const renderSplitRow = (splitView: SplitView) => {
       const leaves = collectLeaves(splitView.root);
-      const isActive = routeSearch.splitViewId === splitView.id;
+      const isActiveSplit = routeSearch.splitViewId === splitView.id;
+      const isCollapsed = collapsedSplitViewGroupIds.has(splitView.id);
+      const populatedLeafCount = leaves.reduce(
+        (count, leaf) => (leaf.threadId ? count + 1 : count),
+        0,
+      );
+      const collapseLabel = isCollapsed ? "Expand split chats" : "Collapse split chats";
+      // The split-chats header is styled like the project header (full width, px-2) rather than
+      // a thread row, so it matches the "section" that the user expects above the nested thread
+      // rows. Thread rows underneath keep their pl-8/pr-9 chrome unchanged.
+      const headerToneClass = isActiveSplit
+        ? "bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)] hover:bg-[var(--color-background-button-secondary)]"
+        : "hover:bg-[var(--sidebar-accent)]";
+      const headerSecondaryToneClass = isActiveSplit
+        ? "text-foreground/54 dark:text-foreground/64"
+        : "text-muted-foreground/45";
 
       return (
-        <SidebarMenuSubItem key={`split:${splitView.id}`} className="w-full" data-thread-item>
-          <SidebarMenuSubButton
-            render={<div role="button" tabIndex={0} />}
-            size="sm"
-            isActive={isActive}
-            className={resolveThreadRowClassName({
-              isActive,
-              isSelected: false,
-            })}
-            onClick={() => activateSplitPane(splitView, splitView.focusedPaneId)}
-            onContextMenu={(event) => {
-              event.preventDefault();
-              void handleSplitContextMenu(splitView, splitView.focusedPaneId, {
-                x: event.clientX,
-                y: event.clientY,
-              });
-            }}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter" && event.key !== " ") return;
-              event.preventDefault();
-              activateSplitPane(splitView, splitView.focusedPaneId);
-            }}
-          >
-            <div className="-ml-1.5 flex min-w-0 flex-1 items-center gap-0.5">
-              {leaves.map((leaf: LeafPane) => {
-                const preview = resolveSplitPreview(leaf.threadId);
-                const isPaneFocused = splitView.focusedPaneId === leaf.id;
-                return (
-                  <div
-                    key={leaf.id}
-                    role="button"
-                    tabIndex={0}
-                    className={cn(
-                      "flex min-w-0 flex-1 select-none items-center gap-1 rounded-md px-1.5 py-0.5 text-left outline-hidden transition-colors focus-visible:ring-1 focus-visible:ring-[color:var(--color-border-focus)]",
-                      isPaneFocused
-                        ? "bg-[var(--color-background-button-secondary)] shadow-xs"
-                        : "hover:bg-[var(--sidebar-accent)]",
-                    )}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      activateSplitPane(splitView, leaf.id);
-                    }}
-                    onContextMenu={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      void handleSplitContextMenu(splitView, leaf.id, {
-                        x: event.clientX,
-                        y: event.clientY,
-                      });
-                    }}
-                    onMouseDown={(event) => {
-                      if (event.detail > 1) {
-                        event.preventDefault();
-                      }
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key !== "Enter" && event.key !== " ") return;
-                      event.preventDefault();
-                      event.stopPropagation();
-                      activateSplitPane(splitView, leaf.id);
-                    }}
-                  >
-                    <ProviderGlyph provider={preview.provider} className="size-3 shrink-0" />
-                    <span className="min-w-0 truncate text-[length:var(--app-font-size-ui-sm,11px)] leading-5 text-foreground/86">
-                      {preview.threadId ? preview.title : "Select chat"}
-                    </span>
-                  </div>
-                );
-              })}
+        <Fragment key={`split-group:${splitView.id}`}>
+          <SidebarMenuSubItem className="group/thread-row w-full" data-thread-item>
+            <div
+              role="button"
+              tabIndex={0}
+              data-active={isActiveSplit ? "true" : undefined}
+              className={cn(
+                "flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 py-0.5 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-sidebar-foreground transition-colors select-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
+                headerToneClass,
+              )}
+              onClick={() => activateSplitPane(splitView, splitView.focusedPaneId)}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                void handleSplitContextMenu(splitView, splitView.focusedPaneId, {
+                  x: event.clientX,
+                  y: event.clientY,
+                });
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" && event.key !== " ") return;
+                event.preventDefault();
+                activateSplitPane(splitView, splitView.focusedPaneId);
+              }}
+            >
+              <BsLayoutSplit
+                aria-hidden="true"
+                className={cn("size-3.5 shrink-0", headerSecondaryToneClass)}
+              />
+              <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                <span className="min-w-0 truncate leading-5 text-foreground/86">Split chats</span>
+                <span
+                  aria-label={`${populatedLeafCount} chat${populatedLeafCount === 1 ? "" : "s"} in this split`}
+                  className={cn(
+                    "shrink-0 text-[10px] leading-none tabular-nums",
+                    headerSecondaryToneClass,
+                  )}
+                >
+                  {populatedLeafCount}
+                </span>
+              </div>
+              {/* Collapse toggle stays inline with the rest of the header content; clicking it
+                  toggles the group only and never activates the split. */}
+              <button
+                type="button"
+                data-thread-selection-safe
+                aria-label={collapseLabel}
+                title={collapseLabel}
+                className={cn(
+                  "inline-flex size-4 shrink-0 items-center justify-center rounded-sm transition-colors hover:bg-[var(--sidebar-accent)] hover:text-foreground",
+                  headerSecondaryToneClass,
+                )}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  toggleSplitViewGroupCollapsed(splitView.id);
+                }}
+              >
+                {isCollapsed ? (
+                  <ChevronRightIcon className="size-3" />
+                ) : (
+                  <ChevronDownIcon className="size-3" />
+                )}
+              </button>
             </div>
-            <div className="ml-auto flex shrink-0 items-center gap-1.5">
-              <span className="text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/40">
-                {formatRelativeTime(splitView.updatedAt)}
-              </span>
-            </div>
-          </SidebarMenuSubButton>
-        </SidebarMenuSubItem>
+          </SidebarMenuSubItem>
+          {!isCollapsed
+            ? leaves.flatMap((leaf) => {
+                // Empty/unknown panes don't get a placeholder row — keep the rule "reuse the
+                // existing thread row component, nothing else". Empty panes are still visible
+                // inside the split view itself when the user opens the group.
+                if (leaf.threadId === null) return [];
+                const thread = sidebarThreadSummaryById[leaf.threadId];
+                if (!thread) return [];
+                return [
+                  renderThreadRow(thread, EMPTY_THREAD_ID_LIST, 0, 0, false, {
+                    splitView,
+                    paneId: leaf.id,
+                  }),
+                ];
+              })
+            : null}
+        </Fragment>
       );
     };
 

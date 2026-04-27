@@ -14,6 +14,7 @@ import {
   hasActionableProposedPlan,
   isLatestTurnSettled,
 } from "../session-logic";
+import { collectLeaves } from "../splitView.logic";
 import type { SplitView } from "../splitViewStore";
 
 export {
@@ -942,16 +943,31 @@ export function deriveSidebarProjectData(input: {
   for (const project of input.projects) {
     const allProjectThreads = input.sortedSidebarThreadsByProjectId.get(project.id) ?? [];
     const allProjectThreadIds = new Set(allProjectThreads.map((thread) => thread.id));
-    const projectThreads = getUnpinnedThreadsForSidebar(allProjectThreads, input.pinnedThreadIds);
-    const projectThreadTree = buildProjectThreadTree({
-      threads: projectThreads,
-      expandedParentThreadIds: input.expandedParentThreadIds,
-    });
     const projectSplitViews = (input.splitViewsByProjectId.get(project.id) ?? []).filter(
       (splitView) =>
         !input.pinnedThreadIdSet.has(splitView.sourceThreadId) ||
         !allProjectThreadIds.has(splitView.sourceThreadId),
     );
+    // Threads that already live inside a split-view group must not appear again as
+    // standalone rows in the regular project list. The split's source thread keeps its
+    // slot (it gets replaced in-place by the split entry below) so we only hide the
+    // additional panes that have been dropped into the split.
+    const threadIdsAdoptedBySplitGroups = new Set<ThreadId>();
+    for (const splitView of projectSplitViews) {
+      for (const leaf of collectLeaves(splitView.root)) {
+        if (leaf.threadId && leaf.threadId !== splitView.sourceThreadId) {
+          threadIdsAdoptedBySplitGroups.add(leaf.threadId);
+        }
+      }
+    }
+    const projectThreads = getUnpinnedThreadsForSidebar(
+      allProjectThreads,
+      input.pinnedThreadIds,
+    ).filter((thread) => !threadIdsAdoptedBySplitGroups.has(thread.id));
+    const projectThreadTree = buildProjectThreadTree({
+      threads: projectThreads,
+      expandedParentThreadIds: input.expandedParentThreadIds,
+    });
     const projectStatus = resolveProjectStatusIndicator(
       allProjectThreads.map((thread) =>
         input.resolveThreadStatus
