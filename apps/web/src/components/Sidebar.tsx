@@ -27,8 +27,10 @@ import { LuMessageSquareDashed, LuSplit } from "react-icons/lu";
 import {
   useCallback,
   useEffect,
+  lazy,
   useMemo,
   useRef,
+  Suspense,
   useState,
   type MouseEvent,
   type PointerEvent as ReactPointerEvent,
@@ -109,9 +111,8 @@ import { dispatchThreadRename } from "../lib/threadRename";
 import { quotePosixShellArgument } from "../lib/shellQuote";
 import { DEFAULT_THREAD_TERMINAL_ID, type SidebarThreadSummary, type Thread } from "../types";
 import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
-import { ClaudeAI, Gemini, OpenAI, OpenCodeIcon } from "./Icons";
+import { ClaudeAI, CursorIcon, Gemini, OpenAI, OpenCodeIcon } from "./Icons";
 import { AppNavigationButtons } from "./AppNavigationButtons";
-import { DebugFeatureFlagsMenu } from "./DebugFeatureFlagsMenu";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
 import { ThreadRunningSpinner } from "./ThreadRunningSpinner";
@@ -262,6 +263,11 @@ const ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS = 6;
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS = 50;
 const ADD_PROJECT_EXISTING_SYNC_ERROR =
   "This folder is already linked, but the existing project has not synced into the sidebar yet. Try again in a moment.";
+const DebugFeatureFlagsMenu = import.meta.env.DEV
+  ? lazy(() =>
+      import("./DebugFeatureFlagsMenu").then((module) => ({ default: module.DebugFeatureFlagsMenu })),
+    )
+  : null;
 
 const PROJECT_CONTEXT_MENU_FOLDER_ICON = renderToStaticMarkup(<HiOutlineFolderOpen />);
 const PROJECT_CONTEXT_MENU_EDIT_ICON =
@@ -273,12 +279,27 @@ const PROJECT_CONTEXT_MENU_COPY_PATH_ICON =
 const PROJECT_CONTEXT_MENU_ARCHIVE_ICON = renderToStaticMarkup(<HiOutlineArchiveBox />);
 const PROJECT_CONTEXT_MENU_DELETE_THREADS_ICON = renderToStaticMarkup(<Trash2 />);
 
-// Debug-only local controls stay reusable, but require an explicit dev/browser opt-in.
+function isLoopbackHostname(hostname: string): boolean {
+  const normalizedHostname = hostname.trim().toLowerCase().replace(/\.$/, "");
+
+  return (
+    normalizedHostname === "localhost" ||
+    normalizedHostname === "127.0.0.1" ||
+    normalizedHostname === "::1" ||
+    normalizedHostname === "[::1]"
+  );
+}
+
 function shouldShowDebugFeatureFlagsMenu(): boolean {
-  if (!import.meta.env.DEV || typeof window === "undefined") return false;
+  if (!import.meta.env.DEV || typeof window === "undefined") {
+    return false;
+  }
 
   try {
-    return window.localStorage.getItem(DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY) === "true";
+    return (
+      isLoopbackHostname(window.location.hostname) &&
+      window.localStorage.getItem(DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY) === "true"
+    );
   } catch {
     return false;
   }
@@ -338,6 +359,9 @@ function ProviderGlyph({ provider, className }: { provider: ProviderKind; classN
   }
   if (provider === "gemini") {
     return <Gemini aria-hidden="true" className={cn("text-foreground", className)} />;
+  }
+  if (provider === "cursor") {
+    return <CursorIcon aria-hidden="true" className={cn("text-foreground", className)} />;
   }
   if (provider === "opencode") {
     return (
@@ -1995,6 +2019,8 @@ export default function Sidebar() {
       const title =
         provider === "claudeAgent"
           ? `Imported Claude session${suffix ? ` ${suffix}` : ""}`
+          : provider === "cursor"
+            ? `Imported Cursor session${suffix ? ` ${suffix}` : ""}`
           : provider === "opencode"
             ? `Imported OpenCode session${suffix ? ` ${suffix}` : ""}`
             : `Imported Codex thread${suffix ? ` ${suffix}` : ""}`;
@@ -5031,7 +5057,7 @@ export default function Sidebar() {
         id: "import-thread",
         label: "Import thread from...",
         description: "Attach a local thread to an existing provider session.",
-        keywords: ["import", "resume", "thread", "session", "codex", "claude", "opencode"],
+        keywords: ["import", "resume", "thread", "session", "codex", "claude", "cursor", "opencode"],
         shortcutLabel: importThreadShortcutLabel,
       },
       {
@@ -5822,8 +5848,10 @@ export default function Sidebar() {
         <SidebarMenu>
           <SidebarMenuItem>
             <div className="flex flex-col gap-1">
-              {shouldShowDebugFeatureFlagsMenu() && !isOnSettings ? (
-                <DebugFeatureFlagsMenu />
+              {DebugFeatureFlagsMenu && shouldShowDebugFeatureFlagsMenu() && !isOnSettings ? (
+                <Suspense fallback={null}>
+                  <DebugFeatureFlagsMenu />
+                </Suspense>
               ) : null}
               <div className="flex items-center gap-2">
                 {!isOnSettings && (
@@ -5946,14 +5974,14 @@ function SidebarSearchPaletteController(props: {
   const selectAllThreads = useMemo(() => createAllThreadsSelector(), []);
   const selectSidebarDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
   const importProviderCapabilityQueries = useQueries({
-    queries: (["codex", "claudeAgent", "opencode"] as const).map((provider) =>
+    queries: (["codex", "claudeAgent", "cursor", "opencode"] as const).map((provider) =>
       providerComposerCapabilitiesQueryOptions(provider),
     ),
   });
   const threads = useStore(selectAllThreads);
   const sidebarDisplayThreads = useStore(selectSidebarDisplayThreads);
   const importProviders: ReadonlyArray<ImportProviderKind> = (
-    ["codex", "claudeAgent", "opencode"] as const
+    ["codex", "claudeAgent", "cursor", "opencode"] as const
   ).filter((provider, index) => supportsThreadImport(importProviderCapabilityQueries[index]?.data));
   const searchPaletteThreads = useMemo<SidebarSearchThread[]>(() => {
     const threadById = new Map(threads.map((thread) => [thread.id, thread] as const));

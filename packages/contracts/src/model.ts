@@ -50,9 +50,18 @@ export const OpenCodeModelOptions = Schema.Struct({
 });
 export type OpenCodeModelOptions = typeof OpenCodeModelOptions.Type;
 
+export const CursorModelOptions = Schema.Struct({
+  reasoningEffort: Schema.optional(TrimmedNonEmptyString),
+  fastMode: Schema.optional(Schema.Boolean),
+  thinking: Schema.optional(Schema.Boolean),
+  contextWindow: Schema.optional(Schema.String),
+});
+export type CursorModelOptions = typeof CursorModelOptions.Type;
+
 export const ProviderModelOptions = Schema.Struct({
   codex: Schema.optional(CodexModelOptions),
   claudeAgent: Schema.optional(ClaudeModelOptions),
+  cursor: Schema.optional(CursorModelOptions),
   gemini: Schema.optional(GeminiModelOptions),
   opencode: Schema.optional(OpenCodeModelOptions),
 });
@@ -346,6 +355,62 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       },
     },
   ],
+  cursor: [
+    {
+      slug: "auto",
+      name: "Auto",
+      capabilities: {
+        reasoningEffortLevels: [],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+    {
+      slug: "composer-2",
+      name: "Composer 2",
+      capabilities: {
+        reasoningEffortLevels: [],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+    {
+      slug: "claude-opus-4-6",
+      name: "Claude Opus 4.6",
+      capabilities: {
+        reasoningEffortLevels: [
+          { value: "low", label: "Low" },
+          { value: "medium", label: "Medium" },
+          { value: "high", label: "High", isDefault: true },
+          { value: "max", label: "Max" },
+        ],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+    {
+      slug: "gpt-5.3-codex",
+      name: "GPT-5.3 Codex",
+      capabilities: CODEX_GPT_5_CAPABILITIES,
+    },
+    {
+      slug: "gemini-3-pro",
+      name: "Gemini 3 Pro",
+      capabilities: {
+        reasoningEffortLevels: [],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+  ],
 } as const satisfies Record<ProviderKind, readonly ModelDefinition[]>;
 export type ModelOptionsByProvider = typeof MODEL_OPTIONS_BY_PROVIDER;
 
@@ -355,6 +420,7 @@ export type ModelSlug = BuiltInModelSlug | (string & {});
 export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderKind, ModelSlug> = {
   codex: "gpt-5.5",
   claudeAgent: "claude-sonnet-4-6",
+  cursor: "auto",
   gemini: "auto-gemini-3",
   opencode: "openai/gpt-5",
 };
@@ -392,6 +458,18 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "haiku-4.5": "claude-haiku-4-5",
     "claude-haiku-4.5": "claude-haiku-4-5",
     "claude-haiku-4-5-20251001": "claude-haiku-4-5",
+  },
+  cursor: {
+    auto: "auto",
+    composer: "composer-2",
+    "composer-2": "composer-2",
+    "composer-1.5": "composer-1.5",
+    "composer-1": "composer-1.5",
+    "opus-4.6": "claude-opus-4-6",
+    "opus-4.6-thinking": "claude-opus-4-6",
+    "gpt-5.3": "gpt-5.3-codex",
+    "codex-5.3": "gpt-5.3-codex",
+    "gemini-3": "gemini-3-pro",
   },
   gemini: {
     auto: "auto-gemini-3",
@@ -435,6 +513,7 @@ export const MODEL_CAPABILITIES_INDEX = Object.fromEntries(
 export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   codex: "Codex",
   claudeAgent: "Claude",
+  cursor: "Cursor",
   gemini: "Gemini",
   opencode: "OpenCode",
 };

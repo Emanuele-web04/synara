@@ -56,6 +56,7 @@ import {
 const DEFAULT_TIMEOUT_MS = 4_000;
 const CODEX_PROVIDER = "codex" as const;
 const CLAUDE_AGENT_PROVIDER = "claudeAgent" as const;
+const CURSOR_PROVIDER = "cursor" as const;
 const GEMINI_PROVIDER = "gemini" as const;
 const OPENCODE_PROVIDER = "opencode" as const;
 type ProviderStatuses = ReadonlyArray<ServerProviderStatus>;
@@ -668,6 +669,32 @@ const runOpenCodeCommand = (args: ReadonlyArray<string>) =>
     return { stdout, stderr, code: exitCode } satisfies CommandResult;
   }).pipe(Effect.scoped);
 
+const runCursorCommand = (args: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const command = ChildProcess.make("agent", [...args], {
+      shell: process.platform === "win32",
+      env: process.env,
+    });
+
+    const child = yield* spawner.spawn(command);
+
+    const [stdout, stderr, exitCode] = yield* Effect.all(
+      [
+        collectStreamAsString(child.stdout),
+        collectStreamAsString(child.stderr),
+        child.exitCode.pipe(Effect.map(Number)),
+      ],
+      { concurrency: "unbounded" },
+    );
+
+    if (isWindowsShellCommandMissingResult({ code: exitCode, stderr })) {
+      return yield* Effect.fail(new Error("spawn agent ENOENT"));
+    }
+
+    return { stdout, stderr, code: exitCode } satisfies CommandResult;
+  }).pipe(Effect.scoped);
+
 // ── Health check ────────────────────────────────────────────────────
 
 export const checkCodexProviderStatus: Effect.Effect<
@@ -1157,6 +1184,70 @@ export const checkOpenCodeProviderStatus: Effect.Effect<
   } satisfies ServerProviderStatus;
 });
 
+// ── Cursor health check ─────────────────────────────────────────────
+
+export const checkCursorProviderStatus: Effect.Effect<
+  ServerProviderStatus,
+  never,
+  ChildProcessSpawner.ChildProcessSpawner
+> = Effect.gen(function* () {
+  const checkedAt = new Date().toISOString();
+
+  const versionProbe = yield* runCursorCommand(["--version"]).pipe(
+    Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+    Effect.result,
+  );
+
+  if (Result.isFailure(versionProbe)) {
+    const error = versionProbe.failure;
+    return {
+      provider: CURSOR_PROVIDER,
+      status: "error" as const,
+      available: false,
+      authStatus: "unknown" as const,
+      checkedAt,
+      message: isCommandMissingCause(error)
+        ? "Cursor Agent CLI (`agent`) is not installed or not on PATH."
+        : `Failed to execute Cursor Agent CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+    } satisfies ServerProviderStatus;
+  }
+
+  if (Option.isNone(versionProbe.success)) {
+    return {
+      provider: CURSOR_PROVIDER,
+      status: "error" as const,
+      available: false,
+      authStatus: "unknown" as const,
+      checkedAt,
+      message: "Cursor Agent CLI is installed but failed to run. Timed out while running command.",
+    } satisfies ServerProviderStatus;
+  }
+
+  const version = versionProbe.success.value;
+  if (version.code !== 0) {
+    const detail = detailFromResult(version);
+    return {
+      provider: CURSOR_PROVIDER,
+      status: "error" as const,
+      available: false,
+      authStatus: "unknown" as const,
+      checkedAt,
+      message: detail
+        ? `Cursor Agent CLI is installed but failed to run. ${detail}`
+        : "Cursor Agent CLI is installed but failed to run.",
+    } satisfies ServerProviderStatus;
+  }
+
+  return {
+    provider: CURSOR_PROVIDER,
+    status: "ready" as const,
+    available: true,
+    authStatus: "unknown" as const,
+    checkedAt,
+    message: "Cursor Agent CLI is installed. Sign in with Cursor if a session prompts for authentication.",
+  } satisfies ServerProviderStatus;
+});
+
 // ── Snapshot helpers ────────────────────────────────────────────────
 
 function providerStatusesEqual(left: ProviderStatuses, right: ProviderStatuses): boolean {
@@ -1196,7 +1287,7 @@ export const ProviderHealthLive = Layer.effect(
     yield* Effect.addFinalizer(() => Scope.close(refreshScope, Exit.void));
 
     const cachePathByProvider = new Map(
-      [CODEX_PROVIDER, CLAUDE_AGENT_PROVIDER, GEMINI_PROVIDER, OPENCODE_PROVIDER].map(
+      [CODEX_PROVIDER, CLAUDE_AGENT_PROVIDER, CURSOR_PROVIDER, GEMINI_PROVIDER, OPENCODE_PROVIDER].map(
         (provider) =>
           [
             provider,
@@ -1209,7 +1300,13 @@ export const ProviderHealthLive = Layer.effect(
     );
 
     const cachedStatuses: ProviderStatuses = yield* Effect.forEach(
-      [CODEX_PROVIDER, CLAUDE_AGENT_PROVIDER, GEMINI_PROVIDER, OPENCODE_PROVIDER] as const,
+      [
+        CODEX_PROVIDER,
+        CLAUDE_AGENT_PROVIDER,
+        CURSOR_PROVIDER,
+        GEMINI_PROVIDER,
+        OPENCODE_PROVIDER,
+      ] as const,
       (provider) =>
         readProviderStatusCache(cachePathByProvider.get(provider)!).pipe(
           Effect.provideService(FileSystem.FileSystem, fileSystem),
@@ -1245,6 +1342,7 @@ export const ProviderHealthLive = Layer.effect(
       [
         checkCodexProviderStatus,
         checkClaude,
+        checkCursorProviderStatus,
         checkGeminiProviderStatus,
         checkOpenCodeProviderStatus,
       ],

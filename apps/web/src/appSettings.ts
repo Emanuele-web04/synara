@@ -33,6 +33,7 @@ export const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "update
 type CustomModelSettingsKey =
   | "customCodexModels"
   | "customClaudeModels"
+  | "customCursorModels"
   | "customGeminiModels"
   | "customOpenCodeModels";
 export type ProviderCustomModelConfig = {
@@ -48,6 +49,7 @@ export type ProviderCustomModelConfig = {
 const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>> = {
   codex: new Set(getModelOptions("codex").map((option) => option.slug)),
   claudeAgent: new Set(getModelOptions("claudeAgent").map((option) => option.slug)),
+  cursor: new Set(getModelOptions("cursor").map((option) => option.slug)),
   gemini: new Set(getModelOptions("gemini").map((option) => option.slug)),
   opencode: new Set(getModelOptions("opencode").map((option) => option.slug)),
 };
@@ -71,6 +73,8 @@ export const AppSettingsSchema = Schema.Struct({
   chatCodeFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
   codexBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   codexHomePath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  cursorBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  cursorApiEndpoint: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   geminiBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   openCodeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   openCodeServerUrl: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
@@ -95,6 +99,7 @@ export const AppSettingsSchema = Schema.Struct({
   timestampFormat: TimestampFormat.pipe(withDefaults(() => DEFAULT_TIMESTAMP_FORMAT)),
   customCodexModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customClaudeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
+  customCursorModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customGeminiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customOpenCodeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
@@ -127,6 +132,15 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     description: "Save additional Claude model slugs for the picker and `/model` command.",
     placeholder: "your-claude-model-slug",
     example: "claude-sonnet-5-0",
+  },
+  cursor: {
+    provider: "cursor",
+    settingsKey: "customCursorModels",
+    defaultSettingsKey: "customCursorModels",
+    title: "Cursor",
+    description: "Save additional Cursor model slugs for the picker and provider runtime.",
+    placeholder: "cursor-model-slug",
+    example: "composer-2",
   },
   gemini: {
     provider: "gemini",
@@ -193,6 +207,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     chatFontSizePx: normalizeChatFontSizePx(settings.chatFontSizePx),
     customCodexModels: normalizeCustomModelSlugs(settings.customCodexModels, "codex"),
     customClaudeModels: normalizeCustomModelSlugs(settings.customClaudeModels, "claudeAgent"),
+    customCursorModels: normalizeCustomModelSlugs(settings.customCursorModels, "cursor"),
     customGeminiModels: normalizeCustomModelSlugs(settings.customGeminiModels, "gemini"),
     customOpenCodeModels: normalizeCustomModelSlugs(settings.customOpenCodeModels, "opencode"),
   };
@@ -231,6 +246,7 @@ export function getCustomModelsByProvider(
   return {
     codex: getCustomModelsForProvider(settings, "codex"),
     claudeAgent: getCustomModelsForProvider(settings, "claudeAgent"),
+    cursor: getCustomModelsForProvider(settings, "cursor"),
     gemini: getCustomModelsForProvider(settings, "gemini"),
     opencode: getCustomModelsForProvider(settings, "opencode"),
   };
@@ -328,6 +344,7 @@ export function getCustomModelOptionsByProvider(
   return {
     codex: getAppModelOptions("codex", customModelsByProvider.codex),
     claudeAgent: getAppModelOptions("claudeAgent", customModelsByProvider.claudeAgent),
+    cursor: getAppModelOptions("cursor", customModelsByProvider.cursor),
     gemini: getAppModelOptions("gemini", customModelsByProvider.gemini),
     opencode: getAppModelOptions("opencode", customModelsByProvider.opencode),
   };
@@ -339,6 +356,8 @@ export function getProviderStartOptions(
     | "claudeBinaryPath"
     | "codexBinaryPath"
     | "codexHomePath"
+    | "cursorApiEndpoint"
+    | "cursorBinaryPath"
     | "geminiBinaryPath"
     | "openCodeBinaryPath"
     | "openCodeServerPassword"
@@ -358,6 +377,14 @@ export function getProviderStartOptions(
       ? {
           claudeAgent: {
             binaryPath: settings.claudeBinaryPath,
+          },
+        }
+      : {}),
+    ...(settings.cursorBinaryPath || settings.cursorApiEndpoint
+      ? {
+          cursor: {
+            ...(settings.cursorBinaryPath ? { binaryPath: settings.cursorBinaryPath } : {}),
+            ...(settings.cursorApiEndpoint ? { apiEndpoint: settings.cursorApiEndpoint } : {}),
           },
         }
       : {}),
@@ -387,7 +414,11 @@ export function getProviderStartOptions(
 export function getCustomBinaryPathForProvider(
   settings: Pick<
     AppSettings,
-    "claudeBinaryPath" | "codexBinaryPath" | "geminiBinaryPath" | "openCodeBinaryPath"
+    | "claudeBinaryPath"
+    | "codexBinaryPath"
+    | "cursorBinaryPath"
+    | "geminiBinaryPath"
+    | "openCodeBinaryPath"
   >,
   provider: ProviderKind,
 ): string {
@@ -396,6 +427,8 @@ export function getCustomBinaryPathForProvider(
       return settings.codexBinaryPath;
     case "claudeAgent":
       return settings.claudeBinaryPath;
+    case "cursor":
+      return settings.cursorBinaryPath;
     case "gemini":
       return settings.geminiBinaryPath;
     case "opencode":

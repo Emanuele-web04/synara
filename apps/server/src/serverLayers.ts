@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, FileSystem, Layer, Path } from "effect";
+import { ChildProcessSpawner } from "effect/unstable/process";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { CheckpointDiffQueryLive } from "./checkpointing/Layers/CheckpointDiffQuery";
@@ -19,6 +20,7 @@ import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus"
 import { ProviderUnsupportedError } from "./provider/Errors";
 import { makeClaudeAdapterLive } from "./provider/Layers/ClaudeAdapter";
 import { makeCodexAdapterLive } from "./provider/Layers/CodexAdapter";
+import { makeCursorAdapterLive } from "./provider/Layers/CursorAdapter";
 import { makeGeminiAdapterLive } from "./provider/Layers/GeminiAdapter";
 import { makeOpenCodeAdapterLive } from "./provider/Layers/OpenCodeAdapter";
 import { ProviderAdapterRegistryLive } from "./provider/Layers/ProviderAdapterRegistry";
@@ -36,6 +38,7 @@ import { GitManagerLive } from "./git/Layers/GitManager";
 import { GitCoreLive } from "./git/Layers/GitCore";
 import { GitHubCliLive } from "./git/Layers/GitHubCli";
 import { CodexTextGenerationServiceLive } from "./git/Layers/CodexTextGeneration";
+import { CursorTextGenerationServiceLive } from "./git/Layers/CursorTextGeneration";
 import { OpenCodeTextGenerationServiceLive } from "./git/Layers/OpenCodeTextGeneration";
 import { ProviderTextGenerationLive } from "./git/Layers/ProviderTextGeneration";
 import { OpenCodeRuntimeLive } from "./provider/opencodeRuntime";
@@ -62,7 +65,11 @@ const makeRuntimePtyAdapterLayer = () =>
 export function makeServerProviderLayer(): Layer.Layer<
   ProviderService | ProviderDiscoveryService | ProviderAdapterRegistry,
   ProviderUnsupportedError,
-  SqlClient.SqlClient | ServerConfig | FileSystem.FileSystem | AnalyticsService
+  | SqlClient.SqlClient
+  | ServerConfig
+  | FileSystem.FileSystem
+  | AnalyticsService
+  | ChildProcessSpawner.ChildProcessSpawner
 > {
   return Effect.gen(function* () {
     const { logProviderEvents, providerEventLogPath } = yield* ServerConfig;
@@ -91,10 +98,14 @@ export function makeServerProviderLayer(): Layer.Layer<
     const geminiAdapterLayer = makeGeminiAdapterLive(
       nativeEventLogger ? { nativeEventLogger } : undefined,
     );
+    const cursorAdapterLayer = makeCursorAdapterLive(
+      {},
+      nativeEventLogger ? { nativeEventLogger } : undefined,
+    );
     const adapterRegistryLayer = ProviderAdapterRegistryLive.pipe(
       Layer.provide(codexAdapterLayer),
       Layer.provide(claudeAdapterLayer),
-      Layer.provide(geminiAdapterLayer),
+      Layer.provide(cursorAdapterLayer),
       Layer.provide(geminiAdapterLayer),
       Layer.provide(openCodeAdapterLayer),
       Layer.provideMerge(providerSessionDirectoryLayer),
@@ -112,6 +123,7 @@ export function makeServerProviderLayer(): Layer.Layer<
 export function makeServerRuntimeServicesLayer() {
   const textGenerationLayer = ProviderTextGenerationLive.pipe(
     Layer.provide(CodexTextGenerationServiceLive),
+    Layer.provide(CursorTextGenerationServiceLive),
     Layer.provide(OpenCodeTextGenerationServiceLive.pipe(Layer.provide(OpenCodeRuntimeLive))),
   );
   const checkpointStoreLayer = CheckpointStoreLive.pipe(Layer.provide(GitCoreLive));

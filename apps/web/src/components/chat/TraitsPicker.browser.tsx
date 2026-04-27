@@ -39,7 +39,7 @@ function ClaudeTraitsPickerHarness(props: {
     selectedProvider: "claudeAgent",
     threadModelSelection: props.fallbackModelSelection,
     projectModelSelection: null,
-    customModelsByProvider: { codex: [], claudeAgent: [], gemini: [], opencode: [] },
+    customModelsByProvider: { codex: [], claudeAgent: [], cursor: [], gemini: [], opencode: [] },
   });
   const handlePromptChange = useCallback(
     (nextPrompt: string) => {
@@ -486,7 +486,7 @@ function OpenCodeTraitsPickerHarness(props: {
     selectedProvider: "opencode",
     threadModelSelection: props.fallbackModelSelection,
     projectModelSelection: null,
-    customModelsByProvider: { codex: [], claudeAgent: [], gemini: [], opencode: [] },
+    customModelsByProvider: { codex: [], claudeAgent: [], cursor: [], gemini: [], opencode: [] },
   });
   const handlePromptChange = useCallback(
     (nextPrompt: string) => {
