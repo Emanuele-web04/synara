@@ -476,7 +476,7 @@ function SplitPaneEmptyState(props: {
     <div
       className={cn(
         "flex min-h-0 min-w-0 flex-1 flex-col items-center bg-background px-6 pt-16",
-        props.isFocused ? "ring-1 ring-inset ring-primary/25" : "",
+        props.isFocused ? "ring-2 ring-inset ring-primary/70" : "",
       )}
       onMouseDown={props.onFocus}
     >
@@ -804,9 +804,9 @@ function DeferredChatView(props: {
       onToggleDiffPanel={props.onToggleDiff}
       onToggleBrowserPanel={props.onToggleBrowser}
       onOpenTurnDiffPanel={props.onOpenTurnDiff}
-      onSplitSurface={props.onSplitSurface}
-      onMaximizeSurface={props.onMaximize}
-      onChangeThreadInSplitPane={props.onChangeThread}
+      {...(props.onSplitSurface ? { onSplitSurface: props.onSplitSurface } : {})}
+      {...(props.onMaximize ? { onMaximizeSurface: props.onMaximize } : {})}
+      {...(props.onChangeThread ? { onChangeThreadInSplitPane: props.onChangeThread } : {})}
     />
   );
 }
@@ -879,7 +879,7 @@ function SplitPaneSurface(props: {
         <SidebarInset
           className={cn(
             "min-h-0 min-w-0 overflow-hidden overscroll-y-none text-foreground transition-shadow",
-            props.isFocused ? "ring-1 ring-inset ring-primary/25" : "",
+            props.isFocused ? "ring-2 ring-inset ring-primary/70" : "",
           )}
           onMouseDown={props.onFocus}
         >
@@ -924,7 +924,7 @@ function SplitPaneSurface(props: {
       {!props.isFocused ? (
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute inset-0 z-10 bg-foreground/[0.030] transition-opacity duration-150"
+          className="pointer-events-none absolute inset-0 z-10 bg-foreground/[0.060] transition-opacity duration-150"
         />
       ) : null}
     </div>
@@ -970,13 +970,14 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
     if (leaves.length <= 1) {
       const onlyThreadId = leaves[0]?.threadId ?? null;
       removeSplitView(activeSplitView.id);
-      if (!onlyThreadId) {
+      const fallbackThreadId = onlyThreadId ?? props.routeThreadId;
+      if (!fallbackThreadId) {
         void handleNewChat({ fresh: true });
         return;
       }
       void navigate({
         to: "/$threadId",
-        params: { threadId: onlyThreadId },
+        params: { threadId: fallbackThreadId },
         replace: true,
         search: (previous) => ({ ...stripDiffSearchParams(previous), splitViewId: undefined }),
       });
@@ -1538,9 +1539,7 @@ function SingleChatSurface(props: {
             surfaceMode="single"
             isFocusedPane
             panelState={panelState}
-            onToggleDiff={() =>
-              updatePanelState(resolveToggledChatPanelPatch(panelState, "diff"))
-            }
+            onToggleDiff={() => updatePanelState(resolveToggledChatPanelPatch(panelState, "diff"))}
             onToggleBrowser={() =>
               updatePanelState(resolveToggledChatPanelPatch(panelState, "browser"))
             }
@@ -1576,7 +1575,6 @@ function SingleChatSurface(props: {
 
 function ChatThreadRouteView() {
   const threadsHydrated = useStore((store) => store.threadsHydrated);
-  const { handleNewChat } = useHandleNewChat();
   const threadId = Route.useParams({
     select: (params) => ThreadId.makeUnsafe(params.threadId),
   });
@@ -1594,6 +1592,7 @@ function ChatThreadRouteView() {
   const draftThreadExists = draftThreadState !== null;
   const routeThreadExists = threadExists || draftThreadExists;
   const splitView = useSplitViewStore(selectSplitView(search.splitViewId ?? null));
+  const splitViewsHydrated = useSplitViewStore((store) => store.hasHydrated);
   const activeProjectId = resolveSingleProjectId({
     threadProjectId,
     draftProjectId: draftThreadState?.projectId ?? null,
@@ -1601,7 +1600,7 @@ function ChatThreadRouteView() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (!threadsHydrated) {
+    if (!threadsHydrated || !splitViewsHydrated) {
       return;
     }
 
@@ -1618,11 +1617,19 @@ function ChatThreadRouteView() {
     }
 
     if (!routeThreadExists) {
-      void handleNewChat({ fresh: true });
+      void navigate({ to: "/", replace: true });
     }
-  }, [handleNewChat, navigate, routeThreadExists, search, splitView, threadId, threadsHydrated]);
+  }, [
+    navigate,
+    routeThreadExists,
+    search,
+    splitView,
+    splitViewsHydrated,
+    threadId,
+    threadsHydrated,
+  ]);
 
-  if (!threadsHydrated) {
+  if (!threadsHydrated || !splitViewsHydrated) {
     return <ChatMountSkeleton />;
   }
 

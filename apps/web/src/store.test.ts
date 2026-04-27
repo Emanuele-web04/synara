@@ -2393,7 +2393,7 @@ describe("store read model sync", () => {
       addEventListener: vi.fn(),
     };
     storage.set(
-      "t3code:renderer-state:v8",
+      "dpcode:renderer-state:v8",
       JSON.stringify({
         projectNamesByCwd: {
           "/tmp/project": "dpcode",
@@ -2481,7 +2481,7 @@ describe("store read model sync", () => {
       freshStore.useStore.getState().renameProjectLocally(projectId, "dpcode");
 
       expect(setItem).toHaveBeenCalled();
-      expect(JSON.parse(storage.get("t3code:renderer-state:v8") ?? "{}")).toMatchObject({
+      expect(JSON.parse(storage.get("dpcode:renderer-state:v8") ?? "{}")).toMatchObject({
         projectNamesByCwd: {
           "/tmp/project": "dpcode",
         },

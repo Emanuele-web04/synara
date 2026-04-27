@@ -49,7 +49,7 @@ describe("threadDetailSubscriptionRetention", () => {
   it("notifies imperative listeners when retained ids change", () => {
     vi.useFakeTimers();
     const threadId = ThreadId.makeUnsafe("thread-listener");
-    const snapshots: readonly ThreadId[][] = [];
+    const snapshots: ThreadId[][] = [];
     const unsubscribe = subscribeRetainedThreadDetailIdChanges((threadIds) => {
       snapshots.push([...threadIds]);
     });

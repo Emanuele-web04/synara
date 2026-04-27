@@ -31,7 +31,7 @@ import {
 import { hasLiveTurnTailWork, type WorkLogEntry } from "../session-logic";
 import { localSubagentThreadId } from "./ChatView.selectors";
 
-export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "t3code:last-invoked-script-by-project";
+export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "dpcode:last-invoked-script-by-project";
 const WORKTREE_NAME_PREFIX = "dpcode";
 
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);

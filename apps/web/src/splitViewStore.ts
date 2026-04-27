@@ -86,6 +86,7 @@ interface DropThreadOnPaneInput {
 }
 
 interface SplitViewStore {
+  hasHydrated: boolean;
   splitViewsById: Record<SplitViewId, SplitView | undefined>;
   splitViewIdBySourceThreadId: Record<string, SplitViewId | undefined>;
   createFromThread: (input: CreateFromThreadInput) => SplitViewId;
@@ -101,10 +102,14 @@ interface SplitViewStore {
     patch: Partial<SplitViewPanePanelState>,
   ) => void;
   removeThreadFromSplitViews: (threadId: ThreadId) => void;
+  setHasHydrated: (hasHydrated: boolean) => void;
 }
 
-// Keep the storage key stable so persisted v1 payloads can be read and migrated by Zustand.
-const SPLIT_VIEW_STORAGE_KEY = "t3code:split-view-state:v1";
+// Keep the v1 suffix stable while using the DPCode namespace; the legacy
+// `t3code:split-view-state:v1` key is copied over to this one by
+// `storageKeyMigration` before this store hydrates, so older payloads still
+// flow through the v1 -> v2 schema migration below.
+const SPLIT_VIEW_STORAGE_KEY = "dpcode:split-view-state:v1";
 const SPLIT_VIEW_STORAGE_VERSION = 2;
 const DEFAULT_RATIO = 0.5;
 const MIN_RATIO = 0.25;
@@ -357,6 +362,9 @@ export function selectSplitViewIdForSourceThread(threadId: ThreadId | null) {
     threadId ? (store.splitViewIdBySourceThreadId[threadId] ?? null) : null;
 }
 
+// Deterministic membership lookup: restore only if a thread has one clear split,
+// or if it is the source thread of one split. Ambiguous non-source membership
+// falls back to single-chat instead of guessing by recency.
 export function resolvePreferredSplitViewIdForThread(input: {
   splitViewsById: Record<SplitViewId, SplitView | undefined>;
   splitViewIdBySourceThreadId: Record<string, SplitViewId | undefined>;
@@ -366,19 +374,22 @@ export function resolvePreferredSplitViewIdForThread(input: {
     return null;
   }
 
-  const sourceSplitViewId = input.splitViewIdBySourceThreadId[input.threadId] ?? null;
-  if (sourceSplitViewId) {
-    return sourceSplitViewId;
-  }
-
   const matchingSplitViews = Object.values(input.splitViewsById)
     .filter((splitView): splitView is SplitView => splitView !== undefined)
     .filter((splitView) =>
       collectLeaves(splitView.root).some((leaf) => leaf.threadId === input.threadId),
-    )
-    .toSorted((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
+    );
 
-  return matchingSplitViews[0]?.id ?? null;
+  const sourceSplitViewId = input.splitViewIdBySourceThreadId[input.threadId] ?? null;
+  if (
+    sourceSplitViewId &&
+    matchingSplitViews.some((splitView) => splitView.id === sourceSplitViewId)
+  ) {
+    return sourceSplitViewId;
+  }
+
+  const onlyMatchingSplitView = matchingSplitViews.length === 1 ? matchingSplitViews[0] : null;
+  return onlyMatchingSplitView?.id ?? null;
 }
 
 // --- store ---
@@ -386,8 +397,10 @@ export function resolvePreferredSplitViewIdForThread(input: {
 export const useSplitViewStore = create<SplitViewStore>()(
   persist(
     (set, get) => ({
+      hasHydrated: false,
       splitViewsById: {},
       splitViewIdBySourceThreadId: {},
+      setHasHydrated: (hasHydrated) => set({ hasHydrated }),
       createFromThread: (input) => {
         const existingId = get().splitViewIdBySourceThreadId[input.sourceThreadId] ?? null;
         if (existingId) {
@@ -616,13 +629,29 @@ export const useSplitViewStore = create<SplitViewStore>()(
             const nextFocusedPaneId = focusedStillPresent
               ? splitView.focusedPaneId
               : resolveDefaultFocusLeafId(result.nextRoot);
+            const nextSourceThreadId =
+              splitView.sourceThreadId === threadId
+                ? resolveNextSourceThreadId({
+                    root: result.nextRoot,
+                    splitViewId,
+                    splitViewIdBySourceThreadId: nextSplitViewIdBySourceThreadId,
+                  })
+                : splitView.sourceThreadId;
 
             if (splitView.sourceThreadId === threadId) {
               delete nextSplitViewIdBySourceThreadId[splitView.sourceThreadId];
             }
+            if (!nextSourceThreadId) {
+              delete nextSplitViewsById[splitViewId];
+              continue;
+            }
+            if (nextSourceThreadId !== splitView.sourceThreadId) {
+              nextSplitViewIdBySourceThreadId[nextSourceThreadId] = splitViewId;
+            }
 
             nextSplitViewsById[splitViewId] = {
               ...splitView,
+              sourceThreadId: nextSourceThreadId,
               root: result.nextRoot,
               focusedPaneId: nextFocusedPaneId,
               updatedAt: resolveUpdatedAt(),
@@ -643,6 +672,20 @@ export const useSplitViewStore = create<SplitViewStore>()(
       name: SPLIT_VIEW_STORAGE_KEY,
       version: SPLIT_VIEW_STORAGE_VERSION,
       storage: createJSONStorage(() => localStorage),
+      partialize: (state) => ({
+        splitViewsById: state.splitViewsById,
+        splitViewIdBySourceThreadId: state.splitViewIdBySourceThreadId,
+      }),
+      merge: (persistedState, currentState) => ({
+        ...currentState,
+        ...(persistedState as Partial<SplitViewStoreState>),
+        hasHydrated: currentState.hasHydrated,
+      }),
+      onRehydrateStorage: () => {
+        return (state) => {
+          state?.setHasHydrated(true);
+        };
+      },
       // Pre-v2 storage used a flat left/right pane shape. We migrate any persisted state to the
       // tree shape; if migration cannot recover anything, we silently drop it instead of crashing.
       migrate: (persistedState, version) => {

@@ -188,8 +188,9 @@ import {
   getVisibleSidebarEntriesForPreview,
   groupSidebarThreadsByProjectId,
   pruneExpandedProjectThreadListsForCollapsedProjects,
+  resolvePreferredSplitForCommand,
   resolveSidebarNewThreadEnvMode,
-  resolveSidebarRestorableThreadRoute,
+  resolveThreadCommandActivation,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
   isDuplicateProjectCreateError,
@@ -199,6 +200,7 @@ import {
   sortProjectsForSidebar,
   sortThreadsForSidebar,
 } from "./Sidebar.logic";
+import { resolveRestorableThreadRoute, type LastThreadRoute } from "../chatRouteRestore";
 import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { cn } from "~/lib/utils";
@@ -219,6 +221,7 @@ import {
   resolveSplitViewFocusedThreadId,
   resolveSplitViewPaneIdForThread,
   selectSplitView,
+  type SplitViewId,
   useSplitViewStore,
 } from "../splitViewStore";
 import { THREAD_DRAG_MIME } from "./chat-drop-overlay/ChatPaneDropOverlay";
@@ -1108,6 +1111,7 @@ export default function Sidebar() {
   const settingsSectionSearch = useSearch({ strict: false }) as Record<string, unknown>;
   const activeSettingsSection = normalizeSettingsSection(settingsSectionSearch.section);
   const activeSplitView = useSplitViewStore(selectSplitView(routeSearch.splitViewId ?? null));
+  const splitViewsById = useSplitViewStore((store) => store.splitViewsById);
   const setSplitFocusedPane = useSplitViewStore((store) => store.setFocusedPane);
   const removeThreadFromSplitViews = useSplitViewStore((store) => store.removeThreadFromSplitViews);
   const { data: keybindings = EMPTY_KEYBINDINGS } = useQuery({
@@ -1154,6 +1158,7 @@ export default function Sidebar() {
     () => readSidebarUiState().lastThreadRoute,
   );
   const [optimisticActiveThreadId, setOptimisticActiveThreadId] = useState<ThreadId | null>(null);
+  const lastCommandRestorableSplitViewIdRef = useRef<SplitViewId | null>(null);
   const [expandedSubagentParentIds, setExpandedSubagentParentIds] = useState<ReadonlySet<ThreadId>>(
     () => new Set(),
   );
@@ -1674,7 +1679,7 @@ export default function Sidebar() {
         return;
       }
 
-      const restorableRoute = resolveSidebarRestorableThreadRoute({
+      const restorableRoute = resolveRestorableThreadRoute({
         lastThreadRoute,
         availableThreadIds: new Set(Object.keys(sidebarThreadSummaryById)),
       });
@@ -2985,9 +2990,11 @@ export default function Sidebar() {
     ],
   );
 
-  // Keep clicks, keyboard activation, and Alt+Tab cycling aligned on the same thread-open path.
+  // Opens a thread as a single chat. Split-aware entry points should use
+  // activateThreadFromCommand below so click/search/shortcuts stay consistent.
   const activateThread = useCallback(
     (threadId: ThreadId) => {
+      if (!sidebarThreadSummaryById[threadId]) return;
       // Mark the row active immediately; route rendering can do heavier chat work after this.
       prewarmThreadDetailForIntent(threadId);
       setOptimisticActiveThreadId(threadId);
@@ -3022,34 +3029,95 @@ export default function Sidebar() {
       selectedThreadIds.size,
       setSelectionAnchor,
       setOptimisticActiveThreadId,
+      sidebarThreadSummaryById,
       terminalStateByThreadId,
     ],
   );
-  const activateThreadFromShortcut = useCallback(
+  const rememberLastThreadRouteNow = useCallback(
+    (nextLastThreadRoute: LastThreadRoute) => {
+      setLastThreadRoute(nextLastThreadRoute);
+      persistSidebarUiState({
+        chatSectionExpanded,
+        chatThreadListExpanded,
+        expandedProjectThreadListCwds: [...expandedThreadListsByProject],
+        dismissedThreadStatusKeyByThreadId,
+        lastThreadRoute: nextLastThreadRoute,
+      });
+    },
+    [
+      chatSectionExpanded,
+      chatThreadListExpanded,
+      dismissedThreadStatusKeyByThreadId,
+      expandedThreadListsByProject,
+    ],
+  );
+  const activateThreadFromCommand = useCallback(
     (threadId: ThreadId) => {
-      const splitPaneId = activeSplitView
-        ? resolveSplitViewPaneIdForThread(activeSplitView, threadId)
-        : null;
-      if (!activeSplitView || !splitPaneId) {
-        activateThread(threadId);
+      // Active-split-aware activation rules for keyboard shortcuts / search picker:
+      //   1. While inside a split view, a shortcut targeting one of *that split's*
+      //      panes only swaps focus inside the split (no navigation churn).
+      //   2. While inside a split view, a shortcut targeting a thread that does
+      //      NOT belong to that split closes the split and opens the target as a
+      //      single chat — even if the target lives in some other persisted split.
+      //   3. While viewing a single chat (no active split), shortcuts can restore
+      //      only the last split the user actually left. Old persisted splits do
+      //      not get resurrected by generic 3/4-style switching.
+      const preferredSplit = resolvePreferredSplitForCommand({
+        activeSplitView,
+        splitViewsById,
+        restorableSplitViewId: lastCommandRestorableSplitViewIdRef.current,
+        threadId,
+      });
+      const activation = resolveThreadCommandActivation({
+        threadId,
+        threadExists: sidebarThreadSummaryById[threadId] !== undefined,
+        // Compare against the actual routed thread, not optimistic hover/click
+        // state. Pointer-down prewarms rows before click, and treating that as
+        // active makes normal clicks no-op while Cmd+number still works.
+        activeSidebarThreadId: routeThreadId,
+        preferredSplitViewId: preferredSplit?.splitViewId ?? null,
+        splitPaneId: preferredSplit?.paneId ?? null,
+      });
+
+      if (activation.kind === "ignore") {
         return;
       }
 
-      // Numeric/sidebar cycling shortcuts should switch panes when already inside a split.
-      // Pointer clicks still use activateThread above and intentionally return to single chat.
-      prewarmThreadDetailForIntent(threadId);
-      setOptimisticActiveThreadId(threadId);
+      if (activation.kind === "single") {
+        if (activeSplitView) {
+          lastCommandRestorableSplitViewIdRef.current = activeSplitView.id;
+        }
+        activateThread(activation.threadId);
+        return;
+      }
+
+      // Skip the entire side-effect chain when the route already points at the
+      // exact (thread, split) the shortcut would land on — including the
+      // localStorage write below — so a "no-op" Cmd+N stays cheap.
+      if (
+        routeThreadId === activation.threadId &&
+        routeSearch.splitViewId === activation.splitViewId
+      ) {
+        return;
+      }
+
+      prewarmThreadDetailForIntent(activation.threadId);
+      setOptimisticActiveThreadId(activation.threadId);
       if (selectedThreadIds.size > 0) {
         clearSelection();
       }
-      setSelectionAnchor(threadId);
-      setSplitFocusedPane(activeSplitView.id, splitPaneId);
+      setSelectionAnchor(activation.threadId);
+      setSplitFocusedPane(activation.splitViewId, activation.paneId);
+      rememberLastThreadRouteNow({
+        threadId: activation.threadId,
+        splitViewId: activation.splitViewId,
+      });
       void navigate({
         to: "/$threadId",
-        params: { threadId },
+        params: { threadId: activation.threadId },
         search: (previous) => ({
           ...previous,
-          splitViewId: activeSplitView.id,
+          splitViewId: activation.splitViewId,
         }),
       });
     },
@@ -3059,10 +3127,15 @@ export default function Sidebar() {
       clearSelection,
       navigate,
       prewarmThreadDetailForIntent,
+      rememberLastThreadRouteNow,
+      routeSearch.splitViewId,
+      routeThreadId,
       selectedThreadIds.size,
       setOptimisticActiveThreadId,
       setSelectionAnchor,
       setSplitFocusedPane,
+      sidebarThreadSummaryById,
+      splitViewsById,
     ],
   );
 
@@ -3585,16 +3658,17 @@ export default function Sidebar() {
         return;
       }
 
-      if (options?.isActive && options.canToggleSubagents && !routeSearch.splitViewId) {
+      if (threadId === routeThreadId && options?.canToggleSubagents && !routeSearch.splitViewId) {
         toggleSubagentParent(threadId);
         return;
       }
 
-      activateThread(threadId);
+      activateThreadFromCommand(threadId);
     },
     [
-      activateThread,
+      activateThreadFromCommand,
       rangeSelectTo,
+      routeThreadId,
       routeSearch.splitViewId,
       toggleSubagentParent,
       toggleThreadSelection,
@@ -3851,7 +3925,7 @@ export default function Sidebar() {
               : "text-foreground/72 hover:bg-[var(--sidebar-accent)]",
           )}
           onPointerDown={(event) => primeThreadActivation(event, thread.id)}
-          onClick={() => activateThread(thread.id)}
+          onClick={() => activateThreadFromCommand(thread.id)}
           onDoubleClick={(event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -3861,7 +3935,7 @@ export default function Sidebar() {
           onKeyDown={(event) => {
             if (event.key === "Enter" || event.key === " ") {
               event.preventDefault();
-              activateThread(thread.id);
+              activateThreadFromCommand(thread.id);
             }
           }}
           onContextMenu={(event) => {
@@ -4134,7 +4208,7 @@ export default function Sidebar() {
           onKeyDown={(event) => {
             if (event.key !== "Enter" && event.key !== " ") return;
             event.preventDefault();
-            activateThread(thread.id);
+            activateThreadFromCommand(thread.id);
           }}
           onContextMenu={(event) => {
             event.preventDefault();
@@ -4734,30 +4808,28 @@ export default function Sidebar() {
       }
       const jumpIndex = threadJumpIndexFromCommand(command ?? "");
       if (jumpIndex !== null) {
-        const threadJumpTargetId = threadJumpThreadIds[jumpIndex];
-        if (!threadJumpTargetId) {
-          return;
-        }
-        if (threadJumpTargetId === activeSidebarThreadId) return;
         event.preventDefault();
         event.stopPropagation();
-        activateThreadFromShortcut(threadJumpTargetId);
+        const threadJumpTargetId = threadJumpThreadIds[jumpIndex];
+        if (threadJumpTargetId) {
+          activateThreadFromCommand(threadJumpTargetId);
+        }
         return;
       }
       if (command !== "chat.visible.next" && command !== "chat.visible.previous") {
         return;
       }
 
+      event.preventDefault();
+      event.stopPropagation();
       const nextThreadId = getNextVisibleSidebarThreadId({
         visibleThreadIds: visibleSidebarThreadIds,
         activeThreadId: activeSidebarThreadId ?? undefined,
         direction: command === "chat.visible.previous" ? "backward" : "forward",
       });
-      if (!nextThreadId || nextThreadId === activeSidebarThreadId) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-      activateThreadFromShortcut(nextThreadId);
+      if (nextThreadId && nextThreadId !== activeSidebarThreadId) {
+        activateThreadFromCommand(nextThreadId);
+      }
     };
     const onKeyUp = (event: KeyboardEvent) => {
       if (shouldIgnoreThreadJumpHintUpdate(event)) {
@@ -4796,7 +4868,7 @@ export default function Sidebar() {
       window.removeEventListener("blur", onWindowBlur);
     };
   }, [
-    activateThreadFromShortcut,
+    activateThreadFromCommand,
     activeSidebarThreadId,
     keybindings,
     getCurrentSidebarShortcutContext,
@@ -5825,7 +5897,7 @@ export default function Sidebar() {
           onOpenProject={handleOpenProjectFromSearch}
           onImportThread={handleImportThread}
           onOpenThread={(threadId) => {
-            activateThread(ThreadId.makeUnsafe(threadId));
+            activateThreadFromCommand(ThreadId.makeUnsafe(threadId));
           }}
         />
       ) : null}

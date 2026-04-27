@@ -37,7 +37,7 @@ const DROP_ZONE_PREVIEW_CLASS: Record<DropZone, string> = {
   right: "top-0 bottom-0 right-0 w-1/2",
 };
 const DROP_ZONE_PREVIEW_BASE_CLASS =
-  "absolute m-1 rounded-xl bg-info/18 ring-1 ring-inset ring-info/65";
+  "absolute m-1 rounded-md bg-info/18 ring-1 ring-inset ring-info/65";
 const EMPTY_RECT = { left: 0, top: 0, width: 0, height: 0 };
 const EDGE_REGION_FRACTION = 1 / 3;
 

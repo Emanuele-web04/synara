@@ -9,6 +9,12 @@ import { cn } from "../lib/utils";
 import { isDuplicateProjectCreateError } from "../lib/projectCreateRecovery";
 import { workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
 import {
+  resolveSplitViewPaneIdForThread,
+  type PaneId,
+  type SplitView,
+  type SplitViewId,
+} from "../splitViewStore";
+import {
   hasLiveLatestTurn,
   findLatestProposedPlan,
   hasActionableProposedPlan,
@@ -23,10 +29,6 @@ export {
 export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
 export const SIDEBAR_THREAD_PREWARM_LIMIT = 10;
 export type SidebarNewThreadEnvMode = "local" | "worktree";
-export type SidebarLastThreadRoute = {
-  threadId: string;
-  splitViewId?: string | undefined;
-};
 type SidebarProject = {
   id: string;
   name: string;
@@ -60,6 +62,11 @@ export type SidebarDerivedProjectData = {
   projectStatus: ReturnType<typeof resolveProjectStatusIndicator>;
 };
 
+export type ThreadCommandActivation =
+  | { kind: "ignore" }
+  | { kind: "single"; threadId: ThreadId }
+  | { kind: "split"; threadId: ThreadId; splitViewId: string; paneId: string };
+
 const THREAD_JUMP_COMMANDS = [
   "thread.jump.1",
   "thread.jump.2",
@@ -71,6 +78,67 @@ const THREAD_JUMP_COMMANDS = [
   "thread.jump.8",
   "thread.jump.9",
 ] as const satisfies readonly KeybindingCommand[];
+
+/**
+ * Decide what a keyboard/search activation should do for a given thread.
+ *
+ * Callers decide which split (if any) is "preferred". For command/search
+ * activation, that means the currently active split first; if no split is
+ * active, only the last exited split can be restored. When
+ * `preferredSplitViewId`/`splitPaneId` are set the activation focuses that
+ * split's pane; otherwise the thread is opened as a single chat.
+ */
+export function resolveThreadCommandActivation(input: {
+  threadId: ThreadId;
+  threadExists: boolean;
+  activeSidebarThreadId: ThreadId | null | undefined;
+  preferredSplitViewId: string | null;
+  splitPaneId: string | null;
+}): ThreadCommandActivation {
+  if (!input.threadExists) {
+    return { kind: "ignore" };
+  }
+
+  if (input.preferredSplitViewId && input.splitPaneId) {
+    return {
+      kind: "split",
+      threadId: input.threadId,
+      splitViewId: input.preferredSplitViewId,
+      paneId: input.splitPaneId,
+    };
+  }
+
+  if (input.threadId === input.activeSidebarThreadId) {
+    return { kind: "ignore" };
+  }
+
+  return { kind: "single", threadId: input.threadId };
+}
+
+/**
+ * Resolve whether command/search activation should land in a split.
+ *
+ * While a split is active, only that split's own panes count. From single chat,
+ * only the last exited split may be restored; older persisted pairings stay
+ * dormant so generic thread switching never resurrects random layouts.
+ */
+export function resolvePreferredSplitForCommand(input: {
+  activeSplitView: SplitView | null;
+  splitViewsById: Record<SplitViewId, SplitView | undefined>;
+  restorableSplitViewId: SplitViewId | null;
+  threadId: ThreadId;
+}): { splitViewId: SplitViewId; paneId: PaneId } | null {
+  if (input.activeSplitView) {
+    const paneId = resolveSplitViewPaneIdForThread(input.activeSplitView, input.threadId);
+    return paneId ? { splitViewId: input.activeSplitView.id, paneId } : null;
+  }
+
+  if (!input.restorableSplitViewId) return null;
+
+  const splitView = input.splitViewsById[input.restorableSplitViewId] ?? null;
+  const paneId = splitView ? resolveSplitViewPaneIdForThread(splitView, input.threadId) : null;
+  return splitView && paneId ? { splitViewId: splitView.id, paneId } : null;
+}
 
 export interface ThreadStatusPill {
   label:
@@ -148,19 +216,6 @@ export function resolveSidebarNewThreadEnvMode(input: {
   defaultEnvMode: SidebarNewThreadEnvMode;
 }): SidebarNewThreadEnvMode {
   return input.requestedEnvMode ?? input.defaultEnvMode;
-}
-
-// Reuses the last visited thread route when leaving special views like settings.
-export function resolveSidebarRestorableThreadRoute(input: {
-  lastThreadRoute: SidebarLastThreadRoute | null;
-  availableThreadIds: ReadonlySet<string>;
-}): SidebarLastThreadRoute | null {
-  const { lastThreadRoute, availableThreadIds } = input;
-  if (!lastThreadRoute) {
-    return null;
-  }
-
-  return availableThreadIds.has(lastThreadRoute.threadId) ? lastThreadRoute : null;
 }
 
 // Drops remembered "show more" state for projects that are currently collapsed.
@@ -947,10 +1002,7 @@ export function deriveSidebarProjectData(input: {
 
   for (const project of input.projects) {
     const allProjectThreads = input.sortedSidebarThreadsByProjectId.get(project.id) ?? [];
-    const projectThreads = getUnpinnedThreadsForSidebar(
-      allProjectThreads,
-      input.pinnedThreadIds,
-    );
+    const projectThreads = getUnpinnedThreadsForSidebar(allProjectThreads, input.pinnedThreadIds);
     const projectThreadTree = buildProjectThreadTree({
       threads: projectThreads,
       expandedParentThreadIds: input.expandedParentThreadIds,
