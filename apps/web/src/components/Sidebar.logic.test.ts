@@ -957,28 +957,48 @@ function makeSidebarThreadSummary(
 }
 
 function makeSplitView(overrides: Partial<SplitView> = {}): SplitView {
+  const sourceThreadId = (overrides.sourceThreadId ?? ThreadId.makeUnsafe("thread-1")) as ThreadId;
+  const ownerProjectId = (overrides.ownerProjectId ??
+    ProjectId.makeUnsafe("project-1")) as ProjectId;
+  const firstLeaf = {
+    kind: "leaf" as const,
+    id: "pane-first",
+    threadId: sourceThreadId,
+    panel: {
+      panel: null,
+      diffTurnId: null,
+      diffFilePath: null,
+      hasOpenedPanel: false,
+      lastOpenPanel: "browser" as const,
+    },
+  };
+  const secondLeaf = {
+    kind: "leaf" as const,
+    id: "pane-second",
+    threadId: null,
+    panel: {
+      panel: null,
+      diffTurnId: null,
+      diffFilePath: null,
+      hasOpenedPanel: false,
+      lastOpenPanel: "browser" as const,
+    },
+  };
+  const root = {
+    kind: "split" as const,
+    id: "split-root",
+    direction: "horizontal" as const,
+    first: firstLeaf,
+    second: secondLeaf,
+    ratio: 0.5,
+  };
+
   return {
     id: "split-1",
-    sourceThreadId: ThreadId.makeUnsafe("thread-1"),
-    ownerProjectId: ProjectId.makeUnsafe("project-1"),
-    leftThreadId: ThreadId.makeUnsafe("thread-1"),
-    rightThreadId: null,
-    focusedPane: "right",
-    ratio: 0.5,
-    leftPanel: {
-      panel: null,
-      diffTurnId: null,
-      diffFilePath: null,
-      hasOpenedPanel: false,
-      lastOpenPanel: "browser",
-    },
-    rightPanel: {
-      panel: null,
-      diffTurnId: null,
-      diffFilePath: null,
-      hasOpenedPanel: false,
-      lastOpenPanel: "browser",
-    },
+    sourceThreadId,
+    ownerProjectId,
+    root,
+    focusedPaneId: secondLeaf.id,
     createdAt: "2026-03-09T10:00:00.000Z",
     updatedAt: "2026-03-09T10:00:00.000Z",
     ...overrides,
@@ -1001,7 +1021,6 @@ describe("deriveSidebarProjectData", () => {
     const splitView = makeSplitView({
       sourceThreadId: threadOne.id,
       ownerProjectId: project.id,
-      leftThreadId: threadOne.id,
     });
 
     const data = deriveSidebarProjectData({
@@ -1026,6 +1045,117 @@ describe("deriveSidebarProjectData", () => {
       expect.objectContaining({
         kind: "thread",
         rowId: threadTwo.id,
+      }),
+    ]);
+  });
+
+  it("keeps a split view visible after its source thread is gone", () => {
+    const project = makeProject();
+    const deletedSourceThreadId = ThreadId.makeUnsafe("thread-deleted-source");
+    const remainingThread = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-remaining"),
+      title: "Remaining",
+    });
+    const splitView = makeSplitView({
+      sourceThreadId: deletedSourceThreadId,
+      ownerProjectId: project.id,
+    });
+
+    const data = deriveSidebarProjectData({
+      projects: [project],
+      sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId([remainingThread]),
+      splitViewsByProjectId: groupSplitViewsByProjectId([splitView]),
+      splitViewBySourceThreadId: new Map(),
+      pinnedThreadIds: [],
+      pinnedThreadIdSet: new Set(),
+      expandedParentThreadIds: new Set(),
+      expandedThreadListProjectCwds: new Set(),
+      normalizeProjectCwd: (cwd) => cwd,
+      activeSidebarThreadId: undefined,
+      previewLimit: 5,
+    });
+
+    expect(data.get(project.id)?.visibleEntries).toEqual([
+      expect.objectContaining({
+        kind: "thread",
+        rowId: remainingThread.id,
+      }),
+      expect.objectContaining({
+        kind: "split",
+        rowId: deletedSourceThreadId,
+      }),
+    ]);
+  });
+
+  it("keeps an active orphaned split visible when the project preview is collapsed", () => {
+    const project = makeProject();
+    const deletedSourceThreadId = ThreadId.makeUnsafe("thread-deleted-source");
+    const firstThread = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-first"),
+      title: "First",
+    });
+    const secondThread = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-second"),
+      title: "Second",
+      createdAt: "2026-03-09T10:05:00.000Z",
+      updatedAt: "2026-03-09T10:05:00.000Z",
+    });
+    const splitView = makeSplitView({
+      sourceThreadId: deletedSourceThreadId,
+      ownerProjectId: project.id,
+    });
+
+    const data = deriveSidebarProjectData({
+      projects: [project],
+      sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId([firstThread, secondThread]),
+      splitViewsByProjectId: groupSplitViewsByProjectId([splitView]),
+      splitViewBySourceThreadId: new Map(),
+      pinnedThreadIds: [],
+      pinnedThreadIdSet: new Set(),
+      expandedParentThreadIds: new Set(),
+      expandedThreadListProjectCwds: new Set(),
+      normalizeProjectCwd: (cwd) => cwd,
+      activeSidebarThreadId: deletedSourceThreadId,
+      previewLimit: 1,
+    });
+
+    expect(data.get(project.id)).toMatchObject({
+      activeEntryId: deletedSourceThreadId,
+      visibleEntries: expect.arrayContaining([
+        expect.objectContaining({
+          kind: "split",
+          rowId: deletedSourceThreadId,
+        }),
+      ]),
+    });
+  });
+
+  it("does not hide orphaned splits because of stale pinned source state", () => {
+    const project = makeProject();
+    const deletedSourceThreadId = ThreadId.makeUnsafe("thread-deleted-source");
+    const splitView = makeSplitView({
+      sourceThreadId: deletedSourceThreadId,
+      ownerProjectId: project.id,
+    });
+
+    const data = deriveSidebarProjectData({
+      projects: [project],
+      sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId([]),
+      splitViewsByProjectId: groupSplitViewsByProjectId([splitView]),
+      splitViewBySourceThreadId: new Map(),
+      pinnedThreadIds: [deletedSourceThreadId],
+      pinnedThreadIdSet: new Set([deletedSourceThreadId]),
+      expandedParentThreadIds: new Set(),
+      expandedThreadListProjectCwds: new Set(),
+      normalizeProjectCwd: (cwd) => cwd,
+      activeSidebarThreadId: undefined,
+      previewLimit: 5,
+    });
+
+    expect(data.get(project.id)?.visibleEntries).toEqual([
+      expect.objectContaining({
+        kind: "split",
+        rowId: deletedSourceThreadId,
       }),
     ]);
   });

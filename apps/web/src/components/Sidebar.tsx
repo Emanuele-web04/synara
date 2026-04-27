@@ -218,12 +218,15 @@ import {
 } from "../settingsNavigation";
 import {
   resolveSplitViewFocusedThreadId,
-  resolveSplitViewPaneForThread,
+  resolveSplitViewPaneIdForThread,
   selectSplitView,
+  type LeafPane,
+  type PaneId,
   type SplitView,
-  type SplitViewPane,
   useSplitViewStore,
 } from "../splitViewStore";
+import { collectLeaves, findLeafPaneById } from "../splitView.logic";
+import { THREAD_DRAG_MIME } from "./chat-drop-overlay/ChatPaneDropOverlay";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { usePinnedThreadsStore } from "../pinnedThreadsStore";
 import { retainThreadDetailSubscription } from "../threadDetailSubscriptionRetention";
@@ -2202,7 +2205,7 @@ export default function Sidebar() {
       });
       const activeSplitViewId = routeSearch.splitViewId ?? null;
       const deletedPaneInActiveSplit = activeSplitView
-        ? resolveSplitViewPaneForThread(activeSplitView, threadId)
+        ? resolveSplitViewPaneIdForThread(activeSplitView, threadId)
         : null;
       await api.orchestration.dispatchCommand({
         type: "thread.delete",
@@ -2889,11 +2892,10 @@ export default function Sidebar() {
     ],
   );
   const returnSplitViewToSingleChat = useCallback(
-    (splitView: SplitView, pane: SplitViewPane) => {
+    (splitView: SplitView, paneId: PaneId) => {
+      const leaf = findLeafPaneById(splitView.root, paneId);
       const nextThreadId =
-        (pane === "left" ? splitView.leftThreadId : splitView.rightThreadId) ??
-        splitView.leftThreadId ??
-        splitView.rightThreadId;
+        leaf?.threadId ?? resolveSplitViewFocusedThreadId(splitView) ?? splitView.sourceThreadId;
       removeSplitView(splitView.id);
       if (!nextThreadId) {
         return;
@@ -2910,18 +2912,19 @@ export default function Sidebar() {
     [navigate, removeSplitView],
   );
   const handleSplitContextMenu = useCallback(
-    async (splitView: SplitView, pane: SplitViewPane, position: { x: number; y: number }) => {
+    async (splitView: SplitView, paneId: PaneId, position: { x: number; y: number }) => {
       const api = readNativeApi();
       if (!api) return;
 
-      const paneThreadId = pane === "left" ? splitView.leftThreadId : splitView.rightThreadId;
-      setSplitFocusedPane(splitView.id, pane);
+      const leaf = findLeafPaneById(splitView.root, paneId);
+      const paneThreadId = leaf?.threadId ?? null;
+      setSplitFocusedPane(splitView.id, paneId);
 
       if (paneThreadId) {
         await handleThreadContextMenu(paneThreadId, position, {
           extraItems: [{ id: "return-to-single-chat", label: "Return to single chat" }],
           onExtraAction: async () => {
-            returnSplitViewToSingleChat(splitView, pane);
+            returnSplitViewToSingleChat(splitView, paneId);
           },
         });
         return;
@@ -2932,7 +2935,7 @@ export default function Sidebar() {
         position,
       );
       if (clicked === "return-to-single-chat") {
-        returnSplitViewToSingleChat(splitView, pane);
+        returnSplitViewToSingleChat(splitView, paneId);
       }
     },
     [handleThreadContextMenu, returnSplitViewToSingleChat, setSplitFocusedPane],
@@ -3028,16 +3031,17 @@ export default function Sidebar() {
   );
 
   const activateSplitPane = useCallback(
-    (splitView: SplitView, pane: "left" | "right") => {
+    (splitView: SplitView, paneId: PaneId) => {
       if (selectedThreadIds.size > 0) {
         clearSelection();
       }
 
-      const paneThreadId = pane === "left" ? splitView.leftThreadId : splitView.rightThreadId;
-      const nextThreadId = paneThreadId ?? splitView.leftThreadId ?? splitView.rightThreadId;
+      const leaf = findLeafPaneById(splitView.root, paneId);
+      const paneThreadId = leaf?.threadId ?? null;
+      const nextThreadId = paneThreadId ?? resolveSplitViewFocusedThreadId(splitView);
 
       setSelectionAnchor(paneThreadId ?? splitView.sourceThreadId);
-      setSplitFocusedPane(splitView.id, pane);
+      setSplitFocusedPane(splitView.id, paneId);
 
       if (!nextThreadId) {
         return;
@@ -4124,6 +4128,23 @@ export default function Sidebar() {
             }),
             isSubagentThread ? "h-7 pr-7.5" : undefined,
           )}
+          draggable={renamingThreadId !== thread.id}
+          onDragStart={(event) => {
+            const dragImage = event.currentTarget as HTMLElement | null;
+            event.dataTransfer.effectAllowed = "move";
+            event.dataTransfer.setData(
+              THREAD_DRAG_MIME,
+              JSON.stringify({ threadId: thread.id, ownerProjectId: thread.projectId }),
+            );
+            if (dragImage) {
+              const rect = dragImage.getBoundingClientRect();
+              event.dataTransfer.setDragImage(
+                dragImage,
+                Math.max(0, event.clientX - rect.left),
+                Math.max(0, event.clientY - rect.top),
+              );
+            }
+          }}
           onClick={(event) =>
             handleThreadClick(event, thread.id, orderedProjectThreadIds, {
               isActive,
@@ -4352,8 +4373,7 @@ export default function Sidebar() {
       isThreadListExpanded,
     } = projectSidebarData;
     const renderSplitRow = (splitView: SplitView) => {
-      const leftPreview = resolveSplitPreview(splitView.leftThreadId);
-      const rightPreview = resolveSplitPreview(splitView.rightThreadId);
+      const leaves = collectLeaves(splitView.root);
       const isActive = routeSearch.splitViewId === splitView.id;
 
       return (
@@ -4366,10 +4386,10 @@ export default function Sidebar() {
               isActive,
               isSelected: false,
             })}
-            onClick={() => activateSplitPane(splitView, splitView.focusedPane)}
+            onClick={() => activateSplitPane(splitView, splitView.focusedPaneId)}
             onContextMenu={(event) => {
               event.preventDefault();
-              void handleSplitContextMenu(splitView, splitView.focusedPane, {
+              void handleSplitContextMenu(splitView, splitView.focusedPaneId, {
                 x: event.clientX,
                 y: event.clientY,
               });
@@ -4377,54 +4397,55 @@ export default function Sidebar() {
             onKeyDown={(event) => {
               if (event.key !== "Enter" && event.key !== " ") return;
               event.preventDefault();
-              activateSplitPane(splitView, splitView.focusedPane);
+              activateSplitPane(splitView, splitView.focusedPaneId);
             }}
           >
             <div className="-ml-1.5 flex min-w-0 flex-1 items-center gap-0.5">
-              {[
-                { pane: "left" as const, preview: leftPreview },
-                { pane: "right" as const, preview: rightPreview },
-              ].map(({ pane, preview }) => (
-                <div
-                  key={pane}
-                  role="button"
-                  tabIndex={0}
-                  className={cn(
-                    "flex min-w-0 flex-1 select-none items-center gap-1 rounded-md px-1.5 py-0.5 text-left outline-hidden transition-colors focus-visible:ring-1 focus-visible:ring-[color:var(--color-border-focus)]",
-                    splitView.focusedPane === pane
-                      ? "bg-[var(--color-background-button-secondary)] shadow-xs"
-                      : "hover:bg-[var(--sidebar-accent)]",
-                  )}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    activateSplitPane(splitView, pane);
-                  }}
-                  onContextMenu={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    void handleSplitContextMenu(splitView, pane, {
-                      x: event.clientX,
-                      y: event.clientY,
-                    });
-                  }}
-                  onMouseDown={(event) => {
-                    if (event.detail > 1) {
+              {leaves.map((leaf: LeafPane) => {
+                const preview = resolveSplitPreview(leaf.threadId);
+                const isPaneFocused = splitView.focusedPaneId === leaf.id;
+                return (
+                  <div
+                    key={leaf.id}
+                    role="button"
+                    tabIndex={0}
+                    className={cn(
+                      "flex min-w-0 flex-1 select-none items-center gap-1 rounded-md px-1.5 py-0.5 text-left outline-hidden transition-colors focus-visible:ring-1 focus-visible:ring-[color:var(--color-border-focus)]",
+                      isPaneFocused
+                        ? "bg-[var(--color-background-button-secondary)] shadow-xs"
+                        : "hover:bg-[var(--sidebar-accent)]",
+                    )}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      activateSplitPane(splitView, leaf.id);
+                    }}
+                    onContextMenu={(event) => {
                       event.preventDefault();
-                    }
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key !== "Enter" && event.key !== " ") return;
-                    event.preventDefault();
-                    event.stopPropagation();
-                    activateSplitPane(splitView, pane);
-                  }}
-                >
-                  <ProviderGlyph provider={preview.provider} className="size-3 shrink-0" />
-                  <span className="min-w-0 truncate text-[length:var(--app-font-size-ui-sm,11px)] leading-5 text-foreground/86">
-                    {preview.threadId ? preview.title : "Select chat"}
-                  </span>
-                </div>
-              ))}
+                      event.stopPropagation();
+                      void handleSplitContextMenu(splitView, leaf.id, {
+                        x: event.clientX,
+                        y: event.clientY,
+                      });
+                    }}
+                    onMouseDown={(event) => {
+                      if (event.detail > 1) {
+                        event.preventDefault();
+                      }
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Enter" && event.key !== " ") return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      activateSplitPane(splitView, leaf.id);
+                    }}
+                  >
+                    <ProviderGlyph provider={preview.provider} className="size-3 shrink-0" />
+                    <span className="min-w-0 truncate text-[length:var(--app-font-size-ui-sm,11px)] leading-5 text-foreground/86">
+                      {preview.threadId ? preview.title : "Select chat"}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
             <div className="ml-auto flex shrink-0 items-center gap-1.5">
               <span className="text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/40">

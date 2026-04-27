@@ -941,13 +941,16 @@ export function deriveSidebarProjectData(input: {
 
   for (const project of input.projects) {
     const allProjectThreads = input.sortedSidebarThreadsByProjectId.get(project.id) ?? [];
+    const allProjectThreadIds = new Set(allProjectThreads.map((thread) => thread.id));
     const projectThreads = getUnpinnedThreadsForSidebar(allProjectThreads, input.pinnedThreadIds);
     const projectThreadTree = buildProjectThreadTree({
       threads: projectThreads,
       expandedParentThreadIds: input.expandedParentThreadIds,
     });
     const projectSplitViews = (input.splitViewsByProjectId.get(project.id) ?? []).filter(
-      (splitView) => !input.pinnedThreadIdSet.has(splitView.sourceThreadId),
+      (splitView) =>
+        !input.pinnedThreadIdSet.has(splitView.sourceThreadId) ||
+        !allProjectThreadIds.has(splitView.sourceThreadId),
     );
     const projectStatus = resolveProjectStatusIndicator(
       allProjectThreads.map((thread) =>
@@ -963,9 +966,7 @@ export function deriveSidebarProjectData(input: {
     const isThreadListExpanded = input.expandedThreadListProjectCwds.has(
       input.normalizeProjectCwd(project.cwd),
     );
-    const replacedThreadIds = new Set(
-      projectSplitViews.map((splitView) => splitView.sourceThreadId),
-    );
+    const renderedSplitViewIds = new Set<SplitView["id"]>();
     const orderedEntries: SidebarProjectEntry[] = projectThreadTree.map(
       ({ thread, depth, rootThreadId, childCount, isExpanded }) => {
         const splitView = input.splitViewBySourceThreadId.get(thread.id);
@@ -980,6 +981,7 @@ export function deriveSidebarProjectData(input: {
             isExpanded,
           };
         }
+        renderedSplitViewIds.add(splitView.id);
         return {
           kind: "split",
           rowId: splitView.sourceThreadId,
@@ -990,7 +992,7 @@ export function deriveSidebarProjectData(input: {
     );
 
     for (const splitView of projectSplitViews) {
-      if (replacedThreadIds.has(splitView.sourceThreadId)) continue;
+      if (renderedSplitViewIds.has(splitView.id)) continue;
       orderedEntries.push({
         kind: "split",
         rowId: splitView.sourceThreadId,

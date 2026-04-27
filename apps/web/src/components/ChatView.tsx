@@ -714,6 +714,7 @@ export default function ChatView({
   const { resolvedTheme } = useTheme();
   const queryClient = useQueryClient();
   const createWorktreeMutation = useMutation(gitCreateWorktreeMutationOptions({ queryClient }));
+  const isInactiveSplitPane = surfaceMode === "split" && !isFocusedPane;
   const composerDraft = useComposerThreadDraft(threadId);
   const prompt = composerDraft.prompt;
   const composerImages = composerDraft.images;
@@ -3418,7 +3419,11 @@ export default function ChatView({
     onMessagesWheel,
   } = useTranscriptAssistantSelectionAction({
     threadId,
-    enabled: Boolean(activeThread) && pendingUserInputs.length === 0 && !isComposerApprovalState,
+    enabled:
+      Boolean(activeThread) &&
+      !isInactiveSplitPane &&
+      pendingUserInputs.length === 0 &&
+      !isComposerApprovalState,
     composerImagesRef,
     composerAssistantSelectionsRef,
     addComposerAssistantSelectionToDraft,
@@ -3435,6 +3440,7 @@ export default function ChatView({
   });
 
   useLayoutEffect(() => {
+    if (isInactiveSplitPane) return;
     const composerForm = composerFormRef.current;
     if (!composerForm) return;
     const measureComposerFormWidth = () => composerForm.clientWidth;
@@ -3474,7 +3480,7 @@ export default function ChatView({
     return () => {
       observer.disconnect();
     };
-  }, [activeThread?.id, composerFooterHasWideActions, scrollToEnd]);
+  }, [activeThread?.id, composerFooterHasWideActions, isInactiveSplitPane, scrollToEnd]);
 
   useEffect(() => {
     setPullRequestDialogState(null);
@@ -3507,14 +3513,14 @@ export default function ChatView({
   }, [activeThread?.id]);
 
   useEffect(() => {
-    if (!activeThread?.id || terminalState.terminalOpen) return;
+    if (!activeThread?.id || terminalState.terminalOpen || isInactiveSplitPane) return;
     const frame = window.requestAnimationFrame(() => {
       focusComposer();
     });
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [activeThread?.id, focusComposer, terminalState.terminalOpen]);
+  }, [activeThread?.id, focusComposer, isInactiveSplitPane, terminalState.terminalOpen]);
 
   useEffect(() => {
     composerImagesRef.current = composerImages;
@@ -8028,10 +8034,12 @@ export default function ChatView({
         onOpenChange={setWorktreeHandoffDialogOpen}
         onConfirm={confirmWorktreeHandoff}
       />
-      <TranscriptSelectionActionLayer
-        action={pendingTranscriptSelectionAction}
-        onAddToChat={commitTranscriptAssistantSelection}
-      />
+      {isInactiveSplitPane ? null : (
+        <TranscriptSelectionActionLayer
+          action={pendingTranscriptSelectionAction}
+          onAddToChat={commitTranscriptAssistantSelection}
+        />
+      )}
 
       {expandedImage && expandedImageItem && (
         <div

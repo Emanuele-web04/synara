@@ -1,7 +1,7 @@
 // FILE: _chat.$threadId.tsx
 // Purpose: Resolves the active thread route into either a single chat surface or a persisted split view.
 // Layer: Route container
-// Depends on: ChatView, splitViewStore, and pane-scoped browser/diff panels
+// Depends on: ChatView, splitViewStore, splitView.logic, ChatPaneDropOverlay, and pane-scoped browser/diff panels
 
 import {
   type ProviderKind,
@@ -14,7 +14,9 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
   Suspense,
   lazy,
+  startTransition,
   type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
   useCallback,
   useEffect,
@@ -28,6 +30,7 @@ import { TbExchange } from "react-icons/tb";
 import ChatView from "../components/ChatView";
 import BrowserPanel from "../components/BrowserPanel";
 import { ClaudeAI, Gemini, OpenAI, OpenCodeIcon } from "../components/Icons";
+import { ChatPaneDropOverlay } from "../components/chat-drop-overlay/ChatPaneDropOverlay";
 import { DiffWorkerPoolProvider } from "../components/DiffWorkerPoolProvider";
 import {
   DiffPanelHeaderSkeleton,
@@ -45,12 +48,19 @@ import {
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { resolveActiveSplitView, isSplitRoute } from "../splitViewRoute";
+import { canSubdividePane, collectLeaves, findLeafPaneById } from "../splitView.logic";
 import {
   resolveSplitViewFocusedThreadId,
+  resolveSplitViewPaneIdForThread,
+  resolveSplitViewThreadIds,
   selectSplitView,
+  type LeafPane,
+  type Pane,
+  type PaneId,
+  type SplitDirection,
+  type SplitDropSide,
   type SplitView,
   type SplitViewId,
-  type SplitViewPane,
   type SplitViewPanePanelState,
   useSplitViewStore,
 } from "../splitViewStore";
@@ -92,6 +102,15 @@ const SINGLE_PANEL_MIN_WIDTH = 26 * 16;
 const BROWSER_PANEL_MIN_WIDTH = 30 * 16;
 const COMPOSER_COMPACT_MIN_LEFT_CONTROLS_WIDTH_PX = 208;
 const RIGHT_PANEL_SIDEBAR_WIDTH_STORAGE_KEY = "chat_right_panel_width";
+const SPLIT_RATIO_MIN = 0.25;
+const SPLIT_RATIO_MAX = 0.75;
+
+const allowAnySplitDirection = (_direction: SplitDirection) => true;
+
+function clampSplitRatio(value: number): number {
+  if (!Number.isFinite(value)) return 0.5;
+  return Math.min(SPLIT_RATIO_MAX, Math.max(SPLIT_RATIO_MIN, value));
+}
 
 const RightPanelSheet = (props: {
   children: ReactNode;
@@ -304,7 +323,7 @@ const PanePanelInlineSidebar = (props: {
 // against the viewport. This embedded shell keeps browser/diff content anchored to the pane.
 function SplitPaneEmbeddedPanel(props: {
   splitViewId: SplitViewId;
-  pane: SplitViewPane;
+  paneId: PaneId;
   paneScopeId: string;
   panelOpen: boolean;
   panel: ChatRightPanel | null | undefined;
@@ -318,7 +337,7 @@ function SplitPaneEmbeddedPanel(props: {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const panelWidthStorageKey =
     props.panel === "browser" ? "browser" : props.panel === "diff" ? "diff" : "panel";
-  const storageKey = `${RIGHT_PANEL_SIDEBAR_WIDTH_STORAGE_KEY}:${props.splitViewId}:${props.pane}:${panelWidthStorageKey}`;
+  const storageKey = `${RIGHT_PANEL_SIDEBAR_WIDTH_STORAGE_KEY}:${props.splitViewId}:${props.paneId}:${panelWidthStorageKey}`;
   const defaultPanelWidth =
     props.panel === "browser"
       ? BROWSER_SPLIT_PANE_PANEL_DEFAULT_WIDTH_PX
@@ -352,7 +371,7 @@ function SplitPaneEmbeddedPanel(props: {
   );
 
   const startResize = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
+    (event: ReactPointerEvent<HTMLDivElement>) => {
       const wrapper = wrapperRef.current;
       const parent = wrapper?.parentElement;
       if (!wrapper || !parent) return;
@@ -450,7 +469,7 @@ function SplitPaneEmptyState(props: {
     modelSelection: { provider: ProviderKind };
   }[];
   projects: readonly { id: ProjectId; name: string }[];
-  otherPaneThreadId: ThreadIdType | null;
+  excludedThreadIds: ReadonlySet<ThreadIdType>;
   onSelectThread: (threadId: ThreadIdType) => void;
 }) {
   return (
@@ -465,7 +484,7 @@ function SplitPaneEmptyState(props: {
         <p className="text-center text-sm font-medium text-foreground/70">Select a chat</p>
         <div className="max-h-[60vh] space-y-1 overflow-y-auto">
           {props.threads.map((thread) => {
-            const isUsed = thread.id === props.otherPaneThreadId;
+            const isUsed = props.excludedThreadIds.has(thread.id);
             const projectName =
               props.projects.find((p) => p.id === thread.projectId)?.name ?? "Project";
             return (
@@ -521,11 +540,253 @@ function PickerProviderGlyph(props: { provider: ProviderKind; className?: string
   return <OpenAI aria-hidden="true" className={cn("text-muted-foreground/60", props.className)} />;
 }
 
+function SplitDivider(props: {
+  splitNodeId: PaneId;
+  direction: SplitDirection;
+  onSetRatio: (nodeId: PaneId, ratio: number) => void;
+}) {
+  const { onSetRatio, splitNodeId, direction } = props;
+  const handlePointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const target = event.currentTarget;
+      const parent = target.parentElement as HTMLElement | null;
+      if (!parent) return;
+      event.preventDefault();
+      const rect = parent.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+
+      const computeRatio = (clientX: number, clientY: number) =>
+        clampSplitRatio(
+          direction === "horizontal"
+            ? (clientX - rect.left) / rect.width
+            : (clientY - rect.top) / rect.height,
+        );
+
+      let latestRatio = computeRatio(event.clientX, event.clientY);
+      let frameId = 0;
+      const previousParentPosition = parent.style.position;
+      const previousBodyCursor = document.body.style.cursor;
+      const previousBodyUserSelect = document.body.style.userSelect;
+      if (getComputedStyle(parent).position === "static") {
+        parent.style.position = "relative";
+      }
+      const resizeGuide = document.createElement("div");
+      resizeGuide.setAttribute("data-split-resize-guide", "true");
+      Object.assign(resizeGuide.style, {
+        position: "absolute",
+        zIndex: "50",
+        pointerEvents: "none",
+        borderRadius: "999px",
+        background: "var(--info)",
+        opacity: "0.75",
+        boxShadow: "0 0 0 1px color-mix(in srgb, var(--info) 70%, transparent)",
+      });
+      if (direction === "horizontal") {
+        Object.assign(resizeGuide.style, {
+          top: "0",
+          bottom: "0",
+          left: "0",
+          width: "2px",
+        });
+      } else {
+        Object.assign(resizeGuide.style, {
+          top: "0",
+          left: "0",
+          right: "0",
+          height: "2px",
+        });
+      }
+      parent.append(resizeGuide);
+
+      const applyGuide = () => {
+        frameId = 0;
+        const offsetPx =
+          direction === "horizontal" ? rect.width * latestRatio : rect.height * latestRatio;
+        resizeGuide.style.transform =
+          direction === "horizontal"
+            ? `translateX(${Math.round(offsetPx)}px)`
+            : `translateY(${Math.round(offsetPx)}px)`;
+      };
+
+      const onPointerMove = (moveEvent: PointerEvent) => {
+        latestRatio = computeRatio(moveEvent.clientX, moveEvent.clientY);
+        if (frameId === 0) {
+          frameId = window.requestAnimationFrame(applyGuide);
+        }
+      };
+      const onPointerUp = () => {
+        if (frameId !== 0) {
+          window.cancelAnimationFrame(frameId);
+          applyGuide();
+        }
+        document.body.style.userSelect = previousBodyUserSelect;
+        document.body.style.cursor = previousBodyCursor;
+        parent.style.position = previousParentPosition;
+        resizeGuide.remove();
+        window.removeEventListener("pointermove", onPointerMove);
+        window.removeEventListener("pointerup", onPointerUp);
+        window.removeEventListener("pointercancel", onPointerUp);
+        onSetRatio(splitNodeId, latestRatio);
+      };
+
+      document.body.style.userSelect = "none";
+      document.body.style.cursor = direction === "horizontal" ? "col-resize" : "row-resize";
+      applyGuide();
+      window.addEventListener("pointermove", onPointerMove);
+      window.addEventListener("pointerup", onPointerUp);
+      window.addEventListener("pointercancel", onPointerUp);
+    },
+    [direction, onSetRatio, splitNodeId],
+  );
+
+  return (
+    <div
+      data-split-divider="true"
+      data-split-node-id={splitNodeId}
+      data-split-direction={direction}
+      className={cn(
+        "relative z-10 shrink-0 bg-border/70",
+        direction === "horizontal"
+          ? "w-px cursor-col-resize before:absolute before:inset-y-0 before:-left-1 before:w-2 before:bg-transparent"
+          : "h-px cursor-row-resize before:absolute before:inset-x-0 before:-top-1 before:h-2 before:bg-transparent",
+      )}
+      onPointerDown={handlePointerDown}
+    />
+  );
+}
+
+function PaneRenderer(props: {
+  pane: Pane;
+  splitView: SplitView;
+  renderLeaf: (input: { leaf: LeafPane }) => ReactNode;
+  onSetRatio: (nodeId: PaneId, ratio: number) => void;
+}) {
+  if (props.pane.kind === "leaf") {
+    return <>{props.renderLeaf({ leaf: props.pane })}</>;
+  }
+  const node = props.pane;
+  const isRow = node.direction === "horizontal";
+  const firstBasis = `${node.ratio * 100}%`;
+  return (
+    <div
+      data-split-container="true"
+      data-split-direction={node.direction}
+      className={cn("flex min-h-0 min-w-0 flex-1 overflow-hidden", isRow ? "flex-row" : "flex-col")}
+    >
+      <div
+        className="flex min-h-0 min-w-0 overflow-hidden"
+        style={{ flexBasis: firstBasis, flexGrow: 0, flexShrink: 1 }}
+      >
+        <PaneRenderer
+          pane={node.first}
+          splitView={props.splitView}
+          renderLeaf={props.renderLeaf}
+          onSetRatio={props.onSetRatio}
+        />
+      </div>
+      <SplitDivider
+        splitNodeId={node.id}
+        direction={node.direction}
+        onSetRatio={props.onSetRatio}
+      />
+      <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+        <PaneRenderer
+          pane={node.second}
+          splitView={props.splitView}
+          renderLeaf={props.renderLeaf}
+          onSetRatio={props.onSetRatio}
+        />
+      </div>
+    </div>
+  );
+}
+
+function SplitPaneChatMountSkeleton() {
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background [contain:layout_style_paint]">
+      <div className="flex h-[52px] shrink-0 items-center border-b border-[color:var(--color-border-light)] px-4">
+        <div className="h-4 w-40 rounded-full bg-muted" />
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col justify-end gap-3 px-5 py-4">
+        <div className="h-12 w-4/5 rounded-xl bg-muted" />
+        <div className="ml-auto h-10 w-3/5 rounded-xl bg-muted" />
+        <div className="h-16 w-5/6 rounded-xl bg-muted" />
+      </div>
+      <div className="shrink-0 border-t border-[color:var(--color-border-light)] p-3">
+        <div className="h-16 rounded-2xl bg-muted" />
+      </div>
+    </div>
+  );
+}
+
+function DeferredSplitPaneChatView(props: {
+  threadId: ThreadIdType;
+  paneScopeId: string;
+  deferInitialMount: boolean;
+  isFocusedPane: boolean;
+  panelState: SplitViewPanePanelState;
+  onToggleDiff: () => void;
+  onToggleBrowser: () => void;
+  onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
+  onMaximize: () => void;
+  onMounted: () => void;
+}) {
+  const onMounted = props.onMounted;
+  const [canMountChatView, setCanMountChatView] = useState(!props.deferInitialMount);
+
+  useEffect(() => {
+    if (!props.deferInitialMount) {
+      setCanMountChatView(true);
+      return;
+    }
+    setCanMountChatView(false);
+    let firstFrame = 0;
+    let secondFrame = 0;
+    firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => setCanMountChatView(true));
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
+    };
+  }, [props.deferInitialMount, props.paneScopeId, props.threadId]);
+
+  useEffect(() => {
+    if (canMountChatView) {
+      onMounted();
+    }
+  }, [canMountChatView, onMounted]);
+
+  if (!canMountChatView) {
+    return <SplitPaneChatMountSkeleton />;
+  }
+
+  return (
+    <ChatView
+      key={props.paneScopeId}
+      threadId={props.threadId}
+      paneScopeId={props.paneScopeId}
+      surfaceMode="split"
+      isFocusedPane={props.isFocusedPane}
+      panelState={props.panelState}
+      onToggleDiffPanel={props.onToggleDiff}
+      onToggleBrowserPanel={props.onToggleBrowser}
+      onOpenTurnDiffPanel={props.onOpenTurnDiff}
+      onMaximizeSurface={props.onMaximize}
+    />
+  );
+}
+
 function SplitPaneSurface(props: {
   splitView: SplitView;
-  pane: SplitViewPane;
+  paneId: PaneId;
   threadId: ThreadIdType | null;
+  panelState: SplitViewPanePanelState;
   isFocused: boolean;
+  deferChatMount: boolean;
+  canDropInDirection: (direction: SplitDirection) => boolean;
+  excludedThreadIds: ReadonlySet<ThreadIdType>;
+  ownerProjectId: ProjectId;
   threads: readonly {
     id: ThreadIdType;
     title: string | null;
@@ -544,23 +805,38 @@ function SplitPaneSurface(props: {
   onMaximize: () => void;
   onChooseThread: () => void;
   onSelectThread: (threadId: ThreadIdType) => void;
+  onChatMounted: () => void;
+  onDropThread: (payload: {
+    droppedThreadId: ThreadIdType;
+    direction: SplitDirection;
+    side: SplitDropSide;
+  }) => void;
 }) {
-  const paneScopeId = `${props.splitView.id}:${props.pane}`;
-  const panelState = props.pane === "left" ? props.splitView.leftPanel : props.splitView.rightPanel;
-  const panelOpen = panelState.panel !== null;
-  const shouldRenderPanelContent = panelOpen || panelState.hasOpenedPanel;
-  const otherPaneThreadId =
-    props.pane === "left" ? props.splitView.rightThreadId : props.splitView.leftThreadId;
+  const paneScopeId = `${props.splitView.id}:${props.paneId}`;
+  const panelOpen = props.panelState.panel !== null;
+  const shouldRenderPanelContent = panelOpen || props.panelState.hasOpenedPanel;
+
+  const onDropThread = props.onDropThread;
+  const handleDrop = useCallback(
+    (payload: { threadId: ThreadIdType; direction: SplitDirection; side: SplitDropSide }) => {
+      onDropThread({
+        droppedThreadId: payload.threadId,
+        direction: payload.direction,
+        side: payload.side,
+      });
+    },
+    [onDropThread],
+  );
 
   return (
-    <div className="group relative flex min-h-0 min-w-0 flex-1 bg-background">
+    <div className="group relative flex min-h-0 min-w-0 flex-1 bg-background [contain:layout_style_paint]">
       {props.threadId ? (
         <div className="pointer-events-none absolute right-3 top-[3.75rem] z-20 sm:right-5 sm:top-[4.25rem]">
           <Button
             type="button"
             size="icon-sm"
             variant="outline"
-            aria-label={`Choose chat for the ${props.pane} split pane`}
+            aria-label={`Choose chat for split pane ${props.paneId}`}
             title="Choose chat"
             className={cn(
               "pointer-events-auto transition-opacity",
@@ -575,45 +851,55 @@ function SplitPaneSurface(props: {
           </Button>
         </div>
       ) : null}
-      <SidebarInset
-        className={cn(
-          "min-h-0 min-w-0 overflow-hidden overscroll-y-none text-foreground transition-shadow",
-          props.isFocused ? "ring-1 ring-inset ring-primary/25" : "",
-        )}
-        onMouseDown={props.onFocus}
+      <ChatPaneDropOverlay
+        paneScopeId={paneScopeId}
+        canDropInDirection={props.canDropInDirection}
+        excludedThreadIds={props.excludedThreadIds}
+        ownerProjectId={props.ownerProjectId}
+        onDrop={handleDrop}
+        className="flex min-h-0 min-w-0 flex-1"
       >
-        {props.threadId ? (
-          <ChatView
-            threadId={props.threadId}
-            paneScopeId={paneScopeId}
-            surfaceMode="split"
-            isFocusedPane={props.isFocused}
-            panelState={panelState}
-            onToggleDiffPanel={props.onToggleDiff}
-            onToggleBrowserPanel={props.onToggleBrowser}
-            onOpenTurnDiffPanel={props.onOpenTurnDiff}
-            onMaximizeSurface={props.onMaximize}
-          />
-        ) : (
-          <SplitPaneEmptyState
-            isFocused={props.isFocused}
-            onFocus={props.onFocus}
-            threads={props.threads}
-            projects={props.projects}
-            otherPaneThreadId={otherPaneThreadId}
-            onSelectThread={props.onSelectThread}
-          />
-        )}
-      </SidebarInset>
+        <SidebarInset
+          className={cn(
+            "min-h-0 min-w-0 overflow-hidden overscroll-y-none text-foreground transition-shadow",
+            props.isFocused ? "ring-1 ring-inset ring-primary/25" : "",
+          )}
+          onMouseDown={props.onFocus}
+        >
+          {props.threadId ? (
+            <DeferredSplitPaneChatView
+              threadId={props.threadId}
+              paneScopeId={paneScopeId}
+              deferInitialMount={props.deferChatMount}
+              isFocusedPane={props.isFocused}
+              panelState={props.panelState}
+              onToggleDiff={props.onToggleDiff}
+              onToggleBrowser={props.onToggleBrowser}
+              onOpenTurnDiff={props.onOpenTurnDiff}
+              onMaximize={props.onMaximize}
+              onMounted={props.onChatMounted}
+            />
+          ) : (
+            <SplitPaneEmptyState
+              isFocused={props.isFocused}
+              onFocus={props.onFocus}
+              threads={props.threads}
+              projects={props.projects}
+              excludedThreadIds={props.excludedThreadIds}
+              onSelectThread={props.onSelectThread}
+            />
+          )}
+        </SidebarInset>
+      </ChatPaneDropOverlay>
       <SplitPaneEmbeddedPanel
         splitViewId={props.splitView.id}
-        pane={props.pane}
+        paneId={props.paneId}
         paneScopeId={paneScopeId}
         panelOpen={panelOpen && shouldRenderPanelContent}
-        panel={panelState.panel}
+        panel={props.panelState.panel}
         threadId={props.threadId}
         onClosePanel={props.onClosePanel}
-        panelState={panelState}
+        panelState={props.panelState}
         onUpdatePanelState={props.onUpdatePanelState}
       />
     </div>
@@ -628,16 +914,17 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
   const projects = useStore((store) => store.projects);
   const splitView = useSplitViewStore(selectSplitView(props.splitViewId));
   const setFocusedPane = useSplitViewStore((store) => store.setFocusedPane);
-  const setRatio = useSplitViewStore((store) => store.setRatio);
+  const setRatioForNode = useSplitViewStore((store) => store.setRatioForNode);
   const setPanePanelState = useSplitViewStore((store) => store.setPanePanelState);
   const replacePaneThread = useSplitViewStore((store) => store.replacePaneThread);
+  const dropThreadOnPane = useSplitViewStore((store) => store.dropThreadOnPane);
   const removeSplitView = useSplitViewStore((store) => store.removeSplitView);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const [threadPickerPane, setThreadPickerPane] = useState<SplitViewPane | null>(null);
+  const [threadPickerPaneId, setThreadPickerPaneId] = useState<PaneId | null>(null);
+  const mountedChatPaneIdsRef = useRef(new Set<PaneId>());
   const {
     splitView: activeSplitView,
     focusedThreadId,
-    routePane,
+    routePaneId,
   } = resolveActiveSplitView({
     splitView,
     routeThreadId: props.routeThreadId,
@@ -654,26 +941,38 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
       return;
     }
 
+    // Single-leaf split views collapse back to the single chat surface.
+    const leaves = collectLeaves(activeSplitView.root);
+    if (leaves.length <= 1) {
+      const onlyThreadId = leaves[0]?.threadId ?? null;
+      removeSplitView(activeSplitView.id);
+      if (!onlyThreadId) {
+        void handleNewChat({ fresh: true });
+        return;
+      }
+      void navigate({
+        to: "/$threadId",
+        params: { threadId: onlyThreadId },
+        replace: true,
+        search: (previous) => ({ ...stripDiffSearchParams(previous), splitViewId: undefined }),
+      });
+      return;
+    }
+
+    // If the route threadId targets a non-focused pane, switch focus to that pane.
+    const focusedLeaf = findLeafPaneById(activeSplitView.root, activeSplitView.focusedPaneId);
     if (
-      activeSplitView.leftThreadId &&
-      activeSplitView.rightThreadId &&
-      activeSplitView.leftThreadId === activeSplitView.rightThreadId
+      routePaneId &&
+      routePaneId !== activeSplitView.focusedPaneId &&
+      focusedLeaf?.threadId !== null &&
+      focusedLeaf?.threadId !== undefined
     ) {
-      replacePaneThread(activeSplitView.id, "right", null);
-      setFocusedPane(activeSplitView.id, "left");
+      setFocusedPane(activeSplitView.id, routePaneId);
       return;
     }
 
-    const focusedPaneThreadId =
-      activeSplitView.focusedPane === "left"
-        ? activeSplitView.leftThreadId
-        : activeSplitView.rightThreadId;
+    // Sync the route threadId with the focused leaf's thread.
     const normalizedFocusedThreadId = resolveSplitViewFocusedThreadId(activeSplitView);
-    if (routePane && routePane !== activeSplitView.focusedPane && focusedPaneThreadId !== null) {
-      setFocusedPane(activeSplitView.id, routePane);
-      return;
-    }
-
     if (normalizedFocusedThreadId && props.routeThreadId !== normalizedFocusedThreadId) {
       void navigate({
         to: "/$threadId",
@@ -687,21 +986,20 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
     }
   }, [
     activeSplitView,
+    handleNewChat,
     navigate,
     props.routeThreadId,
-    replacePaneThread,
-    routePane,
+    removeSplitView,
+    routePaneId,
     setFocusedPane,
   ]);
 
   const setPaneFocus = useCallback(
-    (pane: SplitViewPane) => {
+    (paneId: PaneId) => {
       if (!activeSplitView) return;
-      setFocusedPane(activeSplitView.id, pane);
-      const nextThreadId =
-        pane === "left"
-          ? (activeSplitView.leftThreadId ?? activeSplitView.rightThreadId)
-          : (activeSplitView.rightThreadId ?? activeSplitView.leftThreadId);
+      const leaf = findLeafPaneById(activeSplitView.root, paneId);
+      const nextThreadId = leaf?.threadId ?? resolveSplitViewFocusedThreadId(activeSplitView);
+      setFocusedPane(activeSplitView.id, paneId);
       if (!nextThreadId || nextThreadId === props.routeThreadId) {
         return;
       }
@@ -720,36 +1018,33 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
 
   const updatePanePanelState = useCallback(
     (
-      pane: SplitViewPane,
+      paneId: PaneId,
       patch: Partial<Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">>,
     ) => {
       if (!activeSplitView) return;
-      const previousState =
-        pane === "left" ? activeSplitView.leftPanel : activeSplitView.rightPanel;
-      setPanePanelState(activeSplitView.id, pane, {
+      const leaf = findLeafPaneById(activeSplitView.root, paneId);
+      if (!leaf) return;
+      const nextPanel = patch.panel ?? leaf.panel.panel;
+      setPanePanelState(activeSplitView.id, paneId, {
         ...patch,
-        hasOpenedPanel:
-          previousState.hasOpenedPanel || (patch.panel ?? previousState.panel) !== null,
+        hasOpenedPanel: leaf.panel.hasOpenedPanel || nextPanel !== null,
         lastOpenPanel:
           patch.panel === "browser" || patch.panel === "diff"
             ? patch.panel
-            : previousState.lastOpenPanel,
+            : leaf.panel.lastOpenPanel,
       });
     },
     [activeSplitView, setPanePanelState],
   );
 
   const togglePanePanel = useCallback(
-    (pane: SplitViewPane, panel: ChatRightPanel) => {
+    (paneId: PaneId, panel: ChatRightPanel) => {
       if (!activeSplitView) return;
-      const paneThreadId =
-        pane === "left" ? activeSplitView.leftThreadId : activeSplitView.rightThreadId;
-      if (!paneThreadId) {
+      const leaf = findLeafPaneById(activeSplitView.root, paneId);
+      if (!leaf?.threadId) {
         return;
       }
-      const previousState =
-        pane === "left" ? activeSplitView.leftPanel : activeSplitView.rightPanel;
-      updatePanePanelState(pane, resolveToggledChatPanelPatch(previousState, panel));
+      updatePanePanelState(paneId, resolveToggledChatPanelPatch(leaf.panel, panel));
     },
     [activeSplitView, updatePanePanelState],
   );
@@ -762,7 +1057,7 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
 
     const unsubscribe = onMenuAction((action) => {
       if (action !== "toggle-browser") return;
-      togglePanePanel(activeSplitView.focusedPane, "browser");
+      togglePanePanel(activeSplitView.focusedPaneId, "browser");
     });
 
     return () => {
@@ -771,17 +1066,15 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
   }, [activeSplitView, togglePanePanel]);
 
   const closePanePanel = useCallback(
-    (pane: SplitViewPane) => {
-      updatePanePanelState(pane, {
-        panel: null,
-      });
+    (paneId: PaneId) => {
+      updatePanePanelState(paneId, { panel: null });
     },
     [updatePanePanelState],
   );
 
   const openPaneTurnDiff = useCallback(
-    (pane: SplitViewPane, turnId: TurnId, filePath?: string) => {
-      updatePanePanelState(pane, {
+    (paneId: PaneId, turnId: TurnId, filePath?: string) => {
+      updatePanePanelState(paneId, {
         panel: "diff",
         diffTurnId: turnId,
         diffFilePath: filePath ?? null,
@@ -792,11 +1085,9 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
 
   const maximizeFocusedPane = useCallback(() => {
     if (!activeSplitView) return;
+    const focusedLeaf = findLeafPaneById(activeSplitView.root, activeSplitView.focusedPaneId);
+    const focusedPanelState = focusedLeaf?.panel ?? null;
     const nextThreadId = focusedThreadId;
-    const focusedPanelState =
-      activeSplitView.focusedPane === "left"
-        ? activeSplitView.leftPanel
-        : activeSplitView.rightPanel;
     removeSplitView(activeSplitView.id);
     if (!nextThreadId) {
       void handleNewChat({ fresh: true });
@@ -806,81 +1097,84 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
       to: "/$threadId",
       params: { threadId: nextThreadId },
       replace: true,
-      search: () => normalizeSingleSearchFromPane(focusedPanelState),
+      search: () => (focusedPanelState ? normalizeSingleSearchFromPane(focusedPanelState) : {}),
     });
   }, [activeSplitView, focusedThreadId, handleNewChat, navigate, removeSplitView]);
 
-  const activeSplitViewIdRef = useRef<SplitViewId | null>(null);
-  activeSplitViewIdRef.current = activeSplitView?.id ?? null;
+  const handleSetRatio = useCallback(
+    (nodeId: PaneId, ratio: number) => {
+      if (!activeSplitView) return;
+      setRatioForNode(activeSplitView.id, nodeId, ratio);
+    },
+    [activeSplitView, setRatioForNode],
+  );
 
-  useEffect(() => {
-    const root = rootRef.current;
-    const splitViewId = activeSplitViewIdRef.current;
-    if (!root || !splitViewId) return;
+  const handleDropThreadOnPane = useCallback(
+    (
+      paneId: PaneId,
+      payload: {
+        droppedThreadId: ThreadIdType;
+        direction: SplitDirection;
+        side: SplitDropSide;
+      },
+    ) => {
+      if (!activeSplitView) return;
+      const ok = dropThreadOnPane({
+        splitViewId: activeSplitView.id,
+        targetPaneId: paneId,
+        direction: payload.direction,
+        side: payload.side,
+        threadId: payload.droppedThreadId,
+      });
+      if (!ok) return;
+      startTransition(() => {
+        void navigate({
+          to: "/$threadId",
+          params: { threadId: payload.droppedThreadId },
+          replace: true,
+          search: () => ({ splitViewId: activeSplitView.id }),
+        });
+      });
+    },
+    [activeSplitView, dropThreadOnPane, navigate],
+  );
 
-    const divider = root.querySelector<HTMLElement>("[data-split-divider='true']");
-    if (!divider) return;
-
-    const handlePointerMove = (event: PointerEvent) => {
-      const rect = root.getBoundingClientRect();
-      if (!rect || rect.width <= 0) return;
-      const id = activeSplitViewIdRef.current;
-      if (!id) return;
-      setRatio(id, (event.clientX - rect.left) / rect.width);
-    };
-
-    const handlePointerUp = () => {
-      document.body.style.removeProperty("user-select");
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", handlePointerUp);
-    };
-
-    const onPointerDown = (event: PointerEvent) => {
-      event.preventDefault();
-      document.body.style.userSelect = "none";
-      window.addEventListener("pointermove", handlePointerMove);
-      window.addEventListener("pointerup", handlePointerUp);
-    };
-
-    divider.addEventListener("pointerdown", onPointerDown);
-    return () => {
-      divider.removeEventListener("pointerdown", onPointerDown);
-      handlePointerUp();
-    };
-  }, [activeSplitView?.id, setRatio]);
+  const selectableThreads = useMemo(
+    () =>
+      threads.toSorted(
+        (left, right) =>
+          Date.parse(right.updatedAt ?? right.createdAt) -
+          Date.parse(left.updatedAt ?? left.createdAt),
+      ),
+    [threads],
+  );
+  const splitThreadIds = useMemo(
+    () => new Set(activeSplitView ? resolveSplitViewThreadIds(activeSplitView) : []),
+    [activeSplitView],
+  );
 
   if (!activeSplitView) {
     return null;
   }
 
-  const leftBasis = `${activeSplitView.ratio * 100}%`;
-  const rightBasis = `${(1 - activeSplitView.ratio) * 100}%`;
-  const selectableThreads = threads.toSorted(
-    (left, right) =>
-      Date.parse(right.updatedAt ?? right.createdAt) - Date.parse(left.updatedAt ?? left.createdAt),
-  );
-  const chooseThreadForPane = (threadId: ThreadIdType, paneOverride?: SplitViewPane) => {
-    const pane = paneOverride ?? threadPickerPane;
-    if (!pane) {
+  const chooseThreadForPane = (threadId: ThreadIdType, paneOverride?: PaneId) => {
+    const paneId = paneOverride ?? threadPickerPaneId;
+    if (!paneId) {
       return;
     }
-    const otherPane: SplitViewPane = pane === "left" ? "right" : "left";
-    const currentPaneThreadId =
-      pane === "left" ? activeSplitView.leftThreadId : activeSplitView.rightThreadId;
-    const otherPaneThreadId =
-      otherPane === "left" ? activeSplitView.leftThreadId : activeSplitView.rightThreadId;
+    setThreadPickerPaneId(null);
 
-    setThreadPickerPane(null);
-
-    if (threadId === otherPaneThreadId) {
-      setPaneFocus(otherPane);
+    const existingPaneIdForThread = resolveSplitViewPaneIdForThread(activeSplitView, threadId);
+    if (existingPaneIdForThread && existingPaneIdForThread !== paneId) {
+      setPaneFocus(existingPaneIdForThread);
       return;
     }
 
-    setFocusedPane(activeSplitView.id, pane);
-    if (threadId !== currentPaneThreadId) {
-      replacePaneThread(activeSplitView.id, pane, threadId);
-      setPanePanelState(activeSplitView.id, pane, {
+    const leaf = findLeafPaneById(activeSplitView.root, paneId);
+    setFocusedPane(activeSplitView.id, paneId);
+    if (leaf && leaf.threadId !== threadId) {
+      replacePaneThread(activeSplitView.id, paneId, threadId);
+      setPanePanelState(activeSplitView.id, paneId, {
         diffTurnId: null,
         diffFilePath: null,
       });
@@ -897,72 +1191,64 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
     });
   };
 
+  const renderLeaf = ({ leaf }: { leaf: LeafPane }): ReactNode => {
+    const isFocused = leaf.id === activeSplitView.focusedPaneId;
+    const shouldDeferChatMount =
+      isFocused && leaf.threadId !== null && !mountedChatPaneIdsRef.current.has(leaf.id);
+    const excluded = new Set<ThreadIdType>(splitThreadIds);
+    return (
+      <SplitPaneSurface
+        key={leaf.id}
+        splitView={activeSplitView}
+        paneId={leaf.id}
+        threadId={leaf.threadId}
+        panelState={leaf.panel}
+        isFocused={isFocused}
+        deferChatMount={shouldDeferChatMount}
+        canDropInDirection={(direction) => canSubdividePane(activeSplitView.root, leaf.id, direction)}
+        excludedThreadIds={excluded}
+        ownerProjectId={activeSplitView.ownerProjectId}
+        threads={selectableThreads}
+        projects={projects}
+        onFocus={() => setPaneFocus(leaf.id)}
+        onToggleDiff={() => togglePanePanel(leaf.id, "diff")}
+        onToggleBrowser={() => togglePanePanel(leaf.id, "browser")}
+        onOpenTurnDiff={(turnId, filePath) => openPaneTurnDiff(leaf.id, turnId, filePath)}
+        onClosePanel={() => closePanePanel(leaf.id)}
+        onUpdatePanelState={(patch) => updatePanePanelState(leaf.id, patch)}
+        onMaximize={maximizeFocusedPane}
+        onChooseThread={() => {
+          setPaneFocus(leaf.id);
+          setThreadPickerPaneId(leaf.id);
+        }}
+        onSelectThread={(threadId) => chooseThreadForPane(threadId, leaf.id)}
+        onChatMounted={() => {
+          mountedChatPaneIdsRef.current.add(leaf.id);
+        }}
+        onDropThread={(payload) => handleDropThreadOnPane(leaf.id, payload)}
+      />
+    );
+  };
+
+  const pickerLeaf = threadPickerPaneId
+    ? findLeafPaneById(activeSplitView.root, threadPickerPaneId)
+    : null;
+
   return (
     <>
-      <div
-        ref={rootRef}
-        className="flex h-dvh min-h-0 min-w-0 flex-1 overflow-hidden bg-background"
-      >
-        <div
-          className="flex min-h-0 min-w-0"
-          style={{ flexBasis: leftBasis, flexGrow: 0, flexShrink: 1 }}
-        >
-          <SplitPaneSurface
-            splitView={activeSplitView}
-            pane="left"
-            threadId={activeSplitView.leftThreadId}
-            isFocused={activeSplitView.focusedPane === "left"}
-            threads={selectableThreads}
-            projects={projects}
-            onFocus={() => setPaneFocus("left")}
-            onToggleDiff={() => togglePanePanel("left", "diff")}
-            onToggleBrowser={() => togglePanePanel("left", "browser")}
-            onOpenTurnDiff={(turnId, filePath) => openPaneTurnDiff("left", turnId, filePath)}
-            onClosePanel={() => closePanePanel("left")}
-            onUpdatePanelState={(patch) => updatePanePanelState("left", patch)}
-            onMaximize={maximizeFocusedPane}
-            onChooseThread={() => {
-              setPaneFocus("left");
-              setThreadPickerPane("left");
-            }}
-            onSelectThread={(threadId) => chooseThreadForPane(threadId, "left")}
-          />
-        </div>
-        <div
-          data-split-divider="true"
-          className="relative z-10 w-px shrink-0 cursor-col-resize bg-border/70 before:absolute before:inset-y-0 before:-left-1 before:w-2 before:bg-transparent"
+      <div className="flex h-dvh min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
+        <PaneRenderer
+          pane={activeSplitView.root}
+          splitView={activeSplitView}
+          renderLeaf={renderLeaf}
+          onSetRatio={handleSetRatio}
         />
-        <div
-          className="flex min-h-0 min-w-0 flex-1"
-          style={{ flexBasis: rightBasis, flexGrow: 1, flexShrink: 1 }}
-        >
-          <SplitPaneSurface
-            splitView={activeSplitView}
-            pane="right"
-            threadId={activeSplitView.rightThreadId}
-            isFocused={activeSplitView.focusedPane === "right"}
-            threads={selectableThreads}
-            projects={projects}
-            onFocus={() => setPaneFocus("right")}
-            onToggleDiff={() => togglePanePanel("right", "diff")}
-            onToggleBrowser={() => togglePanePanel("right", "browser")}
-            onOpenTurnDiff={(turnId, filePath) => openPaneTurnDiff("right", turnId, filePath)}
-            onClosePanel={() => closePanePanel("right")}
-            onUpdatePanelState={(patch) => updatePanePanelState("right", patch)}
-            onMaximize={maximizeFocusedPane}
-            onChooseThread={() => {
-              setPaneFocus("right");
-              setThreadPickerPane("right");
-            }}
-            onSelectThread={(threadId) => chooseThreadForPane(threadId, "right")}
-          />
-        </div>
       </div>
       <Dialog
-        open={threadPickerPane !== null}
+        open={threadPickerPaneId !== null}
         onOpenChange={(open) => {
           if (!open) {
-            setThreadPickerPane(null);
+            setThreadPickerPaneId(null);
           }
         }}
       >
@@ -970,7 +1256,7 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
           <DialogHeader className="items-center text-center">
             <DialogTitle>Choose Chat</DialogTitle>
             <DialogDescription className="max-w-sm text-center">
-              Pick which chat should appear in the {threadPickerPane ?? "focused"} split pane.
+              Pick which chat should appear in the focused split pane.
             </DialogDescription>
           </DialogHeader>
           <DialogPanel className="space-y-3">
@@ -978,10 +1264,7 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
               {selectableThreads.map((thread) => {
                 const projectName =
                   projects.find((project) => project.id === thread.projectId)?.name ?? "Project";
-                const isSelected =
-                  threadPickerPane === "left"
-                    ? activeSplitView.leftThreadId === thread.id
-                    : activeSplitView.rightThreadId === thread.id;
+                const isSelected = pickerLeaf?.threadId === thread.id;
                 return (
                   <button
                     key={thread.id}
@@ -1009,7 +1292,7 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
               })}
             </div>
             <DialogFooter variant="bare">
-              <Button type="button" variant="outline" onClick={() => setThreadPickerPane(null)}>
+              <Button type="button" variant="outline" onClick={() => setThreadPickerPaneId(null)}>
                 Cancel
               </Button>
             </DialogFooter>
@@ -1028,6 +1311,7 @@ function SingleChatSurface(props: {
   const navigate = useNavigate();
   const shouldUseDiffSheet = useMediaQuery(DIFF_INLINE_LAYOUT_MEDIA_QUERY);
   const createSplitView = useSplitViewStore((store) => store.createFromThread);
+  const createSplitViewFromDrop = useSplitViewStore((store) => store.createFromDrop);
   const panelState = useSingleChatPanelStore(selectSingleChatPanelState(props.threadId));
   const setThreadPanelState = useSingleChatPanelStore((store) => store.setThreadPanelState);
   const activePanel = panelState.panel;
@@ -1073,13 +1357,38 @@ function SingleChatSurface(props: {
       sourceThreadId: props.threadId,
       ownerProjectId: props.projectId,
     });
-    void navigate({
-      to: "/$threadId",
-      params: { threadId: props.threadId },
-      replace: true,
-      search: () => ({ splitViewId }),
+    startTransition(() => {
+      void navigate({
+        to: "/$threadId",
+        params: { threadId: props.threadId },
+        replace: true,
+        search: () => ({ splitViewId }),
+      });
     });
   }, [createSplitView, navigate, props.projectId, props.threadId]);
+
+  const handleDropThread = useCallback(
+    (payload: { threadId: ThreadIdType; direction: SplitDirection; side: SplitDropSide }) => {
+      if (!props.projectId) return;
+      if (payload.threadId === props.threadId) return;
+      const splitViewId = createSplitViewFromDrop({
+        sourceThreadId: props.threadId,
+        ownerProjectId: props.projectId,
+        droppedThreadId: payload.threadId,
+        direction: payload.direction,
+        side: payload.side,
+      });
+      startTransition(() => {
+        void navigate({
+          to: "/$threadId",
+          params: { threadId: payload.threadId },
+          replace: true,
+          search: () => ({ splitViewId }),
+        });
+      });
+    },
+    [createSplitViewFromDrop, navigate, props.projectId, props.threadId],
+  );
 
   useEffect(() => {
     const { nextAppliedSearchKey, panelPatch } = resolveRoutePanelBootstrap({
@@ -1136,9 +1445,65 @@ function SingleChatSurface(props: {
 
   const shouldRenderPanelContent = activePanel !== null && (panelOpen || panelState.hasOpenedPanel);
 
+  const excludedThreadIds = useMemo(
+    () => new Set<ThreadIdType>([props.threadId]),
+    [props.threadId],
+  );
+
   if (!shouldUseDiffSheet) {
     return (
       <div className="flex h-dvh min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
+        <ChatPaneDropOverlay
+          canDropInDirection={allowAnySplitDirection}
+          excludedThreadIds={excludedThreadIds}
+          ownerProjectId={props.projectId}
+          onDrop={handleDropThread}
+          className="flex h-full min-h-0 min-w-0 flex-1"
+        >
+          <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground">
+            <ChatView
+              threadId={props.threadId}
+              panelState={panelState}
+              onToggleDiffPanel={() =>
+                updatePanelState(resolveToggledChatPanelPatch(panelState, "diff"))
+              }
+              onToggleBrowserPanel={() =>
+                updatePanelState(resolveToggledChatPanelPatch(panelState, "browser"))
+              }
+              onOpenTurnDiffPanel={(turnId, filePath) =>
+                updatePanelState({
+                  panel: "diff",
+                  diffTurnId: turnId,
+                  diffFilePath: filePath ?? null,
+                })
+              }
+              onSplitSurface={handleSplitSurface}
+            />
+          </SidebarInset>
+        </ChatPaneDropOverlay>
+        <PanePanelInlineSidebar
+          panelOpen={panelOpen}
+          onClosePanel={closePanel}
+          onOpenPanel={openPanel}
+          renderPanelContent={shouldRenderPanelContent}
+          panel={activePanel}
+          threadId={props.threadId}
+          panelState={panelState}
+          onUpdatePanelState={updatePanelState}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <ChatPaneDropOverlay
+        canDropInDirection={allowAnySplitDirection}
+        excludedThreadIds={excludedThreadIds}
+        ownerProjectId={props.projectId}
+        onDrop={handleDropThread}
+        className="flex h-dvh min-h-0 min-w-0 flex-1"
+      >
         <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground">
           <ChatView
             threadId={props.threadId}
@@ -1159,42 +1524,7 @@ function SingleChatSurface(props: {
             onSplitSurface={handleSplitSurface}
           />
         </SidebarInset>
-        <PanePanelInlineSidebar
-          panelOpen={panelOpen}
-          onClosePanel={closePanel}
-          onOpenPanel={openPanel}
-          renderPanelContent={shouldRenderPanelContent}
-          panel={activePanel}
-          threadId={props.threadId}
-          panelState={panelState}
-          onUpdatePanelState={updatePanelState}
-        />
-      </div>
-    );
-  }
-
-  return (
-    <>
-      <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground">
-        <ChatView
-          threadId={props.threadId}
-          panelState={panelState}
-          onToggleDiffPanel={() =>
-            updatePanelState(resolveToggledChatPanelPatch(panelState, "diff"))
-          }
-          onToggleBrowserPanel={() =>
-            updatePanelState(resolveToggledChatPanelPatch(panelState, "browser"))
-          }
-          onOpenTurnDiffPanel={(turnId, filePath) =>
-            updatePanelState({
-              panel: "diff",
-              diffTurnId: turnId,
-              diffFilePath: filePath ?? null,
-            })
-          }
-          onSplitSurface={handleSplitSurface}
-        />
-      </SidebarInset>
+      </ChatPaneDropOverlay>
       <RightPanelSheet panelOpen={panelOpen} onClosePanel={closePanel}>
         {shouldRenderPanelContent ? (
           activePanel === "browser" ? (
