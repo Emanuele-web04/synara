@@ -75,8 +75,8 @@ export type RuntimeThreadState = typeof RuntimeThreadState.Type;
 const RuntimeTurnState = Schema.Literals(["completed", "failed", "interrupted", "cancelled"]);
 export type RuntimeTurnState = typeof RuntimeTurnState.Type;
 
-const RuntimePlanStepStatus = Schema.Literals(["pending", "inProgress", "completed"]);
-export type RuntimePlanStepStatus = typeof RuntimePlanStepStatus.Type;
+const RuntimeTaskStatus = Schema.Literals(["pending", "inProgress", "completed"]);
+export type RuntimeTaskStatus = typeof RuntimeTaskStatus.Type;
 
 const RuntimeItemStatus = Schema.Literals(["inProgress", "completed", "failed", "declined"]);
 export type RuntimeItemStatus = typeof RuntimeItemStatus.Type;
@@ -165,7 +165,7 @@ const ProviderRuntimeEventType = Schema.Literals([
   "turn.started",
   "turn.completed",
   "turn.aborted",
-  "turn.plan.updated",
+  "turn.tasks.updated",
   "turn.proposed.delta",
   "turn.proposed.completed",
   "turn.diff.updated",
@@ -215,7 +215,7 @@ const ThreadRealtimeClosedType = Schema.Literal("thread.realtime.closed");
 const TurnStartedType = Schema.Literal("turn.started");
 const TurnCompletedType = Schema.Literal("turn.completed");
 const TurnAbortedType = Schema.Literal("turn.aborted");
-const TurnPlanUpdatedType = Schema.Literal("turn.plan.updated");
+const TurnTasksUpdatedType = Schema.Literal("turn.tasks.updated");
 const TurnProposedDeltaType = Schema.Literal("turn.proposed.delta");
 const TurnProposedCompletedType = Schema.Literal("turn.proposed.completed");
 const TurnDiffUpdatedType = Schema.Literal("turn.diff.updated");
@@ -373,17 +373,17 @@ const TurnAbortedPayload = Schema.Struct({
 });
 export type TurnAbortedPayload = typeof TurnAbortedPayload.Type;
 
-const RuntimePlanStep = Schema.Struct({
-  step: TrimmedNonEmptyStringSchema,
-  status: RuntimePlanStepStatus,
+const RuntimeTaskListItem = Schema.Struct({
+  task: TrimmedNonEmptyStringSchema,
+  status: RuntimeTaskStatus,
 });
-export type RuntimePlanStep = typeof RuntimePlanStep.Type;
+export type RuntimeTaskListItem = typeof RuntimeTaskListItem.Type;
 
-const TurnPlanUpdatedPayload = Schema.Struct({
+const TurnTasksUpdatedPayload = Schema.Struct({
   explanation: Schema.optional(Schema.NullOr(TrimmedNonEmptyStringSchema)),
-  plan: Schema.Array(RuntimePlanStep),
+  tasks: Schema.Array(RuntimeTaskListItem),
 });
-export type TurnPlanUpdatedPayload = typeof TurnPlanUpdatedPayload.Type;
+export type TurnTasksUpdatedPayload = typeof TurnTasksUpdatedPayload.Type;
 
 const TurnProposedDeltaPayload = Schema.Struct({
   delta: Schema.String,
@@ -724,12 +724,12 @@ const ProviderRuntimeTurnAbortedEvent = Schema.Struct({
 });
 export type ProviderRuntimeTurnAbortedEvent = typeof ProviderRuntimeTurnAbortedEvent.Type;
 
-const ProviderRuntimeTurnPlanUpdatedEvent = Schema.Struct({
+const ProviderRuntimeTurnTasksUpdatedEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
-  type: TurnPlanUpdatedType,
-  payload: TurnPlanUpdatedPayload,
+  type: TurnTasksUpdatedType,
+  payload: TurnTasksUpdatedPayload,
 });
-export type ProviderRuntimeTurnPlanUpdatedEvent = typeof ProviderRuntimeTurnPlanUpdatedEvent.Type;
+export type ProviderRuntimeTurnTasksUpdatedEvent = typeof ProviderRuntimeTurnTasksUpdatedEvent.Type;
 
 const ProviderRuntimeTurnProposedDeltaEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
@@ -965,7 +965,7 @@ export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeTurnStartedEvent,
   ProviderRuntimeTurnCompletedEvent,
   ProviderRuntimeTurnAbortedEvent,
-  ProviderRuntimeTurnPlanUpdatedEvent,
+  ProviderRuntimeTurnTasksUpdatedEvent,
   ProviderRuntimeTurnProposedDeltaEvent,
   ProviderRuntimeTurnProposedCompletedEvent,
   ProviderRuntimeTurnDiffUpdatedEvent,

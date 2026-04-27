@@ -484,16 +484,16 @@ function runtimeEventToActivities(
       ];
     }
 
-    case "turn.plan.updated": {
+    case "turn.tasks.updated": {
       return [
         {
           id: event.eventId,
           createdAt: event.createdAt,
           tone: "info",
-          kind: "turn.plan.updated",
-          summary: "Plan updated",
+          kind: "turn.tasks.updated",
+          summary: "Tasks updated",
           payload: {
-            plan: event.payload.plan,
+            tasks: event.payload.tasks,
             ...(event.payload.explanation !== undefined
               ? { explanation: event.payload.explanation }
               : {}),

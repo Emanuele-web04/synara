@@ -1909,9 +1909,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       throw new Error("No ChatGPT session token is available. Sign in to ChatGPT in Codex.");
     }
     if (authMethod !== "chatgpt" && authMethod !== "chatgptAuthTokens") {
-      throw new Error(
-        "Voice transcription requires a ChatGPT-authenticated Codex session.",
-      );
+      throw new Error("Voice transcription requires a ChatGPT-authenticated Codex session.");
     }
 
     return {

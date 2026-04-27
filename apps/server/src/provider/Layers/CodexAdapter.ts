@@ -869,16 +869,16 @@ function mapToRuntimeEvents(
     return [
       {
         ...runtimeEventBase(event, canonicalThreadId),
-        type: "turn.plan.updated",
+        type: "turn.tasks.updated",
         payload: {
           ...(asString(payload?.explanation)
             ? { explanation: asString(payload?.explanation) }
             : {}),
-          plan: steps
+          tasks: steps
             .map((entry) => asObject(entry))
             .filter((entry): entry is Record<string, unknown> => entry !== undefined)
             .map((entry) => ({
-              step: asString(entry.step) ?? "step",
+              task: asString(entry.step) ?? "task",
               status:
                 entry.status === "completed" || entry.status === "inProgress"
                   ? entry.status
