@@ -145,6 +145,7 @@ export function providerModelsQueryOptions(input: {
       });
     },
     enabled: input.enabled ?? true,
+    retry: input.provider === "cursor" ? 1 : 3,
     staleTime: 60_000,
     placeholderData: (previous) => previous ?? EMPTY_MODELS_RESULT,
   });
