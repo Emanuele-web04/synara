@@ -38,3 +38,11 @@ export function buildPatchCacheKey(patch: string, scope = "diff-panel"): string 
   ).toString(36);
   return `${scope}:${normalizedPatch.length}:${primary}:${secondary}`;
 }
+
+// Returns copyable source text for diff surfaces without depending on virtualized DOM rows.
+export function resolveDiffCopyText(patch: string | undefined): string | null {
+  if (typeof patch !== "string") {
+    return null;
+  }
+  return patch.trim().length > 0 ? patch : null;
+}
