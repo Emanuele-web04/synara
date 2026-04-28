@@ -602,7 +602,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           assistant_message_id AS "assistantMessageId",
           completed_at AS "completedAt"
         FROM projection_turns
+        -- Provider-diff placeholders can reserve checkpoint metadata before the
+        -- turn is complete; snapshot checkpoint summaries require completedAt.
         WHERE checkpoint_turn_count IS NOT NULL
+          AND completed_at IS NOT NULL
         ORDER BY thread_id ASC, checkpoint_turn_count ASC
       `,
   });
@@ -904,8 +907,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           assistant_message_id AS "assistantMessageId",
           completed_at AS "completedAt"
         FROM projection_turns
+        -- Keep incomplete provider-diff placeholders out of the public
+        -- checkpoint summary contract, which requires completedAt.
         WHERE thread_id = ${threadId}
           AND checkpoint_turn_count IS NOT NULL
+          AND completed_at IS NOT NULL
         ORDER BY checkpoint_turn_count ASC
       `,
   });

@@ -1039,6 +1039,22 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           ),
           (
             'thread-context',
+            'turn-placeholder',
+            NULL,
+            NULL,
+            NULL,
+            NULL,
+            'running',
+            '2026-03-02T00:00:04.500Z',
+            '2026-03-02T00:00:04.500Z',
+            NULL,
+            3,
+            'provider-diff:placeholder',
+            'missing',
+            '[]'
+          ),
+          (
+            'thread-context',
             'turn-2',
             NULL,
             NULL,
