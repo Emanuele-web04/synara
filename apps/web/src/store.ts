@@ -814,7 +814,7 @@ function normalizeChatMessages(
   previous: ChatMessage[] | undefined,
 ): ChatMessage[] {
   const previousById = new Map(previous?.map((message) => [message.id, message] as const));
-  const nextMessages = incoming.map((message) =>
+  const nextMessages = incoming.slice(-MAX_THREAD_MESSAGES).map((message) =>
     normalizeChatMessage(message, previousById.get(message.id)),
   );
   return arraysShallowEqual(previous, nextMessages) ? previous : nextMessages;
