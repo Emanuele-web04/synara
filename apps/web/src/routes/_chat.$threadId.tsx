@@ -947,11 +947,11 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
   const setPanePanelState = useSplitViewStore((store) => store.setPanePanelState);
   const replacePaneThread = useSplitViewStore((store) => store.replacePaneThread);
   const dropThreadOnPane = useSplitViewStore((store) => store.dropThreadOnPane);
+  const removePaneFromSplitView = useSplitViewStore((store) => store.removePaneFromSplitView);
   const removeSplitView = useSplitViewStore((store) => store.removeSplitView);
   const [threadPickerPaneId, setThreadPickerPaneId] = useState<PaneId | null>(null);
   const {
     splitView: activeSplitView,
-    focusedThreadId,
     routePaneId,
   } = resolveActiveSplitView({
     splitView,
@@ -1115,20 +1115,53 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
   const maximizeFocusedPane = useCallback(() => {
     if (!activeSplitView) return;
     const focusedLeaf = findLeafPaneById(activeSplitView.root, activeSplitView.focusedPaneId);
-    const focusedPanelState = focusedLeaf?.panel ?? null;
-    const nextThreadId = focusedThreadId;
-    removeSplitView(activeSplitView.id);
+    const expandedThreadId = focusedLeaf?.threadId ?? null;
+    const expandedPanelState = focusedLeaf?.panel ?? null;
+
+    const ok = removePaneFromSplitView({
+      splitViewId: activeSplitView.id,
+      paneId: activeSplitView.focusedPaneId,
+    });
+    if (!ok) return;
+
+    const nextSplitView = useSplitViewStore.getState().splitViewsById[activeSplitView.id] ?? null;
+    if (nextSplitView && collectLeaves(nextSplitView.root).length <= 1) {
+      removeSplitView(nextSplitView.id);
+    }
+
+    if (expandedThreadId) {
+      void navigate({
+        to: "/$threadId",
+        params: { threadId: expandedThreadId },
+        replace: true,
+        search: () => (expandedPanelState ? normalizeSingleSearchFromPane(expandedPanelState) : {}),
+      });
+      return;
+    }
+
+    const nextThreadId = nextSplitView ? resolveSplitViewFocusedThreadId(nextSplitView) : null;
     if (!nextThreadId) {
       void handleNewChat({ fresh: true });
       return;
     }
+
+    if (!nextSplitView || collectLeaves(nextSplitView.root).length <= 1) {
+      void navigate({
+        to: "/$threadId",
+        params: { threadId: nextThreadId },
+        replace: true,
+        search: () => ({}),
+      });
+      return;
+    }
+
     void navigate({
       to: "/$threadId",
       params: { threadId: nextThreadId },
       replace: true,
-      search: () => (focusedPanelState ? normalizeSingleSearchFromPane(focusedPanelState) : {}),
+      search: () => ({ splitViewId: nextSplitView.id }),
     });
-  }, [activeSplitView, focusedThreadId, handleNewChat, navigate, removeSplitView]);
+  }, [activeSplitView, handleNewChat, navigate, removePaneFromSplitView, removeSplitView]);
 
   const handleSetRatio = useCallback(
     (nodeId: PaneId, ratio: number) => {

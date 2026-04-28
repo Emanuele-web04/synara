@@ -16,6 +16,7 @@ import {
   findParentSplitNode,
   findSplitNodeById,
   isLegacySplitViewLike,
+  removeLeafByPaneId,
   removeLeafByThreadId,
   replacePaneInTree,
   resolveDefaultFocusLeafId,
@@ -207,6 +208,37 @@ describe("removeLeafByThreadId", () => {
     const leafB = makeLeaf("leaf-b", THREAD_B);
     const root = makeSplit({ id: "root", direction: "horizontal", first: leafA, second: leafB });
     expect(removeLeafByThreadId(root, THREAD_C).nextRoot).toBe(root);
+  });
+});
+
+describe("removeLeafByPaneId", () => {
+  it("removes only the target pane and collapses the surviving subtree", () => {
+    const left = makeLeaf("left", THREAD_A);
+    const topRight = makeLeaf("top-right", THREAD_B);
+    const bottomRight = makeLeaf("bottom-right", THREAD_C);
+    const right = makeSplit({
+      id: "right",
+      direction: "vertical",
+      first: topRight,
+      second: bottomRight,
+    });
+    const root = makeSplit({ id: "root", direction: "horizontal", first: left, second: right });
+
+    const result = removeLeafByPaneId(root, "left");
+
+    expect(result.removedLeafIds).toEqual(["left"]);
+    expect(result.nextRoot).toBe(right);
+  });
+
+  it("does not remove matching threads in other panes", () => {
+    const leafA = makeLeaf("leaf-a", THREAD_A);
+    const leafB = makeLeaf("leaf-b", THREAD_A);
+    const root = makeSplit({ id: "root", direction: "horizontal", first: leafA, second: leafB });
+
+    const result = removeLeafByPaneId(root, "leaf-a");
+
+    expect(result.removedLeafIds).toEqual(["leaf-a"]);
+    expect(result.nextRoot).toBe(leafB);
   });
 });
 

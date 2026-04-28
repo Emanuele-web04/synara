@@ -15,6 +15,7 @@ import {
   findLeafPaneById,
   findSplitNodeById,
   isLegacySplitViewLike,
+  removeLeafByPaneId,
   removeLeafByThreadId as removeLeafByThreadIdInTree,
   replacePaneInTree,
   resolveDefaultFocusLeafId,
@@ -85,6 +86,11 @@ interface DropThreadOnPaneInput {
   threadId: ThreadId;
 }
 
+interface RemovePaneFromSplitViewInput {
+  splitViewId: SplitViewId;
+  paneId: PaneId;
+}
+
 interface SplitViewStore {
   hasHydrated: boolean;
   splitViewsById: Record<SplitViewId, SplitView | undefined>;
@@ -94,6 +100,7 @@ interface SplitViewStore {
   removeSplitView: (splitViewId: SplitViewId) => void;
   replacePaneThread: (splitViewId: SplitViewId, paneId: PaneId, threadId: ThreadId | null) => void;
   dropThreadOnPane: (input: DropThreadOnPaneInput) => boolean;
+  removePaneFromSplitView: (input: RemovePaneFromSplitViewInput) => boolean;
   setFocusedPane: (splitViewId: SplitViewId, paneId: PaneId) => void;
   setRatioForNode: (splitViewId: SplitViewId, splitNodeId: PaneId, ratio: number) => void;
   setPanePanelState: (
@@ -546,6 +553,83 @@ export const useSplitViewStore = create<SplitViewStore>()(
             updatedAt: resolveUpdatedAt(),
           })),
         );
+        return true;
+      },
+      removePaneFromSplitView: ({ splitViewId, paneId }) => {
+        const stateBefore = get();
+        const splitView = stateBefore.splitViewsById[splitViewId];
+        if (!splitView) return false;
+        const targetLeaf = findLeafPaneById(splitView.root, paneId);
+        if (!targetLeaf) return false;
+
+        set((state) => {
+          const current = state.splitViewsById[splitViewId];
+          if (!current) return state;
+          const currentTargetLeaf = findLeafPaneById(current.root, paneId);
+          if (!currentTargetLeaf) return state;
+
+          const result = removeLeafByPaneId(current.root, paneId);
+          if (result.removedLeafIds.length === 0) return state;
+          const nextSplitViewsById = { ...state.splitViewsById };
+          const nextSplitViewIdBySourceThreadId = { ...state.splitViewIdBySourceThreadId };
+
+          if (current.sourceThreadId === currentTargetLeaf.threadId) {
+            delete nextSplitViewIdBySourceThreadId[current.sourceThreadId];
+          }
+
+          if (!result.nextRoot) {
+            delete nextSplitViewsById[splitViewId];
+            delete nextSplitViewIdBySourceThreadId[current.sourceThreadId];
+            return {
+              splitViewsById: nextSplitViewsById,
+              splitViewIdBySourceThreadId: nextSplitViewIdBySourceThreadId,
+            };
+          }
+
+          const hasAnyThread = collectLeaves(result.nextRoot).some((leaf) => leaf.threadId !== null);
+          if (!hasAnyThread) {
+            delete nextSplitViewsById[splitViewId];
+            delete nextSplitViewIdBySourceThreadId[current.sourceThreadId];
+            return {
+              splitViewsById: nextSplitViewsById,
+              splitViewIdBySourceThreadId: nextSplitViewIdBySourceThreadId,
+            };
+          }
+
+          const nextSourceThreadId =
+            current.sourceThreadId === currentTargetLeaf.threadId
+              ? resolveNextSourceThreadId({
+                  root: result.nextRoot,
+                  splitViewId,
+                  splitViewIdBySourceThreadId: nextSplitViewIdBySourceThreadId,
+                })
+              : current.sourceThreadId;
+          if (!nextSourceThreadId) {
+            delete nextSplitViewsById[splitViewId];
+            return {
+              splitViewsById: nextSplitViewsById,
+              splitViewIdBySourceThreadId: nextSplitViewIdBySourceThreadId,
+            };
+          }
+          if (nextSourceThreadId !== current.sourceThreadId) {
+            nextSplitViewIdBySourceThreadId[nextSourceThreadId] = splitViewId;
+          }
+
+          const focusedStillPresent = !result.removedLeafIds.includes(current.focusedPaneId);
+          nextSplitViewsById[splitViewId] = {
+            ...current,
+            sourceThreadId: nextSourceThreadId,
+            root: result.nextRoot,
+            focusedPaneId: focusedStillPresent
+              ? current.focusedPaneId
+              : resolveDefaultFocusLeafId(result.nextRoot),
+            updatedAt: resolveUpdatedAt(),
+          };
+          return {
+            splitViewsById: nextSplitViewsById,
+            splitViewIdBySourceThreadId: nextSplitViewIdBySourceThreadId,
+          };
+        });
         return true;
       },
       setFocusedPane: (splitViewId, paneId) =>

@@ -529,6 +529,44 @@ describe("splitViewStore", () => {
     expect(nextState.splitViewIdBySourceThreadId[THREAD_C]).toBe(secondSplitId);
   });
 
+  it("removePaneFromSplitView removes one pane and lets the surviving subtree fill the split", () => {
+    const store = useSplitViewStore.getState();
+    const splitViewId = store.createFromDrop({
+      sourceThreadId: THREAD_A,
+      ownerProjectId: PROJECT_ID,
+      droppedThreadId: THREAD_B,
+      direction: "horizontal",
+      side: "second",
+    });
+    const threadBPaneId = findLeafIdForThread(snapshot(splitViewId), THREAD_B);
+    store.dropThreadOnPane({
+      splitViewId,
+      targetPaneId: threadBPaneId,
+      direction: "vertical",
+      side: "second",
+      threadId: THREAD_C,
+    });
+
+    const threadAPaneId = findLeafIdForThread(snapshot(splitViewId), THREAD_A);
+    const ok = useSplitViewStore.getState().removePaneFromSplitView({
+      splitViewId,
+      paneId: threadAPaneId,
+    });
+
+    expect(ok).toBe(true);
+    const splitView = snapshot(splitViewId);
+    expect(splitView.root.kind).toBe("split");
+    if (splitView.root.kind === "split") {
+      expect(splitView.root.direction).toBe("vertical");
+    }
+    expect(resolveSplitViewThreadIds(splitView).toSorted()).toEqual(
+      [THREAD_B, THREAD_C].toSorted(),
+    );
+    expect(splitView.sourceThreadId).toBe(THREAD_B);
+    expect(useSplitViewStore.getState().splitViewIdBySourceThreadId[THREAD_A]).toBeUndefined();
+    expect(useSplitViewStore.getState().splitViewIdBySourceThreadId[THREAD_B]).toBe(splitViewId);
+  });
+
   it("removes an empty split entirely after deleting its source thread", () => {
     const store = useSplitViewStore.getState();
     const splitId = store.createFromDrop({

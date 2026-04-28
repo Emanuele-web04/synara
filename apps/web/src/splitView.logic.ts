@@ -135,6 +135,39 @@ export function removeLeafByThreadId(root: Pane, threadId: ThreadId): RemoveLeaf
   return { nextRoot: null, removedLeafIds };
 }
 
+// Removes exactly one leaf by pane id. SplitNodes whose subtree loses every leaf collapse to null;
+// nodes with one surviving subtree collapse to that subtree so the remaining panes resize naturally.
+export function removeLeafByPaneId(root: Pane, paneId: PaneId): RemoveLeafResult {
+  if (root.kind === "leaf") {
+    if (root.id === paneId) {
+      return { nextRoot: null, removedLeafIds: [root.id] };
+    }
+    return { nextRoot: root, removedLeafIds: [] };
+  }
+
+  const firstResult = removeLeafByPaneId(root.first, paneId);
+  const secondResult = removeLeafByPaneId(root.second, paneId);
+  const removedLeafIds = [...firstResult.removedLeafIds, ...secondResult.removedLeafIds];
+
+  if (removedLeafIds.length === 0) {
+    return { nextRoot: root, removedLeafIds };
+  }
+
+  if (firstResult.nextRoot && secondResult.nextRoot) {
+    return {
+      nextRoot: { ...root, first: firstResult.nextRoot, second: secondResult.nextRoot },
+      removedLeafIds,
+    };
+  }
+  if (firstResult.nextRoot) {
+    return { nextRoot: firstResult.nextRoot, removedLeafIds };
+  }
+  if (secondResult.nextRoot) {
+    return { nextRoot: secondResult.nextRoot, removedLeafIds };
+  }
+  return { nextRoot: null, removedLeafIds };
+}
+
 // --- structural rules ---
 
 // Returns true if a target leaf can be subdivided in the requested direction without exceeding

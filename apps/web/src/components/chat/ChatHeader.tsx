@@ -151,6 +151,8 @@ export const ChatHeader = memo(function ChatHeader({
   const isDisposableThread = useIsDisposableThread(activeThreadId);
 
   const isSplitPane = surfaceMode === "split";
+  const inlineChatLayoutAction = chatLayoutAction?.kind === "maximize" ? chatLayoutAction : null;
+  const menuChatLayoutAction = inlineChatLayoutAction ? null : chatLayoutAction;
 
   useEffect(() => {
     const el = headerRef.current;
@@ -301,11 +303,31 @@ export const ChatHeader = memo(function ChatHeader({
           />
         ) : null}
 
+        {!isDisposableThread && inlineChatLayoutAction ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant="outline"
+                  className="shrink-0 bg-transparent not-disabled:before:shadow-none dark:not-disabled:before:shadow-none [:hover,[data-pressed]]:bg-[var(--sidebar-accent)] dark:[:hover,[data-pressed]]:bg-[var(--sidebar-accent)]"
+                  aria-label={inlineChatLayoutAction.label}
+                  onClick={inlineChatLayoutAction.onClick}
+                >
+                  <HiMiniArrowsPointingOut className="size-3.5" />
+                </Button>
+              }
+            />
+            <TooltipPopup side="bottom">{inlineChatLayoutAction.label}</TooltipPopup>
+          </Tooltip>
+        ) : null}
+
         {/* Panel toggles menu — editor, terminal, browser, split chat. */}
         {!isDisposableThread &&
         (terminalAvailable ||
           activeProjectName ||
-          chatLayoutAction ||
+          menuChatLayoutAction ||
           changeThreadAction ||
           isElectron) ? (
           <Menu modal={false}>
@@ -362,17 +384,17 @@ export const ChatHeader = memo(function ChatHeader({
                   )}
                 </MenuItem>
               ) : null}
-              {chatLayoutAction ? (
-                <MenuItem onClick={chatLayoutAction.onClick}>
-                  {chatLayoutAction.kind === "split" ? (
+              {menuChatLayoutAction ? (
+                <MenuItem onClick={menuChatLayoutAction.onClick}>
+                  {menuChatLayoutAction.kind === "split" ? (
                     <BsLayoutSplit className="size-3.5 shrink-0" />
                   ) : (
                     <HiMiniArrowsPointingOut className="size-3.5 shrink-0" />
                   )}
-                  <span>{chatLayoutAction.label}</span>
-                  {chatLayoutAction.shortcutLabel && (
+                  <span>{menuChatLayoutAction.label}</span>
+                  {menuChatLayoutAction.shortcutLabel && (
                     <span className="ml-auto text-[11px] opacity-60">
-                      {chatLayoutAction.shortcutLabel}
+                      {menuChatLayoutAction.shortcutLabel}
                     </span>
                   )}
                 </MenuItem>
