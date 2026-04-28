@@ -820,7 +820,6 @@ function SplitPaneSurface(props: {
   deferChatMount: boolean;
   canDropInDirection: (direction: SplitDirection) => boolean;
   excludedThreadIds: ReadonlySet<ThreadIdType>;
-  ownerProjectId: ProjectId;
   threads: readonly {
     id: ThreadIdType;
     title: string | null;
@@ -872,7 +871,6 @@ function SplitPaneSurface(props: {
         paneScopeId={paneScopeId}
         canDropInDirection={props.canDropInDirection}
         excludedThreadIds={props.excludedThreadIds}
-        ownerProjectId={props.ownerProjectId}
         onDrop={handleDrop}
         className="flex min-h-0 min-w-0 flex-1"
       >
@@ -1232,7 +1230,6 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
           canSubdividePane(activeSplitView.root, leaf.id, direction)
         }
         excludedThreadIds={excluded}
-        ownerProjectId={activeSplitView.ownerProjectId}
         threads={selectableThreads}
         projects={projects}
         onFocus={() => setPaneFocus(leaf.id)}
@@ -1479,7 +1476,6 @@ function SingleChatSurface(props: {
         <ChatPaneDropOverlay
           canDropInDirection={allowAnySplitDirection}
           excludedThreadIds={excludedThreadIds}
-          ownerProjectId={props.projectId}
           onDrop={handleDropThread}
           className="flex h-full min-h-0 min-w-0 flex-1"
         >
@@ -1527,7 +1523,6 @@ function SingleChatSurface(props: {
       <ChatPaneDropOverlay
         canDropInDirection={allowAnySplitDirection}
         excludedThreadIds={excludedThreadIds}
-        ownerProjectId={props.projectId}
         onDrop={handleDropThread}
         className="flex h-dvh min-h-0 min-w-0 flex-1"
       >

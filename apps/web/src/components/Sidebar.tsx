@@ -4089,7 +4089,7 @@ export default function Sidebar() {
             event.dataTransfer.effectAllowed = "move";
             event.dataTransfer.setData(
               THREAD_DRAG_MIME,
-              JSON.stringify({ threadId: thread.id, ownerProjectId: thread.projectId }),
+              JSON.stringify({ threadId: thread.id }),
             );
             if (dragImage) {
               const rect = dragImage.getBoundingClientRect();

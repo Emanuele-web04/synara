@@ -4,7 +4,7 @@
 // Targets: getDropZoneFromPointer, dropZoneToDirectionSide.
 
 import { describe, expect, it } from "vitest";
-import { ProjectId, ThreadId } from "@t3tools/contracts";
+import { ThreadId } from "@t3tools/contracts";
 
 import {
   dropZoneToDirectionSide,
@@ -13,8 +13,6 @@ import {
 } from "./ChatPaneDropOverlay";
 
 const RECT = { left: 0, top: 0, width: 100, height: 100 };
-const PROJECT_A = ProjectId.makeUnsafe("project-a");
-const PROJECT_B = ProjectId.makeUnsafe("project-b");
 const THREAD_A = ThreadId.makeUnsafe("thread-a");
 const THREAD_B = ThreadId.makeUnsafe("thread-b");
 
@@ -87,23 +85,17 @@ describe("dropZoneToDirectionSide", () => {
 });
 
 describe("isThreadDragPayloadAllowed", () => {
-  it("rejects drops for already mounted threads or another project", () => {
+  it("rejects drops only for already mounted threads", () => {
     expect(
       isThreadDragPayloadAllowed(
-        { threadId: THREAD_A, ownerProjectId: PROJECT_A },
-        { excludedThreadIds: new Set([THREAD_A]), ownerProjectId: PROJECT_A },
+        { threadId: THREAD_A },
+        { excludedThreadIds: new Set([THREAD_A]) },
       ),
     ).toBe(false);
     expect(
       isThreadDragPayloadAllowed(
-        { threadId: THREAD_B, ownerProjectId: PROJECT_B },
-        { excludedThreadIds: new Set([THREAD_A]), ownerProjectId: PROJECT_A },
-      ),
-    ).toBe(false);
-    expect(
-      isThreadDragPayloadAllowed(
-        { threadId: THREAD_B, ownerProjectId: PROJECT_A },
-        { excludedThreadIds: new Set([THREAD_A]), ownerProjectId: PROJECT_A },
+        { threadId: THREAD_B },
+        { excludedThreadIds: new Set([THREAD_A]) },
       ),
     ).toBe(true);
   });

@@ -10,7 +10,7 @@ import {
   type DragEvent as ReactDragEvent,
   type ReactNode,
 } from "react";
-import { type ProjectId, type ThreadId } from "@t3tools/contracts";
+import { type ThreadId } from "@t3tools/contracts";
 
 import { type SplitDirection, type SplitDropSide } from "../../splitViewStore";
 import { cn } from "../../lib/utils";
@@ -20,14 +20,12 @@ export const THREAD_DRAG_MIME = "application/x-t3-thread";
 
 export interface ThreadDragPayload {
   threadId: ThreadId;
-  ownerProjectId: ProjectId;
 }
 
 export type DropZone = "top" | "bottom" | "left" | "right";
 
 export interface ThreadDropRules {
   excludedThreadIds?: ReadonlySet<ThreadId> | undefined;
-  ownerProjectId?: ProjectId | null | undefined;
 }
 
 const DROP_ZONE_PREVIEW_CLASS: Record<DropZone, string> = {
@@ -54,8 +52,6 @@ interface ChatPaneDropOverlayProps {
   canDropInDirection?: (direction: SplitDirection) => boolean;
   // ThreadIds whose drops should be ignored (e.g. threads already mounted in this split view).
   excludedThreadIds?: ReadonlySet<ThreadId>;
-  // Optional ProjectId restriction: drops from threads of other projects are silently ignored.
-  ownerProjectId?: ProjectId | null;
   onDrop(payload: ThreadDragPayload & { direction: SplitDirection; side: SplitDropSide }): void;
   // Outer wrapper className. Defaults to a layout-neutral filler that participates in flex containers.
   className?: string;
@@ -135,10 +131,9 @@ function parseThreadDragPayload(event: ReactDragEvent): ThreadDragPayload | null
     const raw = event.dataTransfer.getData(THREAD_DRAG_MIME);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<ThreadDragPayload>;
-    if (typeof parsed.threadId === "string" && typeof parsed.ownerProjectId === "string") {
+    if (typeof parsed.threadId === "string") {
       return {
         threadId: parsed.threadId as ThreadId,
-        ownerProjectId: parsed.ownerProjectId as ProjectId,
       };
     }
   } catch {
@@ -147,13 +142,12 @@ function parseThreadDragPayload(event: ReactDragEvent): ThreadDragPayload | null
   return null;
 }
 
-// Applies the same thread/project constraints for hover feedback and the final drop.
+// Applies the same thread constraints for hover feedback and the final drop.
 export function isThreadDragPayloadAllowed(
   payload: ThreadDragPayload,
   rules: ThreadDropRules,
 ): boolean {
   if (rules.excludedThreadIds?.has(payload.threadId)) return false;
-  if (rules.ownerProjectId && payload.ownerProjectId !== rules.ownerProjectId) return false;
   return true;
 }
 
@@ -162,7 +156,6 @@ export function ChatPaneDropOverlay(props: ChatPaneDropOverlayProps) {
     onDrop,
     canDropInDirection,
     excludedThreadIds,
-    ownerProjectId,
     paneScopeId,
     className,
     children,
@@ -235,14 +228,13 @@ export function ChatPaneDropOverlay(props: ChatPaneDropOverlayProps) {
         payload &&
         !isThreadDragPayloadAllowed(payload, {
           excludedThreadIds,
-          ownerProjectId,
         })
       ) {
         return null;
       }
       return zone;
     },
-    [excludedThreadIds, getZoneForEvent, ownerProjectId],
+    [excludedThreadIds, getZoneForEvent],
   );
 
   const handleDragEnter = useCallback(
@@ -294,11 +286,11 @@ export function ChatPaneDropOverlay(props: ChatPaneDropOverlayProps) {
       resetOverlayState();
 
       if (!zone || !payload) return;
-      if (!isThreadDragPayloadAllowed(payload, { excludedThreadIds, ownerProjectId })) return;
+      if (!isThreadDragPayloadAllowed(payload, { excludedThreadIds })) return;
       const { direction, side } = dropZoneToDirectionSide(zone);
       onDrop({ ...payload, direction, side });
     },
-    [excludedThreadIds, getZoneForEvent, onDrop, ownerProjectId, resetOverlayState],
+    [excludedThreadIds, getZoneForEvent, onDrop, resetOverlayState],
   );
 
   useEffect(() => {
