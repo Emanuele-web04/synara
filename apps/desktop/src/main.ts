@@ -18,7 +18,7 @@ import {
   shell,
   systemPreferences,
 } from "electron";
-import type { IpcMainEvent, MenuItemConstructorOptions } from "electron";
+import type { FileFilter, IpcMainEvent, MenuItemConstructorOptions } from "electron";
 import * as Effect from "effect/Effect";
 import type {
   DesktopTheme,
@@ -78,6 +78,7 @@ import {
 syncShellEnvironment();
 
 const PICK_FOLDER_CHANNEL = "desktop:pick-folder";
+const SAVE_FILE_CHANNEL = "desktop:save-file";
 const CONFIRM_CHANNEL = "desktop:confirm";
 const SET_THEME_CHANNEL = "desktop:set-theme";
 const CONTEXT_MENU_CHANNEL = "desktop:context-menu";
@@ -257,6 +258,38 @@ function getSafeTheme(rawTheme: unknown): DesktopTheme | null {
   }
 
   return null;
+}
+
+function isSaveFileInput(input: unknown): input is {
+  defaultFilename: string;
+  contents: string;
+  filters?: FileFilter[];
+} {
+  if (!input || typeof input !== "object") {
+    return false;
+  }
+  const record = input as Record<string, unknown>;
+  if (typeof record.defaultFilename !== "string" || record.defaultFilename.trim().length === 0) {
+    return false;
+  }
+  if (typeof record.contents !== "string") {
+    return false;
+  }
+  if (record.filters === undefined) {
+    return true;
+  }
+  if (!Array.isArray(record.filters)) {
+    return false;
+  }
+  return record.filters.every((filter) => {
+    if (!filter || typeof filter !== "object") return false;
+    const filterRecord = filter as Record<string, unknown>;
+    return (
+      typeof filterRecord.name === "string" &&
+      Array.isArray(filterRecord.extensions) &&
+      filterRecord.extensions.every((extension) => typeof extension === "string")
+    );
+  });
 }
 
 async function waitForBackendHttpReady(
@@ -1564,6 +1597,29 @@ function registerIpcHandlers(): void {
         });
     if (result.canceled) return null;
     return result.filePaths[0] ?? null;
+  });
+
+  ipcMain.removeHandler(SAVE_FILE_CHANNEL);
+  ipcMain.handle(SAVE_FILE_CHANNEL, async (_event, input: unknown) => {
+    if (!isSaveFileInput(input)) {
+      throw new Error("Invalid save file input.");
+    }
+
+    const owner = BrowserWindow.getFocusedWindow() ?? mainWindow;
+    const options = {
+      defaultPath: input.defaultFilename,
+      ...(input.filters ? { filters: input.filters } : {}),
+    };
+    const result = owner
+      ? await dialog.showSaveDialog(owner, options)
+      : await dialog.showSaveDialog(options);
+
+    if (result.canceled || !result.filePath) {
+      return null;
+    }
+
+    await FS.promises.writeFile(result.filePath, input.contents, "utf8");
+    return result.filePath;
   });
 
   ipcMain.removeHandler(CONFIRM_CHANNEL);

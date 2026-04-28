@@ -227,6 +227,11 @@ export interface DesktopNotificationInput {
 export interface DesktopBridge {
   getWsUrl: () => string | null;
   pickFolder: () => Promise<string | null>;
+  saveFile?: (input: {
+    defaultFilename: string;
+    contents: string;
+    filters?: ReadonlyArray<{ name: string; extensions: ReadonlyArray<string> }>;
+  }) => Promise<string | null>;
   confirm: (message: string) => Promise<boolean>;
   setTheme: (theme: DesktopTheme) => Promise<void>;
   showContextMenu: <T extends string>(
@@ -277,6 +282,11 @@ export interface DesktopBridge {
 export interface NativeApi {
   dialogs: {
     pickFolder: () => Promise<string | null>;
+    saveFile?: (input: {
+      defaultFilename: string;
+      contents: string;
+      filters?: ReadonlyArray<{ name: string; extensions: ReadonlyArray<string> }>;
+    }) => Promise<string | null>;
     confirm: (message: string) => Promise<boolean>;
   };
   terminal: {
