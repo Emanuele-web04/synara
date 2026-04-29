@@ -1509,6 +1509,10 @@ function SingleChatSurface(props: {
   const activePanel = panelState.panel;
   const panelOpen = activePanel !== null;
   const lastAppliedRoutePanelSearchKeyRef = useRef<string | null>(null);
+  const hasNormalizedAutoRestoredBrowserPanelRef = useRef(false);
+  useEffect(() => {
+    hasNormalizedAutoRestoredBrowserPanelRef.current = false;
+  }, [props.threadId]);
   const updatePanelState = useCallback(
     (patch: Partial<Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">>) => {
       const nextPanel = patch.panel ?? panelState.panel;
@@ -1614,6 +1618,21 @@ function SingleChatSurface(props: {
       unsubscribe?.();
     };
   }, [panelState, updatePanelState]);
+
+  useEffect(() => {
+    if (hasNormalizedAutoRestoredBrowserPanelRef.current) {
+      return;
+    }
+
+    hasNormalizedAutoRestoredBrowserPanelRef.current = true;
+    const routeExplicitlyRequestsBrowserPanel = props.search.panel === "browser";
+    if (routeExplicitlyRequestsBrowserPanel || activePanel !== "browser") {
+      return;
+    }
+
+    // Reopening the browser should be explicit: route search, user toggle, or browser-use request.
+    updatePanelState({ panel: null });
+  }, [activePanel, props.search.panel, updatePanelState]);
 
   useEffect(() => {
     const onOpenBrowserPanelRequest = window.desktopBridge?.browser.onBrowserUseOpenPanelRequest;
