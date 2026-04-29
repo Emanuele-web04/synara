@@ -398,7 +398,6 @@ const PanePanelInlineSidebar = (props: {
       <Sidebar
         side="right"
         collapsible="offcanvas"
-        data-native-browser-surface={panel === "browser" ? "true" : undefined}
         className="border-l border-border/50 bg-card text-foreground"
         resizable={{
           minWidth: inlineSidebarMinWidth,
@@ -407,17 +406,13 @@ const PanePanelInlineSidebar = (props: {
         }}
       >
         {renderPanelContent && threadId ? (
-          panel === "browser" ? (
-            <BrowserPanel mode="sidebar" threadId={threadId} onClosePanel={onClosePanel} />
-          ) : (
-            <LazyDiffPanel
-              mode="sidebar"
-              threadId={threadId}
-              onClosePanel={onClosePanel}
-              {...(panelState ? { panelState } : {})}
-              {...(onUpdatePanelState ? { onUpdatePanelState } : {})}
-            />
-          )
+          <LazyDiffPanel
+            mode="sidebar"
+            threadId={threadId}
+            onClosePanel={onClosePanel}
+            {...(panelState ? { panelState } : {})}
+            {...(onUpdatePanelState ? { onUpdatePanelState } : {})}
+          />
         ) : null}
         <SidebarRail />
       </Sidebar>
@@ -1737,17 +1732,13 @@ function SingleChatSurface(props: {
       </ChatPaneDropOverlay>
       <RightPanelSheet panelOpen={panelOpen} onClosePanel={closePanel}>
         {shouldRenderPanelContent ? (
-          activePanel === "browser" ? (
-            <BrowserPanel mode="sheet" threadId={props.threadId} onClosePanel={closePanel} />
-          ) : (
-            <LazyDiffPanel
-              mode="sheet"
-              threadId={props.threadId}
-              panelState={panelState}
-              onUpdatePanelState={updatePanelState}
-              onClosePanel={closePanel}
-            />
-          )
+          <LazyDiffPanel
+            mode="sheet"
+            threadId={props.threadId}
+            panelState={panelState}
+            onUpdatePanelState={updatePanelState}
+            onClosePanel={closePanel}
+          />
         ) : null}
       </RightPanelSheet>
     </>
