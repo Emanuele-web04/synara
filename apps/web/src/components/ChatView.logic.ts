@@ -7,7 +7,7 @@ import {
   type ThreadId as ThreadIdType,
 } from "@t3tools/contracts";
 import { normalizeModelSlug } from "@t3tools/shared/model";
-import { sanitizeBranchFragment } from "@t3tools/shared/git";
+import { buildDpcodeBranchName } from "@t3tools/shared/git";
 import { isGenericChatThreadTitle } from "@t3tools/shared/chatThreads";
 import { isGenericTerminalThreadTitle } from "@t3tools/shared/terminalThreads";
 import {
@@ -32,7 +32,6 @@ import { hasLiveTurnTailWork, type WorkLogEntry } from "../session-logic";
 import { localSubagentThreadId } from "./ChatView.selectors";
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "dpcode:last-invoked-script-by-project";
-const WORKTREE_NAME_PREFIX = "dpcode";
 
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);
 
@@ -356,15 +355,7 @@ export function buildSuggestedWorktreeName(input: {
   associatedWorktreeBranch?: string | null;
   title?: string | null;
 }): string {
-  const normalizedExisting =
-    input.associatedWorktreeBranch?.trim().replace(/^(codex|t3code|dpcode)\//i, "") ?? "";
-  const preferred =
-    normalizedExisting ||
-    `${WORKTREE_NAME_PREFIX}/${sanitizeBranchFragment(input.title ?? "update")}`;
-  const normalized = preferred.toLowerCase();
-  return normalized.startsWith(`${WORKTREE_NAME_PREFIX}/`)
-    ? normalized
-    : `${WORKTREE_NAME_PREFIX}/${sanitizeBranchFragment(normalized)}`;
+  return buildDpcodeBranchName(input.associatedWorktreeBranch ?? input.title);
 }
 
 export function cloneComposerImageForRetry(

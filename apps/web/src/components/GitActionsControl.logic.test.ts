@@ -6,6 +6,7 @@ import {
   requiresFeatureBranchForDefaultBranchAction,
   requiresDefaultBranchConfirmation,
   resolveAutoFeatureBranchName,
+  resolveDefaultCreateBranchName,
   resolveDefaultBranchActionDialogCopy,
   resolveLiveThreadBranchUpdate,
   resolveQuickAction,
@@ -1190,6 +1191,36 @@ describe("resolveAutoFeatureBranchName", () => {
   it("falls back to feature/update when no preferred name is provided", () => {
     const branch = resolveAutoFeatureBranchName(["main"]);
     assert.equal(branch, "feature/update");
+  });
+});
+
+describe("resolveDefaultCreateBranchName", () => {
+  it("uses dpcode as the default namespace", () => {
+    const branch = resolveDefaultCreateBranchName(["main"], "fix toast copy");
+    assert.equal(branch, "dpcode/fix-toast-copy");
+  });
+
+  it("keeps an existing dpcode namespace", () => {
+    const branch = resolveDefaultCreateBranchName(["main"], "dpcode/refine-toolbar-actions");
+    assert.equal(branch, "dpcode/refine-toolbar-actions");
+  });
+
+  it("preserves nested namespaces under dpcode", () => {
+    const branch = resolveDefaultCreateBranchName(["main"], "feature/refine-toolbar-actions");
+    assert.equal(branch, "dpcode/feature/refine-toolbar-actions");
+  });
+
+  it("increments suffix when the dpcode branch already exists", () => {
+    const branch = resolveDefaultCreateBranchName(
+      ["main", "dpcode/fix-toast-copy", "dpcode/fix-toast-copy-2"],
+      "fix toast copy",
+    );
+    assert.equal(branch, "dpcode/fix-toast-copy-3");
+  });
+
+  it("falls back to dpcode/update when no preferred name is provided", () => {
+    const branch = resolveDefaultCreateBranchName(["main"]);
+    assert.equal(branch, "dpcode/update");
   });
 });
 

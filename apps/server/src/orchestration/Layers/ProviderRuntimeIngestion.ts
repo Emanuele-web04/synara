@@ -1032,10 +1032,6 @@ const make = Effect.gen(function* () {
     turnId?: TurnId;
   }) =>
     Effect.gen(function* () {
-      if (input.event.itemId) {
-        return MessageId.makeUnsafe(`assistant:${input.event.itemId}`);
-      }
-
       if (input.turnId) {
         const knownAssistantMessageIds = yield* getAssistantMessageIdsForTurn(
           input.thread.id,
@@ -1072,7 +1068,13 @@ const make = Effect.gen(function* () {
             return preferredKnownMessage.id;
           }
         }
-        return MessageId.makeUnsafe(`assistant:${input.turnId}`);
+        return input.event.itemId
+          ? MessageId.makeUnsafe(`assistant:${input.event.itemId}`)
+          : MessageId.makeUnsafe(`assistant:${input.turnId}`);
+      }
+
+      if (input.event.itemId) {
+        return MessageId.makeUnsafe(`assistant:${input.event.itemId}`);
       }
 
       return MessageId.makeUnsafe(`assistant:${input.event.eventId}`);

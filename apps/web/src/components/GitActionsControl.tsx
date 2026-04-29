@@ -28,6 +28,7 @@ import {
   requiresFeatureBranchForDefaultBranchAction,
   requiresDefaultBranchConfirmation,
   resolveLiveThreadBranchUpdate,
+  resolveDefaultCreateBranchName,
   resolveDefaultBranchActionDialogCopy,
   resolveQuickAction,
   shouldOfferCreateBranchPrompt,
@@ -117,11 +118,11 @@ interface RunGitActionWithToastInput {
 }
 
 interface GitPickerMenuItem {
-  id: "push" | "pr" | "sync" | "commit";
+  id: "push" | "pr" | "sync" | "commit" | "create_branch";
   label: string;
   disabled: boolean;
   disabledReason: string | null;
-  icon: GitActionIconName | "sync";
+  icon: GitActionIconName | "sync" | "branch";
   onSelect: () => void;
 }
 
@@ -229,7 +230,8 @@ function GitActionItemIcon({ icon }: { icon: GitActionIconName }) {
   return <GitHubIcon />;
 }
 
-function GitPickerItemIcon({ icon }: { icon: GitActionIconName | "sync" }) {
+function GitPickerItemIcon({ icon }: { icon: GitActionIconName | "sync" | "branch" }) {
+  if (icon === "branch") return <GoGitBranch />;
   if (icon === "sync") return <RefreshCwIcon />;
   if (icon === "pr") return <GitHubIcon />;
   return <GitActionItemIcon icon={icon} />;
@@ -390,9 +392,21 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
   }, [activeThread?.createBranchFlowCompleted, activeThread?.worktreePath, gitStatusForActions]);
   const currentBranchName =
     gitStatusForActions?.branch ?? currentBranch ?? activeThread?.branch ?? null;
+  const existingBranchNames = useMemo(
+    () => (branchList?.branches ?? []).map((branch) => branch.name),
+    [branchList?.branches],
+  );
+  const branchNames = useMemo(
+    () => new Set(existingBranchNames.map((branchName) => branchName.toLowerCase())),
+    [existingBranchNames],
+  );
   const suggestedCreateBranchName = useMemo(
-    () => activeThread?.associatedWorktreeBranch ?? currentBranchName ?? "",
-    [activeThread?.associatedWorktreeBranch, currentBranchName],
+    () =>
+      resolveDefaultCreateBranchName(
+        existingBranchNames,
+        activeThread?.associatedWorktreeBranch ?? activeThread?.title,
+      ),
+    [activeThread?.associatedWorktreeBranch, activeThread?.title, existingBranchNames],
   );
 
   const quickAction = useMemo(
@@ -855,10 +869,6 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
     setIsCommitDialogOpen(true);
   }, []);
 
-  const branchNames = useMemo(
-    () => new Set((branchList?.branches ?? []).map((b) => b.name.toLowerCase())),
-    [branchList?.branches],
-  );
   const normalizedCurrentBranchName = currentBranchName?.trim().toLowerCase() ?? "";
   const normalizedCreateBranchName = createBranchName.trim().toLowerCase();
   const createBranchNameConflicts =
@@ -996,6 +1006,7 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
     const commitMenuItem = gitActionMenuItems.find((item) => item.id === "commit");
     const pushMenuItem = gitActionMenuItems.find((item) => item.id === "push");
     const prMenuItem = gitActionMenuItems.find((item) => item.id === "pr");
+    const createBranchDisabled = isGitActionRunning || !gitStatusForActions;
 
     if (commitMenuItem) {
       items.push({
@@ -1045,12 +1056,26 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
       });
     }
 
+    items.push({
+      id: "create_branch",
+      label: "Create Branch",
+      disabled: createBranchDisabled,
+      disabledReason: createBranchDisabled
+        ? isGitActionRunning
+          ? "Git action in progress."
+          : "Git status is unavailable."
+        : null,
+      icon: "branch",
+      onSelect: openCreateBranchDialog,
+    });
+
     return items;
   }, [
     gitActionMenuItems,
     gitStatusForActions,
     hasOriginRemote,
     isGitActionRunning,
+    openCreateBranchDialog,
     openDialogForMenuItem,
   ]);
 
@@ -1450,7 +1475,8 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
           <DialogHeader>
             <DialogTitle>Create Branch</DialogTitle>
             <DialogDescription>
-              Create a permanent branch for this worktree. The temporary branch will be replaced.
+              Create and switch to a branch from the current HEAD. Future commits, pushes, and PRs
+              will use it.
             </DialogDescription>
           </DialogHeader>
           <DialogPanel className="space-y-3">
