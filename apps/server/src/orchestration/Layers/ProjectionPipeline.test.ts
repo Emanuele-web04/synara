@@ -579,14 +579,40 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-pipe
           yield* projectionPipeline.bootstrap;
 
           const rowsAfterRequest = yield* sql<{
+            readonly pendingApprovalCount: number;
             readonly pendingUserInputCount: number;
           }>`
           SELECT
+            pending_approval_count AS "pendingApprovalCount",
             pending_user_input_count AS "pendingUserInputCount"
           FROM projection_threads
           WHERE thread_id = ${threadId}
         `;
-          assert.deepEqual(rowsAfterRequest, [{ pendingUserInputCount: 1 }]);
+          assert.deepEqual(rowsAfterRequest, [
+            { pendingApprovalCount: 0, pendingUserInputCount: 1 },
+          ]);
+
+          // Simulate rows written by older projectors that treated user-input requests as approvals.
+          yield* sql`
+            INSERT INTO projection_pending_approvals (
+              request_id,
+              thread_id,
+              turn_id,
+              status,
+              decision,
+              created_at,
+              resolved_at
+            )
+            VALUES (
+              ${requestId},
+              ${threadId},
+              ${null},
+              'pending',
+              ${null},
+              ${requestedAt},
+              ${null}
+            )
+          `;
 
           yield* eventStore.append({
             type: "thread.user-input-response-requested",
@@ -614,10 +640,12 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-pipe
           yield* projectionPipeline.bootstrap;
 
           const rowsAfterRespond = yield* sql<{
+            readonly pendingApprovalCount: number;
             readonly pendingUserInputCount: number;
             readonly updatedAt: string;
           }>`
           SELECT
+            pending_approval_count AS "pendingApprovalCount",
             pending_user_input_count AS "pendingUserInputCount",
             updated_at AS "updatedAt"
           FROM projection_threads
@@ -625,6 +653,7 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-pipe
         `;
           assert.deepEqual(rowsAfterRespond, [
             {
+              pendingApprovalCount: 0,
               pendingUserInputCount: 0,
               updatedAt: respondedAt,
             },

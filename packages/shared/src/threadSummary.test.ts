@@ -160,7 +160,7 @@ describe("deriveThreadSummaryMetadata", () => {
         summary: "User input response failed",
         payload: {
           requestId: "input-1",
-          detail: "unknown pending user input request",
+          detail: "unknown pending user-input request",
         },
         sequence: 4,
         turnId: TurnId.makeUnsafe("turn-1"),

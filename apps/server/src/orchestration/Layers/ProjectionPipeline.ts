@@ -143,6 +143,22 @@ function extractActivityRequestId(payload: unknown): ApprovalRequestId | null {
   return typeof requestId === "string" ? ApprovalRequestId.makeUnsafe(requestId) : null;
 }
 
+function isStalePendingApprovalFailure(payload: unknown): boolean {
+  if (typeof payload !== "object" || payload === null) {
+    return false;
+  }
+  const detail = (payload as Record<string, unknown>).detail;
+  if (typeof detail !== "string") {
+    return false;
+  }
+  const normalized = detail.toLowerCase();
+  return (
+    normalized.includes("stale pending approval request") ||
+    normalized.includes("unknown pending approval request") ||
+    normalized.includes("unknown pending permission request")
+  );
+}
+
 function shouldRefreshThreadShellSummary(event: OrchestrationEvent): boolean {
   switch (event.type) {
     case "thread.message-sent":
@@ -219,8 +235,14 @@ const withRefreshedThreadShellSummary = Effect.fn(function* (input: {
     })),
     latestTurn: input.thread.latestTurnId ? { turnId: input.thread.latestTurnId } : null,
   });
+  const requestedApprovalIds = new Set(
+    activities
+      .filter((activity) => activity.kind === "approval.requested")
+      .map((activity) => extractActivityRequestId(activity.payload))
+      .filter((requestId): requestId is ApprovalRequestId => requestId !== null),
+  );
   const pendingApprovalCount = pendingApprovals.filter(
-    (approval) => approval.status === "pending",
+    (approval) => approval.status === "pending" && requestedApprovalIds.has(approval.requestId),
   ).length;
 
   return {
@@ -1462,8 +1484,16 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
     Effect.gen(function* () {
       switch (event.type) {
         case "thread.activity-appended": {
+          const activity = event.payload.activity;
+          if (
+            activity.kind !== "approval.requested" &&
+            activity.kind !== "approval.resolved" &&
+            activity.kind !== "provider.approval.respond.failed"
+          ) {
+            return;
+          }
           const requestId =
-            extractActivityRequestId(event.payload.activity.payload) ??
+            extractActivityRequestId(activity.payload) ??
             event.metadata.requestId ??
             null;
           if (requestId === null) {
@@ -1472,12 +1502,16 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           const existingRow = yield* projectionPendingApprovalRepository.getByRequestId({
             requestId,
           });
-          if (event.payload.activity.kind === "approval.resolved") {
+          if (
+            activity.kind === "approval.resolved" ||
+            (activity.kind === "provider.approval.respond.failed" &&
+              isStalePendingApprovalFailure(activity.payload))
+          ) {
             const resolvedDecisionRaw =
-              typeof event.payload.activity.payload === "object" &&
-              event.payload.activity.payload !== null &&
-              "decision" in event.payload.activity.payload
-                ? (event.payload.activity.payload as { decision?: unknown }).decision
+              typeof activity.payload === "object" &&
+              activity.payload !== null &&
+              "decision" in activity.payload
+                ? (activity.payload as { decision?: unknown }).decision
                 : null;
             const resolvedDecision =
               resolvedDecisionRaw === "accept" ||
@@ -1493,28 +1527,33 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                 : event.payload.threadId,
               turnId: Option.isSome(existingRow)
                 ? existingRow.value.turnId
-                : event.payload.activity.turnId,
+                : activity.turnId,
               status: "resolved",
               decision: resolvedDecision,
               createdAt: Option.isSome(existingRow)
                 ? existingRow.value.createdAt
-                : event.payload.activity.createdAt,
-              resolvedAt: event.payload.activity.createdAt,
+                : activity.createdAt,
+              resolvedAt: activity.createdAt,
             });
+            return;
+          }
+          if (activity.kind !== "approval.requested") {
             return;
           }
           if (Option.isSome(existingRow) && existingRow.value.status === "resolved") {
             return;
           }
+          // Only approval requests belong in this table; user-input requests are
+          // derived from thread activities when refreshing the shell summary.
           yield* projectionPendingApprovalRepository.upsert({
             requestId,
             threadId: event.payload.threadId,
-            turnId: event.payload.activity.turnId,
+            turnId: activity.turnId,
             status: "pending",
             decision: null,
             createdAt: Option.isSome(existingRow)
               ? existingRow.value.createdAt
-              : event.payload.activity.createdAt,
+              : activity.createdAt,
             resolvedAt: null,
           });
           return;
