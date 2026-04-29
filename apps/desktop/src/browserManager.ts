@@ -5,8 +5,17 @@
 
 import * as Crypto from "node:crypto";
 
-import { BrowserWindow, clipboard, nativeImage, shell, WebContentsView } from "electron";
+import {
+  BrowserWindow,
+  clipboard,
+  nativeImage,
+  shell,
+  webContents as electronWebContents,
+  WebContentsView,
+} from "electron";
+import type { WebContents } from "electron";
 import type {
+  BrowserAttachWebviewInput,
   BrowserCaptureScreenshotResult,
   BrowserExecuteCdpInput,
   BrowserNavigateInput,
@@ -36,7 +45,10 @@ interface LiveTabRuntime {
   key: string;
   threadId: ThreadId;
   tabId: string;
-  view: WebContentsView;
+  webContents: WebContents;
+  view: WebContentsView | null;
+  ownsWebContents: boolean;
+  listenerDisposers: Array<() => void>;
 }
 
 interface NativeBrowserViewVisibility {
@@ -343,17 +355,25 @@ export class DesktopBrowserManager {
   }
 
   getBrowserUseSnapshot(): BrowserUseSnapshot | null {
-    if (!this.activeThreadId || !this.getVisibleBoundsForThread(this.activeThreadId)) {
-      return null;
+    if (this.activeThreadId) {
+      const activeState = this.states.get(this.activeThreadId);
+      if (activeState?.open) {
+        return {
+          threadId: this.activeThreadId,
+          state: this.snapshotThreadState(this.activeThreadId, activeState),
+        };
+      }
     }
-    const state = this.states.get(this.activeThreadId);
-    if (!state) {
-      return null;
+
+    for (const [threadId, state] of this.states) {
+      if (state.open) {
+        return {
+          threadId,
+          state: this.snapshotThreadState(threadId, state),
+        };
+      }
     }
-    return {
-      threadId: this.activeThreadId,
-      state: this.snapshotThreadState(this.activeThreadId, state),
-    };
+    return null;
   }
 
   open(input: BrowserOpenInput): ThreadBrowserState {
@@ -405,7 +425,6 @@ export class DesktopBrowserManager {
       this.detachAttachedRuntime();
       this.activeThreadId = null;
     }
-    this.clearActiveBoundsForThread(input.threadId);
 
     if (!state?.open) {
       return;
@@ -425,6 +444,7 @@ export class DesktopBrowserManager {
     const nextBoundsSignature = browserBoundsSignature(nextBounds);
     const activeTabId = this.getActiveTab(state)?.id ?? null;
     const activeRuntimeKey = activeTabId ? buildRuntimeKey(input.threadId, activeTabId) : null;
+    const activeRuntime = activeRuntimeKey ? this.runtimes.get(activeRuntimeKey) : null;
     this.setActiveBounds(input.threadId, nextBounds);
 
     if (!state.open || nextBounds === null) {
@@ -434,6 +454,23 @@ export class DesktopBrowserManager {
         this.scheduleThreadSuspend(input.threadId);
       }
       return;
+    }
+
+    if (
+      input.surface === "native" &&
+      activeTabId &&
+      activeRuntime &&
+      !activeRuntime.ownsWebContents
+    ) {
+      // Sheet mode renders more reliably with the native WebContentsView than a translated <webview>.
+      this.destroyRuntime(input.threadId, activeTabId);
+      const activeTab = this.getTab(state, activeTabId);
+      if (activeTab) {
+        suspendTabState(activeTab);
+        this.markThreadStateChanged(input.threadId);
+      }
+      this.attachedRuntimeKey = null;
+      this.attachedBoundsSignature = null;
     }
 
     // Bounds sync fires often during panel motion. If the visible runtime and
@@ -463,6 +500,58 @@ export class DesktopBrowserManager {
     this.activateThread(input.threadId, nextBounds);
   }
 
+  // Adopts the renderer-owned <webview> so the visible page and browser-use tools
+  // share one WebContents instead of racing a hidden native WebContentsView.
+  attachWebview(input: BrowserAttachWebviewInput): ThreadBrowserState {
+    const state = this.ensureWorkspace(input.threadId);
+    const tab = this.resolveTab(state, input.tabId);
+    const webContents = electronWebContents.fromId(input.webContentsId);
+    if (!webContents || webContents.isDestroyed()) {
+      throw new Error("The visible browser webview is not available.");
+    }
+
+    const key = buildRuntimeKey(input.threadId, tab.id);
+    const existingRendererRuntime = this.findRendererRuntimeByWebContentsId(webContents.id);
+    if (existingRendererRuntime && existingRendererRuntime.key !== key) {
+      this.destroyRuntime(existingRendererRuntime.threadId, existingRendererRuntime.tabId);
+    }
+
+    const existing = this.runtimes.get(key);
+    if (existing?.webContents.id !== webContents.id) {
+      if (existing) {
+        this.destroyRuntime(input.threadId, tab.id);
+      }
+      const runtime: LiveTabRuntime = {
+        key,
+        threadId: input.threadId,
+        tabId: tab.id,
+        webContents,
+        view: null,
+        ownsWebContents: false,
+        listenerDisposers: [],
+      };
+      this.configureRuntimeWebContents(runtime);
+      this.runtimes.set(key, runtime);
+    }
+
+    const bounds = this.getVisibleBoundsForThread(input.threadId);
+    const runtime = this.runtimes.get(key);
+    if (runtime && bounds) {
+      this.attachRuntime(runtime, bounds);
+    }
+
+    const didChange = tab.status !== LIVE_TAB_STATUS || tab.lastError !== null;
+    tab.status = LIVE_TAB_STATUS;
+    tab.lastError = null;
+    syncThreadLastError(state);
+    if (didChange) {
+      this.markThreadStateChanged(input.threadId);
+    }
+    this.queueRuntimeStateSync(input.threadId, tab.id);
+    this.emitState(input.threadId);
+    return this.snapshotThreadState(input.threadId, state);
+  }
+
   navigate(input: BrowserNavigateInput): ThreadBrowserState {
     const state = this.ensureWorkspace(input.threadId);
     const tab = this.resolveTab(state, input.tabId);
@@ -474,16 +563,23 @@ export class DesktopBrowserManager {
     syncThreadLastError(state);
     this.markThreadStateChanged(input.threadId);
 
-    if (this.activeThreadId === input.threadId) {
-      // Load the target tab directly so we don't clobber its pending URL with a
-      // thread-wide runtime sync from the old live page state.
-      const runtime = this.ensureLiveRuntime(input.threadId, tab.id);
-      this.clearSuspendTimer(input.threadId);
+    const runtime = this.runtimes.get(buildRuntimeKey(input.threadId, tab.id));
+    if (runtime) {
       const bounds = this.getVisibleBoundsForThread(input.threadId);
       if (state.activeTabId === tab.id && bounds) {
         this.attachRuntime(runtime, bounds);
       }
       void this.loadTab(input.threadId, tab.id, { force: true, runtime });
+    } else if (this.activeThreadId === input.threadId) {
+      // Load the target tab directly so we don't clobber its pending URL with a
+      // thread-wide runtime sync from the old live page state.
+      const nextRuntime = this.ensureLiveRuntime(input.threadId, tab.id);
+      this.clearSuspendTimer(input.threadId);
+      const bounds = this.getVisibleBoundsForThread(input.threadId);
+      if (state.activeTabId === tab.id && bounds) {
+        this.attachRuntime(nextRuntime, bounds);
+      }
+      void this.loadTab(input.threadId, tab.id, { force: true, runtime: nextRuntime });
     }
 
     this.emitState(input.threadId);
@@ -495,7 +591,7 @@ export class DesktopBrowserManager {
     const tab = this.resolveTab(state, input.tabId);
     const runtime = this.runtimes.get(buildRuntimeKey(input.threadId, tab.id));
     if (runtime) {
-      runtime.view.webContents.reload();
+      runtime.webContents.reload();
     } else if (this.activeThreadId === input.threadId) {
       this.resumeThread(input.threadId);
       void this.loadTab(input.threadId, tab.id, { force: true });
@@ -505,16 +601,16 @@ export class DesktopBrowserManager {
 
   goBack(input: BrowserTabInput): ThreadBrowserState {
     const runtime = this.runtimes.get(buildRuntimeKey(input.threadId, input.tabId));
-    if (runtime && runtime.view.webContents.canGoBack()) {
-      runtime.view.webContents.goBack();
+    if (runtime && canWebContentsGoBack(runtime.webContents)) {
+      runtime.webContents.goBack();
     }
     return this.getState({ threadId: input.threadId });
   }
 
   goForward(input: BrowserTabInput): ThreadBrowserState {
     const runtime = this.runtimes.get(buildRuntimeKey(input.threadId, input.tabId));
-    if (runtime && runtime.view.webContents.canGoForward()) {
-      runtime.view.webContents.goForward();
+    if (runtime && canWebContentsGoForward(runtime.webContents)) {
+      runtime.webContents.goForward();
     }
     return this.getState({ threadId: input.threadId });
   }
@@ -621,7 +717,7 @@ export class DesktopBrowserManager {
     if (bounds) {
       this.attachActiveTab(input.threadId, bounds);
     }
-    runtime.view.webContents.openDevTools({ mode: "detach" });
+    runtime.webContents.openDevTools({ mode: "detach" });
   }
 
   // Ensures the requested tab is active/live, then returns a fresh PNG capture
@@ -640,8 +736,9 @@ export class DesktopBrowserManager {
     }
 
     this.resumeThread(input.threadId);
+    const wasSuspended = tab.status === SUSPENDED_TAB_STATUS;
     const runtime = this.ensureLiveRuntime(input.threadId, tab.id);
-    const webContents = runtime.view.webContents;
+    const webContents = runtime.webContents;
     const expectedUrl = normalizeUrlInput(tab.lastCommittedUrl ?? tab.url);
     const currentUrl = webContents.getURL();
     const bounds = this.getVisibleBoundsForThread(input.threadId);
@@ -649,7 +746,7 @@ export class DesktopBrowserManager {
       this.attachActiveTab(input.threadId, bounds);
     }
 
-    if (tab.status === "suspended" || currentUrl.length === 0 || currentUrl !== expectedUrl) {
+    if (wasSuspended || currentUrl.length === 0 || currentUrl !== expectedUrl) {
       await this.loadTab(input.threadId, tab.id, { runtime });
     } else {
       this.queueRuntimeStateSync(input.threadId, tab.id);
@@ -703,14 +800,15 @@ export class DesktopBrowserManager {
     }
 
     this.resumeThread(input.threadId);
+    const wasSuspended = tab.status === SUSPENDED_TAB_STATUS;
     const runtime = this.ensureLiveRuntime(input.threadId, tab.id);
-    const webContents = runtime.view.webContents;
+    const webContents = runtime.webContents;
     const bounds = this.getVisibleBoundsForThread(input.threadId);
     if (bounds) {
       this.attachActiveTab(input.threadId, bounds);
     }
 
-    if (tab.status === "suspended") {
+    if (wasSuspended) {
       await this.loadTab(input.threadId, tab.id, { force: true, runtime });
     } else {
       this.queueRuntimeStateSync(input.threadId, tab.id);
@@ -741,19 +839,20 @@ export class DesktopBrowserManager {
     }
 
     this.resumeThread(input.threadId);
+    const wasSuspended = tab.status === SUSPENDED_TAB_STATUS;
     const runtime = this.ensureLiveRuntime(input.threadId, tab.id);
     if (this.activeBounds && this.activeBoundsThreadId === input.threadId) {
       this.activateThread(input.threadId, this.activeBounds);
     }
 
-    if (tab.status === "suspended") {
+    if (wasSuspended) {
       await this.loadTab(input.threadId, tab.id, { force: true, runtime });
     } else {
       this.queueRuntimeStateSync(input.threadId, tab.id);
     }
 
-    if (!runtime.view.webContents.debugger.isAttached()) {
-      runtime.view.webContents.debugger.attach("1.3");
+    if (!runtime.webContents.debugger.isAttached()) {
+      runtime.webContents.debugger.attach("1.3");
     }
   }
 
@@ -773,9 +872,9 @@ export class DesktopBrowserManager {
       });
     };
 
-    runtime.view.webContents.debugger.on("message", handleMessage);
+    runtime.webContents.debugger.on("message", handleMessage);
     return () => {
-      runtime.view.webContents.debugger.removeListener("message", handleMessage);
+      runtime.webContents.debugger.removeListener("message", handleMessage);
     };
   }
 
@@ -828,11 +927,12 @@ export class DesktopBrowserManager {
       if (tab.id !== activeTab?.id) {
         continue;
       }
+      const wasSuspended = tab.status === SUSPENDED_TAB_STATUS;
       const runtime = this.ensureLiveRuntime(threadId, tab.id);
-      if (tab.status === "suspended") {
+      if (wasSuspended) {
         void this.loadTab(threadId, tab.id, { force: true, runtime });
       } else {
-        didChange = syncTabStateFromRuntime(state, tab, runtime.view.webContents) || didChange;
+        didChange = syncTabStateFromRuntime(state, tab, runtime.webContents) || didChange;
       }
     }
 
@@ -982,9 +1082,10 @@ export class DesktopBrowserManager {
     }
 
     this.suspendInactiveTabs(threadId, activeTab.id);
+    const wasSuspended = activeTab.status === SUSPENDED_TAB_STATUS;
     const runtime = this.ensureLiveRuntime(threadId, activeTab.id);
     this.attachRuntime(runtime, bounds);
-    if (activeTab.status === "suspended") {
+    if (wasSuspended) {
       void this.loadTab(threadId, activeTab.id, { force: true, runtime });
     } else {
       this.syncRuntimeState(threadId, activeTab.id);
@@ -999,11 +1100,27 @@ export class DesktopBrowserManager {
 
     const nextBoundsSignature = browserBoundsSignature(bounds);
     this.runtimeLastActiveAtByKey.set(runtime.key, Date.now());
+    // Renderer-owned <webview> runtimes are already visible in React; keep any
+    // old native view detached so it cannot cover the real browser surface.
+    if (!runtime.ownsWebContents) {
+      if (this.attachedRuntimeKey && this.attachedRuntimeKey !== runtime.key) {
+        this.detachAttachedRuntime();
+      }
+      this.attachedRuntimeKey = runtime.key;
+      this.attachedBoundsSignature = nextBoundsSignature;
+      return;
+    }
+    if (!runtime.view) {
+      this.attachedRuntimeKey = runtime.key;
+      this.attachedBoundsSignature = nextBoundsSignature;
+      return;
+    }
     if (this.attachedRuntimeKey === runtime.key) {
+      this.setRuntimeViewHidden(runtime, false);
+      this.bringRuntimeViewToFront(runtime);
       if (this.attachedBoundsSignature === nextBoundsSignature) {
         return;
       }
-      this.setRuntimeViewHidden(runtime, false);
       runtime.view.setBounds(bounds);
       this.attachedBoundsSignature = nextBoundsSignature;
       return;
@@ -1011,10 +1128,24 @@ export class DesktopBrowserManager {
 
     this.detachAttachedRuntime();
     this.setRuntimeViewHidden(runtime, false);
-    window.contentView.addChildView(runtime.view);
+    this.bringRuntimeViewToFront(runtime);
     runtime.view.setBounds(bounds);
     this.attachedRuntimeKey = runtime.key;
     this.attachedBoundsSignature = nextBoundsSignature;
+  }
+
+  private bringRuntimeViewToFront(runtime: LiveTabRuntime): void {
+    const window = this.window;
+    if (!window || !runtime.view) {
+      return;
+    }
+
+    try {
+      window.contentView.removeChildView(runtime.view);
+    } catch {
+      // Electron throws when the view is not attached yet; adding it below is the desired state.
+    }
+    window.contentView.addChildView(runtime.view);
   }
 
   private detachAttachedRuntime(): void {
@@ -1025,7 +1156,7 @@ export class DesktopBrowserManager {
     }
 
     const runtime = this.runtimes.get(this.attachedRuntimeKey);
-    if (runtime) {
+    if (runtime?.view) {
       this.setRuntimeViewHidden(runtime, true);
       this.window.contentView.removeChildView(runtime.view);
     }
@@ -1034,6 +1165,9 @@ export class DesktopBrowserManager {
   }
 
   private setRuntimeViewHidden(runtime: LiveTabRuntime, hidden: boolean): void {
+    if (!runtime.view) {
+      return;
+    }
     const nativeView = runtime.view as typeof runtime.view & NativeBrowserViewVisibility;
     nativeView.setVisible?.(!hidden);
     if (hidden) {
@@ -1046,7 +1180,11 @@ export class DesktopBrowserManager {
     this.clearTabSuspendTimer(threadId, tabId);
     const existing = this.runtimes.get(key);
     if (existing) {
-      return existing;
+      if (existing.webContents.isDestroyed()) {
+        this.destroyRuntime(threadId, tabId);
+      } else {
+        return existing;
+      }
     }
 
     const runtime = this.createLiveRuntime(threadId, tabId);
@@ -1078,9 +1216,17 @@ export class DesktopBrowserManager {
       key: buildRuntimeKey(threadId, tabId),
       threadId,
       tabId,
+      webContents: view.webContents,
       view,
+      ownsWebContents: true,
+      listenerDisposers: [],
     };
-    const webContents = view.webContents;
+    this.configureRuntimeWebContents(runtime);
+    return runtime;
+  }
+
+  private configureRuntimeWebContents(runtime: LiveTabRuntime): void {
+    const { threadId, tabId, webContents } = runtime;
 
     webContents.setWindowOpenHandler(({ url }) => {
       if (url.startsWith("http://") || url.startsWith("https://") || url === ABOUT_BLANK_URL) {
@@ -1100,48 +1246,86 @@ export class DesktopBrowserManager {
       return { action: "deny" };
     });
 
-    webContents.on("page-title-updated", (event) => {
+    const pageTitleUpdated = (event: Electron.Event) => {
       event.preventDefault();
       this.queueRuntimeStateSync(threadId, tabId);
+    };
+    webContents.on("page-title-updated", pageTitleUpdated);
+    runtime.listenerDisposers.push(() => {
+      webContents.removeListener("page-title-updated", pageTitleUpdated);
     });
-    webContents.on("page-favicon-updated", (_event, faviconUrls) => {
+
+    const pageFaviconUpdated = (_event: Electron.Event, faviconUrls: string[]) => {
       this.queueRuntimeStateSync(threadId, tabId, faviconUrls);
+    };
+    webContents.on("page-favicon-updated", pageFaviconUpdated);
+    runtime.listenerDisposers.push(() => {
+      webContents.removeListener("page-favicon-updated", pageFaviconUpdated);
     });
-    webContents.on("did-start-loading", () => {
-      this.queueRuntimeStateSync(threadId, tabId);
-    });
-    webContents.on("did-stop-loading", () => {
-      this.queueRuntimeStateSync(threadId, tabId);
-    });
-    webContents.on("did-navigate", () => {
-      this.queueRuntimeStateSync(threadId, tabId);
-    });
-    webContents.on("did-navigate-in-page", () => {
-      this.queueRuntimeStateSync(threadId, tabId);
-    });
-    webContents.on(
-      "did-fail-load",
-      (_event, errorCode, _errorDescription, validatedURL, isMainFrame) => {
-        if (!isMainFrame || errorCode === BROWSER_ERROR_ABORTED) {
-          return;
-        }
 
-        const state = this.states.get(threadId);
-        const tab = state ? this.getTab(state, tabId) : null;
-        if (!state || !tab) {
-          return;
-        }
+    const didStartLoading = () => {
+      this.queueRuntimeStateSync(threadId, tabId);
+    };
+    webContents.on("did-start-loading", didStartLoading);
+    runtime.listenerDisposers.push(() => {
+      webContents.removeListener("did-start-loading", didStartLoading);
+    });
 
-        tab.url = validatedURL || tab.url;
-        tab.title = defaultTitleForUrl(tab.url);
-        tab.isLoading = false;
-        tab.lastError = mapBrowserLoadError(errorCode);
-        syncThreadLastError(state);
-        this.markThreadStateChanged(threadId);
-        this.emitState(threadId);
-      },
-    );
-    webContents.on("render-process-gone", () => {
+    const didStopLoading = () => {
+      this.queueRuntimeStateSync(threadId, tabId);
+    };
+    webContents.on("did-stop-loading", didStopLoading);
+    runtime.listenerDisposers.push(() => {
+      webContents.removeListener("did-stop-loading", didStopLoading);
+    });
+
+    const didNavigate = () => {
+      this.queueRuntimeStateSync(threadId, tabId);
+    };
+    webContents.on("did-navigate", didNavigate);
+    runtime.listenerDisposers.push(() => {
+      webContents.removeListener("did-navigate", didNavigate);
+    });
+
+    const didNavigateInPage = () => {
+      this.queueRuntimeStateSync(threadId, tabId);
+    };
+    webContents.on("did-navigate-in-page", didNavigateInPage);
+    runtime.listenerDisposers.push(() => {
+      webContents.removeListener("did-navigate-in-page", didNavigateInPage);
+    });
+
+    const didFailLoad = (
+      _event: Electron.Event,
+      errorCode: number,
+      _errorDescription: string,
+      validatedURL: string,
+      isMainFrame: boolean,
+    ) => {
+      if (!isMainFrame || errorCode === BROWSER_ERROR_ABORTED) {
+        return;
+      }
+
+      const state = this.states.get(threadId);
+      const tab = state ? this.getTab(state, tabId) : null;
+      if (!state || !tab) {
+        return;
+      }
+
+      tab.url = validatedURL || tab.url;
+      tab.title = defaultTitleForUrl(tab.url);
+      tab.isLoading = false;
+      tab.lastError = mapBrowserLoadError(errorCode);
+      syncThreadLastError(state);
+      this.markThreadStateChanged(threadId);
+      this.emitState(threadId);
+    };
+    webContents.on("did-fail-load", didFailLoad);
+    runtime.listenerDisposers.push(() => {
+      webContents.removeListener("did-fail-load", didFailLoad);
+    });
+
+    const renderProcessGone = () => {
       const state = this.states.get(threadId);
       const tab = state ? this.getTab(state, tabId) : null;
       this.destroyRuntime(threadId, tabId);
@@ -1157,9 +1341,11 @@ export class DesktopBrowserManager {
       if (this.activeThreadId === threadId && bounds) {
         this.attachActiveTab(threadId, bounds);
       }
+    };
+    webContents.on("render-process-gone", renderProcessGone);
+    runtime.listenerDisposers.push(() => {
+      webContents.removeListener("render-process-gone", renderProcessGone);
     });
-
-    return runtime;
   }
 
   private async loadTab(
@@ -1174,7 +1360,7 @@ export class DesktopBrowserManager {
     }
 
     const runtime = options.runtime ?? this.ensureLiveRuntime(threadId, tabId);
-    const webContents = runtime.view.webContents;
+    const webContents = runtime.webContents;
     const nextUrl = normalizeUrlInput(
       options.force === true ? tab.url : (tab.lastCommittedUrl ?? tab.url),
     );
@@ -1220,7 +1406,7 @@ export class DesktopBrowserManager {
       return;
     }
 
-    const didChange = syncTabStateFromRuntime(state, tab, runtime.view.webContents, faviconUrls);
+    const didChange = syncTabStateFromRuntime(state, tab, runtime.webContents, faviconUrls);
     const nextDidChange = syncThreadLastError(state) || didChange;
     if (nextDidChange) {
       this.markThreadStateChanged(threadId);
@@ -1293,7 +1479,10 @@ export class DesktopBrowserManager {
     }
 
     this.runtimes.delete(key);
-    const webContents = runtime.view.webContents;
+    const webContents = runtime.webContents;
+    for (const disposeListener of runtime.listenerDisposers.splice(0)) {
+      disposeListener();
+    }
     if (!webContents.isDestroyed()) {
       if (webContents.debugger.isAttached()) {
         try {
@@ -1302,8 +1491,19 @@ export class DesktopBrowserManager {
           // The runtime is being torn down anyway; ignore stale-debugger cleanup noise.
         }
       }
-      webContents.close({ waitForBeforeUnload: false });
+      if (runtime.ownsWebContents) {
+        webContents.close({ waitForBeforeUnload: false });
+      }
     }
+  }
+
+  private findRendererRuntimeByWebContentsId(webContentsId: number): LiveTabRuntime | null {
+    for (const runtime of this.runtimes.values()) {
+      if (!runtime.ownsWebContents && runtime.webContents.id === webContentsId) {
+        return runtime;
+      }
+    }
+    return null;
   }
 
   private getOrCreateState(threadId: ThreadId): ThreadBrowserState {
@@ -1349,7 +1549,7 @@ export class DesktopBrowserManager {
   private getTrackedProcessIds(): number[] {
     const processIds = new Set<number>();
     for (const runtime of this.runtimes.values()) {
-      const webContents = runtime.view.webContents;
+      const webContents = runtime.webContents;
       if (webContents.isDestroyed()) {
         continue;
       }
@@ -1471,7 +1671,7 @@ function suspendTabState(tab: BrowserTabState): boolean {
 function syncTabStateFromRuntime(
   state: ThreadBrowserState,
   tab: BrowserTabState,
-  webContents: WebContentsView["webContents"],
+  webContents: WebContents,
   faviconUrls?: string[],
 ): boolean {
   const currentUrl = webContents.getURL();
@@ -1497,11 +1697,11 @@ function syncTabStateFromRuntime(
       tab.isLoading = value;
     }) || didChange;
   didChange =
-    setIfChanged(tab.canGoBack, webContents.canGoBack(), (value) => {
+    setIfChanged(tab.canGoBack, canWebContentsGoBack(webContents), (value) => {
       tab.canGoBack = value;
     }) || didChange;
   didChange =
-    setIfChanged(tab.canGoForward, webContents.canGoForward(), (value) => {
+    setIfChanged(tab.canGoForward, canWebContentsGoForward(webContents), (value) => {
       tab.canGoForward = value;
     }) || didChange;
   didChange =
@@ -1520,6 +1720,14 @@ function syncTabStateFromRuntime(
   }
   didChange = syncThreadLastError(state) || didChange;
   return didChange;
+}
+
+function canWebContentsGoBack(webContents: WebContents): boolean {
+  return webContents.navigationHistory?.canGoBack() ?? webContents.canGoBack();
+}
+
+function canWebContentsGoForward(webContents: WebContents): boolean {
+  return webContents.navigationHistory?.canGoForward() ?? webContents.canGoForward();
 }
 
 function syncThreadLastError(state: ThreadBrowserState): boolean {

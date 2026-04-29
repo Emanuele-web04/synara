@@ -512,6 +512,12 @@ export function createWsNativeApi(): NativeApi {
           return;
         }
       },
+      attachWebview: async (input) => {
+        if (window.desktopBridge) {
+          return window.desktopBridge.browser.attachWebview(input);
+        }
+        return cloneBrowserState(getFallbackBrowserState(input.threadId));
+      },
       copyScreenshotToClipboard: async (input) => {
         if (window.desktopBridge) {
           await window.desktopBridge.browser.copyScreenshotToClipboard(input);

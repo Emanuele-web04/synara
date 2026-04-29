@@ -16,6 +16,7 @@ import {
   isRecoverableThreadResumeError,
   normalizeCodexModelSlug,
   readCodexAccountSnapshot,
+  resolveCodexBrowserUsePipePath,
   resolveCodexModelForAccount,
 } from "./codexAppServerManager";
 
@@ -324,6 +325,29 @@ describe("buildCodexProcessEnv", () => {
 
     expect(readEnvironment).not.toHaveBeenCalled();
     expect(env.AZURE_OPENAI_API_KEY).toBe("existing-secret");
+  });
+
+  it("allows the configured desktop browser-use socket in the Codex sandbox", () => {
+    const env = buildCodexProcessEnv({
+      env: {
+        DPCODE_BROWSER_USE_PIPE_PATH: "/tmp/codex-browser-use/dpcode.sock",
+        NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS: "/tmp/existing.sock",
+      },
+      platform: "darwin",
+    });
+
+    expect(env.NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS).toBe(
+      "/tmp/existing.sock,/tmp/codex-browser-use/dpcode.sock",
+    );
+  });
+
+  it("resolves the browser-use pipe path from desktop env aliases", () => {
+    expect(
+      resolveCodexBrowserUsePipePath({
+        env: { T3CODE_BROWSER_USE_PIPE_PATH: "/tmp/codex-browser-use/t3.sock" },
+        platform: "darwin",
+      }),
+    ).toBe("/tmp/codex-browser-use/t3.sock");
   });
 });
 

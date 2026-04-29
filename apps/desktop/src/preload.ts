@@ -86,6 +86,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     setPanelBounds: async (input) => {
       ipcRenderer.send(BROWSER_IPC_CHANNELS.setBounds, input);
     },
+    attachWebview: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.attachWebview, input),
     copyScreenshotToClipboard: (input) =>
       ipcRenderer.invoke(BROWSER_IPC_CHANNELS.copyScreenshotToClipboard, input),
     captureScreenshot: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.captureScreenshot, input),
@@ -107,6 +108,13 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.on(BROWSER_IPC_CHANNELS.state, wrappedListener);
       return () => {
         ipcRenderer.removeListener(BROWSER_IPC_CHANNELS.state, wrappedListener);
+      };
+    },
+    onBrowserUseOpenPanelRequest: (listener) => {
+      const wrappedListener = () => listener();
+      ipcRenderer.on(BROWSER_IPC_CHANNELS.requestOpenPanel, wrappedListener);
+      return () => {
+        ipcRenderer.removeListener(BROWSER_IPC_CHANNELS.requestOpenPanel, wrappedListener);
       };
     },
   },

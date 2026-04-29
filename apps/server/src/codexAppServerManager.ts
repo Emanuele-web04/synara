@@ -239,9 +239,24 @@ const CODEX_SPARK_MODEL = "gpt-5.3-codex-spark";
 const CODEX_SPARK_DISABLED_PLAN_TYPES = new Set<CodexPlanType>(["free", "go", "plus"]);
 const CODEX_PROCESS_SHELL_ENV_NAMES = ["PATH", "SSH_AUTH_SOCK"] as const;
 const CODEX_DISCOVERY_SESSION_IDLE_MS = 10 * 60 * 1000;
-const CODEX_BROWSER_USE_PIPE_PATH =
-  process.platform === "win32" ? String.raw`\\.\pipe\codex-browser-use` : "/tmp/codex-browser-use";
 const NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS = "NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS";
+
+export function resolveCodexBrowserUsePipePath(
+  input: {
+    readonly env?: NodeJS.ProcessEnv;
+    readonly platform?: NodeJS.Platform;
+  } = {},
+): string {
+  const env = input.env ?? process.env;
+  const configured =
+    env.DPCODE_BROWSER_USE_PIPE_PATH?.trim() || env.T3CODE_BROWSER_USE_PIPE_PATH?.trim();
+  if (configured) {
+    return configured;
+  }
+  return (input.platform ?? process.platform) === "win32"
+    ? String.raw`\\.\pipe\codex-browser-use`
+    : "/tmp/codex-browser-use.sock";
+}
 
 function asObject(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object") {
@@ -292,15 +307,16 @@ export function buildCodexProcessEnv(
   }
 
   if (platform !== "win32") {
+    const browserUsePipePath = resolveCodexBrowserUsePipePath({ env: effectiveEnv, platform });
     const allowedSockets =
       effectiveEnv[NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS]
         ?.split(",")
         .map((entry) => entry.trim())
         .filter((entry) => entry.length > 0) ?? [];
-    if (!allowedSockets.includes(CODEX_BROWSER_USE_PIPE_PATH)) {
+    if (!allowedSockets.includes(browserUsePipePath)) {
       effectiveEnv[NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS] = [
         ...allowedSockets,
-        CODEX_BROWSER_USE_PIPE_PATH,
+        browserUsePipePath,
       ].join(",");
     }
   }

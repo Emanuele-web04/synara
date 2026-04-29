@@ -6,6 +6,7 @@
 import type { IpcMain, WebContents } from "electron";
 
 import type {
+  BrowserAttachWebviewInput,
   BrowserCaptureScreenshotResult,
   BrowserExecuteCdpInput,
   BrowserNavigateInput,
@@ -26,6 +27,8 @@ export const BROWSER_IPC_CHANNELS = {
   hide: "desktop:browser-hide",
   getState: "desktop:browser-get-state",
   setBounds: "desktop:browser-set-bounds",
+  attachWebview: "desktop:browser-attach-webview",
+  requestOpenPanel: "desktop:browser-use-request-open-panel",
   copyScreenshotToClipboard: "desktop:browser-copy-screenshot-to-clipboard",
   captureScreenshot: "desktop:browser-capture-screenshot",
   executeCdp: "desktop:browser-execute-cdp",
@@ -77,6 +80,12 @@ export function registerBrowserIpcHandlers(
   ipcMain.on(BROWSER_IPC_CHANNELS.setBounds, (_event, input: BrowserSetPanelBoundsInput) => {
     browserManager.setPanelBounds(input);
   });
+
+  ipcMain.removeHandler(BROWSER_IPC_CHANNELS.attachWebview);
+  ipcMain.handle(
+    BROWSER_IPC_CHANNELS.attachWebview,
+    async (_event, input: BrowserAttachWebviewInput) => browserManager.attachWebview(input),
+  );
 
   ipcMain.removeHandler(BROWSER_IPC_CHANNELS.captureScreenshot);
   ipcMain.handle(

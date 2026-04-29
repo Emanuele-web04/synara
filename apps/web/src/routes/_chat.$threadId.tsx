@@ -93,14 +93,15 @@ import { Sidebar, SidebarInset, SidebarProvider, SidebarRail } from "~/component
 const DiffPanel = lazy(() => import("../components/DiffPanel"));
 const DIFF_INLINE_LAYOUT_MEDIA_QUERY = "(max-width: 1180px)";
 const DIFF_INLINE_DEFAULT_WIDTH = "clamp(28rem,48vw,44rem)";
-const BROWSER_INLINE_DEFAULT_WIDTH = "clamp(34rem,56vw,72rem)";
+const BROWSER_INLINE_DEFAULT_WIDTH = "50%";
 const SPLIT_PANE_PANEL_DEFAULT_WIDTH_PX = 22 * 16;
-const BROWSER_SPLIT_PANE_PANEL_DEFAULT_WIDTH_PX = 32 * 16;
+const BROWSER_SPLIT_PANE_PANEL_DEFAULT_WIDTH_PX = 30 * 16;
 const SPLIT_PANE_CHAT_MIN_WIDTH = 20 * 16;
 const SINGLE_PANEL_MIN_WIDTH = 26 * 16;
-const BROWSER_PANEL_MIN_WIDTH = 30 * 16;
+const BROWSER_PANEL_MIN_WIDTH = 21 * 16;
 const COMPOSER_COMPACT_MIN_LEFT_CONTROLS_WIDTH_PX = 208;
 const RIGHT_PANEL_SIDEBAR_WIDTH_STORAGE_KEY = "chat_right_panel_width";
+const PANEL_RESIZE_OVERLAY_SYNC_EVENT = "dpcode:panel-resize-overlay-sync";
 const SPLIT_RATIO_MIN = 0.25;
 const SPLIT_RATIO_MAX = 0.75;
 
@@ -130,7 +131,7 @@ const RightPanelSheet = (props: {
         side="right"
         showCloseButton={false}
         keepMounted
-        className="w-[min(88vw,820px)] max-w-[820px] p-0"
+        className="h-full min-h-0 w-[min(88vw,820px)] max-w-[820px] p-0"
       >
         {props.children}
       </SheetPopup>
@@ -218,6 +219,25 @@ function canComposerHandlePanelWidth(input: {
   return !hasComposerOverflow && !overflowsViewport && !violatesMinimumComposerWidth;
 }
 
+// Electron <webview> can swallow pointermove during drag; this keeps resizing in the React layer.
+function createPanelResizeOverlay(): HTMLDivElement {
+  const overlay = document.createElement("div");
+  overlay.setAttribute("data-panel-resize-overlay", "true");
+  overlay.style.position = "fixed";
+  overlay.style.inset = "0";
+  overlay.style.zIndex = "2147483647";
+  overlay.style.cursor = "col-resize";
+  overlay.style.background = "transparent";
+  document.body.append(overlay);
+  window.dispatchEvent(new Event(PANEL_RESIZE_OVERLAY_SYNC_EVENT));
+  return overlay;
+}
+
+function removePanelResizeOverlay(overlay: HTMLDivElement): void {
+  overlay.remove();
+  window.dispatchEvent(new Event(PANEL_RESIZE_OVERLAY_SYNC_EVENT));
+}
+
 const PanePanelInlineSidebar = (props: {
   panelOpen: boolean;
   onClosePanel: () => void;
@@ -242,6 +262,7 @@ const PanePanelInlineSidebar = (props: {
     panelState,
     onUpdatePanelState,
   } = props;
+  const inlineWrapperRef = useRef<HTMLDivElement>(null);
   const inlineSidebarWidth =
     panel === "browser" ? BROWSER_INLINE_DEFAULT_WIDTH : DIFF_INLINE_DEFAULT_WIDTH;
   const inlineSidebarMinWidth =
@@ -280,6 +301,91 @@ const PanePanelInlineSidebar = (props: {
     },
     [paneScopeId],
   );
+
+  if (panel === "browser") {
+    const startResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+      const wrapper = inlineWrapperRef.current;
+      const parent = wrapper?.parentElement;
+      if (!wrapper || !parent) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      const startX = event.clientX;
+      const startWidth = wrapper.getBoundingClientRect().width;
+      const maxWidth = Math.max(
+        inlineSidebarMinWidth,
+        parent.clientWidth - SPLIT_PANE_CHAT_MIN_WIDTH,
+      );
+      const resizeOverlay = createPanelResizeOverlay();
+
+      const onPointerMove = (moveEvent: PointerEvent) => {
+        const delta = startX - moveEvent.clientX;
+        const nextWidth = Math.max(inlineSidebarMinWidth, Math.min(maxWidth, startWidth + delta));
+        if (
+          !canComposerHandlePanelWidth({
+            nextWidth,
+            applyWidth: (width) => {
+              wrapper.style.width = `${width}px`;
+            },
+            resetWidth: () => {
+              wrapper.style.width = `${startWidth}px`;
+            },
+            ...(paneScopeId ? { paneScopeId } : {}),
+          })
+        ) {
+          return;
+        }
+        wrapper.style.width = `${nextWidth}px`;
+        setLocalStorageItem(inlineSidebarStorageKey, nextWidth, Schema.Finite);
+      };
+
+      const onPointerUp = () => {
+        removePanelResizeOverlay(resizeOverlay);
+        document.body.style.removeProperty("cursor");
+        document.body.style.removeProperty("user-select");
+        resizeOverlay.removeEventListener("pointermove", onPointerMove);
+        resizeOverlay.removeEventListener("pointerup", onPointerUp);
+        resizeOverlay.removeEventListener("pointercancel", onPointerUp);
+      };
+
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+      resizeOverlay.addEventListener("pointermove", onPointerMove);
+      resizeOverlay.addEventListener("pointerup", onPointerUp);
+      resizeOverlay.addEventListener("pointercancel", onPointerUp);
+    };
+    const storedWidth = getLocalStorageItem(inlineSidebarStorageKey, Schema.Finite);
+
+    if (!panelOpen) {
+      return null;
+    }
+
+    return (
+      <div
+        ref={inlineWrapperRef}
+        data-native-browser-surface="true"
+        className="relative flex h-dvh min-h-0 min-w-0 flex-none border-l border-border/50 bg-card text-foreground"
+        style={
+          {
+            width:
+              storedWidth === null
+                ? inlineSidebarWidth
+                : `min(${storedWidth}px, calc(100% - ${SPLIT_PANE_CHAT_MIN_WIDTH}px))`,
+            maxWidth: `calc(100% - ${SPLIT_PANE_CHAT_MIN_WIDTH}px)`,
+            minWidth: inlineSidebarMinWidth,
+          } as CSSProperties
+        }
+      >
+        <div
+          className="absolute inset-y-0 left-0 z-20 w-2 -translate-x-1/2 cursor-col-resize bg-transparent before:absolute before:inset-y-0 before:left-1/2 before:w-px before:-translate-x-1/2 before:bg-border/65"
+          onPointerDown={startResize}
+        />
+        {renderPanelContent && threadId ? (
+          <BrowserPanel mode="sidebar" threadId={threadId} onClosePanel={onClosePanel} />
+        ) : null}
+      </div>
+    );
+  }
 
   return (
     <SidebarProvider
@@ -379,8 +485,9 @@ function SplitPaneEmbeddedPanel(props: {
       event.preventDefault();
       event.stopPropagation();
       const startX = event.clientX;
-      const startWidth = panelWidth;
+      const startWidth = wrapper.getBoundingClientRect().width;
       const maxWidth = Math.max(minPanelWidth, parent.clientWidth - SPLIT_PANE_CHAT_MIN_WIDTH);
+      const resizeOverlay = createPanelResizeOverlay();
 
       const onPointerMove = (moveEvent: PointerEvent) => {
         const delta = startX - moveEvent.clientX;
@@ -393,14 +500,19 @@ function SplitPaneEmbeddedPanel(props: {
       };
 
       const onPointerUp = () => {
+        removePanelResizeOverlay(resizeOverlay);
+        document.body.style.removeProperty("cursor");
         document.body.style.removeProperty("user-select");
-        window.removeEventListener("pointermove", onPointerMove);
-        window.removeEventListener("pointerup", onPointerUp);
+        resizeOverlay.removeEventListener("pointermove", onPointerMove);
+        resizeOverlay.removeEventListener("pointerup", onPointerUp);
+        resizeOverlay.removeEventListener("pointercancel", onPointerUp);
       };
 
+      document.body.style.cursor = "col-resize";
       document.body.style.userSelect = "none";
-      window.addEventListener("pointermove", onPointerMove);
-      window.addEventListener("pointerup", onPointerUp);
+      resizeOverlay.addEventListener("pointermove", onPointerMove);
+      resizeOverlay.addEventListener("pointerup", onPointerUp);
+      resizeOverlay.addEventListener("pointercancel", onPointerUp);
     },
     [minPanelWidth, panelWidth, shouldAcceptEmbeddedWidth, storageKey],
   );
@@ -414,7 +526,13 @@ function SplitPaneEmbeddedPanel(props: {
       ref={wrapperRef}
       data-native-browser-surface={props.panel === "browser" ? "true" : undefined}
       className="relative flex h-full min-h-0 min-w-0 flex-none border-l border-border/50 bg-card text-foreground"
-      style={{ width: `${panelWidth}px` } as CSSProperties}
+      style={
+        {
+          width: `${panelWidth}px`,
+          maxWidth: `calc(100% - ${SPLIT_PANE_CHAT_MIN_WIDTH}px)`,
+          minWidth: minPanelWidth,
+        } as CSSProperties
+      }
     >
       <div
         className="absolute inset-y-0 left-0 z-20 w-2 -translate-x-1/2 cursor-col-resize bg-transparent before:absolute before:inset-y-0 before:left-1/2 before:w-px before:-translate-x-1/2 before:bg-border/65"
@@ -1094,6 +1212,21 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
     };
   }, [activeSplitView, togglePanePanel]);
 
+  useEffect(() => {
+    const onOpenBrowserPanelRequest = window.desktopBridge?.browser.onBrowserUseOpenPanelRequest;
+    if (typeof onOpenBrowserPanelRequest !== "function" || !activeSplitView) {
+      return;
+    }
+
+    const unsubscribe = onOpenBrowserPanelRequest(() => {
+      updatePanePanelState(activeSplitView.focusedPaneId, { panel: "browser" });
+    });
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, [activeSplitView, updatePanePanelState]);
+
   const closePanePanel = useCallback(
     (paneId: PaneId) => {
       updatePanePanelState(paneId, { panel: null });
@@ -1376,10 +1509,6 @@ function SingleChatSurface(props: {
   const activePanel = panelState.panel;
   const panelOpen = activePanel !== null;
   const lastAppliedRoutePanelSearchKeyRef = useRef<string | null>(null);
-  const hasNormalizedAutoRestoredBrowserPanelRef = useRef(false);
-  useEffect(() => {
-    hasNormalizedAutoRestoredBrowserPanelRef.current = false;
-  }, [props.threadId]);
   const updatePanelState = useCallback(
     (patch: Partial<Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">>) => {
       const nextPanel = patch.panel ?? panelState.panel;
@@ -1471,22 +1600,6 @@ function SingleChatSurface(props: {
   }, [navigate, props.search, props.threadId, updatePanelState]);
 
   useEffect(() => {
-    if (hasNormalizedAutoRestoredBrowserPanelRef.current) {
-      return;
-    }
-
-    hasNormalizedAutoRestoredBrowserPanelRef.current = true;
-    const routeExplicitlyRequestsBrowserPanel = props.search.panel === "browser";
-    if (routeExplicitlyRequestsBrowserPanel || activePanel !== "browser") {
-      return;
-    }
-
-    // Don't auto-restore the browser panel just because this thread happened to
-    // have it open previously. Reopening the browser must stay an explicit user action.
-    updatePanelState({ panel: null });
-  }, [activePanel, props.search.panel, updatePanelState]);
-
-  useEffect(() => {
     const onMenuAction = window.desktopBridge?.onMenuAction;
     if (typeof onMenuAction !== "function") {
       return;
@@ -1502,6 +1615,21 @@ function SingleChatSurface(props: {
     };
   }, [panelState, updatePanelState]);
 
+  useEffect(() => {
+    const onOpenBrowserPanelRequest = window.desktopBridge?.browser.onBrowserUseOpenPanelRequest;
+    if (typeof onOpenBrowserPanelRequest !== "function") {
+      return;
+    }
+
+    const unsubscribe = onOpenBrowserPanelRequest(() => {
+      updatePanelState({ panel: "browser" });
+    });
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, [updatePanelState]);
+
   const shouldRenderPanelContent = activePanel !== null && (panelOpen || panelState.hasOpenedPanel);
 
   const excludedThreadIds = useMemo(
@@ -1509,7 +1637,7 @@ function SingleChatSurface(props: {
     [props.threadId],
   );
 
-  if (!shouldUseDiffSheet) {
+  if (!shouldUseDiffSheet || activePanel === "browser") {
     return (
       <div className="flex h-dvh min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
         <ChatPaneDropOverlay

@@ -61,8 +61,13 @@ import {
 } from "./githubUpdateFeed";
 import { isArm64HostRunningIntelBuild, resolveDesktopRuntimeInfo } from "./runtimeArch";
 import { DesktopBrowserManager } from "./browserManager";
-import { registerBrowserIpcHandlers, sendBrowserState } from "./browserIpc";
-import { BrowserUsePipeServer } from "./browserUsePipeServer";
+import { BROWSER_IPC_CHANNELS, registerBrowserIpcHandlers, sendBrowserState } from "./browserIpc";
+import {
+  BrowserUsePipeServer,
+  DPCODE_BROWSER_USE_PIPE_ENV,
+  DPCODE_BROWSER_USE_PIPE_PATH,
+  T3CODE_BROWSER_USE_PIPE_ENV,
+} from "./browserUsePipeServer";
 import {
   DESKTOP_WS_URL_CHANNEL,
   normalizeDesktopWsUrl,
@@ -119,11 +124,7 @@ const DESKTOP_UPDATE_ALLOW_PRERELEASE = false;
 const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
 const DPCODE_BROWSER_LABEL = "DPCODE browser";
 const browserPerfLoggingEnabled =
-  process.env.DPCODE_BROWSER_PERF === "1" ||
-  process.env.T3CODE_BROWSER_PERF === "1" ||
-  (isDevelopment &&
-    process.env.DPCODE_BROWSER_PERF !== "0" &&
-    process.env.T3CODE_BROWSER_PERF !== "0");
+  process.env.DPCODE_BROWSER_PERF === "1" || process.env.T3CODE_BROWSER_PERF === "1";
 
 type DesktopUpdateErrorContext = DesktopUpdateState["errorContext"];
 
@@ -187,7 +188,11 @@ async function ensureBrowserUsePipeServer(): Promise<void> {
   if (browserUsePipeServer) {
     return;
   }
-  const server = new BrowserUsePipeServer(browserManager);
+  const server = new BrowserUsePipeServer(browserManager, {
+    requestOpenPanel: () => {
+      mainWindow?.webContents.send(BROWSER_IPC_CHANNELS.requestOpenPanel);
+    },
+  });
   await server.start();
   browserUsePipeServer = server;
 }
@@ -1389,11 +1394,13 @@ function backendEnv(): NodeJS.ProcessEnv {
     DPCODE_PORT: String(backendPort),
     DPCODE_HOME: BASE_DIR,
     DPCODE_AUTH_TOKEN: backendAuthToken,
+    [DPCODE_BROWSER_USE_PIPE_ENV]: DPCODE_BROWSER_USE_PIPE_PATH,
     T3CODE_MODE: "desktop",
     T3CODE_NO_BROWSER: "1",
     T3CODE_PORT: String(backendPort),
     T3CODE_HOME: BASE_DIR,
     T3CODE_AUTH_TOKEN: backendAuthToken,
+    [T3CODE_BROWSER_USE_PIPE_ENV]: DPCODE_BROWSER_USE_PIPE_PATH,
   };
 }
 
@@ -1840,6 +1847,7 @@ function createWindow(): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      webviewTag: true,
     },
   });
   browserManager.setWindow(window);

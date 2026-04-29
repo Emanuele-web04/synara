@@ -15,6 +15,7 @@ import {
   ArrowRightIcon,
   CameraIcon,
   CopyIcon,
+  EllipsisIcon,
   ExternalLinkIcon,
   GlobeIcon,
   LoaderCircleIcon,
@@ -48,6 +49,7 @@ import {
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
+import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "./ui/menu";
 import { toastManager } from "./ui/toast";
 
 interface BrowserPanelProps {
@@ -56,28 +58,39 @@ interface BrowserPanelProps {
   onClosePanel: () => void;
 }
 
-const BROWSER_BOUNDS_SYNC_BURST_FRAMES = 8;
+const BROWSER_BOUNDS_SYNC_BURST_FRAMES = 30;
 const BROWSER_BOUNDS_SYNC_STABLE_FRAME_TARGET = 2;
+const BROWSER_WEBVIEW_PARTITION = "persist:dpcode-browser";
+const BROWSER_BLANK_URL = "about:blank";
 const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
 const DPCODE_BROWSER_LABEL = "DPCODE browser";
+const PANEL_RESIZE_OVERLAY_SYNC_EVENT = "dpcode:panel-resize-overlay-sync";
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
 const NATIVE_BROWSER_OBSCURING_OVERLAY_SELECTOR = [
   "[data-slot='dialog-backdrop']",
   "[data-slot='dialog-popup']",
   "[data-slot='dialog-viewport']",
-  "[data-slot='sheet-backdrop']",
-  "[data-slot='sheet-popup']",
   "[data-slot='alert-dialog-backdrop']",
   "[data-slot='alert-dialog-popup']",
   "[data-slot='alert-dialog-viewport']",
   "[data-slot='command-dialog-backdrop']",
   "[data-slot='command-dialog-popup']",
   "[data-slot='command-dialog-viewport']",
+  "[data-slot='toast-popup']",
+  "[role='dialog'][aria-modal='true']",
+].join(", ");
+
+// The browser itself lives inside a sheet, and toast portals/positioners are just
+// layout containers. Treating either as blockers hides the WebContentsView.
+const NATIVE_BROWSER_NON_OBSCURING_OVERLAY_SELECTOR = [
+  "[data-panel-resize-overlay='true']",
+  "[data-slot='sheet-backdrop']",
+  "[data-slot='sheet-popup']",
+  "[data-slot='toast-portal']",
+  "[data-slot='toast-portal-anchored']",
   "[data-slot='toast-viewport']",
   "[data-slot='toast-viewport-anchored']",
   "[data-slot='toast-positioner']",
-  "[data-slot='toast-popup']",
-  "[role='dialog'][aria-modal='true']",
 ].join(", ");
 
 interface BrowserViewportPerfCounters {
@@ -93,17 +106,32 @@ interface BrowserViewportPerfCounters {
   ignoredTransitionSignals: number;
 }
 
+interface BrowserWebviewElement extends HTMLElement {
+  getWebContentsId?: () => number;
+}
+
 const VIEWPORT_TRANSITION_PROPERTIES = new Set([
   "transform",
+  "translate",
+  "scale",
+  "rotate",
   "width",
   "max-width",
   "min-width",
+  "height",
+  "max-height",
+  "min-height",
   "left",
   "right",
+  "top",
+  "bottom",
   "inset",
   "inset-inline",
   "inset-inline-start",
   "inset-inline-end",
+  "inset-block",
+  "inset-block-start",
+  "inset-block-end",
 ]);
 function closeButtonClassName(isActive: boolean) {
   return cn(
@@ -128,12 +156,30 @@ function ignoreBrowserBoundsSyncError(): void {
   // browser errors because they do not reflect page navigation health.
 }
 
+function setBrowserWebviewOverlayOcclusion(
+  webview: BrowserWebviewElement | null,
+  occluded: boolean,
+): void {
+  if (!webview) {
+    return;
+  }
+  webview.style.visibility = occluded ? "hidden" : "visible";
+  webview.style.pointerEvents = occluded ? "none" : "auto";
+}
+
 function isVisibleOverlayElement(element: HTMLElement): boolean {
   const styles = window.getComputedStyle(element);
   if (styles.display === "none" || styles.visibility === "hidden" || styles.opacity === "0") {
     return false;
   }
   return element.getClientRects().length > 0;
+}
+
+function isNativeBrowserNonObscuringOverlayElement(element: HTMLElement): boolean {
+  return (
+    element.closest("[data-slot='toast-popup']") === null &&
+    element.closest(NATIVE_BROWSER_NON_OBSCURING_OVERLAY_SELECTOR) !== null
+  );
 }
 
 const NATIVE_BROWSER_OVERLAY_SAMPLE_POINTS = [
@@ -188,6 +234,9 @@ function hasTopLayerDomObstruction(element: HTMLElement): boolean {
       if (hitElement === element || element.contains(hitElement) || hitElement.contains(element)) {
         continue;
       }
+      if (isNativeBrowserNonObscuringOverlayElement(hitElement)) {
+        continue;
+      }
       if (!isVisibleOverlayElement(hitElement)) {
         continue;
       }
@@ -209,38 +258,6 @@ function hasNativeBrowserObscuringOverlay(element: HTMLElement): boolean {
   }
 
   return hasTopLayerDomObstruction(element);
-}
-
-function nodeMayAffectNativeBrowserOverlay(node: Node | null): boolean {
-  if (!(node instanceof HTMLElement)) {
-    return false;
-  }
-
-  return (
-    node.matches(NATIVE_BROWSER_OBSCURING_OVERLAY_SELECTOR) ||
-    node.querySelector(NATIVE_BROWSER_OBSCURING_OVERLAY_SELECTOR) !== null ||
-    node.closest(NATIVE_BROWSER_OBSCURING_OVERLAY_SELECTOR) !== null
-  );
-}
-
-function mutationMayAffectNativeBrowserOverlay(mutation: MutationRecord): boolean {
-  if (nodeMayAffectNativeBrowserOverlay(mutation.target)) {
-    return true;
-  }
-
-  for (const node of mutation.addedNodes) {
-    if (nodeMayAffectNativeBrowserOverlay(node)) {
-      return true;
-    }
-  }
-
-  for (const node of mutation.removedNodes) {
-    if (nodeMayAffectNativeBrowserOverlay(node)) {
-      return true;
-    }
-  }
-
-  return false;
 }
 
 function isNativeBrowserTransitionSignalTarget(
@@ -267,10 +284,6 @@ function isBrowserPerfLoggingEnabled(): boolean {
     return false;
   }
 
-  if (import.meta.env.DEV) {
-    return true;
-  }
-
   try {
     return (
       window.localStorage.getItem("dpcode:browser-perf") === "1" ||
@@ -294,7 +307,11 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
     (store) => store.draftsByThreadId[threadId]?.assistantSelections.length ?? 0,
   );
   const addressInputRef = useRef<HTMLInputElement>(null);
+  const browserTabsBarRef = useRef<HTMLDivElement>(null);
   const browserViewportRef = useRef<HTMLDivElement>(null);
+  const browserWebviewRef = useRef<BrowserWebviewElement | null>(null);
+  const browserWebviewTabIdRef = useRef<string | null>(null);
+  const browserWebviewAttachKeyRef = useRef<string | null>(null);
   const copyScreenshotButtonRef = useRef<HTMLButtonElement>(null);
   const addressDraftsByTabIdRef = useRef(new Map<string, string>());
   const lastSyncedAddressByTabIdRef = useRef(new Map<string, string>());
@@ -420,6 +437,94 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
     previousActiveTabIdRef.current = activeTabId;
   }, [activeTab]);
 
+  useLayoutEffect(() => {
+    if (!api || !workspaceReady || !activeTab) {
+      return;
+    }
+
+    const host = browserViewportRef.current;
+    if (!host) {
+      return;
+    }
+
+    let webview = browserWebviewRef.current;
+    if (!webview) {
+      webview = document.createElement("webview") as BrowserWebviewElement;
+      webview.className = "h-full w-full";
+      webview.style.display = "flex";
+      webview.style.width = "100%";
+      webview.style.height = "100%";
+      webview.style.backgroundColor = "#fff";
+      webview.setAttribute("partition", BROWSER_WEBVIEW_PARTITION);
+      webview.setAttribute("webpreferences", "contextIsolation=yes,nodeIntegration=no,sandbox=yes");
+      browserWebviewRef.current = webview;
+      host.append(webview);
+    } else if (webview.parentElement !== host) {
+      host.append(webview);
+    }
+
+    const initialUrl = activeTab.lastCommittedUrl ?? activeTab.url ?? BROWSER_BLANK_URL;
+    if (browserWebviewTabIdRef.current !== activeTab.id) {
+      browserWebviewTabIdRef.current = activeTab.id;
+      browserWebviewAttachKeyRef.current = null;
+      webview.setAttribute("src", initialUrl.length > 0 ? initialUrl : BROWSER_BLANK_URL);
+    }
+
+    const attachVisibleWebview = () => {
+      let webContentsId: number | undefined;
+      try {
+        webContentsId = webview.getWebContentsId?.();
+      } catch {
+        return;
+      }
+      if (!webContentsId || webContentsId <= 0) {
+        return;
+      }
+
+      const attachKey = `${activeTab.id}:${webContentsId}`;
+      if (browserWebviewAttachKeyRef.current === attachKey) {
+        return;
+      }
+      browserWebviewAttachKeyRef.current = attachKey;
+      void runBrowserAction(() =>
+        api.browser.attachWebview({
+          threadId,
+          tabId: activeTab.id,
+          webContentsId,
+        }),
+      ).then((state) => {
+        if (state) {
+          upsertThreadState(state);
+        }
+      });
+    };
+
+    webview.addEventListener("dom-ready", attachVisibleWebview);
+    webview.addEventListener("did-start-loading", attachVisibleWebview);
+    window.requestAnimationFrame(attachVisibleWebview);
+
+    return () => {
+      webview.removeEventListener("dom-ready", attachVisibleWebview);
+      webview.removeEventListener("did-start-loading", attachVisibleWebview);
+    };
+  }, [
+    activeTab,
+    api,
+    runBrowserAction,
+    threadId,
+    upsertThreadState,
+    workspaceReady,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      browserWebviewRef.current?.remove();
+      browserWebviewRef.current = null;
+      browserWebviewTabIdRef.current = null;
+      browserWebviewAttachKeyRef.current = null;
+    };
+  }, []);
+
   useEffect(() => {
     const liveTabIds = new Set(threadBrowserState?.tabs.map((tab) => tab.id) ?? []);
     for (const tabId of addressDraftsByTabIdRef.current.keys()) {
@@ -461,10 +566,11 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
       perfCountersRef.current.syncAttempts += 1;
       const obscuredByOverlay = hasNativeBrowserObscuringOverlay(element);
       lastOverlayObscuredRef.current = obscuredByOverlay;
+      setBrowserWebviewOverlayOcclusion(browserWebviewRef.current, obscuredByOverlay);
+      const rect = element.getBoundingClientRect();
       const bounds = obscuredByOverlay
         ? null
         : (() => {
-            const rect = element.getBoundingClientRect();
             if (rect.width <= 0 || rect.height <= 0) {
               return null;
             }
@@ -476,8 +582,8 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
             };
           })();
       const nextKey = bounds
-        ? `${Math.round(bounds.x)}:${Math.round(bounds.y)}:${Math.round(bounds.width)}:${Math.round(bounds.height)}`
-        : "hidden";
+        ? `renderer:${Math.round(bounds.x)}:${Math.round(bounds.y)}:${Math.round(bounds.width)}:${Math.round(bounds.height)}`
+        : "renderer:hidden";
       lastMeasuredBoundsKeyRef.current = nextKey;
       if (lastSentBoundsRef.current === nextKey) {
         perfCountersRef.current.syncSkips += 1;
@@ -485,7 +591,9 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
       }
       lastSentBoundsRef.current = nextKey;
       perfCountersRef.current.syncSends += 1;
-      void api.browser.setPanelBounds({ threadId, bounds }).catch(ignoreBrowserBoundsSyncError);
+      void api.browser
+        .setPanelBounds({ threadId, bounds, surface: "renderer" })
+        .catch(ignoreBrowserBoundsSyncError);
     };
 
     // The panel can slide horizontally without resizing. A short burst keeps the
@@ -505,7 +613,8 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
         perfCountersRef.current.burstFrames += 1;
         const previousMeasuredKey = lastMeasuredBoundsKeyRef.current;
         syncBounds();
-        if (lastMeasuredBoundsKeyRef.current === previousMeasuredKey) {
+        const measuredHidden = lastMeasuredBoundsKeyRef.current?.endsWith(":hidden") ?? false;
+        if (!measuredHidden && lastMeasuredBoundsKeyRef.current === previousMeasuredKey) {
           burstStableFramesRef.current += 1;
         } else {
           burstStableFramesRef.current = 0;
@@ -538,17 +647,6 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
       });
     };
 
-    const scheduleOverlayVisibilitySync = () => {
-      const obscuredByOverlay = hasNativeBrowserObscuringOverlay(element);
-      if (obscuredByOverlay === lastOverlayObscuredRef.current) {
-        return;
-      }
-      scheduleSyncBounds();
-      if (obscuredByOverlay) {
-        syncBoundsBurst();
-      }
-    };
-
     const handleTransitionBounds = (event: TransitionEvent) => {
       if (!isNativeBrowserTransitionSignalTarget(event.target, element)) {
         perfCountersRef.current.ignoredTransitionSignals += 1;
@@ -577,28 +675,16 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
     });
     observer.observe(element);
     window.addEventListener("resize", scheduleSyncBounds);
-    // Keep overlay sync event-driven instead of watching the full app subtree.
-    // Codex-style browser hosts avoid broad DOM observation and instead react to
-    // explicit UI lifecycle signals plus direct visibility checks at sync time.
-    const overlayObserver = new MutationObserver((mutations) => {
-      if (!mutations.some(mutationMayAffectNativeBrowserOverlay)) {
-        return;
-      }
-      scheduleOverlayVisibilitySync();
-    });
-    overlayObserver.observe(document.body, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-    });
+    window.addEventListener(PANEL_RESIZE_OVERLAY_SYNC_EVENT, scheduleSyncBounds);
     document.addEventListener("transitionrun", handleTransitionBounds, true);
     document.addEventListener("transitionend", handleTransitionBounds, true);
     document.addEventListener("transitioncancel", handleTransitionBounds, true);
 
     return () => {
+      setBrowserWebviewOverlayOcclusion(browserWebviewRef.current, false);
       observer.disconnect();
-      overlayObserver.disconnect();
       window.removeEventListener("resize", scheduleSyncBounds);
+      window.removeEventListener(PANEL_RESIZE_OVERLAY_SYNC_EVENT, scheduleSyncBounds);
       document.removeEventListener("transitionrun", handleTransitionBounds, true);
       document.removeEventListener("transitionend", handleTransitionBounds, true);
       document.removeEventListener("transitioncancel", handleTransitionBounds, true);
@@ -792,7 +878,6 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
         <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
           <Button
             type="button"
-            ref={copyScreenshotButtonRef}
             variant="ghost"
             size="icon-sm"
             className="size-7 shrink-0"
@@ -921,62 +1006,55 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
         ) : null}
       </div>
       <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          className="size-7"
-          onClick={onCreateTab}
-        >
-          <PlusIcon className="size-3.5" />
-          <span className="sr-only">New tab</span>
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          className="size-7"
-          disabled={!activeTab}
-          onClick={onCaptureScreenshot}
-        >
-          <CameraIcon className="size-3.5" />
-          <span className="sr-only">Capture screenshot into composer</span>
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          className="size-7"
-          disabled={!activeTab}
-          onClick={onCopyScreenshotToClipboard}
-        >
-          <CopyIcon className="size-3.5" />
-          <span className="sr-only">Copy browser screenshot to clipboard</span>
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          className="size-7"
-          disabled={!activeTab}
-          onClick={() => {
-            if (!api || !activeTab) return;
-            void api.shell.openExternal(activeTab.url);
-          }}
-        >
-          <ExternalLinkIcon className="size-3.5" />
-          <span className="sr-only">Open in external browser</span>
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          className="size-7"
-          onClick={onClosePanel}
-        >
-          <XIcon className="size-3.5" />
-          <span className="sr-only">Close browser panel</span>
-        </Button>
+        <Menu modal={false}>
+          <MenuTrigger
+            render={
+              <Button
+                ref={copyScreenshotButtonRef}
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                className="size-7"
+                aria-label="Browser actions"
+              />
+            }
+          >
+            <EllipsisIcon className="size-3.5" />
+          </MenuTrigger>
+          <MenuPopup
+            align="end"
+            side="bottom"
+            className="w-52 rounded-lg border-[color:var(--color-border)] bg-[var(--composer-surface)] shadow-lg"
+          >
+            <MenuItem onClick={onCreateTab}>
+              <PlusIcon className="size-4" />
+              <span>New tab</span>
+            </MenuItem>
+            <MenuItem disabled={!activeTab} onClick={onCaptureScreenshot}>
+              <CameraIcon className="size-4" />
+              <span>Capture screenshot</span>
+            </MenuItem>
+            <MenuItem disabled={!activeTab} onClick={onCopyScreenshotToClipboard}>
+              <CopyIcon className="size-4" />
+              <span>Copy screenshot</span>
+            </MenuItem>
+            <MenuItem
+              disabled={!activeTab}
+              onClick={() => {
+                if (!api || !activeTab) return;
+                void api.shell.openExternal(activeTab.url);
+              }}
+            >
+              <ExternalLinkIcon className="size-4" />
+              <span>Open externally</span>
+            </MenuItem>
+            <MenuSeparator />
+            <MenuItem onClick={onClosePanel}>
+              <XIcon className="size-4" />
+              <span>Close browser panel</span>
+            </MenuItem>
+          </MenuPopup>
+        </Menu>
       </div>
     </div>
   );
@@ -992,7 +1070,7 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
   return (
     <DiffPanelShell mode={mode} header={header}>
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="flex items-center gap-2 border-b border-border px-2 py-1.5">
+        <div ref={browserTabsBarRef} className="flex items-center gap-2 border-b border-border px-2 py-1.5">
           <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
             {threadBrowserState?.tabs.map((tab) => {
               const isActive = tab.id === activeTab?.id;
@@ -1002,12 +1080,12 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
                   className={cn(
                     "group flex h-8 min-w-0 max-w-[14rem] items-center rounded-md border px-2 text-left text-xs transition-colors",
                     isActive
-                      ? "border-border bg-card text-foreground shadow-sm"
-                      : "border-transparent bg-background/40 text-muted-foreground hover:bg-card/60",
+                      ? "border-border/70 text-foreground"
+                      : "border-transparent text-muted-foreground hover:border-border/50 hover:text-foreground",
                     tab.status === "suspended" ? "opacity-75" : "",
                   )}
                 >
-                  <span className="mr-2 flex size-4 shrink-0 items-center justify-center rounded-sm bg-background/80">
+                  <span className="mr-2 flex size-4 shrink-0 items-center justify-center rounded-sm">
                     {tab.faviconUrl ? (
                       <img alt="" src={tab.faviconUrl} className="size-3 rounded-[2px]" />
                     ) : (
@@ -1060,13 +1138,13 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
             </div>
           ) : null}
         </div>
-        <div className="relative min-h-0 flex-1 bg-background">
+        <div className="relative min-h-0 flex-1 bg-transparent">
           {!workspaceReady ? (
             <div className="absolute inset-0 z-10">
               <DiffPanelLoadingState label="Starting browser..." />
             </div>
           ) : null}
-          <div ref={browserViewportRef} className="absolute inset-0" />
+          <div ref={browserViewportRef} className="absolute inset-0 bg-transparent" />
         </div>
       </div>
     </DiffPanelShell>

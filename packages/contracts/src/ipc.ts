@@ -203,6 +203,11 @@ export interface BrowserPanelBounds {
 export interface BrowserSetPanelBoundsInput {
   threadId: ThreadId;
   bounds: BrowserPanelBounds | null;
+  surface?: "native" | "renderer";
+}
+
+export interface BrowserAttachWebviewInput extends BrowserTabInput {
+  webContentsId: number;
 }
 
 export interface BrowserCaptureScreenshotResult {
@@ -264,6 +269,7 @@ export interface DesktopBridge {
     hide: (input: BrowserThreadInput) => Promise<void>;
     getState: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;
     setPanelBounds: (input: BrowserSetPanelBoundsInput) => Promise<void>;
+    attachWebview: (input: BrowserAttachWebviewInput) => Promise<ThreadBrowserState>;
     copyScreenshotToClipboard: (input: BrowserTabInput) => Promise<void>;
     captureScreenshot: (input: BrowserTabInput) => Promise<BrowserCaptureScreenshotResult>;
     executeCdp: (input: BrowserExecuteCdpInput) => Promise<unknown>;
@@ -276,6 +282,7 @@ export interface DesktopBridge {
     selectTab: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
     openDevTools: (input: BrowserTabInput) => Promise<void>;
     onState: (listener: (state: ThreadBrowserState) => void) => () => void;
+    onBrowserUseOpenPanelRequest: (listener: () => void) => () => void;
   };
 }
 
@@ -400,6 +407,7 @@ export interface NativeApi {
     hide: (input: BrowserThreadInput) => Promise<void>;
     getState: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;
     setPanelBounds: (input: BrowserSetPanelBoundsInput) => Promise<void>;
+    attachWebview: (input: BrowserAttachWebviewInput) => Promise<ThreadBrowserState>;
     copyScreenshotToClipboard: (input: BrowserTabInput) => Promise<void>;
     captureScreenshot: (input: BrowserTabInput) => Promise<BrowserCaptureScreenshotResult>;
     executeCdp: (input: BrowserExecuteCdpInput) => Promise<unknown>;

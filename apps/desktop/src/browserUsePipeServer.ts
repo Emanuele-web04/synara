@@ -8,13 +8,19 @@ import * as Net from "node:net";
 import * as OS from "node:os";
 import * as Path from "node:path";
 
-import type { BrowserExecuteCdpInput, ThreadId } from "@t3tools/contracts";
+import type { BrowserExecuteCdpInput, ThreadBrowserState, ThreadId } from "@t3tools/contracts";
 
-import { DesktopBrowserManager } from "./browserManager";
+import type { DesktopBrowserManager } from "./browserManager";
 
 const BROWSER_USE_HEADER_BYTES = 4;
 const BROWSER_USE_MAX_MESSAGE_BYTES = 8 * 1024 * 1024;
 const BROWSER_USE_INITIAL_URL = "about:blank";
+const BROWSER_USE_PANEL_READY_TIMEOUT_MS = 2_000;
+const BROWSER_USE_PANEL_READY_POLL_MS = 50;
+const BROWSER_USE_PIPE_DIR = "codex-browser-use";
+const BROWSER_USE_PIPE_NAME_PREFIX = "dpcode-iab";
+export const DPCODE_BROWSER_USE_PIPE_ENV = "DPCODE_BROWSER_USE_PIPE_PATH";
+export const T3CODE_BROWSER_USE_PIPE_ENV = "T3CODE_BROWSER_USE_PIPE_PATH";
 
 type BrowserUseRpcId = string | number;
 
@@ -30,14 +36,32 @@ interface BrowserUseTrackedTab {
   tabId: string;
 }
 
-function resolveDefaultBrowserUsePipePath(platform = process.platform): string {
-  if (platform === "win32") {
-    return String.raw`\\.\pipe\codex-browser-use`;
-  }
-  return "/tmp/codex-browser-use";
+interface BrowserUsePipeServerOptions {
+  pipePath?: string;
+  requestOpenPanel?: () => void | Promise<void>;
 }
 
-export const DPCODE_BROWSER_USE_PIPE_PATH = resolveDefaultBrowserUsePipePath();
+export function resolveDefaultBrowserUsePipePath(platform = process.platform): string {
+  if (platform === "win32") {
+    return String.raw`\\.\pipe\codex-browser-use-${BROWSER_USE_PIPE_NAME_PREFIX}-${process.pid}`;
+  }
+  return Path.join(
+    OS.tmpdir(),
+    BROWSER_USE_PIPE_DIR,
+    `${BROWSER_USE_PIPE_NAME_PREFIX}-${process.pid}.sock`,
+  );
+}
+
+export function resolveConfiguredBrowserUsePipePath(
+  env: NodeJS.ProcessEnv = process.env,
+  platform = process.platform,
+): string {
+  const configured =
+    env[DPCODE_BROWSER_USE_PIPE_ENV]?.trim() || env[T3CODE_BROWSER_USE_PIPE_ENV]?.trim();
+  return configured || resolveDefaultBrowserUsePipePath(platform);
+}
+
+export const DPCODE_BROWSER_USE_PIPE_PATH = resolveConfiguredBrowserUsePipePath();
 
 function asObject(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -105,10 +129,14 @@ function ensurePipeParentDirectory(pipePath: string): void {
 }
 
 function cleanupPipePath(pipePath: string): void {
-  if (process.platform === "win32" || !FS.existsSync(pipePath)) {
+  if (process.platform === "win32") {
     return;
   }
   try {
+    const stat = FS.lstatSync(pipePath);
+    if (!stat.isSocket() && !stat.isFile()) {
+      return;
+    }
     FS.unlinkSync(pipePath);
   } catch {
     // Ignore stale socket cleanup failures.
@@ -123,13 +151,18 @@ export class BrowserUsePipeServer {
   private readonly selectedTrackedTabIdBySessionId = new Map<string, number>();
   private readonly cdpListenerDisposeBySessionId = new Map<string, () => void>();
   private readonly server: Net.Server;
+  private readonly pipePath: string;
+  private readonly requestOpenPanel: (() => void | Promise<void>) | undefined;
   private nextTrackedTabId = 1;
   private started = false;
 
   constructor(
     private readonly browserManager: DesktopBrowserManager,
-    private readonly pipePath = DPCODE_BROWSER_USE_PIPE_PATH,
+    options: BrowserUsePipeServerOptions | string = DPCODE_BROWSER_USE_PIPE_PATH,
   ) {
+    this.pipePath =
+      typeof options === "string" ? options : (options.pipePath ?? DPCODE_BROWSER_USE_PIPE_PATH);
+    this.requestOpenPanel = typeof options === "string" ? undefined : options.requestOpenPanel;
     this.server = Net.createServer((socket) => this.handleSocketConnection(socket));
   }
 
@@ -232,10 +265,12 @@ export class BrowserUsePipeServer {
       case "ping":
         return "pong";
       case "getInfo":
+        const sessionId = asString(asObject(params)?.session_id);
         return {
           name: "DP Code In-app Browser",
           version: "0.1.0",
           type: "iab",
+          ...(sessionId ? { metadata: { codexSessionId: sessionId } } : {}),
         };
       case "getTabs":
         return this.getTabsForSession(requireSessionId(params));
@@ -260,13 +295,34 @@ export class BrowserUsePipeServer {
 
   private getActiveBrowserHostState(): {
     threadId: ThreadId;
-    state: ReturnType<DesktopBrowserManager["getState"]>;
+    state: ThreadBrowserState;
   } | null {
     const snapshot = this.browserManager.getBrowserUseSnapshot();
     if (!snapshot || !snapshot.state.open) {
       return null;
     }
     return snapshot;
+  }
+
+  private async waitForActiveBrowserHostState(): Promise<{
+    threadId: ThreadId;
+    state: ThreadBrowserState;
+  } | null> {
+    const existing = this.getActiveBrowserHostState();
+    if (existing) {
+      return existing;
+    }
+
+    await this.requestOpenPanel?.();
+    const deadline = Date.now() + BROWSER_USE_PANEL_READY_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      const snapshot = this.getActiveBrowserHostState();
+      if (snapshot) {
+        return snapshot;
+      }
+      await new Promise((resolve) => setTimeout(resolve, BROWSER_USE_PANEL_READY_POLL_MS));
+    }
+    return null;
   }
 
   private trackTab(threadId: ThreadId, tabId: string): BrowserUseTrackedTab {
@@ -316,7 +372,7 @@ export class BrowserUsePipeServer {
     active: boolean;
     url: string;
   }> {
-    const snapshot = this.getActiveBrowserHostState();
+    const snapshot = await this.waitForActiveBrowserHostState();
     if (!snapshot) {
       throw new Error("No active DP Code browser pane available");
     }
