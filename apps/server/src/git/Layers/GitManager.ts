@@ -23,7 +23,7 @@ import {
   type GitRunStackedActionOptions,
 } from "../Services/GitManager.ts";
 import { GitCore } from "../Services/GitCore.ts";
-import { GitHubCli } from "../Services/GitHubCli.ts";
+import { GitHubCli, type GitHubPullRequestSummary } from "../Services/GitHubCli.ts";
 import { TextGeneration } from "../Services/TextGeneration.ts";
 import { ServerConfig } from "../../config.ts";
 
@@ -246,6 +246,50 @@ function matchesBranchHeadContext(
     return false;
   }
   return true;
+}
+
+// Normalizes `gh pr view` service output into the richer internal PR shape.
+function toPullRequestInfo(pullRequest: GitHubPullRequestSummary): PullRequestInfo {
+  return {
+    number: pullRequest.number,
+    title: pullRequest.title,
+    url: pullRequest.url,
+    baseRefName: pullRequest.baseRefName,
+    headRefName: pullRequest.headRefName,
+    state: pullRequest.state ?? "open",
+    updatedAt: null,
+    ...(pullRequest.isCrossRepository !== undefined
+      ? { isCrossRepository: pullRequest.isCrossRepository }
+      : {}),
+    ...(pullRequest.headRepositoryNameWithOwner !== undefined
+      ? { headRepositoryNameWithOwner: pullRequest.headRepositoryNameWithOwner }
+      : {}),
+    ...(pullRequest.headRepositoryOwnerLogin !== undefined
+      ? { headRepositoryOwnerLogin: pullRequest.headRepositoryOwnerLogin }
+      : {}),
+  };
+}
+
+// Detects GitHub's duplicate-PR response from `gh pr create`.
+function isPullRequestAlreadyExistsError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("pull request") &&
+    message.includes("branch") &&
+    message.includes("already exists")
+  );
+}
+
+// Pulls the existing PR URL out of GitHub's duplicate-PR error when present.
+function extractPullRequestUrlFromError(error: unknown): string | null {
+  if (!(error instanceof Error)) {
+    return null;
+  }
+  const match = /https:\/\/github\.com\/[^\s)]+\/pull\/\d+/i.exec(error.message);
+  return match?.[0] ?? null;
 }
 
 function parsePullRequestList(raw: unknown): PullRequestInfo[] {
@@ -1061,6 +1105,30 @@ export const makeGitManager = Effect.gen(function* () {
       return parsed[0] ?? null;
     });
 
+  const resolveAlreadyExistingPullRequest = (
+    cwd: string,
+    error: unknown,
+    headContext: BranchHeadContext,
+  ) =>
+    Effect.gen(function* () {
+      const pullRequestUrl = extractPullRequestUrlFromError(error);
+      if (pullRequestUrl) {
+        const pullRequest = yield* gitHubCli
+          .getPullRequest({ cwd, reference: pullRequestUrl })
+          .pipe(Effect.catch(() => Effect.succeed(null)));
+        if (pullRequest) {
+          const candidate = toPullRequestInfo(pullRequest);
+          if (candidate.state === "open" && matchesBranchHeadContext(candidate, headContext)) {
+            return candidate;
+          }
+        }
+      }
+
+      // `gh pr create` can race with an existing-PR probe. Treat GitHub's
+      // create-time duplicate response as success when the PR can be found.
+      return yield* findOpenPr(cwd, headContext);
+    });
+
   const resolveBaseBranch = (
     cwd: string,
     branch: string,
@@ -1339,7 +1407,7 @@ export const makeGitManager = Effect.gen(function* () {
             gitManagerError("runPrStep", "Failed to write pull request body temp file.", cause),
           ),
         );
-      yield* gitHubCli
+      const existingAfterCreateConflict = yield* gitHubCli
         .createPullRequest({
           cwd,
           baseBranch,
@@ -1347,7 +1415,26 @@ export const makeGitManager = Effect.gen(function* () {
           title: generated.title,
           bodyFile,
         })
-        .pipe(Effect.ensuring(fileSystem.remove(bodyFile).pipe(Effect.catch(() => Effect.void))));
+        .pipe(
+          Effect.as(null),
+          Effect.catch((error) => {
+            if (!isPullRequestAlreadyExistsError(error)) {
+              return Effect.fail(error);
+            }
+            return resolveAlreadyExistingPullRequest(cwd, error, headContext);
+          }),
+          Effect.ensuring(fileSystem.remove(bodyFile).pipe(Effect.catch(() => Effect.void))),
+        );
+      if (existingAfterCreateConflict) {
+        return {
+          status: "opened_existing" as const,
+          url: existingAfterCreateConflict.url,
+          number: existingAfterCreateConflict.number,
+          baseBranch: existingAfterCreateConflict.baseRefName,
+          headBranch: existingAfterCreateConflict.headRefName,
+          title: existingAfterCreateConflict.title,
+        };
+      }
 
       const created = yield* findOpenPr(cwd, headContext);
       if (!created) {

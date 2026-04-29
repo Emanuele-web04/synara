@@ -40,6 +40,7 @@ interface FakeGhScenario {
   };
   repositoryCloneUrls?: Record<string, { url: string; sshUrl: string }>;
   failWith?: GitHubCliError;
+  createPullRequestError?: GitHubCliError;
 }
 
 interface FakeGitTextGeneration {
@@ -300,6 +301,9 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
     }
 
     if (args[0] === "pr" && args[1] === "create") {
+      if (scenario.createPullRequestError) {
+        return Effect.fail(scenario.createPullRequestError);
+      }
       return Effect.succeed({
         stdout:
           (scenario.createdPrUrl ?? "https://github.com/pingdotgg/codething-mvp/pull/101") + "\n",
@@ -1855,6 +1859,50 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         ghCalls.some((call) => call.includes("pr create --base main --head feature-create-pr")),
       ).toBe(true);
       expect(ghCalls.some((call) => call.startsWith("pr view "))).toBe(false);
+    }),
+  );
+
+  it.effect("opens existing PR when create reports a duplicate branch PR", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/already-created"]);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      fs.writeFileSync(path.join(repoDir, "changes.txt"), "change\n");
+      yield* runGit(repoDir, ["add", "changes.txt"]);
+      yield* runGit(repoDir, ["commit", "-m", "Feature commit"]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "feature/already-created"]);
+      yield* runGit(repoDir, ["config", "branch.feature/already-created.gh-merge-base", "main"]);
+
+      const existingPrUrl = "https://github.com/pingdotgg/codething-mvp/pull/82";
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: {
+          prListSequence: ["[]"],
+          createPullRequestError: new GitHubCliError({
+            operation: "execute",
+            detail: `GitHub CLI command failed: gh pr create failed (code=1, signal=null). a pull request for branch "feature/already-created" into branch "main" already exists: ${existingPrUrl}`,
+          }),
+          pullRequest: {
+            number: 82,
+            title: "Already created PR",
+            url: existingPrUrl,
+            baseRefName: "main",
+            headRefName: "feature/already-created",
+            state: "open",
+          },
+        },
+      });
+
+      const result = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "commit_push_pr",
+      });
+
+      expect(result.pr.status).toBe("opened_existing");
+      expect(result.pr.number).toBe(82);
+      expect(ghCalls.some((call) => call.includes("pr create --base main"))).toBe(true);
+      expect(ghCalls.some((call) => call.startsWith(`pr view ${existingPrUrl}`))).toBe(true);
     }),
   );
 
