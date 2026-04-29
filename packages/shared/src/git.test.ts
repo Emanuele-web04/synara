@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   WORKTREE_BRANCH_PREFIX,
+  buildDpcodeBranchName,
   buildTemporaryWorktreeBranchName,
   isTemporaryWorktreeBranch,
+  resolveUniqueDpcodeBranchName,
   resolveThreadBranchRegressionGuard,
 } from "./git";
 
@@ -49,5 +51,38 @@ describe("resolveThreadBranchRegressionGuard", () => {
         nextBranch: null,
       }),
     ).toBeNull();
+  });
+});
+
+describe("buildDpcodeBranchName", () => {
+  it("uses dpcode as the branch namespace", () => {
+    expect(buildDpcodeBranchName("fix toast copy")).toBe("dpcode/fix-toast-copy");
+  });
+
+  it("keeps non-dpcode namespaces inside the dpcode branch", () => {
+    expect(buildDpcodeBranchName("feature/refine-toolbar-actions")).toBe(
+      "dpcode/feature/refine-toolbar-actions",
+    );
+  });
+
+  it("normalizes legacy dpcode-style prefixes before rebuilding the branch", () => {
+    expect(buildDpcodeBranchName("t3code/refine toolbar actions")).toBe(
+      "dpcode/refine-toolbar-actions",
+    );
+  });
+
+  it("falls back to dpcode/update when no preferred name is provided", () => {
+    expect(buildDpcodeBranchName()).toBe("dpcode/update");
+  });
+});
+
+describe("resolveUniqueDpcodeBranchName", () => {
+  it("increments suffix when the dpcode branch already exists", () => {
+    expect(
+      resolveUniqueDpcodeBranchName(
+        ["main", "dpcode/fix-toast-copy", "dpcode/fix-toast-copy-2"],
+        "fix toast copy",
+      ),
+    ).toBe("dpcode/fix-toast-copy-3");
   });
 });

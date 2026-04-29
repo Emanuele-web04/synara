@@ -3,7 +3,10 @@ import type {
   GitStackedAction,
   GitStatusResult,
 } from "@t3tools/contracts";
-import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
+import {
+  isTemporaryWorktreeBranch,
+  resolveUniqueDpcodeBranchName,
+} from "@t3tools/shared/git";
 
 export type GitActionIconName = "commit" | "push" | "pr";
 
@@ -60,6 +63,13 @@ function truncateText(
   if (value.length <= maxLength) return value;
   if (maxLength <= 3) return "...".slice(0, maxLength);
   return `${value.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+}
+
+export function resolveDefaultCreateBranchName(
+  existingBranchNames: readonly string[],
+  preferredBranch?: string,
+): string {
+  return resolveUniqueDpcodeBranchName(existingBranchNames, preferredBranch);
 }
 
 export function buildGitActionProgressStages(input: {
