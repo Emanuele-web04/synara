@@ -1037,6 +1037,12 @@ const make = Effect.gen(function* () {
           input.thread.id,
           input.turnId,
         );
+        if (input.event.itemId) {
+          const eventMessageId = MessageId.makeUnsafe(`assistant:${input.event.itemId}`);
+          if (knownAssistantMessageIds.has(eventMessageId)) {
+            return eventMessageId;
+          }
+        }
         if (knownAssistantMessageIds.size === 1) {
           const [onlyMessageId] = knownAssistantMessageIds;
           if (onlyMessageId) {

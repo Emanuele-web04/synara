@@ -2163,6 +2163,118 @@ describe("ProviderRuntimeIngestion", () => {
     expect(assistantMessages[0]?.text).toBe("same answer");
   });
 
+  it("honors the completed item id when a turn has multiple live assistant messages", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-multiple-assistant-items"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("message-multiple-assistant-items"),
+          role: "user",
+          text: "stream two messages",
+          attachments: [],
+        },
+        assistantDeliveryMode: "streaming",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await harness.drain();
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-multiple-assistant-items"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-multiple-assistant-items"),
+    });
+
+    await waitForThread(
+      harness.engine,
+      (thread) =>
+        thread.session?.status === "running" &&
+        thread.session?.activeTurnId === "turn-multiple-assistant-items",
+    );
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-assistant-delta-multiple-assistant-items-a"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-multiple-assistant-items"),
+      itemId: asItemId("item-multiple-assistant-items-a"),
+      payload: {
+        streamKind: "assistant_text",
+        delta: "first answer",
+      },
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-assistant-delta-multiple-assistant-items-b"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-multiple-assistant-items"),
+      itemId: asItemId("item-multiple-assistant-items-b"),
+      payload: {
+        streamKind: "assistant_text",
+        delta: "second answer",
+      },
+    });
+
+    await waitForThread(harness.engine, (thread) => {
+      const assistantMessages = thread.messages.filter(
+        (message: ProviderRuntimeTestMessage) =>
+          message.role === "assistant" && message.turnId === "turn-multiple-assistant-items",
+      );
+      return (
+        assistantMessages.length === 2 && assistantMessages.every((message) => message.streaming)
+      );
+    });
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-assistant-completed-multiple-assistant-items-a"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-multiple-assistant-items"),
+      itemId: asItemId("item-multiple-assistant-items-a"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: "first answer",
+      },
+    });
+
+    const finalizedThread = await waitForThread(harness.engine, (thread) =>
+      thread.messages.some(
+        (message: ProviderRuntimeTestMessage) =>
+          message.id === "assistant:item-multiple-assistant-items-a" && !message.streaming,
+      ),
+    );
+
+    const firstMessage = finalizedThread.messages.find(
+      (message: ProviderRuntimeTestMessage) =>
+        message.id === "assistant:item-multiple-assistant-items-a",
+    );
+    const secondMessage = finalizedThread.messages.find(
+      (message: ProviderRuntimeTestMessage) =>
+        message.id === "assistant:item-multiple-assistant-items-b",
+    );
+    expect(firstMessage?.text).toBe("first answer");
+    expect(firstMessage?.streaming).toBe(false);
+    expect(secondMessage?.text).toBe("second answer");
+    expect(secondMessage?.streaming).toBe(true);
+  });
+
   it("maps canonical request events into approval activities with requestKind", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
