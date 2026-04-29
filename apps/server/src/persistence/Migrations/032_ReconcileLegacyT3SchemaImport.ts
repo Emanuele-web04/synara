@@ -1,8 +1,8 @@
 /**
  * Reconciles schema after a legacy ~/.t3 import where the imported
- * `effect_sql_migrations` tracker already records IDs 17–23 under unrelated
+ * `effect_sql_migrations` tracker already records IDs 17-31 under unrelated
  * T3 Code names. Because the migrator skips by ID, the renumbered DP Code
- * migrations 17–23 never run on those imports, leaving columns like
+ * migrations 17-31 never run on those imports, leaving columns like
  * `env_mode` missing and crashing the server on first query.
  *
  * Migration #023 previously held this self-healing logic, but legacy DBs
@@ -11,10 +11,12 @@
  * any T3 Code migration, guaranteeing it runs on import.
  *
  * Idempotent and a no-op for fresh DP Code installs (every column already
- * exists from the in-order runs of 17–23).
+ * exists from the in-order runs of 17-31).
  */
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Effect from "effect/Effect";
+
+import BackfillProjectionThreadShellSummary from "./027_BackfillProjectionThreadShellSummary.ts";
 
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -44,6 +46,27 @@ export default Effect.gen(function* () {
       }
       yield* sql.unsafe(`
         ALTER TABLE projection_threads
+        ADD COLUMN ${definition}
+      `);
+      return true;
+    });
+
+  const ensureProjectionProjectsColumn = (columnName: string, definition: string) =>
+    Effect.gen(function* () {
+      const exists = yield* sql<{ readonly exists: number }>`
+        SELECT EXISTS(
+          SELECT 1
+          FROM pragma_table_info('projection_projects')
+          WHERE name = ${columnName}
+        ) AS "exists"
+      `.pipe(Effect.map(([row]) => row?.exists === 1));
+
+      if (exists) {
+        return false;
+      }
+
+      yield* sql.unsafe(`
+        ALTER TABLE projection_projects
         ADD COLUMN ${definition}
       `);
       return true;
@@ -118,4 +141,47 @@ export default Effect.gen(function* () {
         AND COALESCE(associated_worktree_branch, branch) IS NOT NULL
     `;
   }
+
+  yield* ensureProjectionThreadsColumn("archived_at", "archived_at TEXT");
+  yield* ensureProjectionThreadsColumn("parent_thread_id", "parent_thread_id TEXT");
+  yield* ensureProjectionThreadsColumn("subagent_agent_id", "subagent_agent_id TEXT");
+  yield* ensureProjectionThreadsColumn("subagent_nickname", "subagent_nickname TEXT");
+  yield* ensureProjectionThreadsColumn("subagent_role", "subagent_role TEXT");
+  yield* sql`
+    CREATE INDEX IF NOT EXISTS idx_projection_threads_parent_thread_id
+    ON projection_threads(parent_thread_id)
+  `;
+
+  const addedLatestUserMessageAt = yield* ensureProjectionThreadsColumn(
+    "latest_user_message_at",
+    "latest_user_message_at TEXT",
+  );
+  const addedPendingApprovalCount = yield* ensureProjectionThreadsColumn(
+    "pending_approval_count",
+    "pending_approval_count INTEGER NOT NULL DEFAULT 0",
+  );
+  const addedPendingUserInputCount = yield* ensureProjectionThreadsColumn(
+    "pending_user_input_count",
+    "pending_user_input_count INTEGER NOT NULL DEFAULT 0",
+  );
+  const addedHasActionableProposedPlan = yield* ensureProjectionThreadsColumn(
+    "has_actionable_proposed_plan",
+    "has_actionable_proposed_plan INTEGER NOT NULL DEFAULT 0",
+  );
+  if (
+    addedLatestUserMessageAt ||
+    addedPendingApprovalCount ||
+    addedPendingUserInputCount ||
+    addedHasActionableProposedPlan
+  ) {
+    yield* BackfillProjectionThreadShellSummary;
+  }
+
+  yield* ensureProjectionProjectsColumn("kind", "kind TEXT NOT NULL DEFAULT 'project'");
+  yield* ensureProjectionThreadsColumn("last_known_pr_json", "last_known_pr_json TEXT");
+  yield* ensureProjectionThreadMessagesColumn("dispatch_mode", "dispatch_mode TEXT");
+  yield* ensureProjectionThreadsColumn(
+    "create_branch_flow_completed",
+    "create_branch_flow_completed INTEGER NOT NULL DEFAULT 0",
+  );
 });
