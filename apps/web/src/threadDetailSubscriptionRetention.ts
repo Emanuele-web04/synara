@@ -1,3 +1,8 @@
+// FILE: threadDetailSubscriptionRetention.ts
+// Purpose: Keep recently used thread-detail subscriptions warm across route/sidebar switches.
+// Layer: Web subscription retention utility
+// Exports: retain/release helpers plus React and imperative subscription listeners.
+
 import type { ThreadId } from "@t3tools/contracts";
 import { useSyncExternalStore } from "react";
 import { useStore } from "./store";
@@ -13,12 +18,16 @@ type RetainedThreadEntry = {
 
 const retainedThreadEntries = new Map<ThreadId, RetainedThreadEntry>();
 const listeners = new Set<() => void>();
+const retainedThreadIdChangeListeners = new Set<(threadIds: readonly ThreadId[]) => void>();
 let cachedSnapshot: readonly ThreadId[] = [];
 
 function emitChange(): void {
   cachedSnapshot = [...retainedThreadEntries.keys()];
   for (const listener of listeners) {
     listener();
+  }
+  for (const listener of retainedThreadIdChangeListeners) {
+    listener(cachedSnapshot);
   }
 }
 
@@ -171,6 +180,15 @@ export function subscribeRetainedThreadDetailIds(listener: () => void): () => vo
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
+  };
+}
+
+export function subscribeRetainedThreadDetailIdChanges(
+  listener: (threadIds: readonly ThreadId[]) => void,
+): () => void {
+  retainedThreadIdChangeListeners.add(listener);
+  return () => {
+    retainedThreadIdChangeListeners.delete(listener);
   };
 }
 

@@ -1,16 +1,19 @@
-import { normalizeWorkspaceRootForComparison } from "@t3tools/shared/threadWorkspace";
+// FILE: Sidebar.uiState.ts
+// Purpose: Persists sidebar-only UI preferences plus the last chat route for restore flows.
+// Layer: Browser storage helper
+// Exports: sidebar UI state read/write helpers.
 
-const SIDEBAR_UI_STATE_STORAGE_KEY = "t3code:sidebar-ui:v1";
+import { normalizeWorkspaceRootForComparison } from "@t3tools/shared/threadWorkspace";
+import type { LastThreadRoute } from "../chatRouteRestore";
+
+const SIDEBAR_UI_STATE_STORAGE_KEY = "dpcode:sidebar-ui:v1";
 
 export type SidebarUiState = {
   chatSectionExpanded: boolean;
   chatThreadListExpanded: boolean;
   expandedProjectThreadListCwds: string[];
   dismissedThreadStatusKeyByThreadId: Record<string, string>;
-  lastThreadRoute: {
-    threadId: string;
-    splitViewId?: string | undefined;
-  } | null;
+  lastThreadRoute: LastThreadRoute | null;
 };
 
 const DEFAULT_SIDEBAR_UI_STATE: SidebarUiState = {

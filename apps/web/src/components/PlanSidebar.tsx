@@ -1,4 +1,4 @@
-import { memo, useState, useCallback } from "react";
+import { memo, useState } from "react";
 import { type TimestampFormat } from "../appSettings";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -8,7 +8,6 @@ import {
   CheckIcon,
   ChevronDownIcon,
   ChevronRightIcon,
-  EllipsisIcon,
   LoaderIcon,
   PanelRightCloseIcon,
 } from "~/lib/icons";
@@ -16,17 +15,8 @@ import { cn } from "~/lib/utils";
 import type { ActiveTaskListState } from "../session-logic";
 import type { LatestProposedPlanState } from "../session-logic";
 import { formatTimestamp } from "../timestampFormat";
-import {
-  proposedPlanTitle,
-  buildProposedPlanMarkdownFilename,
-  normalizePlanMarkdownForExport,
-  downloadPlanAsTextFile,
-  stripDisplayedPlanMarkdown,
-} from "../proposedPlan";
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
-import { readNativeApi } from "~/nativeApi";
-import { toastManager } from "./ui/toast";
-import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+import { proposedPlanTitle, stripDisplayedPlanMarkdown } from "../proposedPlan";
+import { ProposedPlanActions } from "./chat/ProposedPlanActions";
 
 function stepStatusIcon(status: string): React.ReactNode {
   if (status === "completed") {
@@ -68,54 +58,9 @@ const PlanSidebar = memo(function PlanSidebar({
   onClose,
 }: PlanSidebarProps) {
   const [proposedPlanExpanded, setProposedPlanExpanded] = useState(false);
-  const [isSavingToWorkspace, setIsSavingToWorkspace] = useState(false);
-  const { copyToClipboard, isCopied } = useCopyToClipboard();
-
   const planMarkdown = activeProposedPlan?.planMarkdown ?? null;
   const displayedPlanMarkdown = planMarkdown ? stripDisplayedPlanMarkdown(planMarkdown) : null;
   const planTitle = planMarkdown ? proposedPlanTitle(planMarkdown) : null;
-
-  const handleCopyPlan = useCallback(() => {
-    if (!planMarkdown) return;
-    copyToClipboard(planMarkdown);
-  }, [planMarkdown, copyToClipboard]);
-
-  const handleDownload = useCallback(() => {
-    if (!planMarkdown) return;
-    const filename = buildProposedPlanMarkdownFilename(planMarkdown);
-    downloadPlanAsTextFile(filename, normalizePlanMarkdownForExport(planMarkdown));
-  }, [planMarkdown]);
-
-  const handleSaveToWorkspace = useCallback(() => {
-    const api = readNativeApi();
-    if (!api || !workspaceRoot || !planMarkdown) return;
-    const filename = buildProposedPlanMarkdownFilename(planMarkdown);
-    setIsSavingToWorkspace(true);
-    void api.projects
-      .writeFile({
-        cwd: workspaceRoot,
-        relativePath: filename,
-        contents: normalizePlanMarkdownForExport(planMarkdown),
-      })
-      .then((result) => {
-        toastManager.add({
-          type: "success",
-          title: "Plan saved",
-          description: result.relativePath,
-        });
-      })
-      .catch((error) => {
-        toastManager.add({
-          type: "error",
-          title: "Could not save plan",
-          description: error instanceof Error ? error.message : "An error occurred.",
-        });
-      })
-      .then(
-        () => setIsSavingToWorkspace(false),
-        () => setIsSavingToWorkspace(false),
-      );
-  }, [planMarkdown, workspaceRoot]);
 
   return (
     <div className="flex h-full w-[340px] shrink-0 flex-col border-l border-border/70 bg-card/50">
@@ -136,32 +81,12 @@ const PlanSidebar = memo(function PlanSidebar({
         </div>
         <div className="flex items-center gap-1">
           {planMarkdown ? (
-            <Menu>
-              <MenuTrigger
-                render={
-                  <Button
-                    size="icon-xs"
-                    variant="ghost"
-                    className="text-muted-foreground/50 hover:text-foreground/70"
-                    aria-label="Plan actions"
-                  />
-                }
-              >
-                <EllipsisIcon className="size-3.5" />
-              </MenuTrigger>
-              <MenuPopup align="end">
-                <MenuItem onClick={handleCopyPlan}>
-                  {isCopied ? "Copied!" : "Copy to clipboard"}
-                </MenuItem>
-                <MenuItem onClick={handleDownload}>Download as markdown</MenuItem>
-                <MenuItem
-                  onClick={handleSaveToWorkspace}
-                  disabled={!workspaceRoot || isSavingToWorkspace}
-                >
-                  Save to workspace
-                </MenuItem>
-              </MenuPopup>
-            </Menu>
+            <ProposedPlanActions
+              planMarkdown={planMarkdown}
+              workspaceRoot={workspaceRoot}
+              variant="ghost"
+              buttonClassName="text-muted-foreground/50 hover:text-foreground/70"
+            />
           ) : null}
           <Button
             size="icon-xs"

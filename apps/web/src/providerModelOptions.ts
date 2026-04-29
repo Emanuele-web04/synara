@@ -113,6 +113,33 @@ export function groupProviderModelOptions(
   return groupedOptions;
 }
 
+export function groupProviderModelOptionsWithFavorites(input: {
+  options: ReadonlyArray<ProviderModelOption>;
+  favoriteSlugs: ReadonlySet<string>;
+  favoriteLabel?: string;
+}): ProviderModelOptionGroup[] {
+  if (input.favoriteSlugs.size === 0) {
+    return groupProviderModelOptions(input.options);
+  }
+
+  const favoriteOptions = input.options.filter((option) => input.favoriteSlugs.has(option.slug));
+  if (favoriteOptions.length === 0) {
+    return groupProviderModelOptions(input.options);
+  }
+  const groupedOptions = groupProviderModelOptions(
+    input.options.filter((option) => !input.favoriteSlugs.has(option.slug)),
+  );
+
+  return [
+    {
+      key: "__favorites__",
+      label: input.favoriteLabel ?? "Favourites",
+      options: favoriteOptions,
+    },
+    ...groupedOptions,
+  ];
+}
+
 export function buildNextProviderOptions(
   provider: ProviderKind,
   modelOptions: ProviderOptions | null | undefined,

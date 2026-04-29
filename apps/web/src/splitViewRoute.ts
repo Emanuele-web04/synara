@@ -7,7 +7,8 @@ import { type ThreadId } from "@t3tools/contracts";
 import { type DiffRouteSearch } from "./diffRouteSearch";
 import {
   resolveSplitViewFocusedThreadId,
-  resolveSplitViewPaneForThread,
+  resolveSplitViewPaneIdForThread,
+  type PaneId,
   type SplitView,
 } from "./splitViewStore";
 
@@ -17,21 +18,21 @@ export function resolveActiveSplitView(input: {
 }): {
   splitView: SplitView | null;
   focusedThreadId: ThreadId | null;
-  routePane: "left" | "right" | null;
+  routePaneId: PaneId | null;
 } {
   const { routeThreadId, splitView } = input;
   if (!splitView) {
     return {
       splitView: null,
       focusedThreadId: routeThreadId,
-      routePane: null,
+      routePaneId: null,
     };
   }
 
   return {
     splitView,
     focusedThreadId: resolveSplitViewFocusedThreadId(splitView),
-    routePane: resolveSplitViewPaneForThread(splitView, routeThreadId),
+    routePaneId: resolveSplitViewPaneIdForThread(splitView, routeThreadId),
   };
 }
 

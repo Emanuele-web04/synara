@@ -22,6 +22,48 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.0.39",
+    date: "Apr 28",
+    features: [
+      {
+        id: "split-chat-drag-drop",
+        title: "Split chats are easier to arrange",
+        description:
+          "Split chat panes now support direct drag-and-drop, cross-project drops, and safer orphan handling so multi-chat layouts stay easier to build and recover.",
+      },
+      {
+        id: "split-chat-routing-stability",
+        title: "Split chat navigation is steadier",
+        description:
+          "Split chat activation, route restore, sidebar grouping, and thread subscriptions were tightened so opening and switching chats feels more predictable.",
+      },
+      {
+        id: "opencode-task-events",
+        title: "OpenCode tasks show live progress",
+        description:
+          "OpenCode todo events now flow into DP Code as active task updates, with a compact banner option for keeping current work visible without taking over the chat.",
+      },
+      {
+        id: "opencode-model-favourites",
+        title: "OpenCode models can be favourited",
+        description:
+          "The model picker now supports OpenCode favourites, making preferred models quicker to find across larger provider model lists.",
+      },
+      {
+        id: "opencode-context-usage",
+        title: "OpenCode context usage is tracked",
+        description:
+          "OpenCode sessions now report context usage more consistently, giving DP Code better runtime visibility as conversations grow.",
+      },
+      {
+        id: "production-debug-flags",
+        title: "Debug controls stay out of production",
+        description:
+          "Debug feature flags are now hidden behind local opt-in behavior, keeping production sidebars cleaner while preserving developer-only controls.",
+      },
+    ],
+  },
+  {
     version: "0.0.38",
     date: "Apr 26",
     features: [

@@ -16,9 +16,10 @@ import React, { memo, useEffect, useRef, useState } from "react";
 import { BsLayoutSplit, BsTerminal } from "react-icons/bs";
 import { FiGitBranch } from "react-icons/fi";
 import { HiMiniArrowsPointingOut } from "react-icons/hi2";
-import { TbLayoutSidebarRight } from "react-icons/tb";
+import { TbExchange, TbLayoutSidebarRight } from "react-icons/tb";
+import type { ThreadPrimarySurface } from "../../types";
 import GitActionsControl from "../GitActionsControl";
-import { AppsIcon, ArrowRightIcon, GlobeIcon, PlusIcon } from "~/lib/icons";
+import { AppsIcon, ArrowRightIcon, GlobeIcon, PlusIcon, TerminalIcon } from "~/lib/icons";
 import { Button } from "../ui/button";
 import { Badge } from "../ui/badge";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
@@ -42,6 +43,8 @@ const HEADER_COMPACT_BREAKPOINT = 480;
 interface ChatHeaderProps {
   activeThreadId: ThreadId;
   activeThreadTitle: string;
+  activeThreadEntryPoint: ThreadPrimarySurface;
+  activeProvider: ProviderKind;
   activeProjectName: string | undefined;
   threadBreadcrumbs: ReadonlyArray<{
     threadId: ThreadId;
@@ -77,6 +80,10 @@ interface ChatHeaderProps {
     shortcutLabel: string | null;
     onClick: () => void;
   } | null;
+  changeThreadAction?: {
+    label: string;
+    onClick: () => void;
+  } | null;
   onRunProjectScript: (script: ProjectScript) => void;
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<void>;
   onUpdateProjectScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void>;
@@ -89,9 +96,19 @@ interface ChatHeaderProps {
   onRenameThread: () => void;
 }
 
+export type ChatHeaderThreadIconKind = "provider" | "terminal";
+
+export function resolveChatHeaderThreadIconKind(
+  entryPoint: ThreadPrimarySurface,
+): ChatHeaderThreadIconKind {
+  return entryPoint === "terminal" ? "terminal" : "provider";
+}
+
 export const ChatHeader = memo(function ChatHeader({
   activeThreadId,
   activeThreadTitle,
+  activeThreadEntryPoint,
+  activeProvider,
   activeProjectName,
   threadBreadcrumbs,
   hideHandoffControls = false,
@@ -119,6 +136,7 @@ export const ChatHeader = memo(function ChatHeader({
   diffDisabledReason = null,
   surfaceMode = "single",
   chatLayoutAction = null,
+  changeThreadAction = null,
   onRunProjectScript,
   onAddProjectScript,
   onUpdateProjectScript,
@@ -144,6 +162,9 @@ export const ChatHeader = memo(function ChatHeader({
   const isDisposableThread = useIsDisposableThread(activeThreadId);
 
   const isSplitPane = surfaceMode === "split";
+  const inlineChatLayoutAction = chatLayoutAction?.kind === "maximize" ? chatLayoutAction : null;
+  const menuChatLayoutAction = inlineChatLayoutAction ? null : chatLayoutAction;
+  const threadIconKind = resolveChatHeaderThreadIconKind(activeThreadEntryPoint);
 
   useEffect(() => {
     const el = headerRef.current;
@@ -202,6 +223,20 @@ export const ChatHeader = memo(function ChatHeader({
               </div>
             ) : null}
             <div className="flex min-w-0 items-center gap-2">
+              <span
+                className="inline-flex size-3.5 shrink-0 items-center justify-center"
+                title={
+                  threadIconKind === "terminal"
+                    ? "Terminal"
+                    : PROVIDER_DISPLAY_NAMES[activeProvider]
+                }
+              >
+                {threadIconKind === "terminal" ? (
+                  <TerminalIcon className="size-3.5 text-teal-600/85" />
+                ) : (
+                  renderProviderIcon(activeProvider, "size-3.5")
+                )}
+              </span>
               <h2
                 className="max-w-[clamp(16rem,50vw,40rem)] truncate text-sm font-medium text-foreground"
                 title={activeThreadTitle}
@@ -288,9 +323,33 @@ export const ChatHeader = memo(function ChatHeader({
           />
         ) : null}
 
+        {!isDisposableThread && inlineChatLayoutAction ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant="outline"
+                  className="shrink-0 bg-transparent not-disabled:before:shadow-none dark:not-disabled:before:shadow-none [:hover,[data-pressed]]:bg-[var(--sidebar-accent)] dark:[:hover,[data-pressed]]:bg-[var(--sidebar-accent)]"
+                  aria-label={inlineChatLayoutAction.label}
+                  onClick={inlineChatLayoutAction.onClick}
+                >
+                  <HiMiniArrowsPointingOut className="size-3.5" />
+                </Button>
+              }
+            />
+            <TooltipPopup side="bottom">{inlineChatLayoutAction.label}</TooltipPopup>
+          </Tooltip>
+        ) : null}
+
         {/* Panel toggles menu — editor, terminal, browser, split chat. */}
         {!isDisposableThread &&
-        (terminalAvailable || activeProjectName || chatLayoutAction || isElectron) ? (
+        (terminalAvailable ||
+          activeProjectName ||
+          menuChatLayoutAction ||
+          changeThreadAction ||
+          isElectron) ? (
           <Menu modal={false}>
             <MenuTrigger
               render={
@@ -345,19 +404,25 @@ export const ChatHeader = memo(function ChatHeader({
                   )}
                 </MenuItem>
               ) : null}
-              {chatLayoutAction ? (
-                <MenuItem onClick={chatLayoutAction.onClick}>
-                  {chatLayoutAction.kind === "split" ? (
+              {menuChatLayoutAction ? (
+                <MenuItem onClick={menuChatLayoutAction.onClick}>
+                  {menuChatLayoutAction.kind === "split" ? (
                     <BsLayoutSplit className="size-3.5 shrink-0" />
                   ) : (
                     <HiMiniArrowsPointingOut className="size-3.5 shrink-0" />
                   )}
-                  <span>{chatLayoutAction.label}</span>
-                  {chatLayoutAction.shortcutLabel && (
+                  <span>{menuChatLayoutAction.label}</span>
+                  {menuChatLayoutAction.shortcutLabel && (
                     <span className="ml-auto text-[11px] opacity-60">
-                      {chatLayoutAction.shortcutLabel}
+                      {menuChatLayoutAction.shortcutLabel}
                     </span>
                   )}
+                </MenuItem>
+              ) : null}
+              {changeThreadAction ? (
+                <MenuItem onClick={changeThreadAction.onClick}>
+                  <TbExchange className="size-3.5 shrink-0" />
+                  <span>{changeThreadAction.label}</span>
                 </MenuItem>
               ) : null}
               {activeProjectScripts ? (

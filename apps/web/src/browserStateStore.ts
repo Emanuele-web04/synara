@@ -9,7 +9,7 @@ import type { ThreadBrowserState, ThreadId } from "@t3tools/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
-const BROWSER_STATE_STORAGE_KEY = "t3code:browser-state:v1";
+const BROWSER_STATE_STORAGE_KEY = "dpcode:browser-state:v1";
 const BROWSER_HISTORY_LIMIT = 12;
 const EMPTY_BROWSER_HISTORY: BrowserHistoryEntry[] = [];
 

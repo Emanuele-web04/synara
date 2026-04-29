@@ -1,7 +1,8 @@
 import { FileSystem, Path, Effect } from "effect";
 import { assert, it } from "@effect/vitest";
 
-import { ensureNodePtySpawnHelperExecutable } from "./NodePTY";
+import { PtyAdapter } from "../Services/PTY";
+import { ensureNodePtySpawnHelperExecutable, makeNodePtyLayer } from "./NodePTY";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 it.layer(NodeServices.layer)("ensureNodePtySpawnHelperExecutable", (it) => {
@@ -42,4 +43,35 @@ it.layer(NodeServices.layer)("ensureNodePtySpawnHelperExecutable", (it) => {
       assert.equal(mode & 0o111, 0o111);
     }),
   );
+
+  it.effect("defers node-pty native loading until a terminal is spawned", () => {
+    let loadCalls = 0;
+
+    return Effect.gen(function* () {
+      const adapter = yield* PtyAdapter;
+      assert.equal(loadCalls, 0);
+
+      const error = yield* adapter
+        .spawn({
+          shell: "/bin/sh",
+          args: ["-lc", "exit 0"],
+          cwd: process.cwd(),
+          cols: 80,
+          rows: 24,
+          env: {},
+        })
+        .pipe(Effect.flip);
+
+      assert.equal(loadCalls, 1);
+      assert.equal(error._tag, "PtySpawnError");
+      assert.equal(error.message, "Failed to load node-pty native module");
+    }).pipe(
+      Effect.provide(
+        makeNodePtyLayer(async () => {
+          loadCalls += 1;
+          throw new Error("native binding missing");
+        }),
+      ),
+    );
+  });
 });

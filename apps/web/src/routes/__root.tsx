@@ -14,7 +14,7 @@ import {
   useRouterState,
   useSearch,
 } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Throttler } from "@tanstack/react-pacer";
 
@@ -46,7 +46,10 @@ import { projectQueryKeys } from "../lib/projectReactQuery";
 import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
 import { TaskCompletionNotifications } from "../notifications/taskCompletion";
 import { useWorkspaceStore, workspaceThreadId } from "../workspaceStore";
-import { useRetainedThreadDetailIds } from "../threadDetailSubscriptionRetention";
+import {
+  subscribeRetainedThreadDetailIdChanges,
+  useRetainedThreadDetailIds,
+} from "../threadDetailSubscriptionRetention";
 import { useAppTypography } from "../hooks/useAppTypography";
 import { useChatCodeFont } from "../hooks/useChatCodeFont";
 import { useTheme } from "../hooks/useTheme";
@@ -363,6 +366,7 @@ function EventRouter() {
   const workspacePagesRef = useRef(workspacePages);
   const pathnameRef = useRef(pathname);
   const handledBootstrapThreadIdRef = useRef<string | null>(null);
+  const routeVisibleThreadIdsRef = useRef(visibleThreadIds);
   const visibleThreadIdsRef = useRef(subscribedThreadIds);
   const reconcileThreadSubscriptionsRef = useRef<
     ((threadIds: readonly ThreadId[]) => Promise<void>) | null
@@ -370,6 +374,7 @@ function EventRouter() {
 
   workspacePagesRef.current = workspacePages;
   pathnameRef.current = pathname;
+  routeVisibleThreadIdsRef.current = visibleThreadIds;
   visibleThreadIdsRef.current = subscribedThreadIds;
 
   useEffect(() => {
@@ -440,18 +445,10 @@ function EventRouter() {
       const removals = [...subscribedThreadIds].filter((threadId) => !nextThreadIds.has(threadId));
       const additions = [...nextThreadIds].filter((threadId) => !subscribedThreadIds.has(threadId));
 
-      for (const threadId of removals) {
-        threadSnapshotSequenceById.delete(threadId);
-        pendingThreadEventsById.delete(threadId);
-        threadSnapshotRequestInFlight.delete(threadId);
-      }
-      await Promise.all(
-        removals.map((threadId) =>
-          api.orchestration.unsubscribeThread({ threadId }).catch(() => undefined),
-        ),
-      );
+      // Start new detail snapshots first so route changes can paint from the hot thread cache.
       for (const threadId of additions) {
         beginThreadSubscription(threadId);
+        subscribedThreadIds.add(threadId);
       }
       await Promise.all(
         additions.map((threadId) =>
@@ -459,10 +456,17 @@ function EventRouter() {
         ),
       );
 
-      subscribedThreadIds.clear();
-      for (const threadId of nextThreadIds) {
-        subscribedThreadIds.add(threadId);
+      for (const threadId of removals) {
+        threadSnapshotSequenceById.delete(threadId);
+        pendingThreadEventsById.delete(threadId);
+        threadSnapshotRequestInFlight.delete(threadId);
+        subscribedThreadIds.delete(threadId);
       }
+      await Promise.all(
+        removals.map((threadId) =>
+          api.orchestration.unsubscribeThread({ threadId }).catch(() => undefined),
+        ),
+      );
     };
 
     const enqueueThreadSubscriptionReconcile = (threadIds: readonly ThreadId[]) => {
@@ -472,6 +476,16 @@ function EventRouter() {
         .then(() => reconcileThreadSubscriptions(nextThreadIds));
       return reconcileThreadSubscriptionsChain;
     };
+
+    const unsubscribeRetainedThreadIdChanges = subscribeRetainedThreadDetailIdChanges(
+      (nextRetainedThreadIds) => {
+        const nextThreadIds = new Set(routeVisibleThreadIdsRef.current);
+        for (const threadId of nextRetainedThreadIds) {
+          nextThreadIds.add(threadId);
+        }
+        void enqueueThreadSubscriptionReconcile([...nextThreadIds]);
+      },
+    );
 
     const ensureScopedSubscriptions = async () => {
       shellSnapshotSequence = -1;
@@ -743,6 +757,7 @@ function EventRouter() {
           api.orchestration.unsubscribeThread({ threadId }).catch(() => undefined),
         ),
       );
+      unsubscribeRetainedThreadIdChanges();
       unsubShellEvent();
       unsubThreadEvent();
       unsubTerminalEvent();
@@ -762,7 +777,7 @@ function EventRouter() {
     syncServerThreadDetailHotPath,
   ]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const reconcile = reconcileThreadSubscriptionsRef.current;
     if (!reconcile) {
       return;

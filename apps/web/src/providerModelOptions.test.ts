@@ -5,7 +5,12 @@
 
 import { describe, expect, it } from "vitest";
 
-import { formatProviderModelOptionName } from "./providerModelOptions";
+import {
+  formatProviderModelOptionName,
+  groupProviderModelOptions,
+  groupProviderModelOptionsWithFavorites,
+  type ProviderModelOption,
+} from "./providerModelOptions";
 
 describe("formatProviderModelOptionName", () => {
   it("humanizes unknown OpenCode runtime model slugs using the model identifier", () => {
@@ -33,5 +38,58 @@ describe("formatProviderModelOptionName", () => {
         slug: "custom/internal-model",
       }),
     ).toBe("custom/internal-model");
+  });
+});
+
+describe("groupProviderModelOptions", () => {
+  it("groups provider models by upstream provider", () => {
+    const options = [
+      {
+        slug: "anthropic/claude-sonnet",
+        name: "Claude Sonnet",
+        upstreamProviderId: "anthropic",
+        upstreamProviderName: "Anthropic",
+      },
+      {
+        slug: "openai/gpt-5",
+        name: "GPT-5",
+        upstreamProviderId: "openai",
+        upstreamProviderName: "OpenAI",
+      },
+    ] satisfies ProviderModelOption[];
+
+    const groupedOptions = groupProviderModelOptions(options);
+
+    expect(groupedOptions.map((group) => group.label)).toEqual(["Anthropic", "OpenAI"]);
+  });
+});
+
+describe("groupProviderModelOptionsWithFavorites", () => {
+  it("adds a favourites group ahead of the normal provider groups", () => {
+    const options = [
+      {
+        slug: "anthropic/claude-sonnet",
+        name: "Claude Sonnet",
+        upstreamProviderId: "anthropic",
+        upstreamProviderName: "Anthropic",
+      },
+      {
+        slug: "openai/gpt-5",
+        name: "GPT-5",
+        upstreamProviderId: "openai",
+        upstreamProviderName: "OpenAI",
+      },
+    ] satisfies ProviderModelOption[];
+
+    const groupedOptions = groupProviderModelOptionsWithFavorites({
+      options,
+      favoriteSlugs: new Set(["openai/gpt-5"]),
+    });
+
+    expect(groupedOptions.map((group) => group.label)).toEqual(["Favourites", "Anthropic"]);
+    expect(groupedOptions[0]?.options.map((option) => option.slug)).toEqual(["openai/gpt-5"]);
+    expect(
+      groupedOptions.flatMap((group) => group.options.map((option) => option.slug)),
+    ).toEqual(["openai/gpt-5", "anthropic/claude-sonnet"]);
   });
 });

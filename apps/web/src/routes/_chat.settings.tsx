@@ -649,7 +649,7 @@ function SettingsRouteView() {
       return;
     }
 
-    const notification = new Notification(title, { body, tag: "t3code:test-notification" });
+    const notification = new Notification(title, { body, tag: "dpcode:test-notification" });
     notification.addEventListener("click", () => {
       window.focus();
     });

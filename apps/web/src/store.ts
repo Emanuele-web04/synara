@@ -75,8 +75,9 @@ type ThreadUserInputResponseRequestedEvent = Extract<
   { type: "thread.user-input-response-requested" }
 >;
 
-const PERSISTED_STATE_KEY = "t3code:renderer-state:v8";
+const PERSISTED_STATE_KEY = "dpcode:renderer-state:v8";
 const LEGACY_PERSISTED_STATE_KEYS = [
+  "t3code:renderer-state:v8",
   "t3code:renderer-state:v7",
   "t3code:renderer-state:v6",
   "t3code:renderer-state:v5",
@@ -813,7 +814,7 @@ function normalizeChatMessages(
   previous: ChatMessage[] | undefined,
 ): ChatMessage[] {
   const previousById = new Map(previous?.map((message) => [message.id, message] as const));
-  const nextMessages = incoming.map((message) =>
+  const nextMessages = incoming.slice(-MAX_THREAD_MESSAGES).map((message) =>
     normalizeChatMessage(message, previousById.get(message.id)),
   );
   return arraysShallowEqual(previous, nextMessages) ? previous : nextMessages;

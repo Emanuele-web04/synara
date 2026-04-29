@@ -34,8 +34,11 @@ import { checkpointDiffQueryOptions } from "~/lib/providerReactQuery";
 import { cn } from "~/lib/utils";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
 import { useTheme } from "../hooks/useTheme";
-import { buildPatchCacheKey } from "../lib/diffRendering";
-import { resolveDiffThemeName } from "../lib/diffRendering";
+import {
+  buildPatchCacheKey,
+  resolveDiffCopyText,
+  resolveDiffThemeName,
+} from "../lib/diffRendering";
 import { resolveDiffEnvironmentState } from "../lib/threadEnvironment";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
@@ -400,6 +403,8 @@ export default function DiffPanel({
     surfaceMode === "total" ? hasNoWorkingTreeChanges : hasNoNetChanges;
   const isSidebarMode = mode === "sidebar";
   const { copyToClipboard, isCopied: isSummaryCopied } = useCopyToClipboard();
+  const { copyToClipboard: copyDiffToClipboard, isCopied: isDiffCopied } = useCopyToClipboard();
+  const diffCopyText = useMemo(() => resolveDiffCopyText(activeReviewPatch), [activeReviewPatch]);
   const renderablePatch = useMemo(
     () => getRenderablePatch(activeReviewPatch, `diff-panel:${resolvedTheme}`),
     [activeReviewPatch, resolvedTheme],
@@ -877,6 +882,25 @@ export default function DiffPanel({
                 <DiffIcon className="size-3.5 opacity-80" />
                 <span>Total</span>
               </button>
+              {surfaceMode !== "summary" && diffCopyText ? (
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  className="ml-auto shrink-0 gap-1.5 self-center"
+                  onClick={() => {
+                    copyDiffToClipboard(diffCopyText, undefined);
+                  }}
+                  aria-label={isDiffCopied ? "Copied full diff" : "Copy full diff"}
+                  title={isDiffCopied ? "Copied full diff" : "Copy full diff"}
+                >
+                  {isDiffCopied ? (
+                    <CheckIcon className="size-3 text-success" />
+                  ) : (
+                    <CopyIcon className="size-3" />
+                  )}
+                  <span>{isDiffCopied ? "Copied" : "Copy"}</span>
+                </Button>
+              ) : null}
             </div>
           </div>
 

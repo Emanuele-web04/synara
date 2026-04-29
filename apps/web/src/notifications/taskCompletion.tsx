@@ -8,7 +8,6 @@ import { useEffect, useRef } from "react";
 import { toastManager } from "../components/ui/toast";
 import { useAppSettings } from "../appSettings";
 import { isElectron } from "../env";
-import { resolvePreferredSplitViewIdForThread, useSplitViewStore } from "../splitViewStore";
 import { useStore } from "../store";
 import { createAllThreadsSelector } from "../storeSelectors";
 import { useTerminalStateStore } from "../terminalStateStore";
@@ -70,15 +69,13 @@ interface ThreadNotificationCopy {
   body: string;
 }
 
-function focusThread(
-  threadId: Thread["id"],
-  navigate: ReturnType<typeof useNavigate>,
-  splitViewId: string | null,
-): void {
+// Notification opens are generic thread activations, so they clear splitViewId
+// instead of resurrecting a hidden split pairing.
+function focusThread(threadId: Thread["id"], navigate: ReturnType<typeof useNavigate>): void {
   void navigate({
     to: "/$threadId",
     params: { threadId },
-    ...(splitViewId ? { search: () => ({ splitViewId }) } : {}),
+    search: (previous) => ({ ...previous, splitViewId: undefined }),
   });
 }
 
@@ -86,7 +83,6 @@ async function showSystemThreadNotification(
   copy: ThreadNotificationCopy,
   threadId: Thread["id"],
   navigate: ReturnType<typeof useNavigate>,
-  splitViewId: string | null,
 ): Promise<boolean> {
   const { body, title } = copy;
 
@@ -108,7 +104,7 @@ async function showSystemThreadNotification(
   });
   notification.addEventListener("click", () => {
     window.focus();
-    focusThread(threadId, navigate, splitViewId);
+    focusThread(threadId, navigate);
   });
   return true;
 }
@@ -118,7 +114,6 @@ function showThreadToast(
   threadId: Thread["id"],
   tone: "success" | "warning",
   navigate: ReturnType<typeof useNavigate>,
-  splitViewId: string | null,
 ): void {
   const { body, title } = copy;
   toastManager.add({
@@ -132,7 +127,7 @@ function showThreadToast(
     },
     actionProps: {
       children: "Open",
-      onClick: () => focusThread(threadId, navigate, splitViewId),
+      onClick: () => focusThread(threadId, navigate),
     },
   });
 }
@@ -143,10 +138,6 @@ export function TaskCompletionNotifications() {
   const threads = useStore(useRef(createAllThreadsSelector()).current);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
   const terminalStateByThreadId = useTerminalStateStore((store) => store.terminalStateByThreadId);
-  const splitViewsById = useSplitViewStore((store) => store.splitViewsById);
-  const splitViewIdBySourceThreadId = useSplitViewStore(
-    (store) => store.splitViewIdBySourceThreadId,
-  );
   const previousThreadsRef = useRef<readonly Thread[]>([]);
   const previousTerminalStateRef = useRef(terminalStateByThreadId);
   const readyRef = useRef(false);
@@ -166,18 +157,13 @@ export function TaskCompletionNotifications() {
       if (threadId.length === 0) {
         return;
       }
-      const preferredSplitViewId = resolvePreferredSplitViewIdForThread({
-        splitViewsById,
-        splitViewIdBySourceThreadId,
-        threadId: threadId as Thread["id"],
-      });
-      focusThread(threadId as Thread["id"], navigate, preferredSplitViewId);
+      focusThread(threadId as Thread["id"], navigate);
     });
 
     return () => {
       unsubscribe?.();
     };
-  }, [navigate, splitViewIdBySourceThreadId, splitViewsById]);
+  }, [navigate]);
 
   useEffect(() => {
     if (!threadsHydrated) {
@@ -221,76 +207,44 @@ export function TaskCompletionNotifications() {
       (window.desktopBridge ? true : !isWindowForeground());
 
     for (const completion of completions) {
-      const preferredSplitViewId = resolvePreferredSplitViewIdForThread({
-        splitViewsById,
-        splitViewIdBySourceThreadId,
-        threadId: completion.threadId,
-      });
       const copy = buildTaskCompletionCopy(completion);
       if (shouldAttemptSystemNotification) {
-        void showSystemThreadNotification(
-          copy,
-          completion.threadId,
-          navigate,
-          preferredSplitViewId,
-        );
+        void showSystemThreadNotification(copy, completion.threadId, navigate);
       }
     }
 
     for (const candidate of inputNeededCandidates) {
-      const preferredSplitViewId = resolvePreferredSplitViewIdForThread({
-        splitViewsById,
-        splitViewIdBySourceThreadId,
-        threadId: candidate.threadId,
-      });
       const copy = buildInputNeededCopy(candidate);
       if (settings.enableTaskCompletionToasts) {
-        showThreadToast(copy, candidate.threadId, "warning", navigate, preferredSplitViewId);
+        showThreadToast(copy, candidate.threadId, "warning", navigate);
       }
 
       if (shouldAttemptSystemNotification) {
-        void showSystemThreadNotification(copy, candidate.threadId, navigate, preferredSplitViewId);
+        void showSystemThreadNotification(copy, candidate.threadId, navigate);
       }
     }
 
     for (const completion of terminalCompletions) {
-      const preferredSplitViewId = resolvePreferredSplitViewIdForThread({
-        splitViewsById,
-        splitViewIdBySourceThreadId,
-        threadId: completion.threadId,
-      });
       const copy = buildTerminalCompletionCopy(completion);
       if (shouldAttemptSystemNotification) {
-        void showSystemThreadNotification(
-          copy,
-          completion.threadId,
-          navigate,
-          preferredSplitViewId,
-        );
+        void showSystemThreadNotification(copy, completion.threadId, navigate);
       }
     }
 
     for (const candidate of terminalAttentionCandidates) {
-      const preferredSplitViewId = resolvePreferredSplitViewIdForThread({
-        splitViewsById,
-        splitViewIdBySourceThreadId,
-        threadId: candidate.threadId,
-      });
       const copy = buildTerminalAttentionCopy(candidate);
       if (settings.enableTaskCompletionToasts) {
-        showThreadToast(copy, candidate.threadId, "warning", navigate, preferredSplitViewId);
+        showThreadToast(copy, candidate.threadId, "warning", navigate);
       }
 
       if (shouldAttemptSystemNotification) {
-        void showSystemThreadNotification(copy, candidate.threadId, navigate, preferredSplitViewId);
+        void showSystemThreadNotification(copy, candidate.threadId, navigate);
       }
     }
   }, [
     navigate,
     settings.enableSystemTaskCompletionNotifications,
     settings.enableTaskCompletionToasts,
-    splitViewIdBySourceThreadId,
-    splitViewsById,
     terminalStateByThreadId,
     threads,
     threadsHydrated,
