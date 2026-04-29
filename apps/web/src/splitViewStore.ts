@@ -586,7 +586,9 @@ export const useSplitViewStore = create<SplitViewStore>()(
             };
           }
 
-          const hasAnyThread = collectLeaves(result.nextRoot).some((leaf) => leaf.threadId !== null);
+          const hasAnyThread = collectLeaves(result.nextRoot).some(
+            (leaf) => leaf.threadId !== null,
+          );
           if (!hasAnyThread) {
             delete nextSplitViewsById[splitViewId];
             delete nextSplitViewIdBySourceThreadId[current.sourceThreadId];

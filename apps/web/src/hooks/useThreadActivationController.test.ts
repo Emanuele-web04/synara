@@ -229,12 +229,10 @@ describe("activateThreadFromSidebarIntent", () => {
       "split-second-pane-first",
     );
     expect(input.openChatThreadPage).not.toHaveBeenCalled();
-    expect(getFirstNavigateArgs(input).search({ keep: true, splitViewId: "split-first" })).toEqual(
-      {
-        keep: true,
-        splitViewId: "split-second",
-      },
-    );
+    expect(getFirstNavigateArgs(input).search({ keep: true, splitViewId: "split-first" })).toEqual({
+      keep: true,
+      splitViewId: "split-second",
+    });
   });
 
   it("does nothing when the current route already targets the same split pane", () => {

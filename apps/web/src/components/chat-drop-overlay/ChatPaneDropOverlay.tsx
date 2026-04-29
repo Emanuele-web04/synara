@@ -152,14 +152,7 @@ export function isThreadDragPayloadAllowed(
 }
 
 export function ChatPaneDropOverlay(props: ChatPaneDropOverlayProps) {
-  const {
-    onDrop,
-    canDropInDirection,
-    excludedThreadIds,
-    paneScopeId,
-    className,
-    children,
-  } = props;
+  const { onDrop, canDropInDirection, excludedThreadIds, paneScopeId, className, children } = props;
   const wrapperRef = useRef<HTMLDivElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const rectRef = useRef<DOMRect | null>(null);

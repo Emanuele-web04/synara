@@ -73,9 +73,7 @@ export function resolvePreferredSplitForCommand(input: {
       splitView,
       paneId: resolveSplitViewPaneIdForThread(splitView, input.threadId),
     }))
-    .filter(
-      (match): match is { splitView: SplitView; paneId: PaneId } => match.paneId !== null,
-    );
+    .filter((match): match is { splitView: SplitView; paneId: PaneId } => match.paneId !== null);
 
   const sourceMatch = matchingSplits.find(
     ({ splitView }) => splitView.sourceThreadId === input.threadId,

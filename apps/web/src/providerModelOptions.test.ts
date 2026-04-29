@@ -88,8 +88,9 @@ describe("groupProviderModelOptionsWithFavorites", () => {
 
     expect(groupedOptions.map((group) => group.label)).toEqual(["Favourites", "Anthropic"]);
     expect(groupedOptions[0]?.options.map((option) => option.slug)).toEqual(["openai/gpt-5"]);
-    expect(
-      groupedOptions.flatMap((group) => group.options.map((option) => option.slug)),
-    ).toEqual(["openai/gpt-5", "anthropic/claude-sonnet"]);
+    expect(groupedOptions.flatMap((group) => group.options.map((option) => option.slug))).toEqual([
+      "openai/gpt-5",
+      "anthropic/claude-sonnet",
+    ]);
   });
 });

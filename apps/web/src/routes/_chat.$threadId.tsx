@@ -950,10 +950,7 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
   const removePaneFromSplitView = useSplitViewStore((store) => store.removePaneFromSplitView);
   const removeSplitView = useSplitViewStore((store) => store.removeSplitView);
   const [threadPickerPaneId, setThreadPickerPaneId] = useState<PaneId | null>(null);
-  const {
-    splitView: activeSplitView,
-    routePaneId,
-  } = resolveActiveSplitView({
+  const { splitView: activeSplitView, routePaneId } = resolveActiveSplitView({
     splitView,
     routeThreadId: props.routeThreadId,
   });
