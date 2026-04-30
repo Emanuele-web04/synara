@@ -17,6 +17,7 @@ export interface ProviderRuntimeBinding {
   readonly provider: ProviderKind;
   readonly adapterKey?: string;
   readonly status?: ProviderSessionRuntimeStatus;
+  readonly lastSeenAt?: string;
   readonly resumeCursor?: unknown | null;
   readonly runtimePayload?: unknown | null;
   readonly runtimeMode?: RuntimeMode;
@@ -47,6 +48,11 @@ export interface ProviderSessionDirectoryShape {
 
   readonly listThreadIds: () => Effect.Effect<
     ReadonlyArray<ThreadId>,
+    ProviderSessionDirectoryPersistenceError
+  >;
+
+  readonly listBindings: () => Effect.Effect<
+    ReadonlyArray<ProviderRuntimeBinding>,
     ProviderSessionDirectoryPersistenceError
   >;
 }

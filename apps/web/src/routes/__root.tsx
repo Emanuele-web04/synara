@@ -30,7 +30,11 @@ import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { isElectron } from "../env";
 import { useFocusedChatContext } from "../focusedChatContext";
 import { isTerminalFocused } from "../lib/terminalFocus";
-import { serverConfigQueryOptions, serverQueryKeys } from "../lib/serverReactQuery";
+import {
+  serverConfigQueryOptions,
+  serverQueryKeys,
+  serverSettingsQueryOptions,
+} from "../lib/serverReactQuery";
 import { readNativeApi } from "../nativeApi";
 import { clearPromotedDraftThreads, useComposerDraftStore } from "../composerDraftStore";
 import { useStore } from "../store";
@@ -39,6 +43,7 @@ import { terminalActivityFromEvent } from "../terminalActivity";
 import {
   onServerConfigUpdated,
   onServerProviderStatusesUpdated,
+  onServerSettingsUpdated,
   onServerWelcome,
 } from "../wsNativeApi";
 import { providerQueryKeys } from "../lib/providerReactQuery";
@@ -742,6 +747,12 @@ function EventRouter() {
         queryKey: providerDiscoveryQueryKeys.agents("opencode"),
       });
     });
+    const unsubServerSettingsUpdated = onServerSettingsUpdated((payload) => {
+      queryClient.setQueryData(serverQueryKeys.settings(), payload.settings);
+      void queryClient.invalidateQueries({
+        queryKey: serverSettingsQueryOptions().queryKey,
+      });
+    });
     subscribed = true;
     void ensureScopedSubscriptions();
 
@@ -764,6 +775,7 @@ function EventRouter() {
       unsubWelcome();
       unsubServerConfigUpdated();
       unsubProviderStatusesUpdated();
+      unsubServerSettingsUpdated();
     };
   }, [
     applyOrchestrationEventsHotPath,

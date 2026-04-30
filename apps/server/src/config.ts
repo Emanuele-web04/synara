@@ -18,16 +18,20 @@ export type RuntimeMode = "web" | "desktop";
  */
 export interface ServerDerivedPaths {
   readonly stateDir: string;
+  readonly secretsDir: string;
   readonly dbPath: string;
+  readonly settingsPath: string;
   readonly keybindingsConfigPath: string;
   readonly worktreesDir: string;
   readonly attachmentsDir: string;
   readonly logsDir: string;
   readonly serverLogPath: string;
+  readonly serverRuntimeStatePath: string;
   readonly providerLogsDir: string;
   readonly providerEventLogPath: string;
   readonly terminalLogsDir: string;
   readonly anonymousIdPath: string;
+  readonly environmentIdPath: string;
 }
 
 /**
@@ -55,22 +59,27 @@ export const deriveServerPaths = Effect.fn(function* (
 ): Effect.fn.Return<ServerDerivedPaths, never, Path.Path> {
   const { join } = yield* Path.Path;
   const stateDir = join(baseDir, devUrl !== undefined ? "dev" : "userdata");
+  const secretsDir = join(stateDir, "secrets");
   const dbPath = join(stateDir, "state.sqlite");
   const attachmentsDir = join(stateDir, "attachments");
   const logsDir = join(stateDir, "logs");
   const providerLogsDir = join(logsDir, "provider");
   return {
     stateDir,
+    secretsDir,
     dbPath,
+    settingsPath: join(stateDir, "settings.json"),
     keybindingsConfigPath: join(stateDir, "keybindings.json"),
     worktreesDir: join(baseDir, "worktrees"),
     attachmentsDir,
     logsDir,
     serverLogPath: join(logsDir, "server.log"),
+    serverRuntimeStatePath: join(stateDir, "server-runtime.json"),
     providerLogsDir,
     providerEventLogPath: join(providerLogsDir, "events.log"),
     terminalLogsDir: join(logsDir, "terminals"),
     anonymousIdPath: join(stateDir, "anonymous-id"),
+    environmentIdPath: join(stateDir, "environment-id"),
   };
 });
 

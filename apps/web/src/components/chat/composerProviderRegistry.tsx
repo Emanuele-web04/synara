@@ -47,6 +47,7 @@ type ProviderTraitRenderInput = {
   threadId: ThreadId;
   model: ModelSlug;
   runtimeModel?: ProviderModelDescriptor | undefined;
+  runtimeModels?: ReadonlyArray<ProviderModelDescriptor> | null | undefined;
   modelOptions: ProviderModelOptions[ProviderKind] | undefined;
   prompt: string;
   includeFastMode?: boolean;
@@ -75,6 +76,7 @@ function renderTraitsMenuContentForProvider(
       threadId={input.threadId}
       model={input.model}
       runtimeModel={input.runtimeModel}
+      runtimeModels={input.runtimeModels}
       modelOptions={input.modelOptions}
       prompt={input.prompt}
       {...(input.includeFastMode === undefined ? {} : { includeFastMode: input.includeFastMode })}
@@ -93,6 +95,7 @@ function renderTraitsPickerForProvider(
       threadId={input.threadId}
       model={input.model}
       runtimeModel={input.runtimeModel}
+      runtimeModels={input.runtimeModels}
       modelOptions={input.modelOptions}
       prompt={input.prompt}
       {...(input.open !== undefined ? { open: input.open } : {})}
@@ -225,6 +228,7 @@ export function renderProviderTraitsMenuContent(input: {
   threadId: ThreadId;
   model: ModelSlug;
   runtimeModel?: ProviderModelDescriptor | undefined;
+  runtimeModels?: ReadonlyArray<ProviderModelDescriptor> | null | undefined;
   modelOptions: ProviderModelOptions[ProviderKind] | undefined;
   prompt: string;
   includeFastMode?: boolean;
@@ -253,6 +257,7 @@ export function renderProviderTraitsPicker(input: {
   threadId: ThreadId;
   model: ModelSlug;
   runtimeModel?: ProviderModelDescriptor | undefined;
+  runtimeModels?: ReadonlyArray<ProviderModelDescriptor> | null | undefined;
   modelOptions: ProviderModelOptions[ProviderKind] | undefined;
   prompt: string;
   includeFastMode?: boolean;

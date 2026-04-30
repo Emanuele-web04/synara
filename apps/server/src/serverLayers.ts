@@ -1,135 +1,46 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Effect, FileSystem, Layer, Path } from "effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { Layer } from "effect";
 
 import { CheckpointDiffQueryLive } from "./checkpointing/Layers/CheckpointDiffQuery";
 import { CheckpointStoreLive } from "./checkpointing/Layers/CheckpointStore";
-import { ServerConfig } from "./config";
-import { OrchestrationCommandReceiptRepositoryLive } from "./persistence/Layers/OrchestrationCommandReceipts";
-import { OrchestrationEventStoreLive } from "./persistence/Layers/OrchestrationEventStore";
-import { ProviderSessionRuntimeRepositoryLive } from "./persistence/Layers/ProviderSessionRuntime";
-import { OrchestrationEngineLive } from "./orchestration/Layers/OrchestrationEngine";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor";
 import { OrchestrationReactorLive } from "./orchestration/Layers/OrchestrationReactor";
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor";
-import { OrchestrationProjectionPipelineLive } from "./orchestration/Layers/ProjectionPipeline";
-import { OrchestrationProjectionSnapshotQueryLive } from "./orchestration/Layers/ProjectionSnapshotQuery";
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion";
 import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus";
-import { ProviderUnsupportedError } from "./provider/Errors";
-import { makeClaudeAdapterLive } from "./provider/Layers/ClaudeAdapter";
-import { makeCodexAdapterLive } from "./provider/Layers/CodexAdapter";
-import { makeGeminiAdapterLive } from "./provider/Layers/GeminiAdapter";
-import { makeOpenCodeAdapterLive } from "./provider/Layers/OpenCodeAdapter";
-import { ProviderAdapterRegistryLive } from "./provider/Layers/ProviderAdapterRegistry";
-import { makeProviderServiceLive } from "./provider/Layers/ProviderService";
-import { ProviderDiscoveryServiceLive } from "./provider/Layers/ProviderDiscoveryService";
-import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionDirectory";
-import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
-import { ProviderDiscoveryService } from "./provider/Services/ProviderDiscoveryService";
-import { ProviderService } from "./provider/Services/ProviderService";
-import { makeEventNdjsonLogger } from "./provider/Layers/EventNdjsonLogger";
+import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor";
+import { OrchestrationLayerLive } from "./orchestration/runtimeLayer";
 
-import { TerminalManagerLive } from "./terminal/Layers/Manager";
 import { KeybindingsLive } from "./keybindings";
-import { GitManagerLive } from "./git/Layers/GitManager";
 import { GitCoreLive } from "./git/Layers/GitCore";
-import { GitHubCliLive } from "./git/Layers/GitHubCli";
-import { CodexTextGenerationServiceLive } from "./git/Layers/CodexTextGeneration";
-import { OpenCodeTextGenerationServiceLive } from "./git/Layers/OpenCodeTextGeneration";
-import { ProviderTextGenerationLive } from "./git/Layers/ProviderTextGeneration";
-import { OpenCodeRuntimeLive } from "./provider/opencodeRuntime";
-import { PtyAdapter } from "./terminal/Services/PTY";
-import { AnalyticsService } from "./telemetry/Services/AnalyticsService";
+import { GitLayerLive, TextGenerationLayerLive } from "./git/runtimeLayer";
+import { TerminalLayerLive } from "./terminal/runtimeLayer";
+import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReaper";
+import { AuthControlPlaneLive } from "./auth/Layers/AuthControlPlane";
+import { BootstrapCredentialServiceLive } from "./auth/Layers/BootstrapCredentialService";
+import { ServerAuthLive } from "./auth/Layers/ServerAuth";
+import { ServerAuthPolicyLive } from "./auth/Layers/ServerAuthPolicy";
+import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore";
+import { SessionCredentialServiceLive } from "./auth/Layers/SessionCredentialService";
+import { ServerLifecycleEventsLive } from "./serverLifecycleEvents";
+import { ServerRuntimeStartupLive } from "./serverRuntimeStartup";
+import { ServerSettingsLive } from "./serverSettings";
+import { WorkspaceLayerLive } from "./workspace/runtimeLayer";
+import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver";
+import { ServerEnvironmentLive } from "./environment/Layers/ServerEnvironment";
 
-type RuntimePtyAdapterLoader = {
-  layer: Layer.Layer<PtyAdapter, never, FileSystem.FileSystem | Path.Path>;
-};
-
-const runtimePtyAdapterLoaders = {
-  bun: () => import("./terminal/Layers/BunPTY"),
-  node: () => import("./terminal/Layers/NodePTY"),
-} satisfies Record<string, () => Promise<RuntimePtyAdapterLoader>>;
-
-const makeRuntimePtyAdapterLayer = () =>
-  Effect.gen(function* () {
-    const runtime = process.versions.bun !== undefined ? "bun" : "node";
-    const loader = runtimePtyAdapterLoaders[runtime];
-    const ptyAdapterModule = yield* Effect.promise<RuntimePtyAdapterLoader>(loader);
-    return ptyAdapterModule.layer;
-  }).pipe(Layer.unwrap);
-
-export function makeServerProviderLayer(): Layer.Layer<
-  ProviderService | ProviderDiscoveryService | ProviderAdapterRegistry,
-  ProviderUnsupportedError,
-  SqlClient.SqlClient | ServerConfig | FileSystem.FileSystem | AnalyticsService
-> {
-  return Effect.gen(function* () {
-    const { logProviderEvents, providerEventLogPath } = yield* ServerConfig;
-    const nativeEventLogger = logProviderEvents
-      ? yield* makeEventNdjsonLogger(providerEventLogPath, {
-          stream: "native",
-        })
-      : undefined;
-    const canonicalEventLogger = logProviderEvents
-      ? yield* makeEventNdjsonLogger(providerEventLogPath, {
-          stream: "canonical",
-        })
-      : undefined;
-    const providerSessionDirectoryLayer = ProviderSessionDirectoryLive.pipe(
-      Layer.provide(ProviderSessionRuntimeRepositoryLive),
-    );
-    const codexAdapterLayer = makeCodexAdapterLive(
-      nativeEventLogger ? { nativeEventLogger } : undefined,
-    );
-    const claudeAdapterLayer = makeClaudeAdapterLive(
-      nativeEventLogger ? { nativeEventLogger } : undefined,
-    );
-    const openCodeAdapterLayer = makeOpenCodeAdapterLive(
-      nativeEventLogger ? { nativeEventLogger } : undefined,
-    );
-    const geminiAdapterLayer = makeGeminiAdapterLive(
-      nativeEventLogger ? { nativeEventLogger } : undefined,
-    );
-    const adapterRegistryLayer = ProviderAdapterRegistryLive.pipe(
-      Layer.provide(codexAdapterLayer),
-      Layer.provide(claudeAdapterLayer),
-      Layer.provide(geminiAdapterLayer),
-      Layer.provide(geminiAdapterLayer),
-      Layer.provide(openCodeAdapterLayer),
-      Layer.provideMerge(providerSessionDirectoryLayer),
-    );
-    const providerServiceLayer = makeProviderServiceLive(
-      canonicalEventLogger ? { canonicalEventLogger } : undefined,
-    ).pipe(Layer.provide(adapterRegistryLayer), Layer.provide(providerSessionDirectoryLayer));
-    const providerDiscoveryLayer = ProviderDiscoveryServiceLive.pipe(
-      Layer.provide(adapterRegistryLayer),
-    );
-    return Layer.mergeAll(providerServiceLayer, providerDiscoveryLayer, adapterRegistryLayer);
-  }).pipe(Layer.unwrap);
-}
+export { makeServerProviderLayer } from "./provider/runtimeLayer";
 
 export function makeServerRuntimeServicesLayer() {
-  const textGenerationLayer = ProviderTextGenerationLive.pipe(
-    Layer.provide(CodexTextGenerationServiceLive),
-    Layer.provide(OpenCodeTextGenerationServiceLive.pipe(Layer.provide(OpenCodeRuntimeLive))),
-  );
   const checkpointStoreLayer = CheckpointStoreLive.pipe(Layer.provide(GitCoreLive));
 
-  const orchestrationLayer = OrchestrationEngineLive.pipe(
-    Layer.provide(OrchestrationProjectionPipelineLive),
-    Layer.provide(OrchestrationEventStoreLive),
-    Layer.provide(OrchestrationCommandReceiptRepositoryLive),
-  );
-
   const checkpointDiffQueryLayer = CheckpointDiffQueryLive.pipe(
-    Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
+    Layer.provideMerge(OrchestrationLayerLive),
     Layer.provideMerge(checkpointStoreLayer),
   );
 
   const runtimeServicesLayer = Layer.mergeAll(
-    orchestrationLayer,
-    OrchestrationProjectionSnapshotQueryLive,
+    OrchestrationLayerLive,
     checkpointStoreLayer,
     checkpointDiffQueryLayer,
     RuntimeReceiptBusLive,
@@ -140,7 +51,7 @@ export function makeServerRuntimeServicesLayer() {
   const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(GitCoreLive),
-    Layer.provideMerge(textGenerationLayer),
+    Layer.provideMerge(TextGenerationLayerLive),
   );
   const checkpointReactorLayer = CheckpointReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
@@ -150,20 +61,48 @@ export function makeServerRuntimeServicesLayer() {
     Layer.provideMerge(providerCommandReactorLayer),
     Layer.provideMerge(checkpointReactorLayer),
   );
-
-  const terminalLayer = TerminalManagerLive.pipe(Layer.provide(makeRuntimePtyAdapterLayer()));
-
-  const gitManagerLayer = GitManagerLive.pipe(
-    Layer.provideMerge(GitCoreLive),
-    Layer.provideMerge(GitHubCliLive),
-    Layer.provideMerge(textGenerationLayer),
+  const threadDeletionReactorLayer = ThreadDeletionReactorLive.pipe(
+    Layer.provideMerge(OrchestrationLayerLive),
+    Layer.provideMerge(TerminalLayerLive),
+  );
+  const providerSessionReaperLayer = ProviderSessionReaperLive.pipe(
+    Layer.provideMerge(OrchestrationLayerLive),
+  );
+  const sessionCredentialLayer = SessionCredentialServiceLive.pipe(
+    Layer.provide(ServerSecretStoreLive),
+  );
+  const authControlPlaneLayer = AuthControlPlaneLive.pipe(
+    Layer.provide(BootstrapCredentialServiceLive),
+    Layer.provide(sessionCredentialLayer),
+  );
+  const serverAuthLayer = ServerAuthLive.pipe(
+    Layer.provide(ServerAuthPolicyLive),
+    Layer.provide(BootstrapCredentialServiceLive),
+    Layer.provide(sessionCredentialLayer),
+    Layer.provide(authControlPlaneLayer),
+  );
+  const authServicesLayer = Layer.mergeAll(
+    ServerAuthPolicyLive,
+    ServerSecretStoreLive,
+    BootstrapCredentialServiceLive,
+    sessionCredentialLayer,
+    authControlPlaneLayer,
+    serverAuthLayer,
   );
 
   return Layer.mergeAll(
     orchestrationReactorLayer,
-    GitCoreLive,
-    gitManagerLayer,
-    terminalLayer,
+    threadDeletionReactorLayer,
+    providerSessionReaperLayer,
+    GitLayerLive,
+    TerminalLayerLive,
     KeybindingsLive,
+    ServerSettingsLive,
+    ServerEnvironmentLive,
+    authServicesLayer,
+    ServerLifecycleEventsLive,
+    ServerRuntimeStartupLive,
+    WorkspaceLayerLive,
+    ProjectFaviconResolverLive,
   ).pipe(Layer.provideMerge(NodeServices.layer));
 }
