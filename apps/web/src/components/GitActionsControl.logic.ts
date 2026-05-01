@@ -13,7 +13,7 @@ export type GitActionIconName = "commit" | "push" | "pr";
 export type GitDialogAction = "commit" | "push" | "commit_push" | "create_pr";
 
 export interface GitActionMenuItem {
-  id: "commit" | "push" | "pr";
+  id: "commit" | "commit_push" | "push" | "pr";
   label: string;
   disabled: boolean;
   icon: GitActionIconName;
@@ -184,6 +184,18 @@ export function buildMenuItems(
       kind: "open_dialog",
       dialogAction: "commit",
     },
+    ...(hasChanges && !isDefaultBranch
+      ? [
+          {
+            id: "commit_push" as const,
+            label: "Commit & push",
+            disabled: !canCommitPush,
+            icon: "push" as const,
+            kind: "open_dialog" as const,
+            dialogAction: "commit_push" as const,
+          },
+        ]
+      : []),
     {
       id: "push",
       label: isDefaultBranch ? "Commit & push" : "Push",

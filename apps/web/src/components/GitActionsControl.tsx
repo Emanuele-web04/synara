@@ -118,7 +118,7 @@ interface RunGitActionWithToastInput {
 }
 
 interface GitPickerMenuItem {
-  id: "push" | "pr" | "sync" | "commit" | "create_branch";
+  id: "push" | "pr" | "sync" | "commit" | "commit_push" | "create_branch";
   label: string;
   disabled: boolean;
   disabledReason: string | null;
@@ -191,6 +191,22 @@ function getMenuActionDisabledReason({
       return "No local commits to push.";
     }
     return "Push is currently unavailable.";
+  }
+
+  if (item.id === "commit_push") {
+    if (!hasBranch) {
+      return "Detached HEAD: checkout a branch before committing and pushing.";
+    }
+    if (isBehind) {
+      return "Branch is behind upstream. Pull/rebase before committing and pushing.";
+    }
+    if (!gitStatus.hasUpstream && !hasOriginRemote) {
+      return 'Add an "origin" remote before committing and pushing.';
+    }
+    if (!hasChanges && !isAhead) {
+      return "No local changes or commits to push.";
+    }
+    return "Commit & push is currently unavailable.";
   }
 
   if (hasOpenPr) {
@@ -1004,6 +1020,7 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
   const gitPickerMenuItems = useMemo<GitPickerMenuItem[]>(() => {
     const items: GitPickerMenuItem[] = [];
     const commitMenuItem = gitActionMenuItems.find((item) => item.id === "commit");
+    const commitPushMenuItem = gitActionMenuItems.find((item) => item.id === "commit_push");
     const pushMenuItem = gitActionMenuItems.find((item) => item.id === "push");
     const prMenuItem = gitActionMenuItems.find((item) => item.id === "pr");
     const createBranchDisabled = isGitActionRunning || !gitStatusForActions;
@@ -1021,6 +1038,22 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
         }),
         icon: "commit",
         onSelect: () => openDialogForMenuItem(commitMenuItem),
+      });
+    }
+
+    if (commitPushMenuItem) {
+      items.push({
+        id: "commit_push",
+        label: commitPushMenuItem.label,
+        disabled: commitPushMenuItem.disabled,
+        disabledReason: getMenuActionDisabledReason({
+          item: commitPushMenuItem,
+          gitStatus: gitStatusForActions,
+          isBusy: isGitActionRunning,
+          hasOriginRemote,
+        }),
+        icon: "push",
+        onSelect: () => openDialogForMenuItem(commitPushMenuItem),
       });
     }
 

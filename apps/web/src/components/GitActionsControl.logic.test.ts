@@ -437,6 +437,14 @@ describe("when: working tree has local changes", () => {
         dialogAction: "commit",
       },
       {
+        id: "commit_push",
+        label: "Commit & push",
+        disabled: false,
+        icon: "push",
+        kind: "open_dialog",
+        dialogAction: "commit_push",
+      },
+      {
         id: "push",
         label: "Push",
         disabled: true,
@@ -614,6 +622,14 @@ describe("when: working tree has local changes and branch is behind upstream", (
         icon: "commit",
         kind: "open_dialog",
         dialogAction: "commit",
+      },
+      {
+        id: "commit_push",
+        label: "Commit & push",
+        disabled: true,
+        icon: "push",
+        kind: "open_dialog",
+        dialogAction: "commit_push",
       },
       {
         id: "push",
