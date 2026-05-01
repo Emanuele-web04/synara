@@ -1,6 +1,6 @@
 # DP Code
 
-DP Code is a minimal web GUI for coding agents (currently Codex and Claude, more coming soon).
+DP Code is a minimal web GUI for coding agents (currently Claude Code, Codex, Gemini, OpenCode, more coming soon).
 
 This project started as a clone of [T3Code](https://github.com/pingdotgg/t3code), and has since been customized into its own product with different branding, packaging, release wiring, and product-level behavior.
 
