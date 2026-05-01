@@ -33,6 +33,7 @@ import { RotatingFileSink } from "@t3tools/shared/logging";
 import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness";
 import { waitForBackendStartupReady } from "./backendStartupReadiness";
 import { showDesktopConfirmDialog } from "./confirmDialog";
+import { openInitialBackendWindow } from "./initialBackendWindowOpen";
 import { shouldAllowMediaPermissionRequest } from "./mediaPermissions";
 import { ServerListeningDetector } from "./serverListeningDetector";
 import { syncShellEnvironment } from "./syncShellEnvironment";
@@ -361,41 +362,25 @@ async function waitForBackendWindowReady(baseUrl: string): Promise<"listening" |
 }
 
 function ensureInitialBackendWindowOpen(baseUrl: string): void {
-  const existingWindow = mainWindow ?? BrowserWindow.getAllWindows()[0] ?? null;
-  if (
-    isDevelopment ||
-    baseUrl.length === 0 ||
-    existingWindow !== null ||
-    backendInitialWindowOpenInFlight !== null
-  ) {
-    return;
-  }
-
-  const nextOpen = waitForBackendWindowReady(baseUrl)
-    .then((source) => {
-      writeDesktopLogHeader(`bootstrap backend ready source=${source}`);
-      if (mainWindow ?? BrowserWindow.getAllWindows()[0]) {
-        return;
-      }
+  openInitialBackendWindow({
+    isDevelopment,
+    baseUrl,
+    hasExistingWindow: () => (mainWindow ?? BrowserWindow.getAllWindows()[0] ?? null) !== null,
+    createWindow: () => {
       mainWindow = createWindow();
-      writeDesktopLogHeader("bootstrap main window created");
-    })
-    .catch((error) => {
-      if (isBackendReadinessAborted(error)) {
-        return;
-      }
-      writeDesktopLogHeader(
-        `bootstrap backend readiness warning message=${formatErrorMessage(error)}`,
-      );
-      console.warn("[desktop] backend readiness check timed out during packaged bootstrap", error);
-    })
-    .finally(() => {
-      if (backendInitialWindowOpenInFlight === nextOpen) {
-        backendInitialWindowOpenInFlight = null;
-      }
-    });
-
-  backendInitialWindowOpenInFlight = nextOpen;
+    },
+    getReadinessInFlight: () => backendInitialWindowOpenInFlight,
+    setReadinessInFlight: (promise) => {
+      backendInitialWindowOpenInFlight = promise;
+    },
+    waitForBackendWindowReady,
+    writeLog: writeDesktopLogHeader,
+    isReadinessAborted: isBackendReadinessAborted,
+    formatErrorMessage,
+    warn: (message, error) => {
+      console.warn(message, error);
+    },
+  });
 }
 
 function writeDesktopStreamChunk(
