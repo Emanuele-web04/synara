@@ -6,11 +6,7 @@ import { useCallback } from "react";
 import type { useNavigate } from "@tanstack/react-router";
 import type { ThreadId } from "@t3tools/contracts";
 import type { LastThreadRoute } from "../chatRouteRestore";
-import {
-  type PaneId,
-  type SplitView,
-  type SplitViewId,
-} from "../splitViewStore";
+import { type PaneId, type SplitView, type SplitViewId } from "../splitViewStore";
 import { selectThreadTerminalState } from "../terminalStateStore";
 import {
   resolvePreferredSplitForCommand,

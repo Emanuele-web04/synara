@@ -266,7 +266,9 @@ const ADD_PROJECT_EXISTING_SYNC_ERROR =
   "This folder is already linked, but the existing project has not synced into the sidebar yet. Try again in a moment.";
 const DebugFeatureFlagsMenu = import.meta.env.DEV
   ? lazy(() =>
-      import("./DebugFeatureFlagsMenu").then((module) => ({ default: module.DebugFeatureFlagsMenu })),
+      import("./DebugFeatureFlagsMenu").then((module) => ({
+        default: module.DebugFeatureFlagsMenu,
+      })),
     )
   : null;
 
@@ -4087,10 +4089,7 @@ export default function Sidebar() {
           onDragStart={(event) => {
             const dragImage = event.currentTarget as HTMLElement | null;
             event.dataTransfer.effectAllowed = "move";
-            event.dataTransfer.setData(
-              THREAD_DRAG_MIME,
-              JSON.stringify({ threadId: thread.id }),
-            );
+            event.dataTransfer.setData(THREAD_DRAG_MIME, JSON.stringify({ threadId: thread.id }));
             if (dragImage) {
               const rect = dragImage.getBoundingClientRect();
               event.dataTransfer.setDragImage(
