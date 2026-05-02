@@ -59,7 +59,7 @@ import {
   serverQueryKeys,
   serverWorktreesQueryOptions,
 } from "../lib/serverReactQuery";
-import { cn } from "../lib/utils";
+import { cn, isMacPlatform } from "../lib/utils";
 import { newCommandId } from "../lib/utils";
 import { ensureNativeApi, readNativeApi } from "../nativeApi";
 import {
@@ -342,6 +342,9 @@ function SettingsRouteView() {
   const [browserNotificationPermission, setBrowserNotificationPermission] = useState(
     readBrowserNotificationPermissionState(),
   );
+  const shouldShowFontSmoothing = isMacPlatform(
+    typeof navigator === "undefined" ? "" : navigator.platform,
+  );
 
   const codexBinaryPath = settings.codexBinaryPath;
   const codexHomePath = settings.codexHomePath;
@@ -440,6 +443,10 @@ function SettingsRouteView() {
     ...(settings.uiFontFamily !== defaults.uiFontFamily ? ["UI font"] : []),
     ...(settings.chatCodeFontFamily !== defaults.chatCodeFontFamily ? ["Code font"] : []),
     ...(settings.chatFontSizePx !== defaults.chatFontSizePx ? ["Base font size"] : []),
+    ...(shouldShowFontSmoothing &&
+    settings.enableNativeFontSmoothing !== defaults.enableNativeFontSmoothing
+      ? ["Font smoothing"]
+      : []),
     ...(settings.timestampFormat !== defaults.timestampFormat ? ["Time format"] : []),
     ...(settings.enableTaskCompletionToasts !== defaults.enableTaskCompletionToasts
       ? ["Activity toasts"]
@@ -1251,6 +1258,34 @@ function SettingsRouteView() {
               </div>
             }
           />
+
+          {shouldShowFontSmoothing ? (
+            <SettingsRow
+              title="Font smoothing"
+              description="Use macOS-style antialiasing for lighter, crisper text rendering."
+              resetAction={
+                settings.enableNativeFontSmoothing !== defaults.enableNativeFontSmoothing ? (
+                  <SettingResetButton
+                    label="font smoothing"
+                    onClick={() =>
+                      updateSettings({
+                        enableNativeFontSmoothing: defaults.enableNativeFontSmoothing,
+                      })
+                    }
+                  />
+                ) : null
+              }
+              control={
+                <Switch
+                  checked={settings.enableNativeFontSmoothing}
+                  onCheckedChange={(checked) =>
+                    updateSettings({ enableNativeFontSmoothing: checked })
+                  }
+                  aria-label="Enable font smoothing"
+                />
+              }
+            />
+          ) : null}
         </div>
       </SettingsSection>
 

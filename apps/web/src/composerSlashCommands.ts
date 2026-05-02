@@ -8,6 +8,7 @@ export const BUILT_IN_COMPOSER_SLASH_COMMANDS = [
   "default",
   "review",
   "fork",
+  "side",
   "status",
   "subagents",
   "fast",
@@ -145,6 +146,12 @@ const COMPOSER_SLASH_COMMAND_DEFINITIONS: Record<
     description: "Fork this thread into local or a new worktree",
     source: "app",
   },
+  side: {
+    command: "side",
+    label: "/side",
+    description: "Open a guarded sidechat from this thread",
+    source: "app",
+  },
   status: {
     command: "status",
     label: "/status",
@@ -240,6 +247,26 @@ export function canOfferForkSlashCommand(input: {
   );
 }
 
+export function canOfferSideSlashCommand(input: {
+  prompt: string;
+  imageCount: number;
+  terminalContextCount: number;
+  selectedSkillCount: number;
+  selectedMentionCount: number;
+  interactionMode: "default" | "plan";
+  isSidechat: boolean;
+}): boolean {
+  return (
+    !hasMeaningfulComposerText(input.prompt) &&
+    input.imageCount === 0 &&
+    input.terminalContextCount === 0 &&
+    input.selectedSkillCount === 0 &&
+    input.selectedMentionCount === 0 &&
+    input.interactionMode === "default" &&
+    !input.isSidechat
+  );
+}
+
 export function canOfferReviewSlashCommand(input: {
   prompt: string;
   imageCount: number;
@@ -318,6 +345,7 @@ export function getAvailableComposerSlashCommands(input: {
   canOfferCompactCommand: boolean;
   canOfferReviewCommand: boolean;
   canOfferForkCommand: boolean;
+  canOfferSideCommand: boolean;
   providerNativeCommandNames?: ReadonlyArray<string>;
 }): ComposerSlashCommand[] {
   const collidingNativeCommandNames = new Set<ComposerSlashCommand>(
@@ -342,6 +370,7 @@ export function getAvailableComposerSlashCommands(input: {
           "default",
           ...(input.canOfferReviewCommand ? (["review"] as const) : []),
           ...(input.canOfferForkCommand ? (["fork"] as const) : []),
+          ...(input.canOfferSideCommand ? (["side"] as const) : []),
           "status",
           "subagents",
         ]

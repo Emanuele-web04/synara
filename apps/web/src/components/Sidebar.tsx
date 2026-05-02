@@ -384,17 +384,20 @@ function resolveWorktreeBadgeLabel(
 }
 
 type ThreadMetaChip = {
-  id: "handoff" | "fork" | "worktree";
+  id: "handoff" | "fork" | "sidechat" | "worktree";
   tooltip: string;
   icon: ReactNode;
 };
 
 /**
  * Back-to-front order: first = behind, last = in front.
- * Priority lowest → highest: handoff → fork → worktree.
+ * Priority lowest -> highest: handoff -> fork/sidechat -> worktree.
  */
 function resolveThreadRowMetaChips(input: {
-  thread: Pick<Thread, "forkSourceThreadId" | "envMode" | "worktreePath" | "handoff">;
+  thread: Pick<
+    Thread,
+    "forkSourceThreadId" | "sidechatSourceThreadId" | "envMode" | "worktreePath" | "handoff"
+  >;
   includeHandoffBadge: boolean;
 }): ThreadMetaChip[] {
   const chips: ThreadMetaChip[] = [];
@@ -413,6 +416,14 @@ function resolveThreadRowMetaChips(input: {
       id: "fork",
       tooltip: "Forked thread",
       icon: <GoRepoForked className="size-3 text-emerald-600 dark:text-emerald-300/90" />,
+    });
+  }
+
+  if (input.thread.sidechatSourceThreadId) {
+    chips.push({
+      id: "sidechat",
+      tooltip: "Sidechat",
+      icon: <LuMessageSquareDashed className="size-3 text-sky-600 dark:text-sky-300/90" />,
     });
   }
 
@@ -3813,7 +3824,10 @@ export default function Sidebar() {
     const threadStatus = resolveThreadStatusForSidebar(thread);
     const isSubagentThread = Boolean(thread.parentThreadId);
     const prStatus = prStatusIndicator(prByThreadId.get(thread.id) ?? null);
-    const leadingPrStatus = isSubagentThread || thread.forkSourceThreadId ? null : prStatus;
+    const leadingPrStatus =
+      isSubagentThread || thread.forkSourceThreadId || thread.sidechatSourceThreadId
+        ? null
+        : prStatus;
     const handoffBadgeLabel = resolveThreadHandoffBadgeLabel(thread);
     const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
     const threadJumpLabelParts =
@@ -3998,7 +4012,10 @@ export default function Sidebar() {
       includeHandoffBadge: !isDisposableThread,
     });
     const isSubagentThread = Boolean(thread.parentThreadId);
-    const leadingPrStatus = isSubagentThread || thread.forkSourceThreadId ? null : prStatus;
+    const leadingPrStatus =
+      isSubagentThread || thread.forkSourceThreadId || thread.sidechatSourceThreadId
+        ? null
+        : prStatus;
     const handoffBadgeLabel = resolveThreadHandoffBadgeLabel(thread);
     const subagentPresentation = isSubagentThread
       ? resolveSubagentPresentationForThread({

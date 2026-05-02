@@ -612,6 +612,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             subagentNickname: event.payload.subagentNickname ?? null,
             subagentRole: event.payload.subagentRole ?? null,
             forkSourceThreadId: event.payload.forkSourceThreadId,
+            sidechatSourceThreadId: event.payload.sidechatSourceThreadId,
             lastKnownPr: event.payload.lastKnownPr ?? null,
             latestTurnId: null,
             handoff: event.payload.handoff,

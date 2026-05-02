@@ -1,12 +1,14 @@
-import { TurnId } from "@t3tools/contracts";
+import { ThreadId, TurnId } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
   resolveRoutePanelBootstrap,
+  resolveSplitPaneMaximizeDecision,
   resolveThreadPickerTitle,
   resolveToggledChatPanelPatch,
 } from "./-chatThreadRoute.logic";
 
+const THREAD_ID = ThreadId.makeUnsafe("thread-1");
 const TURN_ID = TurnId.makeUnsafe("turn-1");
 const OTHER_TURN_ID = TurnId.makeUnsafe("turn-2");
 
@@ -161,5 +163,39 @@ describe("resolveToggledChatPanelPatch", () => {
       diffTurnId: OTHER_TURN_ID,
       diffFilePath: "src/browser.tsx",
     });
+  });
+});
+
+describe("resolveSplitPaneMaximizeDecision", () => {
+  it("targets the focused thread and preserves its panel state for single-chat navigation", () => {
+    expect(
+      resolveSplitPaneMaximizeDecision({
+        splitViewId: "split-1",
+        focusedThreadId: THREAD_ID,
+        focusedPanelState: {
+          panel: "diff",
+          diffTurnId: TURN_ID,
+          diffFilePath: "src/chat.tsx",
+        },
+      }),
+    ).toEqual({
+      splitViewIdToRemove: "split-1",
+      threadId: THREAD_ID,
+      panelState: {
+        panel: "diff",
+        diffTurnId: TURN_ID,
+        diffFilePath: "src/chat.tsx",
+      },
+    });
+  });
+
+  it("does not invent a target when the focused pane is empty", () => {
+    expect(
+      resolveSplitPaneMaximizeDecision({
+        splitViewId: "split-1",
+        focusedThreadId: null,
+        focusedPanelState: null,
+      }),
+    ).toBeNull();
   });
 });

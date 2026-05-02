@@ -8,6 +8,7 @@ import {
   type RuntimeMode,
   type ThreadId,
 } from "@t3tools/contracts";
+import { buildPromptThreadTitleFallback } from "@t3tools/shared/chatThreads";
 import { deriveAssociatedWorktreeMetadata } from "@t3tools/shared/threadWorkspace";
 import { useCallback, useState } from "react";
 import { newCommandId, newMessageId, newThreadId } from "../lib/utils";
@@ -30,6 +31,7 @@ import { toastManager } from "../components/ui/toast";
 import type { ComposerCommandItem } from "../components/chat/ComposerCommandMenu";
 import { buildNextProviderOptions } from "../providerModelOptions";
 import { resolveForkThreadEnvironment } from "../lib/threadEnvironment";
+import { type SplitViewId, useSplitViewStore } from "../splitViewStore";
 
 type ComposerSnapshot = {
   value: string;
@@ -50,6 +52,7 @@ export function useComposerSlashCommands(input: {
   isServerThread: boolean;
   supportsFastSlashCommand: boolean;
   canOfferCompactCommand: boolean;
+  canOfferSideCommand: boolean;
   supportsTextNativeReviewCommand: boolean;
   fastModeEnabled: boolean;
   providerNativeCommands: readonly ProviderNativeCommandDescriptor[];
@@ -61,7 +64,7 @@ export function useComposerSlashCommands(input: {
   interactionMode: ProviderInteractionMode;
   threadId: ThreadId;
   syncServerReadModel: (snapshot: OrchestrationReadModel) => void;
-  navigateToThread: (threadId: ThreadId) => Promise<void>;
+  navigateToThread: (threadId: ThreadId, options?: { splitViewId?: SplitViewId }) => Promise<void>;
   handleClearConversation: () => Promise<void> | void;
   handleInteractionModeChange: (mode: "default" | "plan") => Promise<void> | void;
   openForkTargetPicker: () => void;
@@ -97,6 +100,7 @@ export function useComposerSlashCommands(input: {
     isServerThread,
     supportsFastSlashCommand,
     canOfferCompactCommand,
+    canOfferSideCommand,
     supportsTextNativeReviewCommand,
     fastModeEnabled,
     providerNativeCommands,
@@ -117,12 +121,14 @@ export function useComposerSlashCommands(input: {
     editorActions,
   } = input;
   const providerNativeCommandNames = providerNativeCommands.map((command) => command.name);
+  const createSplitViewFromDrop = useSplitViewStore((store) => store.createFromDrop);
   const availableBuiltInSlashCommands = getAvailableComposerSlashCommands({
     provider: selectedProvider,
     supportsFastSlashCommand,
     canOfferCompactCommand,
     canOfferReviewCommand: true,
     canOfferForkCommand: true,
+    canOfferSideCommand: true,
     providerNativeCommandNames,
   });
 
@@ -286,6 +292,90 @@ export function useComposerSlashCommands(input: {
       isServerThread,
       navigateToThread,
       runtimeMode,
+      selectedModelSelection,
+      syncServerReadModel,
+    ],
+  );
+
+  const createSidechatFromSlashCommand = useCallback(
+    async (inputOptions?: { initialPrompt?: string }) => {
+      const api = readNativeApi();
+      if (!api || !activeProject || !activeThread || !isServerThread || !canOfferSideCommand) {
+        toastManager.add({
+          type: "warning",
+          title: "Sidechat is unavailable",
+          description: "Open a server-backed main thread before starting a sidechat.",
+        });
+        return true;
+      }
+
+      const importedMessages = buildThreadHandoffImportedMessages(activeThread);
+      const nextThreadId = newThreadId();
+      const createdAt = new Date().toISOString();
+      const initialPrompt = inputOptions?.initialPrompt?.trim() ?? "";
+      const titleSeed =
+        initialPrompt.length > 0
+          ? buildPromptThreadTitleFallback(initialPrompt)
+          : activeThread.title;
+
+      await api.orchestration.dispatchCommand({
+        type: "thread.fork.create",
+        commandId: newCommandId(),
+        threadId: nextThreadId,
+        sourceThreadId: activeThread.id,
+        sidechatSourceThreadId: activeThread.id,
+        projectId: activeProject.id,
+        title: `Sidechat: ${titleSeed}`,
+        modelSelection: selectedModelSelection,
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        envMode: activeThread.envMode ?? (activeThread.worktreePath ? "worktree" : "local"),
+        branch: activeThread.branch,
+        worktreePath: activeThread.worktreePath,
+        associatedWorktreePath: activeThread.associatedWorktreePath ?? null,
+        associatedWorktreeBranch: activeThread.associatedWorktreeBranch ?? null,
+        associatedWorktreeRef: activeThread.associatedWorktreeRef ?? null,
+        importedMessages: [...importedMessages],
+        createdAt,
+      });
+
+      if (initialPrompt.length > 0) {
+        await api.orchestration.dispatchCommand({
+          type: "thread.turn.start",
+          commandId: newCommandId(),
+          threadId: nextThreadId,
+          message: {
+            messageId: newMessageId(),
+            role: "user",
+            text: initialPrompt,
+            attachments: [],
+          },
+          modelSelection: selectedModelSelection,
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          createdAt: new Date().toISOString(),
+        });
+      }
+
+      const snapshot = await api.orchestration.getSnapshot();
+      syncServerReadModel(snapshot);
+      const splitViewId = createSplitViewFromDrop({
+        sourceThreadId: activeThread.id,
+        ownerProjectId: activeProject.id,
+        droppedThreadId: nextThreadId,
+        direction: "horizontal",
+        side: "second",
+      });
+      await navigateToThread(nextThreadId, { splitViewId });
+      return true;
+    },
+    [
+      activeProject,
+      activeThread,
+      canOfferSideCommand,
+      createSplitViewFromDrop,
+      isServerThread,
+      navigateToThread,
       selectedModelSelection,
       syncServerReadModel,
     ],
@@ -585,6 +675,22 @@ export function useComposerSlashCommands(input: {
         }
         return true;
       }
+      if (slashInvocation.command === "side") {
+        try {
+          editorActions.clearComposerSlashDraft();
+          await createSidechatFromSlashCommand({ initialPrompt: slashInvocation.args });
+        } catch (error) {
+          toastManager.add({
+            type: "error",
+            title: "Could not start sidechat",
+            description:
+              error instanceof Error
+                ? error.message
+                : "An error occurred while creating the sidechat.",
+          });
+        }
+        return true;
+      }
       return false;
     },
     [
@@ -592,6 +698,7 @@ export function useComposerSlashCommands(input: {
       checkClaudeFastSlashCommandAvailability,
       compactProviderThread,
       createForkThreadFromSlashCommand,
+      createSidechatFromSlashCommand,
       editorActions,
       handleClearConversation,
       handleInteractionModeChange,
@@ -746,10 +853,30 @@ export function useComposerSlashCommands(input: {
         editorActions.setComposerHighlightedItemId(null);
         openForkTargetPicker();
         editorActions.scheduleComposerFocus();
+        return;
+      }
+
+      if (item.command === "side") {
+        const applied = clearSlashCommandFromComposer();
+        if (!wasPromptReplacementApplied(applied)) {
+          return;
+        }
+        editorActions.setComposerHighlightedItemId(null);
+        void createSidechatFromSlashCommand().catch((error) => {
+          toastManager.add({
+            type: "error",
+            title: "Could not start sidechat",
+            description:
+              error instanceof Error
+                ? error.message
+                : "An error occurred while creating the sidechat.",
+          });
+        });
       }
     },
     [
       compactProviderThread,
+      createSidechatFromSlashCommand,
       editorActions,
       handleClearConversation,
       handleInteractionModeChange,

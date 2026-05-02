@@ -180,6 +180,7 @@ export interface Thread extends ThreadWorkspaceState {
   subagentNickname?: string | null;
   subagentRole?: string | null;
   forkSourceThreadId?: ThreadId | null;
+  sidechatSourceThreadId?: ThreadId | null;
   handoff?: ThreadHandoff | null;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
   latestUserMessageAt?: string | null;
@@ -207,6 +208,7 @@ export interface ThreadShell extends ThreadWorkspaceState {
   subagentNickname?: string | null;
   subagentRole?: string | null;
   forkSourceThreadId?: ThreadId | null;
+  sidechatSourceThreadId?: ThreadId | null;
   handoff?: ThreadHandoff | null;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
   latestUserMessageAt?: string | null;
@@ -246,6 +248,7 @@ export interface SidebarThreadSummary {
   hasActionableProposedPlan: boolean;
   hasLiveTailWork: boolean;
   forkSourceThreadId?: ThreadId | null;
+  sidechatSourceThreadId?: ThreadId | null;
   handoff?: ThreadHandoff | null;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
 }

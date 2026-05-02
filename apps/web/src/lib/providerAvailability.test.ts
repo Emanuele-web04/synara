@@ -54,6 +54,49 @@ describe("normalizeProviderStatusForLocalConfig", () => {
     });
   });
 
+  it("marks a custom-path provider ready after a successful session confirms it", () => {
+    expect(
+      normalizeProviderStatusForLocalConfig({
+        provider: "opencode",
+        status: {
+          ...BASE_STATUS,
+          provider: "opencode",
+          message: "OpenCode CLI (`opencode`) is not installed or not on PATH.",
+        },
+        customBinaryPath: "/custom/bin/opencode",
+        confirmedCustomBinaryPath: "/custom/bin/opencode",
+      }),
+    ).toEqual({
+      provider: "opencode",
+      authStatus: "unknown",
+      available: true,
+      checkedAt: BASE_STATUS.checkedAt,
+      status: "ready",
+    });
+  });
+
+  it("keeps warning when a different custom path was confirmed", () => {
+    expect(
+      normalizeProviderStatusForLocalConfig({
+        provider: "opencode",
+        status: {
+          ...BASE_STATUS,
+          provider: "opencode",
+          message: "OpenCode CLI (`opencode`) is not installed or not on PATH.",
+        },
+        customBinaryPath: "/custom/bin/opencode-next",
+        confirmedCustomBinaryPath: "/custom/bin/opencode",
+      }),
+    ).toEqual({
+      ...BASE_STATUS,
+      provider: "opencode",
+      available: true,
+      status: "warning",
+      message:
+        "OpenCode uses a custom local binary path in this app. Availability will be confirmed when you start a session.",
+    });
+  });
+
   it("preserves authenticated and unauthenticated statuses", () => {
     expect(
       normalizeProviderStatusForLocalConfig({

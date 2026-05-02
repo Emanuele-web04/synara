@@ -15,6 +15,7 @@ import {
   type ProviderPluginDescriptor,
   type ProviderSkillDescriptor,
   type ProviderSkillReference,
+  type ProviderStartOptions,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   type ResolvedKeybindingsConfig,
@@ -83,6 +84,7 @@ import {
 import { getLocalFolderBrowseRootPath, isLocalFolderMentionQuery } from "~/lib/localFolderMentions";
 import {
   isProviderUsable,
+  normalizeCustomBinaryPath,
   normalizeProviderStatusForLocalConfig,
   providerUnavailableReason,
 } from "~/lib/providerAvailability";
@@ -101,6 +103,7 @@ import {
   buildThreadBreadcrumbs,
   enrichSubagentWorkEntries,
   resolveActiveThreadTitle,
+  shouldConsumePendingCustomBinaryConfirmation,
   shouldShowComposerModelBootstrapSkeleton,
 } from "./ChatView.logic";
 import {
@@ -123,6 +126,7 @@ import {
 import { createProjectSelector, createThreadSelector } from "../storeSelectors";
 import {
   canOfferForkSlashCommand,
+  canOfferSideSlashCommand,
   canOfferReviewSlashCommand,
   hasProviderNativeSlashCommand,
   resolveComposerSlashRootBranch,
@@ -320,6 +324,7 @@ import {
   collectUserMessageBlobPreviewUrls,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
+  filterSidechatTranscriptMessages,
   hasServerAcknowledgedLocalDispatch,
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
   LastInvokedScriptByProjectSchema,
@@ -386,6 +391,40 @@ function canHandleComposerPickerShortcut(
 const EMPTY_AVAILABLE_EDITORS: EditorId[] = [];
 const EMPTY_PROVIDER_STATUSES: ServerProviderStatus[] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
+
+function getThreadProviderCustomBinaryPathKey(threadId: Thread["id"], provider: ProviderKind) {
+  return `${threadId}:${provider}`;
+}
+
+function getConfirmedCustomBinarySessionKey(
+  thread: Thread | null | undefined,
+  provider: ProviderKind,
+): string | null {
+  const session = thread?.session;
+  if (!thread || session?.provider !== provider) {
+    return null;
+  }
+  if (session.status !== "ready" && session.status !== "running") {
+    return null;
+  }
+  return getThreadProviderCustomBinaryPathKey(thread.id, provider);
+}
+
+function getProviderStartOptionsCustomBinaryPath(
+  providerOptions: ProviderStartOptions | undefined,
+  provider: ProviderKind,
+): string | null {
+  switch (provider) {
+    case "codex":
+      return normalizeCustomBinaryPath(providerOptions?.codex?.binaryPath);
+    case "claudeAgent":
+      return normalizeCustomBinaryPath(providerOptions?.claudeAgent?.binaryPath);
+    case "gemini":
+      return normalizeCustomBinaryPath(providerOptions?.gemini?.binaryPath);
+    case "opencode":
+      return normalizeCustomBinaryPath(providerOptions?.opencode?.binaryPath);
+  }
+}
 
 type ComposerPluginSuggestion = {
   plugin: ProviderPluginDescriptor;
@@ -831,6 +870,11 @@ export default function ChatView({
   const [planSidebarOpen, setPlanSidebarOpen] = useState(false);
   const [activeTaskListCompact, setActiveTaskListCompact] = useState(false);
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
+  const [confirmedCustomBinaryPathsByProvider, setConfirmedCustomBinaryPathsByProvider] = useState<
+    Partial<Record<ProviderKind, string>>
+  >({});
+  const confirmedCustomBinarySessionKeysRef = useRef<Set<string>>(new Set());
+  const pendingCustomBinaryPathsByThreadProviderRef = useRef<Map<string, string>>(new Map());
   const [composerCommandPicker, setComposerCommandPicker] = useState<
     null | "fork-target" | "review-target"
   >(null);
@@ -1802,7 +1846,10 @@ export default function ChatView({
   }, []);
   const serverMessages = activeThread?.messages;
   const timelineMessages = useMemo(() => {
-    const messages = serverMessages ?? [];
+    const messages = filterSidechatTranscriptMessages(
+      serverMessages ?? [],
+      Boolean(activeThread?.sidechatSourceThreadId),
+    );
     const serverMessagesWithPreviewHandoff =
       Object.keys(attachmentPreviewHandoffByMessageId).length === 0
         ? messages
@@ -1853,7 +1900,12 @@ export default function ChatView({
       return serverMessagesWithPreviewHandoff;
     }
     return [...serverMessagesWithPreviewHandoff, ...pendingMessages];
-  }, [serverMessages, attachmentPreviewHandoffByMessageId, optimisticUserMessages]);
+  }, [
+    activeThread?.sidechatSourceThreadId,
+    serverMessages,
+    attachmentPreviewHandoffByMessageId,
+    optimisticUserMessages,
+  ]);
   const timelineEntries = useMemo(
     () =>
       deriveTimelineEntries(timelineMessages, activeThread?.proposedPlans ?? [], workLogEntries),
@@ -2128,6 +2180,18 @@ export default function ChatView({
       selectedMentionCount: selectedComposerMentions.length,
       interactionMode,
     });
+  const canOfferSideCommand =
+    isServerThread &&
+    activeThread !== undefined &&
+    canOfferSideSlashCommand({
+      prompt: composerPromptWithoutActiveSlashTrigger,
+      imageCount: composerImages.length,
+      terminalContextCount: composerTerminalContexts.length,
+      selectedSkillCount: selectedComposerSkills.length,
+      selectedMentionCount: selectedComposerMentions.length,
+      interactionMode,
+      isSidechat: Boolean(activeThread.sidechatSourceThreadId),
+    });
   const dynamicAgents = useMemo(() => {
     const query =
       selectedProvider === "claudeAgent"
@@ -2162,6 +2226,7 @@ export default function ChatView({
       activeThread?.session?.status !== "closed",
     canOfferReviewCommand,
     canOfferForkCommand,
+    canOfferSideCommand,
     dynamicAgents,
   });
   const composerMenuItems = useMemo(() => {
@@ -2229,18 +2294,83 @@ export default function ChatView({
   );
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
   const availableEditors = serverConfigQuery.data?.availableEditors ?? EMPTY_AVAILABLE_EDITORS;
+  const rememberCustomBinaryPathForDispatch = useCallback(
+    (input: {
+      threadId: Thread["id"];
+      provider: ProviderKind;
+      providerOptions: ProviderStartOptions | undefined;
+    }) => {
+      const pendingKey = getThreadProviderCustomBinaryPathKey(input.threadId, input.provider);
+      const customBinaryPath = getProviderStartOptionsCustomBinaryPath(
+        input.providerOptions,
+        input.provider,
+      );
+      if (!customBinaryPath) {
+        pendingCustomBinaryPathsByThreadProviderRef.current.delete(pendingKey);
+        return;
+      }
+      pendingCustomBinaryPathsByThreadProviderRef.current.set(pendingKey, customBinaryPath);
+    },
+    [],
+  );
+  useEffect(() => {
+    const provider = activeThread?.session?.provider;
+    if (!activeThread || !provider) {
+      return;
+    }
+
+    const sessionKey = getConfirmedCustomBinarySessionKey(activeThread, provider);
+    if (!sessionKey) {
+      confirmedCustomBinarySessionKeysRef.current.delete(
+        getThreadProviderCustomBinaryPathKey(activeThread.id, provider),
+      );
+      return;
+    }
+    const customBinaryPath =
+      pendingCustomBinaryPathsByThreadProviderRef.current.get(sessionKey) ?? null;
+    if (
+      !shouldConsumePendingCustomBinaryConfirmation({
+        sessionAlreadyChecked: confirmedCustomBinarySessionKeysRef.current.has(sessionKey),
+        pendingCustomBinaryPath: customBinaryPath,
+      })
+    ) {
+      return;
+    }
+    confirmedCustomBinarySessionKeysRef.current.add(sessionKey);
+
+    pendingCustomBinaryPathsByThreadProviderRef.current.delete(sessionKey);
+    if (!customBinaryPath) {
+      return;
+    }
+
+    setConfirmedCustomBinaryPathsByProvider((existing) =>
+      existing[provider] === customBinaryPath
+        ? existing
+        : {
+            ...existing,
+            [provider]: customBinaryPath,
+          },
+    );
+  }, [
+    activeThread,
+    activeThread?.id,
+    activeThread?.session?.provider,
+    activeThread?.session?.status,
+  ]);
   const providerStatuses = useMemo(
     () =>
       (serverConfigQuery.data?.providers ?? EMPTY_PROVIDER_STATUSES)
-        .map((status) =>
-          normalizeProviderStatusForLocalConfig({
+        .map((status) => {
+          const customBinaryPath = getCustomBinaryPathForProvider(settings, status.provider);
+          return normalizeProviderStatusForLocalConfig({
             provider: status.provider,
             status,
-            customBinaryPath: getCustomBinaryPathForProvider(settings, status.provider),
-          }),
-        )
+            customBinaryPath,
+            confirmedCustomBinaryPath: confirmedCustomBinaryPathsByProvider[status.provider],
+          });
+        })
         .flatMap((status) => (status ? [status] : [])),
-    [serverConfigQuery.data?.providers, settings],
+    [confirmedCustomBinaryPathsByProvider, serverConfigQuery.data?.providers, settings],
   );
   const handoffBadgeLabel = useMemo(
     () => (activeThread ? resolveThreadHandoffBadgeLabel(activeThread) : null),
@@ -5166,6 +5296,11 @@ export default function ChatView({
 
       beginLocalDispatch();
       const turnAttachments = await turnAttachmentsPromise;
+      rememberCustomBinaryPathForDispatch({
+        threadId: threadIdForSend,
+        provider: selectedModelSelectionForSend.provider,
+        providerOptions: providerOptionsForDispatchForSend,
+      });
       await api.orchestration.dispatchCommand({
         type: "thread.turn.start",
         commandId: newCommandId(),
@@ -5463,6 +5598,14 @@ export default function ChatView({
       // while the same-thread implementation turn is starting.
       setComposerDraftInteractionMode(threadIdForSend, nextInteractionMode);
 
+      const providerOptionsForPlanDispatch =
+        queuedTurn?.providerOptionsForDispatch ?? providerOptionsForDispatch;
+      const modelSelectionForPlanDispatch = queuedTurn?.modelSelection ?? selectedModelSelection;
+      rememberCustomBinaryPathForDispatch({
+        threadId: threadIdForSend,
+        provider: modelSelectionForPlanDispatch.provider,
+        providerOptions: providerOptionsForPlanDispatch,
+      });
       await api.orchestration.dispatchCommand({
         type: "thread.turn.start",
         commandId: newCommandId(),
@@ -5473,10 +5616,10 @@ export default function ChatView({
           text: outgoingMessageText,
           attachments: [],
         },
-        modelSelection: queuedTurn?.modelSelection ?? selectedModelSelection,
-        ...((queuedTurn?.providerOptionsForDispatch ?? providerOptionsForDispatch)
+        modelSelection: modelSelectionForPlanDispatch,
+        ...(providerOptionsForPlanDispatch
           ? {
-              providerOptions: queuedTurn?.providerOptionsForDispatch ?? providerOptionsForDispatch,
+              providerOptions: providerOptionsForPlanDispatch,
             }
           : {}),
         assistantDeliveryMode: settings.enableAssistantStreaming ? "streaming" : "buffered",
@@ -5756,6 +5899,11 @@ export default function ChatView({
         createdAt,
       })
       .then(() => {
+        rememberCustomBinaryPathForDispatch({
+          threadId: nextThreadId,
+          provider: selectedModelSelection.provider,
+          providerOptions: providerOptionsForDispatch,
+        });
         return api.orchestration.dispatchCommand({
           type: "thread.turn.start",
           commandId: newCommandId(),
@@ -5822,6 +5970,7 @@ export default function ChatView({
     selectedPromptEffort,
     selectedModelSelection,
     providerOptionsForDispatch,
+    rememberCustomBinaryPathForDispatch,
     selectedProvider,
     settings.enableAssistantStreaming,
     syncServerReadModel,
@@ -6279,6 +6428,7 @@ export default function ChatView({
       isServerThread &&
       activeThread?.session !== null &&
       activeThread?.session?.status !== "closed",
+    canOfferSideCommand,
     supportsTextNativeReviewCommand,
     fastModeEnabled,
     providerNativeCommands,
@@ -6290,10 +6440,13 @@ export default function ChatView({
     interactionMode,
     threadId,
     syncServerReadModel,
-    navigateToThread: (nextThreadId) =>
+    navigateToThread: (nextThreadId, options) =>
       navigate({
         to: "/$threadId",
         params: { threadId: nextThreadId },
+        ...(options?.splitViewId
+          ? { search: () => ({ splitViewId: options.splitViewId }) }
+          : {}),
       }),
     handleClearConversation: async () => {
       if (!activeProject) {

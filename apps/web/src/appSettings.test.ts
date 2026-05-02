@@ -8,6 +8,7 @@ import {
   DEFAULT_SIDEBAR_THREAD_SORT_ORDER,
   DEFAULT_TIMESTAMP_FORMAT,
   getAppModelOptions,
+  getDefaultNativeFontSmoothing,
   getCustomModelOptionsByProvider,
   getCustomModelsByProvider,
   getCustomModelsForProvider,
@@ -212,6 +213,18 @@ describe("sidebar sort defaults", () => {
 });
 
 describe("normalizeStoredAppSettings", () => {
+  it("defaults native font smoothing by platform", () => {
+    expect(getDefaultNativeFontSmoothing("MacIntel")).toBe(true);
+    expect(getDefaultNativeFontSmoothing("Win32")).toBe(false);
+    expect(getDefaultNativeFontSmoothing("Linux x86_64")).toBe(false);
+  });
+
+  it("uses the current platform default for existing settings without a stored value", () => {
+    const decodedSettings = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema))("{}");
+
+    expect(decodedSettings.enableNativeFontSmoothing).toBe(getDefaultNativeFontSmoothing());
+  });
+
   it("preserves an explicitly stored updated_at project sort order", () => {
     const decodedSettings = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema))(
       JSON.stringify({

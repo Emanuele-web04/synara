@@ -94,6 +94,8 @@ function commandMenuTitle(
       return "Code Review";
     case "fork":
       return "Fork";
+    case "side":
+      return "Sidechat";
     case "status":
       return "Status";
     case "subagents":
@@ -472,6 +474,8 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
                 return <TbUsers className={cls} />;
               case "fork":
                 return <GoRepoForked className={cls} />;
+              case "side":
+                return <TbMessage className={cls} />;
               default:
                 return <TbTerminal2 className={cls} />;
             }

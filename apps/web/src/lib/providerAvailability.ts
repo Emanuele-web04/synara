@@ -4,7 +4,7 @@ import {
   type ServerProviderStatus,
 } from "@t3tools/contracts";
 
-function trimOrNull(value: string | null | undefined): string | null {
+export function normalizeCustomBinaryPath(value: string | null | undefined): string | null {
   if (typeof value !== "string") {
     return null;
   }
@@ -16,19 +16,36 @@ export function normalizeProviderStatusForLocalConfig(input: {
   provider: ProviderKind;
   status: ServerProviderStatus | null | undefined;
   customBinaryPath?: string | null | undefined;
+  confirmedCustomBinaryPath?: string | null | undefined;
 }): ServerProviderStatus | null {
   const status = input.status ?? null;
   if (!status) {
     return null;
   }
 
-  const customBinaryPath = trimOrNull(input.customBinaryPath);
+  const customBinaryPath = normalizeCustomBinaryPath(input.customBinaryPath);
   if (!customBinaryPath) {
     return status;
   }
 
   if (status.available || status.authStatus !== "unknown") {
     return status;
+  }
+
+  if (normalizeCustomBinaryPath(input.confirmedCustomBinaryPath) === customBinaryPath) {
+    // Only the exact path used by a successful session can suppress the warning.
+    return {
+      provider: status.provider,
+      available: true,
+      status: "ready",
+      authStatus: status.authStatus,
+      checkedAt: status.checkedAt,
+      ...(status.authType ? { authType: status.authType } : {}),
+      ...(status.authLabel ? { authLabel: status.authLabel } : {}),
+      ...(status.voiceTranscriptionAvailable !== undefined
+        ? { voiceTranscriptionAvailable: status.voiceTranscriptionAvailable }
+        : {}),
+    };
   }
 
   return {

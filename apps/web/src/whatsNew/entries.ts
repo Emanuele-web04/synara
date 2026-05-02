@@ -45,9 +45,9 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
       },
       {
         id: "split-pane-maximize",
-        title: "Split panes maximize in place",
+        title: "Split panes expand predictably",
         description:
-          "Maximizing a chat pane now removes only the focused pane and keeps the remaining split layout intact when possible, making it easier to focus without throwing away the whole arrangement.",
+          "Expanding a chat pane now opens that selected chat as the single full-screen surface, closing the rest of the split layout.",
       },
       {
         id: "git-branch-pr-flow",

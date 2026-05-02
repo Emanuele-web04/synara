@@ -463,6 +463,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           subagentNickname: null,
           subagentRole: null,
           forkSourceThreadId: command.sourceThreadId,
+          sidechatSourceThreadId: command.sidechatSourceThreadId,
           handoff: null,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,

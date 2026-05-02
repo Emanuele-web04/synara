@@ -1872,7 +1872,7 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain("1 File changed");
     expect(markup).toContain('aria-expanded="true"');
-    expect(markup).toContain("font-chat-code truncate font-normal");
+    expect(markup).toContain("font-system-ui truncate font-normal");
     expect(markup).toContain("apps/web/src/components/Sidebar.tsx");
   });
 });

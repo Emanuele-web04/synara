@@ -81,6 +81,7 @@ async function createWorktreeThreadReadModel(now: string) {
         subagentNickname: null,
         subagentRole: null,
         forkSourceThreadId: null,
+        sidechatSourceThreadId: null,
         handoff: null,
         createdAt: now,
         updatedAt: now,

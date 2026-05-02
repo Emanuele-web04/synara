@@ -497,7 +497,7 @@ label:has(> select#reasoning-effort) select {
   background: var(--muted);
   padding: 0.1rem 0.35rem;
   color: var(--foreground);
-  font-size: calc(var(--app-font-size-chat-code) - 1px);
+  font-size: var(--app-font-size-chat-code);
   font-family: var(--font-chat-code-family);
 }
 
@@ -548,7 +548,7 @@ label:has(> select#reasoning-effort) select {
   background: transparent;
   padding: 0;
   line-height: 1.5;
-  font-size: calc(var(--app-font-size-chat-code) - 1px);
+  font-size: var(--app-font-size-chat-code);
   font-family: inherit;
 }
 

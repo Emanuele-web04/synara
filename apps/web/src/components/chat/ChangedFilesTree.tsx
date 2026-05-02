@@ -73,14 +73,14 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
               <FolderClosedIcon className="size-3.5 shrink-0 text-muted-foreground/75" />
             )}
             <span
-              className="font-chat-code truncate text-muted-foreground/90 underline-offset-2 group-hover:text-foreground/90 group-hover:underline group-focus-visible:underline"
-              style={{ fontSize: "var(--app-font-size-chat-code,11px)" }}
+              className="font-system-ui truncate text-muted-foreground/90 underline-offset-2 group-hover:text-foreground/90 group-hover:underline group-focus-visible:underline"
+              style={{ fontSize: "var(--app-font-size-chat,12px)" }}
             >
               {node.name}
             </span>
             {hasNonZeroStat(node.stat) && (
               <span
-                className="font-chat-code ml-auto shrink-0 tabular-nums"
+                className="font-system-ui ml-auto shrink-0 tabular-nums"
                 style={{ fontSize: "var(--app-font-size-chat-meta,10px)" }}
               >
                 <DiffStatLabel additions={node.stat.additions} deletions={node.stat.deletions} />
@@ -110,14 +110,14 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
             className="size-3.5 text-muted-foreground/70"
           />
           <span
-            className="font-chat-code truncate text-muted-foreground/80 underline-offset-2 group-hover:text-foreground/90 group-hover:underline group-focus-visible:underline"
-            style={{ fontSize: "var(--app-font-size-chat-code,11px)" }}
+            className="font-system-ui truncate text-muted-foreground/80 underline-offset-2 group-hover:text-foreground/90 group-hover:underline group-focus-visible:underline"
+            style={{ fontSize: "var(--app-font-size-chat,12px)" }}
           >
             {node.name}
           </span>
           {node.stat && (
             <span
-              className="font-chat-code ml-auto shrink-0 tabular-nums"
+              className="font-system-ui ml-auto shrink-0 tabular-nums"
               style={{ fontSize: "var(--app-font-size-chat-meta,10px)" }}
             >
               <DiffStatLabel additions={node.stat.additions} deletions={node.stat.deletions} />

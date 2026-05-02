@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   appendVoiceTranscriptToPrompt,
+  filterSidechatTranscriptMessages,
   type LocalDispatchSnapshot,
   deriveComposerSendState,
   deriveComposerVoiceState,
@@ -13,6 +14,7 @@ import {
   sanitizeVoiceErrorMessage,
   buildExpiredTerminalContextToastCopy,
   shouldAutoDeleteTerminalThreadOnLastClose,
+  shouldConsumePendingCustomBinaryConfirmation,
   shouldShowComposerModelBootstrapSkeleton,
   shouldStartActiveTurnLayoutGrace,
   shouldRenderTerminalWorkspace,
@@ -50,6 +52,39 @@ describe("voice helpers", () => {
         isEmpty: false,
       }),
     ).toBe("Reviewer / Fix follow-up");
+  });
+
+  it("hides fork-imported transcript rows only for sidechats", () => {
+    const messages = [
+      {
+        id: "message-imported" as never,
+        role: "assistant",
+        text: "Previous context",
+        turnId: null,
+        streaming: false,
+        source: "fork-import",
+        createdAt: "2026-05-02T10:00:00.000Z",
+        completedAt: "2026-05-02T10:00:00.000Z",
+      },
+      {
+        id: "message-native" as never,
+        role: "user",
+        text: "Fresh side question",
+        turnId: null,
+        streaming: false,
+        source: "native",
+        createdAt: "2026-05-02T10:01:00.000Z",
+        completedAt: "2026-05-02T10:01:00.000Z",
+      },
+    ] as const;
+
+    expect(filterSidechatTranscriptMessages(messages, true).map((message) => message.id)).toEqual([
+      "message-native",
+    ]);
+    expect(filterSidechatTranscriptMessages(messages, false).map((message) => message.id)).toEqual([
+      "message-imported",
+      "message-native",
+    ]);
   });
 
   it("appends a transcript to the existing prompt without disturbing spacing", () => {
@@ -181,6 +216,26 @@ describe("shouldShowComposerModelBootstrapSkeleton", () => {
         providerModelsLoading: false,
       }),
     ).toBe(true);
+  });
+});
+
+describe("shouldConsumePendingCustomBinaryConfirmation", () => {
+  it("still processes a pending path for a session that was already checked", () => {
+    expect(
+      shouldConsumePendingCustomBinaryConfirmation({
+        sessionAlreadyChecked: true,
+        pendingCustomBinaryPath: "/custom/bin/opencode",
+      }),
+    ).toBe(true);
+  });
+
+  it("skips already checked sessions when there is no pending path to confirm", () => {
+    expect(
+      shouldConsumePendingCustomBinaryConfirmation({
+        sessionAlreadyChecked: true,
+        pendingCustomBinaryPath: null,
+      }),
+    ).toBe(false);
   });
 });
 

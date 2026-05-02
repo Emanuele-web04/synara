@@ -835,7 +835,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     correspondingUserMessageId != null &&
                     revertTurnCountByUserMessageId.has(correspondingUserMessageId);
                   return (
-                    <div className="mt-5 overflow-hidden rounded-lg border border-[color:var(--color-border-light)] bg-[var(--composer-surface)]">
+                    <div className="mt-5 overflow-hidden rounded-xl border border-[color:var(--color-border-light)] bg-[var(--composer-surface)]">
                       <div className="flex items-center justify-between gap-2 border-b border-[color:var(--color-border-light)] px-3 py-2">
                         <span
                           className="truncate font-normal text-foreground/92"
@@ -895,9 +895,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                                 className="size-4 shrink-0 opacity-50 dark:opacity-30"
                               />
                               <span
-                                className="font-chat-code truncate font-normal underline-offset-2 group-hover:underline group-focus-visible:underline"
+                                className="font-system-ui truncate font-normal underline-offset-2 group-hover:underline group-focus-visible:underline"
                                 style={{
-                                  fontSize: `${appTypographyScale.chatCodePx}px`,
+                                  fontSize: chatTypographyStyle.fontSize,
                                   color: "var(--color-text-foreground)",
                                 }}
                               >
@@ -905,7 +905,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                               </span>
                               {(file.additions ?? 0) + (file.deletions ?? 0) > 0 && (
                                 <span
-                                  className="font-chat-code ml-auto shrink-0 tabular-nums"
+                                  className="font-system-ui ml-auto shrink-0 tabular-nums"
                                   style={{ fontSize: `${appTypographyScale.chatMetaPx}px` }}
                                 >
                                   <DiffStatLabel

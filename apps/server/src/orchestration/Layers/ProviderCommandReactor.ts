@@ -119,6 +119,12 @@ const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 const HANDOFF_CONTEXT_WRAPPER_OVERHEAD =
   "<handoff_context>\n\n</handoff_context>\n\n<latest_user_message>\n\n</latest_user_message>"
     .length;
+const SIDECHAT_BOUNDARY_INSTRUCTION =
+  "You are in a sidechat. Treat all prior conversation as reference-only context. Do not continue any prior task automatically. Do not mutate files, git, or the workspace and do not run workspace-changing commands unless the latest user message explicitly asks you to do so after this boundary. Use this sidechat for focused explanation, safety checks, summaries, and alternatives.";
+
+function wrapSidechatInput(messageText: string): string {
+  return `<sidechat_boundary>\n${SIDECHAT_BOUNDARY_INSTRUCTION}\n</sidechat_boundary>\n\n<latest_user_message>\n${messageText}\n</latest_user_message>`;
+}
 
 function isUnknownPendingApprovalRequestError(cause: Cause.Cause<ProviderServiceError>): boolean {
   const error = Cause.squash(cause);
@@ -802,9 +808,12 @@ const make = Effect.gen(function* () {
       shouldBootstrapHandoff && availableBootstrapChars > 0
         ? buildHandoffBootstrapText(thread, availableBootstrapChars)
         : null;
-    const providerInput = handoffBootstrapText
-      ? `<handoff_context>\n${handoffBootstrapText}\n</handoff_context>\n\n<latest_user_message>\n${input.messageText}\n</latest_user_message>`
+    const boundaryMessageText = thread.sidechatSourceThreadId
+      ? wrapSidechatInput(input.messageText)
       : input.messageText;
+    const providerInput = handoffBootstrapText
+      ? `<handoff_context>\n${handoffBootstrapText}\n</handoff_context>\n\n<latest_user_message>\n${boundaryMessageText}\n</latest_user_message>`
+      : boundaryMessageText;
     const normalizedInput = toNonEmptyProviderInput(providerInput);
     const normalizedAttachments = input.attachments ?? [];
     const activeSession = yield* providerService

@@ -50,6 +50,7 @@ function makeThread(
     subagentNickname: null,
     subagentRole: null,
     forkSourceThreadId: null,
+    sidechatSourceThreadId: null,
     lastKnownPr: null,
     latestTurn: null,
     handoff: null,

@@ -58,6 +58,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     branch: null,
     worktreePath: null,
     forkSourceThreadId: null,
+    sidechatSourceThreadId: null,
     handoff: null,
     ...overrides,
   };
@@ -152,6 +153,7 @@ function makeReadModelThread(overrides: Partial<OrchestrationReadModel["threads"
     branch: null,
     worktreePath: null,
     forkSourceThreadId: null,
+    sidechatSourceThreadId: null,
     latestTurn: null,
     createdAt: "2026-02-27T00:00:00.000Z",
     updatedAt: "2026-02-27T00:00:00.000Z",
@@ -732,6 +734,7 @@ describe("store pure functions", () => {
         subagentNickname: null,
         subagentRole: null,
         forkSourceThreadId: null,
+        sidechatSourceThreadId: null,
         lastKnownPr: null,
         latestTurn: null,
         createdAt: "2026-02-27T00:00:00.000Z",

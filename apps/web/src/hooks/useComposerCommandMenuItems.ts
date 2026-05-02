@@ -57,6 +57,7 @@ export function useComposerCommandMenuItems(input: {
   canOfferCompactCommand: boolean;
   canOfferReviewCommand: boolean;
   canOfferForkCommand: boolean;
+  canOfferSideCommand: boolean;
   dynamicAgents: readonly { name: string; displayName: string; description?: string }[];
 }): ComposerCommandItem[] {
   const {
@@ -71,6 +72,7 @@ export function useComposerCommandMenuItems(input: {
     canOfferCompactCommand,
     canOfferReviewCommand,
     canOfferForkCommand,
+    canOfferSideCommand,
     dynamicAgents,
   } = input;
 
@@ -164,6 +166,7 @@ export function useComposerCommandMenuItems(input: {
         canOfferCompactCommand,
         canOfferReviewCommand,
         canOfferForkCommand,
+        canOfferSideCommand,
         providerNativeCommandNames: providerNativeCommands.map((command) => command.name),
       });
       const builtInItems = filterComposerSlashCommands(
@@ -257,6 +260,7 @@ export function useComposerCommandMenuItems(input: {
     canOfferForkCommand,
     canOfferCompactCommand,
     canOfferReviewCommand,
+    canOfferSideCommand,
     composerTrigger,
     dynamicAgents,
     provider,

@@ -1,3 +1,8 @@
+// FILE: main.ts
+// Purpose: Starts the Electron shell, backend process, native menus, IPC bridges, and updater.
+// Layer: Desktop main process
+// Depends on: Electron, backend startup helpers, browser manager, and update runtime.
+
 import * as ChildProcess from "node:child_process";
 import * as Crypto from "node:crypto";
 import * as FS from "node:fs";
@@ -43,6 +48,7 @@ import {
   shouldCheckForUpdatesOnForeground,
 } from "./updateState";
 import { registerDesktopVoiceTranscriptionHandler } from "./voiceTranscription";
+import { resolveKeyboardShortcutsMenuAccelerator } from "./menuShortcuts";
 import {
   createInitialDesktopUpdateState,
   reduceDesktopUpdateStateOnCheckFailure,
@@ -792,6 +798,7 @@ async function checkForUpdatesFromMenu(): Promise<void> {
 
 function configureApplicationMenu(): void {
   const template: MenuItemConstructorOptions[] = [];
+  const keyboardShortcutsAccelerator = resolveKeyboardShortcutsMenuAccelerator(process.platform);
 
   if (process.platform === "darwin") {
     template.push({
@@ -876,7 +883,7 @@ function configureApplicationMenu(): void {
       submenu: [
         {
           label: "Keyboard Shortcuts",
-          accelerator: "CmdOrCtrl+/",
+          ...(keyboardShortcutsAccelerator ? { accelerator: keyboardShortcutsAccelerator } : {}),
           click: () => dispatchMenuAction("show-shortcuts"),
         },
         { type: "separator" },
