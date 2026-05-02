@@ -334,6 +334,7 @@ function EventRouter() {
   );
   const setWorkspaceHomeDir = useWorkspaceStore((store) => store.setHomeDir);
   const workspacePages = useWorkspaceStore((store) => store.workspacePages);
+  const serverThreads = useStore((store) => store.threads);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
@@ -353,13 +354,24 @@ function EventRouter() {
     return routeThreadId ? [routeThreadId] : [];
   }, [activeSplitView, routeThreadId]);
   const retainedThreadIds = useRetainedThreadDetailIds();
+  const serverThreadIds = useMemo(
+    () => new Set(serverThreads.map((thread) => thread.id)),
+    [serverThreads],
+  );
   const subscribedThreadIds = useMemo(() => {
-    const nextThreadIds = new Set<ThreadId>(visibleThreadIds);
+    const nextThreadIds = new Set<ThreadId>();
+    for (const threadId of visibleThreadIds) {
+      if (serverThreadIds.has(threadId)) {
+        nextThreadIds.add(threadId);
+      }
+    }
     for (const threadId of retainedThreadIds) {
-      nextThreadIds.add(threadId);
+      if (serverThreadIds.has(threadId)) {
+        nextThreadIds.add(threadId);
+      }
     }
     return [...nextThreadIds];
-  }, [retainedThreadIds, visibleThreadIds]);
+  }, [retainedThreadIds, serverThreadIds, visibleThreadIds]);
   const workspacePagesRef = useRef(workspacePages);
   const pathnameRef = useRef(pathname);
   const handledBootstrapThreadIdRef = useRef<string | null>(null);
