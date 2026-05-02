@@ -22,6 +22,36 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.0.41",
+    date: "May 2",
+    features: [
+      {
+        id: "sidechat-threads",
+        title: "Sidechat threads are easier to track",
+        description:
+          "Sidechat source metadata now flows through projections, filters, and snapshots so secondary threads stay easier to separate from the main conversation.",
+      },
+      {
+        id: "desktop-startup-window",
+        title: "Desktop startup feels faster",
+        description:
+          "Packaged desktop builds now open the app window before backend readiness finishes, reducing the blank-start feeling while services come online.",
+      },
+      {
+        id: "git-commit-push-action",
+        title: "Git gained commit and push",
+        description:
+          "The Git actions menu can now commit current work and push it from DP Code, keeping the common release and handoff flow closer to the chat.",
+      },
+      {
+        id: "task-and-approval-polish",
+        title: "Task controls are clearer",
+        description:
+          "Active task controls were tightened, and approval counts are now separated from user input requests so pending work is easier to read at a glance.",
+      },
+    ],
+  },
+  {
     version: "0.0.40",
     date: "Apr 29",
     features: [
