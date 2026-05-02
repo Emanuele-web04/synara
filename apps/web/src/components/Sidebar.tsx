@@ -956,12 +956,12 @@ function SidebarPrimaryAction({
         size="default"
         data-active={active}
         aria-current={active ? "page" : undefined}
-        className="group/sidebar-primary-action h-8 gap-2.5 rounded-lg px-2 font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-foreground/82 transition-colors hover:bg-[var(--sidebar-accent)] data-[active=true]:bg-[var(--sidebar-accent-active)] data-[active=true]:text-[var(--sidebar-accent-foreground)]"
+        className="group/sidebar-primary-action h-8 gap-2.5 rounded-lg px-2 font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-foreground/89 transition-colors hover:bg-[var(--sidebar-accent)] data-[active=true]:bg-[var(--sidebar-accent-active)] data-[active=true]:text-[var(--sidebar-accent-foreground)]"
         aria-disabled={disabled || undefined}
         disabled={disabled}
         onClick={onClick}
       >
-        <span className="inline-flex size-5 shrink-0 items-center justify-center text-muted-foreground/72">
+        <span className="inline-flex size-5 shrink-0 items-center justify-center text-muted-foreground/79">
           <Icon className="size-[15px]" />
         </span>
         <span className="truncate">{label}</span>
@@ -3287,14 +3287,6 @@ export default function Sidebar() {
     animatedProjectListsRef.current.add(node);
   }, []);
 
-  const animatedThreadListsRef = useRef(new WeakSet<HTMLElement>());
-  const attachThreadListAutoAnimateRef = useCallback((node: HTMLElement | null) => {
-    if (!node || animatedThreadListsRef.current.has(node)) {
-      return;
-    }
-    autoAnimate(node, SIDEBAR_LIST_ANIMATION_OPTIONS);
-    animatedThreadListsRef.current.add(node);
-  }, []);
   const sidebarThreadsByProjectId = useMemo(
     () => groupSidebarThreadsByProjectId(sidebarDisplayThreads),
     [sidebarDisplayThreads],
@@ -3361,16 +3353,21 @@ export default function Sidebar() {
     [homeDir, sortedProjects],
   );
   const visibleChatThreadRows = useMemo(
-    () =>
-      buildProjectThreadTree({
+    () => {
+      if (!chatSectionExpanded) {
+        return [];
+      }
+      return buildProjectThreadTree({
         threads: sortThreadsForSidebar(
           chatProjects.flatMap((project) => sortedSidebarThreadsByProjectId.get(project.id) ?? []),
           appSettings.sidebarThreadSortOrder,
         ),
         expandedParentThreadIds: expandedSubagentParentIds,
-      }),
+      });
+    },
     [
       appSettings.sidebarThreadSortOrder,
+      chatSectionExpanded,
       chatProjects,
       expandedSubagentParentIds,
       sortedSidebarThreadsByProjectId,
@@ -3737,7 +3734,7 @@ export default function Sidebar() {
         aria-label="Archive thread"
         title="Archive thread"
         className={cn(
-          "sidebar-icon-button inline-flex justify-center hover:text-foreground/82",
+          "sidebar-icon-button inline-flex justify-center hover:text-foreground/89",
           compact ? "size-[18px]" : "size-5",
           toneClassName,
         )}
@@ -4366,7 +4363,7 @@ export default function Sidebar() {
               });
             }}
           >
-            <span className="relative inline-flex size-4 shrink-0 items-center justify-center text-muted-foreground/72">
+            <span className="relative inline-flex size-4 shrink-0 items-center justify-center text-muted-foreground/79">
               <ProjectSidebarIcon cwd={project.cwd} expanded={project.expanded} />
               {projectStatus ? (
                 <span
@@ -4418,7 +4415,7 @@ export default function Sidebar() {
                 />
               ) : (
                 <>
-                  <span className="truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72">
+                  <span className="truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79">
                     {project.name}
                   </span>
                   {project.localName ? (
@@ -4533,7 +4530,6 @@ export default function Sidebar() {
         >
           <div className="min-h-0 overflow-hidden">
             <SidebarMenuSub
-              ref={attachThreadListAutoAnimateRef}
               className={cn(
                 "mx-0 my-0 w-full translate-x-0 gap-0.5 border-l-0 px-0 py-0 transition-transform duration-220 ease-out",
                 project.expanded ? "translate-y-0" : "-translate-y-1 pointer-events-none",
@@ -4555,7 +4551,7 @@ export default function Sidebar() {
                     render={<button type="button" />}
                     data-thread-selection-safe
                     size="sm"
-                    className="h-7 w-full translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/72 hover:bg-[var(--sidebar-accent)]"
+                    className="h-7 w-full translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/79 hover:bg-[var(--sidebar-accent)]"
                     onClick={() => {
                       expandThreadListForProject(project.cwd);
                     }}
@@ -4570,7 +4566,7 @@ export default function Sidebar() {
                     render={<button type="button" />}
                     data-thread-selection-safe
                     size="sm"
-                    className="h-7 w-full translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/72 hover:bg-[var(--sidebar-accent)]"
+                    className="h-7 w-full translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/79 hover:bg-[var(--sidebar-accent)]"
                     onClick={() => {
                       collapseThreadListForProject(project.cwd);
                     }}
@@ -5098,7 +5094,7 @@ export default function Sidebar() {
           <div className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 font-system-ui">
             <div className="flex min-w-0 items-center gap-1">
               <T3Wordmark />
-              <span className="truncate text-[14px] font-normal tracking-tight text-foreground/82">
+              <span className="truncate text-[14px] font-normal tracking-tight text-foreground/89">
                 Code
               </span>
             </div>
@@ -5192,7 +5188,7 @@ export default function Sidebar() {
               <SidebarMenuItem>
                 <SidebarMenuButton
                   size="default"
-                  className="h-8 gap-2.5 rounded-lg px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 hover:bg-[var(--sidebar-accent)] hover:text-foreground"
+                  className="h-8 gap-2.5 rounded-lg px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79 hover:bg-[var(--sidebar-accent)] hover:text-foreground"
                   onClick={() => handleSidebarViewChange("threads")}
                 >
                   <ArrowLeftIcon className="size-[15px]" />
@@ -5348,7 +5344,7 @@ export default function Sidebar() {
                                   <SidebarMenuButton
                                     size="sm"
                                     isActive={isActive}
-                                    className="group/ws h-8 gap-2 rounded-lg px-2 font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-foreground/82 transition-colors hover:bg-[var(--sidebar-accent)] data-[active=true]:bg-[var(--sidebar-accent-active)] data-[active=true]:text-[var(--sidebar-accent-foreground)]"
+                                    className="group/ws h-8 gap-2 rounded-lg px-2 font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-foreground/89 transition-colors hover:bg-[var(--sidebar-accent)] data-[active=true]:bg-[var(--sidebar-accent-active)] data-[active=true]:text-[var(--sidebar-accent-foreground)]"
                                     onClick={() => {
                                       navigateToWorkspace(workspace.id);
                                     }}
@@ -5638,11 +5634,11 @@ export default function Sidebar() {
                   setChatSectionExpanded((current) => !current);
                 }}
               >
-                <span className="relative inline-flex size-4 shrink-0 items-center justify-center text-muted-foreground/72">
+                <span className="relative inline-flex size-4 shrink-0 items-center justify-center text-muted-foreground/79">
                   <BsChat className="size-3.5" />
                 </span>
                 <div className="flex min-w-0 flex-1 items-baseline gap-2 overflow-hidden">
-                  <span className="truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72">
+                  <span className="truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79">
                     Chats
                   </span>
                 </div>
@@ -5700,7 +5696,7 @@ export default function Sidebar() {
                     <SidebarMenuItem className="w-full">
                       <SidebarMenuButton
                         size="sm"
-                        className="h-7 w-full justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 hover:bg-[var(--sidebar-accent)]"
+                        className="h-7 w-full justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79 hover:bg-[var(--sidebar-accent)]"
                         onClick={() => setChatThreadListExpanded(true)}
                       >
                         <span>Show more</span>
@@ -5711,7 +5707,7 @@ export default function Sidebar() {
                     <SidebarMenuItem className="w-full">
                       <SidebarMenuButton
                         size="sm"
-                        className="h-7 w-full justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 hover:bg-[var(--sidebar-accent)]"
+                        className="h-7 w-full justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79 hover:bg-[var(--sidebar-accent)]"
                         onClick={() => setChatThreadListExpanded(false)}
                       >
                         <span>Show less</span>
@@ -5735,7 +5731,7 @@ export default function Sidebar() {
                 {!isOnSettings && (
                   <SidebarMenuButton
                     size="default"
-                    className="h-8 flex-1 gap-2.5 rounded-lg px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/72 hover:bg-[var(--sidebar-accent)]"
+                    className="h-8 flex-1 gap-2.5 rounded-lg px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79 hover:bg-[var(--sidebar-accent)]"
                     onClick={() => void navigate({ to: "/settings" })}
                   >
                     <SettingsIcon className="size-[15px]" />

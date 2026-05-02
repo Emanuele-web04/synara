@@ -932,10 +932,6 @@ export function deriveSidebarProjectData(input: {
   for (const project of input.projects) {
     const allProjectThreads = input.sortedSidebarThreadsByProjectId.get(project.id) ?? [];
     const projectThreads = getUnpinnedThreadsForSidebar(allProjectThreads, input.pinnedThreadIds);
-    const projectThreadTree = buildProjectThreadTree({
-      threads: projectThreads,
-      expandedParentThreadIds: input.expandedParentThreadIds,
-    });
     const projectStatus = resolveProjectStatusIndicator(
       allProjectThreads.map((thread) =>
         input.resolveThreadStatus
@@ -950,6 +946,50 @@ export function deriveSidebarProjectData(input: {
     const isThreadListExpanded = input.expandedThreadListProjectCwds.has(
       input.normalizeProjectCwd(project.cwd),
     );
+    const orderedProjectThreadIds = projectThreads.map((thread) => thread.id);
+
+    // Collapsed folders should not build or render their full tree; large projects can
+    // contain hundreds of rows and folder toggles are on the sidebar hot path.
+    if (!project.expanded) {
+      const activeThread =
+        input.activeSidebarThreadId === undefined
+          ? null
+          : (projectThreads.find((thread) => thread.id === input.activeSidebarThreadId) ?? null);
+      const childCount =
+        activeThread === null
+          ? 0
+          : projectThreads.filter((thread) => thread.parentThreadId === activeThread.id).length;
+      const visibleEntries =
+        activeThread === null
+          ? []
+          : [
+              {
+                kind: "thread" as const,
+                rowId: activeThread.id,
+                rootRowId: activeThread.id,
+                thread: activeThread,
+                depth: 0,
+                childCount,
+                isExpanded: false,
+              },
+            ];
+
+      byProjectId.set(project.id, {
+        projectThreads,
+        orderedProjectThreadIds,
+        visibleEntries,
+        hasHiddenThreads: projectThreads.length > visibleEntries.length,
+        isThreadListExpanded,
+        activeEntryId: activeThread?.id ?? null,
+        projectStatus,
+      });
+      continue;
+    }
+
+    const projectThreadTree = buildProjectThreadTree({
+      threads: projectThreads,
+      expandedParentThreadIds: input.expandedParentThreadIds,
+    });
     const orderedEntries: SidebarProjectEntry[] = projectThreadTree.map(
       ({ thread, depth, rootThreadId, childCount, isExpanded }) => ({
         kind: "thread",
@@ -972,12 +1012,11 @@ export function deriveSidebarProjectData(input: {
       isExpanded: isThreadListExpanded,
       previewLimit: input.previewLimit,
     });
-    const pinnedCollapsedEntry = !project.expanded && activeEntry ? activeEntry : null;
 
     byProjectId.set(project.id, {
       projectThreads,
-      orderedProjectThreadIds: projectThreads.map((thread) => thread.id),
-      visibleEntries: pinnedCollapsedEntry ? [pinnedCollapsedEntry] : renderedEntries,
+      orderedProjectThreadIds,
+      visibleEntries: renderedEntries,
       hasHiddenThreads: renderedEntries.length < orderedEntries.length,
       isThreadListExpanded,
       activeEntryId: activeEntry?.rowId ?? null,

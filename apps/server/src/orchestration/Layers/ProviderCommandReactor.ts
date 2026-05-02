@@ -43,7 +43,11 @@ import { ProviderAdapterRequestError, ProviderServiceError } from "../../provide
 import { TextGeneration } from "../../git/Services/TextGeneration.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { clearWorkspaceIndexCache } from "../../workspaceEntries.ts";
-import { buildHandoffBootstrapText, hasNativeAssistantMessagesBefore } from "../handoff.ts";
+import {
+  buildForkBootstrapText,
+  buildHandoffBootstrapText,
+  hasNativeAssistantMessagesBefore,
+} from "../handoff.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ProviderCommandReactor,
@@ -230,6 +234,7 @@ const make = Effect.gen(function* () {
   >();
   const editResendTurnStartKeys = new Set<string>();
   const drainingQueuedTurns = new Set<string>();
+  const sidechatContextBootstrapThreadIds = new Set<string>();
 
   const resolveThreadTextGenerationInput = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
@@ -760,6 +765,10 @@ const make = Effect.gen(function* () {
       }
     }
 
+    if (thread.sidechatSourceThreadId && thread.forkSourceThreadId) {
+      sidechatContextBootstrapThreadIds.add(threadId);
+    }
+
     const startedSession = yield* startProviderSession(undefined);
     yield* bindSessionToThread(startedSession);
     return startedSession.threadId;
@@ -808,11 +817,21 @@ const make = Effect.gen(function* () {
       shouldBootstrapHandoff && availableBootstrapChars > 0
         ? buildHandoffBootstrapText(thread, availableBootstrapChars)
         : null;
+    const shouldBootstrapSidechatContext =
+      thread.sidechatSourceThreadId !== null &&
+      sidechatContextBootstrapThreadIds.has(input.threadId) &&
+      !hasNativeAssistantMessagesBefore(thread, input.messageId);
+    const sidechatBootstrapText =
+      shouldBootstrapSidechatContext && availableBootstrapChars > 0
+        ? buildForkBootstrapText(thread, availableBootstrapChars)
+        : null;
     const boundaryMessageText = thread.sidechatSourceThreadId
       ? wrapSidechatInput(input.messageText)
       : input.messageText;
     const providerInput = handoffBootstrapText
       ? `<handoff_context>\n${handoffBootstrapText}\n</handoff_context>\n\n<latest_user_message>\n${boundaryMessageText}\n</latest_user_message>`
+      : sidechatBootstrapText
+        ? `<sidechat_context>\n${sidechatBootstrapText}\n</sidechat_context>\n\n${boundaryMessageText}`
       : boundaryMessageText;
     const normalizedInput = toNonEmptyProviderInput(providerInput);
     const normalizedAttachments = input.attachments ?? [];
@@ -912,6 +931,9 @@ const make = Effect.gen(function* () {
           bootstrapStatus: "completed",
         },
       });
+    }
+    if (sidechatBootstrapText) {
+      sidechatContextBootstrapThreadIds.delete(input.threadId);
     }
   });
 

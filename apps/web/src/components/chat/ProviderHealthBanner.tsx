@@ -1,11 +1,14 @@
 import { PROVIDER_DISPLAY_NAMES, type ServerProviderStatus } from "@t3tools/contracts";
 import { memo } from "react";
-import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
-import { CircleAlertIcon } from "~/lib/icons";
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "../ui/alert";
+import { Button } from "../ui/button";
+import { CircleAlertIcon, XIcon } from "~/lib/icons";
 
 export const ProviderHealthBanner = memo(function ProviderHealthBanner({
+  onDismiss,
   status,
 }: {
+  onDismiss?: () => void;
   status: ServerProviderStatus | null;
 }) {
   if (!status || status.status === "ready") {
@@ -27,6 +30,19 @@ export const ProviderHealthBanner = memo(function ProviderHealthBanner({
         <AlertDescription className="line-clamp-3" title={status.message ?? defaultMessage}>
           {status.message ?? defaultMessage}
         </AlertDescription>
+        {onDismiss ? (
+          <AlertAction>
+            <Button
+              aria-label="Dismiss provider status"
+              size="icon-xs"
+              title="Dismiss provider status"
+              variant="ghost"
+              onClick={onDismiss}
+            >
+              <XIcon className="size-3.5" />
+            </Button>
+          </AlertAction>
+        ) : null}
       </Alert>
     </div>
   );

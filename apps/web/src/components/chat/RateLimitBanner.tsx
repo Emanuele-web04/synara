@@ -1,7 +1,8 @@
 import { memo } from "react";
 import type { OrchestrationThreadActivity } from "@t3tools/contracts";
-import { Alert, AlertDescription } from "../ui/alert";
-import { CircleAlertIcon } from "~/lib/icons";
+import { Alert, AlertAction, AlertDescription } from "../ui/alert";
+import { Button } from "../ui/button";
+import { CircleAlertIcon, XIcon } from "~/lib/icons";
 
 export type RateLimitStatus = {
   status: "rejected" | "allowed_warning";
@@ -48,8 +49,10 @@ function formatResetsAt(resetsAt: string): string {
 }
 
 export const RateLimitBanner = memo(function RateLimitBanner({
+  onDismiss,
   rateLimitStatus,
 }: {
+  onDismiss?: () => void;
   rateLimitStatus: RateLimitStatus | null;
 }) {
   if (!rateLimitStatus) return null;
@@ -66,6 +69,19 @@ export const RateLimitBanner = memo(function RateLimitBanner({
       <Alert variant={isRejected ? "error" : "warning"}>
         <CircleAlertIcon />
         <AlertDescription>{message}</AlertDescription>
+        {onDismiss ? (
+          <AlertAction>
+            <Button
+              aria-label="Dismiss rate limit status"
+              size="icon-xs"
+              title="Dismiss rate limit status"
+              variant="ghost"
+              onClick={onDismiss}
+            >
+              <XIcon className="size-3.5" />
+            </Button>
+          </AlertAction>
+        ) : null}
       </Alert>
     </div>
   );

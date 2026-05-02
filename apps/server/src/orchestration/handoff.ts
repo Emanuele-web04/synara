@@ -38,6 +38,17 @@ export function listImportedHandoffMessages(
   );
 }
 
+export function listImportedForkMessages(
+  thread: Pick<OrchestrationThread, "messages">,
+): ReadonlyArray<OrchestrationMessage> {
+  return thread.messages.filter(
+    (message) =>
+      message.source === "fork-import" &&
+      (message.role === "user" || message.role === "assistant") &&
+      message.streaming === false,
+  );
+}
+
 export function hasNativeHandoffMessages(thread: Pick<OrchestrationThread, "messages">): boolean {
   return thread.messages.some(
     (message) =>
@@ -62,27 +73,25 @@ export function hasNativeAssistantMessagesBefore(
   });
 }
 
-export function buildHandoffBootstrapText(
-  thread: Pick<OrchestrationThread, "title" | "branch" | "worktreePath" | "handoff" | "messages">,
-  maxChars = HANDOFF_BOOTSTRAP_CHAR_BUDGET,
-): string | null {
-  const importedMessages = listImportedHandoffMessages(thread);
-  if (importedMessages.length === 0 || thread.handoff === null) {
+function buildImportedMessagesBootstrapText(input: {
+  thread: Pick<OrchestrationThread, "title" | "branch" | "worktreePath">;
+  importedMessages: ReadonlyArray<OrchestrationMessage>;
+  intro: string;
+  maxChars: number;
+}): string | null {
+  if (input.importedMessages.length === 0) {
     return null;
   }
 
-  const earlierMessages = importedMessages.slice(0, -RECENT_MESSAGE_COUNT);
-  const recentMessages = importedMessages.slice(-RECENT_MESSAGE_COUNT);
-  const sections: string[] = [
-    `This conversation was handed off from ${thread.handoff.sourceProvider}.`,
-    `Original conversation title: ${thread.title}`,
-  ];
+  const earlierMessages = input.importedMessages.slice(0, -RECENT_MESSAGE_COUNT);
+  const recentMessages = input.importedMessages.slice(-RECENT_MESSAGE_COUNT);
+  const sections: string[] = [input.intro, `Original conversation title: ${input.thread.title}`];
 
-  if (thread.branch) {
-    sections.push(`Git branch: ${thread.branch}`);
+  if (input.thread.branch) {
+    sections.push(`Git branch: ${input.thread.branch}`);
   }
-  if (thread.worktreePath) {
-    sections.push(`Worktree path: ${thread.worktreePath}`);
+  if (input.thread.worktreePath) {
+    sections.push(`Worktree path: ${input.thread.worktreePath}`);
   }
 
   if (earlierMessages.length > 0) {
@@ -114,5 +123,39 @@ export function buildHandoffBootstrapText(
   );
 
   const joined = sections.join("\n\n").trim();
-  return truncateText(joined, Math.max(0, maxChars));
+  return truncateText(joined, Math.max(0, input.maxChars));
+}
+
+export function buildHandoffBootstrapText(
+  thread: Pick<OrchestrationThread, "title" | "branch" | "worktreePath" | "handoff" | "messages">,
+  maxChars = HANDOFF_BOOTSTRAP_CHAR_BUDGET,
+): string | null {
+  const importedMessages = listImportedHandoffMessages(thread);
+  if (importedMessages.length === 0 || thread.handoff === null) {
+    return null;
+  }
+
+  return buildImportedMessagesBootstrapText({
+    thread,
+    importedMessages,
+    intro: `This conversation was handed off from ${thread.handoff.sourceProvider}.`,
+    maxChars,
+  });
+}
+
+export function buildForkBootstrapText(
+  thread: Pick<OrchestrationThread, "title" | "branch" | "worktreePath" | "messages">,
+  maxChars = HANDOFF_BOOTSTRAP_CHAR_BUDGET,
+): string | null {
+  const importedMessages = listImportedForkMessages(thread);
+  if (importedMessages.length === 0) {
+    return null;
+  }
+
+  return buildImportedMessagesBootstrapText({
+    thread,
+    importedMessages,
+    intro: "This sidechat was cloned from an earlier conversation.",
+    maxChars,
+  });
 }

@@ -308,7 +308,11 @@ import { resolveRuntimeModelDescriptor } from "./chat/runtimeModelCapabilities";
 import { ProjectPicker } from "./chat/ProjectPicker";
 import { ProviderHealthBanner } from "./chat/ProviderHealthBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
-import { RateLimitBanner, deriveLatestRateLimitStatus } from "./chat/RateLimitBanner";
+import {
+  RateLimitBanner,
+  deriveLatestRateLimitStatus,
+  type RateLimitStatus,
+} from "./chat/RateLimitBanner";
 import {
   ACTIVE_TURN_LAYOUT_SETTLE_DELAY_MS,
   appendVoiceTranscriptToPrompt,
@@ -319,6 +323,8 @@ import {
   shouldAutoDeleteTerminalThreadOnLastClose,
   buildExpiredTerminalContextToastCopy,
   buildLocalDraftThread,
+  DISMISSED_PROVIDER_HEALTH_BANNERS_KEY,
+  DismissedProviderHealthBannersSchema,
   shouldRenderTerminalWorkspace,
   cloneComposerImageForRetry,
   collectUserMessageBlobPreviewUrls,
@@ -391,6 +397,7 @@ function canHandleComposerPickerShortcut(
 const EMPTY_AVAILABLE_EDITORS: EditorId[] = [];
 const EMPTY_PROVIDER_STATUSES: ServerProviderStatus[] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
+const MAX_DISMISSED_PROVIDER_HEALTH_BANNERS = 50;
 
 function getThreadProviderCustomBinaryPathKey(threadId: Thread["id"], provider: ProviderKind) {
   return `${threadId}:${provider}`;
@@ -424,6 +431,34 @@ function getProviderStartOptionsCustomBinaryPath(
     case "opencode":
       return normalizeCustomBinaryPath(providerOptions?.opencode?.binaryPath);
   }
+}
+
+function getProviderHealthBannerDismissalKey(status: ServerProviderStatus | null): string | null {
+  if (!status || status.status === "ready") {
+    return null;
+  }
+  return [
+    status.provider,
+    status.status,
+    status.available ? "available" : "unavailable",
+    status.authStatus,
+    status.message?.trim() ?? "",
+  ].join("\u001f");
+}
+
+function getRateLimitBannerDismissalKey(
+  status: RateLimitStatus | null,
+  threadId: Thread["id"] | null,
+): string | null {
+  if (!status || !threadId) {
+    return null;
+  }
+  return [
+    threadId,
+    status.status,
+    status.resetsAt ?? "",
+    typeof status.utilization === "number" ? String(Math.round(status.utilization * 100)) : "",
+  ].join("\u001f");
 }
 
 type ComposerPluginSuggestion = {
@@ -908,6 +943,15 @@ export default function ChatView({
     {},
     LastInvokedScriptByProjectSchema,
   );
+  const [dismissedProviderHealthBannerKeys, setDismissedProviderHealthBannerKeys] =
+    useLocalStorage(
+      DISMISSED_PROVIDER_HEALTH_BANNERS_KEY,
+      [],
+      DismissedProviderHealthBannersSchema,
+    );
+  const [dismissedRateLimitBannerKey, setDismissedRateLimitBannerKey] = useState<string | null>(
+    null,
+  );
   const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
   const [isTraitsPickerOpen, setIsTraitsPickerOpen] = useState(false);
   const legendListRef = useRef<LegendListRef | null>(null);
@@ -1096,6 +1140,14 @@ export default function ChatView({
     () => deriveLatestRateLimitStatus(threadActivities),
     [threadActivities],
   );
+  const activeRateLimitBannerDismissalKey = useMemo(
+    () => getRateLimitBannerDismissalKey(activeRateLimitStatus, activeThread?.id ?? null),
+    [activeRateLimitStatus, activeThread?.id],
+  );
+  const visibleActiveRateLimitStatus =
+    activeRateLimitBannerDismissalKey === dismissedRateLimitBannerKey
+      ? null
+      : activeRateLimitStatus;
   const latestTurnSettledByProvider = isLatestTurnSettled(
     activeLatestTurn,
     activeThread?.session ?? null,
@@ -2397,6 +2449,15 @@ export default function ChatView({
     () => providerStatuses.find((status) => status.provider === selectedProvider) ?? null,
     [selectedProvider, providerStatuses],
   );
+  const activeProviderHealthBannerDismissalKey = useMemo(
+    () => getProviderHealthBannerDismissalKey(activeProviderStatus),
+    [activeProviderStatus],
+  );
+  const visibleActiveProviderStatus =
+    activeProviderHealthBannerDismissalKey &&
+    dismissedProviderHealthBannerKeys.includes(activeProviderHealthBannerDismissalKey)
+      ? null
+      : activeProviderStatus;
   const voiceProviderStatus = useMemo(
     () => providerStatuses.find((status) => status.provider === "codex") ?? null,
     [providerStatuses],
@@ -6804,6 +6865,22 @@ export default function ChatView({
     if (!activeThread) return;
     setThreadError(activeThread.id, null);
   }, [activeThread, setThreadError]);
+  const dismissActiveProviderHealthBanner = useCallback(() => {
+    if (!activeProviderHealthBannerDismissalKey) return;
+    setDismissedProviderHealthBannerKeys((current) => {
+      if (current.includes(activeProviderHealthBannerDismissalKey)) {
+        return current;
+      }
+      return [activeProviderHealthBannerDismissalKey, ...current].slice(
+        0,
+        MAX_DISMISSED_PROVIDER_HEALTH_BANNERS,
+      );
+    });
+  }, [activeProviderHealthBannerDismissalKey, setDismissedProviderHealthBannerKeys]);
+  const dismissActiveRateLimitBanner = useCallback(() => {
+    if (!activeRateLimitBannerDismissalKey) return;
+    setDismissedRateLimitBannerKey(activeRateLimitBannerDismissalKey);
+  }, [activeRateLimitBannerDismissalKey]);
 
   // Empty state: no active thread
   if (!activeThread) {
@@ -7535,9 +7612,15 @@ export default function ChatView({
       />
 
       {/* Error banner */}
-      <ProviderHealthBanner status={activeProviderStatus} />
+      <ProviderHealthBanner
+        status={visibleActiveProviderStatus}
+        onDismiss={dismissActiveProviderHealthBanner}
+      />
       <ThreadErrorBanner error={activeThread.error} onDismiss={dismissActiveThreadError} />
-      <RateLimitBanner rateLimitStatus={activeRateLimitStatus} />
+      <RateLimitBanner
+        rateLimitStatus={visibleActiveRateLimitStatus}
+        onDismiss={dismissActiveRateLimitBanner}
+      />
       {terminalWorkspaceOpen ? (
         <TerminalWorkspaceTabs
           activeTab={terminalState.workspaceActiveTab}

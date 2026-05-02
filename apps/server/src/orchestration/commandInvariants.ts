@@ -32,15 +32,15 @@ export function findProjectById(
   return readModel.projects.find((project) => project.id === projectId);
 }
 
-// Finds an active project by workspace root using the same comparison rules as import flows.
-export function findActiveProjectByWorkspaceRoot(
+// Finds active projects by workspace root using the same comparison rules as import flows.
+export function listActiveProjectsByWorkspaceRoot(
   readModel: OrchestrationReadModel,
   workspaceRoot: string,
-): OrchestrationProject | undefined {
+): ReadonlyArray<OrchestrationProject> {
   const normalizedWorkspaceRoot = normalizeWorkspaceRootForComparison(workspaceRoot, {
     platform: process.platform,
   });
-  return readModel.projects.find(
+  return readModel.projects.filter(
     (project) =>
       project.deletedAt === null &&
       project.kind === "project" &&
@@ -48,6 +48,13 @@ export function findActiveProjectByWorkspaceRoot(
         platform: process.platform,
       }) === normalizedWorkspaceRoot,
   );
+}
+
+export function findActiveProjectByWorkspaceRoot(
+  readModel: OrchestrationReadModel,
+  workspaceRoot: string,
+): OrchestrationProject | undefined {
+  return listActiveProjectsByWorkspaceRoot(readModel, workspaceRoot)[0];
 }
 
 export function listThreadsByProjectId(

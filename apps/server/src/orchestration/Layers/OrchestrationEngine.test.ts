@@ -890,6 +890,114 @@ describe("OrchestrationEngine", () => {
     await runtime.dispose();
   });
 
+  it("retires an empty existing project when re-adding the same workspace root", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-project-stale-create"),
+        projectId: asProjectId("project-stale"),
+        title: "Stale Project",
+        workspaceRoot: "/tmp/readd-project",
+        defaultModelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        createdAt,
+      }),
+    );
+
+    await expect(
+      system.run(
+        engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.makeUnsafe("cmd-project-readd-create"),
+          projectId: asProjectId("project-readd"),
+          title: "Readded Project",
+          workspaceRoot: "/tmp/readd-project",
+          defaultModelSelection: {
+            provider: "codex",
+            model: "gpt-5-codex",
+          },
+          createdAt,
+        }),
+      ),
+    ).resolves.toEqual({ sequence: 3 });
+
+    const readModel = await system.run(engine.getReadModel());
+    expect(
+      readModel.projects.find((project) => project.id === asProjectId("project-stale"))
+        ?.deletedAt,
+    ).toBe(createdAt);
+    expect(
+      readModel.projects.find((project) => project.id === asProjectId("project-readd"))
+        ?.deletedAt,
+    ).toBeNull();
+
+    await system.dispose();
+  });
+
+  it("keeps rejecting a duplicate workspace root when the existing project has threads", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-project-active-create"),
+        projectId: asProjectId("project-active"),
+        title: "Active Project",
+        workspaceRoot: "/tmp/active-project",
+        defaultModelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-project-active-thread-create"),
+        threadId: ThreadId.makeUnsafe("thread-active"),
+        projectId: asProjectId("project-active"),
+        title: "active",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    await expect(
+      system.run(
+        engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.makeUnsafe("cmd-project-active-duplicate-create"),
+          projectId: asProjectId("project-active-duplicate"),
+          title: "Active Duplicate",
+          workspaceRoot: "/tmp/active-project",
+          defaultModelSelection: {
+            provider: "codex",
+            model: "gpt-5-codex",
+          },
+          createdAt,
+        }),
+      ),
+    ).rejects.toThrow("already uses workspace root");
+
+    await system.dispose();
+  });
+
   it("rejects duplicate thread creation", async () => {
     const system = await createOrchestrationSystem();
     const { engine } = system;

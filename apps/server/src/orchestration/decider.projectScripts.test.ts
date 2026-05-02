@@ -40,6 +40,183 @@ describe("decider project scripts", () => {
     expect((event.payload as { scripts: unknown[] }).scripts).toEqual([]);
   });
 
+  it("retires all empty project shells before recreating a workspace root", async () => {
+    const now = new Date().toISOString();
+    const initial = createEmptyReadModel(now);
+    const withFirstProject = await Effect.runPromise(
+      projectEvent(initial, {
+        sequence: 1,
+        eventId: asEventId("evt-stale-project-a"),
+        aggregateKind: "project",
+        aggregateId: asProjectId("project-stale-a"),
+        type: "project.created",
+        occurredAt: now,
+        commandId: CommandId.makeUnsafe("cmd-stale-project-a"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-stale-project-a"),
+        metadata: {},
+        payload: {
+          projectId: asProjectId("project-stale-a"),
+          title: "Stale A",
+          workspaceRoot: "/tmp/recreate-root",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      }),
+    );
+    const readModel = await Effect.runPromise(
+      projectEvent(withFirstProject, {
+        sequence: 2,
+        eventId: asEventId("evt-stale-project-b"),
+        aggregateKind: "project",
+        aggregateId: asProjectId("project-stale-b"),
+        type: "project.created",
+        occurredAt: now,
+        commandId: CommandId.makeUnsafe("cmd-stale-project-b"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-stale-project-b"),
+        metadata: {},
+        payload: {
+          projectId: asProjectId("project-stale-b"),
+          title: "Stale B",
+          workspaceRoot: "/tmp/recreate-root",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      }),
+    );
+
+    const result = await Effect.runPromise(
+      decideOrchestrationCommand({
+        command: {
+          type: "project.create",
+          commandId: CommandId.makeUnsafe("cmd-project-recreate"),
+          projectId: asProjectId("project-recreated"),
+          title: "Recreated",
+          workspaceRoot: "/tmp/recreate-root",
+          createdAt: now,
+        },
+        readModel,
+      }),
+    );
+
+    expect(Array.isArray(result)).toBe(true);
+    const events = Array.isArray(result) ? result : [result];
+    expect(events.map((event) => event.type)).toEqual([
+      "project.deleted",
+      "project.deleted",
+      "project.created",
+    ]);
+    expect(
+      events.map((event) => (event.payload as { projectId: ProjectId }).projectId),
+    ).toEqual([
+      asProjectId("project-stale-a"),
+      asProjectId("project-stale-b"),
+      asProjectId("project-recreated"),
+    ]);
+  });
+
+  it("blocks on the project with saved threads before retiring empty duplicate shells", async () => {
+    const now = new Date().toISOString();
+    const initial = createEmptyReadModel(now);
+    const withStaleProject = await Effect.runPromise(
+      projectEvent(initial, {
+        sequence: 1,
+        eventId: asEventId("evt-mixed-stale-project"),
+        aggregateKind: "project",
+        aggregateId: asProjectId("project-mixed-stale"),
+        type: "project.created",
+        occurredAt: now,
+        commandId: CommandId.makeUnsafe("cmd-mixed-stale-project"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-mixed-stale-project"),
+        metadata: {},
+        payload: {
+          projectId: asProjectId("project-mixed-stale"),
+          title: "Mixed Stale",
+          workspaceRoot: "/tmp/mixed-root",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      }),
+    );
+    const withActiveProject = await Effect.runPromise(
+      projectEvent(withStaleProject, {
+        sequence: 2,
+        eventId: asEventId("evt-mixed-active-project"),
+        aggregateKind: "project",
+        aggregateId: asProjectId("project-mixed-active"),
+        type: "project.created",
+        occurredAt: now,
+        commandId: CommandId.makeUnsafe("cmd-mixed-active-project"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-mixed-active-project"),
+        metadata: {},
+        payload: {
+          projectId: asProjectId("project-mixed-active"),
+          title: "Mixed Active",
+          workspaceRoot: "/tmp/mixed-root",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      }),
+    );
+    const readModel = await Effect.runPromise(
+      projectEvent(withActiveProject, {
+        sequence: 3,
+        eventId: asEventId("evt-mixed-active-thread"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.makeUnsafe("thread-mixed-active"),
+        type: "thread.created",
+        occurredAt: now,
+        commandId: CommandId.makeUnsafe("cmd-mixed-active-thread"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-mixed-active-thread"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.makeUnsafe("thread-mixed-active"),
+          projectId: asProjectId("project-mixed-active"),
+          title: "Saved chat",
+          modelSelection: {
+            provider: "codex",
+            model: "gpt-5-codex",
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          branch: null,
+          worktreePath: null,
+          envMode: "local",
+          createdAt: now,
+          updatedAt: now,
+        },
+      }),
+    );
+
+    await expect(
+      Effect.runPromise(
+        decideOrchestrationCommand({
+          command: {
+            type: "project.create",
+            commandId: CommandId.makeUnsafe("cmd-project-mixed-recreate"),
+            projectId: asProjectId("project-mixed-recreated"),
+            title: "Mixed Recreated",
+            workspaceRoot: "/tmp/mixed-root",
+            createdAt: now,
+          },
+          readModel,
+        }),
+      ),
+    ).rejects.toThrow("Project 'project-mixed-active' already uses workspace root");
+  });
+
   it("propagates scripts in project.meta.update payload", async () => {
     const now = new Date().toISOString();
     const initial = createEmptyReadModel(now);

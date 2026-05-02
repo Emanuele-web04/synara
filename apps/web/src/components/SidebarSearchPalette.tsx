@@ -750,7 +750,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                   {isBrowsing ? (
                     unsupportedWindowsPath ? (
                       <CommandEmpty className="py-10">
-                        <div className="text-center text-sm text-muted-foreground/72">
+                        <div className="text-center text-sm text-muted-foreground/79">
                           Windows paths are not supported on this platform.
                         </div>
                       </CommandEmpty>
@@ -895,11 +895,11 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                                     query={query}
                                   />
                                 </div>
-                                <span className="w-24 shrink-0 truncate text-right text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/72">
+                                <span className="w-24 shrink-0 truncate text-right text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/79">
                                   {thread.projectName}
                                 </span>
                                 {thread.updatedAt || thread.createdAt ? (
-                                  <span className="w-10 shrink-0 text-right text-[length:var(--app-font-size-ui-timestamp,10px)] text-muted-foreground/72">
+                                  <span className="w-10 shrink-0 text-right text-[length:var(--app-font-size-ui-timestamp,10px)] text-muted-foreground/79">
                                     {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
                                   </span>
                                 ) : (
@@ -958,7 +958,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                             <div className="truncate text-[length:var(--app-font-size-ui,12px)] text-foreground">
                               {project.name || "Untitled project"}
                             </div>
-                            <div className="truncate text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/72">
+                            <div className="truncate text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/79">
                               {project.localName
                                 ? `${project.folderName} · ${project.cwd}`
                                 : project.cwd}
@@ -994,7 +994,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                               {themeCommandItem.label}
                             </span>
                             {themeCommandItem.isActive ? (
-                              <CheckIcon className="size-3.5 shrink-0 text-muted-foreground/72" />
+                              <CheckIcon className="size-3.5 shrink-0 text-muted-foreground/79" />
                             ) : null}
                           </CommandItem>
                         </CommandGroup>
@@ -1033,7 +1033,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                                 <span className="min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)] text-foreground">
                                   {themeItem.label}
                                 </span>
-                                <span className="shrink-0 text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/72">
+                                <span className="shrink-0 text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/79">
                                   {resolvedTheme === "dark"
                                     ? "Dark color theme"
                                     : "Light color theme"}
@@ -1043,7 +1043,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                                   aria-hidden={!themeItem.isActive}
                                 >
                                   {themeItem.isActive ? (
-                                    <CheckIcon className="size-3.5 text-muted-foreground/72" />
+                                    <CheckIcon className="size-3.5 text-muted-foreground/79" />
                                   ) : null}
                                 </span>
                               </CommandItem>
@@ -1056,7 +1056,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
 
                   {!isBrowsing && !hasSearchResults ? (
                     <CommandEmpty className="py-10">
-                      <div className="flex flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground/72">
+                      <div className="flex flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground/79">
                         <SearchIcon className="size-4 opacity-70" />
                         <div>No matches.</div>
                       </div>

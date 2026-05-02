@@ -107,6 +107,7 @@ import {
 } from "@t3tools/shared/threadWorkspace";
 import { getProviderUsageSnapshot } from "./providerUsageSnapshot";
 import { TerminalThreadTitleTracker } from "./terminal/terminalThreadTitleTracker";
+import { startThreadRetentionJob } from "./threadRetention";
 
 /**
  * ServerShape - Service API for server lifecycle control.
@@ -1188,6 +1189,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   yield* readiness.markHttpListening;
 
   const orchestrationEngine = yield* OrchestrationEngineService;
+  yield* startThreadRetentionJob(orchestrationEngine);
   const projectionReadModelQuery = yield* ProjectionSnapshotQuery;
   const checkpointDiffQuery = yield* CheckpointDiffQuery;
   const orchestrationReactor = yield* OrchestrationReactor;

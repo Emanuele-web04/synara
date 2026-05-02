@@ -16,6 +16,8 @@ import { Effect } from "effect";
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import { hasNativeHandoffMessages } from "./handoff.ts";
 import {
+  listActiveProjectsByWorkspaceRoot,
+  listThreadsByProjectId,
   requireProject,
   requireProjectAbsent,
   requireProjectHasNoThreads,
@@ -139,15 +141,46 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         projectId: command.projectId,
       });
+      const events: Array<Omit<OrchestrationEvent, "sequence">> = [];
       if ((command.kind ?? "project") === "project") {
-        yield* requireProjectWorkspaceRootAvailable({
+        const existingProjects = listActiveProjectsByWorkspaceRoot(
           readModel,
-          command,
-          workspaceRoot: command.workspaceRoot,
-        });
+          command.workspaceRoot,
+        );
+        const staleProjects: typeof existingProjects = [];
+        for (const existingProject of existingProjects) {
+          const remainingThreads = listThreadsByProjectId(readModel, existingProject.id).filter(
+            (thread) => thread.deletedAt === null,
+          );
+          if (remainingThreads.length > 0) {
+            return yield* new OrchestrationCommandInvariantError({
+              commandType: command.type,
+              detail: `Project '${existingProject.id}' already uses workspace root '${existingProject.workspaceRoot}'.`,
+            });
+          }
+          staleProjects.push(existingProject);
+        }
+
+        for (const staleProject of staleProjects) {
+          // A removed folder can leave an active project shell with no live threads.
+          // Retire that stale shell so re-adding the same folder creates a fresh project.
+          events.push({
+            ...withEventBase({
+              aggregateKind: "project",
+              aggregateId: staleProject.id,
+              occurredAt: command.createdAt,
+              commandId: command.commandId,
+            }),
+            type: "project.deleted",
+            payload: {
+              projectId: staleProject.id,
+              deletedAt: command.createdAt,
+            },
+          });
+        }
       }
 
-      return {
+      events.push({
         ...withEventBase({
           aggregateKind: "project",
           aggregateId: command.projectId,
@@ -165,7 +198,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
-      };
+      });
+      return events.length === 1 ? events[0]! : events;
     }
 
     case "project.meta.update": {

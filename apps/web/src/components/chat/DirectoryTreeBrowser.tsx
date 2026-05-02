@@ -173,7 +173,7 @@ export const DirectoryTreeBrowser = memo(function DirectoryTreeBrowser({
               ) : (
                 <FileIcon className="size-4 shrink-0 text-muted-foreground/60" />
               )}
-              <span className="truncate text-foreground/88">{entry.name}</span>
+              <span className="truncate text-foreground/95">{entry.name}</span>
             </button>
             {isDirectory && isLoadingChildren ? (
               <span className="shrink-0 text-[11px] text-muted-foreground/45">Loading…</span>
