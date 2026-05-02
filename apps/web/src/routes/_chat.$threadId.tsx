@@ -556,7 +556,9 @@ function resolveSingleProjectId(input: {
   return input.threadProjectId ?? input.draftProjectId ?? null;
 }
 
-function normalizeSingleSearchFromPane(panelState: SplitViewPanePanelState): DiffRouteSearch {
+function normalizeSingleSearchFromPane(
+  panelState: Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">,
+): DiffRouteSearch {
   if (panelState.panel === "browser") {
     return { panel: "browser" };
   }
