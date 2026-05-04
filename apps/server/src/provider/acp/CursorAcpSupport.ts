@@ -889,17 +889,60 @@ function findCursorModelChoiceIgnoringFast(
   )?.slug;
 }
 
+function cursorModelChoiceSupportsRequestedParameters(
+  choice: string,
+  requested: string,
+): boolean {
+  if (stripCursorParameterizedSuffix(choice) !== stripCursorParameterizedSuffix(requested)) {
+    return false;
+  }
+
+  const choiceParams = parseCursorModelParameters(choice);
+  const requestedParams = parseCursorModelParameters(requested);
+  for (const [key, requestedValue] of requestedParams) {
+    const choiceValue = choiceParams.get(key);
+    if (choiceValue === requestedValue) {
+      continue;
+    }
+    if ((key === "fast" || key === "thinking") && requestedValue === "false") {
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
+function findCursorModelChoiceWithSupportedParameters(
+  choices: ReadonlyArray<CursorAcpModelChoice>,
+  model: string,
+): string | undefined {
+  return choices.find((choice) => cursorModelChoiceSupportsRequestedParameters(choice.slug, model))?.slug;
+}
+
+function resolveCursorAutoModelValue(
+  choices: ReadonlyArray<CursorAcpModelChoice>,
+): string | undefined {
+  return (
+    choices.find((choice) => choice.slug.trim().toLowerCase() === "auto")?.slug ??
+    choices.find((choice) => normalizedText(choice.name) === "auto")?.slug
+  );
+}
+
 function resolveCursorAcpModelValue(
   configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
   model: string | null | undefined,
   options: CursorModelOptions | null | undefined,
 ): string | undefined {
   const trimmed = model?.trim();
-  if (!trimmed || trimmed === "auto") {
+  if (!trimmed) {
     return undefined;
   }
 
   const choices = flattenCursorAcpModelChoices(configOptions);
+  if (trimmed === "auto") {
+    return resolveCursorAutoModelValue(choices);
+  }
+
   const exactChoice = choices.find((choice) => choice.slug === trimmed);
   if (exactChoice) {
     return exactChoice.slug;
@@ -929,7 +972,11 @@ function resolveCursorAcpModelValue(
   if (choices.some((choice) => choice.slug === resolvedModel)) {
     return resolvedModel;
   }
-  return findCursorModelChoiceIgnoringFast(choices, resolvedModel) ?? resolvedModel;
+  return (
+    findCursorModelChoiceIgnoringFast(choices, resolvedModel) ??
+    findCursorModelChoiceWithSupportedParameters(choices, resolvedModel) ??
+    resolvedModel
+  );
 }
 
 export function applyCursorAcpModelSelection<E>(input: {

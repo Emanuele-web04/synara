@@ -59,6 +59,7 @@ async function mountPicker(props: {
   model: ModelSlug;
   lockedProvider: ProviderKind | null;
   providers?: ReadonlyArray<ServerProviderStatus>;
+  loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
   modelOptionsByProvider?: Record<
     ProviderKind,
     ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>
@@ -73,6 +74,7 @@ async function mountPicker(props: {
       model={props.model}
       lockedProvider={props.lockedProvider}
       modelOptionsByProvider={props.modelOptionsByProvider ?? MODEL_OPTIONS_BY_PROVIDER}
+      {...(props.loadingModelProviders ? { loadingModelProviders: props.loadingModelProviders } : {})}
       {...(props.providers ? { providers: props.providers } : {})}
       onProviderModelChange={onProviderModelChange}
     />,
@@ -251,6 +253,29 @@ describe("ProviderModelPicker", () => {
         .toBeInTheDocument();
       await expect
         .element(page.getByRole("menuitemradio", { name: "GPT Cursor 1" }))
+        .not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows a loading skeleton instead of fallback models for loading providers", async () => {
+    const mounted = await mountPicker({
+      provider: "cursor",
+      model: "auto",
+      lockedProvider: "cursor",
+      loadingModelProviders: { cursor: true },
+    });
+
+    try {
+      await page.getByRole("button").click();
+
+      await expect.element(page.getByLabelText("Loading models")).toBeInTheDocument();
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "Auto" }))
+        .not.toBeInTheDocument();
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "Composer 2" }))
         .not.toBeInTheDocument();
     } finally {
       await mounted.cleanup();

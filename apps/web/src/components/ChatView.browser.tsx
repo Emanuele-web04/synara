@@ -1846,7 +1846,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
           const planButton = Array.from(
             document.querySelectorAll<HTMLButtonElement>("button"),
           ).find((button) => button.textContent?.trim() === "Plan");
-          expect(planButton?.title).toContain("return to normal chat mode");
+          expect(planButton?.title).toContain("return to normal build mode");
         },
         { timeout: 8_000, interval: 16 },
       );

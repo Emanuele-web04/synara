@@ -4,6 +4,7 @@ import {
   extractAskQuestions,
   extractPlanMarkdown,
   extractTodosAsPlan,
+  formatCursorPlanUpdateMarkdown,
 } from "./CursorAcpExtension.ts";
 
 describe("CursorAcpExtension", () => {
@@ -104,5 +105,25 @@ describe("CursorAcpExtension", () => {
         { step: "Unknown status", status: "pending" },
       ],
     });
+  });
+
+  it("formats Cursor ACP plan updates as proposed plan markdown", () => {
+    expect(
+      formatCursorPlanUpdateMarkdown({
+        explanation: "Assume a static hub page first.",
+        plan: [
+          { step: "Add /blogs route metadata", status: "pending" },
+          { step: "Link /blogs from footer", status: "pending" },
+        ],
+      }),
+    ).toBe("Assume a static hub page first.\n\n1. Add /blogs route metadata\n2. Link /blogs from footer");
+  });
+
+  it("does not format empty Cursor plan updates", () => {
+    expect(
+      formatCursorPlanUpdateMarkdown({
+        plan: [{ step: "   ", status: "pending" }],
+      }),
+    ).toBeUndefined();
   });
 });

@@ -149,8 +149,8 @@ describe("TraitsPicker (Claude)", () => {
     await vi.waitFor(() => {
       const text = document.body.textContent ?? "";
       expect(text).toContain("Fast Mode");
-      expect(text).toContain("off");
-      expect(text).toContain("on");
+      expect(text).toContain("Default");
+      expect(text).toContain("Fast");
     });
   });
 
@@ -379,8 +379,8 @@ describe("TraitsPicker (Codex)", () => {
     await vi.waitFor(() => {
       const text = document.body.textContent ?? "";
       expect(text).toContain("Fast Mode");
-      expect(text).toContain("off");
-      expect(text).toContain("on");
+      expect(text).toContain("Default");
+      expect(text).toContain("Fast");
     });
   });
 
@@ -434,11 +434,85 @@ describe("TraitsPicker (Codex)", () => {
     });
 
     await page.getByRole("button").click();
-    await page.getByRole("menuitemradio", { name: "on" }).click();
+    await page.getByRole("menuitemradio", { name: "Fast" }).click();
 
     expect(useComposerDraftStore.getState().stickyModelSelectionByProvider.codex).toMatchObject({
       provider: "codex",
       options: { fastMode: true },
+    });
+  });
+});
+
+// ── Cursor TraitsPicker tests ─────────────────────────────────────────
+
+async function mountCursorPicker(props: {
+  runtimeModel: ProviderModelDescriptor;
+  options?: { fastMode?: boolean };
+}) {
+  const threadId = ThreadId.makeUnsafe("thread-cursor-traits");
+  const host = document.createElement("div");
+  document.body.append(host);
+  const screen = await render(
+    <TraitsPicker
+      provider="cursor"
+      threadId={threadId}
+      model={props.runtimeModel.slug}
+      runtimeModel={props.runtimeModel}
+      prompt=""
+      modelOptions={props.options}
+      onPromptChange={() => {}}
+    />,
+    { container: host },
+  );
+
+  const cleanup = async () => {
+    await screen.unmount();
+    host.remove();
+  };
+
+  return {
+    [Symbol.asyncDispose]: cleanup,
+    cleanup,
+  };
+}
+
+describe("TraitsPicker (Cursor)", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  const fastOnlyComposerRuntimeModel: ProviderModelDescriptor = {
+    slug: "composer-2[fast=false]",
+    name: "Composer 2",
+    supportsFastMode: true,
+  };
+
+  it("shows Default instead of an empty trigger for fast-only models", async () => {
+    await using _ = await mountCursorPicker({
+      runtimeModel: fastOnlyComposerRuntimeModel,
+      options: { fastMode: false },
+    });
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent ?? "").toContain("Default");
+    });
+  });
+
+  it("shows only fast mode labels for fast-only models", async () => {
+    await using _ = await mountCursorPicker({
+      runtimeModel: fastOnlyComposerRuntimeModel,
+      options: { fastMode: false },
+    });
+
+    await page.getByRole("button").click();
+
+    await vi.waitFor(() => {
+      const text = document.body.textContent ?? "";
+      expect(text).toContain("Fast Mode");
+      expect(text).toContain("Default");
+      expect(text).toContain("Fast");
+      expect(text).not.toMatch(/\bThinking\b/u);
+      expect(text).not.toContain("Effort");
     });
   });
 });

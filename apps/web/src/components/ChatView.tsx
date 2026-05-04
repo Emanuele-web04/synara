@@ -1322,7 +1322,7 @@ export default function ChatView({
       provider: "cursor",
       binaryPath: settings.cursorBinaryPath || null,
       apiEndpoint: settings.cursorApiEndpoint || null,
-      enabled: selectedProvider === "cursor" || lockedProvider === "cursor",
+      enabled: selectedProvider === "cursor" || lockedProvider === "cursor" || isModelPickerOpen,
     }),
   );
   const geminiModelsQuery = useQuery(
@@ -1350,7 +1350,8 @@ export default function ChatView({
         : collapseCursorModelVariants(cursorDynamicModelsQuery.data?.models ?? []),
     [cursorDynamicModelsQuery.data?.models, showExpandedCursorModelVariants],
   );
-  const cursorModelDiscoveryEnabled = selectedProvider === "cursor" || lockedProvider === "cursor";
+  const cursorModelDiscoveryEnabled =
+    selectedProvider === "cursor" || lockedProvider === "cursor" || isModelPickerOpen;
   const hasResolvedCursorModelDiscovery =
     cursorDynamicModelsQuery.data?.source === "cursor.cli" &&
     (cursorDynamicModelsQuery.data.models.length ?? 0) > 0;
@@ -1522,6 +1523,7 @@ export default function ChatView({
     persistedModelSelection: persistedComposerModelSelection,
     draftModelSelection: draftModelSelectionForSelectedProvider,
     providerModelsLoading,
+    requiresDiscoveredModels: selectedProvider === "cursor",
   });
   const searchableModelOptions = useMemo(
     () =>
@@ -5953,6 +5955,7 @@ export default function ChatView({
       lockedProvider={lockedProvider}
       providers={providerStatuses}
       modelOptionsByProvider={modelOptionsByProvider}
+      loadingModelProviders={{ cursor: cursorModelDiscoveryPending }}
       open={isModelPickerOpen}
       onOpenChange={handleModelPickerOpenChange}
       shortcutLabel={modelPickerShortcutLabel}
@@ -7073,7 +7076,7 @@ export default function ChatView({
                             size="sm"
                             type="button"
                             onClick={toggleInteractionMode}
-                            title="Plan mode — click to return to normal chat mode"
+                            title="Plan mode — click to return to normal build mode"
                           >
                             <GoTasklist className="size-3.5" />
                             <span className="sr-only sm:not-sr-only">Plan</span>
@@ -7792,7 +7795,7 @@ export default function ChatView({
                                         size="sm"
                                         type="button"
                                         onClick={toggleInteractionMode}
-                                        title="Plan mode — click to return to normal chat mode"
+                                        title="Plan mode — click to return to normal build mode"
                                       >
                                         <GoTasklist className="size-3.5" />
                                         <span className="sr-only sm:not-sr-only">Plan</span>

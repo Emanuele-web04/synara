@@ -29,6 +29,7 @@ import { PickerTriggerButton } from "./PickerTriggerButton";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ShortcutKbd } from "../ui/shortcut-kbd";
 import { groupProviderModelOptions, type ProviderModelOption } from "../../providerModelOptions";
+import { Skeleton } from "../ui/skeleton";
 
 function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): option is {
   value: ProviderKind;
@@ -130,6 +131,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   lockedProvider: ProviderKind | null;
   providers?: ReadonlyArray<ServerProviderStatus>;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
+  loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
   activeProviderIconClassName?: string;
   compact?: boolean;
   disabled?: boolean;
@@ -177,6 +179,21 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   };
 
   const renderModelRadioGroup = (provider: ProviderKind) => {
+    if (props.loadingModelProviders?.[provider]) {
+      return (
+        <div className="w-60 space-y-2 px-2 py-2" aria-label="Loading models">
+          {Array.from({ length: 6 }, (_, index) => (
+            <div key={index} className="flex items-center gap-2 rounded-md px-2 py-1.5">
+              <Skeleton className="size-3.5 rounded-full" />
+              <Skeleton
+                className={cn("h-3.5 rounded-full", index % 3 === 0 ? "w-24" : "w-32")}
+              />
+            </div>
+          ))}
+        </div>
+      );
+    }
+
     const providerOptions = props.modelOptionsByProvider[provider];
     const shouldShowSearch =
       (provider === "opencode" || provider === "cursor") &&

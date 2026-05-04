@@ -283,14 +283,26 @@ describe("buildCursorAcpModelDescriptors", () => {
 });
 
 describe("applyCursorAcpModelSelection", () => {
-  it("leaves Cursor's runtime default model unchanged for auto", async () => {
+  it("selects Cursor auto explicitly when the ACP model picker exposes it", async () => {
     const calls: Array<
       | { readonly type: "model"; readonly value: string }
       | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
     > = [];
 
     const runtime = {
-      getConfigOptions: Effect.succeed(parameterizedGpt54ConfigOptions),
+      getConfigOptions: Effect.succeed([
+        {
+          id: "model",
+          name: "Model",
+          category: "model",
+          type: "select",
+          currentValue: "composer-2[fast=true]",
+          options: [
+            { value: "auto", name: "Auto" },
+            { value: "composer-2[fast=true]", name: "Composer 2" },
+          ],
+        },
+      ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
       setModel: (value: string) =>
         Effect.sync(() => {
           calls.push({ type: "model", value });
@@ -310,7 +322,49 @@ describe("applyCursorAcpModelSelection", () => {
       }),
     );
 
-    expect(calls).toEqual([]);
+    expect(calls).toEqual([{ type: "model", value: "auto" }]);
+  });
+
+  it("maps Cursor auto to legacy ACP default model values named Auto", async () => {
+    const calls: Array<
+      | { readonly type: "model"; readonly value: string }
+      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
+    > = [];
+
+    const runtime = {
+      getConfigOptions: Effect.succeed([
+        {
+          id: "model",
+          name: "Model",
+          category: "model",
+          type: "select",
+          currentValue: "composer-2[fast=true]",
+          options: [
+            { value: "default[]", name: "Auto" },
+            { value: "composer-2[fast=true]", name: "Composer 2" },
+          ],
+        },
+      ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
+      setModel: (value: string) =>
+        Effect.sync(() => {
+          calls.push({ type: "model", value });
+        }),
+      setConfigOption: (configId: string, value: string | boolean) =>
+        Effect.sync(() => {
+          calls.push({ type: "config", configId, value });
+        }),
+    };
+
+    await Effect.runPromise(
+      applyCursorAcpModelSelection({
+        runtime,
+        model: "auto",
+        options: undefined,
+        mapError: ({ cause }) => cause,
+      }),
+    );
+
+    expect(calls).toEqual([{ type: "model", value: "default[]" }]);
   });
 
   it("maps legacy Cursor base slugs to parameterized ACP model values", async () => {
@@ -353,6 +407,48 @@ describe("applyCursorAcpModelSelection", () => {
     );
 
     expect(calls).toEqual([{ type: "model", value: "composer-2[fast=true]" }]);
+  });
+
+  it("maps unsupported false boolean parameters to an available Cursor ACP model value", async () => {
+    const calls: Array<
+      | { readonly type: "model"; readonly value: string }
+      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
+    > = [];
+
+    const runtime = {
+      getConfigOptions: Effect.succeed([
+        {
+          id: "model",
+          name: "Model",
+          category: "model",
+          type: "select",
+          currentValue: "grok-4-20[thinking=true]",
+          options: [
+            { value: "default[]", name: "Auto" },
+            { value: "grok-4-20[thinking=true]", name: "Grok 4.20" },
+          ],
+        },
+      ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
+      setModel: (value: string) =>
+        Effect.sync(() => {
+          calls.push({ type: "model", value });
+        }),
+      setConfigOption: (configId: string, value: string | boolean) =>
+        Effect.sync(() => {
+          calls.push({ type: "config", configId, value });
+        }),
+    };
+
+    await Effect.runPromise(
+      applyCursorAcpModelSelection({
+        runtime,
+        model: "grok-4-20[thinking=false]",
+        options: undefined,
+        mapError: ({ cause }) => cause,
+      }),
+    );
+
+    expect(calls).toEqual([{ type: "model", value: "grok-4-20[thinking=true]" }]);
   });
 
   it("sets the base model before applying separate config options", async () => {
