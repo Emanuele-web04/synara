@@ -33,10 +33,7 @@ export const makeServerReadiness = Effect.gen(function* () {
     orchestrationSubscriptionsReady: false,
   };
 
-  const complete = (
-    deferred: Deferred.Deferred<void>,
-    key: keyof typeof status,
-  ): Effect.Effect<void> =>
+  const complete = (deferred: Deferred.Deferred<void>, key: keyof typeof status) =>
     Effect.gen(function* () {
       status[key] = true;
       yield* Deferred.succeed(deferred, undefined);

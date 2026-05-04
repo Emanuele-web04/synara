@@ -153,7 +153,7 @@ export function createDevRunnerEnv({
       T3CODE_PORT: String(serverPort),
       PORT: String(webPort),
       ELECTRON_RENDERER_PORT: String(webPort),
-      VITE_WS_URL: `ws://localhost:${serverPort}`,
+      VITE_WS_URL: `ws://[::1]:${serverPort}`,
       VITE_DEV_SERVER_URL: devUrl?.toString() ?? `http://localhost:${webPort}`,
       DPCODE_HOME: resolvedBaseDir,
       T3CODE_HOME: resolvedBaseDir,

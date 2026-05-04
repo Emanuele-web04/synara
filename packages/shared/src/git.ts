@@ -117,3 +117,18 @@ export function resolveThreadBranchRegressionGuard(input: {
 
   return input.nextBranch;
 }
+
+export function mergeGitStatusParts<Local extends object, Remote extends object>(
+  local: Local,
+  remote: Remote | null,
+): Local & Remote {
+  return {
+    ...local,
+    ...(remote ?? {
+      hasUpstream: false,
+      aheadCount: 0,
+      behindCount: 0,
+      pr: null,
+    }),
+  } as Local & Remote;
+}

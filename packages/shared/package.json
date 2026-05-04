@@ -44,6 +44,14 @@
       "types": "./src/schemaJson.ts",
       "import": "./src/schemaJson.ts"
     },
+    "./Struct": {
+      "types": "./src/Struct.ts",
+      "import": "./src/Struct.ts"
+    },
+    "./serverSettings": {
+      "types": "./src/serverSettings.ts",
+      "import": "./src/serverSettings.ts"
+    },
     "./terminalThreads": {
       "types": "./src/terminalThreads.ts",
       "import": "./src/terminalThreads.ts"

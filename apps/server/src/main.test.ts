@@ -15,7 +15,7 @@ import { ServerConfig, type ServerConfigShape } from "./config";
 import { Open, type OpenShape } from "./open";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService";
-import { Server, type ServerShape } from "./wsServer";
+import { Server, type ServerShape } from "./effectServer";
 
 const start = vi.fn(() => undefined);
 const stop = vi.fn(() => undefined);

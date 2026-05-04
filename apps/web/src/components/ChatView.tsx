@@ -6109,6 +6109,7 @@ export default function ChatView({
     threadId,
     model: selectedModel,
     runtimeModel: selectedRuntimeModel,
+    runtimeModels: runtimeModelsByProvider[selectedProvider],
     modelOptions: selectedProviderModelOptions,
     prompt,
     includeFastMode: false,

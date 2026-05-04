@@ -7,7 +7,7 @@ import { CliConfig, t3Cli } from "./main";
 import { OpenLive } from "./open";
 import { Command } from "effect/unstable/cli";
 import { version } from "../package.json" with { type: "json" };
-import { ServerLive } from "./wsServer";
+import { ServerLive } from "./effectServer";
 import { NetService } from "@t3tools/shared/Net";
 import { FetchHttpClient } from "effect/unstable/http";
 

@@ -25,8 +25,9 @@ import * as SqlitePersistence from "./persistence/Layers/Sqlite";
 import { makeServerProviderLayer, makeServerRuntimeServicesLayer } from "./serverLayers";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
-import { Server } from "./wsServer";
+import { Server } from "./effectServer";
 import { ServerLoggerLive } from "./serverLogger";
+import { formatHostForUrl, isWildcardHost } from "./startupAccess";
 import { AnalyticsServiceLayerLive } from "./telemetry/Layers/AnalyticsService";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService";
 
@@ -230,12 +231,6 @@ const LayerLive = (input: CliInput) =>
     Layer.provideMerge(AnalyticsServiceLayerLive),
     Layer.provideMerge(ServerConfigLive(input)),
   );
-
-const isWildcardHost = (host: string | undefined): boolean =>
-  host === "0.0.0.0" || host === "::" || host === "[::]";
-
-const formatHostForUrl = (host: string): string =>
-  host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
 
 export const recordStartupHeartbeat = Effect.gen(function* () {
   const analytics = yield* AnalyticsService;

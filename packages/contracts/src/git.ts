@@ -247,6 +247,35 @@ export const GitStatusResult = Schema.Struct({
 });
 export type GitStatusResult = typeof GitStatusResult.Type;
 
+export const GitStatusLocalResult = Schema.Struct({
+  branch: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
+  hasWorkingTreeChanges: Schema.Boolean,
+  workingTree: GitStatusResult.fields.workingTree,
+});
+export type GitStatusLocalResult = typeof GitStatusLocalResult.Type;
+
+export const GitStatusRemoteResult = Schema.Struct({
+  hasUpstream: Schema.Boolean,
+  aheadCount: NonNegativeInt,
+  behindCount: NonNegativeInt,
+  pr: Schema.NullOr(GitStatusPr),
+});
+export type GitStatusRemoteResult = typeof GitStatusRemoteResult.Type;
+
+export const GitStatusStreamEvent = Schema.Union([
+  Schema.TaggedStruct("snapshot", {
+    local: GitStatusLocalResult,
+    remote: Schema.NullOr(GitStatusRemoteResult),
+  }),
+  Schema.TaggedStruct("localUpdated", {
+    local: GitStatusLocalResult,
+  }),
+  Schema.TaggedStruct("remoteUpdated", {
+    remote: Schema.NullOr(GitStatusRemoteResult),
+  }),
+]);
+export type GitStatusStreamEvent = typeof GitStatusStreamEvent.Type;
+
 export const GitReadWorkingTreeDiffResult = Schema.Struct({
   patch: Schema.String,
 });
