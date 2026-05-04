@@ -105,8 +105,8 @@ describe("CompactComposerControlsMenu", () => {
     await vi.waitFor(() => {
       const text = document.body.textContent ?? "";
       expect(text).toContain("Fast Mode");
-      expect(text).toContain("off");
-      expect(text).toContain("on");
+      expect(text).toContain("Default");
+      expect(text).toContain("Fast");
     });
   });
 
@@ -178,14 +178,14 @@ describe("CompactComposerControlsMenu", () => {
     });
   });
 
-  it("shows both chat and plan mode options", async () => {
+  it("shows both build and plan mode options", async () => {
     await using _ = await mountMenu();
 
     await page.getByLabelText("More composer controls").click();
 
     await vi.waitFor(() => {
       const text = document.body.textContent ?? "";
-      expect(text).toContain("Chat");
+      expect(text).toContain("Build");
       expect(text).toContain("Plan");
     });
   });

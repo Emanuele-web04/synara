@@ -16,6 +16,7 @@ import {
   hasEffortLevel,
   isClaudeUltrathinkPrompt,
   normalizeClaudeModelOptions,
+  normalizeCursorModelOptions,
   normalizeGeminiModelOptions,
   normalizeOpenCodeModelOptions,
   resolveLabeledOptionValue,
@@ -139,6 +140,12 @@ function getProviderStateFromCapabilities(
       normalizedOptions = normalizeClaudeModelOptions(model, providerOptions);
       break;
     }
+    case "cursor": {
+      const providerOptions = modelOptions?.cursor;
+      rawEffort = trimOrNull(providerOptions?.reasoningEffort);
+      normalizedOptions = normalizeCursorModelOptions(providerOptions);
+      break;
+    }
     case "gemini": {
       const providerOptions = modelOptions?.gemini;
       rawEffort = getGeminiThinkingSelectionValue(caps, providerOptions);
@@ -206,6 +213,11 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
     getState: (input) => getProviderStateFromCapabilities(input),
     renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("claudeAgent", input),
     renderTraitsPicker: (input) => renderTraitsPickerForProvider("claudeAgent", input),
+  },
+  cursor: {
+    getState: (input) => getProviderStateFromCapabilities(input),
+    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("cursor", input),
+    renderTraitsPicker: (input) => renderTraitsPickerForProvider("cursor", input),
   },
   gemini: {
     getState: (input) => getProviderStateFromCapabilities(input),

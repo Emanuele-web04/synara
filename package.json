@@ -10,6 +10,7 @@
     "catalog": {
       "effect": "https://pkg.pr.new/Effect-TS/effect-smol/effect@8881a9b",
       "@effect/platform-node": "https://pkg.pr.new/Effect-TS/effect-smol/@effect/platform-node@8881a9b",
+      "@effect/openapi-generator": "https://pkg.pr.new/Effect-TS/effect-smol/@effect/openapi-generator@8881a9b",
       "@effect/sql-sqlite-bun": "https://pkg.pr.new/Effect-TS/effect-smol/@effect/sql-sqlite-bun@8881a9b",
       "@effect/vitest": "https://pkg.pr.new/Effect-TS/effect-smol/@effect/vitest@8881a9b",
       "@effect/language-service": "0.75.1",

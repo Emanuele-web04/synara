@@ -7,6 +7,7 @@ import { AnalyticsService } from "../telemetry/Services/AnalyticsService";
 import { ProviderUnsupportedError } from "./Errors";
 import { makeClaudeAdapterLive } from "./Layers/ClaudeAdapter";
 import { makeCodexAdapterLive } from "./Layers/CodexAdapter";
+import { makeCursorAdapterLive } from "./Layers/CursorAdapter";
 import { makeEventNdjsonLogger } from "./Layers/EventNdjsonLogger";
 import { makeGeminiAdapterLive } from "./Layers/GeminiAdapter";
 import { makeOpenCodeAdapterLive } from "./Layers/OpenCodeAdapter";
@@ -56,9 +57,14 @@ export function makeServerProviderLayer(): Layer.Layer<
     const geminiAdapterLayer = makeGeminiAdapterLive(
       nativeEventLogger ? { nativeEventLogger } : undefined,
     );
+    const cursorAdapterLayer = makeCursorAdapterLive(
+      {},
+      nativeEventLogger ? { nativeEventLogger } : undefined,
+    );
     const adapterRegistryLayer = ProviderAdapterRegistryLive.pipe(
       Layer.provide(codexAdapterLayer),
       Layer.provide(claudeAdapterLayer),
+      Layer.provide(cursorAdapterLayer),
       Layer.provide(geminiAdapterLayer),
       Layer.provide(openCodeAdapterLayer),
       Layer.provideMerge(providerSessionDirectoryLayer),

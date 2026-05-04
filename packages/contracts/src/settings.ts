@@ -36,6 +36,13 @@ export const GeminiServerProviderSettings = Schema.Struct({
 });
 export type GeminiServerProviderSettings = typeof GeminiServerProviderSettings.Type;
 
+export const CursorServerProviderSettings = Schema.Struct({
+  ...ProviderSettingsBase,
+  binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "agent")),
+  apiEndpoint: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
+});
+export type CursorServerProviderSettings = typeof CursorServerProviderSettings.Type;
+
 export const OpenCodeServerProviderSettings = Schema.Struct({
   ...ProviderSettingsBase,
   binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "opencode")),
@@ -57,6 +64,7 @@ export const ServerSettings = Schema.Struct({
   providers: Schema.Struct({
     codex: CodexServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     claudeAgent: ClaudeServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+    cursor: CursorServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     gemini: GeminiServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     opencode: OpenCodeServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   }).pipe(Schema.withDecodingDefault(() => ({}))),
@@ -94,6 +102,12 @@ export const ServerSettingsPatch = Schema.Struct({
         Schema.Struct({
           ...ProviderSettingsBasePatch,
           launchArgs: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(4096))),
+        }),
+      ),
+      cursor: Schema.optionalKey(
+        Schema.Struct({
+          ...ProviderSettingsBasePatch,
+          apiEndpoint: Schema.optionalKey(StringSetting),
         }),
       ),
       gemini: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),

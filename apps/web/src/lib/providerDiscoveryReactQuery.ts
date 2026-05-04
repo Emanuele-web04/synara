@@ -56,8 +56,8 @@ export const providerDiscoveryQueryKeys = {
     ["provider-discovery", "plugins", provider, cwd] as const,
   plugin: (provider: ProviderKind, marketplacePath: string, pluginName: string) =>
     ["provider-discovery", "plugin", provider, marketplacePath, pluginName] as const,
-  models: (provider: ProviderKind, binaryPath: string | null) =>
-    ["provider-discovery", "models", provider, binaryPath] as const,
+  models: (provider: ProviderKind, binaryPath: string | null, apiEndpoint: string | null) =>
+    ["provider-discovery", "models", provider, binaryPath, apiEndpoint] as const,
   agents: (provider: ProviderKind) => ["provider-discovery", "agents", provider] as const,
 };
 
@@ -127,18 +127,25 @@ export function providerCommandsQueryOptions(input: {
 export function providerModelsQueryOptions(input: {
   provider: ProviderKind;
   binaryPath?: string | null;
+  apiEndpoint?: string | null;
   enabled?: boolean;
 }) {
   return queryOptions({
-    queryKey: providerDiscoveryQueryKeys.models(input.provider, input.binaryPath ?? null),
+    queryKey: providerDiscoveryQueryKeys.models(
+      input.provider,
+      input.binaryPath ?? null,
+      input.apiEndpoint ?? null,
+    ),
     queryFn: async () => {
       const api = ensureNativeApi();
       return api.provider.listModels({
         provider: input.provider,
         ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+        ...(input.apiEndpoint ? { apiEndpoint: input.apiEndpoint } : {}),
       });
     },
     enabled: input.enabled ?? true,
+    retry: input.provider === "cursor" ? 1 : 3,
     staleTime: 60_000,
     placeholderData: (previous) => previous ?? EMPTY_MODELS_RESULT,
   });

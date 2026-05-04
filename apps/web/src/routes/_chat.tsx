@@ -224,6 +224,7 @@ function ChatRouteGlobalShortcuts() {
       if (
         command === "chat.newClaude" ||
         command === "chat.newCodex" ||
+        command === "chat.newCursor" ||
         command === "chat.newGemini"
       ) {
         const provider =
@@ -231,7 +232,9 @@ function ChatRouteGlobalShortcuts() {
             ? "claudeAgent"
             : command === "chat.newCodex"
               ? "codex"
-              : "gemini";
+              : command === "chat.newCursor"
+                ? "cursor"
+                : "gemini";
         const normalizedStatus = normalizeProviderStatusForLocalConfig({
           provider,
           status: providerStatuses.find((entry) => entry.provider === provider) ?? null,
@@ -240,7 +243,9 @@ function ChatRouteGlobalShortcuts() {
               ? appSettings.codexBinaryPath
               : provider === "claudeAgent"
                 ? appSettings.claudeBinaryPath
-                : appSettings.geminiBinaryPath,
+                : provider === "cursor"
+                  ? appSettings.cursorBinaryPath
+                  : appSettings.geminiBinaryPath,
         });
         if (!isProviderUsable(normalizedStatus)) {
           event.preventDefault();
@@ -302,6 +307,7 @@ function ChatRouteGlobalShortcuts() {
     latestUsableProjectId,
     appSettings.claudeBinaryPath,
     appSettings.codexBinaryPath,
+    appSettings.cursorBinaryPath,
     appSettings.geminiBinaryPath,
     providerStatuses,
     projects,

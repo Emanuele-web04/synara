@@ -193,8 +193,10 @@ import {
   ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  CircleAlertIcon,
   EllipsisIcon,
   QueueArrow,
+  RefreshCwIcon,
   Trash2,
   XIcon,
 } from "~/lib/icons";
@@ -342,6 +344,8 @@ import {
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useComposerSlashCommands } from "../hooks/useComposerSlashCommands";
+import { useFeatureFlags } from "../featureFlags";
+import { collapseCursorModelVariants } from "../cursorModelVariants";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import {
   canCreateThreadHandoff,
@@ -592,7 +596,8 @@ function mergeDynamicModelOptions(input: {
     (model) => !("isCustom" in model) || model.isCustom !== true,
   );
   const missingStaticBuiltIns =
-    input.provider === "opencode" && normalizedDynamicOptions.length > 0
+    (input.provider === "opencode" || input.provider === "cursor") &&
+    normalizedDynamicOptions.length > 0
       ? []
       : staticBuiltInModels.filter((model) => !dynamicNormalizedSlugs.has(model.slug));
 
@@ -738,6 +743,48 @@ function ComposerControlSkeleton(props: { widthClassName: string }) {
     >
       <Skeleton className="h-3.5 w-full rounded-full" />
     </div>
+  );
+}
+
+function ComposerModelLoadingControl(props: { widthClassName: string }) {
+  return (
+    <div
+      aria-label="Loading models"
+      className={cn(
+        "flex h-8 shrink-0 items-center gap-2 rounded-md border border-border/50 px-2 text-muted-foreground",
+        props.widthClassName,
+      )}
+    >
+      <RefreshCwIcon aria-hidden="true" className="size-3.5 animate-spin" />
+      <span className="truncate text-[length:var(--app-font-size-ui-xs,11px)]">Loading models</span>
+    </div>
+  );
+}
+
+function ComposerModelErrorControl(props: {
+  widthClassName: string;
+  onRetry: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      className={cn(
+        "h-8 shrink-0 justify-start gap-2 px-2 text-destructive hover:text-destructive",
+        props.widthClassName,
+      )}
+      disabled={props.disabled ?? false}
+      onClick={props.onRetry}
+    >
+      {props.disabled ? (
+        <RefreshCwIcon aria-hidden="true" className="size-3.5 animate-spin" />
+      ) : (
+        <CircleAlertIcon aria-hidden="true" className="size-3.5" />
+      )}
+      <span className="truncate text-[length:var(--app-font-size-ui-xs,11px)]">Retry models</span>
+    </Button>
   );
 }
 
@@ -1344,6 +1391,8 @@ export default function ChatView({
   voiceThreadIdRef.current = threadId;
   voiceProviderRef.current = selectedProvider;
   const customModelsByProvider = useMemo(() => getCustomModelsByProvider(settings), [settings]);
+  const featureFlags = useFeatureFlags();
+  const showExpandedCursorModelVariants = featureFlags["show-expanded-cursor-model-variants"];
   const composerModelHintByProvider = useMemo<Record<ProviderKind, string | null>>(() => {
     const threadModelSelection = activeThread?.modelSelection ?? null;
     const projectModelSelection = activeProject?.defaultModelSelection ?? null;
@@ -1357,6 +1406,7 @@ export default function ChatView({
     return {
       codex: resolveHint("codex"),
       claudeAgent: resolveHint("claudeAgent"),
+      cursor: resolveHint("cursor"),
       gemini: resolveHint("gemini"),
       opencode: resolveHint("opencode"),
     };
@@ -1369,6 +1419,14 @@ export default function ChatView({
     providerModelsQueryOptions({ provider: "claudeAgent" }),
   );
   const codexDynamicModelsQuery = useQuery(providerModelsQueryOptions({ provider: "codex" }));
+  const cursorDynamicModelsQuery = useQuery(
+    providerModelsQueryOptions({
+      provider: "cursor",
+      binaryPath: settings.cursorBinaryPath || null,
+      apiEndpoint: settings.cursorApiEndpoint || null,
+      enabled: selectedProvider === "cursor" || lockedProvider === "cursor" || isModelPickerOpen,
+    }),
+  );
   const geminiModelsQuery = useQuery(
     providerModelsQueryOptions({
       provider: "gemini",
@@ -1387,6 +1445,29 @@ export default function ChatView({
   );
   const codexDynamicAgentsQuery = useQuery(providerAgentsQueryOptions({ provider: "codex" }));
   const openCodeDynamicAgentsQuery = useQuery(providerAgentsQueryOptions({ provider: "opencode" }));
+  const cursorRuntimeModels = useMemo(
+    () =>
+      showExpandedCursorModelVariants
+        ? (cursorDynamicModelsQuery.data?.models ?? [])
+        : collapseCursorModelVariants(cursorDynamicModelsQuery.data?.models ?? []),
+    [cursorDynamicModelsQuery.data?.models, showExpandedCursorModelVariants],
+  );
+  const cursorModelDiscoveryEnabled =
+    selectedProvider === "cursor" || lockedProvider === "cursor" || isModelPickerOpen;
+  const hasResolvedCursorModelDiscovery =
+    cursorDynamicModelsQuery.data?.source === "cursor.cli" &&
+    (cursorDynamicModelsQuery.data.models.length ?? 0) > 0;
+  const cursorModelDiscoveryPending =
+    cursorModelDiscoveryEnabled &&
+    !hasResolvedCursorModelDiscovery &&
+    (cursorDynamicModelsQuery.isLoading || cursorDynamicModelsQuery.isFetching);
+  const cursorModelDiscoveryError =
+    cursorModelDiscoveryEnabled &&
+    !cursorModelDiscoveryPending &&
+    !hasResolvedCursorModelDiscovery &&
+    cursorDynamicModelsQuery.isError
+      ? cursorDynamicModelsQuery.error
+      : null;
   const modelOptionsByProvider = useMemo(() => {
     const staticOptions: Record<ProviderKind, ReturnType<typeof getAppModelOptions>> = {
       codex: getAppModelOptions(
@@ -1398,6 +1479,11 @@ export default function ChatView({
         "claudeAgent",
         customModelsByProvider.claudeAgent,
         composerModelHintByProvider.claudeAgent,
+      ),
+      cursor: getAppModelOptions(
+        "cursor",
+        customModelsByProvider.cursor,
+        composerModelHintByProvider.cursor,
       ),
       gemini: getAppModelOptions(
         "gemini",
@@ -1418,11 +1504,15 @@ export default function ChatView({
     const dynamicSources: Record<ProviderKind, typeof claudeDynamicModelsQuery.data> = {
       claudeAgent: claudeDynamicModelsQuery.data,
       codex: codexDynamicModelsQuery.data,
+      cursor:
+        cursorDynamicModelsQuery.data === undefined
+          ? undefined
+          : { ...cursorDynamicModelsQuery.data, models: cursorRuntimeModels },
       gemini: geminiModelsQuery.data,
       opencode: openCodeDynamicModelsQuery.data,
     };
 
-    for (const provider of ["claudeAgent", "codex", "gemini", "opencode"] as const) {
+    for (const provider of ["claudeAgent", "codex", "cursor", "gemini", "opencode"] as const) {
       const dynamicModels = dynamicSources[provider]?.models;
       if (dynamicModels && dynamicModels.length > 0) {
         result[provider] = mergeDynamicModelOptions({
@@ -1447,6 +1537,8 @@ export default function ChatView({
     claudeDynamicModelsQuery.data,
     composerModelHintByProvider,
     codexDynamicModelsQuery.data,
+    cursorDynamicModelsQuery.data,
+    cursorRuntimeModels,
     customModelsByProvider,
     geminiModelsQuery.data,
     openCodeDynamicModelsQuery.data,
@@ -1463,12 +1555,14 @@ export default function ChatView({
     () => ({
       claudeAgent: claudeDynamicModelsQuery.data?.models ?? [],
       codex: codexDynamicModelsQuery.data?.models ?? [],
+      cursor: cursorRuntimeModels,
       gemini: geminiModelsQuery.data?.models ?? [],
       opencode: openCodeDynamicModelsQuery.data?.models ?? [],
     }),
     [
       claudeDynamicModelsQuery.data?.models,
       codexDynamicModelsQuery.data?.models,
+      cursorRuntimeModels,
       geminiModelsQuery.data?.models,
       openCodeDynamicModelsQuery.data?.models,
     ],
@@ -1476,6 +1570,7 @@ export default function ChatView({
   const providerModelsQueryByProvider = {
     claudeAgent: claudeDynamicModelsQuery,
     codex: codexDynamicModelsQuery,
+    cursor: cursorDynamicModelsQuery,
     gemini: geminiModelsQuery,
     opencode: openCodeDynamicModelsQuery,
   } as const;
@@ -1519,14 +1614,18 @@ export default function ChatView({
     composerDraft.modelSelectionByProvider[selectedProvider] ?? null;
   const selectedProviderModelsQuery = providerModelsQueryByProvider[selectedProvider];
   const providerModelsLoading =
-    selectedProviderModelsQuery.isLoading ||
-    (selectedProviderModelsQuery.isFetching && selectedProviderModelsQuery.data === undefined);
+    selectedProvider === "cursor"
+      ? cursorModelDiscoveryPending
+      : selectedProviderModelsQuery !== undefined &&
+        (selectedProviderModelsQuery.isLoading ||
+          (selectedProviderModelsQuery.isFetching && selectedProviderModelsQuery.data === undefined));
   const showComposerModelBootstrapSkeleton = shouldShowComposerModelBootstrapSkeleton({
     selectedProvider,
     selectedModel,
     persistedModelSelection: persistedComposerModelSelection,
     draftModelSelection: draftModelSelectionForSelectedProvider,
     providerModelsLoading,
+    requiresDiscoveredModels: selectedProvider === "cursor",
   });
   const searchableModelOptions = useMemo(
     () =>
@@ -6051,6 +6150,12 @@ export default function ChatView({
         model: resolvedModel,
       };
       setComposerDraftModelSelection(activeThread.id, nextModelSelection);
+      if (provider === "cursor" && !showExpandedCursorModelVariants) {
+        setComposerDraftProviderModelOptions(activeThread.id, provider, undefined, {
+          persistSticky: true,
+          model: resolvedModel,
+        });
+      }
       setStickyComposerModelSelection(nextModelSelection);
       scheduleComposerFocus();
     },
@@ -6059,7 +6164,9 @@ export default function ChatView({
       lockedProvider,
       scheduleComposerFocus,
       setComposerDraftModelSelection,
+      setComposerDraftProviderModelOptions,
       setStickyComposerModelSelection,
+      showExpandedCursorModelVariants,
       customModelsByProvider,
     ],
   );
@@ -6112,14 +6219,28 @@ export default function ChatView({
     runtimeModels: runtimeModelsByProvider[selectedProvider],
     modelOptions: selectedProviderModelOptions,
     prompt,
-    includeFastMode: false,
+    includeFastMode: selectedProvider === "cursor",
     open: isTraitsPickerOpen,
     onOpenChange: handleTraitsPickerOpenChange,
     shortcutLabel: traitsPickerShortcutLabel,
     onPromptChange: setPromptFromTraits,
   });
-  const composerModelPickerControl = showComposerModelBootstrapSkeleton ? (
-    <ComposerControlSkeleton widthClassName={isComposerFooterCompact ? "w-28" : "w-32 sm:w-36"} />
+  const composerModelPickerWidthClassName = isComposerFooterCompact ? "w-28" : "w-32 sm:w-36";
+  const composerTraitsPickerWidthClassName = isComposerFooterCompact ? "w-16" : "w-20";
+  const composerModelPickerControl = cursorModelDiscoveryError ? (
+    <ComposerModelErrorControl
+      widthClassName={composerModelPickerWidthClassName}
+      disabled={cursorDynamicModelsQuery.isFetching}
+      onRetry={() => {
+        void cursorDynamicModelsQuery.refetch();
+      }}
+    />
+  ) : showComposerModelBootstrapSkeleton ? (
+    cursorModelDiscoveryPending ? (
+      <ComposerModelLoadingControl widthClassName={composerModelPickerWidthClassName} />
+    ) : (
+      <ComposerControlSkeleton widthClassName={composerModelPickerWidthClassName} />
+    )
   ) : (
     <ProviderModelPicker
       compact={isComposerFooterCompact}
@@ -6128,6 +6249,7 @@ export default function ChatView({
       lockedProvider={lockedProvider}
       providers={providerStatuses}
       modelOptionsByProvider={modelOptionsByProvider}
+      loadingModelProviders={{ cursor: cursorModelDiscoveryPending }}
       open={isModelPickerOpen}
       onOpenChange={handleModelPickerOpenChange}
       shortcutLabel={modelPickerShortcutLabel}
@@ -6139,8 +6261,12 @@ export default function ChatView({
       onProviderModelChange={onProviderModelSelect}
     />
   );
-  const composerTraitsPickerControl = showComposerModelBootstrapSkeleton ? (
-    <ComposerControlSkeleton widthClassName={isComposerFooterCompact ? "w-16" : "w-20"} />
+  const composerTraitsPickerControl = cursorModelDiscoveryError ? null : showComposerModelBootstrapSkeleton ? (
+    cursorModelDiscoveryPending ? (
+      <ComposerModelLoadingControl widthClassName={composerTraitsPickerWidthClassName} />
+    ) : (
+      <ComposerControlSkeleton widthClassName={composerTraitsPickerWidthClassName} />
+    )
   ) : (
     providerTraitsPicker
   );
@@ -7266,7 +7392,7 @@ export default function ChatView({
                             size="sm"
                             type="button"
                             onClick={toggleInteractionMode}
-                            title="Plan mode — click to return to normal chat mode"
+                            title="Plan mode — click to return to normal build mode"
                           >
                             <GoTasklist className="size-3.5" />
                             <span className="sr-only sm:not-sr-only">Plan</span>
@@ -8010,7 +8136,7 @@ export default function ChatView({
                                         size="sm"
                                         type="button"
                                         onClick={toggleInteractionMode}
-                                        title="Plan mode — click to return to normal chat mode"
+                                        title="Plan mode — click to return to normal build mode"
                                       >
                                         <GoTasklist className="size-3.5" />
                                         <span className="sr-only sm:not-sr-only">Plan</span>

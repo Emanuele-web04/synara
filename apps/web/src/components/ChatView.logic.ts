@@ -217,7 +217,12 @@ export function shouldShowComposerModelBootstrapSkeleton(input: {
   persistedModelSelection: ModelSelection | null | undefined;
   draftModelSelection: ModelSelection | null | undefined;
   providerModelsLoading: boolean;
+  requiresDiscoveredModels?: boolean;
 }): boolean {
+  if (input.requiresDiscoveredModels === true && input.providerModelsLoading) {
+    return true;
+  }
+
   const draftSelection = input.draftModelSelection;
   if (draftSelection && draftSelection.provider === input.selectedProvider) {
     return false;

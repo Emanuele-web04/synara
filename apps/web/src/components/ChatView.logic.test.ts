@@ -155,6 +155,32 @@ describe("voice helpers", () => {
 });
 
 describe("shouldShowComposerModelBootstrapSkeleton", () => {
+  it("shows a skeleton while a provider requires runtime-discovered models", () => {
+    expect(
+      shouldShowComposerModelBootstrapSkeleton({
+        selectedProvider: "cursor",
+        selectedModel: "auto",
+        persistedModelSelection: null,
+        draftModelSelection: null,
+        providerModelsLoading: true,
+        requiresDiscoveredModels: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("hides the skeleton for a provider requiring discovered models after loading completes", () => {
+    expect(
+      shouldShowComposerModelBootstrapSkeleton({
+        selectedProvider: "cursor",
+        selectedModel: "auto",
+        persistedModelSelection: null,
+        draftModelSelection: null,
+        providerModelsLoading: false,
+        requiresDiscoveredModels: true,
+      }),
+    ).toBe(false);
+  });
+
   it("shows a skeleton while provider discovery is still resolving a persisted thread model", () => {
     expect(
       shouldShowComposerModelBootstrapSkeleton({
