@@ -24,6 +24,10 @@ import {
   OrchestrationEventStore,
   type OrchestrationEventStoreShape,
 } from "../Services/OrchestrationEventStore.ts";
+import {
+  normalizeLegacyModelSelection,
+  normalizePersistedModelSelection,
+} from "../modelSelectionCompatibility.ts";
 
 const decodeEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
 const UnknownFromJsonString = Schema.fromJsonString(Schema.Unknown);
@@ -84,61 +88,44 @@ function readTrimmedString(record: Record<string, unknown>, key: string): string
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function inferLegacyModelProvider(
-  provider: unknown,
-  model: string,
-): "codex" | "claudeAgent" | "gemini" {
-  if (provider === "codex" || provider === "claudeAgent" || provider === "gemini") {
-    return provider;
-  }
-  const lowerModel = model.toLowerCase();
-  if (lowerModel.includes("claude")) {
-    return "claudeAgent";
-  }
-  if (lowerModel.includes("gemini")) {
-    return "gemini";
-  }
-  return "codex";
-}
-
-function readLegacyProviderOptions(
-  options: unknown,
-  provider: "codex" | "claudeAgent" | "gemini",
-): unknown {
-  if (!isRecord(options)) {
-    return options;
-  }
-  const providerScopedOptions = options[provider];
-  return providerScopedOptions === undefined ? options : providerScopedOptions;
-}
-
-function legacyModelSelection(input: {
-  readonly provider: unknown;
-  readonly model: string;
-  readonly options: unknown;
-}): Record<string, unknown> {
-  const provider = inferLegacyModelProvider(input.provider, input.model);
-  const options = readLegacyProviderOptions(input.options, provider);
-  return {
-    provider,
-    model: input.model,
-    ...(options === undefined ? {} : { options }),
-  };
-}
-
 function normalizeLegacyEventRow(row: PersistedEventRow): PersistedEventRow {
   if (!isRecord(row.payload)) {
     return row;
+  }
+
+  let normalizedPayload: Record<string, unknown> | undefined;
+  const payloadWithNormalizedModelSelection = () => {
+    normalizedPayload ??= { ...row.payload };
+    return normalizedPayload;
+  };
+
+  if (
+    (row.type === "project.created" || row.type === "project.meta-updated") &&
+    row.payload.defaultModelSelection !== undefined &&
+    row.payload.defaultModelSelection !== null
+  ) {
+    payloadWithNormalizedModelSelection().defaultModelSelection = normalizePersistedModelSelection(
+      row.payload.defaultModelSelection,
+    );
+  }
+
+  if (
+    LEGACY_MODEL_SELECTION_EVENT_TYPES.has(row.type) &&
+    row.payload.modelSelection !== undefined
+  ) {
+    payloadWithNormalizedModelSelection().modelSelection = normalizePersistedModelSelection(
+      row.payload.modelSelection,
+    );
   }
 
   if (
     (row.type === "project.created" || row.type === "project.meta-updated") &&
     row.payload.defaultModelSelection === undefined
   ) {
-    const nextPayload = { ...row.payload };
+    const nextPayload = payloadWithNormalizedModelSelection();
     const legacyModel = readTrimmedString(row.payload, "defaultModel");
     nextPayload.defaultModelSelection = legacyModel
-      ? legacyModelSelection({
+      ? normalizeLegacyModelSelection({
           provider: row.payload.defaultProvider,
           model: legacyModel,
           options: row.payload.defaultModelOptions,
@@ -154,12 +141,12 @@ function normalizeLegacyEventRow(row: PersistedEventRow): PersistedEventRow {
     LEGACY_MODEL_SELECTION_EVENT_TYPES.has(row.type) &&
     row.payload.modelSelection === undefined
   ) {
-    const nextPayload = { ...row.payload };
+    const nextPayload = payloadWithNormalizedModelSelection();
     const legacyModel =
       readTrimmedString(row.payload, "model") ??
       (row.type === "thread.created" ? "gpt-5.5" : undefined);
     if (legacyModel !== undefined) {
-      nextPayload.modelSelection = legacyModelSelection({
+      nextPayload.modelSelection = normalizeLegacyModelSelection({
         provider: row.payload.provider,
         model: legacyModel,
         options: row.payload.modelOptions,
@@ -171,7 +158,7 @@ function normalizeLegacyEventRow(row: PersistedEventRow): PersistedEventRow {
     return { ...row, payload: nextPayload };
   }
 
-  return row;
+  return normalizedPayload === undefined ? row : { ...row, payload: normalizedPayload };
 }
 
 function inferActorKind(

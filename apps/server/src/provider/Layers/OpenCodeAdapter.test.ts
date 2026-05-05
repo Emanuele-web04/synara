@@ -1037,6 +1037,129 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     });
   });
 
+  it("pins default-mode turns to the OpenCode build agent", async () => {
+    const runtime = createMockOpenCodeRuntime();
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-default-build-agent"),
+          runtimeMode: "full-access",
+        });
+
+        yield* adapter.sendTurn({
+          threadId: asThreadId("thread-default-build-agent"),
+          input: "implement this",
+          interactionMode: "default",
+          attachments: [],
+          modelSelection: {
+            provider: "opencode",
+            model: "openai/gpt-5.4",
+          },
+        });
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(runtime.promptCalls[0]).toMatchObject({
+      agent: "build",
+    });
+  });
+
+  it("pins plan-mode turns to the OpenCode plan agent", async () => {
+    const runtime = createMockOpenCodeRuntime();
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-plan-agent"),
+          runtimeMode: "full-access",
+        });
+
+        yield* adapter.sendTurn({
+          threadId: asThreadId("thread-plan-agent"),
+          input: "plan this",
+          interactionMode: "plan",
+          attachments: [],
+          modelSelection: {
+            provider: "opencode",
+            model: "openai/gpt-5.4",
+          },
+        });
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(runtime.promptCalls[0]).toMatchObject({
+      agent: "plan",
+    });
+  });
+
+  it("preserves explicitly selected OpenCode agents", async () => {
+    const runtime = createMockOpenCodeRuntime();
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-explicit-agent"),
+          runtimeMode: "full-access",
+        });
+
+        yield* adapter.sendTurn({
+          threadId: asThreadId("thread-explicit-agent"),
+          input: "use custom agent",
+          interactionMode: "default",
+          attachments: [],
+          modelSelection: {
+            provider: "opencode",
+            model: "openai/gpt-5.4",
+            options: {
+              agent: "reviewer",
+            },
+          },
+        });
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(runtime.promptCalls[0]).toMatchObject({
+      agent: "reviewer",
+    });
+  });
+
   it("does not capture tagged markdown as a proposed plan outside plan mode", async () => {
     const eventQueue = createSubscribedEventQueue();
     const runtime = createMockOpenCodeRuntime();

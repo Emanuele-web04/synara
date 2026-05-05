@@ -1,6 +1,6 @@
 import { CheckpointRef, EventId, MessageId, ProjectId, ThreadId, TurnId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Option } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
@@ -9,6 +9,7 @@ import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQu
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 
 const asProjectId = (value: string): ProjectId => ProjectId.makeUnsafe(value);
+const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
 const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
 const asMessageId = (value: string): MessageId => MessageId.makeUnsafe(value);
 const asEventId = (value: string): EventId => EventId.makeUnsafe(value);
@@ -442,6 +443,142 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           },
         },
       ]);
+    }),
+  );
+
+  it.effect("normalizes imported T3 Code model-selection shapes from projection reads", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_state`;
+      yield* sql`DELETE FROM projection_thread_messages`;
+      yield* sql`DELETE FROM projection_thread_activities`;
+      yield* sql`DELETE FROM projection_thread_proposed_plans`;
+      yield* sql`DELETE FROM projection_turns`;
+      yield* sql`DELETE FROM projection_thread_sessions`;
+
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id,
+          title,
+          workspace_root,
+          default_model_selection_json,
+          scripts_json,
+          created_at,
+          updated_at,
+          deleted_at
+        )
+        VALUES (
+          'project-imported-shape',
+          'Imported Shape Project',
+          '/tmp/imported-shape',
+          '{"instanceId":"codex","model":"imported-project-model","options":[{"id":"reasoningEffort","value":"medium"}]}',
+          '[]',
+          '2026-05-05T14:39:18.000Z',
+          '2026-05-05T14:39:19.000Z',
+          NULL
+        )
+      `;
+
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id,
+          project_id,
+          title,
+          model_selection_json,
+          branch,
+          worktree_path,
+          runtime_mode,
+          interaction_mode,
+          latest_turn_id,
+          created_at,
+          updated_at,
+          deleted_at
+        )
+        VALUES (
+          'thread-imported-shape',
+          'project-imported-shape',
+          'Imported Shape Thread',
+          '{"provider":"codex","model":"gpt-5.5","options":[{"id":"reasoningEffort","value":"medium"}]}',
+          NULL,
+          NULL,
+          'full-access',
+          'default',
+          NULL,
+          '2026-05-05T14:39:20.000Z',
+          '2026-05-05T14:39:21.000Z',
+          NULL
+        )
+      `;
+
+      const expectedProjectSelection = {
+        provider: "codex",
+        model: "imported-project-model",
+        options: { reasoningEffort: "medium" },
+      };
+      const expectedThreadSelection = {
+        provider: "codex",
+        model: "gpt-5.5",
+        options: { reasoningEffort: "medium" },
+      };
+
+      const snapshot = yield* snapshotQuery.getSnapshot();
+      const shellSnapshot = yield* snapshotQuery.getShellSnapshot();
+      const activeProject = yield* snapshotQuery.getActiveProjectByWorkspaceRoot(
+        "/tmp/imported-shape",
+      );
+      const projectShell = yield* snapshotQuery.getProjectShellById(
+        asProjectId("project-imported-shape"),
+      );
+      const threadShell = yield* snapshotQuery.getThreadShellById(
+        asThreadId("thread-imported-shape"),
+      );
+      const threadDetail = yield* snapshotQuery.getThreadDetailById(
+        asThreadId("thread-imported-shape"),
+      );
+      const threadDetailSnapshot = yield* snapshotQuery.getThreadDetailSnapshotById(
+        asThreadId("thread-imported-shape"),
+      );
+
+      assert.deepStrictEqual(
+        snapshot.projects.find((project) => project.id === "project-imported-shape")
+          ?.defaultModelSelection,
+        expectedProjectSelection,
+      );
+      assert.deepStrictEqual(
+        snapshot.threads.find((thread) => thread.id === "thread-imported-shape")?.modelSelection,
+        expectedThreadSelection,
+      );
+      assert.deepStrictEqual(
+        shellSnapshot.projects.find((project) => project.id === "project-imported-shape")
+          ?.defaultModelSelection,
+        expectedProjectSelection,
+      );
+      assert.deepStrictEqual(
+        shellSnapshot.threads.find((thread) => thread.id === "thread-imported-shape")
+          ?.modelSelection,
+        expectedThreadSelection,
+      );
+      assert.deepStrictEqual(
+        Option.getOrNull(activeProject)?.defaultModelSelection,
+        expectedProjectSelection,
+      );
+      assert.deepStrictEqual(
+        Option.getOrNull(projectShell)?.defaultModelSelection,
+        expectedProjectSelection,
+      );
+      assert.deepStrictEqual(Option.getOrNull(threadShell)?.modelSelection, expectedThreadSelection);
+      assert.deepStrictEqual(
+        Option.getOrNull(threadDetail)?.modelSelection,
+        expectedThreadSelection,
+      );
+      assert.deepStrictEqual(
+        Option.getOrNull(threadDetailSnapshot)?.thread.modelSelection,
+        expectedThreadSelection,
+      );
     }),
   );
 

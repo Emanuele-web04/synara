@@ -22,6 +22,7 @@ import {
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { toPersistenceSqlError } from "../../persistence/Errors.ts";
+import { normalizePersistedModelSelection } from "../../persistence/modelSelectionCompatibility.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepository } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
 import {
@@ -259,9 +260,9 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         defaultModelSelection:
           row.defaultModelSelectionJson === null
             ? null
-            : (JSON.parse(
-                row.defaultModelSelectionJson,
-              ) as OrchestrationReadModel["projects"][number]["defaultModelSelection"]),
+            : (normalizePersistedModelSelection(JSON.parse(row.defaultModelSelectionJson)) as
+                | OrchestrationReadModel["projects"][number]["defaultModelSelection"]
+                | null),
         scripts: JSON.parse(
           row.scriptsJson,
         ) as OrchestrationReadModel["projects"][number]["scripts"],

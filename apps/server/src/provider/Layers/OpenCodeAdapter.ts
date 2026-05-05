@@ -58,6 +58,8 @@ import {
 import { extractProposedPlanMarkdown, withProviderPlanModePrompt } from "../planMode.ts";
 
 const PROVIDER = "opencode" as const;
+const OPENCODE_BUILD_AGENT = "build";
+const OPENCODE_PLAN_AGENT = "plan";
 
 type OpenCodeSubscribedEvent =
   Awaited<ReturnType<OpencodeClient["event"]["subscribe"]>> extends {
@@ -1918,7 +1920,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
         context.activeTurnId = turnId;
         context.activeInteractionMode = input.interactionMode === "plan" ? "plan" : "default";
-        context.activeAgent = agent ?? (input.interactionMode === "plan" ? "plan" : undefined);
+        // Always pin DP Code's interaction mode to OpenCode's primary agent.
+        // Otherwise a user config with default agent=plan can trap default turns in plan mode.
+        context.activeAgent =
+          agent ?? (input.interactionMode === "plan" ? OPENCODE_PLAN_AGENT : OPENCODE_BUILD_AGENT);
         context.activeVariant = variant;
         updateProviderSession(
           context,

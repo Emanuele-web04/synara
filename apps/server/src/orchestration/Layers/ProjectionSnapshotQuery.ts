@@ -40,6 +40,7 @@ import {
   toPersistenceSqlError,
   type ProjectionRepositoryError,
 } from "../../persistence/Errors.ts";
+import { normalizePersistedModelSelection } from "../../persistence/modelSelectionCompatibility.ts";
 import { deriveThreadSummaryMetadata } from "@t3tools/shared/threadSummary";
 import { ProjectionCheckpoint } from "../../persistence/Services/ProjectionCheckpoints.ts";
 import { ProjectionProject } from "../../persistence/Services/ProjectionProjects.ts";
@@ -61,9 +62,11 @@ const decodeReadModel = Schema.decodeUnknownEffect(OrchestrationReadModel);
 const decodeShellSnapshot = Schema.decodeUnknownEffect(OrchestrationShellSnapshot);
 const decodeThreadDetail = Schema.decodeUnknownEffect(OrchestrationThread);
 const decodeThreadDetailSnapshot = Schema.decodeUnknownEffect(OrchestrationThreadDetailSnapshot);
+const decodeModelSelection = Schema.decodeUnknownEffect(ModelSelection);
+const ModelSelectionJsonUnknown = Schema.fromJsonString(Schema.Unknown);
 const ProjectionProjectDbRowSchema = ProjectionProject.mapFields(
   Struct.assign({
-    defaultModelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
+    defaultModelSelection: Schema.NullOr(ModelSelectionJsonUnknown),
     scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
   }),
 );
@@ -82,7 +85,7 @@ const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
     createBranchFlowCompleted: Schema.Number,
     handoff: Schema.NullOr(Schema.fromJsonString(ThreadHandoff)),
     lastKnownPr: Schema.NullOr(Schema.fromJsonString(OrchestrationThreadPullRequest)),
-    modelSelection: Schema.fromJsonString(ModelSelection),
+    modelSelection: ModelSelectionJsonUnknown,
   }),
 );
 const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
@@ -134,8 +137,14 @@ const ProjectionThreadCheckpointContextThreadRowSchema = Schema.Struct({
   worktreePath: Schema.NullOr(Schema.String),
 });
 
-type ProjectionThreadDbRow = Schema.Schema.Type<typeof ProjectionThreadDbRowSchema>;
-type ProjectionProjectDbRow = Schema.Schema.Type<typeof ProjectionProjectDbRowSchema>;
+type ProjectionThreadDbRowRaw = Schema.Schema.Type<typeof ProjectionThreadDbRowSchema>;
+type ProjectionProjectDbRowRaw = Schema.Schema.Type<typeof ProjectionProjectDbRowSchema>;
+type ProjectionThreadDbRow = Omit<ProjectionThreadDbRowRaw, "modelSelection"> & {
+  readonly modelSelection: typeof ModelSelection.Type;
+};
+type ProjectionProjectDbRow = Omit<ProjectionProjectDbRowRaw, "defaultModelSelection"> & {
+  readonly defaultModelSelection: typeof ModelSelection.Type | null;
+};
 type ProjectionThreadMessageDbRow = Schema.Schema.Type<typeof ProjectionThreadMessageDbRowSchema>;
 type ProjectionThreadProposedPlanDbRow = Schema.Schema.Type<
   typeof ProjectionThreadProposedPlanDbRowSchema
@@ -144,6 +153,69 @@ type ProjectionThreadActivityDbRow = Schema.Schema.Type<typeof ProjectionThreadA
 type ProjectionCheckpointDbRow = Schema.Schema.Type<typeof ProjectionCheckpointDbRowSchema>;
 type ProjectionLatestTurnDbRow = Schema.Schema.Type<typeof ProjectionLatestTurnDbRowSchema>;
 type ProjectionThreadSessionDbRow = Schema.Schema.Type<typeof ProjectionThreadSessionDbRowSchema>;
+
+function decodeProjectionProjectRow(
+  row: ProjectionProjectDbRowRaw,
+): Effect.Effect<ProjectionProjectDbRow, Schema.SchemaError> {
+  if (row.defaultModelSelection === null) {
+    return Effect.succeed({ ...row, defaultModelSelection: null });
+  }
+  return decodeModelSelection(normalizePersistedModelSelection(row.defaultModelSelection)).pipe(
+    Effect.map((defaultModelSelection) => ({ ...row, defaultModelSelection })),
+  );
+}
+
+function decodeProjectionThreadRow(
+  row: ProjectionThreadDbRowRaw,
+): Effect.Effect<ProjectionThreadDbRow, Schema.SchemaError> {
+  return decodeModelSelection(normalizePersistedModelSelection(row.modelSelection)).pipe(
+    Effect.map((modelSelection) => ({ ...row, modelSelection })),
+  );
+}
+
+function decodeProjectionProjectRows(
+  rows: ReadonlyArray<ProjectionProjectDbRowRaw>,
+  operation: string,
+): Effect.Effect<ReadonlyArray<ProjectionProjectDbRow>, ProjectionRepositoryError> {
+  return Effect.forEach(rows, decodeProjectionProjectRow).pipe(
+    Effect.mapError(toPersistenceDecodeError(operation)),
+  );
+}
+
+function decodeProjectionThreadRows(
+  rows: ReadonlyArray<ProjectionThreadDbRowRaw>,
+  operation: string,
+): Effect.Effect<ReadonlyArray<ProjectionThreadDbRow>, ProjectionRepositoryError> {
+  return Effect.forEach(rows, decodeProjectionThreadRow).pipe(
+    Effect.mapError(toPersistenceDecodeError(operation)),
+  );
+}
+
+function decodeProjectionProjectOption(
+  option: Option.Option<ProjectionProjectDbRowRaw>,
+  operation: string,
+): Effect.Effect<Option.Option<ProjectionProjectDbRow>, ProjectionRepositoryError> {
+  if (Option.isNone(option)) {
+    return Effect.succeed(Option.none());
+  }
+  return decodeProjectionProjectRow(option.value).pipe(
+    Effect.map(Option.some),
+    Effect.mapError(toPersistenceDecodeError(operation)),
+  );
+}
+
+function decodeProjectionThreadOption(
+  option: Option.Option<ProjectionThreadDbRowRaw>,
+  operation: string,
+): Effect.Effect<Option.Option<ProjectionThreadDbRow>, ProjectionRepositoryError> {
+  if (Option.isNone(option)) {
+    return Effect.succeed(Option.none());
+  }
+  return decodeProjectionThreadRow(option.value).pipe(
+    Effect.map(Option.some),
+    Effect.mapError(toPersistenceDecodeError(operation)),
+  );
+}
 
 const REQUIRED_SNAPSHOT_PROJECTORS = [
   ORCHESTRATION_PROJECTOR_NAMES.projects,
@@ -943,12 +1015,24 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   "ProjectionSnapshotQuery.getSnapshot:listProjects:decodeRows",
                 ),
               ),
+              Effect.flatMap((rows) =>
+                decodeProjectionProjectRows(
+                  rows,
+                  "ProjectionSnapshotQuery.getSnapshot:listProjects:decodeModelSelections",
+                ),
+              ),
             ),
             listThreadRows(undefined).pipe(
               Effect.mapError(
                 toPersistenceSqlOrDecodeError(
                   "ProjectionSnapshotQuery.getSnapshot:listThreads:query",
                   "ProjectionSnapshotQuery.getSnapshot:listThreads:decodeRows",
+                ),
+              ),
+              Effect.flatMap((rows) =>
+                decodeProjectionThreadRows(
+                  rows,
+                  "ProjectionSnapshotQuery.getSnapshot:listThreads:decodeModelSelections",
                 ),
               ),
             ),
@@ -1136,12 +1220,24 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                     "ProjectionSnapshotQuery.getShellSnapshot:listProjects:decodeRows",
                   ),
                 ),
+                Effect.flatMap((rows) =>
+                  decodeProjectionProjectRows(
+                    rows,
+                    "ProjectionSnapshotQuery.getShellSnapshot:listProjects:decodeModelSelections",
+                  ),
+                ),
               ),
               listThreadRows(undefined).pipe(
                 Effect.mapError(
                   toPersistenceSqlOrDecodeError(
                     "ProjectionSnapshotQuery.getShellSnapshot:listThreads:query",
                     "ProjectionSnapshotQuery.getShellSnapshot:listThreads:decodeRows",
+                  ),
+                ),
+                Effect.flatMap((rows) =>
+                  decodeProjectionThreadRows(
+                    rows,
+                    "ProjectionSnapshotQuery.getShellSnapshot:listThreads:decodeModelSelections",
                   ),
                 ),
               ),
@@ -1263,6 +1359,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             "ProjectionSnapshotQuery.getActiveProjectByWorkspaceRoot:decodeRow",
           ),
         ),
+        Effect.flatMap((option) =>
+          decodeProjectionProjectOption(
+            option,
+            "ProjectionSnapshotQuery.getActiveProjectByWorkspaceRoot:decodeModelSelection",
+          ),
+        ),
         Effect.map((option) =>
           Option.map(
             option,
@@ -1287,6 +1389,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         toPersistenceSqlOrDecodeError(
           "ProjectionSnapshotQuery.getProjectShellById:query",
           "ProjectionSnapshotQuery.getProjectShellById:decodeRow",
+        ),
+      ),
+      Effect.flatMap((option) =>
+        decodeProjectionProjectOption(
+          option,
+          "ProjectionSnapshotQuery.getProjectShellById:decodeModelSelection",
         ),
       ),
       Effect.map((option) => Option.map(option, (row) => toProjectedProjectShell(row))),
@@ -1360,6 +1468,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 "ProjectionSnapshotQuery.getThreadShellById:getThread:decodeRow",
               ),
             ),
+            Effect.flatMap((option) =>
+              decodeProjectionThreadOption(
+                option,
+                "ProjectionSnapshotQuery.getThreadShellById:getThread:decodeModelSelection",
+              ),
+            ),
           );
           if (Option.isNone(threadRow)) {
             return Option.none<OrchestrationThreadShell>();
@@ -1416,6 +1530,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           toPersistenceSqlOrDecodeError(
             "ProjectionSnapshotQuery.getThreadDetailById:getThread:query",
             "ProjectionSnapshotQuery.getThreadDetailById:getThread:decodeRow",
+          ),
+        ),
+        Effect.flatMap((option) =>
+          decodeProjectionThreadOption(
+            option,
+            "ProjectionSnapshotQuery.getThreadDetailById:getThread:decodeModelSelection",
           ),
         ),
       );
