@@ -19,7 +19,7 @@ import { HiMiniArrowsPointingOut } from "react-icons/hi2";
 import { TbExchange, TbLayoutSidebarRight } from "react-icons/tb";
 import type { ThreadPrimarySurface } from "../../types";
 import GitActionsControl from "../GitActionsControl";
-import { AppsIcon, ArrowRightIcon, GlobeIcon, PlusIcon, TerminalIcon } from "~/lib/icons";
+import { AppsIcon, ArrowRightIcon, GlobeIcon, PlusIcon, TerminalIcon, XIcon } from "~/lib/icons";
 import { Button } from "../ui/button";
 import { Badge } from "../ui/badge";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
@@ -74,6 +74,7 @@ interface ChatHeaderProps {
   diffOpen: boolean;
   diffDisabledReason?: string | null;
   surfaceMode?: "single" | "split";
+  isSidechat?: boolean;
   chatLayoutAction?: {
     kind: "split" | "maximize";
     label: string;
@@ -94,6 +95,7 @@ interface ChatHeaderProps {
   onCreateHandoff: (targetProvider: ProviderKind) => void;
   onNavigateToThread: (threadId: ThreadId) => void;
   onRenameThread: () => void;
+  onCloseThreadPane?: () => void;
 }
 
 export type ChatHeaderThreadIconKind = "provider" | "terminal";
@@ -135,6 +137,7 @@ export const ChatHeader = memo(function ChatHeader({
   diffOpen,
   diffDisabledReason = null,
   surfaceMode = "single",
+  isSidechat = false,
   chatLayoutAction = null,
   changeThreadAction = null,
   onRunProjectScript,
@@ -147,6 +150,7 @@ export const ChatHeader = memo(function ChatHeader({
   onCreateHandoff,
   onNavigateToThread,
   onRenameThread,
+  onCloseThreadPane,
 }: ChatHeaderProps) {
   const { isMobile, state } = useSidebar();
   const headerRef = useRef<HTMLDivElement>(null);
@@ -165,6 +169,7 @@ export const ChatHeader = memo(function ChatHeader({
   const inlineChatLayoutAction = chatLayoutAction?.kind === "maximize" ? chatLayoutAction : null;
   const menuChatLayoutAction = inlineChatLayoutAction ? null : chatLayoutAction;
   const threadIconKind = resolveChatHeaderThreadIconKind(activeThreadEntryPoint);
+  const showSidechatTitleChip = isSidechat && compact;
 
   useEffect(() => {
     const el = headerRef.current;
@@ -226,27 +231,55 @@ export const ChatHeader = memo(function ChatHeader({
               </div>
             ) : null}
             <div className="flex min-w-0 items-center gap-2">
-              <span
-                className="inline-flex size-3.5 shrink-0 items-center justify-center"
-                title={
-                  threadIconKind === "terminal"
-                    ? "Terminal"
-                    : PROVIDER_DISPLAY_NAMES[activeProvider]
-                }
-              >
-                {threadIconKind === "terminal" ? (
-                  <TerminalIcon className="size-3.5 text-teal-600/85" />
-                ) : (
-                  renderProviderIcon(activeProvider, "size-3.5")
+              <div
+                className={cn(
+                  "flex min-w-0 items-center gap-2",
+                  showSidechatTitleChip &&
+                    "rounded-lg bg-secondary py-1 pl-2 pr-1 text-secondary-foreground",
                 )}
-              </span>
-              <h2
-                className="max-w-[clamp(16rem,50vw,40rem)] truncate text-sm font-medium text-foreground"
-                title={activeThreadTitle}
-                onDoubleClick={() => onRenameThread()}
               >
-                {activeThreadTitle}
-              </h2>
+                <span
+                  className="inline-flex size-3.5 shrink-0 items-center justify-center"
+                  title={
+                    threadIconKind === "terminal"
+                      ? "Terminal"
+                      : PROVIDER_DISPLAY_NAMES[activeProvider]
+                  }
+                >
+                  {threadIconKind === "terminal" ? (
+                    <TerminalIcon className="size-3.5 text-teal-600/85" />
+                  ) : (
+                    renderProviderIcon(activeProvider, "size-3.5")
+                  )}
+                </span>
+                <h2
+                  className="max-w-[clamp(12rem,42vw,36rem)] truncate text-sm font-medium text-foreground"
+                  title={activeThreadTitle}
+                  onDoubleClick={() => onRenameThread()}
+                >
+                  {activeThreadTitle}
+                </h2>
+                {showSidechatTitleChip && onCloseThreadPane ? (
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <button
+                          type="button"
+                          className="inline-flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background/55 hover:text-foreground [-webkit-app-region:no-drag]"
+                          aria-label="Close selected sidechat"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onCloseThreadPane();
+                          }}
+                        >
+                          <XIcon className="size-3" />
+                        </button>
+                      }
+                    />
+                    <TooltipPopup side="bottom">Close selected sidechat</TooltipPopup>
+                  </Tooltip>
+                ) : null}
+              </div>
               {!hideHandoffControls && handoffBadgeLabel ? (
                 <Tooltip>
                   <TooltipTrigger
@@ -442,7 +475,11 @@ export const ChatHeader = memo(function ChatHeader({
         ) : null}
 
         {!isDisposableThread && activeProjectName && showGitActions ? (
-          <GitActionsControl gitCwd={gitCwd} activeThreadId={activeThreadId} />
+          <GitActionsControl
+            gitCwd={gitCwd}
+            activeThreadId={activeThreadId}
+            hideQuickActionLabel={compact}
+          />
         ) : null}
         <Tooltip>
           <TooltipTrigger

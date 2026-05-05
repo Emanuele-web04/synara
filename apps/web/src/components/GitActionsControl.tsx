@@ -79,6 +79,7 @@ import { useStore } from "~/store";
 interface GitActionsControlProps {
   gitCwd: string | null;
   activeThreadId: ThreadId | null;
+  hideQuickActionLabel?: boolean;
 }
 
 interface PendingDefaultBranchAction {
@@ -281,7 +282,11 @@ function GitPickerMenuRow({ item }: { item: GitPickerMenuItem }) {
   );
 }
 
-export default function GitActionsControl({ gitCwd, activeThreadId }: GitActionsControlProps) {
+export default function GitActionsControl({
+  gitCwd,
+  activeThreadId,
+  hideQuickActionLabel = false,
+}: GitActionsControlProps) {
   const { settings } = useAppSettings();
   const providerOptions = useMemo(() => getProviderStartOptions(settings), [settings]);
   const activeThread = useStore(
@@ -1182,18 +1187,22 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
                 openOnHover
                 render={
                   <Button
+                    aria-label={quickAction.label}
                     aria-disabled="true"
                     className={cn(
                       "cursor-not-allowed rounded-e-none border-e-0 opacity-64 before:rounded-e-none",
                       headerGhostClass,
                     )}
-                    size="xs"
+                    size={hideQuickActionLabel ? "icon-xs" : "xs"}
                     variant="outline"
+                    title={quickAction.label}
                   />
                 }
               >
                 <GitQuickActionIcon quickAction={quickAction} />
-                <span className="ml-0.5 font-normal">{quickAction.label}</span>
+                {!hideQuickActionLabel ? (
+                  <span className="ml-0.5 font-normal">{quickAction.label}</span>
+                ) : null}
               </PopoverTrigger>
               <PopoverPopup tooltipStyle side="bottom" align="start">
                 {quickActionDisabledReason}
@@ -1202,13 +1211,17 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
           ) : (
             <Button
               variant="outline"
-              size="xs"
+              size={hideQuickActionLabel ? "icon-xs" : "xs"}
               className={headerGhostClass}
               disabled={isGitActionRunning || quickAction.disabled}
+              aria-label={quickAction.label}
+              title={quickAction.label}
               onClick={runQuickAction}
             >
               <GitQuickActionIcon quickAction={quickAction} />
-              <span className="ml-0.5 font-normal">{quickAction.label}</span>
+              {!hideQuickActionLabel ? (
+                <span className="ml-0.5 font-normal">{quickAction.label}</span>
+              ) : null}
             </Button>
           )}
           <GroupSeparator />

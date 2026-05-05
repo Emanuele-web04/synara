@@ -208,6 +208,10 @@ export function TaskCompletionNotifications() {
 
     for (const completion of completions) {
       const copy = buildTaskCompletionCopy(completion);
+      if (settings.enableTaskCompletionToasts) {
+        showThreadToast(copy, completion.threadId, "success", navigate);
+      }
+
       if (shouldAttemptSystemNotification) {
         void showSystemThreadNotification(copy, completion.threadId, navigate);
       }
@@ -226,6 +230,10 @@ export function TaskCompletionNotifications() {
 
     for (const completion of terminalCompletions) {
       const copy = buildTerminalCompletionCopy(completion);
+      if (settings.enableTaskCompletionToasts) {
+        showThreadToast(copy, completion.threadId, "success", navigate);
+      }
+
       if (shouldAttemptSystemNotification) {
         void showSystemThreadNotification(copy, completion.threadId, navigate);
       }

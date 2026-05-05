@@ -3,12 +3,15 @@ import { describe, expect, it } from "vitest";
 
 import {
   resolveRoutePanelBootstrap,
+  resolveSplitPaneCloseDecision,
   resolveSplitPaneMaximizeDecision,
   resolveThreadPickerTitle,
   resolveToggledChatPanelPatch,
 } from "./-chatThreadRoute.logic";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-1");
+const SIDECHAT_THREAD_ID = ThreadId.makeUnsafe("thread-sidechat");
+const OTHER_THREAD_ID = ThreadId.makeUnsafe("thread-2");
 const TURN_ID = TurnId.makeUnsafe("turn-1");
 const OTHER_TURN_ID = TurnId.makeUnsafe("turn-2");
 
@@ -197,5 +200,58 @@ describe("resolveSplitPaneMaximizeDecision", () => {
         focusedPanelState: null,
       }),
     ).toBeNull();
+  });
+});
+
+describe("resolveSplitPaneCloseDecision", () => {
+  it("returns to the original thread when closing a sidechat pane", () => {
+    expect(
+      resolveSplitPaneCloseDecision({
+        splitViewId: "split-sidechat",
+        sourceThreadId: THREAD_ID,
+        closingThreadId: SIDECHAT_THREAD_ID,
+        closingSidechatSourceThreadId: THREAD_ID,
+        nextFocusedThreadId: SIDECHAT_THREAD_ID,
+        nextLeafCount: 1,
+      }),
+    ).toEqual({
+      kind: "single-thread",
+      threadId: THREAD_ID,
+      splitViewIdToRemove: "split-sidechat",
+    });
+  });
+
+  it("collapses a generic one-pane remainder to single chat", () => {
+    expect(
+      resolveSplitPaneCloseDecision({
+        splitViewId: "split-1",
+        sourceThreadId: THREAD_ID,
+        closingThreadId: THREAD_ID,
+        closingSidechatSourceThreadId: null,
+        nextFocusedThreadId: OTHER_THREAD_ID,
+        nextLeafCount: 1,
+      }),
+    ).toEqual({
+      kind: "single-thread",
+      threadId: OTHER_THREAD_ID,
+      splitViewIdToRemove: "split-1",
+    });
+  });
+
+  it("keeps a multi-pane split when there are still multiple leaves", () => {
+    expect(
+      resolveSplitPaneCloseDecision({
+        splitViewId: "split-1",
+        sourceThreadId: THREAD_ID,
+        closingThreadId: THREAD_ID,
+        closingSidechatSourceThreadId: null,
+        nextFocusedThreadId: OTHER_THREAD_ID,
+        nextLeafCount: 2,
+      }),
+    ).toEqual({
+      kind: "split-thread",
+      threadId: OTHER_THREAD_ID,
+      splitViewId: "split-1",
+    });
   });
 });

@@ -30,6 +30,21 @@ export interface SplitPaneMaximizeDecision {
   panelState: ChatPanelStateSnapshot | null;
 }
 
+export type SplitPaneCloseDecision =
+  | {
+      kind: "single-thread";
+      threadId: ThreadId;
+      splitViewIdToRemove: string;
+    }
+  | {
+      kind: "split-thread";
+      threadId: ThreadId;
+      splitViewId: string;
+    }
+  | {
+      kind: "new-chat";
+    };
+
 export function resolveThreadPickerTitle(title: string | null): string {
   return title || "New chat";
 }
@@ -116,4 +131,47 @@ export function resolveSplitPaneMaximizeDecision(input: {
     threadId: input.focusedThreadId,
     panelState: input.focusedPanelState ?? null,
   };
+}
+
+// Closing a sidechat is a return-to-source action; generic pane closes can still fall back normally.
+export function resolveSplitPaneCloseDecision(input: {
+  splitViewId: string;
+  sourceThreadId: ThreadId;
+  closingThreadId: ThreadId | null | undefined;
+  closingSidechatSourceThreadId: ThreadId | null | undefined;
+  nextFocusedThreadId: ThreadId | null | undefined;
+  nextLeafCount: number;
+}): SplitPaneCloseDecision {
+  if (input.closingSidechatSourceThreadId) {
+    return {
+      kind: "single-thread",
+      threadId: input.closingSidechatSourceThreadId,
+      splitViewIdToRemove: input.splitViewId,
+    };
+  }
+
+  if (input.closingThreadId && input.closingThreadId !== input.sourceThreadId) {
+    return {
+      kind: "single-thread",
+      threadId: input.sourceThreadId,
+      splitViewIdToRemove: input.splitViewId,
+    };
+  }
+
+  if (input.nextFocusedThreadId) {
+    if (input.nextLeafCount <= 1) {
+      return {
+        kind: "single-thread",
+        threadId: input.nextFocusedThreadId,
+        splitViewIdToRemove: input.splitViewId,
+      };
+    }
+    return {
+      kind: "split-thread",
+      threadId: input.nextFocusedThreadId,
+      splitViewId: input.splitViewId,
+    };
+  }
+
+  return { kind: "new-chat" };
 }

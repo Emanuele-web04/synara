@@ -83,6 +83,7 @@ import {
 import { Sheet, SheetPopup } from "../components/ui/sheet";
 import {
   resolveRoutePanelBootstrap,
+  resolveSplitPaneCloseDecision,
   resolveSplitPaneMaximizeDecision,
   resolveThreadPickerTitle,
   resolveToggledChatPanelPatch,
@@ -93,7 +94,8 @@ import { Sidebar, SidebarInset, SidebarProvider, SidebarRail } from "~/component
 
 const DiffPanel = lazy(() => import("../components/DiffPanel"));
 const DIFF_INLINE_LAYOUT_MEDIA_QUERY = "(max-width: 1180px)";
-const DIFF_INLINE_DEFAULT_WIDTH = "clamp(28rem,48vw,44rem)";
+// Keep the inline diff visually near half of the chat area after the fixed left sidebar is counted.
+const DIFF_INLINE_DEFAULT_WIDTH = "clamp(28rem, calc(50vw - 8rem), 44rem)";
 const BROWSER_INLINE_DEFAULT_WIDTH = "50%";
 const SPLIT_PANE_PANEL_DEFAULT_WIDTH_PX = 22 * 16;
 const BROWSER_SPLIT_PANE_PANEL_DEFAULT_WIDTH_PX = 30 * 16;
@@ -365,7 +367,7 @@ const PanePanelInlineSidebar = (props: {
       <div
         ref={inlineWrapperRef}
         data-native-browser-surface="true"
-        className="relative flex h-dvh min-h-0 min-w-0 flex-none border-l border-border/50 bg-card text-foreground"
+        className="relative flex h-dvh min-h-0 min-w-0 flex-none border-l border-sidebar-border bg-card text-foreground"
         style={
           {
             width:
@@ -378,7 +380,7 @@ const PanePanelInlineSidebar = (props: {
         }
       >
         <div
-          className="absolute inset-y-0 left-0 z-20 w-2 -translate-x-1/2 cursor-col-resize bg-transparent before:absolute before:inset-y-0 before:left-1/2 before:w-px before:-translate-x-1/2 before:bg-border/65"
+          className="absolute inset-y-0 left-0 z-20 w-2 -translate-x-1/2 cursor-col-resize bg-transparent before:absolute before:inset-y-0 before:left-1/2 before:w-px before:-translate-x-1/2 before:bg-sidebar-border"
           onPointerDown={startResize}
         />
         {renderPanelContent && threadId ? (
@@ -399,7 +401,7 @@ const PanePanelInlineSidebar = (props: {
       <Sidebar
         side="right"
         collapsible="offcanvas"
-        className="border-l border-border/50 bg-card text-foreground"
+        className="border-l border-sidebar-border bg-card text-foreground"
         resizable={{
           minWidth: inlineSidebarMinWidth,
           shouldAcceptWidth: shouldAcceptInlineSidebarWidth,
@@ -521,7 +523,7 @@ function SplitPaneEmbeddedPanel(props: {
     <div
       ref={wrapperRef}
       data-native-browser-surface={props.panel === "browser" ? "true" : undefined}
-      className="relative flex h-full min-h-0 min-w-0 flex-none border-l border-border/50 bg-card text-foreground"
+      className="relative flex h-full min-h-0 min-w-0 flex-none border-l border-sidebar-border bg-card text-foreground"
       style={
         {
           width: `${panelWidth}px`,
@@ -531,7 +533,7 @@ function SplitPaneEmbeddedPanel(props: {
       }
     >
       <div
-        className="absolute inset-y-0 left-0 z-20 w-2 -translate-x-1/2 cursor-col-resize bg-transparent before:absolute before:inset-y-0 before:left-1/2 before:w-px before:-translate-x-1/2 before:bg-border/65"
+        className="absolute inset-y-0 left-0 z-20 w-2 -translate-x-1/2 cursor-col-resize bg-transparent before:absolute before:inset-y-0 before:left-1/2 before:w-px before:-translate-x-1/2 before:bg-sidebar-border"
         onPointerDown={startResize}
       />
       {props.panel === "browser" ? (
@@ -877,6 +879,7 @@ function DeferredChatView(props: {
   onSplitSurface?: () => void;
   onMaximize?: () => void;
   onChangeThread?: () => void;
+  onCloseThreadPane?: () => void;
   onMounted?: () => void;
 }) {
   const onMounted = props.onMounted ?? noop;
@@ -926,6 +929,7 @@ function DeferredChatView(props: {
       {...(props.onSplitSurface ? { onSplitSurface: props.onSplitSurface } : {})}
       {...(props.onMaximize ? { onMaximizeSurface: props.onMaximize } : {})}
       {...(props.onChangeThread ? { onChangeThreadInSplitPane: props.onChangeThread } : {})}
+      {...(props.onCloseThreadPane ? { onCloseThreadPane: props.onCloseThreadPane } : {})}
     />
   );
 }
@@ -955,6 +959,7 @@ function SplitPaneSurface(props: {
     patch: Partial<Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">>,
   ) => void;
   onMaximize: () => void;
+  onCloseThreadPane: () => void;
   onChooseThread: () => void;
   onSelectThread: (threadId: ThreadIdType) => void;
   onChatMounted: () => void;
@@ -1013,6 +1018,7 @@ function SplitPaneSurface(props: {
               onOpenTurnDiff={props.onOpenTurnDiff}
               onMaximize={props.onMaximize}
               onChangeThread={props.onChooseThread}
+              onCloseThreadPane={props.onCloseThreadPane}
               onMounted={props.onChatMounted}
             />
           ) : (
@@ -1067,6 +1073,7 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
   const replacePaneThread = useSplitViewStore((store) => store.replacePaneThread);
   const dropThreadOnPane = useSplitViewStore((store) => store.dropThreadOnPane);
   const removeSplitView = useSplitViewStore((store) => store.removeSplitView);
+  const removePaneFromSplitView = useSplitViewStore((store) => store.removePaneFromSplitView);
   const [threadPickerPaneId, setThreadPickerPaneId] = useState<PaneId | null>(null);
   const { splitView: activeSplitView, routePaneId } = resolveActiveSplitView({
     splitView,
@@ -1267,6 +1274,84 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
     void handleNewChat({ fresh: true });
   }, [activeSplitView, handleNewChat, navigate, removeSplitView]);
 
+  const closePaneThread = useCallback(
+    (paneId: PaneId) => {
+      if (!activeSplitView) return;
+      const closingLeaf = findLeafPaneById(activeSplitView.root, paneId);
+      const closingThread = closingLeaf?.threadId
+        ? threads.find((thread) => thread.id === closingLeaf.threadId)
+        : null;
+
+      if (closingThread?.sidechatSourceThreadId) {
+        const decision = resolveSplitPaneCloseDecision({
+          splitViewId: activeSplitView.id,
+          sourceThreadId: activeSplitView.sourceThreadId,
+          closingThreadId: closingLeaf?.threadId ?? null,
+          closingSidechatSourceThreadId: closingThread.sidechatSourceThreadId,
+          nextFocusedThreadId: null,
+          nextLeafCount: 0,
+        });
+        if (decision.kind !== "single-thread") return;
+        void navigate({
+          to: "/$threadId",
+          params: { threadId: decision.threadId },
+          replace: true,
+          search: (previous) => ({
+            ...stripDiffSearchParams(previous),
+            splitViewId: undefined,
+          }),
+        }).then(() => {
+          removeSplitView(decision.splitViewIdToRemove);
+        });
+        return;
+      }
+
+      const closed = removePaneFromSplitView({ splitViewId: activeSplitView.id, paneId });
+      if (!closed) return;
+
+      const nextSplitView = useSplitViewStore.getState().splitViewsById[activeSplitView.id];
+      const nextThreadId = nextSplitView ? resolveSplitViewFocusedThreadId(nextSplitView) : null;
+      const decision = resolveSplitPaneCloseDecision({
+        splitViewId: activeSplitView.id,
+        sourceThreadId: activeSplitView.sourceThreadId,
+        closingThreadId: closingLeaf?.threadId ?? null,
+        closingSidechatSourceThreadId: null,
+        nextFocusedThreadId: nextThreadId,
+        nextLeafCount: nextSplitView ? collectLeaves(nextSplitView.root).length : 0,
+      });
+
+      if (decision.kind === "single-thread") {
+        removeSplitView(decision.splitViewIdToRemove);
+        void navigate({
+          to: "/$threadId",
+          params: { threadId: decision.threadId },
+          replace: true,
+          search: (previous) => ({
+            ...stripDiffSearchParams(previous),
+            splitViewId: undefined,
+          }),
+        });
+        return;
+      }
+
+      if (decision.kind === "split-thread") {
+        void navigate({
+          to: "/$threadId",
+          params: { threadId: decision.threadId },
+          replace: true,
+          search: (previous) => ({
+            ...stripDiffSearchParams(previous),
+            splitViewId: decision.splitViewId,
+          }),
+        });
+        return;
+      }
+
+      void handleNewChat({ fresh: true });
+    },
+    [activeSplitView, handleNewChat, navigate, removePaneFromSplitView, removeSplitView, threads],
+  );
+
   const handleSetRatio = useCallback(
     (nodeId: PaneId, ratio: number) => {
       if (!activeSplitView) return;
@@ -1382,6 +1467,7 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
         onClosePanel={() => closePanePanel(leaf.id)}
         onUpdatePanelState={(patch) => updatePanePanelState(leaf.id, patch)}
         onMaximize={maximizeFocusedPane}
+        onCloseThreadPane={() => closePaneThread(leaf.id)}
         onChooseThread={() => {
           setPaneFocus(leaf.id);
           setThreadPickerPaneId(leaf.id);

@@ -38,7 +38,7 @@ export function getAppTypographyScale(
     uiMetaPx: clampTypographyPx(basePx * 0.84, 10),
     uiTimestampPx: clampTypographyPx(basePx * 0.72, 8),
     chatPx: basePx,
-    chatCodePx: clampTypographyPx(basePx * 0.86, 10),
+    chatCodePx: clampTypographyPx(basePx * 0.95, 10),
     chatMetaPx: clampTypographyPx(basePx * 0.72, 8),
     chatTinyPx: clampTypographyPx(basePx * 0.66, 8),
   };

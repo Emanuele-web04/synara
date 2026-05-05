@@ -4,10 +4,11 @@
 
 import { useCallback } from "react";
 import type { useNavigate } from "@tanstack/react-router";
-import type { ThreadId } from "@t3tools/contracts";
+import type { ProjectId, ThreadId } from "@t3tools/contracts";
 import type { LastThreadRoute } from "../chatRouteRestore";
 import { type PaneId, type SplitView, type SplitViewId } from "../splitViewStore";
 import { selectThreadTerminalState } from "../terminalStateStore";
+import type { SidebarThreadSummary } from "../types";
 import {
   resolvePreferredSplitForCommand,
   resolveThreadCommandActivation,
@@ -15,12 +16,21 @@ import {
 
 type Navigate = ReturnType<typeof useNavigate>;
 type ThreadTerminalStateById = Parameters<typeof selectThreadTerminalState>[0];
+type SidebarThreadActivationSummary = Pick<
+  SidebarThreadSummary,
+  "id" | "projectId" | "sidechatSourceThreadId"
+>;
 
 export type ThreadActivationControllerInput = {
   activeSplitView: SplitView | null;
   clearSelection: () => void;
   navigate: Navigate;
   openChatThreadPage: (threadId: ThreadId) => void;
+  openSidechatSplit: (input: {
+    sidechatThreadId: ThreadId;
+    sourceThreadId: ThreadId;
+    ownerProjectId: ProjectId;
+  }) => SplitViewId;
   openTerminalThreadPage: (threadId: ThreadId) => void;
   prewarmThreadDetailForIntent: (threadId: ThreadId) => void;
   rememberLastThreadRouteNow: (nextLastThreadRoute: LastThreadRoute) => void;
@@ -30,7 +40,7 @@ export type ThreadActivationControllerInput = {
   setOptimisticActiveThreadId: (threadId: ThreadId) => void;
   setSelectionAnchor: (threadId: ThreadId) => void;
   setSplitFocusedPane: (splitViewId: SplitViewId, paneId: PaneId) => void;
-  sidebarThreadSummaryById: Readonly<Partial<Record<ThreadId, unknown>>>;
+  sidebarThreadSummaryById: Readonly<Partial<Record<ThreadId, SidebarThreadActivationSummary>>>;
   splitViewsById: Record<SplitViewId, SplitView | undefined>;
   terminalStateByThreadId: ThreadTerminalStateById;
 };
@@ -65,13 +75,23 @@ export function activateThreadFromSidebarIntent(
     splitViewsById,
     threadId,
   });
+  const targetThread = sidebarThreadSummaryById[threadId];
   const activation = resolveThreadCommandActivation({
     threadId,
-    threadExists: sidebarThreadSummaryById[threadId] !== undefined,
+    threadExists: targetThread !== undefined,
     activeSidebarThreadId: routeThreadId,
     preferredSplitViewId: preferredSplit?.splitViewId ?? null,
     splitPaneId: preferredSplit?.paneId ?? null,
   });
+
+  const sidechatSplitActivation = resolveSidechatSplitActivation(input, {
+    threadId,
+    targetThread,
+  });
+  if (sidechatSplitActivation && activation.kind !== "split") {
+    activateSidechatSplit(input, sidechatSplitActivation);
+    return;
+  }
 
   if (activation.kind === "ignore") {
     return;
@@ -103,6 +123,63 @@ export function activateThreadFromSidebarIntent(
     search: (previous) => ({
       ...previous,
       splitViewId: activation.splitViewId,
+    }),
+  });
+}
+
+function resolveSidechatSplitActivation(
+  input: ThreadActivationControllerInput,
+  options: {
+    threadId: ThreadId;
+    targetThread: SidebarThreadActivationSummary | undefined;
+  },
+): { threadId: ThreadId; sourceThreadId: ThreadId; ownerProjectId: ProjectId } | null {
+  if (!options.targetThread?.sidechatSourceThreadId) {
+    return null;
+  }
+  const sourceThread = input.sidebarThreadSummaryById[options.targetThread.sidechatSourceThreadId];
+  if (!sourceThread || input.routeSplitViewId) {
+    return null;
+  }
+  return {
+    threadId: options.threadId,
+    sourceThreadId: options.targetThread.sidechatSourceThreadId,
+    ownerProjectId: sourceThread.projectId,
+  };
+}
+
+// Sidechat rows reopen as source-left + sidechat-right when no split route is active.
+function activateSidechatSplit(
+  input: ThreadActivationControllerInput,
+  activation: {
+    threadId: ThreadId;
+    sourceThreadId: ThreadId;
+    ownerProjectId: ProjectId;
+  },
+): void {
+  input.prewarmThreadDetailForIntent(activation.sourceThreadId);
+  input.prewarmThreadDetailForIntent(activation.threadId);
+  input.setOptimisticActiveThreadId(activation.threadId);
+  if (input.selectedThreadCount > 0) {
+    input.clearSelection();
+  }
+  input.setSelectionAnchor(activation.threadId);
+
+  const splitViewId = input.openSidechatSplit({
+    sourceThreadId: activation.sourceThreadId,
+    ownerProjectId: activation.ownerProjectId,
+    sidechatThreadId: activation.threadId,
+  });
+  input.rememberLastThreadRouteNow({
+    threadId: activation.threadId,
+    splitViewId,
+  });
+  void input.navigate({
+    to: "/$threadId",
+    params: { threadId: activation.threadId },
+    search: (previous) => ({
+      ...previous,
+      splitViewId,
     }),
   });
 }
@@ -146,6 +223,7 @@ export function useThreadActivationController(input: ThreadActivationControllerI
     clearSelection,
     navigate,
     openChatThreadPage,
+    openSidechatSplit,
     openTerminalThreadPage,
     prewarmThreadDetailForIntent,
     rememberLastThreadRouteNow,
@@ -168,6 +246,7 @@ export function useThreadActivationController(input: ThreadActivationControllerI
           clearSelection,
           navigate,
           openChatThreadPage,
+          openSidechatSplit,
           openTerminalThreadPage,
           prewarmThreadDetailForIntent,
           rememberLastThreadRouteNow,
@@ -189,6 +268,7 @@ export function useThreadActivationController(input: ThreadActivationControllerI
       clearSelection,
       navigate,
       openChatThreadPage,
+      openSidechatSplit,
       openTerminalThreadPage,
       prewarmThreadDetailForIntent,
       rememberLastThreadRouteNow,

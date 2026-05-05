@@ -800,6 +800,7 @@ interface ChatViewProps {
   onSplitSurface?: () => void;
   onMaximizeSurface?: () => void;
   onChangeThreadInSplitPane?: () => void;
+  onCloseThreadPane?: () => void;
 }
 
 export default function ChatView({
@@ -814,6 +815,7 @@ export default function ChatView({
   onSplitSurface,
   onMaximizeSurface,
   onChangeThreadInSplitPane,
+  onCloseThreadPane,
 }: ChatViewProps) {
   const markThreadVisited = useStore((store) => store.markThreadVisited);
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
@@ -7667,6 +7669,7 @@ export default function ChatView({
           activeProvider={activeThread.modelSelection.provider}
           activeProjectName={activeProjectDisplayName}
           threadBreadcrumbs={threadBreadcrumbs}
+          isSidechat={Boolean(activeThread.sidechatSourceThreadId)}
           hideHandoffControls={terminalWorkspaceTerminalTabActive}
           isGitRepo={isGitRepo}
           openInCwd={threadWorkspaceCwd}
@@ -7728,6 +7731,7 @@ export default function ChatView({
           onCreateHandoff={onCreateHandoffThread}
           onNavigateToThread={onNavigateToThread}
           onRenameThread={() => setRenameDialogOpen(true)}
+          {...(onCloseThreadPane ? { onCloseThreadPane } : {})}
         />
       </header>
 
