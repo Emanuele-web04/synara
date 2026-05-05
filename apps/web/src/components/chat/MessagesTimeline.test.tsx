@@ -1501,6 +1501,98 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("&gt;/bin/zsh -lc");
   });
 
+  it("renders plain location details as file basenames", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        timelineEntries={[
+          {
+            id: "entry-read-location",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-read-location",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "Read",
+              tone: "tool",
+              itemType: "dynamic_tool_call",
+              toolTitle: "Read",
+              detail: "apps/web/src/session-logic.ts:12",
+            },
+          },
+        ]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="dark"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("Read");
+    expect(markup).toContain("session-logic.ts");
+    expect(markup).not.toContain("apps/web/src/session-logic.ts:12");
+  });
+
+  it("renders read target files without edit-row treatment", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        timelineEntries={[
+          {
+            id: "entry-read-target",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-read-target",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "Read",
+              tone: "tool",
+              itemType: "dynamic_tool_call",
+              toolTitle: "Read",
+              changedFiles: ["apps/web/src/session-logic.ts"],
+            },
+          },
+        ]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="dark"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("Read");
+    expect(markup).toContain("session-logic.ts");
+    expect(markup).not.toContain("data-file-change-row");
+  });
+
   it("shows a globe icon next to compact web-search rows", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
@@ -1521,6 +1613,7 @@ describe("MessagesTimeline", () => {
               tone: "tool",
               itemType: "web_search",
               toolTitle: "Searched the web",
+              detail: "48 files found",
             },
           },
         ]}
@@ -1543,6 +1636,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Searched the web");
+    expect(markup).toContain("48 files found");
     expect(markup).toContain("tabler-icon-world");
   });
 

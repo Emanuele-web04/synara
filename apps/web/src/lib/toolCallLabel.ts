@@ -114,7 +114,9 @@ function isGenericToolTitle(value: string): boolean {
     normalized === "subagent task" ||
     normalized === "command run" ||
     normalized === "ran command" ||
-    normalized === "command execution"
+    normalized === "command execution" ||
+    normalized === "find" ||
+    normalized === "read file"
   );
 }
 
@@ -140,6 +142,13 @@ function normalizeToolDescriptor(value: string | null): string | null {
   const collapsed = dedupedTokens.join(" ").trim();
   if (!collapsed) {
     return null;
+  }
+  const lowerCollapsed = collapsed.toLowerCase();
+  if (lowerCollapsed === "read") {
+    return "Read";
+  }
+  if (lowerCollapsed === "search" || lowerCollapsed === "find" || lowerCollapsed === "searched") {
+    return "Search";
   }
   return collapsed.length > 64 ? `${collapsed.slice(0, 61).trimEnd()}...` : collapsed;
 }

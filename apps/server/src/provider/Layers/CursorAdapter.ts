@@ -56,6 +56,7 @@ import {
   makeAcpPlanUpdatedEvent,
   makeAcpRequestOpenedEvent,
   makeAcpRequestResolvedEvent,
+  makeAcpTokenUsageEvent,
   makeAcpToolCallEvent,
 } from "../acp/AcpCoreRuntimeEvents.ts";
 import {
@@ -131,6 +132,7 @@ interface CursorSessionContext {
   activeInteractionMode: ProviderInteractionMode | undefined;
   activeTurnId: TurnId | undefined;
   activePromptFiber: Fiber.Fiber<void, never> | undefined;
+  latestSessionCostUsd: number | undefined;
   stopped: boolean;
 }
 
@@ -145,6 +147,28 @@ function clearCursorActiveTurn(ctx: CursorSessionContext, turnId: TurnId): boole
   const { activeTurnId: _activeTurnId, ...session } = ctx.session;
   ctx.session = session;
   return true;
+}
+
+function readAcpUsdCost(cost: EffectAcpSchema.Cost | null | undefined): number | undefined {
+  if (!cost || cost.currency.toUpperCase() !== "USD" || !Number.isFinite(cost.amount)) {
+    return undefined;
+  }
+  return cost.amount >= 0 ? cost.amount : undefined;
+}
+
+function recordCursorSessionCost(ctx: CursorSessionContext, cost: EffectAcpSchema.Cost | null | undefined): void {
+  const sessionCostUsd = readAcpUsdCost(cost);
+  if (sessionCostUsd === undefined) {
+    return;
+  }
+  ctx.latestSessionCostUsd = sessionCostUsd;
+}
+
+// ACP reports session-cumulative cost, so keep it cumulative instead of inventing turn deltas.
+function finalizeCursorActiveTurnCost(ctx: CursorSessionContext): { readonly cumulativeCostUsd?: number } {
+  return ctx.latestSessionCostUsd !== undefined
+    ? { cumulativeCostUsd: ctx.latestSessionCostUsd }
+    : {};
 }
 
 function settlePendingApprovalsAsCancelled(
@@ -420,6 +444,36 @@ export function makeCursorAdapter(
         );
       });
 
+    const completeCursorPlanTurn = (
+      ctx: CursorSessionContext,
+      turnId: TurnId,
+      activePromptFiber: Fiber.Fiber<void, never> | undefined,
+    ) =>
+      Effect.gen(function* () {
+        if (!clearCursorActiveTurn(ctx, turnId)) {
+          return;
+        }
+        const completedCost = finalizeCursorActiveTurnCost(ctx);
+        const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
+        ctx.session = {
+          ...sessionWithoutLastError,
+          status: "ready",
+          updatedAt: yield* nowIso,
+        };
+        yield* offerRuntimeEvent({
+          type: "turn.completed",
+          ...(yield* makeEventStamp()),
+          provider: PROVIDER,
+          threadId: ctx.threadId,
+          turnId,
+          payload: { state: "completed", stopReason: null, ...completedCost },
+        });
+        yield* Effect.ignore(ctx.acp.cancel);
+        if (activePromptFiber) {
+          yield* Fiber.interrupt(activePromptFiber);
+        }
+      });
+
     const emitPlanUpdate = (
       ctx: CursorSessionContext,
       payload: {
@@ -452,48 +506,6 @@ export function makeCursorAdapter(
           }),
         );
 
-        if (ctx.activeInteractionMode !== "plan" || ctx.activeTurnId === undefined) {
-          return;
-        }
-
-        const planMarkdown = formatCursorPlanUpdateMarkdown(payload);
-        if (!planMarkdown || ctx.completedPlanFingerprint === fingerprint) {
-          return;
-        }
-        ctx.completedPlanFingerprint = fingerprint;
-        const turnId = ctx.activeTurnId;
-        const activePromptFiber = ctx.activePromptFiber;
-        yield* offerRuntimeEvent({
-          type: "turn.proposed.completed",
-          ...(yield* makeEventStamp()),
-          provider: PROVIDER,
-          threadId: ctx.threadId,
-          turnId,
-          payload: { planMarkdown },
-          raw: { source, method, payload: rawPayload },
-        });
-
-        if (!clearCursorActiveTurn(ctx, turnId)) {
-          return;
-        }
-        const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
-        ctx.session = {
-          ...sessionWithoutLastError,
-          status: "ready",
-          updatedAt: yield* nowIso,
-        };
-        yield* offerRuntimeEvent({
-          type: "turn.completed",
-          ...(yield* makeEventStamp()),
-          provider: PROVIDER,
-          threadId: ctx.threadId,
-          turnId,
-          payload: { state: "completed", stopReason: null },
-        });
-        yield* Effect.ignore(ctx.acp.cancel);
-        if (activePromptFiber) {
-          yield* Fiber.interrupt(activePromptFiber);
-        }
       });
 
     const requireSession = (
@@ -654,43 +666,61 @@ export function makeCursorAdapter(
                   params,
                   "acp.cursor.extension",
                 );
+                const turnId = ctx?.activeTurnId;
+                const activePromptFiber = ctx?.activePromptFiber;
+                const planMarkdown = extractPlanMarkdown(params);
                 yield* offerRuntimeEvent({
                   type: "turn.proposed.completed",
                   ...(yield* makeEventStamp()),
                   provider: PROVIDER,
                   threadId: input.threadId,
-                  turnId: ctx?.activeTurnId,
-                  payload: { planMarkdown: extractPlanMarkdown(params) },
+                  turnId,
+                  payload: { planMarkdown },
                   raw: {
                     source: "acp.cursor.extension",
                     method: "cursor/create_plan",
                     payload: params,
                   },
                 });
+                if (
+                  ctx &&
+                  turnId !== undefined &&
+                  ctx.activeInteractionMode === "plan" &&
+                  ctx.completedPlanFingerprint !== planMarkdown
+                ) {
+                  ctx.completedPlanFingerprint = planMarkdown;
+                  yield* completeCursorPlanTurn(ctx, turnId, activePromptFiber);
+                }
                 return { accepted: true } as const;
               }),
+            );
+            const handleCursorUpdateTodos = (params: typeof CursorUpdateTodosRequest.Type) =>
+              Effect.gen(function* () {
+                yield* logNative(
+                  input.threadId,
+                  "cursor/update_todos",
+                  params,
+                  "acp.cursor.extension",
+                );
+                if (ctx) {
+                  yield* emitPlanUpdate(
+                    ctx,
+                    extractTodosAsPlan(params),
+                    params,
+                    "acp.cursor.extension",
+                    "cursor/update_todos",
+                  );
+                }
+              });
+            // Cursor Agent CLI sends cursor/update_todos as a request with an id; keep the
+            // notification handler for older or alternate ACP clients.
+            yield* acp.handleExtRequest("cursor/update_todos", CursorUpdateTodosRequest, (params) =>
+              handleCursorUpdateTodos(params).pipe(Effect.as({ accepted: true } as const)),
             );
             yield* acp.handleExtNotification(
               "cursor/update_todos",
               CursorUpdateTodosRequest,
-              (params) =>
-                Effect.gen(function* () {
-                  yield* logNative(
-                    input.threadId,
-                    "cursor/update_todos",
-                    params,
-                    "acp.cursor.extension",
-                  );
-                  if (ctx) {
-                    yield* emitPlanUpdate(
-                      ctx,
-                      extractTodosAsPlan(params),
-                      params,
-                      "acp.cursor.extension",
-                      "cursor/update_todos",
-                    );
-                  }
-                }),
+              handleCursorUpdateTodos,
             );
             yield* acp.handleRequestPermission((params) =>
               Effect.gen(function* () {
@@ -804,6 +834,7 @@ export function makeCursorAdapter(
             activeInteractionMode: undefined,
             activeTurnId: undefined,
             activePromptFiber: undefined,
+            latestSessionCostUsd: undefined,
             stopped: false,
           };
 
@@ -885,6 +916,26 @@ export function makeCursorAdapter(
                         turnId: ctx.activeTurnId,
                         ...(event.itemId ? { itemId: event.itemId } : {}),
                         text: event.text,
+                        ...(event.streamKind ? { streamKind: event.streamKind } : {}),
+                        rawPayload: event.rawPayload,
+                      }),
+                    );
+                    return;
+                  case "UsageUpdated":
+                    yield* logNative(
+                      ctx.threadId,
+                      "session/update",
+                      event.rawPayload,
+                      "acp.jsonrpc",
+                    );
+                    recordCursorSessionCost(ctx, event.cost);
+                    yield* offerRuntimeEvent(
+                      makeAcpTokenUsageEvent({
+                        stamp: yield* makeEventStamp(),
+                        provider: PROVIDER,
+                        threadId: ctx.threadId,
+                        turnId: ctx.activeTurnId,
+                        usage: event.usage,
                         rawPayload: event.rawPayload,
                       }),
                     );
@@ -946,27 +997,6 @@ export function makeCursorAdapter(
           mapError: ({ cause, method }) =>
             mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
         });
-        ctx.activeTurnId = turnId;
-        ctx.activeInteractionMode = input.interactionMode;
-        ctx.lastPlanFingerprint = undefined;
-        ctx.completedPlanFingerprint = undefined;
-        const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
-        ctx.session = {
-          ...sessionWithoutLastError,
-          status: "running",
-          activeTurnId: turnId,
-          updatedAt: yield* nowIso,
-        };
-
-        yield* offerRuntimeEvent({
-          type: "turn.started",
-          ...(yield* makeEventStamp()),
-          provider: PROVIDER,
-          threadId: input.threadId,
-          turnId,
-          payload: { model: resolvedModel },
-        });
-
         const promptParts: Array<EffectAcpSchema.ContentBlock> = [];
         if (input.input?.trim()) {
           promptParts.push({
@@ -1024,6 +1054,27 @@ export function makeCursorAdapter(
           });
         }
 
+        ctx.activeTurnId = turnId;
+        ctx.activeInteractionMode = input.interactionMode;
+        ctx.lastPlanFingerprint = undefined;
+        ctx.completedPlanFingerprint = undefined;
+        const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
+        ctx.session = {
+          ...sessionWithoutLastError,
+          status: "running",
+          activeTurnId: turnId,
+          updatedAt: yield* nowIso,
+        };
+
+        yield* offerRuntimeEvent({
+          type: "turn.started",
+          ...(yield* makeEventStamp()),
+          provider: PROVIDER,
+          threadId: input.threadId,
+          turnId,
+          payload: { model: resolvedModel },
+        });
+
         const runPrompt = ctx.acp.prompt({ prompt: promptParts }).pipe(
             Effect.mapError((error) =>
               mapAcpToAdapterError(PROVIDER, input.threadId, "session/prompt", error),
@@ -1034,6 +1085,7 @@ export function makeCursorAdapter(
                   if (!clearCursorActiveTurn(ctx, turnId)) {
                     return;
                   }
+                  const completedCost = finalizeCursorActiveTurnCost(ctx);
                   ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, error }] });
                   const detail = error.message;
                   ctx.session = {
@@ -1053,6 +1105,7 @@ export function makeCursorAdapter(
                       state: "failed",
                       stopReason: null,
                       errorMessage: detail,
+                      ...completedCost,
                     },
                   });
                 }),
@@ -1061,6 +1114,7 @@ export function makeCursorAdapter(
                   if (!clearCursorActiveTurn(ctx, turnId)) {
                     return;
                   }
+                  const completedCost = finalizeCursorActiveTurnCost(ctx);
                   ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, result }] });
                   const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
                   ctx.session = {
@@ -1078,6 +1132,8 @@ export function makeCursorAdapter(
                     payload: {
                       state: result.stopReason === "cancelled" ? "cancelled" : "completed",
                       stopReason: result.stopReason ?? null,
+                      ...(result.usage ? { usage: result.usage } : {}),
+                      ...completedCost,
                     },
                   });
                 }),
@@ -1087,6 +1143,7 @@ export function makeCursorAdapter(
                 if (!clearCursorActiveTurn(ctx, turnId)) {
                   return;
                 }
+                const completedCost = finalizeCursorActiveTurnCost(ctx);
                 ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, interrupted: true }] });
                 const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
                 ctx.session = {
@@ -1104,6 +1161,7 @@ export function makeCursorAdapter(
                   payload: {
                     state: "cancelled",
                     stopReason: "cancelled",
+                    ...completedCost,
                   },
                 });
               }),

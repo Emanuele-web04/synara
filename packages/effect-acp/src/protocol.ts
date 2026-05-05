@@ -70,6 +70,29 @@ const decodeElicitationComplete = Schema.decodeUnknownEffect(
   AcpSchema.ElicitationCompleteNotification,
 );
 const parserFactory = RpcSerialization.ndJsonRpc();
+const textEncoder = new TextEncoder();
+
+function normalizeTopLevelZeroRequestIdLine(line: string): string {
+  if (!line.includes('"id"')) {
+    return line;
+  }
+  try {
+    const parsed: unknown = JSON.parse(line);
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed) &&
+      "method" in parsed &&
+      "id" in parsed &&
+      (parsed as Record<string, unknown>).id === 0
+    ) {
+      return `${JSON.stringify({ ...(parsed as Record<string, unknown>), id: "0" })}\n`;
+    }
+  } catch {
+    return line;
+  }
+  return line;
+}
 
 export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(function* (
   options: AcpPatchedProtocolOptions,
@@ -82,6 +105,8 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
   const outgoing = yield* Queue.unbounded<string | Uint8Array, Cause.Done<void>>();
   const nextRequestId = yield* Ref.make(1n);
   const terminationHandled = yield* Ref.make(false);
+  const incomingDecoder = new TextDecoder();
+  let incomingTextBuffer = "";
   const extPending = yield* Ref.make(
     new Map<string, Deferred.Deferred<unknown, AcpError.AcpError>>(),
   );
@@ -97,6 +122,37 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
       options.logger?.(event) ??
       Effect.logDebug("ACP protocol event").pipe(Effect.annotateLogs({ event }))
     );
+  };
+
+  // Effect's ndjson-rpc transport currently decodes top-level JSON-RPC id 0 as
+  // an empty string, which would turn real Cursor requests into notifications.
+  // Normalize only complete top-level NDJSON messages so nested payload fields
+  // and split UTF-8 chunks remain untouched.
+  const preserveZeroRequestIds = (data: string | Uint8Array): string | Uint8Array | undefined => {
+    incomingTextBuffer +=
+      typeof data === "string" ? data : incomingDecoder.decode(data, { stream: true });
+    const lastNewlineIndex = incomingTextBuffer.lastIndexOf("\n");
+    if (lastNewlineIndex < 0) {
+      return undefined;
+    }
+    const completeText = incomingTextBuffer.slice(0, lastNewlineIndex + 1);
+    incomingTextBuffer = incomingTextBuffer.slice(lastNewlineIndex + 1);
+    const normalized = completeText
+      .split(/(?<=\n)/)
+      .map((line) => (line.trim().length === 0 ? line : normalizeTopLevelZeroRequestIdLine(line)))
+      .join("");
+    return typeof data === "string" ? normalized : textEncoder.encode(normalized);
+  };
+
+  const flushBufferedInput = (): Uint8Array | undefined => {
+    incomingTextBuffer += incomingDecoder.decode();
+    if (incomingTextBuffer.trim().length === 0) {
+      incomingTextBuffer = "";
+      return undefined;
+    }
+    const normalized = normalizeTopLevelZeroRequestIdLine(`${incomingTextBuffer}\n`);
+    incomingTextBuffer = "";
+    return textEncoder.encode(normalized);
   };
 
   const offerOutgoing = Effect.fn("offerOutgoing")(function* (
@@ -362,6 +418,30 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
     }
   };
 
+  const decodeWireData = (data: string | Uint8Array | undefined) =>
+    Effect.try({
+      try: () => {
+        if (data === undefined) {
+          return [];
+        }
+        return parser.decode(data) as ReadonlyArray<
+          RpcMessage.FromClientEncoded | RpcMessage.FromServerEncoded
+        >;
+      },
+      catch: (cause) =>
+        new AcpError.AcpProtocolParseError({
+          detail: "Failed to decode ACP wire message",
+          cause,
+        }),
+    });
+
+  const routeDecodedMessages = (
+    messages: ReadonlyArray<RpcMessage.FromClientEncoded | RpcMessage.FromServerEncoded>,
+  ) =>
+    Effect.forEach(messages, routeDecodedMessage, {
+      discard: true,
+    });
+
   yield* options.stdio.stdin.pipe(
     Stream.runForEach((data) =>
       logProtocol({
@@ -369,19 +449,7 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
         stage: "raw",
         payload: typeof data === "string" ? data : new TextDecoder().decode(data),
       }).pipe(
-        Effect.flatMap(() =>
-          Effect.try({
-            try: () =>
-              parser.decode(data) as ReadonlyArray<
-                RpcMessage.FromClientEncoded | RpcMessage.FromServerEncoded
-              >,
-            catch: (cause) =>
-              new AcpError.AcpProtocolParseError({
-                detail: "Failed to decode ACP wire message",
-                cause,
-              }),
-          }),
-        ),
+        Effect.flatMap(() => decodeWireData(preserveZeroRequestIds(data))),
         Effect.tap((messages) =>
           logProtocol({
             direction: "incoming",
@@ -399,11 +467,7 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
             },
           }),
         ),
-        Effect.flatMap((messages) =>
-          Effect.forEach(messages, routeDecodedMessage, {
-            discard: true,
-          }),
-        ),
+        Effect.flatMap(routeDecodedMessages),
       ),
     ),
     Effect.matchEffect({
@@ -417,15 +481,22 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
         return handleTermination(() => Effect.succeed(normalized));
       },
       onSuccess: () =>
-        handleTermination(
-          () =>
-            options.terminationError ??
-            Effect.succeed(
-              new AcpError.AcpTransportError({
-                detail: "ACP input stream ended",
-                cause: new Error("ACP input stream ended"),
-              }),
-            ),
+        decodeWireData(flushBufferedInput()).pipe(
+          Effect.flatMap(routeDecodedMessages),
+          Effect.matchEffect({
+            onFailure: (error) => handleTermination(() => Effect.succeed(error)),
+            onSuccess: () =>
+              handleTermination(
+                () =>
+                  options.terminationError ??
+                  Effect.succeed(
+                    new AcpError.AcpTransportError({
+                      detail: "ACP input stream ended",
+                      cause: new Error("ACP input stream ended"),
+                    }),
+                  ),
+              ),
+          }),
         ),
     }),
     Effect.forkScoped,

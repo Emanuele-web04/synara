@@ -305,6 +305,138 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
     }),
   );
 
+  it.effect("does not rewrite nested zero-valued ids in extension request payloads", () =>
+    Effect.gen(function* () {
+      const { stdio, input } = yield* makeInMemoryStdio();
+      const receivedParams = yield* Deferred.make<unknown>();
+      yield* AcpProtocol.makeAcpPatchedProtocol({
+        stdio,
+        serverRequestMethods: new Set(),
+        onExtRequest: (_method, params) =>
+          Deferred.succeed(receivedParams, params).pipe(Effect.as({ ok: true })),
+      });
+
+      yield* Queue.offer(
+        input,
+        `${JSON.stringify({
+          jsonrpc: "2.0",
+          id: 0,
+          method: "cursor/update_todos",
+          params: {
+            id: 0,
+            nested: { id: 0 },
+          },
+        })}\n`,
+      );
+
+      assert.deepEqual(yield* Deferred.await(receivedParams), {
+        id: 0,
+        nested: { id: 0 },
+      });
+    }),
+  );
+
+  it.effect("keeps split UTF-8 chunks intact while normalizing inbound messages", () =>
+    Effect.gen(function* () {
+      const { stdio, input } = yield* makeInMemoryStdio();
+      const transport = yield* AcpProtocol.makeAcpPatchedProtocol({
+        stdio,
+        serverRequestMethods: new Set(),
+      });
+      const notifications =
+        yield* Deferred.make<ReadonlyArray<AcpProtocol.AcpIncomingNotification>>();
+      yield* transport.incoming.pipe(
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.flatMap((notificationChunk) => Deferred.succeed(notifications, notificationChunk)),
+        Effect.forkScoped,
+      );
+
+      const encoded = new TextEncoder().encode(
+        `${JSON.stringify({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "session-1",
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: {
+                type: "text",
+                text: "accento è",
+              },
+            },
+          },
+        })}\n`,
+      );
+      const splitIndex = encoded.findIndex((byte) => byte === 0xc3) + 1;
+      yield* Queue.offer(input, encoded.slice(0, splitIndex));
+      yield* Queue.offer(input, encoded.slice(splitIndex));
+
+      const [update] = yield* Deferred.await(notifications);
+      assert.equal(update?._tag, "SessionUpdate");
+      if (update?._tag === "SessionUpdate") {
+        assert.deepEqual(update.params.update, {
+          sessionUpdate: "agent_message_chunk",
+          content: {
+            type: "text",
+            text: "accento è",
+          },
+        });
+      }
+    }),
+  );
+
+  it.effect("flushes a final inbound message without a trailing newline", () =>
+    Effect.gen(function* () {
+      const { stdio, input } = yield* makeInMemoryStdio();
+      const transport = yield* AcpProtocol.makeAcpPatchedProtocol({
+        stdio,
+        serverRequestMethods: new Set(),
+      });
+      const notifications =
+        yield* Deferred.make<ReadonlyArray<AcpProtocol.AcpIncomingNotification>>();
+      yield* transport.incoming.pipe(
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.flatMap((notificationChunk) => Deferred.succeed(notifications, notificationChunk)),
+        Effect.forkScoped,
+      );
+
+      yield* Queue.offer(
+        input,
+        new TextEncoder().encode(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            method: "session/update",
+            params: {
+              sessionId: "session-1",
+              update: {
+                sessionUpdate: "agent_message_chunk",
+                content: {
+                  type: "text",
+                  text: "final message",
+                },
+              },
+            },
+          }),
+        ),
+      );
+      yield* Queue.end(input);
+
+      const [update] = yield* Deferred.await(notifications);
+      assert.equal(update?._tag, "SessionUpdate");
+      if (update?._tag === "SessionUpdate") {
+        assert.deepEqual(update.params.update, {
+          sessionUpdate: "agent_message_chunk",
+          content: {
+            type: "text",
+            text: "final message",
+          },
+        });
+      }
+    }),
+  );
+
   it.effect("cleans up interrupted extension requests before a late response arrives", () =>
     Effect.gen(function* () {
       const { stdio, input, output } = yield* makeInMemoryStdio();

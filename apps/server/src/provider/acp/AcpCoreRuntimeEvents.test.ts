@@ -117,6 +117,53 @@ describe("AcpCoreRuntimeEvents", () => {
     });
 
     expect(
+      makeAcpToolCallEvent({
+        stamp,
+        provider: "cursor",
+        threadId: "thread-1" as never,
+        turnId,
+        toolCall: {
+          toolCallId: "tool-2",
+          kind: "execute",
+          status: "pending",
+          title: "Terminal",
+          detail: "bun run test",
+          data: { command: "bun run test" },
+        },
+        rawPayload: { sessionId: "session-1" },
+      }),
+    ).toMatchObject({
+      type: "item.started",
+      payload: {
+        itemType: "command_execution",
+        status: "inProgress",
+      },
+    });
+
+    expect(
+      makeAcpToolCallEvent({
+        stamp,
+        provider: "cursor",
+        threadId: "thread-1" as never,
+        turnId,
+        toolCall: {
+          toolCallId: "tool-search",
+          kind: "search",
+          status: "pending",
+          title: "Searching",
+          data: { kind: "search" },
+        },
+        rawPayload: { sessionId: "session-1" },
+      }),
+    ).toMatchObject({
+      type: "item.started",
+      payload: {
+        itemType: "dynamic_tool_call",
+        status: "inProgress",
+      },
+    });
+
+    expect(
       makeAcpContentDeltaEvent({
         stamp,
         provider: "cursor",
@@ -130,7 +177,26 @@ describe("AcpCoreRuntimeEvents", () => {
       type: "content.delta",
       itemId: "assistant:session-1:segment:0",
       payload: {
+        streamKind: "assistant_text",
         delta: "hello",
+      },
+    });
+
+    expect(
+      makeAcpContentDeltaEvent({
+        stamp,
+        provider: "cursor",
+        threadId: "thread-1" as never,
+        turnId,
+        text: "thinking",
+        streamKind: "reasoning_text",
+        rawPayload: { sessionId: "session-1" },
+      }),
+    ).toMatchObject({
+      type: "content.delta",
+      payload: {
+        streamKind: "reasoning_text",
+        delta: "thinking",
       },
     });
 

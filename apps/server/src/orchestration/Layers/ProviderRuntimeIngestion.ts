@@ -233,10 +233,18 @@ function subagentThreadTitle(identity: {
 function buildContextWindowActivityPayload(
   event: ProviderRuntimeEvent,
 ): ThreadTokenUsageSnapshot | undefined {
-  if (event.type !== "thread.token-usage.updated" || event.payload.usage.usedTokens <= 0) {
+  if (event.type !== "thread.token-usage.updated") {
     return undefined;
   }
-  return event.payload.usage;
+  const usage = event.payload.usage;
+  const hasTokenUsage = usage.usedTokens > 0;
+  const hasPercentUsage =
+    typeof usage.usedPercent === "number" && Number.isFinite(usage.usedPercent);
+  const hasKnownWindow = typeof usage.maxTokens === "number" && Number.isFinite(usage.maxTokens);
+  if (!hasTokenUsage && !hasPercentUsage && !hasKnownWindow) {
+    return undefined;
+  }
+  return usage;
 }
 
 function asPositiveFiniteNumber(value: unknown): number | undefined {
@@ -687,6 +695,7 @@ function runtimeEventToActivities(
           payload: {
             itemType: event.payload.itemType,
             ...(event.payload.status ? { status: event.payload.status } : {}),
+            ...(event.payload.title ? { title: event.payload.title } : {}),
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
             ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
           },
@@ -771,6 +780,9 @@ function runtimeEventToActivities(
             state: runtimeTurnState(event),
             ...(typeof event.payload.totalCostUsd === "number"
               ? { totalCostUsd: event.payload.totalCostUsd }
+              : {}),
+            ...(typeof event.payload.cumulativeCostUsd === "number"
+              ? { cumulativeCostUsd: event.payload.cumulativeCostUsd }
               : {}),
             ...(runtimeTurnErrorMessage(event)
               ? { errorMessage: runtimeTurnErrorMessage(event) }

@@ -612,6 +612,10 @@ const handleSessionUpdate = ({
         continue;
       }
       if (event._tag === "ContentDelta") {
+        if (event.streamKind === "reasoning_text") {
+          yield* Queue.offer(queue, event);
+          continue;
+        }
         if (event.text.trim().length === 0) {
           const assistantSegmentState = yield* Ref.get(assistantSegmentRef);
           if (!assistantSegmentState.activeItemId) {
@@ -650,13 +654,19 @@ function shouldEmitToolCallUpdate(
   previous: AcpToolCallState | undefined,
   next: AcpToolCallState,
 ): boolean {
+  if (previous === undefined) {
+    return true;
+  }
   if (next.status === "completed" || next.status === "failed") {
+    return true;
+  }
+  if (previous.status !== next.status || previous.title !== next.title) {
     return true;
   }
   if (!next.detail) {
     return false;
   }
-  return previous === undefined || previous.title !== next.title || previous.detail !== next.detail;
+  return previous.detail !== next.detail;
 }
 
 const assistantItemId = (sessionId: string, segmentIndex: number) =>

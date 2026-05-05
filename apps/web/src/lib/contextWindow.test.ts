@@ -3,6 +3,8 @@ import { EventId, type OrchestrationThreadActivity, TurnId } from "@t3tools/cont
 
 import {
   deriveContextWindowSelectionStatus,
+  deriveContextWindowMeterDisplay,
+  deriveCumulativeCostUsd,
   deriveLatestContextWindowSnapshot,
   deriveSelectedContextWindowSnapshot,
   formatContextWindowSelectionLabel,
@@ -49,6 +51,73 @@ describe("contextWindow", () => {
     ]);
 
     expect(snapshot).toBeNull();
+  });
+
+  it("derives percent-only context window snapshots", () => {
+    const snapshot = deriveLatestContextWindowSnapshot([
+      makeActivity("activity-1", "context-window.updated", {
+        usedTokens: 0,
+        usedPercent: 5.8,
+        compactsAutomatically: true,
+      }),
+    ]);
+
+    expect(snapshot?.usedTokens).toBe(0);
+    expect(snapshot?.usedPercent).toBe(5.8);
+    expect(snapshot?.usedPercentage).toBe(5.8);
+    expect(snapshot?.maxTokens).toBeNull();
+    expect(snapshot?.compactsAutomatically).toBe(true);
+  });
+
+  it("derives real zero-percent context window snapshots", () => {
+    const snapshot = deriveLatestContextWindowSnapshot([
+      makeActivity("activity-1", "context-window.updated", {
+        usedTokens: 0,
+        usedPercent: 0,
+        compactsAutomatically: true,
+      }),
+    ]);
+
+    expect(snapshot?.usedTokens).toBe(0);
+    expect(snapshot?.usedPercent).toBe(0);
+    expect(snapshot?.usedPercentage).toBe(0);
+  });
+
+  it("keeps zero-token usage reliable when runtime reports max tokens", () => {
+    const snapshot = deriveLatestContextWindowSnapshot([
+      makeActivity("activity-1", "context-window.updated", {
+        usedTokens: 0,
+        usedPercent: 0,
+        maxTokens: 128_000,
+        compactsAutomatically: true,
+      }),
+    ]);
+
+    expect(snapshot?.remainingTokens).toBe(128_000);
+    expect(deriveContextWindowMeterDisplay(snapshot!)).toMatchObject({
+      hasReliableTokenRatio: true,
+      tokenUsageLabel: "0",
+      compactLabel: "0%",
+    });
+  });
+
+  it("does not infer remaining tokens from percent-only usage", () => {
+    const snapshot = deriveLatestContextWindowSnapshot([
+      makeActivity("activity-1", "context-window.configured", {
+        contextWindow: "1m",
+        maxTokens: 1_000_000,
+      }),
+      makeActivity("activity-2", "context-window.updated", {
+        usedTokens: 0,
+        usedPercent: 5.8,
+        compactsAutomatically: true,
+      }),
+    ]);
+
+    expect(snapshot?.usedTokens).toBe(0);
+    expect(snapshot?.usedPercentage).toBe(5.8);
+    expect(snapshot?.maxTokens).toBe(1_000_000);
+    expect(snapshot?.remainingTokens).toBeNull();
   });
 
   it("formats compact token counts", () => {
@@ -108,9 +177,45 @@ describe("contextWindow", () => {
     expect(snapshot?.usedPercentage).toBe(0);
   });
 
+  it("derives meter display labels without inventing token ratios", () => {
+    const percentOnly = deriveLatestContextWindowSnapshot([
+      makeActivity("activity-1", "context-window.configured", {
+        contextWindow: "1m",
+        maxTokens: 1_000_000,
+      }),
+      makeActivity("activity-2", "context-window.updated", {
+        usedTokens: 0,
+        usedPercent: 5.8,
+      }),
+    ]);
+
+    expect(percentOnly).not.toBeNull();
+    expect(deriveContextWindowMeterDisplay(percentOnly!)).toMatchObject({
+      usedPercentageLabel: "5.8%",
+      tokenUsageLabel: "0",
+      hasReliableTokenRatio: false,
+      normalizedPercentage: 5.8,
+      compactLabel: "6%",
+      ariaLabel: "Context window 5.8% used",
+    });
+  });
+
   it("formats context window selection labels for Claude options", () => {
     expect(formatContextWindowSelectionLabel("1m")).toBe("1M");
     expect(formatContextWindowSelectionLabel("200k")).toBe("200k");
+  });
+
+  it("uses Cursor cumulative cost without summing it as a turn delta", () => {
+    expect(
+      deriveCumulativeCostUsd([
+        makeActivity("turn-1", "turn.completed", {
+          cumulativeCostUsd: 0.2,
+        }),
+        makeActivity("turn-2", "turn.completed", {
+          cumulativeCostUsd: 0.25,
+        }),
+      ]),
+    ).toBe(0.25);
   });
 
   it("infers the active Claude context window from max tokens", () => {

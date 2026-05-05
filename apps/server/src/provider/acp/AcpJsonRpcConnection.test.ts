@@ -171,7 +171,7 @@ describe("AcpSessionRuntime", () => {
     ),
   );
 
-  it.effect("suppresses generic placeholder tool updates until completion", () =>
+  it.effect("emits generic placeholder tool lifecycle updates", () =>
     Effect.gen(function* () {
       const runtime = yield* AcpSessionRuntime;
       yield* runtime.start();
@@ -181,13 +181,23 @@ describe("AcpSessionRuntime", () => {
       });
       expect(promptResult).toMatchObject({ stopReason: "end_turn" });
 
-      const notes = Array.from(yield* Stream.runCollect(Stream.take(runtime.getEvents(), 1)));
-      expect(notes.map((note) => note._tag)).toEqual(["ToolCallUpdated"]);
+      const notes = Array.from(yield* Stream.runCollect(Stream.take(runtime.getEvents(), 3)));
+      expect(notes.map((note) => note._tag)).toEqual([
+        "ToolCallUpdated",
+        "ToolCallUpdated",
+        "ToolCallUpdated",
+      ]);
       const toolCall = notes[0];
       expect(toolCall?._tag).toBe("ToolCallUpdated");
       if (toolCall?._tag === "ToolCallUpdated") {
-        expect(toolCall.toolCall.status).toBe("completed");
-        expect(toolCall.toolCall.title).toBe("Read file");
+        expect(toolCall.toolCall.status).toBe("pending");
+        expect(toolCall.toolCall.title).toBe("Reading");
+      }
+      const completedToolCall = notes[2];
+      expect(completedToolCall?._tag).toBe("ToolCallUpdated");
+      if (completedToolCall?._tag === "ToolCallUpdated") {
+        expect(completedToolCall.toolCall.status).toBe("completed");
+        expect(completedToolCall.toolCall.title).toBe("Read");
       }
     }).pipe(
       Effect.provide(
@@ -197,6 +207,48 @@ describe("AcpSessionRuntime", () => {
             args: [mockAgentPath],
             env: {
               T3_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS: "1",
+            },
+          },
+          cwd: process.cwd(),
+          clientInfo: { name: "t3-test", version: "0.0.0" },
+          authMethodId: "test",
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    ),
+  );
+
+  it.effect("does not open assistant segments for reasoning chunks before tool calls", () =>
+    Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime;
+      yield* runtime.start();
+
+      const promptResult = yield* runtime.prompt({
+        prompt: [{ type: "text", text: "hi" }],
+      });
+      expect(promptResult).toMatchObject({ stopReason: "end_turn" });
+
+      const notes = Array.from(yield* Stream.runCollect(Stream.take(runtime.getEvents(), 3)));
+      expect(notes.map((note) => note._tag)).toEqual([
+        "ContentDelta",
+        "ToolCallUpdated",
+        "ToolCallUpdated",
+      ]);
+      const reasoningDelta = notes[0];
+      expect(reasoningDelta?._tag).toBe("ContentDelta");
+      if (reasoningDelta?._tag === "ContentDelta") {
+        expect(reasoningDelta.streamKind).toBe("reasoning_text");
+        expect(reasoningDelta.itemId).toBeUndefined();
+      }
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          spawn: {
+            command: bunExe,
+            args: [mockAgentPath],
+            env: {
+              T3_ACP_EMIT_REASONING_THEN_TOOL_CALL: "1",
             },
           },
           cwd: process.cwd(),

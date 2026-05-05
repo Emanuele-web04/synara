@@ -1,8 +1,20 @@
 import type * as EffectAcpSchema from "effect-acp/schema";
-import type { ToolLifecycleItemType } from "@t3tools/contracts";
+import type {
+  RuntimeContentStreamKind,
+  ThreadTokenUsageSnapshot,
+  ToolLifecycleItemType,
+} from "@t3tools/contracts";
+import { summarizeToolRawOutput } from "@t3tools/shared/toolOutputSummary";
+
+type AcpTextStreamKind = Extract<RuntimeContentStreamKind, "assistant_text" | "reasoning_text">;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function trimNonEmpty(value: string | null | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 export interface AcpSessionMode {
@@ -67,6 +79,13 @@ export type AcpParsedSessionEvent =
       readonly _tag: "ContentDelta";
       readonly itemId?: string;
       readonly text: string;
+      readonly streamKind?: AcpTextStreamKind;
+      readonly rawPayload: unknown;
+    }
+  | {
+      readonly _tag: "UsageUpdated";
+      readonly usage: ThreadTokenUsageSnapshot;
+      readonly cost?: EffectAcpSchema.Cost | null | undefined;
       readonly rawPayload: unknown;
     };
 
@@ -178,6 +197,40 @@ function normalizeToolCallStatus(
   }
 }
 
+function asNonNegativeInt(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+function asPositiveInt(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+function computeUsagePercent(usedTokens: number, maxTokens: number | undefined): number | undefined {
+  if (maxTokens === undefined) {
+    return undefined;
+  }
+  return Math.min(100, Math.max(0, (usedTokens / maxTokens) * 100));
+}
+
+// Converts ACP's unstable usage updates into DP Code's context-window snapshot shape.
+function tokenUsageSnapshotFromAcpUsageUpdate(input: {
+  readonly size: unknown;
+  readonly used: unknown;
+}): ThreadTokenUsageSnapshot | undefined {
+  const usedTokens = asNonNegativeInt(input.used);
+  if (usedTokens === undefined) {
+    return undefined;
+  }
+  const maxTokens = asPositiveInt(input.size);
+  const usedPercent = computeUsagePercent(usedTokens, maxTokens);
+  return {
+    usedTokens,
+    ...(usedPercent !== undefined ? { usedPercent } : {}),
+    ...(maxTokens !== undefined ? { maxTokens } : {}),
+    compactsAutomatically: true,
+  };
+}
+
 function normalizeCommandValue(value: unknown): string | undefined {
   if (typeof value === "string" && value.trim().length > 0) {
     return value.trim();
@@ -236,8 +289,79 @@ function extractTextContentFromToolCallContent(
   return chunks.length > 0 ? chunks.join("\n") : undefined;
 }
 
+function summarizeToolCallLocations(
+  locations: ReadonlyArray<EffectAcpSchema.ToolCallLocation> | null | undefined,
+): string | undefined {
+  const paths = (locations ?? [])
+    .map((location) =>
+      location.line === undefined || location.line === null
+        ? location.path.trim()
+        : `${location.path.trim()}:${location.line}`,
+    )
+    .filter((entry) => entry.length > 0);
+  if (paths.length === 0) {
+    return undefined;
+  }
+  return paths.length === 1 ? paths[0] : `${paths[0]} +${paths.length - 1} more`;
+}
+
+function summarizeToolCallContent(
+  content: ReadonlyArray<EffectAcpSchema.ToolCallContent> | null | undefined,
+): string | undefined {
+  for (const entry of content ?? []) {
+    if (entry.type === "diff") {
+      return entry.path.trim() || undefined;
+    }
+    if (entry.type !== "content") {
+      continue;
+    }
+    const nested = entry.content;
+    if (nested.type === "resource_link") {
+      return (nested.title ?? nested.name ?? nested.uri).trim() || undefined;
+    }
+    if (nested.type === "resource") {
+      const resource = nested.resource;
+      const uri = "uri" in resource && typeof resource.uri === "string" ? resource.uri.trim() : "";
+      return uri || undefined;
+    }
+  }
+  return extractTextContentFromToolCallContent(content);
+}
+
+function isProviderGenericToolTitle(title: string | undefined, kind: string | undefined): boolean {
+  const normalized = title?.toLowerCase().replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return false;
+  }
+  if (normalized === "tool" || normalized === "terminal" || normalized === "tool call") {
+    return true;
+  }
+  if (kind === "search" && normalized === "find") {
+    return true;
+  }
+  if (kind === "read" && (normalized === "read" || normalized === "read file")) {
+    return true;
+  }
+  return false;
+}
+
 function normalizeToolKind(kind: unknown): string | undefined {
   return typeof kind === "string" && kind.trim().length > 0 ? kind.trim() : undefined;
+}
+
+function inferToolKindFromProviderTitle(title: string | undefined): string | undefined {
+  const normalized = title?.toLowerCase().replace(/\s+/g, " ").trim();
+  switch (normalized) {
+    case "find":
+      return "search";
+    case "read":
+    case "read file":
+      return "read";
+    case "terminal":
+      return "execute";
+    default:
+      return undefined;
+  }
 }
 
 function canonicalItemTypeFromAcpToolKind(kind: string | undefined): ToolLifecycleItemType {
@@ -248,11 +372,36 @@ function canonicalItemTypeFromAcpToolKind(kind: string | undefined): ToolLifecyc
     case "delete":
     case "move":
       return "file_change";
-    case "search":
     case "fetch":
       return "web_search";
+    case "search":
     default:
       return "dynamic_tool_call";
+  }
+}
+
+function deriveGenericToolActionTitle(
+  kind: string | undefined,
+  status: "pending" | "inProgress" | "completed" | "failed" | undefined,
+): string | undefined {
+  const running = status === "pending" || status === "inProgress" || status === undefined;
+  switch (kind) {
+    case "execute":
+      return "Ran command";
+    case "edit":
+      return running ? "Editing" : "Edited";
+    case "delete":
+      return running ? "Deleting" : "Deleted";
+    case "move":
+      return running ? "Moving" : "Moved";
+    case "search":
+      return running ? "Searching" : "Searched";
+    case "fetch":
+      return running ? "Fetching" : "Fetched";
+    case "read":
+      return running ? "Reading" : "Read";
+    default:
+      return undefined;
   }
 }
 
@@ -290,12 +439,16 @@ function makeToolCallState(
   const title = input.title?.trim() || undefined;
   const command = extractToolCallCommand(input.rawInput, title);
   const textContent = extractTextContentFromToolCallContent(input.content);
+  const structuredContent = summarizeToolCallContent(input.content);
+  const locationDetail = summarizeToolCallLocations(input.locations);
+  const outputDetail = summarizeToolRawOutput(input.rawOutput);
+  const status = normalizeToolCallStatus(input.status, options?.fallbackStatus);
+  const kind = normalizeToolKind(input.kind) ?? inferToolKindFromProviderTitle(title);
   const normalizedTitle =
     title && title.toLowerCase() !== "terminal" && title.toLowerCase() !== "tool call"
       ? title
       : undefined;
   const data: Record<string, unknown> = { toolCallId };
-  const kind = normalizeToolKind(input.kind);
   if (kind) {
     data.kind = kind;
   }
@@ -314,11 +467,22 @@ function makeToolCallState(
   if (input.locations !== undefined) {
     data.locations = input.locations;
   }
-  const fallbackDetail = command ?? normalizedTitle ?? textContent;
+  const kindSpecificTitleIsGeneric = isProviderGenericToolTitle(title, kind);
+  const fallbackDetail =
+    command ??
+    locationDetail ??
+    structuredContent ??
+    outputDetail ??
+    (kindSpecificTitleIsGeneric ? undefined : normalizedTitle) ??
+    textContent;
+  const actionTitle = deriveGenericToolActionTitle(kind, status);
   const hasPresentationSeed =
     title !== undefined ||
     kind !== undefined ||
     command !== undefined ||
+    locationDetail !== undefined ||
+    structuredContent !== undefined ||
+    outputDetail !== undefined ||
     normalizedTitle !== undefined ||
     textContent !== undefined;
   const itemType = canonicalItemTypeFromAcpToolKind(kind);
@@ -326,12 +490,16 @@ function makeToolCallState(
     ? deriveToolActivityPresentation({
         itemType,
         data,
-        fallbackSummary: itemType === "command_execution" ? "Ran command" : "Tool",
-        ...(normalizedTitle !== undefined ? { title: normalizedTitle } : {}),
+        fallbackSummary:
+          actionTitle ?? (itemType === "command_execution" ? "Ran command" : "Tool"),
+        ...(normalizedTitle !== undefined && !kindSpecificTitleIsGeneric
+          ? { title: normalizedTitle }
+          : actionTitle !== undefined
+            ? { title: actionTitle }
+          : {}),
         ...(fallbackDetail !== undefined ? { detail: fallbackDetail } : {}),
       })
     : undefined;
-  const status = normalizeToolCallStatus(input.status, options?.fallbackStatus);
   return {
     toolCallId,
     ...(kind ? { kind } : {}),
@@ -370,8 +538,12 @@ export function mergeToolCallState(
 ): AcpToolCallState {
   const nextKind = typeof next.data.kind === "string" ? next.data.kind : undefined;
   const kind = nextKind ?? previous?.kind;
-  const title = next.title ?? previous?.title;
   const status = next.status ?? previous?.status;
+  const nextTitleIsGeneric = isProviderGenericToolTitle(next.title, kind);
+  const actionTitle = nextTitleIsGeneric ? deriveGenericToolActionTitle(kind, status) : undefined;
+  const title = nextTitleIsGeneric
+    ? actionTitle ?? previous?.title ?? next.title
+    : next.title ?? previous?.title;
   const command = next.command ?? previous?.command;
   const detail = next.detail ?? previous?.detail;
   return {
@@ -480,7 +652,36 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
       if (upd.content.type === "text" && upd.content.text.length > 0) {
         events.push({
           _tag: "ContentDelta",
+          ...(trimNonEmpty(upd.messageId) ? { itemId: trimNonEmpty(upd.messageId) } : {}),
           text: upd.content.text,
+          streamKind: "assistant_text",
+          rawPayload: params,
+        });
+      }
+      break;
+    }
+    case "agent_thought_chunk": {
+      if (upd.content.type === "text" && upd.content.text.length > 0) {
+        events.push({
+          _tag: "ContentDelta",
+          ...(trimNonEmpty(upd.messageId) ? { itemId: trimNonEmpty(upd.messageId) } : {}),
+          text: upd.content.text,
+          streamKind: "reasoning_text",
+          rawPayload: params,
+        });
+      }
+      break;
+    }
+    case "usage_update": {
+      const usage = tokenUsageSnapshotFromAcpUsageUpdate({
+        size: upd.size,
+        used: upd.used,
+      });
+      if (usage) {
+        events.push({
+          _tag: "UsageUpdated",
+          usage,
+          ...(upd.cost !== undefined ? { cost: upd.cost } : {}),
           rawPayload: params,
         });
       }

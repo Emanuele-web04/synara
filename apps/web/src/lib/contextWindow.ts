@@ -12,6 +12,14 @@ function asBoolean(value: unknown): boolean | null {
   return typeof value === "boolean" ? value : null;
 }
 
+function asContextWindowPercent(value: unknown): number | null {
+  const percent = asFiniteNumber(value);
+  if (percent === null) {
+    return null;
+  }
+  return Math.max(0, Math.min(100, percent));
+}
+
 type NullableContextWindowUsage = {
   readonly [Key in keyof ThreadTokenUsageSnapshot]: undefined extends ThreadTokenUsageSnapshot[Key]
     ? Exclude<ThreadTokenUsageSnapshot[Key], undefined> | null
@@ -31,6 +39,15 @@ export interface ContextWindowSelectionStatus {
   readonly pendingSelectedLabel: string | null;
 }
 
+export interface ContextWindowMeterDisplay {
+  readonly usedPercentageLabel: string | null;
+  readonly tokenUsageLabel: string;
+  readonly hasReliableTokenRatio: boolean;
+  readonly normalizedPercentage: number;
+  readonly compactLabel: string;
+  readonly ariaLabel: string;
+}
+
 const KNOWN_CONTEXT_WINDOW_MAX_TOKENS = {
   "200k": 200_000,
   "1m": 1_000_000,
@@ -47,20 +64,29 @@ function deriveLatestUsageContextWindowSnapshot(
     }
 
     const payload = asRecord(activity.payload);
-    const usedTokens = asFiniteNumber(payload?.usedTokens);
-    if (usedTokens === null || usedTokens <= 0) {
+    const rawUsedTokens = asFiniteNumber(payload?.usedTokens);
+    const usedTokens = rawUsedTokens ?? 0;
+    const payloadUsedPercent = asContextWindowPercent(payload?.usedPercent);
+    const maxTokens = asFiniteNumber(payload?.maxTokens);
+    if (usedTokens <= 0 && payloadUsedPercent === null && (maxTokens === null || maxTokens <= 0)) {
       continue;
     }
 
-    const maxTokens = asFiniteNumber(payload?.maxTokens);
     const usedPercentage =
-      maxTokens !== null && maxTokens > 0 ? Math.min(100, (usedTokens / maxTokens) * 100) : null;
+      payloadUsedPercent ??
+      (maxTokens !== null && maxTokens > 0 ? Math.min(100, (usedTokens / maxTokens) * 100) : null);
+    const hasReliableTokenUsage =
+      rawUsedTokens !== null &&
+      (usedTokens > 0 || payloadUsedPercent === null || (maxTokens !== null && maxTokens > 0));
     const remainingTokens =
-      maxTokens !== null ? Math.max(0, Math.round(maxTokens - usedTokens)) : null;
+      maxTokens !== null && hasReliableTokenUsage
+        ? Math.max(0, Math.round(maxTokens - usedTokens))
+        : null;
     const remainingPercentage = usedPercentage !== null ? Math.max(0, 100 - usedPercentage) : null;
 
     return {
       usedTokens,
+      usedPercent: payloadUsedPercent,
       totalProcessedTokens: asFiniteNumber(payload?.totalProcessedTokens),
       maxTokens,
       remainingTokens,
@@ -118,13 +144,22 @@ export function deriveLatestContextWindowSnapshot(
   const usedTokens = usageSnapshot?.usedTokens ?? 0;
   const maxTokens = configuredMaxTokens ?? usageSnapshot?.maxTokens ?? null;
   const usedPercentage =
-    maxTokens !== null && maxTokens > 0 ? Math.min(100, (usedTokens / maxTokens) * 100) : null;
+    usageSnapshot?.usedPercent ??
+    (maxTokens !== null && maxTokens > 0 ? Math.min(100, (usedTokens / maxTokens) * 100) : null);
+  const hasReliableTokenUsage =
+    usageSnapshot === null ||
+    usageSnapshot.usedTokens > 0 ||
+    usageSnapshot.usedPercent === null ||
+    usageSnapshot.maxTokens !== null;
   const remainingTokens =
-    maxTokens !== null ? Math.max(0, Math.round(maxTokens - usedTokens)) : null;
+    maxTokens !== null && hasReliableTokenUsage
+      ? Math.max(0, Math.round(maxTokens - usedTokens))
+      : null;
   const remainingPercentage = usedPercentage !== null ? Math.max(0, 100 - usedPercentage) : null;
 
   return {
     usedTokens,
+    usedPercent: usageSnapshot?.usedPercent ?? null,
     totalProcessedTokens: usageSnapshot?.totalProcessedTokens ?? null,
     maxTokens,
     remainingTokens,
@@ -162,6 +197,7 @@ export function deriveSelectedContextWindowSnapshot(
 
   return {
     usedTokens: 0,
+    usedPercent: null,
     totalProcessedTokens: null,
     maxTokens,
     remainingTokens: maxTokens,
@@ -183,20 +219,61 @@ export function deriveSelectedContextWindowSnapshot(
   };
 }
 
+function formatPercentage(value: number | null): string | null {
+  if (value === null || !Number.isFinite(value)) {
+    return null;
+  }
+  if (value < 10) {
+    return `${value.toFixed(1).replace(/\.0$/, "")}%`;
+  }
+  return `${Math.round(value)}%`;
+}
+
+export function deriveContextWindowMeterDisplay(
+  usage: ContextWindowSnapshot,
+): ContextWindowMeterDisplay {
+  const usedPercentageLabel = formatPercentage(usage.usedPercentage);
+  const tokenUsageLabel = formatContextWindowTokens(usage.usedTokens);
+  const hasReliableTokenRatio =
+    usage.maxTokens !== null &&
+    (usage.usedTokens > 0 || usage.usedPercent === null || usage.remainingTokens !== null);
+  const normalizedPercentage = Math.max(0, Math.min(100, usage.usedPercentage ?? 0));
+  return {
+    usedPercentageLabel,
+    tokenUsageLabel,
+    hasReliableTokenRatio,
+    normalizedPercentage,
+    compactLabel:
+      usage.usedPercentage !== null ? `${Math.round(usage.usedPercentage)}%` : tokenUsageLabel,
+    ariaLabel: usedPercentageLabel
+      ? `Context window ${usedPercentageLabel} used`
+      : `Context window ${tokenUsageLabel} tokens used`,
+  };
+}
+
 export function deriveCumulativeCostUsd(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): number | null {
-  let total = 0;
-  let found = false;
+  let turnDeltaTotal = 0;
+  let latestCumulative: number | null = null;
+  let foundTurnDelta = false;
   for (const activity of activities) {
     if (activity.kind !== "turn.completed") continue;
     const payload = asRecord(activity.payload);
+    const cumulativeCost = asFiniteNumber(payload?.cumulativeCostUsd);
+    if (cumulativeCost !== null) {
+      latestCumulative = cumulativeCost;
+      continue;
+    }
     const cost = asFiniteNumber(payload?.totalCostUsd);
     if (cost === null) continue;
-    total += cost;
-    found = true;
+    turnDeltaTotal += cost;
+    foundTurnDelta = true;
   }
-  return found ? total : null;
+  if (latestCumulative !== null) {
+    return latestCumulative + turnDeltaTotal;
+  }
+  return foundTurnDelta ? turnDeltaTotal : null;
 }
 
 export function formatContextWindowSelectionLabel(value: string | null | undefined): string | null {
