@@ -16,6 +16,7 @@ import {
   hasEffortLevel,
   isClaudeUltrathinkPrompt,
   normalizeClaudeModelOptions,
+  normalizeCursorModelOptions,
   normalizeGeminiModelOptions,
   normalizeOpenCodeModelOptions,
   resolveLabeledOptionValue,
@@ -47,6 +48,7 @@ type ProviderTraitRenderInput = {
   threadId: ThreadId;
   model: ModelSlug;
   runtimeModel?: ProviderModelDescriptor | undefined;
+  runtimeModels?: ReadonlyArray<ProviderModelDescriptor> | null | undefined;
   modelOptions: ProviderModelOptions[ProviderKind] | undefined;
   prompt: string;
   includeFastMode?: boolean;
@@ -75,6 +77,7 @@ function renderTraitsMenuContentForProvider(
       threadId={input.threadId}
       model={input.model}
       runtimeModel={input.runtimeModel}
+      runtimeModels={input.runtimeModels}
       modelOptions={input.modelOptions}
       prompt={input.prompt}
       {...(input.includeFastMode === undefined ? {} : { includeFastMode: input.includeFastMode })}
@@ -93,6 +96,7 @@ function renderTraitsPickerForProvider(
       threadId={input.threadId}
       model={input.model}
       runtimeModel={input.runtimeModel}
+      runtimeModels={input.runtimeModels}
       modelOptions={input.modelOptions}
       prompt={input.prompt}
       {...(input.open !== undefined ? { open: input.open } : {})}
@@ -134,6 +138,12 @@ function getProviderStateFromCapabilities(
       const providerOptions = modelOptions?.claudeAgent;
       rawEffort = trimOrNull(providerOptions?.effort);
       normalizedOptions = normalizeClaudeModelOptions(model, providerOptions);
+      break;
+    }
+    case "cursor": {
+      const providerOptions = modelOptions?.cursor;
+      rawEffort = trimOrNull(providerOptions?.reasoningEffort);
+      normalizedOptions = normalizeCursorModelOptions(providerOptions);
       break;
     }
     case "gemini": {
@@ -204,6 +214,11 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
     renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("claudeAgent", input),
     renderTraitsPicker: (input) => renderTraitsPickerForProvider("claudeAgent", input),
   },
+  cursor: {
+    getState: (input) => getProviderStateFromCapabilities(input),
+    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("cursor", input),
+    renderTraitsPicker: (input) => renderTraitsPickerForProvider("cursor", input),
+  },
   gemini: {
     getState: (input) => getProviderStateFromCapabilities(input),
     renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("gemini", input),
@@ -225,6 +240,7 @@ export function renderProviderTraitsMenuContent(input: {
   threadId: ThreadId;
   model: ModelSlug;
   runtimeModel?: ProviderModelDescriptor | undefined;
+  runtimeModels?: ReadonlyArray<ProviderModelDescriptor> | null | undefined;
   modelOptions: ProviderModelOptions[ProviderKind] | undefined;
   prompt: string;
   includeFastMode?: boolean;
@@ -253,6 +269,7 @@ export function renderProviderTraitsPicker(input: {
   threadId: ThreadId;
   model: ModelSlug;
   runtimeModel?: ProviderModelDescriptor | undefined;
+  runtimeModels?: ReadonlyArray<ProviderModelDescriptor> | null | undefined;
   modelOptions: ProviderModelOptions[ProviderKind] | undefined;
   prompt: string;
   includeFastMode?: boolean;

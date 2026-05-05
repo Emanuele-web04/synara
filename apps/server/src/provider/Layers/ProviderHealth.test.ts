@@ -7,6 +7,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import {
   checkClaudeProviderStatus,
   checkCodexProviderStatus,
+  checkCursorProviderStatus,
   checkOpenCodeProviderStatus,
   hasCustomModelProvider,
   parseAuthStatusFromOutput,
@@ -630,6 +631,66 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           "OpenCode CLI (`opencode`) is not installed or not on PATH.",
         );
       }).pipe(Effect.provide(failingSpawnerLayer("spawn opencode ENOENT"))),
+    );
+  });
+
+  describe("checkCursorProviderStatus", () => {
+    it.effect("returns ready when Cursor Agent is installed", () =>
+      Effect.gen(function* () {
+        const status = yield* checkCursorProviderStatus;
+        assert.strictEqual(status.provider, "cursor");
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authStatus, "unknown");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") {
+              return { stdout: "agent 2026.04.27\n", stderr: "", code: 0 };
+            }
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("returns unavailable when Cursor Agent is missing", () =>
+      Effect.gen(function* () {
+        const status = yield* checkCursorProviderStatus;
+        assert.strictEqual(status.provider, "cursor");
+        assert.strictEqual(status.status, "error");
+        assert.strictEqual(status.available, false);
+        assert.strictEqual(status.authStatus, "unknown");
+        assert.strictEqual(
+          status.message,
+          "Cursor Agent CLI (`agent`) is not installed or not on PATH.",
+        );
+      }).pipe(Effect.provide(failingSpawnerLayer("spawn agent ENOENT"))),
+    );
+
+    it.effect("returns unavailable when Cursor Agent exits with an error", () =>
+      Effect.gen(function* () {
+        const status = yield* checkCursorProviderStatus;
+        assert.strictEqual(status.provider, "cursor");
+        assert.strictEqual(status.status, "error");
+        assert.strictEqual(status.available, false);
+        assert.strictEqual(status.authStatus, "unknown");
+        assert.strictEqual(
+          status.message,
+          "Cursor Agent CLI is installed but failed to run. version failed",
+        );
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") {
+              return { stdout: "", stderr: "version failed\n", code: 1 };
+            }
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
     );
   });
 

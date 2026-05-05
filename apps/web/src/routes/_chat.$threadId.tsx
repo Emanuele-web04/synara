@@ -28,7 +28,7 @@ import { Schema } from "effect";
 
 import ChatView from "../components/ChatView";
 import BrowserPanel from "../components/BrowserPanel";
-import { ClaudeAI, Gemini, OpenAI, OpenCodeIcon } from "../components/Icons";
+import { ClaudeAI, CursorIcon, Gemini, OpenAI, OpenCodeIcon } from "../components/Icons";
 import { ChatPaneDropOverlay } from "../components/chat-drop-overlay/ChatPaneDropOverlay";
 import { DiffWorkerPoolProvider } from "../components/DiffWorkerPoolProvider";
 import {
@@ -640,6 +640,9 @@ function SplitPaneEmptyState(props: {
 function PickerProviderGlyph(props: { provider: ProviderKind; className?: string }) {
   if (props.provider === "claudeAgent") {
     return <ClaudeAI aria-hidden="true" className={cn("text-foreground", props.className)} />;
+  }
+  if (props.provider === "cursor") {
+    return <CursorIcon aria-hidden="true" className={cn("text-foreground", props.className)} />;
   }
   if (props.provider === "gemini") {
     return <Gemini aria-hidden="true" className={cn("text-foreground", props.className)} />;

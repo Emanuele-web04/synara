@@ -115,6 +115,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("wsNativeApi", () => {
@@ -265,6 +266,45 @@ describe("wsNativeApi", () => {
     expect(lateListener).toHaveBeenCalledWith(payload);
   });
 
+  it("delivers and caches server settings updates", async () => {
+    const { createWsNativeApi, onServerSettingsUpdated } = await import("./wsNativeApi");
+
+    createWsNativeApi();
+    const listener = vi.fn();
+    onServerSettingsUpdated(listener);
+
+    const payload = {
+      settings: {
+        enableAssistantStreaming: true,
+        defaultThreadEnvMode: "local",
+        addProjectBaseDirectory: "",
+        textGenerationModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
+        providers: {
+          codex: { enabled: true, binaryPath: "codex", homePath: "", customModels: [] },
+          claudeAgent: { enabled: true, binaryPath: "claude", launchArgs: "", customModels: [] },
+          cursor: { enabled: false, binaryPath: "agent", apiEndpoint: "", customModels: [] },
+          gemini: { enabled: true, binaryPath: "gemini", customModels: [] },
+          opencode: {
+            enabled: true,
+            binaryPath: "opencode",
+            serverUrl: "",
+            serverPassword: "",
+            customModels: [],
+          },
+        },
+      },
+    } as const;
+    emitPush(WS_CHANNELS.serverSettingsUpdated, payload);
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith(payload);
+
+    const lateListener = vi.fn();
+    onServerSettingsUpdated(lateListener);
+    expect(lateListener).toHaveBeenCalledTimes(1);
+    expect(lateListener).toHaveBeenCalledWith(payload);
+  });
+
   it("forwards valid terminal and orchestration events", async () => {
     const { createWsNativeApi } = await import("./wsNativeApi");
 
@@ -374,6 +414,79 @@ describe("wsNativeApi", () => {
       relativePath: "plan.md",
       contents: "# Plan\n",
     });
+  });
+
+  it("forwards server environment requests to the websocket server method", async () => {
+    requestMock.mockResolvedValue({
+      environmentId: "environment-1",
+      label: "Test Host",
+      platform: { os: "darwin", arch: "arm64" },
+      serverVersion: "0.0.38",
+      capabilities: { repositoryIdentity: true },
+    });
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+    await api.server.getEnvironment();
+
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.serverGetEnvironment);
+  });
+
+  it("fetches auth session state over HTTP", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          authenticated: false,
+          auth: {
+            policy: "loopback-browser",
+            bootstrapMethods: ["one-time-token"],
+            sessionMethods: ["browser-session-cookie", "bearer-session-token"],
+            sessionCookieName: "t3_session",
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+    const result = await api.server.getAuthSession();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/auth/session",
+      expect.objectContaining({ credentials: "same-origin", method: "GET" }),
+    );
+    expect(result).toMatchObject({ authenticated: false });
+  });
+
+  it("posts auth bootstrap payloads over HTTP", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          authenticated: true,
+          role: "client",
+          sessionMethod: "browser-session-cookie",
+          expiresAt: "2026-01-01T00:00:00.000Z",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+    const result = await api.server.bootstrapAuth({ credential: "PAIRINGTOKEN" });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/auth/bootstrap",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "same-origin",
+        body: JSON.stringify({ credential: "PAIRINGTOKEN" }),
+      }),
+    );
+    expect(result).toMatchObject({ authenticated: true, sessionMethod: "browser-session-cookie" });
   });
 
   it("uses no client timeout for git.runStackedAction", async () => {

@@ -86,6 +86,13 @@ describe("providerStatusCache", () => {
           authStatus: "unknown",
           checkedAt: "2026-04-15T10:01:00.000Z",
         },
+        {
+          provider: "cursor",
+          status: "ready",
+          available: true,
+          authStatus: "unknown",
+          checkedAt: "2026-04-15T10:03:00.000Z",
+        },
         readyCodexStatus,
       ]),
     ).toEqual([
@@ -96,6 +103,13 @@ describe("providerStatusCache", () => {
         available: true,
         authStatus: "unknown",
         checkedAt: "2026-04-15T10:01:00.000Z",
+      },
+      {
+        provider: "cursor",
+        status: "ready",
+        available: true,
+        authStatus: "unknown",
+        checkedAt: "2026-04-15T10:03:00.000Z",
       },
       {
         provider: "gemini",

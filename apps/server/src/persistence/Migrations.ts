@@ -46,6 +46,7 @@ import Migration0030 from "./Migrations/030_ProjectionThreadMessagesDispatchMode
 import Migration0031 from "./Migrations/031_ProjectionThreadsCreateBranchFlowCompleted.ts";
 import Migration0032 from "./Migrations/032_ReconcileLegacyT3SchemaImport.ts";
 import Migration0033 from "./Migrations/033_ProjectionThreadsSidechatSource.ts";
+import Migration0034 from "./Migrations/034_AuthAccessManagement.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -91,6 +92,7 @@ export const migrationEntries = [
   [31, "ProjectionThreadsCreateBranchFlowCompleted", Migration0031],
   [32, "ReconcileLegacyT3SchemaImport", Migration0032],
   [33, "ProjectionThreadsSidechatSource", Migration0033],
+  [34, "AuthAccessManagement", Migration0034],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

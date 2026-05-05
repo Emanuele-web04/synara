@@ -25,6 +25,7 @@ function decodeProviderKind(
   if (
     providerName === "codex" ||
     providerName === "claudeAgent" ||
+    providerName === "cursor" ||
     providerName === "gemini" ||
     providerName === "opencode"
   ) {
@@ -73,6 +74,7 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
                   adapterKey: value.adapterKey,
                   runtimeMode: value.runtimeMode,
                   status: value.status,
+                  lastSeenAt: value.lastSeenAt,
                   resumeCursor: value.resumeCursor,
                   runtimePayload: value.runtimePayload,
                 }),
@@ -150,12 +152,34 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
       Effect.map((rows) => rows.map((row) => row.threadId)),
     );
 
+  const listBindings: ProviderSessionDirectoryShape["listBindings"] = () =>
+    repository.list().pipe(
+      Effect.mapError(toPersistenceError("ProviderSessionDirectory.listBindings:list")),
+      Effect.flatMap(
+        Effect.forEach((row) =>
+          decodeProviderKind(row.providerName, "ProviderSessionDirectory.listBindings").pipe(
+            Effect.map((provider) => ({
+              threadId: row.threadId,
+              provider,
+              adapterKey: row.adapterKey,
+              runtimeMode: row.runtimeMode,
+              status: row.status,
+              lastSeenAt: row.lastSeenAt,
+              resumeCursor: row.resumeCursor,
+              runtimePayload: row.runtimePayload,
+            })),
+          ),
+        ),
+      ),
+    );
+
   return {
     upsert,
     getProvider,
     getBinding,
     remove,
     listThreadIds,
+    listBindings,
   } satisfies ProviderSessionDirectoryShape;
 });
 

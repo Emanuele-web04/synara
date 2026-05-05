@@ -1,8 +1,16 @@
 import { Schema } from "effect";
-import { IsoDateTime, NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas";
+import {
+  IsoDateTime,
+  NonNegativeInt,
+  ProjectId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas";
 import { KeybindingRule, ResolvedKeybindingsConfig } from "./keybindings";
 import { EditorId } from "./editor";
 import { ProviderKind } from "./orchestration";
+import { ServerSettings, ServerSettingsPatch } from "./settings";
+import { ExecutionEnvironmentDescriptor } from "./environment";
 
 const SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BASE64_CHARS = 14_000_000;
 
@@ -146,5 +154,65 @@ export const ServerProviderStatusesUpdatedPayload = Schema.Struct({
 });
 export type ServerProviderStatusesUpdatedPayload = typeof ServerProviderStatusesUpdatedPayload.Type;
 
+export const ServerSettingsUpdatedPayload = Schema.Struct({
+  settings: ServerSettings,
+});
+export type ServerSettingsUpdatedPayload = typeof ServerSettingsUpdatedPayload.Type;
+
+export const ServerLifecycleWelcomePayload = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  homeDir: Schema.optional(TrimmedNonEmptyString),
+  projectName: TrimmedNonEmptyString,
+  bootstrapProjectId: Schema.optional(ProjectId),
+  bootstrapThreadId: Schema.optional(ThreadId),
+});
+export type ServerLifecycleWelcomePayload = typeof ServerLifecycleWelcomePayload.Type;
+
+export const ServerLifecycleStreamEvent = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("welcome"),
+    payload: ServerLifecycleWelcomePayload,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("ready"),
+    payload: Schema.Struct({
+      at: IsoDateTime,
+    }),
+  }),
+]);
+export type ServerLifecycleStreamEvent = typeof ServerLifecycleStreamEvent.Type;
+
+export const ServerConfigStreamEvent = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("snapshot"),
+    config: ServerConfig,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("configUpdated"),
+    payload: ServerConfigUpdatedPayload,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("providerStatuses"),
+    payload: ServerProviderStatusesUpdatedPayload,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("settingsUpdated"),
+    payload: ServerSettingsUpdatedPayload,
+  }),
+]);
+export type ServerConfigStreamEvent = typeof ServerConfigStreamEvent.Type;
+
 export const ServerRefreshProvidersResult = ServerProviderStatusesUpdatedPayload;
 export type ServerRefreshProvidersResult = typeof ServerRefreshProvidersResult.Type;
+
+export const ServerGetSettingsResult = ServerSettings;
+export type ServerGetSettingsResult = typeof ServerGetSettingsResult.Type;
+
+export const ServerGetEnvironmentResult = ExecutionEnvironmentDescriptor;
+export type ServerGetEnvironmentResult = typeof ServerGetEnvironmentResult.Type;
+
+export const ServerUpdateSettingsInput = ServerSettingsPatch;
+export type ServerUpdateSettingsInput = typeof ServerUpdateSettingsInput.Type;
+
+export const ServerUpdateSettingsResult = ServerSettings;
+export type ServerUpdateSettingsResult = typeof ServerUpdateSettingsResult.Type;

@@ -604,7 +604,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           checkpoint_status AS "status",
           checkpoint_files_json AS "files",
           assistant_message_id AS "assistantMessageId",
-          completed_at AS "completedAt"
+          COALESCE(completed_at, started_at, requested_at) AS "completedAt"
         FROM projection_turns
         -- Provider-diff placeholders can reserve checkpoint metadata before the
         -- turn is complete; snapshot checkpoint summaries require completedAt.
@@ -910,7 +910,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           checkpoint_status AS "status",
           checkpoint_files_json AS "files",
           assistant_message_id AS "assistantMessageId",
-          completed_at AS "completedAt"
+          COALESCE(completed_at, started_at, requested_at) AS "completedAt"
         FROM projection_turns
         -- Keep incomplete provider-diff placeholders out of the public
         -- checkpoint summary contract, which requires completedAt.
