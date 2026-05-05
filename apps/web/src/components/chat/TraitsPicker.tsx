@@ -70,6 +70,8 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     { caps, effortLevels, thinkingEnabled, contextWindowOptions },
     { includeFastMode },
   );
+  const hasPriorFastModeSection =
+    effortLevels.length > 0 || thinkingEnabled !== null || contextWindowOptions.length > 1;
 
   const handleEffortChange = useCallback(
     (value: string) => {
@@ -187,7 +189,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
       ) : null}
       {includeFastMode && caps.supportsFastMode ? (
         <>
-          <MenuDivider />
+          {hasPriorFastModeSection ? <MenuDivider /> : null}
           <MenuGroup>
             <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Fast Mode</div>
             <MenuRadioGroup
@@ -203,10 +205,10 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
               }}
             >
               <MenuRadioItem value="off" onClick={() => onSelectionComplete?.()}>
-                off
+                Default
               </MenuRadioItem>
               <MenuRadioItem value="on" onClick={() => onSelectionComplete?.()}>
-                on
+                Fast
               </MenuRadioItem>
             </MenuRadioGroup>
           </MenuGroup>
@@ -304,14 +306,23 @@ export const TraitsPicker = memo(function TraitsPicker({
     contextWindowOptions.length > 1 && contextWindow !== defaultContextWindow
       ? (contextWindowOptions.find((option) => option.value === contextWindow)?.label ?? null)
       : null;
+  const isFastOnlyControl =
+    caps.supportsFastMode &&
+    effortLevels.length === 0 &&
+    thinkingEnabled === null &&
+    contextWindowOptions.length <= 1;
   const primaryTriggerLabel = ultrathinkPromptControlled
     ? "Ultrathink"
     : effortLabel
       ? effortLabel
-      : thinkingEnabled === null
-        ? null
-        : `Thinking ${thinkingEnabled ? "On" : "Off"}`;
-  const showsFastBadge = caps.supportsFastMode && fastModeEnabled;
+      : thinkingEnabled !== null
+        ? `Thinking ${thinkingEnabled ? "On" : "Off"}`
+        : isFastOnlyControl
+          ? fastModeEnabled
+            ? "Fast"
+            : "Default"
+          : null;
+  const showsFastBadge = caps.supportsFastMode && fastModeEnabled && !isFastOnlyControl;
 
   const isCodexStyle = provider === "codex";
 

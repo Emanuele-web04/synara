@@ -6,7 +6,13 @@
 import { Schema } from "effect";
 import { TrimmedNonEmptyString } from "./baseSchemas";
 
-const ProviderDiscoveryKind = Schema.Literals(["codex", "claudeAgent", "gemini", "opencode"]);
+const ProviderDiscoveryKind = Schema.Literals([
+  "codex",
+  "claudeAgent",
+  "cursor",
+  "gemini",
+  "opencode",
+]);
 
 export const ProviderSkillInterface = Schema.Struct({
   displayName: Schema.optional(TrimmedNonEmptyString),
@@ -213,6 +219,7 @@ export type ProviderReadPluginResult = typeof ProviderReadPluginResult.Type;
 export const ProviderListModelsInput = Schema.Struct({
   provider: ProviderDiscoveryKind,
   binaryPath: Schema.optional(TrimmedNonEmptyString),
+  apiEndpoint: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderListModelsInput = typeof ProviderListModelsInput.Type;
 
@@ -222,6 +229,13 @@ export const ProviderReasoningEffortDescriptor = Schema.Struct({
   description: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderReasoningEffortDescriptor = typeof ProviderReasoningEffortDescriptor.Type;
+
+export const ProviderContextWindowDescriptor = Schema.Struct({
+  value: TrimmedNonEmptyString,
+  label: TrimmedNonEmptyString,
+  isDefault: Schema.optional(Schema.Literal(true)),
+});
+export type ProviderContextWindowDescriptor = typeof ProviderContextWindowDescriptor.Type;
 
 export const ProviderModelDescriptor = Schema.Struct({
   slug: TrimmedNonEmptyString,
@@ -233,6 +247,9 @@ export const ProviderModelDescriptor = Schema.Struct({
   supportedReasoningEfforts: Schema.optional(Schema.Array(ProviderReasoningEffortDescriptor)),
   defaultReasoningEffort: Schema.optional(TrimmedNonEmptyString),
   supportsFastMode: Schema.optional(Schema.Boolean),
+  supportsThinkingToggle: Schema.optional(Schema.Boolean),
+  contextWindowOptions: Schema.optional(Schema.Array(ProviderContextWindowDescriptor)),
+  defaultContextWindow: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderModelDescriptor = typeof ProviderModelDescriptor.Type;
 

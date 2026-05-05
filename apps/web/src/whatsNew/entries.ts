@@ -158,6 +158,12 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
     date: "Apr 26",
     features: [
       {
+        id: "cursor-provider",
+        title: "Cursor CLI support landed",
+        description:
+          "Cursor is now available as a provider, with ACP sessions, model discovery, existing chats, handoff, shortcuts, and git text generation wired into DP Code.",
+      },
+      {
         id: "chatgpt-voice-transcription",
         title: "Voice transcription is scoped more carefully",
         description:

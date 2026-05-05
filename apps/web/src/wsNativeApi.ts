@@ -1,4 +1,15 @@
 import {
+  type AuthBearerBootstrapResult,
+  type AuthBootstrapInput,
+  type AuthBootstrapResult,
+  type AuthClientSession,
+  type AuthCreatePairingCredentialInput,
+  type AuthPairingCredentialResult,
+  type AuthPairingLink,
+  type AuthRevokeClientSessionInput,
+  type AuthRevokePairingLinkInput,
+  type AuthSessionState,
+  type AuthWebSocketTokenResult,
   type ThreadId,
   type ThreadBrowserState,
   type GitActionProgressEvent,
@@ -6,6 +17,7 @@ import {
   type OrchestrationShellStreamItem,
   type OrchestrationThreadStreamItem,
   type ServerProviderStatusesUpdatedPayload,
+  type ServerSettingsUpdatedPayload,
   type TerminalEvent,
   ORCHESTRATION_WS_CHANNELS,
   ORCHESTRATION_WS_METHODS,
@@ -27,6 +39,7 @@ const serverConfigUpdatedListeners = new Set<(payload: ServerConfigUpdatedPayloa
 const serverProviderStatusesUpdatedListeners = new Set<
   (payload: ServerProviderStatusesUpdatedPayload) => void
 >();
+const serverSettingsUpdatedListeners = new Set<(payload: ServerSettingsUpdatedPayload) => void>();
 const gitActionProgressListeners = new Set<(payload: GitActionProgressEvent) => void>();
 const terminalEventListeners = new Set<(payload: TerminalEvent) => void>();
 const orchestrationDomainEventListeners = new Set<(payload: OrchestrationEvent) => void>();
@@ -57,6 +70,38 @@ function defaultBrowserTitle(url: string): string {
   } catch {
     return url;
   }
+}
+
+async function requestAuthJson<T>(
+  path: string,
+  options: {
+    readonly method?: "GET" | "POST";
+    readonly body?: unknown;
+  } = {},
+): Promise<T> {
+  const hasBody = options.body !== undefined;
+  const response = await fetch(path, {
+    method: options.method ?? "GET",
+    credentials: "same-origin",
+    ...(hasBody
+      ? {
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(options.body),
+        }
+      : {}),
+  });
+  const payload = (await response.json().catch(() => null)) as unknown;
+  if (!response.ok) {
+    const message =
+      payload &&
+      typeof payload === "object" &&
+      "error" in payload &&
+      typeof payload.error === "string"
+        ? payload.error
+        : `Auth request failed with status ${response.status}`;
+    throw new Error(message);
+  }
+  return payload as T;
 }
 
 function createFallbackTab(url = "about:blank") {
@@ -198,6 +243,26 @@ export function onServerProviderStatusesUpdated(
   };
 }
 
+export function onServerSettingsUpdated(
+  listener: (payload: ServerSettingsUpdatedPayload) => void,
+): () => void {
+  serverSettingsUpdatedListeners.add(listener);
+
+  const latestSettings =
+    instance?.transport.getLatestPush(WS_CHANNELS.serverSettingsUpdated)?.data ?? null;
+  if (latestSettings) {
+    try {
+      listener(latestSettings);
+    } catch {
+      // Swallow listener errors
+    }
+  }
+
+  return () => {
+    serverSettingsUpdatedListeners.delete(listener);
+  };
+}
+
 export function createWsNativeApi(): NativeApi {
   if (instance) return instance.api;
 
@@ -226,6 +291,16 @@ export function createWsNativeApi(): NativeApi {
   transport.subscribe(WS_CHANNELS.serverProviderStatusesUpdated, (message) => {
     const payload = message.data;
     for (const listener of serverProviderStatusesUpdatedListeners) {
+      try {
+        listener(payload);
+      } catch {
+        // Swallow listener errors
+      }
+    }
+  });
+  transport.subscribe(WS_CHANNELS.serverSettingsUpdated, (message) => {
+    const payload = message.data;
+    for (const listener of serverSettingsUpdatedListeners) {
       try {
         listener(payload);
       } catch {
@@ -404,6 +479,44 @@ export function createWsNativeApi(): NativeApi {
     },
     server: {
       getConfig: () => transport.request(WS_METHODS.serverGetConfig),
+      getEnvironment: () => transport.request(WS_METHODS.serverGetEnvironment),
+      getSettings: () => transport.request(WS_METHODS.serverGetSettings),
+      updateSettings: (input) => transport.request(WS_METHODS.serverUpdateSettings, input),
+      getAuthSession: () => requestAuthJson<AuthSessionState>("/api/auth/session"),
+      bootstrapAuth: (input: AuthBootstrapInput) =>
+        requestAuthJson<AuthBootstrapResult>("/api/auth/bootstrap", {
+          method: "POST",
+          body: input,
+        }),
+      bootstrapBearerAuth: (input: AuthBootstrapInput) =>
+        requestAuthJson<AuthBearerBootstrapResult>("/api/auth/bootstrap/bearer", {
+          method: "POST",
+          body: input,
+        }),
+      issueAuthWebSocketToken: () =>
+        requestAuthJson<AuthWebSocketTokenResult>("/api/auth/ws-token", { method: "POST" }),
+      createAuthPairingToken: (input?: AuthCreatePairingCredentialInput) =>
+        requestAuthJson<AuthPairingCredentialResult>("/api/auth/pairing-token", {
+          method: "POST",
+          ...(input ? { body: input } : {}),
+        }),
+      listAuthPairingLinks: () =>
+        requestAuthJson<ReadonlyArray<AuthPairingLink>>("/api/auth/pairing-links"),
+      revokeAuthPairingLink: (input: AuthRevokePairingLinkInput) =>
+        requestAuthJson<{ revoked: boolean }>("/api/auth/pairing-links/revoke", {
+          method: "POST",
+          body: input,
+        }),
+      listAuthClients: () => requestAuthJson<ReadonlyArray<AuthClientSession>>("/api/auth/clients"),
+      revokeAuthClient: (input: AuthRevokeClientSessionInput) =>
+        requestAuthJson<{ revoked: boolean }>("/api/auth/clients/revoke", {
+          method: "POST",
+          body: input,
+        }),
+      revokeOtherAuthClients: () =>
+        requestAuthJson<{ revokedCount: number }>("/api/auth/clients/revoke-others", {
+          method: "POST",
+        }),
       refreshProviders: () => transport.request(WS_METHODS.serverRefreshProviders),
       listWorktrees: () => transport.request(WS_METHODS.serverListWorktrees),
       getProviderUsageSnapshot: (input) =>

@@ -1,4 +1,17 @@
 import type {
+  AuthBearerBootstrapResult,
+  AuthBootstrapInput,
+  AuthBootstrapResult,
+  AuthClientSession,
+  AuthCreatePairingCredentialInput,
+  AuthPairingCredentialResult,
+  AuthPairingLink,
+  AuthRevokeClientSessionInput,
+  AuthRevokePairingLinkInput,
+  AuthSessionState,
+  AuthWebSocketTokenResult,
+} from "./auth";
+import type {
   GitCheckoutInput,
   GitActionProgressEvent,
   GitCreateBranchInput,
@@ -45,10 +58,14 @@ import type {
 import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
 import type {
   ServerConfig,
+  ServerGetEnvironmentResult,
   ServerGetProviderUsageSnapshotInput,
   ServerGetProviderUsageSnapshotResult,
+  ServerGetSettingsResult,
   ServerListWorktreesResult,
   ServerRefreshProvidersResult,
+  ServerUpdateSettingsInput,
+  ServerUpdateSettingsResult,
   ServerUpsertKeybindingInput,
   ServerUpsertKeybindingResult,
   ServerVoiceTranscriptionInput,
@@ -359,6 +376,21 @@ export interface NativeApi {
   };
   server: {
     getConfig: () => Promise<ServerConfig>;
+    getEnvironment: () => Promise<ServerGetEnvironmentResult>;
+    getSettings: () => Promise<ServerGetSettingsResult>;
+    updateSettings: (input: ServerUpdateSettingsInput) => Promise<ServerUpdateSettingsResult>;
+    getAuthSession: () => Promise<AuthSessionState>;
+    bootstrapAuth: (input: AuthBootstrapInput) => Promise<AuthBootstrapResult>;
+    bootstrapBearerAuth: (input: AuthBootstrapInput) => Promise<AuthBearerBootstrapResult>;
+    issueAuthWebSocketToken: () => Promise<AuthWebSocketTokenResult>;
+    createAuthPairingToken: (
+      input?: AuthCreatePairingCredentialInput,
+    ) => Promise<AuthPairingCredentialResult>;
+    listAuthPairingLinks: () => Promise<ReadonlyArray<AuthPairingLink>>;
+    revokeAuthPairingLink: (input: AuthRevokePairingLinkInput) => Promise<{ revoked: boolean }>;
+    listAuthClients: () => Promise<ReadonlyArray<AuthClientSession>>;
+    revokeAuthClient: (input: AuthRevokeClientSessionInput) => Promise<{ revoked: boolean }>;
+    revokeOtherAuthClients: () => Promise<{ revokedCount: number }>;
     refreshProviders: () => Promise<ServerRefreshProvidersResult>;
     listWorktrees: () => Promise<ServerListWorktreesResult>;
     getProviderUsageSnapshot: (

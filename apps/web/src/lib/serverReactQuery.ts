@@ -5,6 +5,9 @@ import { ensureNativeApi } from "~/nativeApi";
 export const serverQueryKeys = {
   all: ["server"] as const,
   config: () => ["server", "config"] as const,
+  authSession: () => ["server", "auth", "session"] as const,
+  environment: () => ["server", "environment"] as const,
+  settings: () => ["server", "settings"] as const,
   worktrees: () => ["server", "worktrees"] as const,
   providerUsage: (provider: ProviderKind | null | undefined, homePath?: string | null) =>
     ["server", "providerUsage", provider ?? null, homePath ?? null] as const,
@@ -16,6 +19,39 @@ export function serverConfigQueryOptions() {
     queryFn: async () => {
       const api = ensureNativeApi();
       return api.server.getConfig();
+    },
+    staleTime: Infinity,
+  });
+}
+
+export function serverAuthSessionQueryOptions() {
+  return queryOptions({
+    queryKey: serverQueryKeys.authSession(),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      return api.server.getAuthSession();
+    },
+    staleTime: 15_000,
+  });
+}
+
+export function serverEnvironmentQueryOptions() {
+  return queryOptions({
+    queryKey: serverQueryKeys.environment(),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      return api.server.getEnvironment();
+    },
+    staleTime: Infinity,
+  });
+}
+
+export function serverSettingsQueryOptions() {
+  return queryOptions({
+    queryKey: serverQueryKeys.settings(),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      return api.server.getSettings();
     },
     staleTime: Infinity,
   });

@@ -675,14 +675,8 @@ describe("findSidebarProposedPlan", () => {
 });
 
 describe("deriveWorkLogEntries", () => {
-  it("omits tool started entries and keeps completed entries", () => {
+  it("keeps started tool entries so pending Cursor calls appear immediately", () => {
     const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "tool-complete",
-        createdAt: "2026-02-23T00:00:03.000Z",
-        summary: "Tool call complete",
-        kind: "tool.completed",
-      }),
       makeActivity({
         id: "tool-start",
         createdAt: "2026-02-23T00:00:02.000Z",
@@ -692,7 +686,7 @@ describe("deriveWorkLogEntries", () => {
     ];
 
     const entries = deriveWorkLogEntries(activities, undefined);
-    expect(entries.map((entry) => entry.id)).toEqual(["tool-complete"]);
+    expect(entries.map((entry) => entry.id)).toEqual(["tool-start"]);
   });
 
   it("omits task start and completion lifecycle entries", () => {
@@ -905,6 +899,202 @@ describe("deriveWorkLogEntries", () => {
     expect(entry?.toolTitle).toBe("Searched");
   });
 
+  it("recovers Cursor tool details from stored rawOutput when rawInput is empty", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "cursor-find",
+        kind: "tool.completed",
+        summary: "Find",
+        payload: {
+          itemType: "dynamic_tool_call",
+          title: "Find",
+          data: {
+            kind: "search",
+            rawInput: {},
+            rawOutput: {
+              totalFiles: 33,
+              truncated: false,
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "cursor-read",
+        kind: "tool.completed",
+        summary: "Read File",
+        payload: {
+          itemType: "dynamic_tool_call",
+          title: "Read File",
+          data: {
+            kind: "read",
+            rawInput: {},
+            rawOutput: {
+              content: "one\ntwo\n",
+            },
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+
+    expect(entries).toMatchObject([
+      {
+        id: "cursor-find",
+        toolTitle: "Search",
+        detail: "33 files found",
+      },
+      {
+        id: "cursor-read",
+        toolTitle: "Read",
+        detail: "Read 2 lines",
+      },
+    ]);
+  });
+
+  it("recovers readable Cursor labels from older generic Tool projections", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "cursor-tool-find",
+        kind: "tool.updated",
+        summary: "Tool",
+        payload: {
+          itemType: "dynamic_tool_call",
+          status: "inProgress",
+          data: {
+            toolCallId: "find-1",
+            kind: "search",
+            rawInput: {},
+          },
+        },
+      }),
+      makeActivity({
+        id: "cursor-tool-read",
+        kind: "tool.completed",
+        summary: "Tool",
+        payload: {
+          itemType: "dynamic_tool_call",
+          status: "completed",
+          title: "Tool",
+          detail: "Read 2 lines",
+          data: {
+            toolCallId: "read-1",
+            kind: "read",
+            rawInput: {},
+          },
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
+      {
+        id: "cursor-tool-find",
+        toolTitle: "Search",
+      },
+      {
+        id: "cursor-tool-read",
+        toolTitle: "Read",
+        detail: "Read 2 lines",
+      },
+    ]);
+  });
+
+  it("collapses Cursor tool lifecycle rows by toolCallId even when titles and details change", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "cursor-searching",
+        createdAt: "2026-05-05T15:39:01.000Z",
+        kind: "tool.started",
+        summary: "Searching",
+        payload: {
+          itemType: "dynamic_tool_call",
+          status: "inProgress",
+          title: "Searching",
+          data: {
+            toolCallId: "cursor-find-1",
+            kind: "search",
+            rawInput: {},
+          },
+        },
+      }),
+      makeActivity({
+        id: "cursor-searched",
+        createdAt: "2026-05-05T15:39:02.000Z",
+        kind: "tool.completed",
+        summary: "Searched",
+        payload: {
+          itemType: "dynamic_tool_call",
+          status: "completed",
+          title: "Searched",
+          data: {
+            toolCallId: "cursor-find-1",
+            kind: "search",
+            rawOutput: {
+              totalFiles: 52,
+              truncated: false,
+            },
+          },
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
+      {
+        id: "cursor-searched",
+        toolTitle: "Searched",
+        detail: "52 files found",
+        itemType: "dynamic_tool_call",
+      },
+    ]);
+  });
+
+  it("keeps same-toolCallId rows collapsed even if later command metadata changes", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "cursor-command-start",
+        createdAt: "2026-05-05T15:40:01.000Z",
+        kind: "tool.updated",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          status: "inProgress",
+          title: "Ran command",
+          data: {
+            toolCallId: "cursor-command-1",
+            kind: "execute",
+            command: "git status",
+          },
+        },
+      }),
+      makeActivity({
+        id: "cursor-command-complete",
+        createdAt: "2026-05-05T15:40:02.000Z",
+        kind: "tool.completed",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          status: "completed",
+          title: "Ran command",
+          detail: "done",
+          data: {
+            toolCallId: "cursor-command-1",
+            kind: "execute",
+            command: "git diff --stat",
+          },
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
+      {
+        id: "cursor-command-complete",
+        command: "git diff --stat",
+        detail: "done",
+        itemType: "command_execution",
+      },
+    ]);
+  });
+
   it("keeps compact Codex tool metadata used for icons and labels", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -962,6 +1152,135 @@ describe("deriveWorkLogEntries", () => {
     expect(entry?.changedFiles).toEqual([
       "apps/web/src/components/ChatView.tsx",
       "apps/web/src/session-logic.ts",
+    ]);
+  });
+
+  it("extracts Cursor read targets from rawInput and ACP locations", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "cursor-read-raw-input",
+        kind: "tool.completed",
+        summary: "Read",
+        payload: {
+          itemType: "dynamic_tool_call",
+          title: "Read",
+          data: {
+            kind: "read",
+            rawInput: {
+              file_path: "apps/web/src/session-logic.ts",
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "cursor-read-location",
+        kind: "tool.completed",
+        summary: "Read",
+        payload: {
+          itemType: "dynamic_tool_call",
+          title: "Read",
+          data: {
+            kind: "read",
+            locations: [{ path: "apps/server/src/provider/acp/AcpRuntimeModel.ts", line: 12 }],
+          },
+        },
+      }),
+    ];
+
+    const entriesById = new Map(
+      deriveWorkLogEntries(activities, undefined).map((entry) => [entry.id, entry]),
+    );
+    expect(entriesById.get("cursor-read-raw-input")?.changedFiles).toEqual([
+      "apps/web/src/session-logic.ts",
+    ]);
+    expect(entriesById.get("cursor-read-location")?.changedFiles).toEqual([
+      "apps/server/src/provider/acp/AcpRuntimeModel.ts",
+    ]);
+  });
+
+  it("does not treat arbitrary rawOutput file strings as changed files", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "cursor-search-output",
+        kind: "tool.completed",
+        summary: "Searched",
+        payload: {
+          itemType: "dynamic_tool_call",
+          title: "Searched",
+          data: {
+            kind: "search",
+            rawOutput: {
+              file: "no results",
+              path: "not a path",
+              totalFiles: 0,
+            },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry?.changedFiles).toBeUndefined();
+  });
+
+  it("keeps root-level file names as changed file paths", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "root-file-tool",
+        kind: "tool.completed",
+        summary: "Read",
+        payload: {
+          itemType: "dynamic_tool_call",
+          data: {
+            rawInput: {
+              file_path: "package.json",
+            },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry?.changedFiles).toEqual(["package.json"]);
+  });
+
+  it("does not collapse fallback lifecycle rows for different files without toolCallId", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "read-one",
+        createdAt: "2026-05-05T15:41:01.000Z",
+        kind: "tool.updated",
+        summary: "Read",
+        payload: {
+          itemType: "dynamic_tool_call",
+          title: "Read",
+          data: {
+            rawInput: {
+              file_path: "apps/web/src/session-logic.ts",
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "read-two",
+        createdAt: "2026-05-05T15:41:02.000Z",
+        kind: "tool.completed",
+        summary: "Read",
+        payload: {
+          itemType: "dynamic_tool_call",
+          title: "Read",
+          data: {
+            rawInput: {
+              file_path: "apps/web/src/lib/contextWindow.ts",
+            },
+          },
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined).map((entry) => entry.id)).toEqual([
+      "read-one",
+      "read-two",
     ]);
   });
 
@@ -1131,7 +1450,7 @@ describe("deriveWorkLogEntries", () => {
       label: "Read file",
       detail: 'Read: {"file_path":"/tmp/app.ts"}',
       itemType: "dynamic_tool_call",
-      toolTitle: "Read file",
+      toolTitle: "Read",
     });
   });
 
@@ -1801,19 +2120,26 @@ describe("hasLiveTurnTailWork", () => {
 });
 
 describe("PROVIDER_OPTIONS", () => {
-  it("lists Codex, Claude, Gemini, and OpenCode as available providers", () => {
+  it("lists available providers", () => {
     const claude = PROVIDER_OPTIONS.find((option) => option.value === "claudeAgent");
+    const cursor = PROVIDER_OPTIONS.find((option) => option.value === "cursor");
     const gemini = PROVIDER_OPTIONS.find((option) => option.value === "gemini");
     const opencode = PROVIDER_OPTIONS.find((option) => option.value === "opencode");
     expect(PROVIDER_OPTIONS).toEqual([
       { value: "codex", label: "Codex", available: true },
       { value: "claudeAgent", label: "Claude", available: true },
+      { value: "cursor", label: "Cursor", available: true },
       { value: "gemini", label: "Gemini", available: true },
       { value: "opencode", label: "OpenCode", available: true },
     ]);
     expect(claude).toEqual({
       value: "claudeAgent",
       label: "Claude",
+      available: true,
+    });
+    expect(cursor).toEqual({
+      value: "cursor",
+      label: "Cursor",
       available: true,
     });
     expect(gemini).toEqual({

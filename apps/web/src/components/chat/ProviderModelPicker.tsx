@@ -23,7 +23,7 @@ import {
   MenuSubTrigger,
   MenuTrigger,
 } from "../ui/menu";
-import { ClaudeAI, Gemini, Icon, OpenAI, OpenCodeIcon } from "../Icons";
+import { ClaudeAI, CursorIcon, Gemini, Icon, OpenAI, OpenCodeIcon } from "../Icons";
 import { cn } from "~/lib/utils";
 import { PickerPanelShell } from "./PickerPanelShell";
 import { PickerTriggerButton } from "./PickerTriggerButton";
@@ -36,6 +36,7 @@ import {
 } from "../../providerModelOptions";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { StarFilledIcon, StarIcon } from "../../lib/icons";
+import { Skeleton } from "../ui/skeleton";
 
 function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): option is {
   value: ProviderKind;
@@ -48,6 +49,7 @@ function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): o
 const PROVIDER_ICON_BY_PROVIDER: Record<ProviderPickerKind, Icon> = {
   codex: OpenAI,
   claudeAgent: ClaudeAI,
+  cursor: CursorIcon,
   gemini: Gemini,
   opencode: OpenCodeIcon,
 };
@@ -95,11 +97,37 @@ function providerIconClassName(
     : fallbackClassName;
 }
 
-const OPENCODE_MODEL_SEARCH_THRESHOLD = 15;
+const SEARCHABLE_MODEL_PICKER_THRESHOLD = 15;
 const OPENCODE_FAVORITE_MODEL_STORAGE_KEY = "dpcode:opencode-favourite-models:v1";
 const OpenCodeFavoriteModelSlugs = Schema.Array(Schema.String);
 
-function buildOpenCodeModelSearchText(option: ProviderModelOption): string {
+function stripParameterizedModelSuffix(model: string): string {
+  return model.trim().replace(/\[[^\]]*\]$/u, "");
+}
+
+function resolveSelectedModelLabel(input: {
+  provider: ProviderKind;
+  model: string;
+  options: ReadonlyArray<ProviderModelOption>;
+}): string {
+  const exact = input.options.find((option) => option.slug === input.model);
+  if (exact) {
+    return exact.name;
+  }
+  if (input.provider === "cursor") {
+    const baseModel = stripParameterizedModelSuffix(input.model);
+    const baseMatch = input.options.find((option) => stripParameterizedModelSuffix(option.slug) === baseModel);
+    if (baseMatch) {
+      return baseMatch.name;
+    }
+  }
+  return formatProviderModelOptionName({
+    provider: input.provider,
+    slug: input.model,
+  });
+}
+
+function buildModelSearchText(option: ProviderModelOption): string {
   return [option.name, option.slug, option.upstreamProviderName, option.upstreamProviderId]
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
     .join(" ")
@@ -112,6 +140,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   lockedProvider: ProviderKind | null;
   providers?: ReadonlyArray<ServerProviderStatus>;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
+  loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
   activeProviderIconClassName?: string;
   compact?: boolean;
   disabled?: boolean;
@@ -122,13 +151,13 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
 }) {
   const { onOpenChange, open } = props;
   const [uncontrolledMenuOpen, setUncontrolledMenuOpen] = useState(false);
-  const [openCodeSearchQuery, setOpenCodeSearchQuery] = useState("");
+  const [modelSearchQuery, setModelSearchQuery] = useState("");
   const [openCodeFavoriteModelSlugs, setOpenCodeFavoriteModelSlugs] = useLocalStorage(
     OPENCODE_FAVORITE_MODEL_STORAGE_KEY,
     [],
     OpenCodeFavoriteModelSlugs,
   );
-  const deferredOpenCodeSearchQuery = useDeferredValue(openCodeSearchQuery);
+  const deferredModelSearchQuery = useDeferredValue(modelSearchQuery);
   const activeProvider = props.lockedProvider ?? props.provider;
   const isMenuOpen = open ?? uncontrolledMenuOpen;
   const openCodeFavoriteModelSlugSet = useMemo(
@@ -136,12 +165,11 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     [openCodeFavoriteModelSlugs],
   );
   const selectedProviderOptions = props.modelOptionsByProvider[activeProvider];
-  const selectedModelLabel =
-    selectedProviderOptions.find((option) => option.slug === props.model)?.name ??
-    formatProviderModelOptionName({
-      provider: activeProvider,
-      slug: props.model,
-    });
+  const selectedModelLabel = resolveSelectedModelLabel({
+    provider: activeProvider,
+    model: props.model,
+    options: selectedProviderOptions,
+  });
   const ProviderIcon = PROVIDER_ICON_BY_PROVIDER[activeProvider];
   const setMenuOpen = useCallback(
     (nextOpen: boolean) => {
@@ -149,7 +177,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         setUncontrolledMenuOpen(nextOpen);
       }
       if (!nextOpen) {
-        setOpenCodeSearchQuery("");
+        setModelSearchQuery("");
       }
       onOpenChange?.(nextOpen);
     },
@@ -182,14 +210,30 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   );
 
   const renderModelRadioGroup = (provider: ProviderKind) => {
+    if (props.loadingModelProviders?.[provider]) {
+      return (
+        <div className="w-60 space-y-2 px-2 py-2" aria-label="Loading models">
+          {Array.from({ length: 6 }, (_, index) => (
+            <div key={index} className="flex items-center gap-2 rounded-md px-2 py-1.5">
+              <Skeleton className="size-3.5 rounded-full" />
+              <Skeleton
+                className={cn("h-3.5 rounded-full", index % 3 === 0 ? "w-24" : "w-32")}
+              />
+            </div>
+          ))}
+        </div>
+      );
+    }
+
     const providerOptions = props.modelOptionsByProvider[provider];
-    const shouldShowOpenCodeSearch =
-      provider === "opencode" && providerOptions.length >= OPENCODE_MODEL_SEARCH_THRESHOLD;
-    const normalizedOpenCodeSearchQuery = deferredOpenCodeSearchQuery.trim().toLowerCase();
+    const shouldShowSearch =
+      (provider === "opencode" || provider === "cursor") &&
+      providerOptions.length >= SEARCHABLE_MODEL_PICKER_THRESHOLD;
+    const normalizedModelSearchQuery = deferredModelSearchQuery.trim().toLowerCase();
     const filteredOptions =
-      shouldShowOpenCodeSearch && normalizedOpenCodeSearchQuery.length > 0
+      shouldShowSearch && normalizedModelSearchQuery.length > 0
         ? providerOptions.filter((option) =>
-            buildOpenCodeModelSearchText(option).includes(normalizedOpenCodeSearchQuery),
+            buildModelSearchText(option).includes(normalizedModelSearchQuery),
           )
         : providerOptions;
     const groupedOptions =
@@ -264,15 +308,15 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         <div className="px-2 py-2 text-muted-foreground text-sm">No matches</div>
       );
 
-    if (!shouldShowOpenCodeSearch) {
+    if (!shouldShowSearch) {
       return content;
     }
 
     return (
       <PickerPanelShell
         searchPlaceholder="Search models or providers"
-        query={openCodeSearchQuery}
-        onQueryChange={setOpenCodeSearchQuery}
+        query={modelSearchQuery}
+        onQueryChange={setModelSearchQuery}
         stopSearchKeyPropagation
         autoFocusSearch
         widthClassName="w-60"

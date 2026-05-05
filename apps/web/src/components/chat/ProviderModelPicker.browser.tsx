@@ -16,6 +16,10 @@ const MODEL_OPTIONS_BY_PROVIDER = {
     { slug: "gpt-5-codex", name: "GPT-5 Codex" },
     { slug: "gpt-5.3-codex", name: "GPT-5.3 Codex" },
   ],
+  cursor: [
+    { slug: "auto", name: "Auto" },
+    { slug: "composer-2", name: "Composer 2" },
+  ],
   gemini: [
     { slug: "auto-gemini-3", name: "Auto Gemini 3" },
     { slug: "gemini-2.5-pro", name: "Gemini 2.5 Pro" },
@@ -58,11 +62,19 @@ const OPENCODE_FAVORITE_SORT_MODELS = [
   },
 ] satisfies ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>;
 
+const MANY_CURSOR_MODELS = Array.from({ length: 16 }, (_, index) => ({
+  slug: `cursor-model-${index + 1}` as ModelSlug,
+  name: `${index % 2 === 0 ? "GPT" : "Claude"} Cursor ${index + 1}`,
+  upstreamProviderId: index % 2 === 0 ? "openai" : "anthropic",
+  upstreamProviderName: index % 2 === 0 ? "OpenAI" : "Anthropic",
+})) satisfies ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>;
+
 async function mountPicker(props: {
   provider: ProviderKind;
   model: ModelSlug;
   lockedProvider: ProviderKind | null;
   providers?: ReadonlyArray<ServerProviderStatus>;
+  loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
   modelOptionsByProvider?: Record<
     ProviderKind,
     ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>
@@ -77,6 +89,7 @@ async function mountPicker(props: {
       model={props.model}
       lockedProvider={props.lockedProvider}
       modelOptionsByProvider={props.modelOptionsByProvider ?? MODEL_OPTIONS_BY_PROVIDER}
+      {...(props.loadingModelProviders ? { loadingModelProviders: props.loadingModelProviders } : {})}
       {...(props.providers ? { providers: props.providers } : {})}
       onProviderModelChange={onProviderModelChange}
     />,
@@ -267,6 +280,59 @@ describe("ProviderModelPicker", () => {
           element.textContent?.includes("GPT Favorite Sort"),
         ),
       ).toHaveLength(1);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("filters Cursor models by upstream provider name", async () => {
+    const mounted = await mountPicker({
+      provider: "cursor",
+      model: MANY_CURSOR_MODELS[0]!.slug,
+      lockedProvider: "cursor",
+      modelOptionsByProvider: {
+        ...MODEL_OPTIONS_BY_PROVIDER,
+        cursor: MANY_CURSOR_MODELS,
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+      await page.getByPlaceholder("Search models or providers").fill("Anthropic");
+
+      await vi.waitFor(() => {
+        expect(document.body.textContent ?? "").toContain("Claude Cursor 2");
+      });
+
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "Claude Cursor 2" }))
+        .toBeInTheDocument();
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "GPT Cursor 1" }))
+        .not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows a loading skeleton instead of fallback models for loading providers", async () => {
+    const mounted = await mountPicker({
+      provider: "cursor",
+      model: "auto",
+      lockedProvider: "cursor",
+      loadingModelProviders: { cursor: true },
+    });
+
+    try {
+      await page.getByRole("button").click();
+
+      await expect.element(page.getByLabelText("Loading models")).toBeInTheDocument();
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "Auto" }))
+        .not.toBeInTheDocument();
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "Composer 2" }))
+        .not.toBeInTheDocument();
     } finally {
       await mounted.cleanup();
     }

@@ -1555,6 +1555,13 @@ function workToneIcon(tone: TimelineWorkEntry["tone"]): {
  *   {"file_path":"/path/to/file.ts"}
  */
 function extractFilePathFromDetail(detail: string): string | null {
+  const plainPathMatch = /^(.+?\.[A-Za-z0-9][A-Za-z0-9._-]*)(?::\d+)?(?::\d+)?$/u.exec(
+    detail.trim(),
+  );
+  if (plainPathMatch?.[1]?.includes("/")) {
+    return plainPathMatch[1].trim();
+  }
+
   // Try to find a JSON-like object in the detail
   const jsonStart = detail.indexOf("{");
   if (jsonStart < 0) return null;
@@ -1624,6 +1631,9 @@ function workEntryPreview(
     const trimmedDetail = workEntry.detail.trim();
     if (trimmedDetail.startsWith("{") || trimmedDetail.startsWith("[")) return null;
 
+    const readLinesMatch = /^Read\s+(\d+\s+lines?)$/i.exec(trimmedDetail);
+    if (readLinesMatch?.[1]) return readLinesMatch[1];
+
     // Clean, non-JSON detail — show it
     return trimmedDetail;
   }
@@ -1639,10 +1649,11 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   if (workEntry.itemType === "command_execution" || workEntry.command) {
     return TerminalIcon;
   }
-  if (workEntry.itemType === "file_change" || (workEntry.changedFiles?.length ?? 0) > 0) {
+  if (workEntry.itemType === "file_change") {
     return SquarePenIcon;
   }
   if (workEntry.itemType === "web_search") return GlobeIcon;
+  if (workEntry.requestKind === "file-read") return EyeIcon;
   if (workEntry.itemType === "image_view") return EyeIcon;
 
   switch (workEntry.itemType) {
@@ -1690,11 +1701,7 @@ function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
 }
 
 function isFileChangeWorkEntry(workEntry: TimelineWorkEntry): boolean {
-  return (
-    workEntry.requestKind === "file-change" ||
-    workEntry.itemType === "file_change" ||
-    (workEntry.changedFiles?.length ?? 0) > 0
-  );
+  return workEntry.requestKind === "file-change" || workEntry.itemType === "file_change";
 }
 
 function subagentPrimaryLabel(
@@ -1843,6 +1850,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
               <button
                 key={`${workEntry.id}:${changedFilePath}`}
                 type="button"
+                data-file-change-row="true"
                 className={cn(
                   "group flex w-full max-w-full items-baseline gap-1 text-left transition-opacity duration-150",
                   compact
@@ -2093,8 +2101,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                       ) : null}
                     </span>
                   ) : null}
-                  <span className="text-muted-foreground/50">{heading}</span>
-                  {preview && <span className="text-muted-foreground/25"> {preview}</span>}
+                  <span className="text-muted-foreground/55">{displayText}</span>
                 </p>
               </div>
               {showIconRight && (

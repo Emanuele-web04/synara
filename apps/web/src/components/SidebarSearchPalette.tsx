@@ -20,7 +20,7 @@ import { LuArrowDownToLine, LuArrowLeft, LuCornerLeftUp, LuFolderPlus } from "re
 import { type ComponentType, useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { FolderClosed } from "./FolderClosed";
-import { ClaudeAI, Gemini, OpenAI, OpenCodeIcon } from "./Icons";
+import { ClaudeAI, CursorIcon, Gemini, OpenAI, OpenCodeIcon } from "./Icons";
 import { formatRelativeTime } from "./Sidebar";
 import { readNativeApi } from "~/nativeApi";
 import { isMacPlatform } from "~/lib/utils";
@@ -91,7 +91,10 @@ interface SidebarSearchPaletteProps {
   onImportThread: (provider: ImportProviderKind, externalId: string) => Promise<void>;
 }
 
-export type ImportProviderKind = Extract<ProviderKind, "codex" | "claudeAgent" | "opencode">;
+export type ImportProviderKind = Extract<
+  ProviderKind,
+  "codex" | "claudeAgent" | "cursor" | "opencode"
+>;
 
 function actionHandler(
   actionId: string,
@@ -254,6 +257,8 @@ function ProviderIcon(props: { provider: ProviderKind }) {
     <div className="flex size-5 shrink-0 items-center justify-center">
       {props.provider === "claudeAgent" ? (
         <ClaudeAI aria-hidden="true" className="size-[15px] text-foreground" />
+      ) : props.provider === "cursor" ? (
+        <CursorIcon aria-hidden="true" className="size-[15px] text-foreground" />
       ) : props.provider === "gemini" ? (
         <Gemini aria-hidden="true" className="size-[15px] text-foreground" />
       ) : props.provider === "opencode" ? (
@@ -466,6 +471,8 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
   const importPlaceholder =
     importProvider === "claudeAgent"
       ? "Paste a Claude session id"
+      : importProvider === "cursor"
+        ? "Paste a Cursor session id"
       : importProvider === "opencode"
         ? "Paste an OpenCode session id"
         : "Paste a Codex thread id";
@@ -618,6 +625,8 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                       <ProviderIcon provider={provider} />
                       {provider === "claudeAgent"
                         ? "Claude"
+                        : provider === "cursor"
+                          ? "Cursor"
                         : provider === "opencode"
                           ? "OpenCode"
                           : "Codex"}
@@ -651,6 +660,8 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                 <p className="text-xs text-muted-foreground">
                   {importProvider === "claudeAgent"
                     ? "Claude resumes a persisted session by session id."
+                    : importProvider === "cursor"
+                      ? "Cursor resumes a persisted session by session id."
                     : importProvider === "opencode"
                       ? "OpenCode resumes a persisted session by session id."
                       : "Codex resumes a persisted thread by thread id."}

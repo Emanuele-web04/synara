@@ -30,7 +30,11 @@ import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { isElectron } from "../env";
 import { useFocusedChatContext } from "../focusedChatContext";
 import { isTerminalFocused } from "../lib/terminalFocus";
-import { serverConfigQueryOptions, serverQueryKeys } from "../lib/serverReactQuery";
+import {
+  serverConfigQueryOptions,
+  serverQueryKeys,
+  serverSettingsQueryOptions,
+} from "../lib/serverReactQuery";
 import { readNativeApi } from "../nativeApi";
 import { clearPromotedDraftThreads, useComposerDraftStore } from "../composerDraftStore";
 import { useStore } from "../store";
@@ -39,6 +43,7 @@ import { terminalActivityFromEvent } from "../terminalActivity";
 import {
   onServerConfigUpdated,
   onServerProviderStatusesUpdated,
+  onServerSettingsUpdated,
   onServerWelcome,
 } from "../wsNativeApi";
 import { providerQueryKeys } from "../lib/providerReactQuery";
@@ -339,6 +344,7 @@ function EventRouter() {
   );
   const setWorkspaceHomeDir = useWorkspaceStore((store) => store.setHomeDir);
   const workspacePages = useWorkspaceStore((store) => store.workspacePages);
+  const serverThreads = useStore((store) => store.threads);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
@@ -358,13 +364,24 @@ function EventRouter() {
     return routeThreadId ? [routeThreadId] : [];
   }, [activeSplitView, routeThreadId]);
   const retainedThreadIds = useRetainedThreadDetailIds();
+  const serverThreadIds = useMemo(
+    () => new Set(serverThreads.map((thread) => thread.id)),
+    [serverThreads],
+  );
   const subscribedThreadIds = useMemo(() => {
-    const nextThreadIds = new Set<ThreadId>(visibleThreadIds);
+    const nextThreadIds = new Set<ThreadId>();
+    for (const threadId of visibleThreadIds) {
+      if (serverThreadIds.has(threadId)) {
+        nextThreadIds.add(threadId);
+      }
+    }
     for (const threadId of retainedThreadIds) {
-      nextThreadIds.add(threadId);
+      if (serverThreadIds.has(threadId)) {
+        nextThreadIds.add(threadId);
+      }
     }
     return [...nextThreadIds];
-  }, [retainedThreadIds, visibleThreadIds]);
+  }, [retainedThreadIds, serverThreadIds, visibleThreadIds]);
   const workspacePagesRef = useRef(workspacePages);
   const pathnameRef = useRef(pathname);
   const handledBootstrapThreadIdRef = useRef<string | null>(null);
@@ -741,7 +758,16 @@ function EventRouter() {
         queryKey: ["provider-discovery", "models", "opencode"],
       });
       void queryClient.invalidateQueries({
+        queryKey: ["provider-discovery", "models", "cursor"],
+      });
+      void queryClient.invalidateQueries({
         queryKey: providerDiscoveryQueryKeys.agents("opencode"),
+      });
+    });
+    const unsubServerSettingsUpdated = onServerSettingsUpdated((payload) => {
+      queryClient.setQueryData(serverQueryKeys.settings(), payload.settings);
+      void queryClient.invalidateQueries({
+        queryKey: serverSettingsQueryOptions().queryKey,
       });
     });
     subscribed = true;
@@ -766,6 +792,7 @@ function EventRouter() {
       unsubWelcome();
       unsubServerConfigUpdated();
       unsubProviderStatusesUpdated();
+      unsubServerSettingsUpdated();
     };
   }, [
     applyOrchestrationEventsHotPath,

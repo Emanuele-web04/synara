@@ -1,19 +1,10 @@
 import {
   type ContextWindowSnapshot,
+  deriveContextWindowMeterDisplay,
   formatContextWindowTokens,
   formatCostUsd,
 } from "~/lib/contextWindow";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
-
-function formatPercentage(value: number | null): string | null {
-  if (value === null || !Number.isFinite(value)) {
-    return null;
-  }
-  if (value < 10) {
-    return `${value.toFixed(1).replace(/\.0$/, "")}%`;
-  }
-  return `${Math.round(value)}%`;
-}
 
 export function ContextWindowMeter(props: {
   usage: ContextWindowSnapshot;
@@ -22,11 +13,10 @@ export function ContextWindowMeter(props: {
   pendingWindowLabel?: string | null | undefined;
 }) {
   const { usage, cumulativeCostUsd, activeWindowLabel, pendingWindowLabel } = props;
-  const usedPercentage = formatPercentage(usage.usedPercentage);
-  const normalizedPercentage = Math.max(0, Math.min(100, usage.usedPercentage ?? 0));
+  const display = deriveContextWindowMeterDisplay(usage);
   const radius = 6;
   const circumference = 2 * Math.PI * radius;
-  const dashOffset = circumference - (normalizedPercentage / 100) * circumference;
+  const dashOffset = circumference - (display.normalizedPercentage / 100) * circumference;
 
   return (
     <Popover>
@@ -38,11 +28,7 @@ export function ContextWindowMeter(props: {
           <button
             type="button"
             className="group inline-flex items-center gap-1.5 rounded-full px-1 py-0.5 text-[10px] text-muted-foreground/60 transition-colors hover:text-muted-foreground"
-            aria-label={
-              usage.maxTokens !== null && usedPercentage
-                ? `Context window ${usedPercentage} used`
-                : `Context window ${formatContextWindowTokens(usage.usedTokens)} tokens used`
-            }
+            aria-label={display.ariaLabel}
           >
             <span className="relative flex h-3.5 w-3.5 items-center justify-center">
               <svg
@@ -74,9 +60,7 @@ export function ContextWindowMeter(props: {
               </svg>
             </span>
             <span className="tabular-nums font-medium leading-none">
-              {usage.usedPercentage !== null
-                ? `${Math.round(usage.usedPercentage)}%`
-                : formatContextWindowTokens(usage.usedTokens)}
+              {display.compactLabel}
             </span>
           </button>
         }
@@ -91,17 +75,23 @@ export function ContextWindowMeter(props: {
               Current session: {activeWindowLabel ?? "Unknown"}
             </div>
           ) : null}
-          {usage.maxTokens !== null && usedPercentage ? (
+          {display.usedPercentageLabel ? (
             <div className="whitespace-nowrap text-xs font-medium text-foreground">
-              <span>{usedPercentage}</span>
-              <span className="mx-1">⋅</span>
-              <span>{formatContextWindowTokens(usage.usedTokens)}</span>
-              <span>/</span>
-              <span>{formatContextWindowTokens(usage.maxTokens ?? null)} context used</span>
+              <span>{display.usedPercentageLabel}</span>
+              {display.hasReliableTokenRatio ? (
+                <>
+                  <span className="mx-1">⋅</span>
+                  <span>{display.tokenUsageLabel}</span>
+                  <span>/</span>
+                  <span>{formatContextWindowTokens(usage.maxTokens)} context used</span>
+                </>
+              ) : (
+                <span className="ml-1">context used</span>
+              )}
             </div>
           ) : (
             <div className="text-sm text-foreground">
-              {formatContextWindowTokens(usage.usedTokens)} tokens used so far
+              {display.tokenUsageLabel} tokens used so far
             </div>
           )}
           {pendingWindowLabel ? (

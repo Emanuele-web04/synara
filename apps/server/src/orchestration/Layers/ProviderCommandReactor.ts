@@ -1193,14 +1193,12 @@ const make = Effect.gen(function* () {
             turnId: null,
             createdAt: event.payload.createdAt,
           });
-          if (isEditResendTurn) {
-            yield* setThreadSessionError({
-              threadId: event.payload.threadId,
-              runtimeMode: event.payload.runtimeMode,
-              detail,
-              createdAt: event.payload.createdAt,
-            });
-          }
+          yield* setThreadSessionError({
+            threadId: event.payload.threadId,
+            runtimeMode: event.payload.runtimeMode,
+            detail,
+            createdAt: event.payload.createdAt,
+          });
           yield* drainQueuedTurnsForThread(event.payload.threadId);
         }),
       ),

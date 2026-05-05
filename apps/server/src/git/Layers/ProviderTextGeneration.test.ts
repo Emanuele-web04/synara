@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   CodexTextGeneration,
+  CursorTextGeneration,
   OpenCodeTextGeneration,
   type TextGenerationShape,
   TextGeneration,
@@ -56,18 +57,20 @@ function createTextGenerationDouble(label: string) {
 
 function makeProviderTextGenerationTestLayer() {
   const codex = createTextGenerationDouble("codex");
+  const cursor = createTextGenerationDouble("cursor");
   const opencode = createTextGenerationDouble("opencode");
   const layer = ProviderTextGenerationLive.pipe(
     Layer.provide(Layer.succeed(CodexTextGeneration, codex.service)),
+    Layer.provide(Layer.succeed(CursorTextGeneration, cursor.service)),
     Layer.provide(Layer.succeed(OpenCodeTextGeneration, opencode.service)),
   );
 
-  return { layer, codex, opencode };
+  return { layer, codex, cursor, opencode };
 }
 
 describe("ProviderTextGenerationLive", () => {
   it("routes standard git-writing models to Codex", async () => {
-    const { layer, codex, opencode } = makeProviderTextGenerationTestLayer();
+    const { layer, codex, cursor, opencode } = makeProviderTextGenerationTestLayer();
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
@@ -82,11 +85,12 @@ describe("ProviderTextGenerationLive", () => {
 
     expect(result.summary).toBe("codex summary");
     expect(codex.generateDiffSummary).toHaveBeenCalledTimes(1);
+    expect(cursor.generateDiffSummary).not.toHaveBeenCalled();
     expect(opencode.generateDiffSummary).not.toHaveBeenCalled();
   });
 
   it("routes OpenCode provider/model slugs to OpenCode", async () => {
-    const { layer, codex, opencode } = makeProviderTextGenerationTestLayer();
+    const { layer, codex, cursor, opencode } = makeProviderTextGenerationTestLayer();
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
@@ -102,10 +106,11 @@ describe("ProviderTextGenerationLive", () => {
     expect(result.summary).toBe("opencode summary");
     expect(opencode.generateDiffSummary).toHaveBeenCalledTimes(1);
     expect(codex.generateDiffSummary).not.toHaveBeenCalled();
+    expect(cursor.generateDiffSummary).not.toHaveBeenCalled();
   });
 
   it("routes explicit OpenCode model selections and preserves provider options", async () => {
-    const { layer, codex, opencode } = makeProviderTextGenerationTestLayer();
+    const { layer, codex, cursor, opencode } = makeProviderTextGenerationTestLayer();
 
     const result = await Effect.runPromise(
       Effect.gen(function* () {
@@ -153,5 +158,56 @@ describe("ProviderTextGenerationLive", () => {
       }),
     );
     expect(codex.generateThreadTitle).not.toHaveBeenCalled();
+    expect(cursor.generateThreadTitle).not.toHaveBeenCalled();
+  });
+
+  it("routes explicit Cursor model selections and preserves provider options", async () => {
+    const { layer, codex, cursor, opencode } = makeProviderTextGenerationTestLayer();
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const textGeneration = yield* TextGeneration;
+        return yield* textGeneration.generateThreadTitle({
+          cwd: "/repo",
+          message: "Plan the Cursor integration work",
+          modelSelection: {
+            provider: "cursor",
+            model: "composer-2",
+            options: {
+              reasoningEffort: "high",
+              fastMode: true,
+            },
+          },
+          providerOptions: {
+            cursor: {
+              binaryPath: "/custom/bin/agent",
+              apiEndpoint: "http://127.0.0.1:3947",
+            },
+          },
+        });
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(result.title).toBe("cursor title");
+    expect(cursor.generateThreadTitle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelSelection: {
+          provider: "cursor",
+          model: "composer-2",
+          options: {
+            reasoningEffort: "high",
+            fastMode: true,
+          },
+        },
+        providerOptions: {
+          cursor: {
+            binaryPath: "/custom/bin/agent",
+            apiEndpoint: "http://127.0.0.1:3947",
+          },
+        },
+      }),
+    );
+    expect(codex.generateThreadTitle).not.toHaveBeenCalled();
+    expect(opencode.generateThreadTitle).not.toHaveBeenCalled();
   });
 });

@@ -75,6 +75,26 @@ describe("deriveReadableToolTitle", () => {
     ).toBe("Xcodebuildmcp: List Sims");
   });
 
+  it("treats Cursor placeholder titles as generic", () => {
+    expect(
+      deriveReadableToolTitle({
+        title: "Find",
+        fallbackLabel: "Find",
+        itemType: "dynamic_tool_call",
+        payload: { data: { kind: "search" } },
+      }),
+    ).toBe("Search");
+
+    expect(
+      deriveReadableToolTitle({
+        title: "Read File",
+        fallbackLabel: "Read File",
+        itemType: "dynamic_tool_call",
+        payload: { data: { kind: "read" } },
+      }),
+    ).toBe("Read");
+  });
+
   it("formats MCP identifiers into readable tool names", () => {
     expect(
       deriveReadableToolTitle({

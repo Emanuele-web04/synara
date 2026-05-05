@@ -4,6 +4,8 @@ import type {
   ClaudeModelSelection,
   CodexModelOptions,
   CodexModelSelection,
+  CursorModelOptions,
+  CursorModelSelection,
   GeminiModelOptions,
   GeminiModelSelection,
   ModelSelection,
@@ -40,7 +42,8 @@ export function formatProviderModelOptionName(input: {
   provider: ProviderKind;
   slug: string;
 }): string {
-  const trimmedSlug = input.slug.trim();
+  const trimmedSlug =
+    input.provider === "cursor" ? input.slug.trim().replace(/\[[^\]]*\]$/u, "") : input.slug.trim();
   if (trimmedSlug.length === 0) {
     return trimmedSlug;
   }
@@ -151,6 +154,9 @@ export function buildNextProviderOptions(
   if (provider === "claudeAgent") {
     return { ...(modelOptions as ClaudeModelOptions | undefined), ...patch } as ClaudeModelOptions;
   }
+  if (provider === "cursor") {
+    return { ...(modelOptions as CursorModelOptions | undefined), ...patch } as CursorModelOptions;
+  }
   if (provider === "gemini") {
     return {
       ...(modelOptions as GeminiModelOptions | undefined),
@@ -175,6 +181,11 @@ export function buildModelSelection(
   model: string,
   options?: ClaudeModelOptions | null | undefined,
 ): ClaudeModelSelection;
+export function buildModelSelection(
+  provider: "cursor",
+  model: string,
+  options?: CursorModelOptions | null | undefined,
+): CursorModelSelection;
 export function buildModelSelection(
   provider: "gemini",
   model: string,
@@ -210,6 +221,14 @@ export function buildModelSelection(
             provider,
             model,
             options: options as ClaudeModelOptions,
+          }
+        : { provider, model };
+    case "cursor":
+      return options
+        ? {
+            provider,
+            model,
+            options: options as CursorModelOptions,
           }
         : { provider, model };
     case "gemini":

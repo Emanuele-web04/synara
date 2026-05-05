@@ -714,6 +714,50 @@ describe("ProviderRuntimeIngestion", () => {
     expect(message?.streaming).toBe(false);
   });
 
+  it("does not project reasoning content deltas into transcript work rows", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-reasoning-delta"),
+      provider: "cursor",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning"),
+      itemId: asItemId("thought-1"),
+      payload: {
+        streamKind: "reasoning_text",
+        delta: "checking files",
+      },
+    });
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-reasoning-turn-completed"),
+      provider: "cursor",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning"),
+      payload: {
+        state: "completed",
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-reasoning-turn-completed",
+      ),
+    );
+
+    expect(
+      thread.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-reasoning-delta",
+      ),
+    ).toBe(false);
+    expect(thread.messages).toHaveLength(0);
+  });
+
   it("projects MCP tool progress into thread activity with preserved tool metadata", async () => {
     const harness = await createHarness();
 
@@ -2611,6 +2655,7 @@ describe("ProviderRuntimeIngestion", () => {
       payload: {
         usage: {
           usedTokens: 1075,
+          usedPercent: 0.83984375,
           totalProcessedTokens: 10_200,
           maxTokens: 128_000,
           inputTokens: 1000,
@@ -2639,6 +2684,7 @@ describe("ProviderRuntimeIngestion", () => {
     expect(usageActivity).toBeDefined();
     expect(usageActivity?.payload).toMatchObject({
       usedTokens: 1075,
+      usedPercent: 0.83984375,
       totalProcessedTokens: 10_200,
       maxTokens: 128_000,
       inputTokens: 1000,
@@ -2646,6 +2692,76 @@ describe("ProviderRuntimeIngestion", () => {
       outputTokens: 50,
       reasoningOutputTokens: 25,
       lastUsedTokens: 1075,
+      compactsAutomatically: true,
+    });
+  });
+
+  it("projects percent-only context window updates into normalized thread activities", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "thread.token-usage.updated",
+      eventId: asEventId("evt-thread-token-usage-updated-percent"),
+      provider: "cursor",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        usage: {
+          usedTokens: 0,
+          usedPercent: 5.8,
+          compactsAutomatically: true,
+        },
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.kind === "context-window.updated",
+      ),
+    );
+
+    const usageActivity = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) => activity.kind === "context-window.updated",
+    );
+    expect(usageActivity?.payload).toMatchObject({
+      usedTokens: 0,
+      usedPercent: 5.8,
+      compactsAutomatically: true,
+    });
+  });
+
+  it("projects real zero-percent context window updates into normalized thread activities", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "thread.token-usage.updated",
+      eventId: asEventId("evt-thread-token-usage-updated-zero-percent"),
+      provider: "cursor",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        usage: {
+          usedTokens: 0,
+          usedPercent: 0,
+          compactsAutomatically: true,
+        },
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.kind === "context-window.updated",
+      ),
+    );
+
+    const usageActivity = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) => activity.kind === "context-window.updated",
+    );
+    expect(usageActivity?.payload).toMatchObject({
+      usedTokens: 0,
+      usedPercent: 0,
       compactsAutomatically: true,
     });
   });
