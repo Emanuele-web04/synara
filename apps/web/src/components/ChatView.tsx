@@ -943,12 +943,11 @@ export default function ChatView({
     {},
     LastInvokedScriptByProjectSchema,
   );
-  const [dismissedProviderHealthBannerKeys, setDismissedProviderHealthBannerKeys] =
-    useLocalStorage(
-      DISMISSED_PROVIDER_HEALTH_BANNERS_KEY,
-      [],
-      DismissedProviderHealthBannersSchema,
-    );
+  const [dismissedProviderHealthBannerKeys, setDismissedProviderHealthBannerKeys] = useLocalStorage(
+    DISMISSED_PROVIDER_HEALTH_BANNERS_KEY,
+    [],
+    DismissedProviderHealthBannersSchema,
+  );
   const [dismissedRateLimitBannerKey, setDismissedRateLimitBannerKey] = useState<string | null>(
     null,
   );
@@ -6505,9 +6504,7 @@ export default function ChatView({
       navigate({
         to: "/$threadId",
         params: { threadId: nextThreadId },
-        ...(options?.splitViewId
-          ? { search: () => ({ splitViewId: options.splitViewId }) }
-          : {}),
+        ...(options?.splitViewId ? { search: () => ({ splitViewId: options.splitViewId }) } : {}),
       }),
     handleClearConversation: async () => {
       if (!activeProject) {

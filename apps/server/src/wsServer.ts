@@ -101,6 +101,7 @@ import { expandHomePath } from "./os-jank.ts";
 import { makeServerPushBus } from "./wsServer/pushBus.ts";
 import { makeServerReadiness } from "./wsServer/readiness.ts";
 import { decodeJsonResult, formatSchemaError } from "@t3tools/shared/schemaJson";
+import { resolveCodexHome } from "@t3tools/shared/codexConfig";
 import {
   deriveAssociatedWorktreeMetadata,
   workspaceRootsEqual,
@@ -568,6 +569,8 @@ function stripRequestTag<T extends { _tag: string }>(body: T) {
 
 const encodeWsResponse = Schema.encodeEffect(Schema.fromJsonString(WsResponse));
 const decodeWebSocketRequest = decodeJsonResult(WebSocketRequest);
+const CODEX_PETS_ROUTE_PREFIX = "/codex-pets";
+const SAFE_PET_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,79}$/i;
 
 export type ServerCoreRuntimeServices =
   | OrchestrationEngineService
@@ -599,6 +602,25 @@ export class ServerLifecycleError extends Schema.TaggedErrorClass<ServerLifecycl
 class RouteRequestError extends Schema.TaggedErrorClass<RouteRequestError>()("RouteRequestError", {
   message: Schema.String,
 }) {}
+
+interface CodexPetManifest {
+  readonly id: string;
+  readonly displayName: string;
+  readonly description: string;
+  readonly spritesheetPath: string;
+  readonly spritesheetUrl: string;
+}
+
+function isSafePetId(petId: string): boolean {
+  return SAFE_PET_ID_PATTERN.test(petId) && !petId.includes("..");
+}
+
+function isPathWithinRoot(candidate: string, root: string, path: Path.Path): boolean {
+  return (
+    candidate === root ||
+    candidate.startsWith(root.endsWith(path.sep) ? root : `${root}${path.sep}`)
+  );
+}
 
 // Summarize noisy websocket pushes so explicit debug logging stays useful
 // without dumping ANSI-heavy terminal redraw traffic into the server logs.
@@ -704,6 +726,103 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const clients = yield* Ref.make(new Set<WebSocket>());
   const logger = createLogger("ws");
   const readiness = yield* makeServerReadiness;
+
+  // Codex pets live under CODEX_HOME and are served read-only for the renderer overlay.
+  const codexPetsRoot = path.resolve(resolveCodexHome(process.env), "pets");
+  const readCodexPets = Effect.fnUntraced(function* () {
+    const petRootStat = yield* fileSystem
+      .stat(codexPetsRoot)
+      .pipe(Effect.catch(() => Effect.succeed(null)));
+    if (!petRootStat || petRootStat.type !== "Directory") {
+      return [] as CodexPetManifest[];
+    }
+
+    const realPetsRoot = yield* Effect.try({
+      try: () => realpathSync.native(codexPetsRoot),
+      catch: () => codexPetsRoot,
+    });
+    const entries = yield* fileSystem
+      .readDirectory(codexPetsRoot, { recursive: false })
+      .pipe(Effect.catch(() => Effect.succeed([] as string[])));
+    const pets: CodexPetManifest[] = [];
+
+    for (const entry of entries) {
+      if (!isSafePetId(entry)) {
+        continue;
+      }
+
+      const petDir = path.resolve(codexPetsRoot, entry);
+      const realPetDir = yield* Effect.try({
+        try: () => realpathSync.native(petDir),
+        catch: () => petDir,
+      });
+      if (!isPathWithinRoot(realPetDir, realPetsRoot, path)) {
+        continue;
+      }
+
+      const manifestText = yield* fileSystem
+        .readFileString(path.join(petDir, "pet.json"))
+        .pipe(Effect.catch(() => Effect.succeed(null)));
+      if (!manifestText) {
+        continue;
+      }
+
+      const parsed = yield* Effect.try({
+        try: () => JSON.parse(manifestText) as Record<string, unknown>,
+        catch: () => null,
+      });
+      const id = typeof parsed?.id === "string" && isSafePetId(parsed.id) ? parsed.id : entry;
+      const displayName =
+        typeof parsed?.displayName === "string" && parsed.displayName.trim().length > 0
+          ? parsed.displayName.trim()
+          : id;
+      const description =
+        typeof parsed?.description === "string" && parsed.description.trim().length > 0
+          ? parsed.description.trim()
+          : `${displayName} Codex pet.`;
+      const spritesheetPath =
+        typeof parsed?.spritesheetPath === "string" && parsed.spritesheetPath === "spritesheet.webp"
+          ? parsed.spritesheetPath
+          : "spritesheet.webp";
+      const spritesheetStat = yield* fileSystem
+        .stat(path.join(petDir, spritesheetPath))
+        .pipe(Effect.catch(() => Effect.succeed(null)));
+      if (!spritesheetStat || spritesheetStat.type !== "File") {
+        continue;
+      }
+
+      pets.push({
+        id,
+        displayName,
+        description,
+        spritesheetPath,
+        spritesheetUrl: `${CODEX_PETS_ROUTE_PREFIX}/${encodeURIComponent(id)}/${spritesheetPath}`,
+      });
+    }
+
+    return pets.sort((left, right) => left.displayName.localeCompare(right.displayName));
+  });
+
+  const resolveCodexPetAssetPath = Effect.fnUntraced(function* (petId: string, assetName: string) {
+    if (!isSafePetId(petId) || (assetName !== "pet.json" && assetName !== "spritesheet.webp")) {
+      return null;
+    }
+
+    const realPetsRoot = yield* Effect.try({
+      try: () => realpathSync.native(codexPetsRoot),
+      catch: () => codexPetsRoot,
+    });
+    const assetPath = path.resolve(codexPetsRoot, petId, assetName);
+    const realAssetPath = yield* Effect.try({
+      try: () => realpathSync.native(assetPath),
+      catch: () => assetPath,
+    });
+    if (!isPathWithinRoot(realAssetPath, realPetsRoot, path)) {
+      return null;
+    }
+
+    return assetPath;
+  });
 
   // Canonicalizes imported workspace roots once at the server boundary.
   const canonicalizeProjectWorkspaceRoot = Effect.fnUntraced(function* (
@@ -1007,6 +1126,68 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         }
 
         if (tryHandleProjectFaviconRequest(url, res)) {
+          return;
+        }
+
+        if (url.pathname === CODEX_PETS_ROUTE_PREFIX) {
+          const pets = yield* readCodexPets();
+          respond(
+            200,
+            { "Content-Type": "application/json; charset=utf-8" },
+            JSON.stringify({ pets }),
+          );
+          return;
+        }
+
+        if (url.pathname.startsWith(`${CODEX_PETS_ROUTE_PREFIX}/`)) {
+          const rawRelativePath = url.pathname.slice(CODEX_PETS_ROUTE_PREFIX.length + 1);
+          const [rawPetId, rawAssetName, ...extraSegments] = rawRelativePath.split("/");
+          const petId = decodeURIComponent(rawPetId ?? "");
+          const assetName = decodeURIComponent(rawAssetName ?? "");
+          if (extraSegments.length > 0) {
+            respond(400, { "Content-Type": "text/plain" }, "Invalid pet asset path");
+            return;
+          }
+
+          const filePath = yield* resolveCodexPetAssetPath(petId, assetName);
+          if (!filePath) {
+            respond(404, { "Content-Type": "text/plain" }, "Not Found");
+            return;
+          }
+
+          const fileInfo = yield* fileSystem
+            .stat(filePath)
+            .pipe(Effect.catch(() => Effect.succeed(null)));
+          if (!fileInfo || fileInfo.type !== "File") {
+            respond(404, { "Content-Type": "text/plain" }, "Not Found");
+            return;
+          }
+
+          const contentType =
+            assetName === "pet.json"
+              ? "application/json; charset=utf-8"
+              : (Mime.getType(filePath) ?? "application/octet-stream");
+          res.writeHead(200, {
+            "Content-Type": contentType,
+            "Cache-Control":
+              assetName === "pet.json" ? "no-cache" : "public, max-age=31536000, immutable",
+          });
+          const streamExit = yield* Stream.runForEach(fileSystem.stream(filePath), (chunk) =>
+            Effect.sync(() => {
+              if (!res.destroyed) {
+                res.write(chunk);
+              }
+            }),
+          ).pipe(Effect.exit);
+          if (Exit.isFailure(streamExit)) {
+            if (!res.destroyed) {
+              res.destroy();
+            }
+            return;
+          }
+          if (!res.writableEnded) {
+            res.end();
+          }
           return;
         }
 

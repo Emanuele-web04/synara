@@ -93,7 +93,10 @@ import { Sidebar, SidebarInset, SidebarProvider, SidebarRail } from "~/component
 
 const DiffPanel = lazy(() => import("../components/DiffPanel"));
 const DIFF_INLINE_LAYOUT_MEDIA_QUERY = "(max-width: 1180px)";
-const DIFF_INLINE_DEFAULT_WIDTH = "clamp(28rem,48vw,44rem)";
+// Default the inline diff to ~50% of the chat area (viewport minus the 16rem left
+// sidebar) so it behaves like the split-chat 50/50 layout instead of overflowing past
+// half the view. Users can still resize past these bounds via the sidebar rail.
+const DIFF_INLINE_DEFAULT_WIDTH = "clamp(28rem, calc(50vw - 8rem), 44rem)";
 const BROWSER_INLINE_DEFAULT_WIDTH = "50%";
 const SPLIT_PANE_PANEL_DEFAULT_WIDTH_PX = 22 * 16;
 const BROWSER_SPLIT_PANE_PANEL_DEFAULT_WIDTH_PX = 30 * 16;

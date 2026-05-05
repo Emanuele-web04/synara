@@ -929,12 +929,10 @@ describe("OrchestrationEngine", () => {
 
     const readModel = await system.run(engine.getReadModel());
     expect(
-      readModel.projects.find((project) => project.id === asProjectId("project-stale"))
-        ?.deletedAt,
+      readModel.projects.find((project) => project.id === asProjectId("project-stale"))?.deletedAt,
     ).toBe(createdAt);
     expect(
-      readModel.projects.find((project) => project.id === asProjectId("project-readd"))
-        ?.deletedAt,
+      readModel.projects.find((project) => project.id === asProjectId("project-readd"))?.deletedAt,
     ).toBeNull();
 
     await system.dispose();

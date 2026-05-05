@@ -6,6 +6,17 @@ import {
   normalizeDesktopWsUrl,
   resolveDesktopWsUrlFromEnv,
 } from "./desktopWsBridge";
+import {
+  PET_OVERLAY_DRAG_END_CHANNEL,
+  PET_OVERLAY_DRAG_MOVE_CHANNEL,
+  PET_OVERLAY_DRAG_START_CHANNEL,
+  PET_OVERLAY_CLOSE_CHANNEL,
+  PET_OVERLAY_HIDE_CHANNEL,
+  PET_OVERLAY_MOVED_CHANNEL,
+  PET_OVERLAY_MOVE_BY_CHANNEL,
+  PET_OVERLAY_POINTER_INTERACTION_CHANNEL,
+  PET_OVERLAY_SET_STATE_CHANNEL,
+} from "./petOverlay";
 import { SERVER_TRANSCRIBE_VOICE_CHANNEL } from "./voiceTranscription";
 
 const PICK_FOLDER_CHANNEL = "desktop:pick-folder";
@@ -74,6 +85,30 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   notifications: {
     isSupported: () => ipcRenderer.invoke(NOTIFICATIONS_IS_SUPPORTED_CHANNEL),
     show: (input) => ipcRenderer.invoke(NOTIFICATIONS_SHOW_CHANNEL, input),
+  },
+  petOverlay: {
+    setState: (input) => ipcRenderer.invoke(PET_OVERLAY_SET_STATE_CHANNEL, input),
+    hide: () => ipcRenderer.invoke(PET_OVERLAY_HIDE_CHANNEL),
+    close: () => ipcRenderer.invoke(PET_OVERLAY_CLOSE_CHANNEL),
+    moveBy: (input) => ipcRenderer.invoke(PET_OVERLAY_MOVE_BY_CHANNEL, input),
+    dragStart: (input) => ipcRenderer.invoke(PET_OVERLAY_DRAG_START_CHANNEL, input),
+    dragMove: () => ipcRenderer.invoke(PET_OVERLAY_DRAG_MOVE_CHANNEL),
+    dragEnd: () => ipcRenderer.invoke(PET_OVERLAY_DRAG_END_CHANNEL),
+    setPointerInteraction: (input) =>
+      ipcRenderer.invoke(PET_OVERLAY_POINTER_INTERACTION_CHANNEL, input),
+    onMoved: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, position: unknown) => {
+        if (typeof position !== "object" || position === null) return;
+        const maybePosition = position as { x?: unknown; y?: unknown };
+        if (typeof maybePosition.x !== "number" || typeof maybePosition.y !== "number") return;
+        listener({ x: maybePosition.x, y: maybePosition.y });
+      };
+
+      ipcRenderer.on(PET_OVERLAY_MOVED_CHANNEL, wrappedListener);
+      return () => {
+        ipcRenderer.removeListener(PET_OVERLAY_MOVED_CHANNEL, wrappedListener);
+      };
+    },
   },
   server: {
     transcribeVoice: (input) => ipcRenderer.invoke(SERVER_TRANSCRIBE_VOICE_CHANNEL, input),

@@ -65,8 +65,7 @@ export function resolveAutoFeatureBranchName(
 }
 
 export function buildDpcodeBranchName(preferredBranch?: string | null): string {
-  const normalizedExisting =
-    preferredBranch?.trim().replace(/^(codex|t3code|dpcode)\//i, "") ?? "";
+  const normalizedExisting = preferredBranch?.trim().replace(/^(codex|t3code|dpcode)\//i, "") ?? "";
   return `${WORKTREE_BRANCH_PREFIX}/${sanitizeBranchFragment(
     normalizedExisting || DPCODE_BRANCH_FALLBACK,
   )}`;

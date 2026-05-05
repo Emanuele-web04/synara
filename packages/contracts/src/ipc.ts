@@ -229,6 +229,47 @@ export interface DesktopNotificationInput {
   threadId?: ThreadId;
 }
 
+export interface DesktopPetOverlayState {
+  visible: boolean;
+  spritesheetUrl: string;
+  displayName: string;
+  description: string;
+  animation: string;
+  activity?: {
+    kind: "input-needed" | "working" | "connecting";
+    label: string;
+    title: string;
+  } | null;
+  row: number;
+  frames: number;
+  durationMs: number;
+  width: number;
+  height: number;
+  columns: number;
+  rows: number;
+  x: number;
+  y: number;
+}
+
+export interface DesktopPetOverlayMoveDelta {
+  dx: number;
+  dy: number;
+}
+
+export interface DesktopPetOverlayDragStartInput {
+  pointerWindowX: number;
+  pointerWindowY: number;
+}
+
+export interface DesktopPetOverlayPointerInteractionInput {
+  interactive: boolean;
+}
+
+export interface DesktopPetOverlayMovedEvent {
+  x: number;
+  y: number;
+}
+
 export interface DesktopBridge {
   getWsUrl: () => string | null;
   pickFolder: () => Promise<string | null>;
@@ -257,6 +298,17 @@ export interface DesktopBridge {
   notifications: {
     isSupported: () => Promise<boolean>;
     show: (input: DesktopNotificationInput) => Promise<boolean>;
+  };
+  petOverlay?: {
+    setState: (input: DesktopPetOverlayState) => Promise<void>;
+    hide: () => Promise<void>;
+    close: () => Promise<void>;
+    moveBy: (input: DesktopPetOverlayMoveDelta) => Promise<void>;
+    dragStart: (input: DesktopPetOverlayDragStartInput) => Promise<void>;
+    dragMove: () => Promise<void>;
+    dragEnd: () => Promise<void>;
+    setPointerInteraction: (input: DesktopPetOverlayPointerInteractionInput) => Promise<void>;
+    onMoved: (listener: (event: DesktopPetOverlayMovedEvent) => void) => () => void;
   };
   server?: {
     transcribeVoice: (

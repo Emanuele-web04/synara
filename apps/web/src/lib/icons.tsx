@@ -40,7 +40,6 @@ import {
   IconFolderOpen,
   IconGitCompare,
   IconGitFork,
-  IconGitPullRequest,
   IconEdit,
   IconInfoCircle,
   IconLayoutSidebarLeftCollapse,
@@ -156,7 +155,26 @@ export const GitForkIcon = adaptIcon(IconGitFork);
 export const GitHubIcon: LucideIcon = (props) => (
   <SiGithub className={props.className} style={props.style} />
 );
-export const GitPullRequestIcon = adaptIcon(IconGitPullRequest);
+export const GitPullRequestIcon: LucideIcon = (props) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.5}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+    {...props}
+  >
+    <circle cx="6" cy="6" r="2.25" />
+    <circle cx="6" cy="18" r="2.25" />
+    <circle cx="18" cy="18" r="2.25" />
+    <path d="M6 8.25V15.75" />
+    <path d="M13 6H16C17.1046 6 18 6.89543 18 8V15.75" />
+    <path d="M14 3.75L11.75 6L14 8.25" />
+  </svg>
+);
 export const GlobeIcon = adaptIcon(IconWorld);
 export const McpIcon: LucideIcon = (props) => (
   <VscMcp className={props.className} style={props.style} />

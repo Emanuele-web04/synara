@@ -26,6 +26,10 @@ import {
 import type { FileFilter, IpcMainEvent, MenuItemConstructorOptions } from "electron";
 import * as Effect from "effect/Effect";
 import type {
+  DesktopPetOverlayDragStartInput,
+  DesktopPetOverlayMoveDelta,
+  DesktopPetOverlayPointerInteractionInput,
+  DesktopPetOverlayState,
   DesktopTheme,
   DesktopUpdateActionResult,
   DesktopUpdateState,
@@ -69,6 +73,18 @@ import {
 import { isArm64HostRunningIntelBuild, resolveDesktopRuntimeInfo } from "./runtimeArch";
 import { DesktopBrowserManager } from "./browserManager";
 import { BROWSER_IPC_CHANNELS, registerBrowserIpcHandlers, sendBrowserState } from "./browserIpc";
+import {
+  DesktopPetOverlayController,
+  PET_OVERLAY_DRAG_END_CHANNEL,
+  PET_OVERLAY_DRAG_MOVE_CHANNEL,
+  PET_OVERLAY_DRAG_START_CHANNEL,
+  PET_OVERLAY_CLOSE_CHANNEL,
+  PET_OVERLAY_HIDE_CHANNEL,
+  PET_OVERLAY_MOVED_CHANNEL,
+  PET_OVERLAY_MOVE_BY_CHANNEL,
+  PET_OVERLAY_POINTER_INTERACTION_CHANNEL,
+  PET_OVERLAY_SET_STATE_CHANNEL,
+} from "./petOverlay";
 import {
   BrowserUsePipeServer,
   DPCODE_BROWSER_USE_PIPE_ENV,
@@ -156,6 +172,9 @@ let unreadBackgroundNotificationCount = 0;
 let browserPerfInterval: ReturnType<typeof setInterval> | null = null;
 const browserManager = new DesktopBrowserManager();
 let browserUsePipeServer: BrowserUsePipeServer | null = null;
+let petOverlayController: DesktopPetOverlayController | null = null;
+let mainWindowHiddenForPetOverlay = false;
+let petOverlayShowTimer: ReturnType<typeof setTimeout> | null = null;
 let configuredGitHubUpdateSource: ReturnType<typeof resolveGitHubUpdateSource> = null;
 let configuredGitHubUpdateToken = "";
 
@@ -864,6 +883,10 @@ function configureApplicationMenu(): void {
           accelerator: "CmdOrCtrl+Shift+B",
           click: () => dispatchMenuAction("toggle-browser"),
         },
+        {
+          label: "Show Pet",
+          click: () => dispatchMenuAction("show-pet"),
+        },
         { type: "separator" },
         { role: "reload" },
         { role: "forceReload" },
@@ -1007,6 +1030,72 @@ function showDesktopNotification(input: {
   });
 
   notification.show();
+  return true;
+}
+
+function resolvePetOverlayAssetUrl(rawUrl: string): string {
+  const trimmedUrl = rawUrl.trim();
+  if (/^(https?:|data:|t3:)/i.test(trimmedUrl)) {
+    return trimmedUrl;
+  }
+  if (trimmedUrl.startsWith("/codex-pets") && backendHttpUrl.length > 0) {
+    return `${backendHttpUrl}${trimmedUrl}`;
+  }
+
+  try {
+    const baseUrl = mainWindow?.webContents.getURL() || backendHttpUrl || "t3://app/";
+    return new URL(trimmedUrl, baseUrl).toString();
+  } catch {
+    return trimmedUrl;
+  }
+}
+
+function getPetOverlayController(): DesktopPetOverlayController {
+  if (!petOverlayController) {
+    petOverlayController = new DesktopPetOverlayController({
+      preloadPath: Path.join(__dirname, "preload.js"),
+      resolveAssetUrl: resolvePetOverlayAssetUrl,
+      onMoved: (position) => {
+        mainWindow?.webContents.send(PET_OVERLAY_MOVED_CHANNEL, position);
+      },
+    });
+  }
+  return petOverlayController;
+}
+
+function clearPetOverlayShowTimer(): void {
+  if (!petOverlayShowTimer) return;
+  clearTimeout(petOverlayShowTimer);
+  petOverlayShowTimer = null;
+}
+
+function showPetOverlayAfterBackgroundTransition(delayMs = 80): void {
+  if (isQuitting) return;
+  clearPetOverlayShowTimer();
+  petOverlayShowTimer = setTimeout(() => {
+    petOverlayShowTimer = null;
+    if (isQuitting || mainWindow?.isFocused()) return;
+    void petOverlayController?.showLastState();
+  }, delayMs);
+}
+
+function isDevToolsWindow(window: BrowserWindow): boolean {
+  return window.webContents.getURL().startsWith("devtools://");
+}
+
+function keepPetOverlayInteractionDetachedFromAppFocus(focusedWindow: BrowserWindow): boolean {
+  if (isQuitting || !petOverlayController?.isCursorOverOverlay()) {
+    return false;
+  }
+
+  focusedWindow.blur();
+  if (isDevelopment && isDevToolsWindow(focusedWindow)) {
+    focusedWindow.hide();
+  }
+  if (mainWindowHiddenForPetOverlay && mainWindow?.isVisible()) {
+    mainWindow.hide();
+  }
+  void petOverlayController.showLastState();
   return true;
 }
 
@@ -1803,6 +1892,50 @@ function registerIpcHandlers(): void {
         ...(typeof input?.threadId === "string" ? { threadId: input.threadId } : {}),
       }),
   );
+
+  ipcMain.removeHandler(PET_OVERLAY_SET_STATE_CHANNEL);
+  ipcMain.handle(PET_OVERLAY_SET_STATE_CHANNEL, async (_event, input: unknown) => {
+    await getPetOverlayController().setState(input as DesktopPetOverlayState);
+  });
+
+  ipcMain.removeHandler(PET_OVERLAY_HIDE_CHANNEL);
+  ipcMain.handle(PET_OVERLAY_HIDE_CHANNEL, async () => {
+    getPetOverlayController().hide();
+  });
+
+  ipcMain.removeHandler(PET_OVERLAY_CLOSE_CHANNEL);
+  ipcMain.handle(PET_OVERLAY_CLOSE_CHANNEL, async () => {
+    getPetOverlayController().close();
+    mainWindow?.webContents.send(MENU_ACTION_CHANNEL, "close-pet");
+  });
+
+  ipcMain.removeHandler(PET_OVERLAY_MOVE_BY_CHANNEL);
+  ipcMain.handle(PET_OVERLAY_MOVE_BY_CHANNEL, async (_event, input: unknown) => {
+    getPetOverlayController().moveBy(input as DesktopPetOverlayMoveDelta);
+  });
+
+  ipcMain.removeHandler(PET_OVERLAY_DRAG_START_CHANNEL);
+  ipcMain.handle(PET_OVERLAY_DRAG_START_CHANNEL, async (_event, input: unknown) => {
+    getPetOverlayController().startDrag(input as DesktopPetOverlayDragStartInput);
+  });
+
+  ipcMain.removeHandler(PET_OVERLAY_DRAG_MOVE_CHANNEL);
+  ipcMain.handle(PET_OVERLAY_DRAG_MOVE_CHANNEL, async () => {
+    getPetOverlayController().moveDrag();
+  });
+
+  ipcMain.removeHandler(PET_OVERLAY_DRAG_END_CHANNEL);
+  ipcMain.handle(PET_OVERLAY_DRAG_END_CHANNEL, async () => {
+    getPetOverlayController().endDrag();
+  });
+
+  ipcMain.removeHandler(PET_OVERLAY_POINTER_INTERACTION_CHANNEL);
+  ipcMain.handle(PET_OVERLAY_POINTER_INTERACTION_CHANNEL, async (_event, input: unknown) => {
+    getPetOverlayController().setPointerInteraction(
+      input as DesktopPetOverlayPointerInteractionInput,
+    );
+  });
+
   registerDesktopVoiceTranscriptionHandler();
   startBrowserPerformanceLogging();
   void ensureBrowserUsePipeServer().catch((error) => {
@@ -1899,6 +2032,50 @@ function createWindow(): BrowserWindow {
   window.once("ready-to-show", () => {
     window.show();
   });
+  window.on("hide", () => {
+    if (!isQuitting) {
+      mainWindowHiddenForPetOverlay = true;
+      showPetOverlayAfterBackgroundTransition();
+    }
+  });
+  window.on("minimize", () => {
+    if (!isQuitting) {
+      mainWindowHiddenForPetOverlay = true;
+      showPetOverlayAfterBackgroundTransition();
+    }
+  });
+  window.on("blur", () => {
+    if (!isQuitting) {
+      showPetOverlayAfterBackgroundTransition(0);
+    }
+  });
+  window.on("show", () => {
+    if (
+      !isQuitting &&
+      mainWindowHiddenForPetOverlay &&
+      petOverlayController?.isCursorOverOverlay()
+    ) {
+      window.hide();
+      void petOverlayController.showLastState();
+      return;
+    }
+    mainWindowHiddenForPetOverlay = false;
+    clearPetOverlayShowTimer();
+    petOverlayController?.hide();
+  });
+  window.on("restore", () => {
+    mainWindowHiddenForPetOverlay = false;
+    clearPetOverlayShowTimer();
+    petOverlayController?.hide();
+  });
+  window.on("focus", () => {
+    if (keepPetOverlayInteractionDetachedFromAppFocus(window)) {
+      return;
+    }
+    mainWindowHiddenForPetOverlay = false;
+    clearPetOverlayShowTimer();
+    petOverlayController?.hide();
+  });
 
   if (isDevelopment) {
     void window.loadURL(process.env.VITE_DEV_SERVER_URL as string);
@@ -1911,6 +2088,8 @@ function createWindow(): BrowserWindow {
     if (mainWindow === window) {
       mainWindow = null;
     }
+    petOverlayController?.dispose();
+    petOverlayController = null;
     browserManager.setWindow(null);
   });
 
@@ -2013,9 +2192,12 @@ app.on("before-quit", () => {
   clearUpdateBackgroundBlurTimer();
   clearUpdateCheckTimeoutTimer();
   clearUpdatePollTimer();
+  clearPetOverlayShowTimer();
   void browserUsePipeServer?.dispose().finally(() => {
     browserUsePipeServer = null;
   });
+  petOverlayController?.dispose();
+  petOverlayController = null;
   cancelBackendReadinessWait();
   stopBackend();
   browserManager.dispose();
@@ -2038,13 +2220,26 @@ if (hasSingleInstanceLock) {
 
       app.on("browser-window-blur", () => {
         markDesktopAppBackgrounded();
+        showPetOverlayAfterBackgroundTransition(0);
       });
 
-      app.on("browser-window-focus", () => {
+      app.on("browser-window-focus", (_event, focusedWindow) => {
+        if (keepPetOverlayInteractionDetachedFromAppFocus(focusedWindow)) {
+          return;
+        }
+        clearPetOverlayShowTimer();
         handleDesktopAppForegrounded();
       });
 
+      app.on("hide", () => {
+        mainWindowHiddenForPetOverlay = true;
+        showPetOverlayAfterBackgroundTransition(120);
+      });
+
       app.on("activate", () => {
+        if (petOverlayController?.isCursorOverOverlay()) {
+          return;
+        }
         handleDesktopAppForegrounded();
         if (BrowserWindow.getAllWindows().length === 0) {
           if (!isDevelopment) {

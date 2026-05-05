@@ -6,6 +6,7 @@ import { defineConfig } from "vite";
 import pkg from "./package.json" with { type: "json" };
 
 const port = Number(process.env.PORT ?? 5733);
+const serverPort = Number(process.env.T3CODE_PORT ?? 3773);
 const sourcemapEnv = process.env.T3CODE_WEB_SOURCEMAP?.trim().toLowerCase();
 
 const buildSourcemap =
@@ -48,6 +49,13 @@ export default defineConfig({
   server: {
     port,
     strictPort: true,
+    proxy: {
+      // Pet manifests and sprites are owned by the backend; this keeps dev fetches same-origin.
+      "/codex-pets": {
+        target: `http://localhost:${serverPort}`,
+        changeOrigin: true,
+      },
+    },
     hmr: {
       // Explicit config so Vite's HMR WebSocket connects reliably
       // inside Electron's BrowserWindow. Vite 8 uses console.debug for

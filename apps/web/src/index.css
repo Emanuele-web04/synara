@@ -82,6 +82,68 @@
     transform: scale(0.7);
     will-change: opacity, transform;
   }
+
+  /* Keep pet sprites animated by transform so frames don't repaint the chat renderer. */
+  .codex-pet-sprite--animated {
+    animation: codex-pet-sprite-steps var(--codex-pet-duration) steps(var(--codex-pet-steps))
+      var(--codex-pet-iterations, infinite);
+    animation-fill-mode: var(--codex-pet-fill-mode, none);
+    will-change: transform;
+  }
+
+  /* Soft ellipse beneath the pet sprite to ground it visually above the activity dock. */
+  .codex-pet-ground {
+    background: radial-gradient(
+      ellipse at center,
+      rgba(15, 23, 42, 0.28) 0%,
+      rgba(15, 23, 42, 0.16) 38%,
+      rgba(15, 23, 42, 0) 72%
+    );
+    filter: blur(0.5px);
+  }
+
+  .dark .codex-pet-ground {
+    background: radial-gradient(
+      ellipse at center,
+      rgba(0, 0, 0, 0.55) 0%,
+      rgba(0, 0, 0, 0.32) 38%,
+      rgba(0, 0, 0, 0) 72%
+    );
+  }
+
+  /* Glassy floating dock that visually echoes the pet without overpowering it. */
+  .codex-pet-dock {
+    background: color-mix(in srgb, var(--popover) 78%, transparent);
+    box-shadow:
+      0 1px 0 0 color-mix(in srgb, var(--color-white) 22%, transparent) inset,
+      0 12px 30px -12px rgba(0, 0, 0, 0.45),
+      0 4px 12px -4px rgba(0, 0, 0, 0.18);
+  }
+
+  .dark .codex-pet-dock {
+    background: color-mix(in srgb, var(--popover) 86%, transparent);
+    box-shadow:
+      0 1px 0 0 color-mix(in srgb, var(--color-white) 6%, transparent) inset,
+      0 16px 32px -14px rgba(0, 0, 0, 0.7),
+      0 6px 14px -6px rgba(0, 0, 0, 0.4);
+  }
+
+  /* Tiny upward notch that anchors the dock to the pet so they read as one unit. */
+  .codex-pet-dock-notch {
+    position: absolute;
+    top: -5px;
+    left: 50%;
+    width: 10px;
+    height: 10px;
+    border-top: 1px solid
+      var(--codex-pet-dock-notch-border, color-mix(in srgb, var(--border) 80%, transparent));
+    border-left: 1px solid
+      var(--codex-pet-dock-notch-border, color-mix(in srgb, var(--border) 80%, transparent));
+    background: inherit;
+    transform: translateX(-50%) rotate(45deg);
+    border-top-left-radius: 2px;
+    pointer-events: none;
+  }
 }
 
 @keyframes terminal-running-indicator-pulse {
@@ -94,6 +156,16 @@
   35% {
     opacity: 0.92;
     transform: scale(1);
+  }
+}
+
+@keyframes codex-pet-sprite-steps {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+
+  to {
+    transform: translate3d(var(--codex-pet-sprite-x-end), 0, 0);
   }
 }
 
@@ -118,6 +190,11 @@
 @media (prefers-reduced-motion: reduce) {
   .chat-pane-enter {
     animation: none;
+  }
+
+  .codex-pet-sprite--animated {
+    animation: none;
+    will-change: auto;
   }
 }
 

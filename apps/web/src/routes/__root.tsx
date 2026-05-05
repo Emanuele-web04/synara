@@ -29,6 +29,7 @@ import { AnchoredToastProvider, ToastProvider, toastManager } from "../component
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { isElectron } from "../env";
 import { useFocusedChatContext } from "../focusedChatContext";
+import { getThreadIdsNeedingBackgroundDetail } from "../backgroundThreadActivity";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { serverConfigQueryOptions, serverQueryKeys } from "../lib/serverReactQuery";
 import { readNativeApi } from "../nativeApi";
@@ -45,6 +46,8 @@ import { providerQueryKeys } from "../lib/providerReactQuery";
 import { projectQueryKeys } from "../lib/projectReactQuery";
 import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
 import { TaskCompletionNotifications } from "../notifications/taskCompletion";
+import BackgroundThreadActivityDock from "../components/BackgroundThreadActivityDock";
+import CodexPetLayer from "../components/pet/CodexPetLayer";
 import { useWorkspaceStore, workspaceThreadId } from "../workspaceStore";
 import {
   subscribeRetainedThreadDetailIdChanges,
@@ -60,6 +63,7 @@ import { hasLiveThreadsWithMissingProjects } from "../lib/desktopProjectRecovery
 import { parseDiffRouteSearch } from "../diffRouteSearch";
 import { resolveSplitViewThreadIds, selectSplitView, useSplitViewStore } from "../splitViewStore";
 import { providerDiscoveryQueryKeys } from "../lib/providerDiscoveryReactQuery";
+import { createSidebarThreadSummariesSelector } from "../storeSelectors";
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient;
@@ -97,6 +101,8 @@ function RootRouteView() {
         <GlobalShortcutsDialog />
         <GlobalWhatsNewSurface />
         <TaskCompletionNotifications />
+        <BackgroundThreadActivityDock />
+        <CodexPetLayer />
         <DesktopProjectBootstrap />
         <Outlet />
       </AnchoredToastProvider>
@@ -358,17 +364,28 @@ function EventRouter() {
     return routeThreadId ? [routeThreadId] : [];
   }, [activeSplitView, routeThreadId]);
   const retainedThreadIds = useRetainedThreadDetailIds();
+  const backgroundThreadSummaries = useStore(
+    useMemo(() => createSidebarThreadSummariesSelector(), []),
+  );
+  const backgroundDetailThreadIds = useMemo(
+    () => getThreadIdsNeedingBackgroundDetail(backgroundThreadSummaries),
+    [backgroundThreadSummaries],
+  );
   const subscribedThreadIds = useMemo(() => {
     const nextThreadIds = new Set<ThreadId>(visibleThreadIds);
     for (const threadId of retainedThreadIds) {
       nextThreadIds.add(threadId);
     }
+    for (const threadId of backgroundDetailThreadIds) {
+      nextThreadIds.add(threadId);
+    }
     return [...nextThreadIds];
-  }, [retainedThreadIds, visibleThreadIds]);
+  }, [backgroundDetailThreadIds, retainedThreadIds, visibleThreadIds]);
   const workspacePagesRef = useRef(workspacePages);
   const pathnameRef = useRef(pathname);
   const handledBootstrapThreadIdRef = useRef<string | null>(null);
   const routeVisibleThreadIdsRef = useRef(visibleThreadIds);
+  const backgroundDetailThreadIdsRef = useRef(backgroundDetailThreadIds);
   const visibleThreadIdsRef = useRef(subscribedThreadIds);
   const reconcileThreadSubscriptionsRef = useRef<
     ((threadIds: readonly ThreadId[]) => Promise<void>) | null
@@ -377,6 +394,7 @@ function EventRouter() {
   workspacePagesRef.current = workspacePages;
   pathnameRef.current = pathname;
   routeVisibleThreadIdsRef.current = visibleThreadIds;
+  backgroundDetailThreadIdsRef.current = backgroundDetailThreadIds;
   visibleThreadIdsRef.current = subscribedThreadIds;
 
   useEffect(() => {
@@ -483,6 +501,9 @@ function EventRouter() {
       (nextRetainedThreadIds) => {
         const nextThreadIds = new Set(routeVisibleThreadIdsRef.current);
         for (const threadId of nextRetainedThreadIds) {
+          nextThreadIds.add(threadId);
+        }
+        for (const threadId of backgroundDetailThreadIdsRef.current) {
           nextThreadIds.add(threadId);
         }
         void enqueueThreadSubscriptionReconcile([...nextThreadIds]);

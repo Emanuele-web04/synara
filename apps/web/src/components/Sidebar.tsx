@@ -1145,6 +1145,7 @@ export default function Sidebar() {
   const activeSettingsSection = normalizeSettingsSection(settingsSectionSearch.section);
   const activeSplitView = useSplitViewStore(selectSplitView(routeSearch.splitViewId ?? null));
   const splitViewsById = useSplitViewStore((store) => store.splitViewsById);
+  const createSplitViewFromDrop = useSplitViewStore((store) => store.createFromDrop);
   const setSplitFocusedPane = useSplitViewStore((store) => store.setFocusedPane);
   const removeThreadFromSplitViews = useSplitViewStore((store) => store.removeThreadFromSplitViews);
   const { data: keybindings = EMPTY_KEYBINDINGS } = useQuery({
@@ -3046,6 +3047,14 @@ export default function Sidebar() {
     clearSelection,
     navigate,
     openChatThreadPage,
+    openSidechatSplit: ({ sourceThreadId, ownerProjectId, sidechatThreadId }) =>
+      createSplitViewFromDrop({
+        sourceThreadId,
+        ownerProjectId,
+        droppedThreadId: sidechatThreadId,
+        direction: "horizontal",
+        side: "second",
+      }),
     openTerminalThreadPage,
     prewarmThreadDetailForIntent,
     rememberLastThreadRouteNow,
@@ -3352,27 +3361,24 @@ export default function Sidebar() {
     () => sortedProjects.filter((project) => isHomeChatContainerProject(project, homeDir)),
     [homeDir, sortedProjects],
   );
-  const visibleChatThreadRows = useMemo(
-    () => {
-      if (!chatSectionExpanded) {
-        return [];
-      }
-      return buildProjectThreadTree({
-        threads: sortThreadsForSidebar(
-          chatProjects.flatMap((project) => sortedSidebarThreadsByProjectId.get(project.id) ?? []),
-          appSettings.sidebarThreadSortOrder,
-        ),
-        expandedParentThreadIds: expandedSubagentParentIds,
-      });
-    },
-    [
-      appSettings.sidebarThreadSortOrder,
-      chatSectionExpanded,
-      chatProjects,
-      expandedSubagentParentIds,
-      sortedSidebarThreadsByProjectId,
-    ],
-  );
+  const visibleChatThreadRows = useMemo(() => {
+    if (!chatSectionExpanded) {
+      return [];
+    }
+    return buildProjectThreadTree({
+      threads: sortThreadsForSidebar(
+        chatProjects.flatMap((project) => sortedSidebarThreadsByProjectId.get(project.id) ?? []),
+        appSettings.sidebarThreadSortOrder,
+      ),
+      expandedParentThreadIds: expandedSubagentParentIds,
+    });
+  }, [
+    appSettings.sidebarThreadSortOrder,
+    chatSectionExpanded,
+    chatProjects,
+    expandedSubagentParentIds,
+    sortedSidebarThreadsByProjectId,
+  ]);
   const visibleChatThreadIds = useMemo(
     () => visibleChatThreadRows.map((row) => row.thread.id),
     [visibleChatThreadRows],
