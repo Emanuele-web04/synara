@@ -1412,6 +1412,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 ...(detail ? { detail } : {}),
                 data: {
                   tool: part.tool,
+                  toolName: part.tool,
+                  toolCallId: part.callID,
+                  callID: part.callID,
+                  ...("input" in part.state ? { input: part.state.input } : {}),
                   state: part.state,
                 },
               };
