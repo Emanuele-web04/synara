@@ -9,15 +9,11 @@ const serverConfigLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "dpcode-settings-test-",
 }).pipe(Layer.provide(NodeServices.layer));
 const makeTestLayer = Layer.merge(NodeServices.layer, serverConfigLayer);
+const testLayer = Layer.merge(makeTestLayer, ServerSettingsLive.pipe(Layer.provide(makeTestLayer)));
 
 const runWithSettings = <A, E>(
   effect: Effect.Effect<A, E, ServerSettingsService | ServerConfig | FileSystem.FileSystem>,
-) =>
-  Effect.runPromise(
-    effect.pipe(
-      Effect.provide(ServerSettingsLive.pipe(Layer.provide(makeTestLayer))),
-    ) as Effect.Effect<A, E, never>,
-  );
+) => Effect.runPromise(effect.pipe(Effect.provide(testLayer)) as Effect.Effect<A, E, never>);
 
 describe("ServerSettingsService", () => {
   it("loads defaults when settings file does not exist", async () => {

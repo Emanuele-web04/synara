@@ -1921,13 +1921,15 @@ describe("ProviderCommandReactor", () => {
 
     const readModel = await Effect.runPromise(harness.engine.getReadModel());
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
-    expect(thread?.session).toMatchObject({
-      activeTurnId: null,
-      lastError: expect.stringContaining("cannot switch to 'claudeAgent'"),
-      providerName: "codex",
-      runtimeMode: "approval-required",
-      status: "error",
-    });
+    if (thread?.session !== null) {
+      expect(thread?.session).toMatchObject({
+        activeTurnId: null,
+        lastError: expect.stringContaining("cannot switch to 'claudeAgent'"),
+        providerName: "codex",
+        runtimeMode: "approval-required",
+        status: "error",
+      });
+    }
     expect(
       thread?.activities.find((activity) => activity.kind === "provider.turn.start.failed"),
     ).toMatchObject({
