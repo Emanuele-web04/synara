@@ -19,6 +19,7 @@ import {
   getVisibleThreadsForProject,
   getProjectSortTimestamp,
   hasUnseenCompletion,
+  isLoopbackHostname,
   isDuplicateProjectCreateError,
   pruneExpandedProjectThreadListsForCollapsedProjects,
   recoverExistingAddProjectTarget,
@@ -26,6 +27,7 @@ import {
   resolveSidebarNewThreadEnvMode,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
+  shouldShowDebugFeatureFlagsMenu,
   shouldPrunePinnedThreads,
   shouldClearThreadSelectionOnMouseDown,
   sortProjectsForSidebar,
@@ -93,6 +95,47 @@ describe("shouldClearThreadSelectionOnMouseDown", () => {
     } as unknown as HTMLElement;
 
     expect(shouldClearThreadSelectionOnMouseDown(unrelated)).toBe(true);
+  });
+});
+
+describe("debug feature flags menu visibility", () => {
+  it("allows loopback hostnames", () => {
+    expect(isLoopbackHostname("localhost")).toBe(true);
+    expect(isLoopbackHostname("127.0.0.1")).toBe(true);
+    expect(isLoopbackHostname("::1")).toBe(true);
+    expect(isLoopbackHostname("[::1]")).toBe(true);
+  });
+
+  it("requires dev mode, localhost, and explicit storage opt-in", () => {
+    expect(
+      shouldShowDebugFeatureFlagsMenu({
+        isDev: true,
+        hostname: "localhost",
+        storageValue: "true",
+      }),
+    ).toBe(true);
+
+    expect(
+      shouldShowDebugFeatureFlagsMenu({
+        isDev: false,
+        hostname: "localhost",
+        storageValue: "true",
+      }),
+    ).toBe(false);
+    expect(
+      shouldShowDebugFeatureFlagsMenu({
+        isDev: true,
+        hostname: "app.example.com",
+        storageValue: "true",
+      }),
+    ).toBe(false);
+    expect(
+      shouldShowDebugFeatureFlagsMenu({
+        isDev: true,
+        hostname: "localhost",
+        storageValue: null,
+      }),
+    ).toBe(false);
   });
 });
 

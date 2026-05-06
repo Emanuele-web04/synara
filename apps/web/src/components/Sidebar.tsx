@@ -190,11 +190,13 @@ import {
   groupSidebarThreadsByProjectId,
   pruneExpandedProjectThreadListsForCollapsedProjects,
   recoverExistingAddProjectTarget,
+  DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY,
   resolveSidebarNewThreadEnvMode,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
   isDuplicateProjectCreateError,
   type SidebarDerivedProjectData,
+  shouldShowDebugFeatureFlagsMenu,
   shouldPrunePinnedThreads,
   shouldClearThreadSelectionOnMouseDown,
   sortProjectsForSidebar,
@@ -259,7 +261,6 @@ const SIDEBAR_LIST_ANIMATION_OPTIONS = {
 } as const;
 const EMPTY_THREAD_JUMP_LABELS = new Map<ThreadId, string>();
 const EMPTY_SHORTCUT_PARTS: readonly string[] = [];
-const DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY = "dpcode:show-debug-feature-flags-menu";
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS = 6;
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS = 50;
 const THREAD_INTENT_PREWARM_RELEASE_MS = 10_000;
@@ -283,27 +284,22 @@ const PROJECT_CONTEXT_MENU_COPY_PATH_ICON =
 const PROJECT_CONTEXT_MENU_ARCHIVE_ICON = renderToStaticMarkup(<HiOutlineArchiveBox />);
 const PROJECT_CONTEXT_MENU_DELETE_THREADS_ICON = renderToStaticMarkup(<Trash2 />);
 
-function isLoopbackHostname(hostname: string): boolean {
-  const normalizedHostname = hostname.trim().toLowerCase().replace(/\.$/, "");
+type DebugFeatureFlagsWindow = Window & {
+  dpcodeShowFeatureFlags?: () => void;
+  dpcodeHideFeatureFlags?: () => void;
+};
 
-  return (
-    normalizedHostname === "localhost" ||
-    normalizedHostname === "127.0.0.1" ||
-    normalizedHostname === "::1" ||
-    normalizedHostname === "[::1]"
-  );
-}
-
-function shouldShowDebugFeatureFlagsMenu(): boolean {
-  if (!import.meta.env.DEV || typeof window === "undefined") {
+function readDebugFeatureFlagsMenuVisibility(): boolean {
+  if (typeof window === "undefined") {
     return false;
   }
 
   try {
-    return (
-      isLoopbackHostname(window.location.hostname) &&
-      window.localStorage.getItem(DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY) === "true"
-    );
+    return shouldShowDebugFeatureFlagsMenu({
+      isDev: import.meta.env.DEV,
+      hostname: window.location.hostname,
+      storageValue: window.localStorage.getItem(DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY),
+    });
   } catch {
     return false;
   }
@@ -1090,6 +1086,9 @@ function SortableWorkspaceItem({
 }
 
 export default function Sidebar() {
+  const [showDebugFeatureFlagsMenu, setShowDebugFeatureFlagsMenu] = useState(
+    readDebugFeatureFlagsMenuVisibility,
+  );
   const projects = useStore((store) => store.projects);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
   const sidebarThreadSummaryById = useStore((store) => store.sidebarThreadSummaryById);
@@ -1149,6 +1148,49 @@ export default function Sidebar() {
   const activeSettingsSection = normalizeSettingsSection(settingsSectionSearch.section);
   const activeSplitView = useSplitViewStore(selectSplitView(routeSearch.splitViewId ?? null));
   const splitViewsById = useSplitViewStore((store) => store.splitViewsById);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const canInstallConsoleCommand = shouldShowDebugFeatureFlagsMenu({
+      isDev: import.meta.env.DEV,
+      hostname: window.location.hostname,
+      storageValue: "true",
+    });
+    if (!canInstallConsoleCommand) {
+      return;
+    }
+
+    const debugWindow = window as DebugFeatureFlagsWindow;
+    const updateVisibility = () => {
+      setShowDebugFeatureFlagsMenu(readDebugFeatureFlagsMenuVisibility());
+    };
+    const showFeatureFlags = () => {
+      window.localStorage.setItem(DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY, "true");
+      updateVisibility();
+    };
+    const hideFeatureFlags = () => {
+      window.localStorage.removeItem(DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY);
+      updateVisibility();
+    };
+
+    debugWindow.dpcodeShowFeatureFlags = showFeatureFlags;
+    debugWindow.dpcodeHideFeatureFlags = hideFeatureFlags;
+    window.addEventListener("storage", updateVisibility);
+    updateVisibility();
+
+    return () => {
+      window.removeEventListener("storage", updateVisibility);
+      if (debugWindow.dpcodeShowFeatureFlags === showFeatureFlags) {
+        delete debugWindow.dpcodeShowFeatureFlags;
+      }
+      if (debugWindow.dpcodeHideFeatureFlags === hideFeatureFlags) {
+        delete debugWindow.dpcodeHideFeatureFlags;
+      }
+    };
+  }, []);
   const createSplitViewFromDrop = useSplitViewStore((store) => store.createFromDrop);
   const setSplitFocusedPane = useSplitViewStore((store) => store.setFocusedPane);
   const removeThreadFromSplitViews = useSplitViewStore((store) => store.removeThreadFromSplitViews);
@@ -5767,7 +5809,7 @@ export default function Sidebar() {
         <SidebarMenu>
           <SidebarMenuItem>
             <div className="flex flex-col gap-1">
-              {DebugFeatureFlagsMenu && shouldShowDebugFeatureFlagsMenu() && !isOnSettings ? (
+              {DebugFeatureFlagsMenu && showDebugFeatureFlagsMenu && !isOnSettings ? (
                 <Suspense fallback={null}>
                   <DebugFeatureFlagsMenu />
                 </Suspense>

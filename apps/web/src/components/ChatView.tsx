@@ -147,6 +147,7 @@ import {
   hasToolActivityForTurn,
   isLatestTurnSettled,
   formatElapsed,
+  type ActiveTaskListState,
 } from "../session-logic";
 import {
   buildPendingUserInputAnswers,
@@ -1395,6 +1396,8 @@ export default function ChatView({
   const customModelsByProvider = useMemo(() => getCustomModelsByProvider(settings), [settings]);
   const featureFlags = useFeatureFlags();
   const showExpandedCursorModelVariants = featureFlags["show-expanded-cursor-model-variants"];
+  const showDebugTaskBanner =
+    import.meta.env.DEV && featureFlags["show-debug-task-banner"];
   const composerModelHintByProvider = useMemo<Record<ProviderKind, string | null>>(() => {
     const threadModelSelection = activeThread?.modelSelection ?? null;
     const projectModelSelection = activeProject?.defaultModelSelection ?? null;
@@ -1785,20 +1788,72 @@ export default function ChatView({
     ],
   );
   const planSidebarLabel = sidebarProposedPlan || interactionMode === "plan" ? "Plan" : "Tasks";
+  const [activeTaskListCardHeight, setActiveTaskListCardHeight] = useState(0);
+  const activeTaskListCardRef = useRef<HTMLDivElement | null>(null);
+  const previousActiveTaskListCardHeightRef = useRef(0);
   const activeTaskList = useMemo(
-    () =>
-      latestTurnSettled
+    (): ActiveTaskListState | null => {
+      if (showDebugTaskBanner) {
+        return {
+          createdAt: new Date().toISOString(),
+          turnId: activeLatestTurn?.turnId ?? null,
+          tasks: [
+            {
+              task: "Inspect banner layout without overlapping transcript text",
+              status: "inProgress",
+            },
+            {
+              task: "Confirm compact task banner width",
+              status: "pending",
+            },
+            {
+              task: "Verify sidebar task controls",
+              status: "completed",
+            },
+          ],
+        };
+      }
+
+      return latestTurnSettled
         ? null
-        : deriveActiveTaskListState(threadActivities, activeLatestTurn?.turnId ?? undefined),
-    [activeLatestTurn?.turnId, latestTurnSettled, threadActivities],
+        : deriveActiveTaskListState(threadActivities, activeLatestTurn?.turnId ?? undefined);
+    },
+    [activeLatestTurn?.turnId, latestTurnSettled, showDebugTaskBanner, threadActivities],
   );
   const activeBackgroundTasks = useMemo(
     () =>
       latestTurnSettled
         ? null
-        : deriveActiveBackgroundTasksState(threadActivities, activeLatestTurn?.turnId ?? undefined),
+      : deriveActiveBackgroundTasksState(threadActivities, activeLatestTurn?.turnId ?? undefined),
     [activeLatestTurn?.turnId, latestTurnSettled, threadActivities],
   );
+  useLayoutEffect(() => {
+    if (!activeTaskList || planSidebarOpen) {
+      setActiveTaskListCardHeight(0);
+      return;
+    }
+
+    const element = activeTaskListCardRef.current;
+    if (!element) {
+      setActiveTaskListCardHeight(0);
+      return;
+    }
+
+    const updateHeight = () => {
+      setActiveTaskListCardHeight(Math.ceil(element.getBoundingClientRect().height));
+    };
+
+    updateHeight();
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const resizeObserver = new ResizeObserver(updateHeight);
+    resizeObserver.observe(element);
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, [activeTaskList, activeTaskListCompact, planSidebarOpen]);
   const showPlanFollowUpPrompt =
     pendingUserInputs.length === 0 &&
     interactionMode === "plan" &&
@@ -3671,6 +3726,30 @@ export default function ChatView({
     programmaticScrollUntilRef.current = performance.now() + 200;
     legendListRef.current?.scrollToEnd?.({ animated });
   }, []);
+  useLayoutEffect(() => {
+    const previousHeight = previousActiveTaskListCardHeightRef.current;
+    previousActiveTaskListCardHeightRef.current = activeTaskListCardHeight;
+
+    if (previousHeight <= 0 || activeTaskListCardHeight <= 0 || planSidebarOpen) {
+      return;
+    }
+
+    const delta = activeTaskListCardHeight - previousHeight;
+    if (delta <= 0.5) {
+      return;
+    }
+    if (!isAtEndRef.current) {
+      return;
+    }
+
+    const scrollContainer = legendListRef.current?.getScrollableNode?.();
+    if (!(scrollContainer instanceof HTMLElement)) {
+      return;
+    }
+
+    programmaticScrollUntilRef.current = performance.now() + 200;
+    scrollContainer.scrollTop += delta;
+  }, [activeTaskListCardHeight, planSidebarOpen]);
   const transcriptMessageCount = useMemo(
     () => timelineEntries.filter((entry) => entry.kind === "message").length,
     [timelineEntries],
@@ -7123,22 +7202,24 @@ export default function ChatView({
   // Composer layout keeps the task list and footer actions in one render path so
   // follow-up prompts and normal chat mode stay visually in sync.
   const taskListAboveComposer = Boolean(activeTaskList && !planSidebarOpen);
+  const renderActiveTaskListCard = () =>
+    activeTaskList && !planSidebarOpen ? (
+      <div className="pointer-events-none mx-auto w-full max-w-3xl">
+        <div ref={activeTaskListCardRef} className="pointer-events-auto mx-auto w-11/12">
+          <ActiveTaskListCard
+            activeTaskList={activeTaskList}
+            backgroundTaskCount={activeBackgroundTasks?.activeCount ?? 0}
+            compact={activeTaskListCompact}
+            onCompactChange={setActiveTaskListCompact}
+            onOpenSidebar={() => setPlanSidebarOpen(true)}
+          />
+        </div>
+      </div>
+    ) : null;
 
   const composerSection = secondaryChromeReady ? (
     <>
-      {activeTaskList && !planSidebarOpen ? (
-        <div className="pointer-events-none mx-auto w-full max-w-3xl">
-          <div className="pointer-events-auto mx-auto w-11/12">
-            <ActiveTaskListCard
-              activeTaskList={activeTaskList}
-              backgroundTaskCount={activeBackgroundTasks?.activeCount ?? 0}
-              compact={activeTaskListCompact}
-              onCompactChange={setActiveTaskListCompact}
-              onOpenSidebar={() => setPlanSidebarOpen(true)}
-            />
-          </div>
-        </div>
-      ) : null}
+      {renderActiveTaskListCard()}
       <form
         ref={composerFormRef}
         onSubmit={onSend}
@@ -7850,6 +7931,11 @@ export default function ChatView({
                 onMessagesTouchEnd={onMessagesTouchEnd}
                 scrollButtonVisible={showScrollToBottom}
                 onScrollToBottom={onScrollToBottom}
+                bottomContentInsetPx={
+                  activeTaskList && !planSidebarOpen && activeTaskListCardHeight > 0
+                    ? activeTaskListCardHeight + 8
+                    : undefined
+                }
               />
             )}
 
@@ -7871,15 +7957,7 @@ export default function ChatView({
                   >
                     {activeTaskList && !planSidebarOpen ? (
                       <div className="pointer-events-none absolute inset-x-0 bottom-full z-20">
-                        <div className="pointer-events-auto mx-auto w-11/12">
-                          <ActiveTaskListCard
-                            activeTaskList={activeTaskList}
-                            backgroundTaskCount={activeBackgroundTasks?.activeCount ?? 0}
-                            compact={activeTaskListCompact}
-                            onCompactChange={setActiveTaskListCompact}
-                            onOpenSidebar={() => setPlanSidebarOpen(true)}
-                          />
-                        </div>
+                        {renderActiveTaskListCard()}
                       </div>
                     ) : null}
                     {queuedComposerTurns.length > 0 ? (

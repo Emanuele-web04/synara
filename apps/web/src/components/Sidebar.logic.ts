@@ -22,6 +22,7 @@ export {
 
 export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
 export const SIDEBAR_THREAD_PREWARM_LIMIT = 10;
+export const DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY = "dpcode:show-debug-feature-flags-menu";
 export type SidebarNewThreadEnvMode = "local" | "worktree";
 type SidebarProject = {
   id: string;
@@ -35,6 +36,29 @@ type SidebarThreadSortInput = {
   latestUserMessageAt?: string | null | undefined;
   messages?: ReadonlyArray<Pick<ChatMessage, "role" | "createdAt">> | undefined;
 };
+
+export function isLoopbackHostname(hostname: string): boolean {
+  const normalizedHostname = hostname.trim().toLowerCase().replace(/\.$/, "");
+
+  return (
+    normalizedHostname === "localhost" ||
+    normalizedHostname === "127.0.0.1" ||
+    normalizedHostname === "::1" ||
+    normalizedHostname === "[::1]"
+  );
+}
+
+export function shouldShowDebugFeatureFlagsMenu(input: {
+  readonly isDev: boolean;
+  readonly hostname: string;
+  readonly storageValue: string | null;
+}): boolean {
+  return (
+    input.isDev &&
+    isLoopbackHostname(input.hostname) &&
+    input.storageValue === "true"
+  );
+}
 
 export type SidebarProjectEntry = {
   kind: "thread";

@@ -3105,6 +3105,17 @@ describe("ChatView timeline estimator parity (full app)", () => {
         { timeout: 8_000, interval: 16 },
       );
 
+      const transcriptPane = document.querySelector<HTMLElement>("[data-chat-transcript-pane]");
+      const taskListCard = document.querySelector<HTMLElement>(
+        '[data-testid="active-task-list-card"]',
+      );
+      expect(transcriptPane).not.toBeNull();
+      expect(taskListCard).not.toBeNull();
+      expect(transcriptPane!.getBoundingClientRect().bottom).toBeGreaterThan(
+        taskListCard!.getBoundingClientRect().top + 1,
+      );
+      expect(taskListCard!.getBoundingClientRect().width).toBeLessThan(window.innerWidth);
+
       const openPlanButton = await waitForElement(
         () => document.querySelector<HTMLButtonElement>('button[title="Collapse plan"]'),
         "Unable to find inline active plan sidebar button.",

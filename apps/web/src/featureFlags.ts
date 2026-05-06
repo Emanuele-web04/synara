@@ -17,6 +17,7 @@ export type FeatureFlag =
 
 export type ToggleFeatureFlagId =
   | "persist-action-failed-debug-toasts"
+  | "show-debug-task-banner"
   | "show-expanded-cursor-model-variants";
 
 type FeatureFlagState = Record<ToggleFeatureFlagId, boolean>;
@@ -25,6 +26,7 @@ const FEATURE_FLAG_STORAGE_KEY = "dpcode:feature-flags";
 
 const DEFAULT_FEATURE_FLAG_STATE: FeatureFlagState = {
   "persist-action-failed-debug-toasts": false,
+  "show-debug-task-banner": false,
   "show-expanded-cursor-model-variants": false,
 };
 
@@ -41,6 +43,13 @@ export const FEATURE_FLAGS: readonly FeatureFlag[] = [
     label: "Keep debug error toasts open",
     description: "Disable auto-dismiss for locally triggered error toasts.",
     defaultEnabled: DEFAULT_FEATURE_FLAG_STATE["persist-action-failed-debug-toasts"],
+  },
+  {
+    id: "show-debug-task-banner",
+    kind: "toggle",
+    label: "Show debug task banner",
+    description: "Render a local sample active task banner for UI testing.",
+    defaultEnabled: DEFAULT_FEATURE_FLAG_STATE["show-debug-task-banner"],
   },
   {
     id: "show-expanded-cursor-model-variants",
@@ -71,6 +80,10 @@ function normalizeFeatureFlagState(value: unknown): FeatureFlagState {
       typeof record["persist-action-failed-debug-toasts"] === "boolean"
         ? record["persist-action-failed-debug-toasts"]
         : DEFAULT_FEATURE_FLAG_STATE["persist-action-failed-debug-toasts"],
+    "show-debug-task-banner":
+      typeof record["show-debug-task-banner"] === "boolean"
+        ? record["show-debug-task-banner"]
+        : DEFAULT_FEATURE_FLAG_STATE["show-debug-task-banner"],
     "show-expanded-cursor-model-variants":
       typeof record["show-expanded-cursor-model-variants"] === "boolean"
         ? record["show-expanded-cursor-model-variants"]
