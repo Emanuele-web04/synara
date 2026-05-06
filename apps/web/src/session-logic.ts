@@ -1166,6 +1166,22 @@ function normalizeCommandValue(value: unknown): string | null {
   return parts.length > 0 ? parts.join(" ") : null;
 }
 
+function asCommandArgumentRecord(value: unknown): Record<string, unknown> | null {
+  const direct = asRecord(value);
+  if (direct) {
+    return direct;
+  }
+  const text = asTrimmedString(value);
+  if (!text || !text.startsWith("{")) {
+    return null;
+  }
+  try {
+    return asRecord(JSON.parse(text));
+  } catch {
+    return null;
+  }
+}
+
 function isCommandLikeDetail(payload: Record<string, unknown> | null): boolean {
   if (!payload) {
     return false;
@@ -1187,7 +1203,12 @@ function extractToolCommand(payload: Record<string, unknown> | null): string | n
   const item = asRecord(data?.item);
   const itemResult = asRecord(item?.result);
   const itemInput = asRecord(item?.input);
+  const itemArguments = asCommandArgumentRecord(item?.arguments ?? item?.args ?? item?.params);
+  const itemCall = asRecord(item?.call);
+  const itemFunction = asRecord(item?.function);
   const dataInput = asRecord(data?.input);
+  const dataArguments = asCommandArgumentRecord(data?.arguments ?? data?.args ?? data?.params);
+  const rawInput = asCommandArgumentRecord(data?.rawInput);
   const detailCommand =
     isCommandLikeDetail(payload) && typeof payload?.detail === "string"
       ? stripTrailingExitCode(payload.detail).output
@@ -1197,12 +1218,21 @@ function extractToolCommand(payload: Record<string, unknown> | null): string | n
     normalizeCommandValue(item?.cmd),
     normalizeCommandValue(itemInput?.command),
     normalizeCommandValue(itemInput?.cmd),
+    normalizeCommandValue(itemArguments?.command),
+    normalizeCommandValue(itemArguments?.cmd),
+    normalizeCommandValue(itemCall?.command),
+    normalizeCommandValue(itemCall?.cmd),
+    normalizeCommandValue(itemFunction?.arguments),
     normalizeCommandValue(itemResult?.command),
     normalizeCommandValue(itemResult?.cmd),
     normalizeCommandValue(data?.command),
     normalizeCommandValue(data?.cmd),
     normalizeCommandValue(dataInput?.command),
     normalizeCommandValue(dataInput?.cmd),
+    normalizeCommandValue(dataArguments?.command),
+    normalizeCommandValue(dataArguments?.cmd),
+    normalizeCommandValue(rawInput?.command),
+    normalizeCommandValue(rawInput?.cmd),
     normalizeCommandValue(item?.text),
     normalizeCommandValue(item?.summary),
     normalizeCommandValue(detailCommand),

@@ -12,6 +12,7 @@ import {
   buildTaskCompletionCopy,
   collectCompletedThreadCandidates,
   collectInputNeededThreadCandidates,
+  shouldShowThreadNotificationToast,
 } from "./taskCompletion.logic";
 import type { Thread } from "../types";
 
@@ -318,6 +319,26 @@ describe("collectCompletedThreadCandidates", () => {
     ];
 
     expect(collectCompletedThreadCandidates(previous, next)).toEqual([]);
+  });
+});
+
+describe("shouldShowThreadNotificationToast", () => {
+  it("hides in-app task notifications for already-visible threads", () => {
+    expect(
+      shouldShowThreadNotificationToast({
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        visibleThreadIds: new Set([ThreadId.makeUnsafe("thread-1")]),
+      }),
+    ).toBe(false);
+  });
+
+  it("shows in-app task notifications for off-screen threads", () => {
+    expect(
+      shouldShowThreadNotificationToast({
+        threadId: ThreadId.makeUnsafe("thread-2"),
+        visibleThreadIds: new Set([ThreadId.makeUnsafe("thread-1")]),
+      }),
+    ).toBe(true);
   });
 });
 

@@ -1727,8 +1727,8 @@ function toLegacyProvider(providerName: string | null): ProviderKind {
   return "codex";
 }
 
-function resolveWsHttpOrigin(): string {
-  if (typeof window === "undefined") return "";
+function resolveWsHttpUrl(rawPath: string): string {
+  if (typeof window === "undefined") return rawPath;
   const bridgeWsUrl = window.desktopBridge?.getWsUrl?.();
   const envWsUrl = import.meta.env.VITE_WS_URL as string | undefined;
   const wsCandidate =
@@ -1737,20 +1737,27 @@ function resolveWsHttpOrigin(): string {
       : typeof envWsUrl === "string" && envWsUrl.length > 0
         ? envWsUrl
         : null;
-  if (!wsCandidate) return window.location.origin;
+  if (!wsCandidate) return new URL(rawPath, window.location.origin).toString();
   try {
     const wsUrl = new URL(wsCandidate);
     const protocol =
       wsUrl.protocol === "wss:" ? "https:" : wsUrl.protocol === "ws:" ? "http:" : wsUrl.protocol;
-    return `${protocol}//${wsUrl.host}`;
+    const httpUrl = new URL(rawPath, `${protocol}//${wsUrl.host}`);
+    const legacyToken = wsUrl.searchParams.get("token");
+    // Desktop loads the app from a custom scheme, so attachment <img> requests
+    // need the same startup token that the WebSocket bridge already carries.
+    if (legacyToken) {
+      httpUrl.searchParams.set("token", legacyToken);
+    }
+    return httpUrl.toString();
   } catch {
-    return window.location.origin;
+    return new URL(rawPath, window.location.origin).toString();
   }
 }
 
 function toAttachmentPreviewUrl(rawUrl: string): string {
   if (rawUrl.startsWith("/")) {
-    return `${resolveWsHttpOrigin()}${rawUrl}`;
+    return resolveWsHttpUrl(rawUrl);
   }
   return rawUrl;
 }

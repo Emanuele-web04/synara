@@ -1095,6 +1095,63 @@ describe("deriveWorkLogEntries", () => {
     ]);
   });
 
+  it("recovers Codex command text from nested JSON tool arguments", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "codex-command-json-args",
+        kind: "tool.started",
+        summary: "Ran command started",
+        payload: {
+          itemType: "command_execution",
+          title: "Ran command",
+          data: {
+            item: {
+              type: "command_execution",
+              arguments: JSON.stringify({
+                command: "rg -n \"thread.create\" apps/server/src",
+              }),
+            },
+          },
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
+      {
+        id: "codex-command-json-args",
+        command: 'rg -n "thread.create" apps/server/src',
+        toolTitle: "Searching",
+      },
+    ]);
+  });
+
+  it("recovers Codex command text from rawInput command payloads", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "codex-command-raw-input",
+        kind: "tool.completed",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          title: "Ran command",
+          data: {
+            rawInput: {
+              command: ["git", "status", "--short"],
+            },
+          },
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
+      {
+        id: "codex-command-raw-input",
+        command: "git status --short",
+        toolTitle: "Checked",
+      },
+    ]);
+  });
+
   it("keeps compact Codex tool metadata used for icons and labels", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

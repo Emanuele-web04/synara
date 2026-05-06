@@ -16,13 +16,13 @@ import {
   resolveThreadBootstrapPlan,
   type NewThreadOptions,
 } from "../lib/threadBootstrap";
+import { promoteThreadCreate } from "../lib/threadCreatePromotion";
 import { newCommandId, newThreadId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { useFocusedChatContext } from "../focusedChatContext";
 import { useStore } from "../store";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
-import { getThreadFromState } from "../threadDerivation";
 
 export function useHandleNewThread() {
   const projects = useStore((store) => store.projects);
@@ -142,28 +142,28 @@ export function useHandleNewThread() {
         threadId: ThreadId,
         creationState: ReturnType<typeof resolveCreationState>,
       ): Promise<void> => {
-        if (getThreadFromState(useStore.getState(), threadId)) {
-          return;
-        }
         const api = readNativeApi();
         if (!api) {
           return;
         }
-        await api.orchestration.dispatchCommand({
-          type: "thread.create",
-          commandId: newCommandId(),
-          threadId,
-          projectId,
-          title: "New terminal",
-          modelSelection: creationState.modelSelection,
-          runtimeMode: creationState.runtimeMode,
-          interactionMode: creationState.interactionMode,
-          envMode: creationState.envMode,
-          branch: creationState.branch,
-          worktreePath: creationState.worktreePath,
-          lastKnownPr: creationState.lastKnownPr,
-          createdAt: new Date().toISOString(),
-        });
+        await promoteThreadCreate(
+          {
+            type: "thread.create",
+            commandId: newCommandId(),
+            threadId,
+            projectId,
+            title: "New terminal",
+            modelSelection: creationState.modelSelection,
+            runtimeMode: creationState.runtimeMode,
+            interactionMode: creationState.interactionMode,
+            envMode: creationState.envMode,
+            branch: creationState.branch,
+            worktreePath: creationState.worktreePath,
+            lastKnownPr: creationState.lastKnownPr,
+            createdAt: new Date().toISOString(),
+          },
+          api,
+        );
       };
       if (bootstrapPlan.kind === "stored") {
         return (async () => {

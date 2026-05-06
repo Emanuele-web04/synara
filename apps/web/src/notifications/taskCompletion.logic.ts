@@ -59,6 +59,14 @@ export interface TerminalAttentionCandidate {
 
 type ThreadSessionStatus = ThreadSession["status"];
 
+// Thread completion toasts are for off-screen work; visible threads already show the result inline.
+export function shouldShowThreadNotificationToast(input: {
+  threadId: Thread["id"];
+  visibleThreadIds: ReadonlySet<Thread["id"]>;
+}): boolean {
+  return !input.visibleThreadIds.has(input.threadId);
+}
+
 // Treat sidebar "working" states as the only notification-worthy starting point.
 function isRunningStatus(status: ThreadSessionStatus | null | undefined): boolean {
   return status === "running" || status === "connecting";

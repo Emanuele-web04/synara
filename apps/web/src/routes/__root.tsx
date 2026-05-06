@@ -3,6 +3,7 @@ import {
   type OrchestrationEvent,
   type OrchestrationShellSnapshot,
   type OrchestrationShellStreamEvent,
+  type OrchestrationThread,
   type ServerConfig,
 } from "@t3tools/contracts";
 import { defaultTerminalTitleForCliKind } from "@t3tools/shared/terminalThreads";
@@ -37,7 +38,11 @@ import {
   serverSettingsQueryOptions,
 } from "../lib/serverReactQuery";
 import { readNativeApi } from "../nativeApi";
-import { clearPromotedDraftThreads, useComposerDraftStore } from "../composerDraftStore";
+import {
+  finalizePromotedDraftThreads,
+  markPromotedDraftThreads,
+  useComposerDraftStore,
+} from "../composerDraftStore";
 import { useStore } from "../store";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { terminalActivityFromEvent } from "../terminalActivity";
@@ -68,6 +73,30 @@ import { resolveSplitViewThreadIds, selectSplitView, useSplitViewStore } from ".
 import { providerDiscoveryQueryKeys } from "../lib/providerDiscoveryReactQuery";
 
 const SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS = 1_500;
+
+function shellThreadHasStarted(thread: OrchestrationShellSnapshot["threads"][number]): boolean {
+  return thread.latestTurn !== null || thread.session !== null;
+}
+
+function detailThreadHasStarted(thread: OrchestrationThread): boolean {
+  return shellThreadHasStarted(thread) || thread.messages.length > 0;
+}
+
+function reconcilePromotedDraftsFromShellThreads(
+  threads: ReadonlyArray<OrchestrationShellSnapshot["threads"][number]>,
+): void {
+  markPromotedDraftThreads(new Set(threads.map((thread) => thread.id)));
+  finalizePromotedDraftThreads(
+    new Set(threads.filter((thread) => shellThreadHasStarted(thread)).map((thread) => thread.id)),
+  );
+}
+
+function reconcilePromotedDraftFromThreadDetail(thread: OrchestrationThread): void {
+  markPromotedDraftThreads(new Set([thread.id]));
+  if (detailThreadHasStarted(thread)) {
+    finalizePromotedDraftThreads(new Set([thread.id]));
+  }
+}
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient;
@@ -532,7 +561,7 @@ function EventRouter() {
       }
       shellSnapshotSequence = snapshot.snapshotSequence;
       syncServerShellSnapshot(snapshot);
-      clearPromotedDraftThreads(new Set(snapshot.threads.map((thread) => thread.id)));
+      reconcilePromotedDraftsFromShellThreads(snapshot.threads);
       removeOrphanedTerminalsForCurrentState();
       flushShellBuffer(snapshot.snapshotSequence);
     };
@@ -629,7 +658,7 @@ function EventRouter() {
       if (item.kind === "snapshot") {
         shellSnapshotSequence = item.snapshot.snapshotSequence;
         syncServerShellSnapshot(item.snapshot);
-        clearPromotedDraftThreads(new Set(item.snapshot.threads.map((thread) => thread.id)));
+        reconcilePromotedDraftsFromShellThreads(item.snapshot.threads);
         removeOrphanedTerminalsForCurrentState();
         flushShellBuffer(item.snapshot.snapshotSequence);
         return;
@@ -645,7 +674,7 @@ function EventRouter() {
       shellSnapshotSequence = item.sequence;
       applyShellEvent(item);
       if (item.kind === "thread-upserted") {
-        clearPromotedDraftThreads(new Set([item.thread.id]));
+        reconcilePromotedDraftsFromShellThreads([item.thread]);
       }
       if (
         item.kind === "thread-upserted" &&
@@ -661,7 +690,7 @@ function EventRouter() {
         threadSnapshotSequenceById.set(threadId, item.snapshot.snapshotSequence);
         threadSnapshotRequestInFlight.delete(threadId);
         syncServerThreadDetailHotPath(item.snapshot.thread);
-        clearPromotedDraftThreads(new Set([threadId]));
+        reconcilePromotedDraftFromThreadDetail(item.snapshot.thread);
         flushThreadBuffer(threadId, item.snapshot.snapshotSequence);
         return;
       }

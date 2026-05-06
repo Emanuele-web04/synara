@@ -194,7 +194,6 @@ import {
   ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
-  CircleAlertIcon,
   EllipsisIcon,
   QueueArrow,
   RefreshCwIcon,
@@ -223,6 +222,7 @@ import {
   confirmTerminalTabClose,
   resolveTerminalCloseTitle,
 } from "~/lib/terminalCloseConfirmation";
+import { promoteThreadCreate } from "~/lib/threadCreatePromotion";
 import {
   getAppModelOptions,
   getCustomBinaryPathForProvider,
@@ -761,33 +761,6 @@ function ComposerModelLoadingControl(props: { widthClassName: string }) {
       <RefreshCwIcon aria-hidden="true" className="size-3.5 animate-spin" />
       <span className="truncate text-[length:var(--app-font-size-ui-xs,11px)]">Loading models</span>
     </div>
-  );
-}
-
-function ComposerModelErrorControl(props: {
-  widthClassName: string;
-  onRetry: () => void;
-  disabled?: boolean;
-}) {
-  return (
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      className={cn(
-        "h-8 shrink-0 justify-start gap-2 px-2 text-destructive hover:text-destructive",
-        props.widthClassName,
-      )}
-      disabled={props.disabled ?? false}
-      onClick={props.onRetry}
-    >
-      {props.disabled ? (
-        <RefreshCwIcon aria-hidden="true" className="size-3.5 animate-spin" />
-      ) : (
-        <CircleAlertIcon aria-hidden="true" className="size-3.5" />
-      )}
-      <span className="truncate text-[length:var(--app-font-size-ui-xs,11px)]">Retry models</span>
-    </Button>
   );
 }
 
@@ -1466,13 +1439,6 @@ export default function ChatView({
     cursorModelDiscoveryEnabled &&
     !hasResolvedCursorModelDiscovery &&
     (cursorDynamicModelsQuery.isLoading || cursorDynamicModelsQuery.isFetching);
-  const cursorModelDiscoveryError =
-    cursorModelDiscoveryEnabled &&
-    !cursorModelDiscoveryPending &&
-    !hasResolvedCursorModelDiscovery &&
-    cursorDynamicModelsQuery.isError
-      ? cursorDynamicModelsQuery.error
-      : null;
   const modelOptionsByProvider = useMemo(() => {
     const staticOptions: Record<ProviderKind, ReturnType<typeof getAppModelOptions>> = {
       codex: getAppModelOptions(
@@ -5472,21 +5438,24 @@ export default function ChatView({
       );
 
       if (isLocalDraftThread) {
-        await api.orchestration.dispatchCommand({
-          type: "thread.create",
-          commandId: newCommandId(),
-          threadId: threadIdForSend,
-          projectId: targetProjectIdForSend,
-          title,
-          modelSelection: threadCreateModelSelection,
-          runtimeMode: nextRuntimeModeForSend,
-          interactionMode: interactionModeForSend,
-          envMode: nextThreadEnvMode,
-          branch: nextThreadBranch,
-          worktreePath: nextThreadWorktreePath,
-          lastKnownPr: activeThread.lastKnownPr ?? null,
-          createdAt: activeThread.createdAt,
-        });
+        await promoteThreadCreate(
+          {
+            type: "thread.create",
+            commandId: newCommandId(),
+            threadId: threadIdForSend,
+            projectId: targetProjectIdForSend,
+            title,
+            modelSelection: threadCreateModelSelection,
+            runtimeMode: nextRuntimeModeForSend,
+            interactionMode: interactionModeForSend,
+            envMode: nextThreadEnvMode,
+            branch: nextThreadBranch,
+            worktreePath: nextThreadWorktreePath,
+            lastKnownPr: activeThread.lastKnownPr ?? null,
+            createdAt: activeThread.createdAt,
+          },
+          api,
+        );
         if (targetProjectKindForSend === "chat") {
           await api.orchestration.dispatchCommand({
             type: "project.meta.update",
@@ -6306,15 +6275,7 @@ export default function ChatView({
   });
   const composerModelPickerWidthClassName = isComposerFooterCompact ? "w-28" : "w-32 sm:w-36";
   const composerTraitsPickerWidthClassName = isComposerFooterCompact ? "w-16" : "w-20";
-  const composerModelPickerControl = cursorModelDiscoveryError ? (
-    <ComposerModelErrorControl
-      widthClassName={composerModelPickerWidthClassName}
-      disabled={cursorDynamicModelsQuery.isFetching}
-      onRetry={() => {
-        void cursorDynamicModelsQuery.refetch();
-      }}
-    />
-  ) : showComposerModelBootstrapSkeleton ? (
+  const composerModelPickerControl = showComposerModelBootstrapSkeleton ? (
     cursorModelDiscoveryPending ? (
       <ComposerModelLoadingControl widthClassName={composerModelPickerWidthClassName} />
     ) : (
@@ -6341,7 +6302,7 @@ export default function ChatView({
     />
   );
   const composerTraitsPickerControl =
-    cursorModelDiscoveryError ? null : showComposerModelBootstrapSkeleton ? (
+    showComposerModelBootstrapSkeleton ? (
       cursorModelDiscoveryPending ? (
         <ComposerModelLoadingControl widthClassName={composerTraitsPickerWidthClassName} />
       ) : (

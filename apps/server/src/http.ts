@@ -69,6 +69,14 @@ const requireAuthenticatedRequest = Effect.gen(function* () {
   yield* serverAuth.authenticateHttpRequest(makeEffectAuthRequest(request));
 });
 
+export function isLegacyTokenAuthorized(input: {
+  readonly config: ServerConfigShape;
+  readonly url: URL;
+}): boolean {
+  const legacyToken = input.url.searchParams.get("token");
+  return !input.config.authToken || legacyToken === input.config.authToken;
+}
+
 function encodeCookie(input: {
   readonly name: string;
   readonly value: string;
@@ -292,12 +300,17 @@ const attachmentsEffectRouteLayer = HttpRouter.add(
   "GET",
   `${ATTACHMENTS_ROUTE_PREFIX}/*`,
   Effect.gen(function* () {
-    yield* requireAuthenticatedRequest;
     const request = yield* HttpServerRequest.HttpServerRequest;
     const url = HttpServerRequest.toURL(request);
     if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
 
     const config = yield* ServerConfig;
+    // Desktop image tags cannot attach Authorization headers; preserve the same
+    // startup token rule that the WebSocket route already accepts.
+    if (!isLegacyTokenAuthorized({ config, url })) {
+      yield* requireAuthenticatedRequest;
+    }
+
     const rawRelativePath = url.pathname.slice(ATTACHMENTS_ROUTE_PREFIX.length);
     const normalizedRelativePath = normalizeAttachmentRelativePath(rawRelativePath);
     if (!normalizedRelativePath) {

@@ -3,11 +3,15 @@
 // Layer: Notification runtime
 // Exports: TaskCompletionNotifications and browser permission helpers
 
-import { useNavigate } from "@tanstack/react-router";
-import { useEffect, useRef } from "react";
+import { ThreadId } from "@t3tools/contracts";
+import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
+import { useEffect, useMemo, useRef } from "react";
 import { toastManager } from "../components/ui/toast";
+import { resolveVisibleToastThreadIds } from "../components/ui/toastRouteVisibility";
 import { useAppSettings } from "../appSettings";
+import { parseDiffRouteSearch } from "../diffRouteSearch";
 import { isElectron } from "../env";
+import { selectSplitView, useSplitViewStore } from "../splitViewStore";
 import { useStore } from "../store";
 import { createAllThreadsSelector } from "../storeSelectors";
 import { useTerminalStateStore } from "../terminalStateStore";
@@ -21,6 +25,7 @@ import {
   collectCompletedTerminalCandidates,
   collectInputNeededThreadCandidates,
   collectTerminalAttentionCandidates,
+  shouldShowThreadNotificationToast,
 } from "./taskCompletion.logic";
 
 export type BrowserNotificationPermissionState =
@@ -135,9 +140,22 @@ function showThreadToast(
 export function TaskCompletionNotifications() {
   const { settings } = useAppSettings();
   const navigate = useNavigate();
+  const activeThreadId = useParams({
+    strict: false,
+    select: (params) =>
+      typeof params.threadId === "string" ? ThreadId.makeUnsafe(params.threadId) : null,
+  });
+  const routeSearch = useSearch({
+    strict: false,
+    select: (search) => parseDiffRouteSearch(search),
+  });
+  const splitView = useSplitViewStore(selectSplitView(routeSearch.splitViewId ?? null));
   const threads = useStore(useRef(createAllThreadsSelector()).current);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
   const terminalStateByThreadId = useTerminalStateStore((store) => store.terminalStateByThreadId);
+  const visibleThreadIds = useMemo(() => {
+    return resolveVisibleToastThreadIds({ activeThreadId, splitView });
+  }, [activeThreadId, splitView]);
   const previousThreadsRef = useRef<readonly Thread[]>([]);
   const previousTerminalStateRef = useRef(terminalStateByThreadId);
   const readyRef = useRef(false);
@@ -208,7 +226,13 @@ export function TaskCompletionNotifications() {
 
     for (const completion of completions) {
       const copy = buildTaskCompletionCopy(completion);
-      if (settings.enableTaskCompletionToasts) {
+      if (
+        settings.enableTaskCompletionToasts &&
+        shouldShowThreadNotificationToast({
+          threadId: completion.threadId,
+          visibleThreadIds,
+        })
+      ) {
         showThreadToast(copy, completion.threadId, "success", navigate);
       }
 
@@ -219,7 +243,13 @@ export function TaskCompletionNotifications() {
 
     for (const candidate of inputNeededCandidates) {
       const copy = buildInputNeededCopy(candidate);
-      if (settings.enableTaskCompletionToasts) {
+      if (
+        settings.enableTaskCompletionToasts &&
+        shouldShowThreadNotificationToast({
+          threadId: candidate.threadId,
+          visibleThreadIds,
+        })
+      ) {
         showThreadToast(copy, candidate.threadId, "warning", navigate);
       }
 
@@ -230,7 +260,13 @@ export function TaskCompletionNotifications() {
 
     for (const completion of terminalCompletions) {
       const copy = buildTerminalCompletionCopy(completion);
-      if (settings.enableTaskCompletionToasts) {
+      if (
+        settings.enableTaskCompletionToasts &&
+        shouldShowThreadNotificationToast({
+          threadId: completion.threadId,
+          visibleThreadIds,
+        })
+      ) {
         showThreadToast(copy, completion.threadId, "success", navigate);
       }
 
@@ -241,7 +277,13 @@ export function TaskCompletionNotifications() {
 
     for (const candidate of terminalAttentionCandidates) {
       const copy = buildTerminalAttentionCopy(candidate);
-      if (settings.enableTaskCompletionToasts) {
+      if (
+        settings.enableTaskCompletionToasts &&
+        shouldShowThreadNotificationToast({
+          threadId: candidate.threadId,
+          visibleThreadIds,
+        })
+      ) {
         showThreadToast(copy, candidate.threadId, "warning", navigate);
       }
 
@@ -256,6 +298,7 @@ export function TaskCompletionNotifications() {
     terminalStateByThreadId,
     threads,
     threadsHydrated,
+    visibleThreadIds,
   ]);
 
   return null;

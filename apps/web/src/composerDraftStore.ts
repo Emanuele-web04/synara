@@ -271,6 +271,7 @@ const PersistedDraftThreadState = Schema.Struct({
   lastKnownPr: Schema.optionalKey(Schema.NullOr(OrchestrationThreadPullRequest)),
   envMode: DraftThreadEnvModeSchema,
   isTemporary: Schema.optionalKey(Schema.Boolean),
+  promotedTo: Schema.optionalKey(ThreadId),
 });
 type PersistedDraftThreadState = typeof PersistedDraftThreadState.Type;
 
@@ -315,6 +316,7 @@ export interface DraftThreadState {
   lastKnownPr?: OrchestrationThreadPullRequest | null;
   envMode: DraftThreadEnvMode;
   isTemporary?: boolean;
+  promotedTo?: ThreadId;
 }
 
 interface ProjectDraftThread extends DraftThreadState {
@@ -365,6 +367,8 @@ export interface ComposerDraftStoreState {
   clearProjectDraftThreadId: (projectId: ProjectId, entryPoint?: ThreadPrimarySurface) => void;
   clearProjectDraftThreads: (projectId: ProjectId) => void;
   clearProjectDraftThreadById: (projectId: ProjectId, threadId: ThreadId) => void;
+  markDraftThreadPromoting: (threadId: ThreadId, promotedTo?: ThreadId) => void;
+  finalizePromotedDraftThread: (threadId: ThreadId) => void;
   clearDraftThread: (threadId: ThreadId) => void;
   setStickyModelSelection: (modelSelection: ModelSelection | null | undefined) => void;
   setPrompt: (threadId: ThreadId, prompt: string) => void;
@@ -1473,6 +1477,11 @@ function normalizePersistedDraftThreads(
       }
       const normalizedWorktreePath = typeof worktreePath === "string" ? worktreePath : null;
       const isTemporary = candidateDraftThread.isTemporary === true ? true : undefined;
+      const promotedTo =
+        typeof candidateDraftThread.promotedTo === "string" &&
+        candidateDraftThread.promotedTo.length > 0
+          ? (candidateDraftThread.promotedTo as ThreadId)
+          : undefined;
       if (typeof projectId !== "string" || projectId.length === 0) {
         continue;
       }
@@ -1498,6 +1507,7 @@ function normalizePersistedDraftThreads(
         ...(lastKnownPr ? { lastKnownPr } : {}),
         envMode: normalizeDraftThreadEnvMode(candidateDraftThread.envMode, normalizedWorktreePath),
         ...(isTemporary ? { isTemporary: true } : {}),
+        ...(promotedTo ? { promotedTo } : {}),
       };
     }
   }
@@ -2099,7 +2109,8 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
         if (
           !draftThread ||
           draftThread.projectId !== projectId ||
-          normalizeDraftThreadEntryPoint(draftThread.entryPoint) !== entryPoint
+          normalizeDraftThreadEntryPoint(draftThread.entryPoint) !== entryPoint ||
+          draftThread.promotedTo !== undefined
         ) {
           return null;
         }
@@ -2136,6 +2147,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
               : options?.isTemporary === false
                 ? false
                 : existingThread?.isTemporary === true;
+          const nextPromotedTo = existingThread?.promotedTo;
           const nextDraftThread: DraftThreadState = {
             projectId,
             createdAt: options?.createdAt ?? existingThread?.createdAt ?? new Date().toISOString(),
@@ -2159,6 +2171,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
               options?.envMode ??
               (nextWorktreePath ? "worktree" : (existingThread?.envMode ?? "local")),
             ...(nextIsTemporary ? { isTemporary: true } : {}),
+            ...(nextPromotedTo ? { promotedTo: nextPromotedTo } : {}),
           };
           const hasSameProjectMapping = previousThreadIdForProject === threadId;
           const hasSameDraftThread =
@@ -2172,7 +2185,8 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             existingThread.worktreePath === nextDraftThread.worktreePath &&
             Equal.equals(existingThread.lastKnownPr ?? null, nextDraftThread.lastKnownPr ?? null) &&
             existingThread.envMode === nextDraftThread.envMode &&
-            (existingThread.isTemporary === true) === (nextDraftThread.isTemporary === true);
+            (existingThread.isTemporary === true) === (nextDraftThread.isTemporary === true) &&
+            existingThread.promotedTo === nextDraftThread.promotedTo;
           if (hasSameProjectMapping && hasSameDraftThread) {
             return state;
           }
@@ -2231,6 +2245,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
               : options.isTemporary === false
                 ? false
                 : existing.isTemporary === true;
+          const nextPromotedTo = existing.promotedTo;
           const nextDraftThread: DraftThreadState = {
             projectId: nextProjectId,
             createdAt:
@@ -2249,6 +2264,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             envMode:
               options.envMode ?? (nextWorktreePath ? "worktree" : (existing.envMode ?? "local")),
             ...(nextIsTemporary ? { isTemporary: true } : {}),
+            ...(nextPromotedTo ? { promotedTo: nextPromotedTo } : {}),
           };
           const isUnchanged =
             nextDraftThread.projectId === existing.projectId &&
@@ -2260,7 +2276,8 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             nextDraftThread.worktreePath === existing.worktreePath &&
             Equal.equals(nextDraftThread.lastKnownPr ?? null, existing.lastKnownPr ?? null) &&
             nextDraftThread.envMode === existing.envMode &&
-            (nextDraftThread.isTemporary === true) === (existing.isTemporary === true);
+            (nextDraftThread.isTemporary === true) === (existing.isTemporary === true) &&
+            nextDraftThread.promotedTo === existing.promotedTo;
           if (isUnchanged) {
             return state;
           }
@@ -2394,6 +2411,37 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             projectDraftThreadIdByProjectId: restProjectMappings,
           };
         });
+      },
+      markDraftThreadPromoting: (threadId, promotedTo) => {
+        if (threadId.length === 0) {
+          return;
+        }
+        set((state) => {
+          const existing = state.draftThreadsByThreadId[threadId];
+          if (!existing) {
+            return state;
+          }
+          const nextPromotedTo = promotedTo ?? threadId;
+          if (existing.promotedTo === nextPromotedTo) {
+            return state;
+          }
+          return {
+            draftThreadsByThreadId: {
+              ...state.draftThreadsByThreadId,
+              [threadId]: {
+                ...existing,
+                promotedTo: nextPromotedTo,
+              },
+            },
+          };
+        });
+      },
+      finalizePromotedDraftThread: (threadId) => {
+        const draftThread = get().draftThreadsByThreadId[threadId];
+        if (!draftThread?.promotedTo) {
+          return;
+        }
+        get().clearDraftThread(threadId);
       },
       clearDraftThread: (threadId) => {
         if (threadId.length === 0) {
@@ -3296,19 +3344,20 @@ export function useEffectiveComposerModelState(input: {
   );
 }
 
-/**
- * Clear draft threads that have been promoted to server threads.
- *
- * Call this after a snapshot sync so the route guard in `_chat.$threadId`
- * sees the server thread before the draft is removed — avoids a redirect
- * to `/` caused by a gap where neither draft nor server thread exists.
- */
-export function clearPromotedDraftThreads(serverThreadIds: ReadonlySet<ThreadId>): void {
+// Mark drafts as promoted first; route/composer cleanup happens after the server thread starts.
+export function markPromotedDraftThreads(serverThreadIds: ReadonlySet<ThreadId>): void {
   const store = useComposerDraftStore.getState();
   const draftThreadIds = Object.keys(store.draftThreadsByThreadId) as ThreadId[];
   for (const draftId of draftThreadIds) {
     if (serverThreadIds.has(draftId)) {
-      store.clearDraftThread(draftId);
+      store.markDraftThreadPromoting(draftId);
     }
+  }
+}
+
+export function finalizePromotedDraftThreads(serverThreadIds: ReadonlySet<ThreadId>): void {
+  const store = useComposerDraftStore.getState();
+  for (const threadId of serverThreadIds) {
+    store.finalizePromotedDraftThread(threadId);
   }
 }

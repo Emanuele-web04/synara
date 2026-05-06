@@ -12,6 +12,7 @@ import {
   type ComposerImageAttachment,
   type QueuedComposerTurn,
   deriveEffectiveComposerModelState,
+  markPromotedDraftThreads,
   resolvePreferredComposerModelSelection,
   useComposerDraftStore,
 } from "./composerDraftStore";
@@ -793,6 +794,25 @@ describe("composerDraftStore project draft thread mapping", () => {
     store.setPrompt(threadId, "remove me");
     store.clearDraftThread(threadId);
     expect(useComposerDraftStore.getState().getDraftThreadByProjectId(projectId)).toBeNull();
+    expect(useComposerDraftStore.getState().getDraftThread(threadId)).toBeNull();
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
+  });
+
+  it("marks promoted drafts without deleting composer state until finalization", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectId, threadId);
+    store.setPrompt(threadId, "keep me while server thread hydrates");
+
+    markPromotedDraftThreads(new Set([threadId]));
+
+    expect(useComposerDraftStore.getState().getDraftThread(threadId)?.promotedTo).toBe(threadId);
+    expect(useComposerDraftStore.getState().getDraftThreadByProjectId(projectId)).toBeNull();
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.prompt).toBe(
+      "keep me while server thread hydrates",
+    );
+
+    useComposerDraftStore.getState().finalizePromotedDraftThread(threadId);
+
     expect(useComposerDraftStore.getState().getDraftThread(threadId)).toBeNull();
     expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
   });

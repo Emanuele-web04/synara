@@ -7,7 +7,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { DateTime, Effect, FileSystem, Path } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createHttpRequestHandler } from "./http";
+import { createHttpRequestHandler, isLegacyTokenAuthorized } from "./http";
 import type { ServerAuthShape } from "./auth/Services/ServerAuth";
 import { deriveServerPaths, type ServerConfigShape } from "./config";
 import type { ProjectFaviconResolverShape } from "./project/Services/ProjectFaviconResolver";
@@ -183,6 +183,23 @@ async function withServer<T>(
 }
 
 describe("createHttpRequestHandler", () => {
+  it("recognizes the desktop startup token for legacy attachment requests", async () => {
+    const config = await makeConfig({ authToken: "desktop-secret" });
+
+    expect(
+      isLegacyTokenAuthorized({
+        config,
+        url: new URL("http://127.0.0.1:3773/attachments/attachment-id?token=desktop-secret"),
+      }),
+    ).toBe(true);
+    expect(
+      isLegacyTokenAuthorized({
+        config,
+        url: new URL("http://127.0.0.1:3773/attachments/attachment-id?token=wrong"),
+      }),
+    ).toBe(false);
+  });
+
   it("serves health readiness JSON", async () => {
     const config = await makeConfig();
     const handler = await makeHandler(config);

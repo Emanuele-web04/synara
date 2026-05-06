@@ -1422,7 +1422,10 @@ const make = Effect.gen(function* () {
       ) =>
         Effect.gen(function* () {
           const childThreadId = subagentThreadId(parentThread.id, providerThreadId);
-          const existingThread = readModel.threads.find((entry) => entry.id === childThreadId);
+          // A single provider event can describe the child both as a collab receiver and
+          // as the event's provider thread, so re-read after any earlier dispatch in this handler.
+          const latestReadModel = yield* orchestrationEngine.getReadModel();
+          const existingThread = latestReadModel.threads.find((entry) => entry.id === childThreadId);
           const resolvedModelSelection =
             identity?.model && identity.modelIsRequestedHint !== true
               ? {

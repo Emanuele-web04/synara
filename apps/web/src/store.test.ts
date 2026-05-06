@@ -1547,6 +1547,60 @@ describe("store pure functions", () => {
 });
 
 describe("store read model sync", () => {
+  it("adds the desktop bridge token to server attachment preview URLs", () => {
+    const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+    const testWindow = {
+      location: { origin: "t3://app" },
+      desktopBridge: {
+        getWsUrl: () => "ws://127.0.0.1:53036/?token=desktop-secret",
+      },
+    };
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: testWindow,
+    });
+    const initialState = makeState(makeThread());
+    const readModel = makeReadModel(
+      makeReadModelThread({
+        messages: [
+          {
+            id: MessageId.makeUnsafe("message-with-image"),
+            role: "user",
+            text: "see image",
+            attachments: [
+              {
+                type: "image",
+                id: "thread-1-image",
+                name: "image.png",
+                mimeType: "image/png",
+                sizeBytes: 5,
+              },
+            ],
+            createdAt: "2026-02-27T00:00:00.000Z",
+            updatedAt: "2026-02-27T00:00:00.000Z",
+            streaming: false,
+            source: "native",
+            dispatchMode: "queue",
+          },
+        ],
+      }),
+    );
+
+    try {
+      const next = syncServerReadModel(initialState, readModel);
+
+      expect(next.threads[0]?.messages[0]?.attachments?.[0]).toMatchObject({
+        previewUrl: "http://127.0.0.1:53036/attachments/thread-1-image?token=desktop-secret",
+      });
+    } finally {
+      if (previousWindow) {
+        Object.defineProperty(globalThis, "window", previousWindow);
+      } else {
+        Reflect.deleteProperty(globalThis, "window");
+      }
+    }
+  });
+
   it("filters non-fatal runtime errors from thread banners during read model sync", () => {
     const initialState = makeState(makeThread());
     const readModel = makeReadModel(

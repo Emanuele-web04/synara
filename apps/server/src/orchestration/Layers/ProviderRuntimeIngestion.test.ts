@@ -3248,6 +3248,60 @@ describe("ProviderRuntimeIngestion", () => {
     ).toBe(false);
   });
 
+  it("handles collab receiver and child provider refs on the same event without duplicate thread creation", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "item.updated",
+      eventId: asEventId("evt-collab-child-thread-event"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-child"),
+      parentTurnId: asTurnId("turn-parent"),
+      itemId: asItemId("item-collab-child"),
+      providerRefs: {
+        providerThreadId: "child-provider-same-event",
+        providerParentThreadId: "parent-provider-1",
+        providerTurnId: "turn-child",
+        parentProviderTurnId: "turn-parent",
+      },
+      payload: {
+        itemType: "collab_agent_tool_call",
+        title: "Task",
+        data: {
+          item: {
+            type: "collabAgentToolCall",
+            receiverThreadIds: ["child-provider-same-event"],
+            receiverAgents: [
+              {
+                threadId: "child-provider-same-event",
+                agentNickname: "Noether",
+                agentRole: "explorer",
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    const childThread = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.parentThreadId === "thread-1" &&
+        entry.subagentNickname === "Noether" &&
+        entry.activities.some(
+          (activity: ProviderRuntimeTestActivity) =>
+            activity.id === "evt-collab-child-thread-event" && activity.kind === "tool.updated",
+        ),
+      2000,
+      asThreadId("subagent:thread-1:child-provider-same-event"),
+    );
+
+    expect(childThread.title).toBe("Noether [explorer]");
+  });
+
   it("materializes subagent child threads even when the collab payload only exposes receiverAgents", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
