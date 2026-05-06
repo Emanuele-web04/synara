@@ -1844,6 +1844,10 @@ export default function ChatView({
     };
 
     updateHeight();
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+
     const resizeObserver = new ResizeObserver(updateHeight);
     resizeObserver.observe(element);
     return () => {
