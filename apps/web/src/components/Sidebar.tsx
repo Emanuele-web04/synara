@@ -1092,6 +1092,7 @@ export default function Sidebar() {
   const projects = useStore((store) => store.projects);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
   const sidebarThreadSummaryById = useStore((store) => store.sidebarThreadSummaryById);
+  const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
   const markThreadVisited = useStore((store) => store.markThreadVisited);
   const markThreadUnread = useStore((store) => store.markThreadUnread);
@@ -1148,6 +1149,30 @@ export default function Sidebar() {
   const activeSettingsSection = normalizeSettingsSection(settingsSectionSearch.section);
   const activeSplitView = useSplitViewStore(selectSplitView(routeSearch.splitViewId ?? null));
   const splitViewsById = useSplitViewStore((store) => store.splitViewsById);
+
+  useEffect(() => {
+    const api = readNativeApi();
+    if (!api || !threadsHydrated || projects.length > 0) {
+      return;
+    }
+
+    let cancelled = false;
+    // The sidebar is the visible empty-state owner. If startup hydrated empty
+    // before the desktop projection caught up, ask the lightweight shell endpoint once.
+    void api.orchestration
+      .getShellSnapshot()
+      .then((snapshot) => {
+        if (cancelled || (snapshot.projects.length === 0 && snapshot.threads.length === 0)) {
+          return;
+        }
+        syncServerShellSnapshot(snapshot);
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [projects.length, syncServerShellSnapshot, threadsHydrated]);
 
   useEffect(() => {
     if (typeof window === "undefined") {

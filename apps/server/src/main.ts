@@ -30,6 +30,8 @@ import { ServerLoggerLive } from "./serverLogger";
 import { formatHostForUrl, isWildcardHost } from "./startupAccess";
 import { AnalyticsServiceLayerLive } from "./telemetry/Layers/AnalyticsService";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService";
+import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
+import { startThreadRetentionJob } from "./threadRetention";
 
 export class StartupError extends Data.TaggedError("StartupError")<{
   readonly message: string;
@@ -272,6 +274,10 @@ const makeServerProgram = (input: CliInput) =>
     }
 
     yield* start;
+    const orchestrationEngine = yield* OrchestrationEngineService;
+    // Start the retention loop after the server is live so startup can serve
+    // existing history first, then prune inactive threads in the background.
+    yield* startThreadRetentionJob(orchestrationEngine);
     yield* Effect.forkChild(recordStartupHeartbeat);
 
     const localUrl = `http://localhost:${config.port}`;

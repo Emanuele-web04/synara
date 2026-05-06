@@ -1,6 +1,7 @@
 import {
   ThreadId,
   type OrchestrationEvent,
+  type OrchestrationShellSnapshot,
   type OrchestrationShellStreamEvent,
   type ServerConfig,
 } from "@t3tools/contracts";
@@ -508,9 +509,25 @@ function EventRouter() {
       },
     );
 
+    const shouldApplyBootstrapShellSnapshot = (snapshot: OrchestrationShellSnapshot) => {
+      if (disposed) {
+        return false;
+      }
+      const currentState = useStore.getState();
+      if (!currentState.threadsHydrated) {
+        return true;
+      }
+      // Desktop can briefly hydrate from an empty startup stream before the
+      // projection reader is fully ready. Let the later non-empty shell query win.
+      return (
+        (currentState.projects.length === 0 && snapshot.projects.length > 0) ||
+        (currentState.threads.length === 0 && snapshot.threads.length > 0)
+      );
+    };
+
     const loadShellSnapshotOnce = async () => {
       const snapshot = await api.orchestration.getShellSnapshot();
-      if (disposed || useStore.getState().threadsHydrated) {
+      if (!shouldApplyBootstrapShellSnapshot(snapshot)) {
         return;
       }
       shellSnapshotSequence = snapshot.snapshotSequence;
@@ -692,6 +709,7 @@ function EventRouter() {
         if (disposed) {
           return;
         }
+        await loadShellSnapshotOnce();
 
         if (!payload.bootstrapProjectId || !payload.bootstrapThreadId) {
           return;
@@ -789,9 +807,6 @@ function EventRouter() {
     // The shell stream normally delivers the sidebar snapshot. If it fails before
     // the first event, use the same lightweight query instead of the full history.
     const shellBootstrapFallbackTimer = window.setTimeout(() => {
-      if (disposed || useStore.getState().threadsHydrated) {
-        return;
-      }
       void loadShellSnapshotOnce().catch(() => undefined);
     }, SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS);
 
