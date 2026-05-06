@@ -261,6 +261,11 @@ export const makeWsRpcLayer = () =>
             projectionReadModelQuery.getSnapshot(),
             "Failed to load orchestration snapshot",
           ),
+        [ORCHESTRATION_WS_METHODS.getShellSnapshot]: () =>
+          rpcEffect(
+            projectionReadModelQuery.getShellSnapshot(),
+            "Failed to load orchestration shell snapshot",
+          ),
         [ORCHESTRATION_WS_METHODS.repairState]: () =>
           rpcEffect(orchestrationEngine.repairState(), "Failed to repair orchestration state"),
         [ORCHESTRATION_WS_METHODS.getTurnDiff]: (input) =>

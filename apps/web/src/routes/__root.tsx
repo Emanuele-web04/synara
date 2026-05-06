@@ -66,6 +66,8 @@ import { parseDiffRouteSearch } from "../diffRouteSearch";
 import { resolveSplitViewThreadIds, selectSplitView, useSplitViewStore } from "../splitViewStore";
 import { providerDiscoveryQueryKeys } from "../lib/providerDiscoveryReactQuery";
 
+const SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS = 1_500;
+
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient;
 }>()({
@@ -506,13 +508,25 @@ function EventRouter() {
       },
     );
 
+    const loadShellSnapshotOnce = async () => {
+      const snapshot = await api.orchestration.getShellSnapshot();
+      if (disposed || useStore.getState().threadsHydrated) {
+        return;
+      }
+      shellSnapshotSequence = snapshot.snapshotSequence;
+      syncServerShellSnapshot(snapshot);
+      clearPromotedDraftThreads(new Set(snapshot.threads.map((thread) => thread.id)));
+      removeOrphanedTerminalsForCurrentState();
+      flushShellBuffer(snapshot.snapshotSequence);
+    };
+
     const ensureScopedSubscriptions = async () => {
       shellSnapshotSequence = -1;
       pendingShellEvents = [];
       subscribedThreadIds.clear();
       threadSnapshotSequenceById.clear();
       pendingThreadEventsById.clear();
-      await api.orchestration.subscribeShell().catch(() => undefined);
+      await api.orchestration.subscribeShell().catch(() => loadShellSnapshotOnce());
       await enqueueThreadSubscriptionReconcile(visibleThreadIdsRef.current);
     };
 
@@ -772,10 +786,19 @@ function EventRouter() {
     });
     subscribed = true;
     void ensureScopedSubscriptions();
+    // The shell stream normally delivers the sidebar snapshot. If it fails before
+    // the first event, use the same lightweight query instead of the full history.
+    const shellBootstrapFallbackTimer = window.setTimeout(() => {
+      if (disposed || useStore.getState().threadsHydrated) {
+        return;
+      }
+      void loadShellSnapshotOnce().catch(() => undefined);
+    }, SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS);
 
     return () => {
       flushPendingDomainEvents();
       disposed = true;
+      window.clearTimeout(shellBootstrapFallbackTimer);
       needsProviderInvalidation = false;
       domainEventFlushThrottler.cancel();
       reconcileThreadSubscriptionsRef.current = null;
@@ -841,13 +864,13 @@ function DesktopProjectBootstrap() {
     // Shell subscriptions should normally hydrate the sidebar. If project rows
     // are missing while live threads exist, repair before accepting the snapshot.
     void api.orchestration
-      .getSnapshot()
+      .getShellSnapshot()
       .then((snapshot) => {
         const needsRepair =
           (snapshot.projects.length === 0 && snapshot.threads.length === 0) ||
           hasLiveThreadsWithMissingProjects(snapshot);
         if (!needsRepair) {
-          syncServerReadModel(snapshot);
+          useStore.getState().syncServerShellSnapshot(snapshot);
           return snapshot;
         }
         return api.orchestration.repairState().then((repairedSnapshot) => {

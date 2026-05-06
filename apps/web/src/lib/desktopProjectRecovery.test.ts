@@ -1,7 +1,12 @@
 // FILE: desktopProjectRecovery.test.ts
 // Purpose: Verifies desktop startup detects snapshots where threads outlive visible project rows.
 
-import { ProjectId, ThreadId, type OrchestrationReadModel } from "@t3tools/contracts";
+import {
+  ProjectId,
+  ThreadId,
+  type OrchestrationReadModel,
+  type OrchestrationShellSnapshot,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
 import { hasLiveThreadsWithMissingProjects } from "./desktopProjectRecovery";
@@ -81,6 +86,64 @@ function makeSnapshot(overrides: Partial<OrchestrationReadModel> = {}): Orchestr
   };
 }
 
+function makeShellSnapshot(
+  overrides: Partial<OrchestrationShellSnapshot> = {},
+): OrchestrationShellSnapshot {
+  const project = makeProject();
+  const thread = makeThread();
+  return {
+    snapshotSequence: 1,
+    updatedAt: "2026-04-20T08:00:00.000Z",
+    projects: [
+      {
+        id: project.id,
+        kind: project.kind,
+        title: project.title,
+        workspaceRoot: project.workspaceRoot,
+        defaultModelSelection: project.defaultModelSelection,
+        scripts: project.scripts,
+        createdAt: project.createdAt,
+        updatedAt: project.updatedAt,
+      },
+    ],
+    threads: [
+      {
+        id: thread.id,
+        projectId: thread.projectId,
+        title: thread.title,
+        modelSelection: thread.modelSelection,
+        runtimeMode: thread.runtimeMode,
+        interactionMode: thread.interactionMode,
+        envMode: thread.envMode,
+        branch: thread.branch,
+        worktreePath: thread.worktreePath,
+        associatedWorktreePath: thread.associatedWorktreePath,
+        associatedWorktreeBranch: thread.associatedWorktreeBranch,
+        associatedWorktreeRef: thread.associatedWorktreeRef,
+        createBranchFlowCompleted: thread.createBranchFlowCompleted,
+        parentThreadId: thread.parentThreadId,
+        subagentAgentId: thread.subagentAgentId,
+        subagentNickname: thread.subagentNickname,
+        subagentRole: thread.subagentRole,
+        forkSourceThreadId: thread.forkSourceThreadId,
+        sidechatSourceThreadId: thread.sidechatSourceThreadId,
+        lastKnownPr: thread.lastKnownPr,
+        latestTurn: thread.latestTurn,
+        latestUserMessageAt: thread.latestUserMessageAt,
+        hasPendingApprovals: thread.hasPendingApprovals,
+        hasPendingUserInput: thread.hasPendingUserInput,
+        hasActionableProposedPlan: thread.hasActionableProposedPlan,
+        createdAt: thread.createdAt,
+        updatedAt: thread.updatedAt,
+        archivedAt: thread.archivedAt,
+        handoff: thread.handoff,
+        session: thread.session,
+      },
+    ],
+    ...overrides,
+  };
+}
+
 describe("desktopProjectRecovery", () => {
   it("returns false when live threads still have live project rows", () => {
     const snapshot = makeSnapshot();
@@ -111,5 +174,10 @@ describe("desktopProjectRecovery", () => {
     });
 
     expect(hasLiveThreadsWithMissingProjects(snapshot)).toBe(false);
+  });
+
+  it("accepts shell snapshots that do not carry deleted markers", () => {
+    expect(hasLiveThreadsWithMissingProjects(makeShellSnapshot())).toBe(false);
+    expect(hasLiveThreadsWithMissingProjects(makeShellSnapshot({ projects: [] }))).toBe(true);
   });
 });
