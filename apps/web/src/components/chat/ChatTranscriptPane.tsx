@@ -27,6 +27,7 @@ interface ChatTranscriptPaneProps {
   activeTurnId?: TurnId | null;
   activeTurnInProgress: boolean;
   activeTurnStartedAt: string | null;
+  bottomContentInsetPx?: ComponentProps<typeof MessagesTimeline>["bottomContentInsetPx"];
   chatFontSizePx: number;
   completionDividerBeforeEntryId: string | null;
   completionSummary: string | null;
@@ -71,6 +72,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   activeTurnId,
   activeTurnInProgress,
   activeTurnStartedAt,
+  bottomContentInsetPx,
   chatFontSizePx,
   completionDividerBeforeEntryId,
   completionSummary,
@@ -111,6 +113,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
 }: ChatTranscriptPaneProps) {
   return (
     <div
+      data-chat-transcript-pane="true"
       aria-hidden={terminalWorkspaceTerminalTabActive}
       className={cn(
         "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
@@ -154,6 +157,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
           chatFontSizePx={chatFontSizePx}
           timestampFormat={timestampFormat}
           workspaceRoot={workspaceRoot}
+          bottomContentInsetPx={bottomContentInsetPx}
           emptyStateContent={<ChatEmptyStateHero projectName={emptyStateProjectName} />}
           {...(expandedWorkGroups ? { expandedWorkGroups } : {})}
           {...(onToggleWorkGroup ? { onToggleWorkGroup } : {})}

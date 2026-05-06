@@ -210,6 +210,7 @@ interface MessagesTimelineProps {
   chatFontSizePx?: number;
   timestampFormat: TimestampFormat;
   workspaceRoot: string | undefined;
+  bottomContentInsetPx?: number | undefined;
 }
 
 export const MessagesTimeline = memo(function MessagesTimeline({
@@ -251,6 +252,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   timestampFormat,
   workspaceRoot,
   emptyStateContent,
+  bottomContentInsetPx,
 }: MessagesTimelineProps) {
   const normalizedChatFontSizePx = normalizeChatFontSizePx(chatFontSizePx);
   const appTypographyScale = useMemo(
@@ -1030,6 +1032,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onWheel={onMessagesWheel}
       data-chat-scroll-container="true"
       className="h-full overflow-x-hidden overscroll-y-contain px-3 py-3 sm:px-5 sm:py-4"
+      style={bottomContentInsetPx ? { paddingBottom: bottomContentInsetPx } : undefined}
     />
   );
 });
