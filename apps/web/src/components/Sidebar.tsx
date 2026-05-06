@@ -189,6 +189,7 @@ import {
   getVisibleSidebarEntriesForPreview,
   groupSidebarThreadsByProjectId,
   pruneExpandedProjectThreadListsForCollapsedProjects,
+  recoverExistingAddProjectTarget,
   DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY,
   resolveSidebarNewThreadEnvMode,
   resolveThreadRowClassName,
@@ -1434,19 +1435,6 @@ export default function Sidebar() {
     [appSettings.sidebarThreadSortOrder, navigate, sidebarThreads],
   );
 
-  const openExistingProjectLocally = useCallback(
-    (projectId: ProjectId) => {
-      const hasProjectThread = sidebarThreads.some((thread) => thread.projectId === projectId);
-      if (hasProjectThread) {
-        focusMostRecentThreadForProject(projectId);
-        return;
-      }
-
-      setProjectExpanded(projectId, true);
-    },
-    [focusMostRecentThreadForProject, setProjectExpanded, sidebarThreads],
-  );
-
   const openOrCreateProjectThreadFromSnapshot = useCallback(
     async (projectId: ProjectId, snapshot: OrchestrationReadModel) => {
       const latestThread = sortThreadsForSidebar(
@@ -1473,7 +1461,7 @@ export default function Sidebar() {
         return;
       }
 
-      await handleNewThread(projectId, {
+      void handleNewThread(projectId, {
         envMode: appSettings.defaultThreadEnvMode,
       }).catch(() => undefined);
     },
@@ -1520,9 +1508,18 @@ export default function Sidebar() {
       }
 
       setProjectExpanded(projectId, true);
+      void handleNewThread(projectId, {
+        envMode: appSettings.defaultThreadEnvMode,
+      }).catch(() => undefined);
       return true;
     },
-    [appSettings.sidebarThreadSortOrder, navigate, setProjectExpanded],
+    [
+      appSettings.defaultThreadEnvMode,
+      appSettings.sidebarThreadSortOrder,
+      handleNewThread,
+      navigate,
+      setProjectExpanded,
+    ],
   );
 
   // Poll the server read model briefly after project.create so we only recover from fresh state.
@@ -1785,17 +1782,27 @@ export default function Sidebar() {
         setAddingProject(false);
       };
 
-      const existing = findWorkspaceRootMatch(projects, cwd, (project) => project.cwd);
-      if (existing) {
-        finishAddingProject();
-        openExistingProjectLocally(existing.id);
-        return;
-      }
-
-      const projectId = newProjectId();
-      const createdAt = new Date().toISOString();
-      const title = cwd.split(/[/\\]/).findLast(isNonEmptyString) ?? cwd;
       try {
+        const existing = findWorkspaceRootMatch(projects, cwd, (project) => project.cwd);
+        const existingRecovery = await recoverExistingAddProjectTarget({
+          existingProjectId: existing?.id,
+          workspaceRoot: cwd,
+          recoverByProjectId: (projectId) => recoverExistingProjectFromServer(api, projectId),
+          recoverByWorkspaceRoot: (workspaceRoot) =>
+            recoverExistingProjectByWorkspaceRootFromServer(api, workspaceRoot),
+        });
+        if (existingRecovery === "recovered") {
+          finishAddingProject();
+          return;
+        }
+        if (existing) {
+          // Local project state can briefly outlive a server-side project.deleted event.
+          // Continue to project.create so re-adding the folder revives it instead of opening a dead shell.
+        }
+
+        const projectId = newProjectId();
+        const createdAt = new Date().toISOString();
+        const title = cwd.split(/[/\\]/).findLast(isNonEmptyString) ?? cwd;
         await api.orchestration.dispatchCommand({
           type: "project.create",
           commandId: newCommandId(),
@@ -1820,7 +1827,7 @@ export default function Sidebar() {
         // snapshot is just slow to catch up, continue with the local new-thread flow
         // instead of surfacing a false-negative sidebar sync error.
         setProjectExpanded(projectId, true);
-        await handleNewThread(projectId, {
+        void handleNewThread(projectId, {
           envMode: appSettings.defaultThreadEnvMode,
         }).catch(() => undefined);
         finishAddingProject();
@@ -1829,36 +1836,44 @@ export default function Sidebar() {
         const description =
           error instanceof Error ? error.message : "An error occurred while adding the project.";
         if (isDuplicateProjectCreateError(description)) {
-          const { project, snapshot } = await waitForRecoverableProjectForDuplicateCreate({
-            message: description,
-            workspaceRoot: cwd,
-            loadSnapshot: () => api.orchestration.getSnapshot().catch(() => null),
-            repairSnapshot: () => api.orchestration.repairState().catch(() => null),
-            maxAttempts: ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS,
-            delayMs: ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS,
-          });
-          if (snapshot) {
-            syncServerReadModel(snapshot);
-          }
-          if (project && snapshot) {
-            const recovered = await openExistingProjectFromSnapshot(project.id, snapshot);
+          try {
+            const { project, snapshot } = await waitForRecoverableProjectForDuplicateCreate({
+              message: description,
+              workspaceRoot: cwd,
+              loadSnapshot: () => api.orchestration.getSnapshot().catch(() => null),
+              repairSnapshot: () => api.orchestration.repairState().catch(() => null),
+              maxAttempts: ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS,
+              delayMs: ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS,
+            });
+            if (snapshot) {
+              syncServerReadModel(snapshot);
+            }
+            if (project && snapshot) {
+              const recovered = await openExistingProjectFromSnapshot(project.id, snapshot);
+              if (recovered) {
+                finishAddingProject();
+                return;
+              }
+            }
+
+            const duplicateProjectId = extractDuplicateProjectCreateProjectId(description);
+            const recovered = duplicateProjectId
+              ? await recoverExistingProjectFromServer(
+                  api,
+                  ProjectId.makeUnsafe(duplicateProjectId),
+                )
+              : await recoverExistingProjectByWorkspaceRootFromServer(api, cwd);
             if (recovered) {
               finishAddingProject();
               return;
             }
-          }
 
-          const duplicateProjectId = extractDuplicateProjectCreateProjectId(description);
-          const recovered = duplicateProjectId
-            ? await recoverExistingProjectFromServer(api, ProjectId.makeUnsafe(duplicateProjectId))
-            : await recoverExistingProjectByWorkspaceRootFromServer(api, cwd);
-          if (recovered) {
-            finishAddingProject();
-            return;
+            setIsAddingProject(false);
+            throw new Error(ADD_PROJECT_EXISTING_SYNC_ERROR);
+          } catch (recoveryError) {
+            setIsAddingProject(false);
+            throw recoveryError;
           }
-
-          setIsAddingProject(false);
-          throw new Error(ADD_PROJECT_EXISTING_SYNC_ERROR);
         }
         setIsAddingProject(false);
         throw error instanceof Error ? error : new Error(description);
@@ -1868,7 +1883,6 @@ export default function Sidebar() {
       appSettings.defaultThreadEnvMode,
       handleNewThread,
       isAddingProject,
-      openExistingProjectLocally,
       projects,
       recoverExistingProjectFromServer,
       recoverExistingProjectByWorkspaceRootFromServer,
@@ -1900,7 +1914,16 @@ export default function Sidebar() {
       setIsPickingFolder(false);
       if (pickedPath) {
         setAddProjectError(null);
-        await addProjectFromPath(pickedPath);
+        await addProjectFromPath(pickedPath).catch((error: unknown) => {
+          const description =
+            error instanceof Error ? error.message : "An error occurred while adding the project.";
+          setAddProjectError(description);
+          toastManager.add({
+            type: "error",
+            title: "Unable to add project",
+            description,
+          });
+        });
       }
     } catch (error) {
       const description =

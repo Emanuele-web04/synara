@@ -22,6 +22,7 @@ import {
   isLoopbackHostname,
   isDuplicateProjectCreateError,
   pruneExpandedProjectThreadListsForCollapsedProjects,
+  recoverExistingAddProjectTarget,
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadEnvMode,
   resolveThreadRowClassName,
@@ -198,6 +199,39 @@ describe("add-project error helpers", () => {
         (project) => project.cwd,
       )?.id,
     ).toBe("project-2");
+  });
+
+  it("falls through to project.create when a local project shell is stale on the server", async () => {
+    const recoverByProjectIdCalls: ProjectId[] = [];
+    const recoverByWorkspaceRootCalls: string[] = [];
+
+    const decision = await recoverExistingAddProjectTarget({
+      existingProjectId: ProjectId.makeUnsafe("project-stale-local"),
+      workspaceRoot: "/Users/tester/Code/one",
+      recoverByProjectId: async (projectId) => {
+        recoverByProjectIdCalls.push(projectId);
+        return false;
+      },
+      recoverByWorkspaceRoot: async (workspaceRoot) => {
+        recoverByWorkspaceRootCalls.push(workspaceRoot);
+        return false;
+      },
+    });
+
+    expect(decision).toBe("create");
+    expect(recoverByProjectIdCalls).toEqual([ProjectId.makeUnsafe("project-stale-local")]);
+    expect(recoverByWorkspaceRootCalls).toEqual(["/Users/tester/Code/one"]);
+  });
+
+  it("reuses an active server project matched by workspace root even if the local id is stale", async () => {
+    const decision = await recoverExistingAddProjectTarget({
+      existingProjectId: ProjectId.makeUnsafe("project-stale-local"),
+      workspaceRoot: "/Users/tester/Code/one",
+      recoverByProjectId: async () => false,
+      recoverByWorkspaceRoot: async () => true,
+    });
+
+    expect(decision).toBe("recovered");
   });
 
   it("detects duplicate project.create errors", () => {

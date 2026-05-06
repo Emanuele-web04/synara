@@ -376,6 +376,28 @@ export function findWorkspaceRootMatch<T>(
   return items.find((item) => workspaceRootsEqual(getWorkspaceRoot(item), targetWorkspaceRoot));
 }
 
+// Rechecks an existing local project against the server before the add flow decides to reuse it.
+export async function recoverExistingAddProjectTarget(input: {
+  readonly existingProjectId: ProjectId | null | undefined;
+  readonly workspaceRoot: string;
+  readonly recoverByProjectId: (projectId: ProjectId) => Promise<boolean>;
+  readonly recoverByWorkspaceRoot: (workspaceRoot: string) => Promise<boolean>;
+}): Promise<"recovered" | "create"> {
+  if (!input.existingProjectId) {
+    return "create";
+  }
+
+  if (await input.recoverByProjectId(input.existingProjectId)) {
+    return "recovered";
+  }
+
+  if (await input.recoverByWorkspaceRoot(input.workspaceRoot)) {
+    return "recovered";
+  }
+
+  return "create";
+}
+
 // Translates low-level add-project failures into a short explanation without
 // hiding the original error text that developers may need for diagnosis.
 export function describeAddProjectError(message: string): string | null {

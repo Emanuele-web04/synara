@@ -1187,6 +1187,7 @@ function extractToolCommand(payload: Record<string, unknown> | null): string | n
   const item = asRecord(data?.item);
   const itemResult = asRecord(item?.result);
   const itemInput = asRecord(item?.input);
+  const dataInput = asRecord(data?.input);
   const detailCommand =
     isCommandLikeDetail(payload) && typeof payload?.detail === "string"
       ? stripTrailingExitCode(payload.detail).output
@@ -1200,6 +1201,8 @@ function extractToolCommand(payload: Record<string, unknown> | null): string | n
     normalizeCommandValue(itemResult?.cmd),
     normalizeCommandValue(data?.command),
     normalizeCommandValue(data?.cmd),
+    normalizeCommandValue(dataInput?.command),
+    normalizeCommandValue(dataInput?.cmd),
     normalizeCommandValue(item?.text),
     normalizeCommandValue(item?.summary),
     normalizeCommandValue(detailCommand),
@@ -1215,7 +1218,7 @@ function extractToolName(payload: Record<string, unknown> | null): string | null
   const data = asRecord(payload?.data);
   const item = asRecord(data?.item);
   const itemInput = asRecord(item?.input);
-  const candidates = [data?.toolName, item?.toolName, item?.name, itemInput?.toolName];
+  const candidates = [data?.toolName, data?.tool, item?.toolName, item?.name, itemInput?.toolName];
   for (const candidate of candidates) {
     const normalized = asTrimmedString(candidate);
     if (normalized) {
@@ -1227,7 +1230,7 @@ function extractToolName(payload: Record<string, unknown> | null): string | null
 
 function extractToolCallId(payload: Record<string, unknown> | null): string | null {
   const data = asRecord(payload?.data);
-  return asTrimmedString(data?.toolCallId);
+  return asTrimmedString(data?.toolCallId ?? data?.callID ?? data?.callId);
 }
 
 function stripTrailingExitCode(value: string): {
