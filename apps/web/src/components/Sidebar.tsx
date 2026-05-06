@@ -2001,9 +2001,9 @@ export default function Sidebar() {
           ? `Imported Claude session${suffix ? ` ${suffix}` : ""}`
           : provider === "cursor"
             ? `Imported Cursor session${suffix ? ` ${suffix}` : ""}`
-          : provider === "opencode"
-            ? `Imported OpenCode session${suffix ? ` ${suffix}` : ""}`
-            : `Imported Codex thread${suffix ? ` ${suffix}` : ""}`;
+            : provider === "opencode"
+              ? `Imported OpenCode session${suffix ? ` ${suffix}` : ""}`
+              : `Imported Codex thread${suffix ? ` ${suffix}` : ""}`;
       let createdThread = false;
 
       try {
@@ -3336,27 +3336,24 @@ export default function Sidebar() {
     () => sortedProjects.filter((project) => isHomeChatContainerProject(project, homeDir)),
     [homeDir, sortedProjects],
   );
-  const visibleChatThreadRows = useMemo(
-    () => {
-      if (!chatSectionExpanded) {
-        return [];
-      }
-      return buildProjectThreadTree({
-        threads: sortThreadsForSidebar(
-          chatProjects.flatMap((project) => sortedSidebarThreadsByProjectId.get(project.id) ?? []),
-          appSettings.sidebarThreadSortOrder,
-        ),
-        expandedParentThreadIds: expandedSubagentParentIds,
-      });
-    },
-    [
-      appSettings.sidebarThreadSortOrder,
-      chatSectionExpanded,
-      chatProjects,
-      expandedSubagentParentIds,
-      sortedSidebarThreadsByProjectId,
-    ],
-  );
+  const visibleChatThreadRows = useMemo(() => {
+    if (!chatSectionExpanded) {
+      return [];
+    }
+    return buildProjectThreadTree({
+      threads: sortThreadsForSidebar(
+        chatProjects.flatMap((project) => sortedSidebarThreadsByProjectId.get(project.id) ?? []),
+        appSettings.sidebarThreadSortOrder,
+      ),
+      expandedParentThreadIds: expandedSubagentParentIds,
+    });
+  }, [
+    appSettings.sidebarThreadSortOrder,
+    chatSectionExpanded,
+    chatProjects,
+    expandedSubagentParentIds,
+    sortedSidebarThreadsByProjectId,
+  ]);
   const visibleChatThreadIds = useMemo(
     () => visibleChatThreadRows.map((row) => row.thread.id),
     [visibleChatThreadRows],
@@ -5018,7 +5015,16 @@ export default function Sidebar() {
         id: "import-thread",
         label: "Import thread from...",
         description: "Attach a local thread to an existing provider session.",
-        keywords: ["import", "resume", "thread", "session", "codex", "claude", "cursor", "opencode"],
+        keywords: [
+          "import",
+          "resume",
+          "thread",
+          "session",
+          "codex",
+          "claude",
+          "cursor",
+          "opencode",
+        ],
         shortcutLabel: importThreadShortcutLabel,
       },
       {

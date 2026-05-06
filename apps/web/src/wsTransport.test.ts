@@ -1,4 +1,8 @@
-import { WS_CHANNELS } from "@t3tools/contracts";
+// FILE: wsTransport.test.ts
+// Purpose: Verifies browser WebSocket construction around the Effect RPC transport.
+// Layer: Web transport tests
+// Depends on: the global WebSocket constructor shim and desktop bridge URL contract.
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { WsTransport } from "./wsTransport";
@@ -15,13 +19,10 @@ class MockWebSocket {
   static readonly CLOSED = 3;
 
   readyState = MockWebSocket.CONNECTING;
-  readonly sent: string[] = [];
+  readonly sent: unknown[] = [];
   private readonly listeners = new Map<WsEventType, Set<WsListener>>();
 
-  readonly url: string;
-
-  constructor(url: string) {
-    this.url = url;
+  constructor(readonly url: string) {
     sockets.push(this);
   }
 
@@ -31,22 +32,17 @@ class MockWebSocket {
     this.listeners.set(type, listeners);
   }
 
-  send(data: string) {
+  removeEventListener(type: WsEventType, listener: WsListener) {
+    this.listeners.get(type)?.delete(listener);
+  }
+
+  send(data: unknown) {
     this.sent.push(data);
   }
 
   close() {
     this.readyState = MockWebSocket.CLOSED;
     this.emit("close");
-  }
-
-  open() {
-    this.readyState = MockWebSocket.OPEN;
-    this.emit("open");
-  }
-
-  serverMessage(data: unknown) {
-    this.emit("message", { data });
   }
 
   private emit(type: WsEventType, event?: { data?: unknown }) {
@@ -60,22 +56,13 @@ class MockWebSocket {
 
 const originalWebSocket = globalThis.WebSocket;
 
-function getSocket(): MockWebSocket {
-  const socket = sockets.at(-1);
-  if (!socket) {
-    throw new Error("Expected a websocket instance");
-  }
-  return socket;
-}
-
 beforeEach(() => {
-  vi.useRealTimers();
   sockets.length = 0;
 
   Object.defineProperty(globalThis, "window", {
     configurable: true,
     value: {
-      location: { hostname: "localhost", port: "3020" },
+      location: { protocol: "http:", hostname: "localhost", port: "3020" },
       desktopBridge: undefined,
     },
   });
@@ -86,200 +73,41 @@ beforeEach(() => {
 afterEach(() => {
   globalThis.WebSocket = originalWebSocket;
   vi.restoreAllMocks();
-  vi.useRealTimers();
 });
 
 describe("WsTransport", () => {
-  it("routes valid push envelopes to channel listeners", () => {
+  it("normalizes explicit websocket URLs to the RPC endpoint", () => {
     const transport = new WsTransport("ws://localhost:3020");
-    const socket = getSocket();
-    socket.open();
 
-    const listener = vi.fn();
-    transport.subscribe(WS_CHANNELS.serverConfigUpdated, listener);
-
-    socket.serverMessage(
-      JSON.stringify({
-        type: "push",
-        sequence: 1,
-        channel: WS_CHANNELS.serverConfigUpdated,
-        data: { issues: [], providers: [] },
-      }),
-    );
-
-    expect(listener).toHaveBeenCalledTimes(1);
-    expect(listener).toHaveBeenCalledWith({
-      type: "push",
-      sequence: 1,
-      channel: WS_CHANNELS.serverConfigUpdated,
-      data: { issues: [], providers: [] },
-    });
+    expect(sockets[0]?.url).toBe("ws://localhost:3020/ws");
+    expect(transport.getState()).toBe("connecting");
 
     transport.dispose();
   });
 
-  it("resolves pending requests for valid response envelopes", async () => {
-    const transport = new WsTransport("ws://localhost:3020");
-    const socket = getSocket();
-    socket.open();
-
-    const requestPromise = transport.request("projects.list");
-    const sent = socket.sent.at(-1);
-    if (!sent) {
-      throw new Error("Expected request envelope to be sent");
-    }
-
-    const requestEnvelope = JSON.parse(sent) as { id: string };
-    socket.serverMessage(
-      JSON.stringify({
-        id: requestEnvelope.id,
-        result: { projects: [] },
-      }),
-    );
-
-    await expect(requestPromise).resolves.toEqual({ projects: [] });
-
-    transport.dispose();
-  });
-
-  it("drops malformed envelopes without crashing transport", () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const transport = new WsTransport("ws://localhost:3020");
-    const socket = getSocket();
-    socket.open();
-
-    const listener = vi.fn();
-    transport.subscribe(WS_CHANNELS.serverConfigUpdated, listener);
-
-    socket.serverMessage("{ invalid-json");
-    socket.serverMessage(
-      JSON.stringify({
-        type: "push",
-        sequence: 2,
-        channel: 42,
-        data: { bad: true },
-      }),
-    );
-    socket.serverMessage(
-      JSON.stringify({
-        type: "push",
-        sequence: 3,
-        channel: WS_CHANNELS.serverConfigUpdated,
-        data: { issues: [], providers: [] },
-      }),
-    );
-
-    expect(listener).toHaveBeenCalledTimes(1);
-    expect(listener).toHaveBeenCalledWith({
-      type: "push",
-      sequence: 3,
-      channel: WS_CHANNELS.serverConfigUpdated,
-      data: { issues: [], providers: [] },
-    });
-    expect(warnSpy).toHaveBeenCalledTimes(2);
-    expect(warnSpy).toHaveBeenNthCalledWith(
-      1,
-      "Dropped inbound WebSocket envelope",
-      "SyntaxError: Expected property name or '}' in JSON at position 2 (line 1 column 3)",
-    );
-    expect(warnSpy).toHaveBeenNthCalledWith(
-      2,
-      "Dropped inbound WebSocket envelope",
-      expect.stringContaining('Expected "server.configUpdated"'),
-    );
-
-    transport.dispose();
-  });
-
-  it("queues requests until the websocket opens", async () => {
-    const transport = new WsTransport("ws://localhost:3020");
-    const socket = getSocket();
-
-    const requestPromise = transport.request("projects.list");
-    expect(socket.sent).toHaveLength(0);
-
-    socket.open();
-    expect(socket.sent).toHaveLength(1);
-    const requestEnvelope = JSON.parse(socket.sent[0] ?? "{}") as { id: string };
-    socket.serverMessage(
-      JSON.stringify({
-        id: requestEnvelope.id,
-        result: { projects: [] },
-      }),
-    );
-
-    await expect(requestPromise).resolves.toEqual({ projects: [] });
-    transport.dispose();
-  });
-
-  it("does not create a timeout for requests with timeoutMs null", async () => {
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const transport = new WsTransport("ws://localhost:3020");
-    const socket = getSocket();
-    socket.open();
-
-    const requestPromise = transport.request(
-      "git.runStackedAction",
-      { cwd: "/repo" },
-      { timeoutMs: null },
-    );
-    const sent = socket.sent.at(-1);
-    if (!sent) {
-      throw new Error("Expected request envelope to be sent");
-    }
-    const requestEnvelope = JSON.parse(sent) as { id: string };
-
-    socket.serverMessage(
-      JSON.stringify({
-        id: requestEnvelope.id,
-        result: { ok: true },
-      }),
-    );
-
-    await expect(requestPromise).resolves.toEqual({ ok: true });
-    expect(timeoutSpy.mock.calls.some(([callback]) => typeof callback === "function")).toBe(false);
-
-    transport.dispose();
-  });
-
-  it("rejects pending requests when the websocket closes", async () => {
-    const transport = new WsTransport("ws://localhost:3020");
-    const socket = getSocket();
-    socket.open();
-
-    const requestPromise = transport.request(
-      "git.runStackedAction",
-      { cwd: "/repo" },
-      { timeoutMs: null },
-    );
-
-    socket.close();
-
-    await expect(requestPromise).rejects.toThrow("WebSocket connection closed.");
-    transport.dispose();
-  });
-
-  it("refreshes the desktop bridge websocket URL before reconnecting", async () => {
-    vi.useFakeTimers();
-    const getWsUrl = vi
-      .fn()
-      .mockReturnValueOnce("ws://127.0.0.1:53036/?token=old")
-      .mockReturnValue("ws://127.0.0.1:53037/?token=new");
+  it("uses the desktop bridge URL before falling back to the browser location", () => {
+    const getWsUrl = vi.fn().mockReturnValue("ws://127.0.0.1:53036/?token=old");
     Object.defineProperty(globalThis, "window", {
       configurable: true,
       value: {
-        location: { hostname: "localhost", port: "3020" },
+        location: { protocol: "http:", hostname: "localhost", port: "3020" },
         desktopBridge: { getWsUrl },
       },
     });
 
     const transport = new WsTransport();
-    expect(sockets[0]?.url).toBe("ws://127.0.0.1:53036/?token=old");
 
-    sockets[0]?.close();
-    await vi.advanceTimersByTimeAsync(500);
+    expect(getWsUrl).toHaveBeenCalledTimes(1);
+    expect(sockets[0]?.url).toBe("ws://127.0.0.1:53036/ws?token=old");
 
-    expect(sockets[1]?.url).toBe("ws://127.0.0.1:53037/?token=new");
+    transport.dispose();
+  });
+
+  it("falls back to the current browser host when no desktop bridge URL exists", () => {
+    const transport = new WsTransport();
+
+    expect(sockets[0]?.url).toBe("ws://localhost:3020/ws");
+
     transport.dispose();
   });
 });

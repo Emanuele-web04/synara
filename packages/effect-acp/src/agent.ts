@@ -208,7 +208,7 @@ export interface AcpAgentShape {
 }
 
 export class AcpAgent extends ServiceMap.Service<AcpAgent, AcpAgentShape>()(
-  "effect-acp/AcpAgent",
+  "effect-acp/agent/AcpAgent",
 ) {}
 
 interface AcpCoreAgentRequestHandlers {

@@ -507,14 +507,7 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
       webview.removeEventListener("dom-ready", attachVisibleWebview);
       webview.removeEventListener("did-start-loading", attachVisibleWebview);
     };
-  }, [
-    activeTab,
-    api,
-    runBrowserAction,
-    threadId,
-    upsertThreadState,
-    workspaceReady,
-  ]);
+  }, [activeTab, api, runBrowserAction, threadId, upsertThreadState, workspaceReady]);
 
   useEffect(() => {
     return () => {
@@ -1070,7 +1063,10 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
   return (
     <DiffPanelShell mode={mode} header={header}>
       <div className="flex min-h-0 flex-1 flex-col">
-        <div ref={browserTabsBarRef} className="flex items-center gap-2 border-b border-border px-2 py-1.5">
+        <div
+          ref={browserTabsBarRef}
+          className="flex items-center gap-2 border-b border-border px-2 py-1.5"
+        >
           <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
             {threadBrowserState?.tabs.map((tab) => {
               const isActive = tab.id === activeTab?.id;

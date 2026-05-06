@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { collapseCursorModelVariants, normalizeCursorModelVariantBaseId } from "./cursorModelVariants";
+import {
+  collapseCursorModelVariants,
+  normalizeCursorModelVariantBaseId,
+} from "./cursorModelVariants";
 
 describe("normalizeCursorModelVariantBaseId", () => {
   it("normalizes Cursor CLI reasoning, fast, and extra-high suffixes", () => {

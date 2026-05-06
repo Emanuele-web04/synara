@@ -205,7 +205,10 @@ function asPositiveInt(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
-function computeUsagePercent(usedTokens: number, maxTokens: number | undefined): number | undefined {
+function computeUsagePercent(
+  usedTokens: number,
+  maxTokens: number | undefined,
+): number | undefined {
   if (maxTokens === undefined) {
     return undefined;
   }
@@ -490,13 +493,12 @@ function makeToolCallState(
     ? deriveToolActivityPresentation({
         itemType,
         data,
-        fallbackSummary:
-          actionTitle ?? (itemType === "command_execution" ? "Ran command" : "Tool"),
+        fallbackSummary: actionTitle ?? (itemType === "command_execution" ? "Ran command" : "Tool"),
         ...(normalizedTitle !== undefined && !kindSpecificTitleIsGeneric
           ? { title: normalizedTitle }
           : actionTitle !== undefined
             ? { title: actionTitle }
-          : {}),
+            : {}),
         ...(fallbackDetail !== undefined ? { detail: fallbackDetail } : {}),
       })
     : undefined;
@@ -542,8 +544,8 @@ export function mergeToolCallState(
   const nextTitleIsGeneric = isProviderGenericToolTitle(next.title, kind);
   const actionTitle = nextTitleIsGeneric ? deriveGenericToolActionTitle(kind, status) : undefined;
   const title = nextTitleIsGeneric
-    ? actionTitle ?? previous?.title ?? next.title
-    : next.title ?? previous?.title;
+    ? (actionTitle ?? previous?.title ?? next.title)
+    : (next.title ?? previous?.title);
   const command = next.command ?? previous?.command;
   const detail = next.detail ?? previous?.detail;
   return {
@@ -650,9 +652,10 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
     }
     case "agent_message_chunk": {
       if (upd.content.type === "text" && upd.content.text.length > 0) {
+        const itemId = trimNonEmpty(upd.messageId);
         events.push({
           _tag: "ContentDelta",
-          ...(trimNonEmpty(upd.messageId) ? { itemId: trimNonEmpty(upd.messageId) } : {}),
+          ...(itemId ? { itemId } : {}),
           text: upd.content.text,
           streamKind: "assistant_text",
           rawPayload: params,
@@ -662,9 +665,10 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
     }
     case "agent_thought_chunk": {
       if (upd.content.type === "text" && upd.content.text.length > 0) {
+        const itemId = trimNonEmpty(upd.messageId);
         events.push({
           _tag: "ContentDelta",
-          ...(trimNonEmpty(upd.messageId) ? { itemId: trimNonEmpty(upd.messageId) } : {}),
+          ...(itemId ? { itemId } : {}),
           text: upd.content.text,
           streamKind: "reasoning_text",
           rawPayload: params,

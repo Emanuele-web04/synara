@@ -101,7 +101,10 @@ export function resolveCursorAcpBaseModelId(model: string | null | undefined): s
 }
 
 function normalizedText(value: string): string {
-  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ");
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ");
 }
 
 function flattenSessionConfigSelectOptions(
@@ -173,7 +176,10 @@ function cursorModelParametersToObject(value: string): Record<string, string> {
   return Object.fromEntries(parseCursorModelParameters(value).entries());
 }
 
-function buildCursorParameterizedModelSlug(baseModel: string, params: Record<string, string>): string {
+function buildCursorParameterizedModelSlug(
+  baseModel: string,
+  params: Record<string, string>,
+): string {
   const entries = Object.entries(params).filter(([, value]) => value.trim().length > 0);
   if (entries.length === 0) {
     return baseModel;
@@ -285,7 +291,9 @@ export function flattenCursorAcpModelChoices(
 ): ReadonlyArray<CursorAcpModelChoice> {
   const seen = new Set<string>();
   const choices: Array<CursorAcpModelChoice> = [];
-  for (const choice of flattenSessionConfigSelectOptions(findCursorModelConfigOption(configOptions))) {
+  for (const choice of flattenSessionConfigSelectOptions(
+    findCursorModelConfigOption(configOptions),
+  )) {
     if (!choice.value || seen.has(choice.value)) {
       continue;
     }
@@ -535,7 +543,9 @@ function cursorContextLabel(
   value: string,
   contextWindowOptions: NonNullable<ProviderModelDescriptor["contextWindowOptions"]>,
 ): string {
-  return contextWindowOptions.find((option) => option.value === value)?.label ?? value.toUpperCase();
+  return (
+    contextWindowOptions.find((option) => option.value === value)?.label ?? value.toUpperCase()
+  );
 }
 
 function isCursorEffortConfigOption(option: EffectAcpSchema.SessionConfigOption): boolean {
@@ -597,7 +607,9 @@ function buildCursorAcpModelDescriptor(input: {
   readonly choice: CursorAcpModelChoice;
   readonly slug: string;
   readonly name: string;
-  readonly supportedReasoningEfforts: NonNullable<ProviderModelDescriptor["supportedReasoningEfforts"]>;
+  readonly supportedReasoningEfforts: NonNullable<
+    ProviderModelDescriptor["supportedReasoningEfforts"]
+  >;
   readonly defaultReasoningEffort?: string;
   readonly contextWindowOptions: NonNullable<ProviderModelDescriptor["contextWindowOptions"]>;
   readonly defaultContextWindow?: string;
@@ -605,8 +617,12 @@ function buildCursorAcpModelDescriptor(input: {
   return {
     slug: input.slug,
     name: input.name,
-    ...(input.choice.upstreamProviderId ? { upstreamProviderId: input.choice.upstreamProviderId } : {}),
-    ...(input.choice.upstreamProviderName ? { upstreamProviderName: input.choice.upstreamProviderName } : {}),
+    ...(input.choice.upstreamProviderId
+      ? { upstreamProviderId: input.choice.upstreamProviderId }
+      : {}),
+    ...(input.choice.upstreamProviderName
+      ? { upstreamProviderName: input.choice.upstreamProviderName }
+      : {}),
     ...(input.supportedReasoningEfforts.length > 0 && input.defaultReasoningEffort
       ? {
           supportedReasoningEfforts: input.supportedReasoningEfforts,
@@ -628,13 +644,16 @@ function buildCursorAcpModelDescriptor(input: {
 
 function expandCursorParameterizedModelDescriptors(input: {
   readonly choice: CursorAcpModelChoice;
-  readonly supportedReasoningEfforts: NonNullable<ProviderModelDescriptor["supportedReasoningEfforts"]>;
+  readonly supportedReasoningEfforts: NonNullable<
+    ProviderModelDescriptor["supportedReasoningEfforts"]
+  >;
   readonly defaultReasoningEffort?: string;
   readonly contextWindowOptions: NonNullable<ProviderModelDescriptor["contextWindowOptions"]>;
   readonly defaultContextWindow?: string;
 }): ReadonlyArray<ProviderModelDescriptor> {
   const params = cursorModelParametersToObject(input.choice.slug);
-  const reasoningKey = params.reasoning !== undefined ? "reasoning" : params.effort !== undefined ? "effort" : null;
+  const reasoningKey =
+    params.reasoning !== undefined ? "reasoning" : params.effort !== undefined ? "effort" : null;
   const parameterReasoningEffort = normalizeCursorReasoningValue(
     reasoningKey ? params[reasoningKey] : undefined,
   );
@@ -832,12 +851,16 @@ function collectCursorAcpConfigUpdates(
   return updates;
 }
 
-function cursorModelOptionsFromModelParameters(model: string | null | undefined): CursorModelOptions | undefined {
+function cursorModelOptionsFromModelParameters(
+  model: string | null | undefined,
+): CursorModelOptions | undefined {
   if (!model) {
     return undefined;
   }
   const params = parseCursorModelParameters(model);
-  const reasoningEffort = normalizeCursorReasoningValue(params.get("reasoning") ?? params.get("effort"));
+  const reasoningEffort = normalizeCursorReasoningValue(
+    params.get("reasoning") ?? params.get("effort"),
+  );
   const contextWindow = params.get("context")?.trim();
   const fastModeParam = params.get("fast")?.trim().toLowerCase();
   const thinkingParam = params.get("thinking")?.trim().toLowerCase();
@@ -889,10 +912,7 @@ function findCursorModelChoiceIgnoringFast(
   )?.slug;
 }
 
-function cursorModelChoiceSupportsRequestedParameters(
-  choice: string,
-  requested: string,
-): boolean {
+function cursorModelChoiceSupportsRequestedParameters(choice: string, requested: string): boolean {
   if (stripCursorParameterizedSuffix(choice) !== stripCursorParameterizedSuffix(requested)) {
     return false;
   }
@@ -916,7 +936,8 @@ function findCursorModelChoiceWithSupportedParameters(
   choices: ReadonlyArray<CursorAcpModelChoice>,
   model: string,
 ): string | undefined {
-  return choices.find((choice) => cursorModelChoiceSupportsRequestedParameters(choice.slug, model))?.slug;
+  return choices.find((choice) => cursorModelChoiceSupportsRequestedParameters(choice.slug, model))
+    ?.slug;
 }
 
 function resolveCursorAutoModelValue(

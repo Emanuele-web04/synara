@@ -1032,7 +1032,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onWheel={onMessagesWheel}
       data-chat-scroll-container="true"
       className="h-full overflow-x-hidden overscroll-y-contain px-3 py-3 sm:px-5 sm:py-4"
-      style={bottomContentInsetPx ? { paddingBottom: bottomContentInsetPx } : undefined}
+      {...(bottomContentInsetPx ? { style: { paddingBottom: bottomContentInsetPx } } : {})}
     />
   );
 });

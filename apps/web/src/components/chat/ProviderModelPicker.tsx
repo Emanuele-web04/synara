@@ -116,7 +116,9 @@ function resolveSelectedModelLabel(input: {
   }
   if (input.provider === "cursor") {
     const baseModel = stripParameterizedModelSuffix(input.model);
-    const baseMatch = input.options.find((option) => stripParameterizedModelSuffix(option.slug) === baseModel);
+    const baseMatch = input.options.find(
+      (option) => stripParameterizedModelSuffix(option.slug) === baseModel,
+    );
     if (baseMatch) {
       return baseMatch.name;
     }
@@ -216,9 +218,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
           {Array.from({ length: 6 }, (_, index) => (
             <div key={index} className="flex items-center gap-2 rounded-md px-2 py-1.5">
               <Skeleton className="size-3.5 rounded-full" />
-              <Skeleton
-                className={cn("h-3.5 rounded-full", index % 3 === 0 ? "w-24" : "w-32")}
-              />
+              <Skeleton className={cn("h-3.5 rounded-full", index % 3 === 0 ? "w-24" : "w-32")} />
             </div>
           ))}
         </div>

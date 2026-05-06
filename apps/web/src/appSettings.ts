@@ -310,9 +310,7 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
     hasOwn(patch, "customCursorModels")
   ) {
     providers.cursor = {
-      ...(hasOwn(patch, "cursorApiEndpoint")
-        ? { apiEndpoint: patch.cursorApiEndpoint ?? "" }
-        : {}),
+      ...(hasOwn(patch, "cursorApiEndpoint") ? { apiEndpoint: patch.cursorApiEndpoint ?? "" } : {}),
       ...(hasOwn(patch, "cursorBinaryPath") ? { binaryPath: patch.cursorBinaryPath ?? "" } : {}),
       ...(hasOwn(patch, "customCursorModels")
         ? { customModels: patch.customCursorModels ?? [] }

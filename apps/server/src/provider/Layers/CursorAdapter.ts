@@ -156,7 +156,10 @@ function readAcpUsdCost(cost: EffectAcpSchema.Cost | null | undefined): number |
   return cost.amount >= 0 ? cost.amount : undefined;
 }
 
-function recordCursorSessionCost(ctx: CursorSessionContext, cost: EffectAcpSchema.Cost | null | undefined): void {
+function recordCursorSessionCost(
+  ctx: CursorSessionContext,
+  cost: EffectAcpSchema.Cost | null | undefined,
+): void {
   const sessionCostUsd = readAcpUsdCost(cost);
   if (sessionCostUsd === undefined) {
     return;
@@ -165,7 +168,9 @@ function recordCursorSessionCost(ctx: CursorSessionContext, cost: EffectAcpSchem
 }
 
 // ACP reports session-cumulative cost, so keep it cumulative instead of inventing turn deltas.
-function finalizeCursorActiveTurnCost(ctx: CursorSessionContext): { readonly cumulativeCostUsd?: number } {
+function finalizeCursorActiveTurnCost(ctx: CursorSessionContext): {
+  readonly cumulativeCostUsd?: number;
+} {
   return ctx.latestSessionCostUsd !== undefined
     ? { cumulativeCostUsd: ctx.latestSessionCostUsd }
     : {};
@@ -505,7 +510,6 @@ export function makeCursorAdapter(
             rawPayload,
           }),
         );
-
       });
 
     const requireSession = (
@@ -1003,7 +1007,9 @@ export function makeCursorAdapter(
             type: "text",
             text: withCursorPlanModePrompt({
               text: input.input.trim(),
-              interactionMode: input.interactionMode,
+              ...(input.interactionMode !== undefined
+                ? { interactionMode: input.interactionMode }
+                : {}),
             }),
           });
         }
@@ -1076,75 +1082,46 @@ export function makeCursorAdapter(
         });
 
         const runPrompt = ctx.acp.prompt({ prompt: promptParts }).pipe(
-            Effect.mapError((error) =>
-              mapAcpToAdapterError(PROVIDER, input.threadId, "session/prompt", error),
-            ),
-            Effect.matchEffect({
-              onFailure: (error) =>
-                Effect.gen(function* () {
-                  if (!clearCursorActiveTurn(ctx, turnId)) {
-                    return;
-                  }
-                  const completedCost = finalizeCursorActiveTurnCost(ctx);
-                  ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, error }] });
-                  const detail = error.message;
-                  ctx.session = {
-                    ...ctx.session,
-                    status: "error",
-                    updatedAt: yield* nowIso,
-                    model: resolvedModel,
-                    lastError: detail,
-                  };
-                  yield* offerRuntimeEvent({
-                    type: "turn.completed",
-                    ...(yield* makeEventStamp()),
-                    provider: PROVIDER,
-                    threadId: input.threadId,
-                    turnId,
-                    payload: {
-                      state: "failed",
-                      stopReason: null,
-                      errorMessage: detail,
-                      ...completedCost,
-                    },
-                  });
-                }),
-              onSuccess: (result) =>
-                Effect.gen(function* () {
-                  if (!clearCursorActiveTurn(ctx, turnId)) {
-                    return;
-                  }
-                  const completedCost = finalizeCursorActiveTurnCost(ctx);
-                  ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, result }] });
-                  const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
-                  ctx.session = {
-                    ...sessionWithoutLastError,
-                    status: "ready",
-                    updatedAt: yield* nowIso,
-                    model: resolvedModel,
-                  };
-                  yield* offerRuntimeEvent({
-                    type: "turn.completed",
-                    ...(yield* makeEventStamp()),
-                    provider: PROVIDER,
-                    threadId: input.threadId,
-                    turnId,
-                    payload: {
-                      state: result.stopReason === "cancelled" ? "cancelled" : "completed",
-                      stopReason: result.stopReason ?? null,
-                      ...(result.usage ? { usage: result.usage } : {}),
-                      ...completedCost,
-                    },
-                  });
-                }),
-            }),
-            Effect.onInterrupt(() =>
+          Effect.mapError((error) =>
+            mapAcpToAdapterError(PROVIDER, input.threadId, "session/prompt", error),
+          ),
+          Effect.matchEffect({
+            onFailure: (error) =>
               Effect.gen(function* () {
                 if (!clearCursorActiveTurn(ctx, turnId)) {
                   return;
                 }
                 const completedCost = finalizeCursorActiveTurnCost(ctx);
-                ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, interrupted: true }] });
+                ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, error }] });
+                const detail = error.message;
+                ctx.session = {
+                  ...ctx.session,
+                  status: "error",
+                  updatedAt: yield* nowIso,
+                  model: resolvedModel,
+                  lastError: detail,
+                };
+                yield* offerRuntimeEvent({
+                  type: "turn.completed",
+                  ...(yield* makeEventStamp()),
+                  provider: PROVIDER,
+                  threadId: input.threadId,
+                  turnId,
+                  payload: {
+                    state: "failed",
+                    stopReason: null,
+                    errorMessage: detail,
+                    ...completedCost,
+                  },
+                });
+              }),
+            onSuccess: (result) =>
+              Effect.gen(function* () {
+                if (!clearCursorActiveTurn(ctx, turnId)) {
+                  return;
+                }
+                const completedCost = finalizeCursorActiveTurnCost(ctx);
+                ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, result }] });
                 const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
                 ctx.session = {
                   ...sessionWithoutLastError,
@@ -1159,16 +1136,45 @@ export function makeCursorAdapter(
                   threadId: input.threadId,
                   turnId,
                   payload: {
-                    state: "cancelled",
-                    stopReason: "cancelled",
+                    state: result.stopReason === "cancelled" ? "cancelled" : "completed",
+                    stopReason: result.stopReason ?? null,
+                    ...(result.usage ? { usage: result.usage } : {}),
                     ...completedCost,
                   },
                 });
               }),
-            ),
-            Effect.ignoreCause({ log: true }),
-            Effect.forkIn(ctx.scope),
-          );
+          }),
+          Effect.onInterrupt(() =>
+            Effect.gen(function* () {
+              if (!clearCursorActiveTurn(ctx, turnId)) {
+                return;
+              }
+              const completedCost = finalizeCursorActiveTurnCost(ctx);
+              ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, interrupted: true }] });
+              const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
+              ctx.session = {
+                ...sessionWithoutLastError,
+                status: "ready",
+                updatedAt: yield* nowIso,
+                model: resolvedModel,
+              };
+              yield* offerRuntimeEvent({
+                type: "turn.completed",
+                ...(yield* makeEventStamp()),
+                provider: PROVIDER,
+                threadId: input.threadId,
+                turnId,
+                payload: {
+                  state: "cancelled",
+                  stopReason: "cancelled",
+                  ...completedCost,
+                },
+              });
+            }),
+          ),
+          Effect.ignoreCause({ log: true }),
+          Effect.forkIn(ctx.scope),
+        );
         ctx.activePromptFiber = yield* runPrompt;
 
         return {
@@ -1271,19 +1277,20 @@ export function makeCursorAdapter(
         return c !== undefined && !c.stopped;
       });
 
-    const getComposerCapabilities: NonNullable<CursorAdapterShape["getComposerCapabilities"]> =
-      () =>
-        Effect.succeed({
-          provider: PROVIDER,
-          supportsSkillMentions: false,
-          supportsSkillDiscovery: false,
-          supportsNativeSlashCommandDiscovery: false,
-          supportsPluginMentions: false,
-          supportsPluginDiscovery: false,
-          supportsRuntimeModelList: true,
-          supportsThreadCompaction: false,
-          supportsThreadImport: true,
-        } satisfies ProviderComposerCapabilities);
+    const getComposerCapabilities: NonNullable<
+      CursorAdapterShape["getComposerCapabilities"]
+    > = () =>
+      Effect.succeed({
+        provider: PROVIDER,
+        supportsSkillMentions: false,
+        supportsSkillDiscovery: false,
+        supportsNativeSlashCommandDiscovery: false,
+        supportsPluginMentions: false,
+        supportsPluginDiscovery: false,
+        supportsRuntimeModelList: true,
+        supportsThreadCompaction: false,
+        supportsThreadImport: true,
+      } satisfies ProviderComposerCapabilities);
 
     const listModels: NonNullable<CursorAdapterShape["listModels"]> = (input) => {
       const binaryPath = input.binaryPath?.trim();
@@ -1344,15 +1351,14 @@ export function makeCursorAdapter(
           }),
         ),
       );
-      const discovery =
-        Effect.gen(function* () {
-          const cliModels = yield* runCursorModelListCommand;
-          return {
-            models: cliModels,
-            source: "cursor.cli",
-            cached: false,
-          } satisfies ProviderListModelsResult;
-        });
+      const discovery = Effect.gen(function* () {
+        const cliModels = yield* runCursorModelListCommand;
+        return {
+          models: cliModels,
+          source: "cursor.cli",
+          cached: false,
+        } satisfies ProviderListModelsResult;
+      });
 
       return discovery.pipe(
         Effect.mapError((cause) =>

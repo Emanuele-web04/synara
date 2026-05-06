@@ -116,7 +116,9 @@ describe("CursorAcpExtension", () => {
           { step: "Link /blogs from footer", status: "pending" },
         ],
       }),
-    ).toBe("Assume a static hub page first.\n\n1. Add /blogs route metadata\n2. Link /blogs from footer");
+    ).toBe(
+      "Assume a static hub page first.\n\n1. Add /blogs route metadata\n2. Link /blogs from footer",
+    );
   });
 
   it("does not format empty Cursor plan updates", () => {

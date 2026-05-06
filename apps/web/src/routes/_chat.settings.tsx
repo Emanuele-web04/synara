@@ -2105,7 +2105,8 @@ function SettingsRouteView() {
                                           ? { cursorBinaryPath: event.target.value }
                                           : providerSettings.binaryPathKey === "geminiBinaryPath"
                                             ? { geminiBinaryPath: event.target.value }
-                                            : providerSettings.binaryPathKey === "openCodeBinaryPath"
+                                            : providerSettings.binaryPathKey ===
+                                                "openCodeBinaryPath"
                                               ? { openCodeBinaryPath: event.target.value }
                                               : { codexBinaryPath: event.target.value },
                                     )

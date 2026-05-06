@@ -41,6 +41,14 @@ const RequestPermissionRequest = jsonRpcRequest(
 const RequestPermissionResponse = jsonRpcResponse(AcpSchema.RequestPermissionResponse);
 const ExtRequest = jsonRpcRequest("x/test", Schema.Struct({ hello: Schema.String }));
 const ExtResponse = jsonRpcResponse(Schema.Struct({ ok: Schema.Boolean }));
+const CursorUpdateTodosRequest = jsonRpcRequest(
+  "cursor/update_todos",
+  Schema.Struct({
+    id: Schema.Number,
+    nested: Schema.Struct({ id: Schema.Number }),
+  }),
+);
+const textEncoder = new TextEncoder();
 
 const mockPeerPath = Effect.map(Effect.service(Path.Path), (path) =>
   path.join(import.meta.dirname, "../test/fixtures/acp-mock-peer.ts"),
@@ -318,15 +326,16 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
 
       yield* Queue.offer(
         input,
-        `${JSON.stringify({
+        yield* encodeJsonl(CursorUpdateTodosRequest, {
           jsonrpc: "2.0",
           id: 0,
           method: "cursor/update_todos",
+          headers: [],
           params: {
             id: 0,
             nested: { id: 0 },
           },
-        })}\n`,
+        }),
       );
 
       assert.deepEqual(yield* Deferred.await(receivedParams), {
@@ -352,22 +361,20 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
         Effect.forkScoped,
       );
 
-      const encoded = new TextEncoder().encode(
-        `${JSON.stringify({
-          jsonrpc: "2.0",
-          method: "session/update",
-          params: {
-            sessionId: "session-1",
-            update: {
-              sessionUpdate: "agent_message_chunk",
-              content: {
-                type: "text",
-                text: "accento è",
-              },
+      const encoded = yield* encodeJsonl(SessionUpdateNotification, {
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "session-1",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: {
+              type: "text",
+              text: "accento è",
             },
           },
-        })}\n`,
-      );
+        },
+      });
       const splitIndex = encoded.findIndex((byte) => byte === 0xc3) + 1;
       yield* Queue.offer(input, encoded.slice(0, splitIndex));
       yield* Queue.offer(input, encoded.slice(splitIndex));
@@ -402,25 +409,21 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
         Effect.forkScoped,
       );
 
-      yield* Queue.offer(
-        input,
-        new TextEncoder().encode(
-          JSON.stringify({
-            jsonrpc: "2.0",
-            method: "session/update",
-            params: {
-              sessionId: "session-1",
-              update: {
-                sessionUpdate: "agent_message_chunk",
-                content: {
-                  type: "text",
-                  text: "final message",
-                },
-              },
+      const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(SessionUpdateNotification))({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "session-1",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: {
+              type: "text",
+              text: "final message",
             },
-          }),
-        ),
-      );
+          },
+        },
+      });
+      yield* Queue.offer(input, textEncoder.encode(encoded));
       yield* Queue.end(input);
 
       const [update] = yield* Deferred.await(notifications);

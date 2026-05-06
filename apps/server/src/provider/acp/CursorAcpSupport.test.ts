@@ -56,57 +56,58 @@ const parameterizedGpt54ConfigOptions: ReadonlyArray<EffectAcpSchema.SessionConf
   },
 ];
 
-const parameterizedCursorVariantConfigOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> = [
-  {
-    id: "model",
-    name: "Model",
-    category: "model",
-    type: "select",
-    currentValue: "gpt-5.3-codex[reasoning=medium,fast=false]",
-    options: [
-      { value: "gpt-5.3-codex[reasoning=medium,fast=false]", name: "GPT-5.3 Codex" },
-      {
-        value: "claude-opus-4-6[thinking=true,context=200k,effort=high,fast=false]",
-        name: "Claude Opus 4.6",
-      },
-    ],
-  },
-  {
-    id: "reasoning",
-    name: "Reasoning",
-    category: "thought_level",
-    type: "select",
-    currentValue: "medium",
-    options: [
-      { value: "low", name: "Low" },
-      { value: "medium", name: "Medium" },
-      { value: "high", name: "High" },
-      { value: "extra-high", name: "Extra High" },
-    ],
-  },
-  {
-    id: "context",
-    name: "Context",
-    category: "model_config",
-    type: "select",
-    currentValue: "200k",
-    options: [
-      { value: "200k", name: "200K" },
-      { value: "1m", name: "1M" },
-    ],
-  },
-  {
-    id: "fast",
-    name: "Fast",
-    category: "model_config",
-    type: "select",
-    currentValue: "false",
-    options: [
-      { value: "false", name: "Off" },
-      { value: "true", name: "Fast" },
-    ],
-  },
-];
+const parameterizedCursorVariantConfigOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> =
+  [
+    {
+      id: "model",
+      name: "Model",
+      category: "model",
+      type: "select",
+      currentValue: "gpt-5.3-codex[reasoning=medium,fast=false]",
+      options: [
+        { value: "gpt-5.3-codex[reasoning=medium,fast=false]", name: "GPT-5.3 Codex" },
+        {
+          value: "claude-opus-4-6[thinking=true,context=200k,effort=high,fast=false]",
+          name: "Claude Opus 4.6",
+        },
+      ],
+    },
+    {
+      id: "reasoning",
+      name: "Reasoning",
+      category: "thought_level",
+      type: "select",
+      currentValue: "medium",
+      options: [
+        { value: "low", name: "Low" },
+        { value: "medium", name: "Medium" },
+        { value: "high", name: "High" },
+        { value: "extra-high", name: "Extra High" },
+      ],
+    },
+    {
+      id: "context",
+      name: "Context",
+      category: "model_config",
+      type: "select",
+      currentValue: "200k",
+      options: [
+        { value: "200k", name: "200K" },
+        { value: "1m", name: "1M" },
+      ],
+    },
+    {
+      id: "fast",
+      name: "Fast",
+      category: "model_config",
+      type: "select",
+      currentValue: "false",
+      options: [
+        { value: "false", name: "Off" },
+        { value: "true", name: "Fast" },
+      ],
+    },
+  ];
 
 describe("buildCursorAcpSpawnInput", () => {
   it("builds the default Cursor ACP command", () => {

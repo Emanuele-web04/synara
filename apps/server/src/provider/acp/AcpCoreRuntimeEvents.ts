@@ -161,12 +161,20 @@ export function makeAcpPlanUpdatedEvent(input: {
   readonly rawPayload: unknown;
 }): ProviderRuntimeEvent {
   return {
-    type: "turn.plan.updated",
+    type: "turn.tasks.updated",
     ...input.stamp,
     provider: input.provider,
     threadId: input.threadId,
     turnId: input.turnId,
-    payload: input.payload,
+    payload: {
+      ...(input.payload.explanation !== undefined
+        ? { explanation: input.payload.explanation }
+        : {}),
+      tasks: input.payload.plan.map((task) => ({
+        task: task.step,
+        status: task.status,
+      })),
+    },
     raw: {
       source: input.source,
       method: input.method,

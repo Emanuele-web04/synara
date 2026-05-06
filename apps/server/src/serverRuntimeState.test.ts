@@ -10,9 +10,10 @@ import {
   readPersistedServerRuntimeState,
 } from "./serverRuntimeState";
 
-const testLayer = ServerConfig.layerTest(process.cwd(), { prefix: "dpcode-runtime-state-" }).pipe(
-  Layer.provide(NodeServices.layer),
-);
+const serverConfigLayer = ServerConfig.layerTest(process.cwd(), {
+  prefix: "dpcode-runtime-state-",
+}).pipe(Layer.provide(NodeServices.layer));
+const testLayer = Layer.merge(NodeServices.layer, serverConfigLayer);
 
 const run = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.runPromise(effect.pipe(Effect.provide(testLayer)) as Effect.Effect<A, E, never>);

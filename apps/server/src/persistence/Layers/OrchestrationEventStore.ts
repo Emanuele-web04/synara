@@ -93,42 +93,43 @@ function normalizeLegacyEventRow(row: PersistedEventRow): PersistedEventRow {
     return row;
   }
 
+  const originalPayload = row.payload;
   let normalizedPayload: Record<string, unknown> | undefined;
   const payloadWithNormalizedModelSelection = () => {
-    normalizedPayload ??= { ...row.payload };
+    normalizedPayload ??= { ...originalPayload };
     return normalizedPayload;
   };
 
   if (
     (row.type === "project.created" || row.type === "project.meta-updated") &&
-    row.payload.defaultModelSelection !== undefined &&
-    row.payload.defaultModelSelection !== null
+    originalPayload.defaultModelSelection !== undefined &&
+    originalPayload.defaultModelSelection !== null
   ) {
     payloadWithNormalizedModelSelection().defaultModelSelection = normalizePersistedModelSelection(
-      row.payload.defaultModelSelection,
+      originalPayload.defaultModelSelection,
     );
   }
 
   if (
     LEGACY_MODEL_SELECTION_EVENT_TYPES.has(row.type) &&
-    row.payload.modelSelection !== undefined
+    originalPayload.modelSelection !== undefined
   ) {
     payloadWithNormalizedModelSelection().modelSelection = normalizePersistedModelSelection(
-      row.payload.modelSelection,
+      originalPayload.modelSelection,
     );
   }
 
   if (
     (row.type === "project.created" || row.type === "project.meta-updated") &&
-    row.payload.defaultModelSelection === undefined
+    originalPayload.defaultModelSelection === undefined
   ) {
     const nextPayload = payloadWithNormalizedModelSelection();
-    const legacyModel = readTrimmedString(row.payload, "defaultModel");
+    const legacyModel = readTrimmedString(originalPayload, "defaultModel");
     nextPayload.defaultModelSelection = legacyModel
       ? normalizeLegacyModelSelection({
-          provider: row.payload.defaultProvider,
+          provider: originalPayload.defaultProvider,
           model: legacyModel,
-          options: row.payload.defaultModelOptions,
+          options: originalPayload.defaultModelOptions,
         })
       : null;
     delete nextPayload.defaultProvider;
@@ -139,17 +140,17 @@ function normalizeLegacyEventRow(row: PersistedEventRow): PersistedEventRow {
 
   if (
     LEGACY_MODEL_SELECTION_EVENT_TYPES.has(row.type) &&
-    row.payload.modelSelection === undefined
+    originalPayload.modelSelection === undefined
   ) {
     const nextPayload = payloadWithNormalizedModelSelection();
     const legacyModel =
-      readTrimmedString(row.payload, "model") ??
+      readTrimmedString(originalPayload, "model") ??
       (row.type === "thread.created" ? "gpt-5.5" : undefined);
     if (legacyModel !== undefined) {
       nextPayload.modelSelection = normalizeLegacyModelSelection({
-        provider: row.payload.provider,
+        provider: originalPayload.provider,
         model: legacyModel,
-        options: row.payload.modelOptions,
+        options: originalPayload.modelOptions,
       });
     }
     delete nextPayload.provider;

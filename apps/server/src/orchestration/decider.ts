@@ -147,7 +147,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           readModel,
           command.workspaceRoot,
         );
-        const staleProjects: typeof existingProjects = [];
+        const staleProjects: Array<(typeof existingProjects)[number]> = [];
         for (const existingProject of existingProjects) {
           const remainingThreads = listThreadsByProjectId(readModel, existingProject.id).filter(
             (thread) => thread.deletedAt === null,

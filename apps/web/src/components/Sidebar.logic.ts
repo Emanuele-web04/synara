@@ -53,11 +53,7 @@ export function shouldShowDebugFeatureFlagsMenu(input: {
   readonly hostname: string;
   readonly storageValue: string | null;
 }): boolean {
-  return (
-    input.isDev &&
-    isLoopbackHostname(input.hostname) &&
-    input.storageValue === "true"
-  );
+  return input.isDev && isLoopbackHostname(input.hostname) && input.storageValue === "true";
 }
 
 export type SidebarProjectEntry = {

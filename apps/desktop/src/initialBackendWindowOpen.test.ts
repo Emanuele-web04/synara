@@ -22,9 +22,9 @@ function createOptions(
     setReadinessInFlight: vi.fn((promise) => {
       readinessInFlight = promise;
     }),
-    waitForBackendWindowReady: vi.fn<
-      InitialBackendWindowOpenOptions["waitForBackendWindowReady"]
-    >(async () => "listening"),
+    waitForBackendWindowReady: vi.fn<InitialBackendWindowOpenOptions["waitForBackendWindowReady"]>(
+      async () => "listening",
+    ),
     writeLog: vi.fn(),
     isReadinessAborted: vi.fn(() => false),
     formatErrorMessage: vi.fn((error) => (error instanceof Error ? error.message : String(error))),

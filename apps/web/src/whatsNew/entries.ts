@@ -22,6 +22,42 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.0.42",
+    date: "May 6",
+    features: [
+      {
+        id: "cursor-provider",
+        title: "Cursor is now a first-class provider",
+        description:
+          "DP Code can run Cursor CLI sessions through ACP, discover Cursor models, resume existing chats, and keep Cursor handoffs inside the same provider workflow as Codex and OpenCode.",
+      },
+      {
+        id: "effect-acp-runtime",
+        title: "Effect ACP powers the new provider runtime",
+        description:
+          "A new Effect TS ACP package now owns generated schemas, JSON-RPC wiring, client and agent helpers, terminal release handling, and protocol tests for sturdier provider integrations.",
+      },
+      {
+        id: "effect-websocket-server",
+        title: "The server moved onto Effect RPC",
+        description:
+          "WebSocket routing, auth, readiness, settings, environment, git status, and orchestration flows were rebuilt around Effect services so reconnects and failure paths stay more predictable.",
+      },
+      {
+        id: "cursor-streaming-polish",
+        title: "Cursor output is easier to follow",
+        description:
+          "Cursor reasoning, tool progress, usage events, plan updates, composer behavior, and model-selection compatibility now render more consistently across fresh and resumed threads.",
+      },
+      {
+        id: "sidebar-and-task-polish",
+        title: "Busy sessions stay calmer",
+        description:
+          "Sidebar project recovery, visible-thread PR lookups, task banner resizing, stale target repair, sidechat split handling, and compact chat controls were tightened for heavier day-to-day use.",
+      },
+    ],
+  },
+  {
     version: "0.0.41",
     date: "May 2",
     features: [

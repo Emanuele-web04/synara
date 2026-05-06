@@ -3,10 +3,7 @@ import type {
   GitStackedAction,
   GitStatusResult,
 } from "@t3tools/contracts";
-import {
-  isTemporaryWorktreeBranch,
-  resolveUniqueDpcodeBranchName,
-} from "@t3tools/shared/git";
+import { isTemporaryWorktreeBranch, resolveUniqueDpcodeBranchName } from "@t3tools/shared/git";
 
 export type GitActionIconName = "commit" | "push" | "pr";
 

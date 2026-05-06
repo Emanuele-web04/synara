@@ -35,6 +35,7 @@ export interface TraitsMenuContentProps {
   threadId: ThreadId;
   model: string | null | undefined;
   runtimeModel?: ProviderModelDescriptor | undefined;
+  runtimeModels?: ReadonlyArray<ProviderModelDescriptor> | null | undefined;
   prompt: string;
   onPromptChange: (prompt: string) => void;
   includeFastMode?: boolean;
@@ -47,6 +48,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   threadId,
   model,
   runtimeModel,
+  runtimeModels: _runtimeModels,
   prompt,
   onPromptChange,
   includeFastMode = true,
@@ -256,6 +258,7 @@ export const TraitsPicker = memo(function TraitsPicker({
   threadId,
   model,
   runtimeModel,
+  runtimeModels: _runtimeModels,
   prompt,
   onPromptChange,
   includeFastMode = true,

@@ -60,7 +60,11 @@ function isTextGenerationError(error: unknown): error is TextGenerationError {
 
 function resolveCursorModelSelection(input: {
   readonly model?: string;
-  readonly modelSelection?: { readonly provider: string; readonly model: string; readonly options?: unknown };
+  readonly modelSelection?: {
+    readonly provider: string;
+    readonly model: string;
+    readonly options?: unknown;
+  };
 }): CursorModelSelection | null {
   if (input.modelSelection?.provider === "cursor") {
     return input.modelSelection as CursorModelSelection;

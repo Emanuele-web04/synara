@@ -37,7 +37,13 @@ function parseCursorCliReasoningEffort(model: string): string | undefined {
     if (token === "high" && tokens[index - 1] === "extra") {
       return "xhigh";
     }
-    if (token === "max" || token === "none" || token === "low" || token === "medium" || token === "high") {
+    if (
+      token === "max" ||
+      token === "none" ||
+      token === "low" ||
+      token === "medium" ||
+      token === "high"
+    ) {
       return token;
     }
   }
@@ -63,7 +69,9 @@ export function normalizeCursorModelVariantBaseId(model: string | null | undefin
   if (base.endsWith("-max") && !base.includes("codex-max")) {
     base = base.slice(0, -"-max".length);
   }
-  base = base.replace(/^claude-(\d+(?:\.\d+)?)-([a-z]+)-max$/u, "claude-$1-$2").replace(/-preview$/u, "");
+  base = base
+    .replace(/^claude-(\d+(?:\.\d+)?)-([a-z]+)-max$/u, "claude-$1-$2")
+    .replace(/-preview$/u, "");
 
   const claudeReordered = base.match(/^claude-(\d+(?:\.\d+)?)-([a-z]+)$/u);
   if (claudeReordered) {
@@ -86,7 +94,10 @@ function removeVariantNameSuffix(name: string): string {
     .trim();
 }
 
-function defaultEffortForGroup(baseSlug: string, efforts: ReadonlyArray<string>): string | undefined {
+function defaultEffortForGroup(
+  baseSlug: string,
+  efforts: ReadonlyArray<string>,
+): string | undefined {
   if (efforts.length === 0) {
     return undefined;
   }
@@ -103,7 +114,9 @@ function isCursorOneMillionVariant(model: ProviderModelDescriptor): boolean {
   if (model.defaultContextWindow === "1m") {
     return true;
   }
-  if (model.contextWindowOptions?.some((option) => option.value === "1m" && option.isDefault === true)) {
+  if (
+    model.contextWindowOptions?.some((option) => option.value === "1m" && option.isDefault === true)
+  ) {
     return true;
   }
   return /\b1M\b/u.test(model.name ?? "");
@@ -144,7 +157,11 @@ export function collapseCursorModelVariants(
     );
     const defaultEffort =
       variants.find((variant) => normalizeCursorModelVariantBaseId(variant.slug) === variant.slug)
-        ?.defaultReasoningEffort ?? defaultEffortForGroup(baseSlug, efforts.map((effort) => effort.value));
+        ?.defaultReasoningEffort ??
+      defaultEffortForGroup(
+        baseSlug,
+        efforts.map((effort) => effort.value),
+      );
     const hasOneMillionContext = variants.some(isCursorOneMillionVariant);
     const contextWindowOptions = uniqueByValue([
       ...variants.flatMap((variant) => variant.contextWindowOptions ?? []),
@@ -154,8 +171,12 @@ export function collapseCursorModelVariants(
     return {
       slug: baseSlug,
       name: removeVariantNameSuffix(preferredName),
-      ...(variants[0]?.upstreamProviderId ? { upstreamProviderId: variants[0].upstreamProviderId } : {}),
-      ...(variants[0]?.upstreamProviderName ? { upstreamProviderName: variants[0].upstreamProviderName } : {}),
+      ...(variants[0]?.upstreamProviderId
+        ? { upstreamProviderId: variants[0].upstreamProviderId }
+        : {}),
+      ...(variants[0]?.upstreamProviderName
+        ? { upstreamProviderName: variants[0].upstreamProviderName }
+        : {}),
       ...(efforts.length > 0
         ? {
             supportedReasoningEfforts: efforts.map((effort) => ({

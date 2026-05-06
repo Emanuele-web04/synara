@@ -126,11 +126,12 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
             .trim()
             .split("\n")
             .filter((line) => line.length > 0)
-            .map((line) => JSON.parse(line) as { method?: string; params?: Record<string, unknown> });
+            .map(
+              (line) => JSON.parse(line) as { method?: string; params?: Record<string, unknown> },
+            );
 
           expect(
-            requests.find((request) => request.method === "initialize")?.params
-              ?.clientCapabilities,
+            requests.find((request) => request.method === "initialize")?.params?.clientCapabilities,
           ).toHaveProperty("_meta.parameterizedModelPicker");
           expect(
             requests.some(

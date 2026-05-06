@@ -59,9 +59,7 @@ export function ContextWindowMeter(props: {
                 />
               </svg>
             </span>
-            <span className="tabular-nums font-medium leading-none">
-              {display.compactLabel}
-            </span>
+            <span className="tabular-nums font-medium leading-none">{display.compactLabel}</span>
           </button>
         }
       />

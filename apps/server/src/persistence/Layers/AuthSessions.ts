@@ -216,7 +216,7 @@ const makeAuthSessionRepository = Effect.gen(function* () {
     );
 
   const listActive: AuthSessionRepositoryShape["listActive"] = (input) =>
-    listActiveSessionRows({ now: toIsoDateTime(input.now) }).pipe(
+    listActiveSessionRows(input as unknown as Parameters<typeof listActiveSessionRows>[0]).pipe(
       Effect.mapError(
         toPersistenceSqlOrDecodeError(
           "AuthSessionRepository.listActive:query",
@@ -227,10 +227,7 @@ const makeAuthSessionRepository = Effect.gen(function* () {
     );
 
   const revoke: AuthSessionRepositoryShape["revoke"] = (input) =>
-    revokeSessionRows({
-      sessionId: input.sessionId,
-      revokedAt: toIsoDateTime(input.revokedAt),
-    }).pipe(
+    revokeSessionRows(input as unknown as Parameters<typeof revokeSessionRows>[0]).pipe(
       Effect.mapError(
         toPersistenceSqlOrDecodeError(
           "AuthSessionRepository.revoke:query",
@@ -241,10 +238,7 @@ const makeAuthSessionRepository = Effect.gen(function* () {
     );
 
   const revokeAllExcept: AuthSessionRepositoryShape["revokeAllExcept"] = (input) =>
-    revokeOtherSessionRows({
-      currentSessionId: input.currentSessionId,
-      revokedAt: toIsoDateTime(input.revokedAt),
-    }).pipe(
+    revokeOtherSessionRows(input as unknown as Parameters<typeof revokeOtherSessionRows>[0]).pipe(
       Effect.mapError(
         toPersistenceSqlOrDecodeError(
           "AuthSessionRepository.revokeAllExcept:query",

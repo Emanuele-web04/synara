@@ -627,9 +627,7 @@ export const websocketRpcRouteLayer = Layer.effectDiscard(
           () => rpcWebSocketHttpEffect,
           () => sessions.markDisconnected(authenticatedSession.sessionId),
         );
-      }).pipe(
-        Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error))),
-      ),
+      }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
     );
   }),
 );

@@ -105,9 +105,7 @@ export function formatCursorPlanUpdateMarkdown(input: {
     readonly status: "pending" | "inProgress" | "completed";
   }>;
 }): string | undefined {
-  const steps = input.plan
-    .map((entry) => entry.step.trim())
-    .filter((step) => step.length > 0);
+  const steps = input.plan.map((entry) => entry.step.trim()).filter((step) => step.length > 0);
   if (steps.length === 0) {
     return undefined;
   }

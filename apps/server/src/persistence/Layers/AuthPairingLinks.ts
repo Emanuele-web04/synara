@@ -165,7 +165,9 @@ const makeAuthPairingLinkRepository = Effect.gen(function* () {
     );
 
   const listActive: AuthPairingLinkRepositoryShape["listActive"] = (input) =>
-    listActivePairingLinkRows({ now: toIsoDateTime(input.now) }).pipe(
+    listActivePairingLinkRows(
+      input as unknown as Parameters<typeof listActivePairingLinkRows>[0],
+    ).pipe(
       Effect.mapError(
         toPersistenceSqlOrDecodeError(
           "AuthPairingLinkRepository.listActive:query",
@@ -175,7 +177,7 @@ const makeAuthPairingLinkRepository = Effect.gen(function* () {
     );
 
   const revoke: AuthPairingLinkRepositoryShape["revoke"] = (input) =>
-    revokePairingLinkRow({ id: input.id, revokedAt: toIsoDateTime(input.revokedAt) }).pipe(
+    revokePairingLinkRow(input as unknown as Parameters<typeof revokePairingLinkRow>[0]).pipe(
       Effect.mapError(
         toPersistenceSqlOrDecodeError(
           "AuthPairingLinkRepository.revoke:query",

@@ -13,7 +13,10 @@ function isRecord(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function normalizeModelSelection(input: unknown): { readonly changed: boolean; readonly value: unknown } {
+function normalizeModelSelection(input: unknown): {
+  readonly changed: boolean;
+  readonly value: unknown;
+} {
   const value = normalizePersistedModelSelection(input);
   return { changed: JSON.stringify(value) !== JSON.stringify(input), value };
 }
@@ -34,7 +37,10 @@ function normalizeModelSelectionJson(json: string | null): {
   };
 }
 
-function normalizeEventPayloadJson(json: string): { readonly changed: boolean; readonly value: string } {
+function normalizeEventPayloadJson(json: string): {
+  readonly changed: boolean;
+  readonly value: string;
+} {
   const payload = JSON.parse(json) as unknown;
   if (!isRecord(payload)) {
     return { changed: false, value: json };

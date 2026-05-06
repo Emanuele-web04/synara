@@ -86,7 +86,10 @@ describe("AcpCoreRuntimeEvents", () => {
         rawPayload: { todos: [] },
       }),
     ).toMatchObject({
-      type: "turn.plan.updated",
+      type: "turn.tasks.updated",
+      payload: {
+        tasks: [{ task: "Inspect state", status: "inProgress" }],
+      },
       raw: {
         method: "cursor/update_todos",
       },

@@ -130,12 +130,8 @@ describe("checkpointDiffQueryOptions", () => {
     }
 
     expect(retry(1, new Error("Checkpoint turn count 2 exceeds current turn count 1."))).toBe(true);
-    expect(
-      retry(11, new Error("Checkpoint diff is not available yet for turn 2.")),
-    ).toBe(true);
-    expect(
-      retry(12, new Error("Checkpoint diff is not available yet for turn 2.")),
-    ).toBe(false);
+    expect(retry(11, new Error("Checkpoint diff is not available yet for turn 2."))).toBe(true);
+    expect(retry(12, new Error("Checkpoint diff is not available yet for turn 2."))).toBe(false);
     expect(
       retry(3, new Error("Filesystem checkpoint is unavailable for turn 2 in thread thread-1.")),
     ).toBe(false);

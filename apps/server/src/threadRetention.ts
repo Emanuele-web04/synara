@@ -87,7 +87,7 @@ export const runThreadRetentionSweep = Effect.fn("runThreadRetentionSweep")(func
           threadId,
         })
         .pipe(
-          Effect.catchAll((error) =>
+          Effect.catch((error) =>
             Effect.logWarning("failed to delete inactive thread during retention sweep").pipe(
               Effect.annotateLogs({
                 threadId,

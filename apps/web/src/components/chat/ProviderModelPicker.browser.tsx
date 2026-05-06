@@ -89,7 +89,9 @@ async function mountPicker(props: {
       model={props.model}
       lockedProvider={props.lockedProvider}
       modelOptionsByProvider={props.modelOptionsByProvider ?? MODEL_OPTIONS_BY_PROVIDER}
-      {...(props.loadingModelProviders ? { loadingModelProviders: props.loadingModelProviders } : {})}
+      {...(props.loadingModelProviders
+        ? { loadingModelProviders: props.loadingModelProviders }
+        : {})}
       {...(props.providers ? { providers: props.providers } : {})}
       onProviderModelChange={onProviderModelChange}
     />,

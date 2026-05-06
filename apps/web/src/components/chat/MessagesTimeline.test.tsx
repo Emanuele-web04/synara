@@ -1533,6 +1533,7 @@ describe("MessagesTimeline", () => {
         onToggleWorkGroup={() => {}}
         revertTurnCountByUserMessageId={new Map()}
         onRevertUserMessage={() => {}}
+        onOpenTurnDiff={() => {}}
         isRevertingCheckpoint={false}
         onImageExpand={() => {}}
         markdownCwd={undefined}
@@ -1579,6 +1580,7 @@ describe("MessagesTimeline", () => {
         onToggleWorkGroup={() => {}}
         revertTurnCountByUserMessageId={new Map()}
         onRevertUserMessage={() => {}}
+        onOpenTurnDiff={() => {}}
         isRevertingCheckpoint={false}
         onImageExpand={() => {}}
         markdownCwd={undefined}

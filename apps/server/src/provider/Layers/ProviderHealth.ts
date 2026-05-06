@@ -1244,7 +1244,8 @@ export const checkCursorProviderStatus: Effect.Effect<
     available: true,
     authStatus: "unknown" as const,
     checkedAt,
-    message: "Cursor Agent CLI is installed. Sign in with Cursor if a session prompts for authentication.",
+    message:
+      "Cursor Agent CLI is installed. Sign in with Cursor if a session prompts for authentication.",
   } satisfies ServerProviderStatus;
 });
 
@@ -1287,7 +1288,13 @@ export const ProviderHealthLive = Layer.effect(
     yield* Effect.addFinalizer(() => Scope.close(refreshScope, Exit.void));
 
     const cachePathByProvider = new Map(
-      [CODEX_PROVIDER, CLAUDE_AGENT_PROVIDER, CURSOR_PROVIDER, GEMINI_PROVIDER, OPENCODE_PROVIDER].map(
+      [
+        CODEX_PROVIDER,
+        CLAUDE_AGENT_PROVIDER,
+        CURSOR_PROVIDER,
+        GEMINI_PROVIDER,
+        OPENCODE_PROVIDER,
+      ].map(
         (provider) =>
           [
             provider,

@@ -111,9 +111,7 @@ describe("decider project scripts", () => {
       "project.deleted",
       "project.created",
     ]);
-    expect(
-      events.map((event) => (event.payload as { projectId: ProjectId }).projectId),
-    ).toEqual([
+    expect(events.map((event) => (event.payload as { projectId: ProjectId }).projectId)).toEqual([
       asProjectId("project-stale-a"),
       asProjectId("project-stale-b"),
       asProjectId("project-recreated"),
@@ -193,6 +191,7 @@ describe("decider project scripts", () => {
           runtimeMode: "approval-required",
           branch: null,
           worktreePath: null,
+          handoff: null,
           envMode: "local",
           createdAt: now,
           updatedAt: now,

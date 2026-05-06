@@ -30,11 +30,7 @@ function normalizeCloseEvent(first: unknown, second: unknown) {
   return {
     code: typeof first === "number" ? first : 1005,
     reason:
-      typeof second === "string"
-        ? second
-        : second instanceof Buffer
-          ? second.toString("utf8")
-          : "",
+      typeof second === "string" ? second : second instanceof Buffer ? second.toString("utf8") : "",
     wasClean: true,
   } satisfies CloseEventLike;
 }

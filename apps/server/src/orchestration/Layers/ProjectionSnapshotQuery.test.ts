@@ -518,18 +518,17 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         provider: "codex",
         model: "imported-project-model",
         options: { reasoningEffort: "medium" },
-      };
+      } as const;
       const expectedThreadSelection = {
         provider: "codex",
         model: "gpt-5.5",
         options: { reasoningEffort: "medium" },
-      };
+      } as const;
 
       const snapshot = yield* snapshotQuery.getSnapshot();
       const shellSnapshot = yield* snapshotQuery.getShellSnapshot();
-      const activeProject = yield* snapshotQuery.getActiveProjectByWorkspaceRoot(
-        "/tmp/imported-shape",
-      );
+      const activeProject =
+        yield* snapshotQuery.getActiveProjectByWorkspaceRoot("/tmp/imported-shape");
       const projectShell = yield* snapshotQuery.getProjectShellById(
         asProjectId("project-imported-shape"),
       );
@@ -570,7 +569,10 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         Option.getOrNull(projectShell)?.defaultModelSelection,
         expectedProjectSelection,
       );
-      assert.deepStrictEqual(Option.getOrNull(threadShell)?.modelSelection, expectedThreadSelection);
+      assert.deepStrictEqual(
+        Option.getOrNull(threadShell)?.modelSelection,
+        expectedThreadSelection,
+      );
       assert.deepStrictEqual(
         Option.getOrNull(threadDetail)?.modelSelection,
         expectedThreadSelection,

@@ -435,6 +435,8 @@ function getProviderStartOptionsCustomBinaryPath(
       return normalizeCustomBinaryPath(providerOptions?.gemini?.binaryPath);
     case "opencode":
       return normalizeCustomBinaryPath(providerOptions?.opencode?.binaryPath);
+    case "cursor":
+      return normalizeCustomBinaryPath(providerOptions?.cursor?.binaryPath);
   }
 }
 
@@ -993,12 +995,11 @@ export default function ChatView({
     {},
     LastInvokedScriptByProjectSchema,
   );
-  const [dismissedProviderHealthBannerKeys, setDismissedProviderHealthBannerKeys] =
-    useLocalStorage(
-      DISMISSED_PROVIDER_HEALTH_BANNERS_KEY,
-      [],
-      DismissedProviderHealthBannersSchema,
-    );
+  const [dismissedProviderHealthBannerKeys, setDismissedProviderHealthBannerKeys] = useLocalStorage(
+    DISMISSED_PROVIDER_HEALTH_BANNERS_KEY,
+    [],
+    DismissedProviderHealthBannersSchema,
+  );
   const [dismissedRateLimitBannerKey, setDismissedRateLimitBannerKey] = useState<string | null>(
     null,
   );
@@ -1396,8 +1397,7 @@ export default function ChatView({
   const customModelsByProvider = useMemo(() => getCustomModelsByProvider(settings), [settings]);
   const featureFlags = useFeatureFlags();
   const showExpandedCursorModelVariants = featureFlags["show-expanded-cursor-model-variants"];
-  const showDebugTaskBanner =
-    import.meta.env.DEV && featureFlags["show-debug-task-banner"];
+  const showDebugTaskBanner = import.meta.env.DEV && featureFlags["show-debug-task-banner"];
   const composerModelHintByProvider = useMemo<Record<ProviderKind, string | null>>(() => {
     const threadModelSelection = activeThread?.modelSelection ?? null;
     const projectModelSelection = activeProject?.defaultModelSelection ?? null;
@@ -1623,7 +1623,8 @@ export default function ChatView({
       ? cursorModelDiscoveryPending
       : selectedProviderModelsQuery !== undefined &&
         (selectedProviderModelsQuery.isLoading ||
-          (selectedProviderModelsQuery.isFetching && selectedProviderModelsQuery.data === undefined));
+          (selectedProviderModelsQuery.isFetching &&
+            selectedProviderModelsQuery.data === undefined));
   const showComposerModelBootstrapSkeleton = shouldShowComposerModelBootstrapSkeleton({
     selectedProvider,
     selectedModel,
@@ -1791,40 +1792,37 @@ export default function ChatView({
   const [activeTaskListCardHeight, setActiveTaskListCardHeight] = useState(0);
   const activeTaskListCardRef = useRef<HTMLDivElement | null>(null);
   const previousActiveTaskListCardHeightRef = useRef(0);
-  const activeTaskList = useMemo(
-    (): ActiveTaskListState | null => {
-      if (showDebugTaskBanner) {
-        return {
-          createdAt: new Date().toISOString(),
-          turnId: activeLatestTurn?.turnId ?? null,
-          tasks: [
-            {
-              task: "Inspect banner layout without overlapping transcript text",
-              status: "inProgress",
-            },
-            {
-              task: "Confirm compact task banner width",
-              status: "pending",
-            },
-            {
-              task: "Verify sidebar task controls",
-              status: "completed",
-            },
-          ],
-        };
-      }
+  const activeTaskList = useMemo((): ActiveTaskListState | null => {
+    if (showDebugTaskBanner) {
+      return {
+        createdAt: new Date().toISOString(),
+        turnId: activeLatestTurn?.turnId ?? null,
+        tasks: [
+          {
+            task: "Inspect banner layout without overlapping transcript text",
+            status: "inProgress",
+          },
+          {
+            task: "Confirm compact task banner width",
+            status: "pending",
+          },
+          {
+            task: "Verify sidebar task controls",
+            status: "completed",
+          },
+        ],
+      };
+    }
 
-      return latestTurnSettled
-        ? null
-        : deriveActiveTaskListState(threadActivities, activeLatestTurn?.turnId ?? undefined);
-    },
-    [activeLatestTurn?.turnId, latestTurnSettled, showDebugTaskBanner, threadActivities],
-  );
+    return latestTurnSettled
+      ? null
+      : deriveActiveTaskListState(threadActivities, activeLatestTurn?.turnId ?? undefined);
+  }, [activeLatestTurn?.turnId, latestTurnSettled, showDebugTaskBanner, threadActivities]);
   const activeBackgroundTasks = useMemo(
     () =>
       latestTurnSettled
         ? null
-      : deriveActiveBackgroundTasksState(threadActivities, activeLatestTurn?.turnId ?? undefined),
+        : deriveActiveBackgroundTasksState(threadActivities, activeLatestTurn?.turnId ?? undefined),
     [activeLatestTurn?.turnId, latestTurnSettled, threadActivities],
   );
   useLayoutEffect(() => {
@@ -6342,15 +6340,16 @@ export default function ChatView({
       onProviderModelChange={onProviderModelSelect}
     />
   );
-  const composerTraitsPickerControl = cursorModelDiscoveryError ? null : showComposerModelBootstrapSkeleton ? (
-    cursorModelDiscoveryPending ? (
-      <ComposerModelLoadingControl widthClassName={composerTraitsPickerWidthClassName} />
+  const composerTraitsPickerControl =
+    cursorModelDiscoveryError ? null : showComposerModelBootstrapSkeleton ? (
+      cursorModelDiscoveryPending ? (
+        <ComposerModelLoadingControl widthClassName={composerTraitsPickerWidthClassName} />
+      ) : (
+        <ComposerControlSkeleton widthClassName={composerTraitsPickerWidthClassName} />
+      )
     ) : (
-      <ComposerControlSkeleton widthClassName={composerTraitsPickerWidthClassName} />
-    )
-  ) : (
-    providerTraitsPicker
-  );
+      providerTraitsPicker
+    );
   const toggleFastMode = useCallback(() => {
     if (!composerTraitSelection.caps.supportsFastMode) {
       scheduleComposerFocus();
@@ -6713,9 +6712,7 @@ export default function ChatView({
       navigate({
         to: "/$threadId",
         params: { threadId: nextThreadId },
-        ...(options?.splitViewId
-          ? { search: () => ({ splitViewId: options.splitViewId }) }
-          : {}),
+        ...(options?.splitViewId ? { search: () => ({ splitViewId: options.splitViewId }) } : {}),
       }),
     handleClearConversation: async () => {
       if (!activeProject) {
