@@ -11,7 +11,6 @@ import type { OrchestrationEngineShape } from "./orchestration/Services/Orchestr
 
 export const THREAD_RETENTION_UNUSED_MS = 7 * 24 * 60 * 60 * 1000;
 export const THREAD_RETENTION_SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000;
-export const THREAD_RETENTION_STARTUP_DELAY_MS = 5_000;
 
 type RetentionThread = OrchestrationReadModel["threads"][number];
 
@@ -103,15 +102,13 @@ export const runThreadRetentionSweep = Effect.fn("runThreadRetentionSweep")(func
 export const startThreadRetentionJob = Effect.fn("startThreadRetentionJob")(function* (
   orchestrationEngine: OrchestrationEngineShape,
 ) {
+  // Retention should not mutate restored history immediately after startup. Keep
+  // cleanup on the long interval so transient projection/bootstrap states cannot
+  // hide older chats as soon as a dev or desktop instance restarts.
   yield* Effect.forever(
     Effect.sleep(THREAD_RETENTION_SWEEP_INTERVAL_MS).pipe(
       Effect.flatMap(() => runThreadRetentionSweep(orchestrationEngine)),
     ),
     { disableYield: true },
   ).pipe(Effect.forkScoped);
-
-  yield* Effect.sleep(THREAD_RETENTION_STARTUP_DELAY_MS).pipe(
-    Effect.flatMap(() => runThreadRetentionSweep(orchestrationEngine)),
-    Effect.forkScoped,
-  );
 });

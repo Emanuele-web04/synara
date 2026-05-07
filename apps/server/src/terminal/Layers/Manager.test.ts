@@ -499,7 +499,7 @@ describe("TerminalManager", () => {
     manager.dispose();
   });
 
-  it("preserves clear and style control sequences while dropping chunk-split query traffic", async () => {
+  it("strips replay-destructive clears while preserving style sequences", async () => {
     const { manager, ptyAdapter } = makeManager();
     await manager.open(openInput());
     const process = ptyAdapter.processes[0];
@@ -516,8 +516,27 @@ describe("TerminalManager", () => {
     await manager.close({ threadId: "thread-1" });
 
     const reopened = await manager.open(openInput());
+    expect(reopened.history).toBe("before clear\n\u001b[Hprompt \u001b[36mdone\u001b[0m\n");
+
+    manager.dispose();
+  });
+
+  it("strips cursor save and restore sequences that can blank replayed prompt history", async () => {
+    const { manager, ptyAdapter } = makeManager();
+    await manager.open(openInput());
+    const process = ptyAdapter.processes[0];
+    expect(process).toBeDefined();
+    if (!process) return;
+
+    process.emitData("instant prompt\n");
+    process.emitData("\u001b7warning output\n\u001b8\u001b[J");
+    process.emitData("final prompt \u001b[35m❯\u001b[0m ");
+
+    await manager.close({ threadId: "thread-1" });
+
+    const reopened = await manager.open(openInput());
     expect(reopened.history).toBe(
-      "before clear\n\u001b[H\u001b[2Jprompt \u001b[36mdone\u001b[0m\n",
+      "instant prompt\nwarning output\nfinal prompt \u001b[35m❯\u001b[0m ",
     );
 
     manager.dispose();

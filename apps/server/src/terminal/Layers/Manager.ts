@@ -456,6 +456,9 @@ function isCsiFinalByte(codePoint: number): boolean {
 }
 
 function shouldStripCsiSequence(body: string, finalByte: string): boolean {
+  if (finalByte === "J" || finalByte === "K") {
+    return true;
+  }
   if (finalByte === "n") {
     return true;
   }
@@ -463,6 +466,9 @@ function shouldStripCsiSequence(body: string, finalByte: string): boolean {
     return true;
   }
   if (finalByte === "c" && /^[>0-9;?]*$/.test(body)) {
+    return true;
+  }
+  if ((finalByte === "s" || finalByte === "u") && body.length === 0) {
     return true;
   }
   return false;
@@ -633,7 +639,10 @@ function sanitizeTerminalHistoryChunk(
           hookEvents,
         };
       }
-      append(input.slice(index, escapeSequenceEndIndex));
+      const sequence = input.slice(index, escapeSequenceEndIndex);
+      if (sequence !== "\u001b7" && sequence !== "\u001b8") {
+        append(sequence);
+      }
       index = escapeSequenceEndIndex;
       continue;
     }
@@ -820,6 +829,11 @@ function appendSessionHistory(
   const cappedMetrics = measureHistory(session.history);
   session.historyLineBreakCount = cappedMetrics.historyLineBreakCount;
   session.historyEndsWithNewline = cappedMetrics.historyEndsWithNewline;
+}
+
+function sanitizePersistedTerminalHistory(history: string): string {
+  if (history.length === 0) return history;
+  return sanitizeTerminalHistoryChunk("", history).visibleText;
 }
 
 interface TerminalManagerEvents {
@@ -1642,7 +1656,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     const nextPath = this.historyPath(threadId, terminalId);
     try {
       const raw = await fs.promises.readFile(nextPath, "utf8");
-      const capped = capHistory(raw, this.historyLineLimit);
+      const capped = capHistory(sanitizePersistedTerminalHistory(raw), this.historyLineLimit);
       if (capped !== raw) {
         await fs.promises.writeFile(nextPath, capped, "utf8");
       }
@@ -1660,7 +1674,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     const legacyPath = this.legacyHistoryPath(threadId);
     try {
       const raw = await fs.promises.readFile(legacyPath, "utf8");
-      const capped = capHistory(raw, this.historyLineLimit);
+      const capped = capHistory(sanitizePersistedTerminalHistory(raw), this.historyLineLimit);
 
       // Migrate legacy transcript filename to the terminal-scoped path.
       await fs.promises.writeFile(nextPath, capped, "utf8");

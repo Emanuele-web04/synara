@@ -768,11 +768,15 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
 
       if (event.type === "started" || event.type === "restarted") {
         entry.hasHandledExit = false;
-        entry.titleInputBuffer = "";
-        entry.outputIdentityBuffer = "";
-        clearPendingWrites(entry);
-        clearDeferredWrites(entry);
-        terminal.write("\u001bc");
+        const shouldReplaySnapshot =
+          event.type === "restarted" || event.snapshot.history.length > 0;
+        if (shouldReplaySnapshot) {
+          entry.titleInputBuffer = "";
+          entry.outputIdentityBuffer = "";
+          clearPendingWrites(entry);
+          clearDeferredWrites(entry);
+          terminal.write("\u001bc");
+        }
         if (event.snapshot.history.length > 0) {
           maybePromoteTerminalIdentityFromOutput(entry, event.snapshot.history);
           terminal.write(event.snapshot.history);
@@ -858,8 +862,12 @@ function openTerminal(entry: TerminalRuntimeEntry): void {
     })
     .then((snapshot) => {
       if (entry.disposed) return;
-      entry.terminal.write("\u001bc");
       if (snapshot.history.length > 0) {
+        entry.titleInputBuffer = "";
+        entry.outputIdentityBuffer = "";
+        clearPendingWrites(entry);
+        clearDeferredWrites(entry);
+        entry.terminal.write("\u001bc");
         maybePromoteTerminalIdentityFromOutput(entry, snapshot.history);
         entry.terminal.write(snapshot.history);
       }
