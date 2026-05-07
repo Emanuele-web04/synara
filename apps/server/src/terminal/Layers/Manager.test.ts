@@ -516,7 +516,7 @@ describe("TerminalManager", () => {
     await manager.close({ threadId: "thread-1" });
 
     const reopened = await manager.open(openInput());
-    expect(reopened.history).toBe("before clear\n\u001b[Hprompt \u001b[36mdone\u001b[0m\n");
+    expect(reopened.history).toBe("before clear\nprompt \u001b[36mdone\u001b[0m\n");
 
     manager.dispose();
   });
@@ -538,6 +538,25 @@ describe("TerminalManager", () => {
     expect(reopened.history).toBe(
       "instant prompt\nwarning output\nfinal prompt \u001b[35m❯\u001b[0m ",
     );
+
+    manager.dispose();
+  });
+
+  it("strips replay cursor movement while preserving prompt styling", async () => {
+    const { manager, ptyAdapter } = makeManager();
+    await manager.open(openInput());
+    const process = ptyAdapter.processes[0];
+    expect(process).toBeDefined();
+    if (!process) return;
+
+    process.emitData("first prompt\r");
+    process.emitData("\u001b[A\u001b[H\u001b[2K");
+    process.emitData("\u001b[0m\u001b[38;5;175m❯\u001b[0m ");
+
+    await manager.close({ threadId: "thread-1" });
+
+    const reopened = await manager.open(openInput());
+    expect(reopened.history).toBe("first prompt\r\u001b[0m\u001b[38;5;175m❯\u001b[0m ");
 
     manager.dispose();
   });

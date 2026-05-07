@@ -149,6 +149,27 @@ interface PendingUserInput {
   readonly answers: Deferred.Deferred<ProviderUserInputAnswers>;
 }
 
+// Claude's AskUserQuestion SDK expects answers keyed by question text; the web UI submits stable ids.
+function remapAnswersToClaudeQuestionText(
+  questions: ReadonlyArray<UserInputQuestion>,
+  answers: ProviderUserInputAnswers,
+): ProviderUserInputAnswers {
+  const remapped: Record<string, unknown> = { ...answers };
+
+  for (const question of questions) {
+    if (Object.hasOwn(remapped, question.question)) {
+      continue;
+    }
+
+    if (Object.hasOwn(remapped, question.id)) {
+      remapped[question.question] = remapped[question.id];
+      delete remapped[question.id];
+    }
+  }
+
+  return remapped;
+}
+
 interface ToolInFlight {
   readonly itemId: string;
   readonly itemType: CanonicalItemType;
@@ -2930,11 +2951,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             callbackOptions.signal.addEventListener("abort", onAbort, { once: true });
 
             // Block until the user provides answers.
-            const answers = yield* Deferred.await(answersDeferred).pipe(
-              Effect.ensuring(
-                Effect.sync(() => {
-                  callbackOptions.signal.removeEventListener("abort", onAbort);
-                }),
+            const answers = remapAnswersToClaudeQuestionText(
+              questions,
+              yield* Deferred.await(answersDeferred).pipe(
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    callbackOptions.signal.removeEventListener("abort", onAbort);
+                  }),
+                ),
               ),
             );
             pendingUserInputs.delete(requestId);

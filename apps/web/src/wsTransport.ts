@@ -81,6 +81,7 @@ export class WsTransport {
   private clientScope: Scope.Closeable;
   private clientPromise: Promise<RpcClientInstance>;
   private readonly streamCleanups = new Map<string, () => void>();
+  private readonly stoppingStreams = new Set<string>();
 
   constructor(url?: string) {
     this.explicitUrl = url ?? null;
@@ -220,6 +221,12 @@ export class WsTransport {
 
   private startChannelStream(channel: WsPushChannel): void {
     void this.clientPromise.then((client) => {
+      const restartChannel = () => {
+        if (this.listeners.has(channel)) {
+          this.startChannelStream(channel);
+        }
+      };
+
       if (channel === WS_CHANNELS.serverWelcome) {
         this.startStream(
           "server.lifecycle",
@@ -227,6 +234,7 @@ export class WsTransport {
           (event: ServerLifecycleStreamEvent) => {
             if (event.type === "welcome") this.emit(WS_CHANNELS.serverWelcome, event.payload);
           },
+          restartChannel,
         );
       } else if (channel === WS_CHANNELS.serverConfigUpdated) {
         this.startStream(
@@ -242,6 +250,7 @@ export class WsTransport {
               this.emit(WS_CHANNELS.serverConfigUpdated, event.payload);
             }
           },
+          restartChannel,
         );
       } else if (channel === WS_CHANNELS.serverProviderStatusesUpdated) {
         this.startStream(
@@ -249,6 +258,7 @@ export class WsTransport {
           client[WS_METHODS.subscribeServerProviderStatuses]({}),
           (payload: ServerProviderStatusesUpdatedPayload) =>
             this.emit(WS_CHANNELS.serverProviderStatusesUpdated, payload),
+          restartChannel,
         );
       } else if (channel === WS_CHANNELS.serverSettingsUpdated) {
         this.startStream(
@@ -256,18 +266,21 @@ export class WsTransport {
           client[WS_METHODS.subscribeServerSettings]({}),
           (payload: ServerSettingsUpdatedPayload) =>
             this.emit(WS_CHANNELS.serverSettingsUpdated, payload),
+          restartChannel,
         );
       } else if (channel === WS_CHANNELS.terminalEvent) {
         this.startStream(
           "terminal.events",
           client[WS_METHODS.subscribeTerminalEvents]({}),
           (event: TerminalEvent) => this.emit(WS_CHANNELS.terminalEvent, event),
+          restartChannel,
         );
       } else if (channel === ORCHESTRATION_WS_CHANNELS.domainEvent) {
         this.startStream(
           "orchestration.domain",
           client[WS_METHODS.subscribeOrchestrationDomainEvents]({}),
           (event: OrchestrationEvent) => this.emit(ORCHESTRATION_WS_CHANNELS.domainEvent, event),
+          restartChannel,
         );
       }
     });
@@ -302,7 +315,12 @@ export class WsTransport {
     );
   }
 
-  private startStream<T>(key: string, stream: unknown, listener: (event: T) => void): void {
+  private startStream<T>(
+    key: string,
+    stream: unknown,
+    listener: (event: T) => void,
+    restart?: (() => void) | undefined,
+  ): void {
     if (this.streamCleanups.has(key)) return;
     const runnableStream = stream as Stream.Stream<T, WsTransportRpcError, never>;
     const cancel = this.runtime.runCallback(
@@ -310,7 +328,19 @@ export class WsTransport {
       {
         onExit: (exit) => {
           this.streamCleanups.delete(key);
-          if (Exit.isFailure(exit) && !this.disposed) {
+          const wasStoppedIntentionally = this.stoppingStreams.delete(key);
+          if (wasStoppedIntentionally || this.disposed) {
+            return;
+          }
+          if (restart && Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)) {
+            window.setTimeout(() => {
+              if (!this.disposed && !this.streamCleanups.has(key)) {
+                restart();
+              }
+            }, 0);
+            return;
+          }
+          if (Exit.isFailure(exit) && !this.disposed && !Cause.hasInterruptsOnly(exit.cause)) {
             console.warn("WebSocket RPC stream failed", causeToError(exit.cause));
           }
         },
@@ -322,6 +352,7 @@ export class WsTransport {
   private stopStream(key: string): void {
     const cleanup = this.streamCleanups.get(key);
     if (!cleanup) return;
+    this.stoppingStreams.add(key);
     this.streamCleanups.delete(key);
     cleanup();
   }

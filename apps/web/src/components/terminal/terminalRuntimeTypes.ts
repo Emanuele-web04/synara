@@ -73,6 +73,7 @@ export interface TerminalRuntimeEntry {
   pendingWriteLength: number;
   deferredWrites: string[];
   deferredWriteLength: number;
+  outputEventVersion: number;
   webglLoadFrame: number | null;
   themeRefreshFrame: number;
   themeObserver: MutationObserver | null;

@@ -456,22 +456,10 @@ function isCsiFinalByte(codePoint: number): boolean {
 }
 
 function shouldStripCsiSequence(body: string, finalByte: string): boolean {
-  if (finalByte === "J" || finalByte === "K") {
-    return true;
-  }
-  if (finalByte === "n") {
-    return true;
-  }
-  if (finalByte === "R" && /^[0-9;?]*$/.test(body)) {
-    return true;
-  }
-  if (finalByte === "c" && /^[>0-9;?]*$/.test(body)) {
-    return true;
-  }
-  if ((finalByte === "s" || finalByte === "u") && body.length === 0) {
-    return true;
-  }
-  return false;
+  // Persisted terminal history is replayed into a fresh xterm. Keep styling, but
+  // strip cursor movement, erase, query/reply, and mode-control CSI sequences
+  // that can move replayed prompt text off-screen or blank the pane.
+  return finalByte !== "m";
 }
 
 function shouldStripOscSequence(content: string): boolean {

@@ -3751,7 +3751,7 @@ describe("ClaudeAdapterLive", () => {
       yield* adapter.respondToUserInput(
         session.threadId,
         ApprovalRequestId.makeUnsafe(requestId!),
-        { "Which framework?": "React" },
+        { Framework: "React" },
       );
 
       // The adapter should emit a user-input.resolved event.

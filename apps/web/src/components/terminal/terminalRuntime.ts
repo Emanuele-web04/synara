@@ -46,9 +46,24 @@ const VISUAL_RESIZE_MIN_INTERVAL_MS = 64;
 const BACKEND_RESIZE_DEBOUNCE_MS = 120;
 const WRITE_BATCH_SIZE_LIMIT = 262_144;
 const WRITE_BATCH_MAX_LATENCY_MS = 50;
+const OPEN_SNAPSHOT_RECONCILE_DELAY_MS = 250;
 
 // Once WebGL fails, skip it for subsequent terminals in this renderer process.
 let suggestedRendererType: "webgl" | "dom" | undefined;
+
+function resetForSnapshotReplay(entry: TerminalRuntimeEntry): void {
+  entry.titleInputBuffer = "";
+  entry.outputIdentityBuffer = "";
+  clearPendingWrites(entry);
+  clearDeferredWrites(entry);
+  entry.terminal.write("\u001bc");
+}
+
+function replaySnapshotHistory(entry: TerminalRuntimeEntry, history: string): void {
+  resetForSnapshotReplay(entry);
+  maybePromoteTerminalIdentityFromOutput(entry, history);
+  entry.terminal.write(history);
+}
 
 function clearBackendResizeTimer(entry: TerminalRuntimeEntry): void {
   if (entry.resizeDispatchTimer !== null) {
@@ -92,11 +107,6 @@ function flushPendingWrites(entry: TerminalRuntimeEntry): void {
   entry.pendingWrites.length = 0;
   entry.pendingWriteLength = 0;
   entry.terminal.write(combined);
-}
-
-function deferWrite(entry: TerminalRuntimeEntry, data: string): void {
-  entry.deferredWrites.push(data);
-  entry.deferredWriteLength += data.length;
 }
 
 function flushDeferredWrites(entry: TerminalRuntimeEntry): void {
@@ -579,6 +589,7 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
     pendingWriteLength: 0,
     deferredWrites: [],
     deferredWriteLength: 0,
+    outputEventVersion: 0,
     webglLoadFrame: null,
     themeRefreshFrame: 0,
     themeObserver: null,
@@ -756,13 +767,10 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
     entry.terminalId,
     (event) => {
       if (event.type === "output") {
+        entry.outputEventVersion += 1;
         maybePromoteTerminalIdentityFromOutput(entry, event.data);
-        if (entry.viewState.isVisible) {
-          flushDeferredWrites(entry);
-          scheduleWrite(entry, event.data);
-        } else {
-          deferWrite(entry, event.data);
-        }
+        flushDeferredWrites(entry);
+        scheduleWrite(entry, event.data);
         return;
       }
 
@@ -771,11 +779,7 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
         const shouldReplaySnapshot =
           event.type === "restarted" || event.snapshot.history.length > 0;
         if (shouldReplaySnapshot) {
-          entry.titleInputBuffer = "";
-          entry.outputIdentityBuffer = "";
-          clearPendingWrites(entry);
-          clearDeferredWrites(entry);
-          terminal.write("\u001bc");
+          resetForSnapshotReplay(entry);
         }
         if (event.snapshot.history.length > 0) {
           maybePromoteTerminalIdentityFromOutput(entry, event.snapshot.history);
@@ -850,26 +854,47 @@ function openTerminal(entry: TerminalRuntimeEntry): void {
   entry.fitAddon.fit();
   entry.lastSentResize = null;
   entry.opened = true;
+  const outputEventVersionAtOpen = entry.outputEventVersion;
+  const openInput = {
+    threadId: entry.threadId,
+    terminalId: entry.terminalId,
+    cwd: entry.cwd,
+    cols: entry.terminal.cols,
+    rows: entry.terminal.rows,
+    ...(entry.runtimeEnv ? { env: entry.runtimeEnv } : {}),
+  };
 
   void api.terminal
-    .open({
-      threadId: entry.threadId,
-      terminalId: entry.terminalId,
-      cwd: entry.cwd,
-      cols: entry.terminal.cols,
-      rows: entry.terminal.rows,
-      ...(entry.runtimeEnv ? { env: entry.runtimeEnv } : {}),
-    })
+    .open(openInput)
     .then((snapshot) => {
       if (entry.disposed) return;
-      if (snapshot.history.length > 0) {
-        entry.titleInputBuffer = "";
-        entry.outputIdentityBuffer = "";
-        clearPendingWrites(entry);
-        clearDeferredWrites(entry);
-        entry.terminal.write("\u001bc");
-        maybePromoteTerminalIdentityFromOutput(entry, snapshot.history);
-        entry.terminal.write(snapshot.history);
+      if (snapshot.history.length > 0 && entry.outputEventVersion === outputEventVersionAtOpen) {
+        replaySnapshotHistory(entry, snapshot.history);
+      } else if (entry.outputEventVersion === outputEventVersionAtOpen) {
+        window.setTimeout(() => {
+          if (
+            entry.disposed ||
+            !entry.opened ||
+            entry.outputEventVersion !== outputEventVersionAtOpen
+          ) {
+            return;
+          }
+          void api.terminal
+            .open(openInput)
+            .then((nextSnapshot) => {
+              if (
+                entry.disposed ||
+                entry.outputEventVersion !== outputEventVersionAtOpen ||
+                nextSnapshot.history.length === 0
+              ) {
+                return;
+              }
+              replaySnapshotHistory(entry, nextSnapshot.history);
+            })
+            .catch(() => {
+              // Best-effort recovery only; the original open already succeeded.
+            });
+        }, OPEN_SNAPSHOT_RECONCILE_DELAY_MS);
       }
       if (entry.viewState.autoFocus) {
         window.requestAnimationFrame(() => {

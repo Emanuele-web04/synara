@@ -467,11 +467,12 @@ export const makeWsRpcLayer = () =>
           rpcEffect(terminalManager.close(input), "Failed to close terminal"),
         [WS_METHODS.subscribeTerminalEvents]: () =>
           Stream.callback((queue) =>
-            terminalManager
-              .subscribe((event) => Queue.offer(queue, event).pipe(Effect.asVoid))
-              .pipe(
-                Effect.map((unsubscribe) => Effect.addFinalizer(() => Effect.sync(unsubscribe))),
-              ),
+            Effect.gen(function* () {
+              const unsubscribe = yield* terminalManager.subscribe((event) => {
+                Effect.runFork(Queue.offer(queue, event).pipe(Effect.asVoid));
+              });
+              yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+            }),
           ),
 
         [WS_METHODS.serverGetConfig]: () =>
