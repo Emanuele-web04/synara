@@ -1059,6 +1059,20 @@ const make = Effect.gen(function* () {
     if (!isGenericChatThreadTitle(currentTitle) && currentTitle !== fallbackTitle) {
       return;
     }
+    const titleModelSelection =
+      input.modelSelection ?? threadModelSelections.get(input.threadId) ?? thread.modelSelection;
+    if (titleModelSelection.provider === "opencode") {
+      if (currentTitle === fallbackTitle) {
+        return;
+      }
+      yield* orchestrationEngine.dispatch({
+        type: "thread.meta.update",
+        commandId: serverCommandId("thread-title-fallback"),
+        threadId: input.threadId,
+        title: fallbackTitle,
+      });
+      return;
+    }
 
     const cwd = resolveThreadWorkspaceCwd({
       thread,

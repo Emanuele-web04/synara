@@ -61,6 +61,7 @@ import {
   subscribeRetainedThreadDetailIdChanges,
   useRetainedThreadDetailIds,
 } from "../threadDetailSubscriptionRetention";
+import { getThreadFromState } from "../threadDerivation";
 import { useAppTypography } from "../hooks/useAppTypography";
 import { useChatCodeFont } from "../hooks/useChatCodeFont";
 import { useTheme } from "../hooks/useTheme";
@@ -73,6 +74,7 @@ import { resolveSplitViewThreadIds, selectSplitView, useSplitViewStore } from ".
 import { providerDiscoveryQueryKeys } from "../lib/providerDiscoveryReactQuery";
 
 const SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS = 1_500;
+const THREAD_DETAIL_CATCHUP_INTERVAL_MS = 1_500;
 
 function shellThreadHasStarted(thread: OrchestrationShellSnapshot["threads"][number]): boolean {
   return thread.latestTurn !== null || thread.session !== null;
@@ -363,6 +365,28 @@ function shouldFlushDomainEventImmediately(
   return true;
 }
 
+function isThreadDetailEventForThread(event: OrchestrationEvent, threadId: ThreadId): boolean {
+  if (event.aggregateKind !== "thread" || event.aggregateId !== threadId) {
+    return false;
+  }
+  return (
+    event.type === "thread.message-sent" ||
+    event.type === "thread.proposed-plan-upserted" ||
+    event.type === "thread.activity-appended" ||
+    event.type === "thread.turn-diff-completed" ||
+    event.type === "thread.reverted" ||
+    event.type === "thread.conversation-rolled-back" ||
+    event.type === "thread.session-set"
+  );
+}
+
+function shouldPollThreadDetailCatchup(threadId: ThreadId): boolean {
+  const thread = getThreadFromState(useStore.getState(), threadId);
+  return (
+    thread?.session?.orchestrationStatus === "running" || thread?.latestTurn?.state === "running"
+  );
+}
+
 function EventRouter() {
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const syncServerThreadDetailHotPath = useStore((store) => store.syncServerThreadDetailHotPath);
@@ -403,6 +427,9 @@ function EventRouter() {
   const subscribedThreadIds = useMemo(() => {
     const nextThreadIds = new Set<ThreadId>();
     for (const threadId of visibleThreadIds) {
+      // Visible draft routes need a detail subscription before their shell row exists.
+      // Otherwise fast provider responses can complete before the promoted thread is
+      // known to the shell list, leaving the chat detail stuck on its optimistic state.
       nextThreadIds.add(threadId);
     }
     for (const threadId of retainedThreadIds) {
@@ -440,6 +467,7 @@ function EventRouter() {
     const threadSnapshotSequenceById = new Map<ThreadId, number>();
     const pendingThreadEventsById = new Map<ThreadId, OrchestrationEvent[]>();
     const threadSnapshotRequestInFlight = new Set<ThreadId>();
+    const threadReplayRequestInFlight = new Set<ThreadId>();
     let reconcileThreadSubscriptionsChain = Promise.resolve();
 
     const beginThreadSubscription = (threadId: ThreadId) => {
@@ -509,6 +537,7 @@ function EventRouter() {
         threadSnapshotSequenceById.delete(threadId);
         pendingThreadEventsById.delete(threadId);
         threadSnapshotRequestInFlight.delete(threadId);
+        threadReplayRequestInFlight.delete(threadId);
         subscribedThreadIds.delete(threadId);
       }
       await Promise.all(
@@ -570,6 +599,7 @@ function EventRouter() {
       subscribedThreadIds.clear();
       threadSnapshotSequenceById.clear();
       pendingThreadEventsById.clear();
+      threadReplayRequestInFlight.clear();
       await api.orchestration.subscribeShell().catch(() => loadShellSnapshotOnce());
       await enqueueThreadSubscriptionReconcile(visibleThreadIdsRef.current);
     };
@@ -638,6 +668,41 @@ function EventRouter() {
       domainEventFlushThrottler.maybeExecute();
     };
 
+    const replayThreadEvents = async (
+      threadId: ThreadId,
+      targetSequence?: number,
+    ): Promise<void> => {
+      if (disposed || threadReplayRequestInFlight.has(threadId)) {
+        return;
+      }
+      const fromSequence = threadSnapshotSequenceById.get(threadId);
+      if (
+        fromSequence === undefined ||
+        (targetSequence !== undefined && fromSequence >= targetSequence)
+      ) {
+        return;
+      }
+      threadReplayRequestInFlight.add(threadId);
+      try {
+        const replayedEvents = await api.orchestration.replayEvents(fromSequence);
+        for (const event of replayedEvents
+          .filter((candidate) => isThreadDetailEventForThread(candidate, threadId))
+          .filter(
+            (candidate) => targetSequence === undefined || candidate.sequence <= targetSequence,
+          )
+          .toSorted((left, right) => left.sequence - right.sequence)) {
+          const latestThreadSequence = threadSnapshotSequenceById.get(threadId) ?? fromSequence;
+          if (event.sequence <= latestThreadSequence) {
+            continue;
+          }
+          threadSnapshotSequenceById.set(threadId, event.sequence);
+          queueDomainEvent(event);
+        }
+      } finally {
+        threadReplayRequestInFlight.delete(threadId);
+      }
+    };
+
     const domainEventFlushThrottler = new Throttler(
       () => {
         flushPendingDomainEvents();
@@ -680,6 +745,9 @@ function EventRouter() {
         !threadSnapshotSequenceById.has(item.thread.id)
       ) {
         void requestThreadSnapshot(item.thread.id);
+      }
+      if (item.kind === "thread-upserted" && subscribedThreadIds.has(item.thread.id)) {
+        void replayThreadEvents(item.thread.id, item.sequence).catch(() => undefined);
       }
     });
     const unsubThreadEvent = api.orchestration.onThreadEvent((item) => {
@@ -836,11 +904,23 @@ function EventRouter() {
     const shellBootstrapFallbackTimer = window.setTimeout(() => {
       void loadShellSnapshotOnce().catch(() => undefined);
     }, SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS);
+    const threadDetailCatchupInterval = window.setInterval(() => {
+      for (const threadId of subscribedThreadIds) {
+        if (shouldPollThreadDetailCatchup(threadId)) {
+          if (!threadSnapshotSequenceById.has(threadId)) {
+            void requestThreadSnapshot(threadId);
+          } else {
+            void replayThreadEvents(threadId).catch(() => undefined);
+          }
+        }
+      }
+    }, THREAD_DETAIL_CATCHUP_INTERVAL_MS);
 
     return () => {
       flushPendingDomainEvents();
       disposed = true;
       window.clearTimeout(shellBootstrapFallbackTimer);
+      window.clearInterval(threadDetailCatchupInterval);
       needsProviderInvalidation = false;
       domainEventFlushThrottler.cancel();
       reconcileThreadSubscriptionsRef.current = null;

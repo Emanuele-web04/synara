@@ -13,6 +13,7 @@ import {
 } from "../opencodeRuntime.ts";
 import { OpenCodeAdapter } from "../Services/OpenCodeAdapter.ts";
 import {
+  flattenOpenCodeCliModels,
   flattenOpenCodeModels,
   makeOpenCodeAdapterLive,
   normalizeOpenCodeTokenUsage,
@@ -563,6 +564,181 @@ describe("resolvePreferredOpenCodeModelProviders", () => {
 });
 
 describe("flattenOpenCodeModels", () => {
+  it("converts OpenCode CLI model output into grouped model descriptors", () => {
+    const models = flattenOpenCodeCliModels({
+      models: [
+        {
+          slug: "openai/gpt-5.4",
+          providerID: "openai",
+          modelID: "gpt-5.4",
+          name: "GPT-5.4",
+          variants: [],
+          supportedReasoningEfforts: [],
+        },
+        {
+          slug: "opencode/minimax-m2.5-free",
+          providerID: "opencode",
+          modelID: "minimax-m2.5-free",
+          name: "MiniMax M2.5 Free",
+          variants: [],
+          supportedReasoningEfforts: [],
+        },
+        {
+          slug: "opencode-go/kimi-k2.6",
+          providerID: "opencode-go",
+          modelID: "kimi-k2.6",
+          name: "Kimi K2.6",
+          variants: [],
+          supportedReasoningEfforts: [],
+        },
+        {
+          slug: "kimi-for-coding/k2p6",
+          providerID: "kimi-for-coding",
+          modelID: "k2p6",
+          name: "K2P6",
+          variants: [],
+          supportedReasoningEfforts: [
+            {
+              value: "high",
+            },
+          ],
+          defaultReasoningEffort: "high",
+        },
+        {
+          slug: "github-copilot/claude-sonnet-4.6",
+          providerID: "github-copilot",
+          modelID: "claude-sonnet-4.6",
+          name: "Claude Sonnet 4.6",
+          variants: [],
+          supportedReasoningEfforts: [],
+        },
+        {
+          slug: "anthropic/claude-sonnet-4-5",
+          providerID: "anthropic",
+          modelID: "claude-sonnet-4-5",
+          name: "Claude Sonnet 4.5",
+          variants: [],
+          supportedReasoningEfforts: [],
+        },
+        {
+          slug: "google-vertex/gemini-3-pro",
+          providerID: "google-vertex",
+          modelID: "gemini-3-pro",
+          name: "Gemini 3 Pro",
+          variants: [],
+          supportedReasoningEfforts: [],
+        },
+        {
+          slug: "openrouter/qwen/qwen3-coder",
+          providerID: "openrouter",
+          modelID: "qwen/qwen3-coder",
+          name: "Qwen3 Coder",
+          variants: [],
+          supportedReasoningEfforts: [],
+        },
+        {
+          slug: "ollama/qwen3-coder:30b",
+          providerID: "ollama",
+          modelID: "qwen3-coder:30b",
+          name: "Qwen3 Coder 30B",
+          variants: [],
+          supportedReasoningEfforts: [],
+        },
+        {
+          slug: "amazon-bedrock/anthropic-claude-sonnet-4.5",
+          providerID: "amazon-bedrock",
+          modelID: "anthropic-claude-sonnet-4.5",
+          name: "Claude Sonnet 4.5",
+          variants: [],
+          supportedReasoningEfforts: [],
+        },
+        {
+          slug: "vercel-ai-gateway/xai/grok-code-fast",
+          providerID: "vercel-ai-gateway",
+          modelID: "xai/grok-code-fast",
+          name: "Grok Code Fast",
+          variants: [],
+          supportedReasoningEfforts: [],
+        },
+      ],
+    });
+
+    expect(models).toEqual([
+      {
+        slug: "amazon-bedrock/anthropic-claude-sonnet-4.5",
+        name: "Claude Sonnet 4.5",
+        upstreamProviderId: "amazon-bedrock",
+        upstreamProviderName: "Amazon Bedrock",
+      },
+      {
+        slug: "anthropic/claude-sonnet-4-5",
+        name: "Claude Sonnet 4.5",
+        upstreamProviderId: "anthropic",
+        upstreamProviderName: "Anthropic",
+      },
+      {
+        slug: "github-copilot/claude-sonnet-4.6",
+        name: "Claude Sonnet 4.6",
+        upstreamProviderId: "github-copilot",
+        upstreamProviderName: "GitHub Copilot",
+      },
+      {
+        slug: "google-vertex/gemini-3-pro",
+        name: "Gemini 3 Pro",
+        upstreamProviderId: "google-vertex",
+        upstreamProviderName: "Google Vertex AI",
+      },
+      {
+        slug: "kimi-for-coding/k2p6",
+        name: "K2P6",
+        upstreamProviderId: "kimi-for-coding",
+        upstreamProviderName: "Kimi For Coding",
+        supportedReasoningEfforts: [
+          {
+            value: "high",
+          },
+        ],
+        defaultReasoningEffort: "high",
+      },
+      {
+        slug: "ollama/qwen3-coder:30b",
+        name: "Qwen3 Coder 30B",
+        upstreamProviderId: "ollama",
+        upstreamProviderName: "Ollama",
+      },
+      {
+        slug: "openai/gpt-5.4",
+        name: "GPT-5.4",
+        upstreamProviderId: "openai",
+        upstreamProviderName: "OpenAI",
+      },
+      {
+        slug: "opencode/minimax-m2.5-free",
+        name: "MiniMax M2.5 Free",
+        upstreamProviderId: "opencode",
+        upstreamProviderName: "OpenCode",
+      },
+      {
+        slug: "opencode-go/kimi-k2.6",
+        name: "Kimi K2.6",
+        upstreamProviderId: "opencode-go",
+        upstreamProviderName: "OpenCode Go",
+      },
+      {
+        slug: "openrouter/qwen/qwen3-coder",
+        name: "Qwen3 Coder",
+        upstreamProviderId: "openrouter",
+        upstreamProviderName: "OpenRouter",
+      },
+      {
+        slug: "vercel-ai-gateway/xai/grok-code-fast",
+        name: "Grok Code Fast",
+        upstreamProviderId: "vercel-ai-gateway",
+        upstreamProviderName: "Vercel AI Gateway",
+      },
+    ]);
+  });
+
   it("includes upstream provider metadata for grouped OpenCode model menus", () => {
     const models = flattenOpenCodeModels({
       inventory: {
@@ -777,8 +953,26 @@ describe("flattenOpenCodeModels", () => {
 });
 
 describe("OpenCodeAdapter runtime lifecycle", () => {
-  it("augments OpenCode server discovery with CLI models", async () => {
+  it("lists OpenCode models from the CLI before falling back to server inventory", async () => {
     const runtime = createMockOpenCodeRuntime({
+      cliModels: [
+        {
+          slug: "opencode/minimax-m2.5-free",
+          providerID: "opencode",
+          modelID: "minimax-m2.5-free",
+          name: "MiniMax M2.5 Free",
+          variants: [],
+          supportedReasoningEfforts: [],
+        },
+        {
+          slug: "opencode-go/kimi-k2.6",
+          providerID: "opencode-go",
+          modelID: "kimi-k2.6",
+          name: "Kimi K2.6",
+          variants: [],
+          supportedReasoningEfforts: [],
+        },
+      ],
       inventory: {
         providerList: {
           connected: ["openai"],
@@ -799,30 +993,15 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         agents: [],
         consoleState: null,
       },
-      cliModels: [
-        {
-          slug: "opencode/big-pickle",
-          providerID: "opencode",
-          modelID: "big-pickle",
-          name: "Big Pickle",
-          variants: [],
-          supportedReasoningEfforts: [],
-        },
-        {
-          slug: "kimi-for-coding/k2p6",
-          providerID: "kimi-for-coding",
-          modelID: "k2p6",
-          name: "Kimi K2P6",
-          variants: [],
-          supportedReasoningEfforts: [],
-        },
-      ],
     });
 
-    const models = await Effect.runPromise(
+    const result = await Effect.runPromise(
       Effect.gen(function* () {
         const adapter = yield* OpenCodeAdapter;
-        return yield* adapter.listModels!({});
+        return yield* adapter.listModels?.({
+          provider: "opencode",
+          binaryPath: "opencode",
+        });
       }).pipe(
         Effect.provide(
           makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
@@ -835,8 +1014,14 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       ),
     );
 
-    expect(models.models.map((model) => model.slug)).toContain("opencode/big-pickle");
-    expect(models.models.map((model) => model.slug)).toContain("kimi-for-coding/k2p6");
+    expect(result).toMatchObject({
+      source: "opencode-cli",
+      cached: false,
+    });
+    expect(result?.models.map((model) => model.slug)).toEqual([
+      "opencode/minimax-m2.5-free",
+      "opencode-go/kimi-k2.6",
+    ]);
   });
 
   it("pins the initial model on new OpenCode sessions", async () => {

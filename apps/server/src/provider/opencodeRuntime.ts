@@ -617,6 +617,9 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
               ...process.env,
               OPENCODE_CONFIG_CONTENT: JSON.stringify({}),
             },
+            detached: false,
+            killSignal: "SIGKILL",
+            forceKillAfter: "1500 millis",
           }),
         )
         .pipe(
@@ -629,7 +632,11 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
                 cause,
               }),
           ),
-        );
+      );
+      yield* Scope.addFinalizer(
+        runtimeScope,
+        child.kill({ killSignal: "SIGKILL", forceKillAfter: "1500 millis" }).pipe(Effect.ignore),
+      );
 
       const stdoutRef = yield* Ref.make("");
       const stderrRef = yield* Ref.make("");

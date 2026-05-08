@@ -31,6 +31,7 @@ import { getThreadFromState } from "../threadDerivation";
 import { useWorkspaceStore } from "../workspaceStore";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-root-browser-test");
+const OTHER_THREAD_ID = ThreadId.makeUnsafe("thread-other-browser-test");
 const PROJECT_ID = ProjectId.makeUnsafe("project-root-browser-test");
 const NOW_ISO = "2026-03-04T12:00:00.000Z";
 
@@ -46,6 +47,9 @@ let pushSequence = 1;
 let delayNextThreadSnapshot = false;
 let subscribeShellRequestCount = 0;
 const subscribeThreadRequestCountById = new Map<ThreadId, number>();
+let subscribeThreadRequests: ThreadId[] = [];
+let replayEvents: OrchestrationEvent[] = [];
+let replayRequestCursors: number[] = [];
 
 const wsLink = ws.link(/ws(s)?:\/\/.*/);
 
@@ -212,9 +216,16 @@ function getThreadDetailFromFixtureSnapshot(threadId: ThreadId): OrchestrationTh
   return thread;
 }
 
-function resolveWsRpc(tag: string): unknown {
+function resolveWsRpc(tag: string, body?: unknown): unknown {
   if (tag === ORCHESTRATION_WS_METHODS.getSnapshot) {
     return fixture.snapshot;
+  }
+  if (tag === ORCHESTRATION_WS_METHODS.replayEvents) {
+    const request = body as { readonly fromSequenceExclusive?: unknown } | null;
+    const fromSequenceExclusive =
+      typeof request?.fromSequenceExclusive === "number" ? request.fromSequenceExclusive : 0;
+    replayRequestCursors.push(fromSequenceExclusive);
+    return replayEvents.filter((event) => event.sequence > fromSequenceExclusive);
   }
   if (tag === WS_METHODS.serverGetConfig) {
     return fixture.serverConfig;
@@ -275,7 +286,7 @@ const worker = setupWorker(
       client.send(
         JSON.stringify({
           id: request.id,
-          result: resolveWsRpc(method),
+          result: resolveWsRpc(method, request.body),
         }),
       );
       if (method === ORCHESTRATION_WS_METHODS.subscribeShell) {
@@ -297,6 +308,7 @@ const worker = setupWorker(
           threadId,
           (subscribeThreadRequestCountById.get(threadId) ?? 0) + 1,
         );
+        subscribeThreadRequests.push(threadId);
         if (delayNextThreadSnapshot) {
           delayNextThreadSnapshot = false;
           return;
@@ -469,6 +481,9 @@ describe("EventRouter scoped orchestration sync", () => {
     });
     subscribeShellRequestCount = 0;
     subscribeThreadRequestCountById.clear();
+    subscribeThreadRequests = [];
+    replayEvents = [];
+    replayRequestCursors = [];
   });
 
   afterEach(() => {
@@ -554,6 +569,232 @@ describe("EventRouter scoped orchestration sync", () => {
         { timeout: 4_000, interval: 16 },
       );
     } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("replays missed thread detail events when a subscribed shell row advances", async () => {
+    const mounted = await mountApp();
+
+    try {
+      const assistantMessage = {
+        sequence: 2,
+        eventId: EventId.makeUnsafe("event-replay-assistant"),
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        occurredAt: "2026-03-04T12:00:05.000Z",
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.message-sent",
+        payload: {
+          threadId: THREAD_ID,
+          messageId: MessageId.makeUnsafe("msg-replayed-assistant"),
+          role: "assistant",
+          text: "Recovered from replay",
+          turnId: TurnId.makeUnsafe("turn-replayed"),
+          source: "native",
+          streaming: false,
+          createdAt: "2026-03-04T12:00:05.000Z",
+          updatedAt: "2026-03-04T12:00:05.000Z",
+        },
+      } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
+      const sessionReady = {
+        sequence: 3,
+        eventId: EventId.makeUnsafe("event-replay-session-ready"),
+        aggregateKind: "thread",
+        aggregateId: THREAD_ID,
+        occurredAt: "2026-03-04T12:00:06.000Z",
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.session-set",
+        payload: {
+          threadId: THREAD_ID,
+          session: {
+            threadId: THREAD_ID,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: "2026-03-04T12:00:06.000Z",
+          },
+        },
+      } satisfies Extract<OrchestrationEvent, { type: "thread.session-set" }>;
+      const otherThreadMessage = {
+        sequence: 4,
+        eventId: EventId.makeUnsafe("event-replay-other-thread"),
+        aggregateKind: "thread",
+        aggregateId: OTHER_THREAD_ID,
+        occurredAt: "2026-03-04T12:00:07.000Z",
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.message-sent",
+        payload: {
+          threadId: OTHER_THREAD_ID,
+          messageId: MessageId.makeUnsafe("msg-replayed-other-thread"),
+          role: "assistant",
+          text: "Wrong thread",
+          turnId: TurnId.makeUnsafe("turn-replayed-other-thread"),
+          source: "native",
+          streaming: false,
+          createdAt: "2026-03-04T12:00:07.000Z",
+          updatedAt: "2026-03-04T12:00:07.000Z",
+        },
+      } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
+      const futureSameThreadMessage = {
+        ...assistantMessage,
+        sequence: 5,
+        eventId: EventId.makeUnsafe("event-replay-future-assistant"),
+        occurredAt: "2026-03-04T12:00:08.000Z",
+        payload: {
+          ...assistantMessage.payload,
+          messageId: MessageId.makeUnsafe("msg-replayed-future-assistant"),
+          text: "Future event",
+          createdAt: "2026-03-04T12:00:08.000Z",
+          updatedAt: "2026-03-04T12:00:08.000Z",
+        },
+      } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
+      replayEvents = [assistantMessage, sessionReady, otherThreadMessage, futureSameThreadMessage];
+
+      sendShellEventPush({
+        kind: "thread-upserted",
+        sequence: 3,
+        thread: {
+          ...createShellSnapshotFromFixtureSnapshot(fixture.snapshot).threads[0]!,
+          updatedAt: "2026-03-04T12:00:06.000Z",
+          session: sessionReady.payload.session,
+        },
+      });
+
+      await vi.waitFor(
+        () => {
+          const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+          expect(
+            thread?.messages.some(
+              (message) =>
+                message.id === MessageId.makeUnsafe("msg-replayed-assistant") &&
+                message.text === "Recovered from replay" &&
+                message.streaming === false,
+            ),
+          ).toBe(true);
+          expect(thread?.session?.orchestrationStatus).toBe("ready");
+          expect(
+            thread?.messages.some(
+              (message) => message.id === MessageId.makeUnsafe("msg-replayed-future-assistant"),
+            ),
+          ).toBe(false);
+          expect(thread?.messages.some((message) => message.text === "Wrong thread")).toBe(false);
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+      expect(replayRequestCursors).toContain(1);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("polls a subscribed running thread to recover missed detail events", async () => {
+    const runningTurnId = TurnId.makeUnsafe("turn-catchup-running");
+    fixture = {
+      ...fixture,
+      snapshot: createSnapshot({
+        latestTurn: {
+          turnId: runningTurnId,
+          state: "running",
+          requestedAt: "2026-03-04T12:00:04.000Z",
+          startedAt: "2026-03-04T12:00:04.500Z",
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        session: {
+          threadId: THREAD_ID,
+          status: "running",
+          providerName: "opencode",
+          runtimeMode: "full-access",
+          activeTurnId: runningTurnId,
+          lastError: null,
+          updatedAt: "2026-03-04T12:00:04.500Z",
+        },
+        updatedAt: "2026-03-04T12:00:04.500Z",
+      }),
+    };
+
+    const assistantMessage = {
+      sequence: 2,
+      eventId: EventId.makeUnsafe("event-catchup-assistant"),
+      aggregateKind: "thread",
+      aggregateId: THREAD_ID,
+      occurredAt: "2026-03-04T12:00:05.000Z",
+      commandId: null,
+      causationEventId: null,
+      correlationId: null,
+      metadata: {},
+      type: "thread.message-sent",
+      payload: {
+        threadId: THREAD_ID,
+        messageId: MessageId.makeUnsafe("msg-catchup-assistant"),
+        role: "assistant",
+        text: "Recovered by periodic catch-up",
+        turnId: runningTurnId,
+        source: "native",
+        streaming: false,
+        createdAt: "2026-03-04T12:00:05.000Z",
+        updatedAt: "2026-03-04T12:00:05.000Z",
+      },
+    } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
+    const sessionReady = {
+      sequence: 3,
+      eventId: EventId.makeUnsafe("event-catchup-session-ready"),
+      aggregateKind: "thread",
+      aggregateId: THREAD_ID,
+      occurredAt: "2026-03-04T12:00:06.000Z",
+      commandId: null,
+      causationEventId: null,
+      correlationId: null,
+      metadata: {},
+      type: "thread.session-set",
+      payload: {
+        threadId: THREAD_ID,
+        session: {
+          threadId: THREAD_ID,
+          status: "ready",
+          providerName: "opencode",
+          runtimeMode: "full-access",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: "2026-03-04T12:00:06.000Z",
+        },
+      },
+    } satisfies Extract<OrchestrationEvent, { type: "thread.session-set" }>;
+    replayEvents = [assistantMessage, sessionReady];
+
+    const mounted = await mountApp();
+
+    try {
+      await vi.waitFor(
+        () => {
+          const thread = getThreadFromState(useStore.getState(), THREAD_ID);
+          expect(
+            thread?.messages.some(
+              (message) =>
+                message.id === MessageId.makeUnsafe("msg-catchup-assistant") &&
+                message.text === "Recovered by periodic catch-up" &&
+                message.streaming === false,
+            ),
+          ).toBe(true);
+          expect(thread?.session?.orchestrationStatus).toBe("ready");
+        },
+        { timeout: 5_000, interval: 16 },
+      );
+      expect(replayRequestCursors).toContain(1);
+    } finally {
+      fixture = buildFixture();
       await mounted.cleanup();
     }
   });
@@ -724,6 +965,14 @@ describe("EventRouter scoped orchestration sync", () => {
     });
 
     try {
+      await vi.waitFor(
+        () => {
+          expect(subscribeThreadRequests.filter((threadId) => threadId === draftThreadId).length)
+            .toBeGreaterThanOrEqual(1);
+        },
+        { timeout: 4_000, interval: 16 },
+      );
+
       const baseThread = fixture.snapshot.threads[0]!;
       fixture.snapshot = {
         ...fixture.snapshot,
@@ -744,6 +993,30 @@ describe("EventRouter scoped orchestration sync", () => {
         ],
       };
 
+      sendThreadEventPush({
+        sequence: 3,
+        eventId: EventId.makeUnsafe("event-draft-promoted-assistant"),
+        aggregateKind: "thread",
+        aggregateId: draftThreadId,
+        occurredAt: "2026-03-04T12:00:09.000Z",
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.message-sent",
+        payload: {
+          threadId: draftThreadId,
+          messageId: MessageId.makeUnsafe("msg-draft-promoted-assistant"),
+          role: "assistant",
+          text: "draft promotion rendered",
+          turnId: TurnId.makeUnsafe("turn-draft-promoted"),
+          source: "native",
+          streaming: false,
+          createdAt: "2026-03-04T12:00:09.000Z",
+          updatedAt: "2026-03-04T12:00:09.000Z",
+        },
+      } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>);
+
       sendShellEventPush({
         kind: "thread-upserted",
         sequence: 2,
@@ -758,6 +1031,10 @@ describe("EventRouter scoped orchestration sync", () => {
             true,
           );
           expect(subscribeThreadRequestCountById.get(draftThreadId)).toBeGreaterThanOrEqual(2);
+          expect(subscribeThreadRequests.filter((threadId) => threadId === draftThreadId).length)
+            .toBeGreaterThanOrEqual(2);
+          const thread = getThreadFromState(useStore.getState(), draftThreadId);
+          expect(thread?.messages.at(-1)?.text).toBe("draft promotion rendered");
         },
         { timeout: 4_000, interval: 16 },
       );
