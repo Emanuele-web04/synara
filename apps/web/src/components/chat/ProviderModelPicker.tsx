@@ -264,8 +264,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                       onClick={() => setMenuOpen(false)}
                     >
                       {provider === "opencode" ? (
-                        <span className="flex min-w-0 items-center gap-2">
-                          <span className="min-w-0 flex-1 truncate">{modelOption.name}</span>
+                        <span className="flex w-full min-w-0 items-center gap-2">
+                          <span className="block min-w-0 flex-1 truncate">{modelOption.name}</span>
                           <button
                             type="button"
                             aria-label={
@@ -274,7 +274,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                                 : `Add ${modelOption.name} to favourites`
                             }
                             className={cn(
-                              "-me-2 inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground/55 transition-colors hover:bg-[var(--color-background-elevated-tertiary)] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/60",
+                              "-me-2 ms-auto inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground/55 transition-colors hover:bg-[var(--color-background-elevated-tertiary)] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/60",
                               isOpenCodeFavorite && "text-amber-300 hover:text-amber-200",
                             )}
                             onClick={(event) => {

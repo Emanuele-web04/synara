@@ -21,6 +21,7 @@ import { OpenCodeTextGenerationServiceLive } from "./OpenCodeTextGeneration.ts";
 const runtimeMock = {
   state: {
     startCalls: [] as string[],
+    sessionCreateInputs: [] as Array<Record<string, unknown>>,
     promptUrls: [] as string[],
     authHeaders: [] as Array<string | null>,
     closeCalls: [] as string[],
@@ -30,6 +31,7 @@ const runtimeMock = {
   },
   reset() {
     this.state.startCalls.length = 0;
+    this.state.sessionCreateInputs.length = 0;
     this.state.promptUrls.length = 0;
     this.state.authHeaders.length = 0;
     this.state.closeCalls.length = 0;
@@ -73,7 +75,10 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
   createOpenCodeSdkClient: ({ baseUrl, serverPassword }) =>
     ({
       session: {
-        create: async () => ({ data: { id: `${baseUrl}/session` } }),
+        create: async (input: Record<string, unknown>) => {
+          runtimeMock.state.sessionCreateInputs.push(input);
+          return { data: { id: `${baseUrl}/session` } };
+        },
         prompt: async () => {
           runtimeMock.state.promptUrls.push(baseUrl);
           runtimeMock.state.authHeaders.push(
@@ -269,6 +274,39 @@ it.layer(OpenCodeTextGenerationTestLayer)("OpenCodeTextGenerationServiceLive", (
       expect(result).toEqual({
         subject: "Tighten OpenCode parsing",
         body: "Handle JSON text output locally.",
+      });
+    }),
+  );
+
+  it.effect("pins the selected OpenCode model on generated sessions", () =>
+    Effect.gen(function* () {
+      runtimeMock.state.promptResult = {
+        data: {
+          parts: [{ type: "text", text: JSON.stringify({ title: "Model check" }) }],
+        },
+      };
+      const textGeneration = yield* OpenCodeTextGeneration;
+
+      yield* textGeneration.generateThreadTitle({
+        cwd: process.cwd(),
+        message: "which model are you",
+        modelSelection: {
+          provider: "opencode",
+          model: "opencode/big-pickle",
+          options: {
+            agent: "build",
+            variant: "fast",
+          },
+        },
+      });
+
+      expect(runtimeMock.state.sessionCreateInputs[0]).toMatchObject({
+        model: {
+          providerID: "opencode",
+          id: "big-pickle",
+          variant: "fast",
+        },
+        agent: "build",
       });
     }),
   );

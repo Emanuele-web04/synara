@@ -962,9 +962,12 @@ function toOpenCodeModelDescriptor(input: {
 
 export function flattenOpenCodeModels(input: {
   readonly inventory: OpenCodeModelInventory;
-  readonly credentialProviderIDs?: ReadonlyArray<string>;
 }): ProviderListModelsResult["models"] {
-  return resolvePreferredOpenCodeModelProviders(input)
+  const connected = new Set(input.inventory.providerList.connected);
+  // OpenCode already resolves auth, config, enabled providers, and model
+  // availability in provider.list. Mirror that connected set directly.
+  return input.inventory.providerList.all
+    .filter((provider) => connected.has(provider.id))
     .flatMap((provider) =>
       Object.values(provider.models).flatMap((model) => {
         const descriptor = toOpenCodeModelDescriptor({
@@ -1747,6 +1750,18 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           const serverUrl = input.providerOptions?.opencode?.serverUrl?.trim();
           const serverPassword = input.providerOptions?.opencode?.serverPassword?.trim();
           const directory = input.cwd ?? serverConfig.cwd;
+          const initialParsedModel =
+            input.modelSelection?.provider === PROVIDER
+              ? parseOpenCodeModelSlug(input.modelSelection.model)
+              : null;
+          const initialAgent =
+            input.modelSelection?.provider === PROVIDER
+              ? input.modelSelection.options?.agent
+              : undefined;
+          const initialVariant =
+            input.modelSelection?.provider === PROVIDER
+              ? input.modelSelection.options?.variant
+              : undefined;
           const existing = sessions.get(input.threadId);
           if (existing) {
             yield* stopOpenCodeContext(existing);
@@ -1773,6 +1788,16 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   (yield* runOpenCodeSdk("session.create", () =>
                     client.session.create({
                       title: `DP Code ${input.threadId}`,
+                      ...(initialParsedModel
+                        ? {
+                            model: {
+                              providerID: initialParsedModel.providerID,
+                              id: initialParsedModel.modelID,
+                              ...(initialVariant ? { variant: initialVariant } : {}),
+                            },
+                          }
+                        : {}),
+                      ...(initialAgent ? { agent: initialAgent } : {}),
                       permission: buildOpenCodePermissionRules(input.runtimeMode),
                     }),
                   ).pipe(
@@ -2271,7 +2296,6 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         fn: (input: {
           readonly client: OpencodeClient;
           readonly inventory: OpenCodeInventory;
-          readonly credentialProviderIDs: ReadonlyArray<string>;
         }) => Effect.Effect<A, ProviderAdapterRequestError>,
       ): Effect.Effect<A, ProviderAdapterRequestError> =>
         Effect.gen(function* () {
@@ -2281,13 +2305,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               .loadOpenCodeInventory(activeContext.client)
               .pipe(Effect.mapError(toRequestError));
             replaceModelContextLimits(activeContext, buildOpenCodeModelContextLimitMap(inventory));
-            const credentialProviderIDs = yield* openCodeRuntime.loadOpenCodeCredentialProviderIDs(
-              activeContext.client,
-            );
             return yield* fn({
               client: activeContext.client,
               inventory,
-              credentialProviderIDs,
             });
           }
 
@@ -2305,72 +2325,21 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               const inventory = yield* openCodeRuntime
                 .loadOpenCodeInventory(client)
                 .pipe(Effect.mapError(toRequestError));
-              const credentialProviderIDs =
-                yield* openCodeRuntime.loadOpenCodeCredentialProviderIDs(client);
-              return yield* fn({ client, inventory, credentialProviderIDs });
+              return yield* fn({ client, inventory });
             }),
           );
         });
 
-      const listModels: NonNullable<OpenCodeAdapterShape["listModels"]> = (input) => {
-        const binaryPath = input.binaryPath?.trim() || "opencode";
-        return withDiscoveryInventory({ binaryPath }, ({ inventory, credentialProviderIDs }) =>
-          openCodeRuntime.listOpenCodeCliModels({ binaryPath }).pipe(
-            Effect.map((models) => {
-              const preferredProviderIDs = new Set(
-                resolvePreferredOpenCodeModelProviders({
-                  inventory,
-                  credentialProviderIDs,
-                }).map((provider) => provider.id),
-              );
-              const providerById = new Map(
-                inventory.providerList.all.map((provider) => [provider.id, provider] as const),
-              );
-              const filteredModels = models
-                .filter((model) => preferredProviderIDs.has(model.providerID))
-                .flatMap((model) => {
-                  const provider = providerById.get(model.providerID);
-                  if (!provider) {
-                    return [];
-                  }
-                  const descriptor = toOpenCodeModelDescriptor({
-                    slug: model.slug,
-                    name: model.name,
-                    provider,
-                    ...(provider.models[model.modelID]
-                      ? { model: provider.models[model.modelID] }
-                      : {}),
-                    cliModel: model,
-                  });
-                  return descriptor ? [descriptor] : [];
-                })
-                .toSorted(compareOpenCodeModelDescriptors);
-
-              return {
-                models:
-                  filteredModels.length > 0
-                    ? filteredModels
-                    : flattenOpenCodeModels({
-                        inventory,
-                        credentialProviderIDs,
-                      }),
-                source: filteredModels.length > 0 ? "opencode-cli" : "opencode",
-                cached: false,
-              };
+      const listModels: NonNullable<OpenCodeAdapterShape["listModels"]> = (input) =>
+        withDiscoveryInventory(
+          { binaryPath: input.binaryPath?.trim() || "opencode" },
+          ({ inventory }) =>
+            Effect.succeed({
+              models: flattenOpenCodeModels({ inventory }),
+              source: "opencode",
+              cached: false,
             }),
-            Effect.catch(() =>
-              Effect.succeed({
-                models: flattenOpenCodeModels({
-                  inventory,
-                  credentialProviderIDs,
-                }),
-                source: "opencode",
-                cached: false,
-              }),
-            ),
-          ),
         );
-      };
 
       const listAgents: NonNullable<OpenCodeAdapterShape["listAgents"]> = () =>
         withDiscoveryInventory({}, ({ inventory }) =>
