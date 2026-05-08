@@ -457,10 +457,11 @@ function buildActivitySlice(thread: Thread): {
   ids: string[];
   byId: Record<string, Thread["activities"][number]>;
 } {
+  const activities = dedupeActivitiesById(thread.activities);
   return {
-    ids: thread.activities.map((activity) => activity.id),
+    ids: activities.map((activity) => activity.id),
     byId: Object.fromEntries(
-      thread.activities.map((activity) => [activity.id, activity] as const),
+      activities.map((activity) => [activity.id, activity] as const),
     ) as Record<string, Thread["activities"][number]>,
   };
 }
@@ -1245,24 +1246,103 @@ function normalizeActivities(
   incoming: ReadModelThread["activities"],
   previous: Thread["activities"] | undefined,
 ): Thread["activities"] {
-  const previousById = new Map(previous?.map((activity) => [activity.id, activity] as const));
-  const nextActivities = incoming.map((activity) => {
+  const previousActivities = previous ? dedupeActivitiesById(previous) : undefined;
+  const incomingActivities = dedupeActivitiesById(incoming);
+  const previousById = new Map(
+    previousActivities?.map((activity) => [activity.id, activity] as const),
+  );
+  const nextActivities = incomingActivities.map((activity) => {
     const existing = previousById.get(activity.id);
-    if (
-      existing &&
-      existing.kind === activity.kind &&
-      existing.tone === activity.tone &&
-      existing.summary === activity.summary &&
-      deepEqualJson(existing.payload, activity.payload) &&
-      existing.turnId === activity.turnId &&
-      existing.sequence === activity.sequence &&
-      existing.createdAt === activity.createdAt
-    ) {
-      return existing;
+    if (existing) {
+      const preferred = preferRicherActivity(existing, activity);
+      if (preferred === existing || activitiesEqual(existing, preferred)) {
+        return existing;
+      }
+      return preferred;
     }
     return activity;
   });
   return arraysShallowEqual(previous, nextActivities) ? previous : nextActivities;
+}
+
+function dedupeActivitiesById<TActivity extends Thread["activities"][number]>(
+  activities: ReadonlyArray<TActivity>,
+): TActivity[] {
+  const indexById = new Map<string, number>();
+  const result: TActivity[] = [];
+  for (const activity of activities) {
+    const existingIndex = indexById.get(activity.id);
+    if (existingIndex === undefined) {
+      indexById.set(activity.id, result.length);
+      result.push(activity);
+      continue;
+    }
+    result[existingIndex] = preferRicherActivity(result[existingIndex]!, activity);
+  }
+  return arraysShallowEqual(activities, result) ? (activities as TActivity[]) : result;
+}
+
+// Duplicate activity ids can arrive from snapshot + live event races. Keep the
+// payload with the most tool detail so normalized state cannot regress to a generic row.
+function preferRicherActivity<TActivity extends Thread["activities"][number]>(
+  previous: TActivity,
+  incoming: TActivity,
+): TActivity {
+  if (activitiesEqual(previous, incoming)) {
+    return previous;
+  }
+  const previousScore = activityPayloadDetailScore(previous);
+  const incomingScore = activityPayloadDetailScore(incoming);
+  return incomingScore < previousScore ? previous : incoming;
+}
+
+function activitiesEqual(
+  left: Thread["activities"][number],
+  right: Thread["activities"][number],
+): boolean {
+  return (
+    left.kind === right.kind &&
+    left.tone === right.tone &&
+    left.summary === right.summary &&
+    deepEqualJson(left.payload, right.payload) &&
+    left.turnId === right.turnId &&
+    left.sequence === right.sequence &&
+    left.createdAt === right.createdAt
+  );
+}
+
+function activityPayloadDetailScore(activity: Thread["activities"][number]): number {
+  const payload = asActivityRecord(activity.payload);
+  const data = asActivityRecord(payload?.data);
+  const item = asActivityRecord(data?.item);
+  const commandActions = item?.commandActions ?? data?.commandActions ?? payload?.commandActions;
+  let score = 0;
+  if (payload?.itemType) score += 4;
+  if (payload?.title) score += 1;
+  if (payload?.detail) score += 2;
+  if (data) score += 2;
+  if (item) score += 4;
+  if (normalizeActivityCommandValue(item?.command ?? data?.command ?? payload?.command)) score += 8;
+  if (Array.isArray(commandActions) && commandActions.length > 0) score += 8;
+  return score;
+}
+
+function asActivityRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+function normalizeActivityCommandValue(value: unknown): string | null {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const parts = value
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter((entry) => entry.length > 0);
+  return parts.length > 0 ? parts.join(" ") : null;
 }
 
 function isNonFatalThreadErrorMessage(message: string | null | undefined): boolean {

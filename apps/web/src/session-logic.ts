@@ -49,6 +49,8 @@ export interface WorkLogEntry {
   label: string;
   detail?: string;
   command?: string;
+  rawCommand?: string;
+  preview?: string;
   changedFiles?: ReadonlyArray<string>;
   tone: "thinking" | "tool" | "info" | "error";
   toolTitle?: string;
@@ -59,6 +61,8 @@ export interface WorkLogEntry {
   subagents?: ReadonlyArray<WorkLogSubagent>;
   subagentAction?: WorkLogSubagentAction;
 }
+
+export const WORK_LOG_PRESENTATION_VERSION = 4;
 
 export interface WorkLogSubagent {
   threadId: string;
@@ -668,6 +672,7 @@ export function deriveWorkLogEntries(
     )
     .filter((activity) => activity.summary !== "Checkpoint captured")
     .filter((activity) => !isPlanBoundaryToolActivity(activity))
+    .filter((activity) => !isUninformativeCommandStartActivity(activity))
     .map(toDerivedWorkLogEntry);
   return collapseDerivedWorkLogEntries(entries).map(
     ({
@@ -678,6 +683,22 @@ export function deriveWorkLogEntries(
       ...entry
     }) => entry,
   );
+}
+
+function isUninformativeCommandStartActivity(activity: OrchestrationThreadActivity): boolean {
+  if (activity.kind !== "tool.started") {
+    return false;
+  }
+  const payload =
+    activity.payload && typeof activity.payload === "object"
+      ? (activity.payload as Record<string, unknown>)
+      : null;
+  if (extractWorkLogItemType(payload) !== "command_execution") {
+    return false;
+  }
+  const commandAction = extractPrimaryCommandAction(payload);
+  const commandPreview = extractToolCommand(payload, commandAction);
+  return !commandAction && !commandPreview.command;
 }
 
 function isPlanBoundaryToolActivity(activity: OrchestrationThreadActivity): boolean {
@@ -697,7 +718,8 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     activity.payload && typeof activity.payload === "object"
       ? (activity.payload as Record<string, unknown>)
       : null;
-  const command = extractToolCommand(payload);
+  const commandAction = extractPrimaryCommandAction(payload);
+  const commandPreview = extractToolCommand(payload, commandAction);
   const changedFiles = extractChangedFiles(payload);
   const title = extractToolTitle(payload);
   const toolName = extractToolName(payload);
@@ -723,8 +745,15 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (!entry.detail && outputDetail) {
     entry.detail = outputDetail;
   }
-  if (command) {
-    entry.command = command;
+  if (commandPreview.command) {
+    entry.command = commandPreview.command;
+  }
+  if (commandPreview.rawCommand) {
+    entry.rawCommand = commandPreview.rawCommand;
+  }
+  const commandActionDisplay = deriveCommandActionDisplay(commandAction, activity.kind);
+  if (commandActionDisplay?.preview) {
+    entry.preview = commandActionDisplay.preview;
   }
   if (changedFiles.length > 0) {
     entry.changedFiles = changedFiles;
@@ -744,11 +773,11 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     entry.subagentAction = subagentAction;
   }
   const readableTitle = deriveReadableToolTitle({
-    title,
+    title: commandActionDisplay?.title ?? title,
     fallbackLabel: activity.summary,
     itemType,
     requestKind,
-    command,
+    command: commandPreview.command,
     payload,
     isRunning: activity.kind !== "tool.completed",
   });
@@ -826,6 +855,8 @@ function mergeDerivedWorkLogEntries(
   const changedFiles = mergeChangedFiles(previous.changedFiles, next.changedFiles);
   const detail = next.detail ?? previous.detail;
   const command = next.command ?? previous.command;
+  const rawCommand = next.rawCommand ?? previous.rawCommand;
+  const preview = next.preview ?? previous.preview;
   const toolTitle = next.toolTitle ?? previous.toolTitle;
   const itemType = next.itemType ?? previous.itemType;
   const requestKind = next.requestKind ?? previous.requestKind;
@@ -839,6 +870,8 @@ function mergeDerivedWorkLogEntries(
     ...next,
     ...(detail ? { detail } : {}),
     ...(command ? { command } : {}),
+    ...(rawCommand ? { rawCommand } : {}),
+    ...(preview ? { preview } : {}),
     ...(changedFiles.length > 0 ? { changedFiles } : {}),
     ...(toolTitle ? { toolTitle } : {}),
     ...(itemType ? { itemType } : {}),
@@ -1198,7 +1231,23 @@ function isCommandLikeDetail(payload: Record<string, unknown> | null): boolean {
   return normalizedTitle === "Ran command" || normalizedTitle === "Command run";
 }
 
-function extractToolCommand(payload: Record<string, unknown> | null): string | null {
+interface CommandAction {
+  type: string;
+  command?: string;
+  name?: string;
+  path?: string;
+  query?: string;
+}
+
+interface CommandActionDisplay {
+  title: string;
+  preview?: string;
+}
+
+function extractToolCommand(
+  payload: Record<string, unknown> | null,
+  commandAction: CommandAction | null = extractPrimaryCommandAction(payload),
+): { command: string | null; rawCommand: string | null } {
   const data = asRecord(payload?.data);
   const item = asRecord(data?.item);
   const itemResult = asRecord(item?.result);
@@ -1213,35 +1262,174 @@ function extractToolCommand(payload: Record<string, unknown> | null): string | n
     isCommandLikeDetail(payload) && typeof payload?.detail === "string"
       ? stripTrailingExitCode(payload.detail).output
       : null;
-  const candidates = [
-    normalizeCommandValue(item?.command),
-    normalizeCommandValue(item?.cmd),
-    normalizeCommandValue(itemInput?.command),
-    normalizeCommandValue(itemInput?.cmd),
-    normalizeCommandValue(itemArguments?.command),
-    normalizeCommandValue(itemArguments?.cmd),
-    normalizeCommandValue(itemCall?.command),
-    normalizeCommandValue(itemCall?.cmd),
-    normalizeCommandValue(itemFunction?.arguments),
-    normalizeCommandValue(itemResult?.command),
-    normalizeCommandValue(itemResult?.cmd),
-    normalizeCommandValue(data?.command),
-    normalizeCommandValue(data?.cmd),
-    normalizeCommandValue(dataInput?.command),
-    normalizeCommandValue(dataInput?.cmd),
-    normalizeCommandValue(dataArguments?.command),
-    normalizeCommandValue(dataArguments?.cmd),
-    normalizeCommandValue(rawInput?.command),
-    normalizeCommandValue(rawInput?.cmd),
-    normalizeCommandValue(item?.text),
-    normalizeCommandValue(item?.summary),
-    normalizeCommandValue(detailCommand),
+  const rawCommandCandidates = [
+    item?.command,
+    item?.cmd,
+    itemInput?.command,
+    itemInput?.cmd,
+    itemArguments?.command,
+    itemArguments?.cmd,
+    itemCall?.command,
+    itemCall?.cmd,
+    itemFunction?.arguments,
+    itemResult?.command,
+    itemResult?.cmd,
+    data?.command,
+    data?.cmd,
+    dataInput?.command,
+    dataInput?.cmd,
+    dataArguments?.command,
+    dataArguments?.cmd,
+    rawInput?.command,
+    rawInput?.cmd,
+    item?.text,
+    item?.summary,
+    detailCommand,
   ];
-  return candidates.find((candidate) => candidate !== null) ?? null;
+  const rawCommand =
+    rawCommandCandidates
+      .map((candidate) => normalizeCommandValue(candidate))
+      .find((candidate) => candidate !== null) ?? null;
+  const command =
+    normalizeCommandValue(commandAction?.command) ??
+    rawCommandCandidates
+      .map((candidate) => normalizeCommandValue(candidate))
+      .find((candidate) => candidate !== null) ??
+    null;
+  return {
+    command,
+    rawCommand: rawCommand && rawCommand !== command ? rawCommand : null,
+  };
 }
 
 function extractToolTitle(payload: Record<string, unknown> | null): string | null {
   return asTrimmedString(payload?.title);
+}
+
+function extractPrimaryCommandAction(payload: Record<string, unknown> | null): CommandAction | null {
+  const data = asRecord(payload?.data);
+  const item = asRecord(data?.item);
+  const actions = collectCommandActions(payload, data, item);
+  for (const action of actions) {
+    const actionRecord = asRecord(action);
+    if (!actionRecord) {
+      continue;
+    }
+    const type = asTrimmedString(actionRecord.type) ?? "unknown";
+    const command = asTrimmedString(actionRecord.command) ?? undefined;
+    const name = asTrimmedString(actionRecord.name) ?? undefined;
+    const path = asTrimmedString(actionRecord.path) ?? undefined;
+    const query = asTrimmedString(actionRecord.query) ?? undefined;
+    if (command || name || path || query || type !== "unknown") {
+      return {
+        type,
+        ...(command ? { command } : {}),
+        ...(name ? { name } : {}),
+        ...(path ? { path } : {}),
+        ...(query ? { query } : {}),
+      };
+    }
+  }
+  return null;
+}
+
+// Codex has emitted commandActions both on the item and on the surrounding raw
+// payload; scan the nearby envelopes before falling back to generic command text.
+function collectCommandActions(
+  payload: Record<string, unknown> | null,
+  data: Record<string, unknown> | null,
+  item: Record<string, unknown> | null,
+): ReadonlyArray<unknown> {
+  const candidates = [
+    item?.commandActions,
+    asCommandArgumentRecord(item?.arguments ?? item?.args ?? item?.params)?.commandActions,
+    data?.commandActions,
+    asCommandArgumentRecord(data?.arguments ?? data?.args ?? data?.params)?.commandActions,
+    asCommandArgumentRecord(data?.rawInput)?.commandActions,
+    asCommandArgumentRecord(data?.input)?.commandActions,
+    payload?.commandActions,
+  ];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) {
+      return candidate;
+    }
+  }
+  return [];
+}
+
+function deriveCommandActionDisplay(
+  action: CommandAction | null,
+  activityKind: OrchestrationThreadActivity["kind"],
+): CommandActionDisplay | null {
+  if (!action) {
+    return null;
+  }
+  const running = activityKind !== "tool.completed";
+  switch (normalizeCommandActionType(action.type)) {
+    case "read":
+    case "readfile":
+      return {
+        title: running ? "Reading" : "Read",
+        preview: commandActionTarget(action),
+      };
+    case "search":
+    case "find":
+      return {
+        title: running ? "Searching" : "Searched",
+        preview: commandActionSearchPreview(action),
+      };
+    case "listfiles":
+      return {
+        title: running ? "Listing" : "Listed",
+        preview: commandActionListPreview(action),
+      };
+    default:
+      return null;
+  }
+}
+
+function normalizeCommandActionType(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function commandActionTarget(action: CommandAction): string | undefined {
+  return action.name ?? compactWorkLogPath(action.path) ?? undefined;
+}
+
+function commandActionSearchPreview(action: CommandAction): string | undefined {
+  const query = action.query ?? action.name;
+  const path = compactWorkLogPath(action.path);
+  if (query && path) {
+    return `for ${query} in ${path}`;
+  }
+  if (query) {
+    return `for ${query}`;
+  }
+  if (path) {
+    return `in ${path}`;
+  }
+  return commandActionTarget(action);
+}
+
+function commandActionListPreview(action: CommandAction): string | undefined {
+  return compactWorkLogPath(action.path) ?? action.name ?? undefined;
+}
+
+function compactWorkLogPath(value: string | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  if (value === ".") {
+    return "current directory";
+  }
+  if (value === "..") {
+    return "parent directory";
+  }
+  const parts = value.split(/[\\/]/).filter(Boolean);
+  if (parts.length <= 2) {
+    return value;
+  }
+  return parts.slice(-2).join("/");
 }
 
 function extractToolName(payload: Record<string, unknown> | null): string | null {
@@ -1260,7 +1448,8 @@ function extractToolName(payload: Record<string, unknown> | null): string | null
 
 function extractToolCallId(payload: Record<string, unknown> | null): string | null {
   const data = asRecord(payload?.data);
-  return asTrimmedString(data?.toolCallId ?? data?.callID ?? data?.callId);
+  const item = asRecord(data?.item);
+  return asTrimmedString(data?.toolCallId ?? data?.callID ?? data?.callId ?? item?.id);
 }
 
 function stripTrailingExitCode(value: string): {
@@ -1302,8 +1491,16 @@ function extractDetailCollapseHint(detail: string | undefined): string {
 function extractWorkLogItemType(
   payload: Record<string, unknown> | null,
 ): WorkLogEntry["itemType"] | undefined {
-  if (typeof payload?.itemType === "string" && isToolLifecycleItemType(payload.itemType)) {
-    return payload.itemType;
+  const topLevel = payload?.itemType;
+  if (typeof topLevel === "string" && isToolLifecycleItemType(topLevel)) {
+    return topLevel;
+  }
+  // Defensive: some provider payloads nest the type inside data or data.item
+  const data = asRecord(payload?.data);
+  const item = asRecord(data?.item);
+  const nested = data?.itemType ?? item?.type ?? item?.kind ?? payload?.type ?? payload?.kind;
+  if (typeof nested === "string" && isToolLifecycleItemType(nested)) {
+    return nested;
   }
   return undefined;
 }

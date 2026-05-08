@@ -742,3 +742,20 @@ export function createWsNativeApi(): NativeApi {
   instance = { api, transport };
   return api;
 }
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    instance?.transport.dispose();
+    instance = null;
+    welcomeListeners.clear();
+    serverConfigUpdatedListeners.clear();
+    serverProviderStatusesUpdatedListeners.clear();
+    serverSettingsUpdatedListeners.clear();
+    gitActionProgressListeners.clear();
+    terminalEventListeners.clear();
+    orchestrationDomainEventListeners.clear();
+    orchestrationShellEventListeners.clear();
+    orchestrationThreadEventListeners.clear();
+    fallbackBrowserStateListeners.clear();
+  });
+}

@@ -147,6 +147,7 @@ import {
   hasToolActivityForTurn,
   isLatestTurnSettled,
   formatElapsed,
+  WORK_LOG_PRESENTATION_VERSION,
   type ActiveTaskListState,
 } from "../session-logic";
 import {
@@ -1627,7 +1628,7 @@ export default function ChatView({
   const isConnecting = isLocalConnecting || phase === "connecting";
   const rawWorkLogEntries = useMemo(
     () => deriveWorkLogEntries(threadActivities, activeLatestTurn?.turnId ?? undefined),
-    [activeLatestTurn?.turnId, threadActivities],
+    [activeLatestTurn?.turnId, threadActivities, WORK_LOG_PRESENTATION_VERSION],
   );
   const hasWorkLogSubagents = useMemo(
     () => rawWorkLogEntries.some((entry) => (entry.subagents?.length ?? 0) > 0),
@@ -1857,12 +1858,10 @@ export default function ChatView({
   const previousActiveTurnLayoutLiveRef = useRef(activeTurnLayoutLive);
   const previousActiveTurnLayoutKeyRef = useRef<string | null>(null);
   const activeWorkStartedAt = hasLiveTurnTail
-    ? (activeLatestTurn?.startedAt ?? localDispatch?.startedAt ?? null)
-    : deriveActiveWorkStartedAt(
-        activeLatestTurn,
-        activeThread?.session ?? null,
-        localDispatch?.startedAt ?? null,
-      );
+    ? (activeLatestTurn?.startedAt ?? null)
+    : hasLiveTurn
+      ? deriveActiveWorkStartedAt(activeLatestTurn, activeThread?.session ?? null, null)
+      : null;
   const activeTurnLayoutKey =
     activeThreadId === null ? null : `${activeThreadId}:${activeLatestTurn?.turnId ?? "idle"}`;
   const activeTurnInProgress = activeTurnLayoutLive || keepSettledActiveTurnLayout;

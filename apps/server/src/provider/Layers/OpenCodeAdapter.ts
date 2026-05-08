@@ -982,6 +982,51 @@ export function flattenOpenCodeModels(input: {
     .toSorted(compareOpenCodeModelDescriptors);
 }
 
+function fallbackOpenCodeProviderName(providerId: string): string {
+  return providerId
+    .split(/[-_/]+/u)
+    .filter((segment) => segment.length > 0)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(" ");
+}
+
+function mergeOpenCodeCliModelDescriptors(input: {
+  readonly inventory: OpenCodeModelInventory;
+  readonly models: ReadonlyArray<OpenCodeModelDescriptor>;
+  readonly cliModels: ReadonlyArray<OpenCodeCliModelDescriptor>;
+}): ProviderListModelsResult["models"] {
+  const providerById = new Map(
+    input.inventory.providerList.all.map((provider) => [provider.id, provider] as const),
+  );
+  const mergedBySlug = new Map(input.models.map((model) => [model.slug, model] as const));
+
+  for (const cliModel of input.cliModels) {
+    if (mergedBySlug.has(cliModel.slug)) {
+      continue;
+    }
+    const provider =
+      providerById.get(cliModel.providerID) ??
+      ({
+        id: cliModel.providerID,
+        name: fallbackOpenCodeProviderName(cliModel.providerID) || cliModel.providerID,
+      } satisfies Pick<OpenCodeInventoryProvider, "id" | "name">);
+    const descriptor = toOpenCodeModelDescriptor({
+      slug: cliModel.slug,
+      name: cliModel.name,
+      provider,
+      ...(providerById.get(cliModel.providerID)?.models[cliModel.modelID]
+        ? { model: providerById.get(cliModel.providerID)!.models[cliModel.modelID] }
+        : {}),
+      cliModel,
+    });
+    if (descriptor) {
+      mergedBySlug.set(descriptor.slug, descriptor);
+    }
+  }
+
+  return [...mergedBySlug.values()].toSorted(compareOpenCodeModelDescriptors);
+}
+
 function flattenOpenCodeAgents(agents: ReadonlyArray<Agent>): ProviderListAgentsResult["agents"] {
   return agents
     .filter((agent) => !agent.hidden && (agent.mode === "primary" || agent.mode === "all"))
@@ -2334,10 +2379,30 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         withDiscoveryInventory(
           { binaryPath: input.binaryPath?.trim() || "opencode" },
           ({ inventory }) =>
-            Effect.succeed({
-              models: flattenOpenCodeModels({ inventory }),
-              source: "opencode",
-              cached: false,
+            Effect.gen(function* () {
+              const binaryPath = input.binaryPath?.trim() || "opencode";
+              const inventoryModels = flattenOpenCodeModels({ inventory });
+              const cliModels = yield* openCodeRuntime
+                .listOpenCodeCliModels({ binaryPath })
+                .pipe(Effect.catch(() => Effect.succeed([])));
+              const models = mergeOpenCodeCliModelDescriptors({
+                inventory,
+                models: inventoryModels,
+                cliModels,
+              });
+              yield* Effect.logDebug("OpenCode model discovery resolved", {
+                binaryPath,
+                connectedProviders: inventory.providerList.connected,
+                inventoryModelCount: inventoryModels.length,
+                cliModelCount: cliModels.length,
+                modelCount: models.length,
+                sampleModels: models.slice(0, 12).map((model) => model.slug),
+              });
+              return {
+                models,
+                source: cliModels.length > 0 ? "opencode-cli" : "opencode",
+                cached: false,
+              };
             }),
         );
 

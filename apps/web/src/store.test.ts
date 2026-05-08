@@ -2072,6 +2072,126 @@ describe("store read model sync", () => {
     });
   });
 
+  it("replaces duplicate live activities by id instead of appending duplicate ids", () => {
+    const initialState = makeState(
+      makeThread({
+        activities: [
+          makeActivity({
+            id: "activity-command",
+            kind: "tool.completed",
+            summary: "Ran command",
+            payload: { title: "Ran command" },
+          }),
+        ],
+      }),
+    );
+    const richActivity = makeActivity({
+      id: "activity-command",
+      kind: "tool.completed",
+      summary: "Ran command",
+      payload: {
+        itemType: "command_execution",
+        title: "Ran command",
+        data: {
+          item: {
+            type: "commandExecution",
+            command: `/bin/zsh -lc "sed -n '1,220p' README.md"`,
+          },
+        },
+      },
+    });
+
+    const next = applyOrchestrationEvents(initialState, [
+      makeDomainEvent("thread.activity-appended", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        activity: richActivity,
+      }),
+    ]);
+
+    expect(next.threads[0]?.activities).toHaveLength(1);
+    expect(next.threads[0]?.activities[0]?.payload).toEqual(richActivity.payload);
+    expect(next.activityIdsByThreadId?.["thread-1"]).toEqual(["activity-command"]);
+    expect(Object.keys(next.activityByThreadId?.["thread-1"] ?? {})).toEqual(["activity-command"]);
+  });
+
+  it("keeps richer activity payloads when duplicate events arrive with generic data", () => {
+    const richActivity = makeActivity({
+      id: "activity-command",
+      kind: "tool.completed",
+      summary: "Ran command",
+      payload: {
+        itemType: "command_execution",
+        title: "Ran command",
+        detail: `/bin/zsh -lc "sed -n '1,220p' README.md"`,
+        data: {
+          item: {
+            type: "commandExecution",
+            command: `/bin/zsh -lc "sed -n '1,220p' README.md"`,
+            commandActions: [{ type: "read", command: "sed -n '1,220p' README.md" }],
+          },
+        },
+      },
+    });
+    const initialState = syncServerReadModel(
+      makeState(makeThread()),
+      makeReadModel(makeReadModelThread({ activities: [richActivity] })),
+    );
+    const genericDuplicate = makeActivity({
+      id: "activity-command",
+      kind: "tool.completed",
+      summary: "Ran command",
+      payload: { title: "Ran command" },
+    });
+
+    const next = applyOrchestrationEvents(initialState, [
+      makeDomainEvent("thread.activity-appended", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        activity: genericDuplicate,
+      }),
+    ]);
+
+    expect(next.threads[0]?.activities).toHaveLength(1);
+    expect(next.threads[0]?.activities[0]).toBe(richActivity);
+    expect(next.activityByThreadId?.["thread-1"]?.["activity-command"]).toBe(richActivity);
+  });
+
+  it("dedupes read-model activity snapshots without losing rich command payloads", () => {
+    const richActivity = makeActivity({
+      id: "activity-command",
+      kind: "tool.completed",
+      summary: "Ran command",
+      payload: {
+        itemType: "command_execution",
+        title: "Ran command",
+        data: {
+          item: {
+            type: "commandExecution",
+            command: `/bin/zsh -lc 'find apps packages -maxdepth 2 -type d | sort'`,
+          },
+        },
+      },
+    });
+    const genericDuplicate = makeActivity({
+      id: "activity-command",
+      kind: "tool.completed",
+      summary: "Ran command",
+      payload: { title: "Ran command" },
+    });
+
+    const next = syncServerReadModel(
+      makeState(makeThread()),
+      makeReadModel(
+        makeReadModelThread({
+          activities: [richActivity, genericDuplicate],
+        }),
+      ),
+    );
+
+    expect(next.threads[0]?.activities).toEqual([richActivity]);
+    expect(next.activityIdsByThreadId?.["thread-1"]).toEqual(["activity-command"]);
+    expect(next.activityByThreadId?.["thread-1"]?.["activity-command"]).toBe(richActivity);
+  });
+
   it("preserves the existing sidebar pending-user-input state during detail-only response events", () => {
     const initialState = syncServerReadModel(
       makeState(

@@ -45,6 +45,7 @@ let wsClient: { send: (data: string) => void } | null = null;
 let pushSequence = 1;
 let delayNextThreadSnapshot = false;
 let subscribeShellRequestCount = 0;
+const subscribeThreadRequestCountById = new Map<ThreadId, number>();
 
 const wsLink = ws.link(/ws(s)?:\/\/.*/);
 
@@ -292,6 +293,10 @@ const worker = setupWorker(
       }
       if (method === ORCHESTRATION_WS_METHODS.subscribeThread && "threadId" in request.body) {
         const threadId = request.body.threadId as ThreadId;
+        subscribeThreadRequestCountById.set(
+          threadId,
+          (subscribeThreadRequestCountById.get(threadId) ?? 0) + 1,
+        );
         if (delayNextThreadSnapshot) {
           delayNextThreadSnapshot = false;
           return;
@@ -463,6 +468,7 @@ describe("EventRouter scoped orchestration sync", () => {
       ],
     });
     subscribeShellRequestCount = 0;
+    subscribeThreadRequestCountById.clear();
   });
 
   afterEach(() => {
@@ -751,6 +757,7 @@ describe("EventRouter scoped orchestration sync", () => {
           expect(useStore.getState().threads.some((thread) => thread.id === draftThreadId)).toBe(
             true,
           );
+          expect(subscribeThreadRequestCountById.get(draftThreadId)).toBeGreaterThanOrEqual(2);
         },
         { timeout: 4_000, interval: 16 },
       );

@@ -1152,6 +1152,274 @@ describe("deriveWorkLogEntries", () => {
     ]);
   });
 
+  it("prefers Codex commandActions over the shell wrapper command", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "codex-command-actions",
+        kind: "tool.updated",
+        summary: "Ran command started",
+        payload: {
+          itemType: "command_execution",
+          status: "inProgress",
+          title: "Ran command",
+          detail: `/bin/zsh -lc "sed -n '1,220p' README.md"`,
+          data: {
+            item: {
+              type: "commandExecution",
+              command: `/bin/zsh -lc "sed -n '1,220p' README.md"`,
+              commandActions: [
+                {
+                  type: "read",
+                  command: "sed -n '1,220p' README.md",
+                  name: "README.md",
+                  path: "/Users/emanueledipietro/Developer/Testing/t3code/README.md",
+                },
+              ],
+            },
+          },
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
+      {
+        id: "codex-command-actions",
+        command: "sed -n '1,220p' README.md",
+        rawCommand: `/bin/zsh -lc "sed -n '1,220p' README.md"`,
+        toolTitle: "Reading",
+        preview: "README.md",
+      },
+    ]);
+  });
+
+  it("rebuilds Codex search labels from commandActions", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "codex-search-action",
+        kind: "tool.completed",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          status: "completed",
+          title: "Ran command",
+          detail:
+            "/bin/zsh -lc 'find apps packages -maxdepth 2 -name package.json -print'",
+          data: {
+            item: {
+              type: "commandExecution",
+              command:
+                "/bin/zsh -lc 'find apps packages -maxdepth 2 -name package.json -print'",
+              commandActions: [
+                {
+                  type: "search",
+                  command: "find apps packages -maxdepth 2 -name package.json -print",
+                  query: "package.json",
+                  path: "apps",
+                },
+              ],
+            },
+          },
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
+      {
+        id: "codex-search-action",
+        command: "find apps packages -maxdepth 2 -name package.json -print",
+        rawCommand: "/bin/zsh -lc 'find apps packages -maxdepth 2 -name package.json -print'",
+        toolTitle: "Searched",
+        preview: "for package.json in apps",
+      },
+    ]);
+  });
+
+  it("humanizes Codex commands when commandActions.type is unknown", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "codex-unknown-action",
+        kind: "tool.completed",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          status: "completed",
+          title: "Ran command",
+          detail: "/bin/zsh -lc 'git status --short'",
+          data: {
+            item: {
+              type: "commandExecution",
+              command: "/bin/zsh -lc 'git status --short'",
+              status: "completed",
+              commandActions: [{ type: "unknown", command: "git status --short" }],
+            },
+          },
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
+      {
+        id: "codex-unknown-action",
+        command: "git status --short",
+        rawCommand: "/bin/zsh -lc 'git status --short'",
+        toolTitle: "Checked",
+      },
+    ]);
+  });
+
+  it("humanizes Codex commands with the full real-world DB payload shape", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "codex-full-db-shape",
+        kind: "tool.completed",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          status: "completed",
+          title: "Ran command",
+          detail: "/bin/zsh -lc 'git status --short'",
+          data: {
+            item: {
+              type: "commandExecution",
+              id: "call_6OII41pekq8cFCpOCF9pbeMu",
+              command: "/bin/zsh -lc 'git status --short'",
+              cwd: "/Users/emanueledipietro/Developer/Testing/t3code",
+              status: "completed",
+              commandActions: [{ type: "unknown", command: "git status --short" }],
+              aggregatedOutput: " M apps/desktop/src/main.ts\n...",
+              exitCode: 0,
+              durationMs: 0,
+            },
+            threadId: "019e08d7-1234-5678-90ab-cdef01234567",
+            turnId: "019e08d7-1234-5678-90ab-cdef01234567",
+          },
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
+      {
+        id: "codex-full-db-shape",
+        command: "git status --short",
+        rawCommand: "/bin/zsh -lc 'git status --short'",
+        toolTitle: "Checked",
+      },
+    ]);
+  });
+
+  it("collapses generic Codex start rows into completed rows by item id", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "codex-start-generic",
+        createdAt: "2026-05-08T21:00:00.000Z",
+        kind: "tool.started",
+        summary: "Ran command started",
+        payload: {
+          itemType: "command_execution",
+          status: "inProgress",
+          title: "Ran command",
+          data: {
+            item: {
+              type: "commandExecution",
+              id: "call_same_item_id",
+              status: "inProgress",
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "codex-completed-rich",
+        createdAt: "2026-05-08T21:00:01.000Z",
+        kind: "tool.completed",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          status: "completed",
+          title: "Ran command",
+          detail: "/bin/zsh -lc 'git status --short'",
+          data: {
+            item: {
+              type: "commandExecution",
+              id: "call_same_item_id",
+              command: "/bin/zsh -lc 'git status --short'",
+              status: "completed",
+              commandActions: [{ type: "unknown", command: "git status --short" }],
+            },
+          },
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
+      {
+        id: "codex-completed-rich",
+        command: "git status --short",
+        rawCommand: "/bin/zsh -lc 'git status --short'",
+        toolTitle: "Checked",
+      },
+    ]);
+  });
+
+  it("omits uninformative generic Codex command start rows", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "codex-start-no-command",
+        kind: "tool.started",
+        summary: "Ran command started",
+        payload: {
+          itemType: "command_execution",
+          status: "inProgress",
+          title: "Ran command",
+          data: {
+            item: {
+              type: "commandExecution",
+              id: "call_no_command_yet",
+              status: "inProgress",
+            },
+          },
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined)).toEqual([]);
+  });
+
+  it("reads Codex commandActions from the raw data envelope", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "codex-direct-command-actions",
+        kind: "tool.updated",
+        summary: "Ran command started",
+        payload: {
+          itemType: "command_execution",
+          status: "inProgress",
+          title: "Ran command",
+          data: {
+            type: "commandExecution",
+            command: `/bin/zsh -lc "ls -la"`,
+            commandActions: [
+              {
+                type: "list_files",
+                command: "ls -la",
+                path: ".",
+              },
+            ],
+          },
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
+      {
+        id: "codex-direct-command-actions",
+        command: "ls -la",
+        rawCommand: `/bin/zsh -lc "ls -la"`,
+        toolTitle: "Listing",
+        preview: "current directory",
+      },
+    ]);
+  });
+
   it("keeps compact Codex tool metadata used for icons and labels", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -2208,6 +2476,99 @@ describe("PROVIDER_OPTIONS", () => {
       value: "opencode",
       label: "OpenCode",
       available: true,
+    });
+  });
+
+  it("humanizes Codex find commands from real DB payload (regression)", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "5ae75cbe-5cb5-471a-a6ba-d9712170f1c0",
+        kind: "tool.started",
+        summary: "Ran command started",
+        payload: {
+          itemType: "command_execution",
+          status: "inProgress",
+          title: "Ran command",
+          detail:
+            '/bin/zsh -lc "find apps packages -maxdepth 2 -name package.json -print -exec sed -n \'1,120p\' {} \\\\;"',
+          data: {
+            item: {
+              type: "commandExecution",
+              id: "call_UmQKQmLCCrj9PF82rupLIFDO",
+              command:
+                '/bin/zsh -lc "find apps packages -maxdepth 2 -name package.json -print -exec sed -n \'1,120p\' {} \\\\;"',
+              cwd: "/Users/emanueledipietro/Developer/Testing/t3code",
+              processId: "38005",
+              source: "unifiedExecStartup",
+              status: "inProgress",
+              commandActions: [
+                {
+                  type: "search",
+                  command:
+                    "find apps packages -maxdepth 2 -name package.json -print -exec sed -n '1,120p' '{}' \";\"",
+                  query: "package.json",
+                  path: "apps",
+                },
+              ],
+              aggregatedOutput: null,
+              exitCode: null,
+              durationMs: null,
+            },
+            threadId: "019e098c-100f-7c92-b2b2-8fdd7b88d19d",
+            turnId: "019e098c-13fc-7442-873f-fc99ce2caa8b",
+          },
+        },
+      }),
+      makeActivity({
+        id: "6631825b-af15-4f7e-bb9a-891dcb98fd2a",
+        kind: "tool.completed",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          status: "completed",
+          title: "Ran command",
+          detail:
+            '/bin/zsh -lc "find apps packages -maxdepth 2 -name package.json -print -exec sed -n \'1,120p\' {} \\\\;"',
+          data: {
+            item: {
+              type: "commandExecution",
+              id: "call_UmQKQmLCCrj9PF82rupLIFDO",
+              command:
+                '/bin/zsh -lc "find apps packages -maxdepth 2 -name package.json -print -exec sed -n \'1,120p\' {} \\\\;"',
+              cwd: "/Users/emanueledipietro/Developer/Testing/t3code",
+              processId: "38005",
+              source: "unifiedExecStartup",
+              status: "completed",
+              commandActions: [
+                {
+                  type: "search",
+                  command:
+                    "find apps packages -maxdepth 2 -name package.json -print -exec sed -n '1,120p' '{}' \";\"",
+                  query: "package.json",
+                  path: "apps",
+                },
+              ],
+              aggregatedOutput: "...",
+              exitCode: 0,
+              durationMs: 0,
+            },
+            threadId: "019e098c-100f-7c92-b2b2-8fdd7b88d19d",
+            turnId: "019e098c-13fc-7442-873f-fc99ce2caa8b",
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries).toHaveLength(1);
+    const [entry] = entries;
+    expect(entry).toMatchObject({
+      toolTitle: "Searched",
+      command:
+        "find apps packages -maxdepth 2 -name package.json -print -exec sed -n '1,120p' '{}' \";\"",
+      preview: "for package.json in apps",
+      itemType: "command_execution",
+      toolCallId: "call_UmQKQmLCCrj9PF82rupLIFDO",
     });
   });
 });

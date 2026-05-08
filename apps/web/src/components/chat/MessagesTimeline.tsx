@@ -55,7 +55,7 @@ import {
   resolveAssistantMessageCopyState,
   type StableMessagesTimelineRowsState,
 } from "./MessagesTimeline.logic";
-import { deriveReadableCommandDisplay } from "../../lib/toolCallLabel";
+import { deriveInlineCommandCall } from "../../lib/toolCallLabel";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
 import {
@@ -1589,6 +1589,8 @@ function workEntryPreview(
     TimelineWorkEntry,
     | "detail"
     | "command"
+    | "rawCommand"
+    | "preview"
     | "changedFiles"
     | "requestKind"
     | "itemType"
@@ -1601,6 +1603,8 @@ function workEntryPreview(
     workEntry.requestKind === "file-change" ||
     workEntry.itemType === "file_change";
 
+  if (workEntry.preview) return workEntry.preview;
+
   // Prefer clean basenames from changedFiles
   if (workEntry.changedFiles && workEntry.changedFiles.length > 0) {
     const names = workEntry.changedFiles.map((p) => basename(p));
@@ -1608,8 +1612,7 @@ function workEntryPreview(
     return `${names.length} files`;
   }
 
-  // Command rows stay human-readable inline and keep the raw invocation for hover details.
-  if (workEntry.command) return deriveReadableCommandDisplay(workEntry.command).target;
+  if (workEntry.command) return deriveInlineCommandCall(workEntry.command);
 
   if (workEntry.itemType === "collab_agent_tool_call" && (workEntry.subagents?.length ?? 0) > 0) {
     if (workEntry.subagentAction?.summaryText) {
@@ -1825,7 +1828,8 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const heading = toolWorkEntryHeading(workEntry);
   const preview = workEntryPreview(workEntry);
   const displayText = preview ? `${heading} ${preview}` : heading;
-  const hoverText = workEntry.command ?? displayText;
+  const rawCommand = workEntry.rawCommand ?? workEntry.command;
+  const hoverText = rawCommand ?? displayText;
   const changedFiles = workEntry.changedFiles ?? [];
   const showEditedRows = isFileChangeWorkEntry(workEntry) && changedFiles.length > 0;
   const showSubagentRows =
@@ -2118,7 +2122,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
             </div>
           );
 
-          if (!workEntry.command) {
+          if (!rawCommand) {
             return rowContent;
           }
 
@@ -2126,7 +2130,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
             <Tooltip>
               <TooltipTrigger render={rowContent} />
               <TooltipPopup side="top" align="start" className="max-w-96 whitespace-normal">
-                {commandTooltipContent(workEntry.command, displayText)}
+                {commandTooltipContent(rawCommand, displayText)}
               </TooltipPopup>
             </Tooltip>
           );

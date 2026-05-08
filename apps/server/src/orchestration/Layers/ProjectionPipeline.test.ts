@@ -2232,6 +2232,7 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
         readonly userMessageId: string | null;
         readonly sourceProposedPlanThreadId: string | null;
         readonly sourceProposedPlanId: string | null;
+        readonly requestedAt: string;
         readonly startedAt: string;
       }>`
         SELECT
@@ -2239,6 +2240,7 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
           pending_message_id AS "userMessageId",
           source_proposed_plan_thread_id AS "sourceProposedPlanThreadId",
           source_proposed_plan_id AS "sourceProposedPlanId",
+          requested_at AS "requestedAt",
           started_at AS "startedAt"
         FROM projection_turns
         WHERE turn_id = ${turnId}
@@ -2251,7 +2253,8 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
         userMessageId: "message-restart",
         sourceProposedPlanThreadId: "thread-plan-source",
         sourceProposedPlanId: "plan-source",
-        startedAt: turnStartedAt,
+        requestedAt: turnStartedAt,
+        startedAt: sessionSetAt,
       },
     ]);
   }).pipe(
