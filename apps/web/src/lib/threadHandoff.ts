@@ -17,6 +17,7 @@ const HANDOFF_PROVIDER_ORDER: ReadonlyArray<ProviderKind> = [
   "claudeAgent",
   "cursor",
   "gemini",
+  "kilo",
   "opencode",
 ];
 const IMPORTABLE_THREAD_ACTIVITY_KINDS = new Set([

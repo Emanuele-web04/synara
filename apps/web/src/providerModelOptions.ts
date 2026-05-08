@@ -8,6 +8,7 @@ import type {
   CursorModelSelection,
   GeminiModelOptions,
   GeminiModelSelection,
+  KiloModelSelection,
   ModelSelection,
   OpenCodeModelOptions,
   OpenCodeModelSelection,
@@ -48,7 +49,7 @@ export function formatProviderModelOptionName(input: {
     return trimmedSlug;
   }
 
-  if (input.provider === "opencode") {
+  if (input.provider === "kilo" || input.provider === "opencode") {
     const modelIdentifier = trimmedSlug.includes("/")
       ? trimmedSlug.slice(trimmedSlug.lastIndexOf("/") + 1)
       : trimmedSlug;
@@ -197,6 +198,11 @@ export function buildModelSelection(
   options?: OpenCodeModelOptions | null | undefined,
 ): OpenCodeModelSelection;
 export function buildModelSelection(
+  provider: "kilo",
+  model: string,
+  options?: OpenCodeModelOptions | null | undefined,
+): KiloModelSelection;
+export function buildModelSelection(
   provider: ProviderKind,
   model: string,
   options?: ProviderOptions | null | undefined,
@@ -237,6 +243,14 @@ export function buildModelSelection(
             provider,
             model,
             options: options as GeminiModelOptions,
+          }
+        : { provider, model };
+    case "kilo":
+      return options
+        ? {
+            provider,
+            model,
+            options: options as OpenCodeModelOptions,
           }
         : { provider, model };
     case "opencode":

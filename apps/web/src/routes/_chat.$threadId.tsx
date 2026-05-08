@@ -28,7 +28,7 @@ import { Schema } from "effect";
 
 import ChatView from "../components/ChatView";
 import BrowserPanel from "../components/BrowserPanel";
-import { ClaudeAI, CursorIcon, Gemini, OpenAI, OpenCodeIcon } from "../components/Icons";
+import { ClaudeAI, CursorIcon, Gemini, KiloIcon, OpenAI, OpenCodeIcon } from "../components/Icons";
 import { ChatPaneDropOverlay } from "../components/chat-drop-overlay/ChatPaneDropOverlay";
 import { DiffWorkerPoolProvider } from "../components/DiffWorkerPoolProvider";
 import {
@@ -648,6 +648,11 @@ function PickerProviderGlyph(props: { provider: ProviderKind; className?: string
   }
   if (props.provider === "gemini") {
     return <Gemini aria-hidden="true" className={cn("text-foreground", props.className)} />;
+  }
+  if (props.provider === "kilo") {
+    return (
+      <KiloIcon aria-hidden="true" className={cn("text-muted-foreground/70", props.className)} />
+    );
   }
   if (props.provider === "opencode") {
     return (

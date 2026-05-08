@@ -24,6 +24,14 @@ const MODEL_OPTIONS_BY_PROVIDER = {
     { slug: "auto-gemini-3", name: "Auto Gemini 3" },
     { slug: "gemini-2.5-pro", name: "Gemini 2.5 Pro" },
   ],
+  kilo: [
+    {
+      slug: "openai/gpt-5",
+      name: "GPT-5",
+      upstreamProviderId: "openai",
+      upstreamProviderName: "OpenAI",
+    },
+  ],
   opencode: [
     {
       slug: "opencode/nemotron-3-super-free",
@@ -57,6 +65,21 @@ const OPENCODE_FAVORITE_SORT_MODELS = [
   {
     slug: "openai/gpt-favorite-sort" as ModelSlug,
     name: "GPT Favorite Sort",
+    upstreamProviderId: "openai",
+    upstreamProviderName: "OpenAI",
+  },
+] satisfies ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>;
+
+const KILO_FAVORITE_SORT_MODELS = [
+  {
+    slug: "anthropic/claude-kilo-favorite-sort" as ModelSlug,
+    name: "Claude Kilo Favorite Sort",
+    upstreamProviderId: "anthropic",
+    upstreamProviderName: "Anthropic",
+  },
+  {
+    slug: "openai/gpt-kilo-favorite-sort" as ModelSlug,
+    name: "GPT Kilo Favorite Sort",
     upstreamProviderId: "openai",
     upstreamProviderName: "OpenAI",
   },
@@ -282,6 +305,36 @@ describe("ProviderModelPicker", () => {
           element.textContent?.includes("GPT Favorite Sort"),
         ),
       ).toHaveLength(1);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows favourited Kilo models in their own top category", async () => {
+    const mounted = await mountPicker({
+      provider: "kilo",
+      model: "anthropic/claude-kilo-favorite-sort",
+      lockedProvider: "kilo",
+      modelOptionsByProvider: {
+        ...MODEL_OPTIONS_BY_PROVIDER,
+        kilo: KILO_FAVORITE_SORT_MODELS,
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+
+      await page.getByRole("button", { name: "Add GPT Kilo Favorite Sort to favourites" }).click();
+
+      await vi.waitFor(() => {
+        const text = document.body.textContent ?? "";
+        expect(text.indexOf("Favourites")).toBeLessThan(text.indexOf("Anthropic"));
+        expect(text.indexOf("GPT Kilo Favorite Sort")).toBeGreaterThan(text.indexOf("Favourites"));
+        expect(text.indexOf("GPT Kilo Favorite Sort")).toBeLessThan(text.indexOf("Anthropic"));
+      });
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "GPT Kilo Favorite Sort" }))
+        .toBeInTheDocument();
     } finally {
       await mounted.cleanup();
     }

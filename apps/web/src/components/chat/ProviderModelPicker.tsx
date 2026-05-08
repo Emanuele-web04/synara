@@ -23,7 +23,7 @@ import {
   MenuSubTrigger,
   MenuTrigger,
 } from "../ui/menu";
-import { ClaudeAI, CursorIcon, Gemini, Icon, OpenAI, OpenCodeIcon } from "../Icons";
+import { ClaudeAI, CursorIcon, Gemini, Icon, KiloIcon, OpenAI, OpenCodeIcon } from "../Icons";
 import { cn } from "~/lib/utils";
 import { PickerPanelShell } from "./PickerPanelShell";
 import { PickerTriggerButton } from "./PickerTriggerButton";
@@ -51,6 +51,7 @@ const PROVIDER_ICON_BY_PROVIDER: Record<ProviderPickerKind, Icon> = {
   claudeAgent: ClaudeAI,
   cursor: CursorIcon,
   gemini: Gemini,
+  kilo: KiloIcon,
   opencode: OpenCodeIcon,
 };
 
@@ -98,8 +99,9 @@ function providerIconClassName(
 }
 
 const SEARCHABLE_MODEL_PICKER_THRESHOLD = 15;
+const KILO_FAVORITE_MODEL_STORAGE_KEY = "dpcode:kilo-favourite-models:v1";
 const OPENCODE_FAVORITE_MODEL_STORAGE_KEY = "dpcode:opencode-favourite-models:v1";
-const OpenCodeFavoriteModelSlugs = Schema.Array(Schema.String);
+const FavoriteModelSlugs = Schema.Array(Schema.String);
 
 function stripParameterizedModelSuffix(model: string): string {
   return model.trim().replace(/\[[^\]]*\]$/u, "");
@@ -154,14 +156,23 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   const { onOpenChange, open } = props;
   const [uncontrolledMenuOpen, setUncontrolledMenuOpen] = useState(false);
   const [modelSearchQuery, setModelSearchQuery] = useState("");
+  const [kiloFavoriteModelSlugs, setKiloFavoriteModelSlugs] = useLocalStorage(
+    KILO_FAVORITE_MODEL_STORAGE_KEY,
+    [],
+    FavoriteModelSlugs,
+  );
   const [openCodeFavoriteModelSlugs, setOpenCodeFavoriteModelSlugs] = useLocalStorage(
     OPENCODE_FAVORITE_MODEL_STORAGE_KEY,
     [],
-    OpenCodeFavoriteModelSlugs,
+    FavoriteModelSlugs,
   );
   const deferredModelSearchQuery = useDeferredValue(modelSearchQuery);
   const activeProvider = props.lockedProvider ?? props.provider;
   const isMenuOpen = open ?? uncontrolledMenuOpen;
+  const kiloFavoriteModelSlugSet = useMemo(
+    () => new Set(kiloFavoriteModelSlugs),
+    [kiloFavoriteModelSlugs],
+  );
   const openCodeFavoriteModelSlugSet = useMemo(
     () => new Set(openCodeFavoriteModelSlugs),
     [openCodeFavoriteModelSlugs],
@@ -210,6 +221,19 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     },
     [setOpenCodeFavoriteModelSlugs],
   );
+  const toggleKiloFavorite = useCallback(
+    (slug: string) => {
+      setKiloFavoriteModelSlugs((current) => {
+        const normalizedCurrent = Array.from(
+          new Set(current.filter((entry) => entry.trim().length > 0)),
+        );
+        return normalizedCurrent.includes(slug)
+          ? normalizedCurrent.filter((entry) => entry !== slug)
+          : [...normalizedCurrent, slug];
+      });
+    },
+    [setKiloFavoriteModelSlugs],
+  );
 
   const renderModelRadioGroup = (provider: ProviderKind) => {
     if (props.loadingModelProviders?.[provider]) {
@@ -227,7 +251,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
 
     const providerOptions = props.modelOptionsByProvider[provider];
     const shouldShowSearch =
-      (provider === "opencode" || provider === "cursor") &&
+      (provider === "kilo" || provider === "opencode" || provider === "cursor") &&
       providerOptions.length >= SEARCHABLE_MODEL_PICKER_THRESHOLD;
     const normalizedModelSearchQuery = deferredModelSearchQuery.trim().toLowerCase();
     const filteredOptions =
@@ -237,10 +261,11 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
           )
         : providerOptions;
     const groupedOptions =
-      provider === "opencode"
+      provider === "kilo" || provider === "opencode"
         ? groupProviderModelOptionsWithFavorites({
             options: filteredOptions,
-            favoriteSlugs: openCodeFavoriteModelSlugSet,
+            favoriteSlugs:
+              provider === "kilo" ? kiloFavoriteModelSlugSet : openCodeFavoriteModelSlugSet,
           })
         : groupProviderModelOptions(filteredOptions);
 
@@ -255,38 +280,45 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
               <MenuGroup>
                 {group.label ? <MenuGroupLabel>{group.label}</MenuGroupLabel> : null}
                 {group.options.map((modelOption) => {
-                  const isOpenCodeFavorite =
-                    provider === "opencode" && openCodeFavoriteModelSlugSet.has(modelOption.slug);
+                  const isFavorite =
+                    provider === "kilo"
+                      ? kiloFavoriteModelSlugSet.has(modelOption.slug)
+                      : provider === "opencode" &&
+                        openCodeFavoriteModelSlugSet.has(modelOption.slug);
                   return (
                     <MenuRadioItem
                       key={`${provider}:${modelOption.slug}`}
                       value={modelOption.slug}
                       onClick={() => setMenuOpen(false)}
                     >
-                      {provider === "opencode" ? (
+                      {provider === "kilo" || provider === "opencode" ? (
                         <span className="flex min-w-0 items-center gap-2">
                           <span className="min-w-0 flex-1 truncate">{modelOption.name}</span>
                           <button
                             type="button"
                             aria-label={
-                              isOpenCodeFavorite
+                              isFavorite
                                 ? `Remove ${modelOption.name} from favourites`
                                 : `Add ${modelOption.name} to favourites`
                             }
                             className={cn(
                               "-me-2 inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground/55 transition-colors hover:bg-[var(--color-background-elevated-tertiary)] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/60",
-                              isOpenCodeFavorite && "text-amber-300 hover:text-amber-200",
+                              isFavorite && "text-amber-300 hover:text-amber-200",
                             )}
                             onClick={(event) => {
                               event.preventDefault();
                               event.stopPropagation();
-                              toggleOpenCodeFavorite(modelOption.slug);
+                              if (provider === "kilo") {
+                                toggleKiloFavorite(modelOption.slug);
+                              } else {
+                                toggleOpenCodeFavorite(modelOption.slug);
+                              }
                             }}
                             onPointerDown={(event) => {
                               event.stopPropagation();
                             }}
                           >
-                            {isOpenCodeFavorite ? (
+                            {isFavorite ? (
                               <StarFilledIcon aria-hidden="true" className="size-3.5" />
                             ) : (
                               <StarIcon aria-hidden="true" className="size-3.5" />

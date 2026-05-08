@@ -50,6 +50,7 @@ export const ProviderKind = Schema.Literals([
   "claudeAgent",
   "cursor",
   "gemini",
+  "kilo",
   "opencode",
 ]);
 export type ProviderKind = typeof ProviderKind.Type;
@@ -103,11 +104,19 @@ export const OpenCodeModelSelection = Schema.Struct({
 });
 export type OpenCodeModelSelection = typeof OpenCodeModelSelection.Type;
 
+export const KiloModelSelection = Schema.Struct({
+  provider: Schema.Literal("kilo"),
+  model: TrimmedNonEmptyString,
+  options: Schema.optional(OpenCodeModelOptions),
+});
+export type KiloModelSelection = typeof KiloModelSelection.Type;
+
 export const ModelSelection = Schema.Union([
   CodexModelSelection,
   ClaudeModelSelection,
   CursorModelSelection,
   GeminiModelSelection,
+  KiloModelSelection,
   OpenCodeModelSelection,
 ]);
 export type ModelSelection = typeof ModelSelection.Type;
@@ -138,11 +147,18 @@ export const OpenCodeProviderStartOptions = Schema.Struct({
   serverPassword: Schema.optional(TrimmedNonEmptyString),
 });
 
+export const KiloProviderStartOptions = Schema.Struct({
+  binaryPath: Schema.optional(TrimmedNonEmptyString),
+  serverUrl: Schema.optional(TrimmedNonEmptyString),
+  serverPassword: Schema.optional(TrimmedNonEmptyString),
+});
+
 export const ProviderStartOptions = Schema.Struct({
   codex: Schema.optional(CodexProviderStartOptions),
   claudeAgent: Schema.optional(ClaudeProviderStartOptions),
   cursor: Schema.optional(CursorProviderStartOptions),
   gemini: Schema.optional(GeminiProviderStartOptions),
+  kilo: Schema.optional(KiloProviderStartOptions),
   opencode: Schema.optional(OpenCodeProviderStartOptions),
 });
 export type ProviderStartOptions = typeof ProviderStartOptions.Type;

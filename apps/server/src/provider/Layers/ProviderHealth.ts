@@ -58,6 +58,7 @@ const CODEX_PROVIDER = "codex" as const;
 const CLAUDE_AGENT_PROVIDER = "claudeAgent" as const;
 const CURSOR_PROVIDER = "cursor" as const;
 const GEMINI_PROVIDER = "gemini" as const;
+const KILO_PROVIDER = "kilo" as const;
 const OPENCODE_PROVIDER = "opencode" as const;
 type ProviderStatuses = ReadonlyArray<ServerProviderStatus>;
 
@@ -669,6 +670,32 @@ const runOpenCodeCommand = (args: ReadonlyArray<string>) =>
     return { stdout, stderr, code: exitCode } satisfies CommandResult;
   }).pipe(Effect.scoped);
 
+const runKiloCommand = (args: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const command = ChildProcess.make("kilo", [...args], {
+      shell: process.platform === "win32",
+      env: process.env,
+    });
+
+    const child = yield* spawner.spawn(command);
+
+    const [stdout, stderr, exitCode] = yield* Effect.all(
+      [
+        collectStreamAsString(child.stdout),
+        collectStreamAsString(child.stderr),
+        child.exitCode.pipe(Effect.map(Number)),
+      ],
+      { concurrency: "unbounded" },
+    );
+
+    if (isWindowsShellCommandMissingResult({ code: exitCode, stderr })) {
+      return yield* Effect.fail(new Error("spawn kilo ENOENT"));
+    }
+
+    return { stdout, stderr, code: exitCode } satisfies CommandResult;
+  }).pipe(Effect.scoped);
+
 const runCursorCommand = (args: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -1184,6 +1211,70 @@ export const checkOpenCodeProviderStatus: Effect.Effect<
   } satisfies ServerProviderStatus;
 });
 
+// ── Kilo health check ───────────────────────────────────────────────
+
+export const checkKiloProviderStatus: Effect.Effect<
+  ServerProviderStatus,
+  never,
+  ChildProcessSpawner.ChildProcessSpawner
+> = Effect.gen(function* () {
+  const checkedAt = new Date().toISOString();
+
+  const versionProbe = yield* runKiloCommand(["--version"]).pipe(
+    Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+    Effect.result,
+  );
+
+  if (Result.isFailure(versionProbe)) {
+    const error = versionProbe.failure;
+    return {
+      provider: KILO_PROVIDER,
+      status: "error" as const,
+      available: false,
+      authStatus: "unknown" as const,
+      checkedAt,
+      message: isCommandMissingCause(error)
+        ? "Kilo CLI (`kilo`) is not installed or not on PATH."
+        : `Failed to execute Kilo CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+    } satisfies ServerProviderStatus;
+  }
+
+  if (Option.isNone(versionProbe.success)) {
+    return {
+      provider: KILO_PROVIDER,
+      status: "error" as const,
+      available: false,
+      authStatus: "unknown" as const,
+      checkedAt,
+      message: "Kilo CLI is installed but failed to run. Timed out while running command.",
+    } satisfies ServerProviderStatus;
+  }
+
+  const version = versionProbe.success.value;
+  if (version.code !== 0) {
+    const detail = detailFromResult(version);
+    return {
+      provider: KILO_PROVIDER,
+      status: "error" as const,
+      available: false,
+      authStatus: "unknown" as const,
+      checkedAt,
+      message: detail
+        ? `Kilo CLI is installed but failed to run. ${detail}`
+        : "Kilo CLI is installed but failed to run.",
+    } satisfies ServerProviderStatus;
+  }
+
+  return {
+    provider: KILO_PROVIDER,
+    status: "ready" as const,
+    available: true,
+    authStatus: "unknown" as const,
+    checkedAt,
+    message: "Kilo CLI is installed. Configure provider credentials inside Kilo as needed.",
+  } satisfies ServerProviderStatus;
+});
+
 // ── Cursor health check ─────────────────────────────────────────────
 
 export const checkCursorProviderStatus: Effect.Effect<
@@ -1293,6 +1384,7 @@ export const ProviderHealthLive = Layer.effect(
         CLAUDE_AGENT_PROVIDER,
         CURSOR_PROVIDER,
         GEMINI_PROVIDER,
+        KILO_PROVIDER,
         OPENCODE_PROVIDER,
       ].map(
         (provider) =>
@@ -1312,6 +1404,7 @@ export const ProviderHealthLive = Layer.effect(
         CLAUDE_AGENT_PROVIDER,
         CURSOR_PROVIDER,
         GEMINI_PROVIDER,
+        KILO_PROVIDER,
         OPENCODE_PROVIDER,
       ] as const,
       (provider) =>
@@ -1351,6 +1444,7 @@ export const ProviderHealthLive = Layer.effect(
         checkClaude,
         checkCursorProviderStatus,
         checkGeminiProviderStatus,
+        checkKiloProviderStatus,
         checkOpenCodeProviderStatus,
       ],
       {

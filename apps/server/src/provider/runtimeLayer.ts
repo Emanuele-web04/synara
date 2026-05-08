@@ -10,7 +10,7 @@ import { makeCodexAdapterLive } from "./Layers/CodexAdapter";
 import { makeCursorAdapterLive } from "./Layers/CursorAdapter";
 import { makeEventNdjsonLogger } from "./Layers/EventNdjsonLogger";
 import { makeGeminiAdapterLive } from "./Layers/GeminiAdapter";
-import { makeOpenCodeAdapterLive } from "./Layers/OpenCodeAdapter";
+import { makeKiloAdapterLive, makeOpenCodeAdapterLive } from "./Layers/OpenCodeAdapter";
 import { ProviderAdapterRegistryLive } from "./Layers/ProviderAdapterRegistry";
 import { ProviderDiscoveryServiceLive } from "./Layers/ProviderDiscoveryService";
 import { makeProviderServiceLive } from "./Layers/ProviderService";
@@ -54,6 +54,9 @@ export function makeServerProviderLayer(): Layer.Layer<
     const openCodeAdapterLayer = makeOpenCodeAdapterLive(
       nativeEventLogger ? { nativeEventLogger } : undefined,
     );
+    const kiloAdapterLayer = makeKiloAdapterLive(
+      nativeEventLogger ? { nativeEventLogger } : undefined,
+    );
     const geminiAdapterLayer = makeGeminiAdapterLive(
       nativeEventLogger ? { nativeEventLogger } : undefined,
     );
@@ -66,6 +69,7 @@ export function makeServerProviderLayer(): Layer.Layer<
       Layer.provide(claudeAdapterLayer),
       Layer.provide(cursorAdapterLayer),
       Layer.provide(geminiAdapterLayer),
+      Layer.provide(kiloAdapterLayer),
       Layer.provide(openCodeAdapterLayer),
       Layer.provideMerge(providerSessionDirectoryLayer),
     );

@@ -91,7 +91,10 @@ export function getRuntimeAwareModelCapabilities(input: {
     })) ?? staticCapabilities.contextWindowOptions;
   const runtimeEfforts = input.runtimeModel?.supportedReasoningEfforts;
   if (
-    (input.provider !== "codex" && input.provider !== "cursor" && input.provider !== "opencode") ||
+    (input.provider !== "codex" &&
+      input.provider !== "cursor" &&
+      input.provider !== "kilo" &&
+      input.provider !== "opencode") ||
     !runtimeEfforts ||
     runtimeEfforts.length === 0
   ) {
@@ -120,7 +123,7 @@ export function getRuntimeAwareModelCapabilities(input: {
     };
   });
 
-  if (input.provider === "opencode") {
+  if (input.provider === "kilo" || input.provider === "opencode") {
     return {
       ...staticCapabilities,
       variantOptions: runtimeOptions,

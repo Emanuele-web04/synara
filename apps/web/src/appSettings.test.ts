@@ -65,6 +65,7 @@ describe("getAppModelOptions", () => {
     const options = getAppModelOptions("codex", [], "custom/selected-model");
 
     expect(options.at(-1)).toEqual({
+      provider: "codex",
       slug: "custom/selected-model",
       name: "custom/selected-model",
       isCustom: true,
@@ -75,6 +76,7 @@ describe("getAppModelOptions", () => {
     const options = getAppModelOptions("codex", ["gpt-5.1-codex-max"]);
 
     expect(options.at(-1)).toEqual({
+      provider: "codex",
       slug: "gpt-5.1-codex-max",
       name: "GPT-5.1 Codex Max",
       isCustom: true,
@@ -91,14 +93,17 @@ describe("getAppModelOptions", () => {
 });
 
 describe("getGitTextGenerationModelOptions", () => {
-  it("merges codex and OpenCode model options for git writing settings", () => {
+  it("merges codex, Kilo, and OpenCode model options for git writing settings", () => {
     const options = getGitTextGenerationModelOptions({
       customCodexModels: ["custom/codex-model"],
+      customKiloModels: ["openrouter/kilo-model"],
       customOpenCodeModels: ["openrouter/gpt-oss-120b"],
+      textGenerationProvider: "opencode",
       textGenerationModel: "openai/gpt-5",
     });
 
     expect(options.some((option) => option.slug === "gpt-5.4-mini")).toBe(true);
+    expect(options.some((option) => option.provider === "kilo" && option.slug === "openrouter/kilo-model")).toBe(true);
     expect(options.some((option) => option.slug === "openai/gpt-5")).toBe(true);
     expect(options.some((option) => option.slug === "openrouter/gpt-oss-120b")).toBe(true);
   });
@@ -106,11 +111,14 @@ describe("getGitTextGenerationModelOptions", () => {
   it("preserves a currently selected transient git writing model", () => {
     const options = getGitTextGenerationModelOptions({
       customCodexModels: [],
+      customKiloModels: [],
       customOpenCodeModels: [],
+      textGenerationProvider: "opencode",
       textGenerationModel: "openrouter/custom-model",
     });
 
     expect(options.at(-1)).toEqual({
+      provider: "opencode",
       slug: "openrouter/custom-model",
       name: "Custom Model",
       isCustom: true,
@@ -120,15 +128,30 @@ describe("getGitTextGenerationModelOptions", () => {
   it("humanizes transient OpenCode git-writing models instead of showing the raw slug", () => {
     const options = getGitTextGenerationModelOptions({
       customCodexModels: [],
+      customKiloModels: [],
       customOpenCodeModels: [],
+      textGenerationProvider: "opencode",
       textGenerationModel: "opencode-go/kimi-k2.6",
     });
 
     expect(options.at(-1)).toEqual({
+      provider: "opencode",
       slug: "opencode-go/kimi-k2.6",
       name: "Kimi K2.6",
       isCustom: true,
     });
+  });
+
+  it("preserves a currently selected transient Kilo git-writing model", () => {
+    const options = getGitTextGenerationModelOptions({
+      customCodexModels: [],
+      customKiloModels: [],
+      customOpenCodeModels: [],
+      textGenerationProvider: "kilo",
+      textGenerationModel: "openai/gpt-5",
+    });
+
+    expect(options.some((option) => option.provider === "kilo" && option.slug === "openai/gpt-5")).toBe(true);
   });
 });
 
@@ -137,7 +160,7 @@ describe("resolveAppModelSelection", () => {
     expect(
       resolveAppModelSelection(
         "codex",
-        { codex: ["galapagos-alpha"], claudeAgent: [], cursor: [], gemini: [], opencode: [] },
+        { codex: ["galapagos-alpha"], claudeAgent: [], cursor: [], gemini: [], kilo: [], opencode: [] },
         "galapagos-alpha",
       ),
     ).toBe("galapagos-alpha");
@@ -147,7 +170,7 @@ describe("resolveAppModelSelection", () => {
     expect(
       resolveAppModelSelection(
         "codex",
-        { codex: [], claudeAgent: [], cursor: [], gemini: [], opencode: [] },
+        { codex: [], claudeAgent: [], cursor: [], gemini: [], kilo: [], opencode: [] },
         "",
       ),
     ).toBe("gpt-5.5");
@@ -157,7 +180,7 @@ describe("resolveAppModelSelection", () => {
     expect(
       resolveAppModelSelection(
         "codex",
-        { codex: [], claudeAgent: [], cursor: [], gemini: [], opencode: [] },
+        { codex: [], claudeAgent: [], cursor: [], gemini: [], kilo: [], opencode: [] },
         "GPT-5.3 Codex",
       ),
     ).toBe("gpt-5.3-codex");
@@ -167,7 +190,7 @@ describe("resolveAppModelSelection", () => {
     expect(
       resolveAppModelSelection(
         "claudeAgent",
-        { codex: [], claudeAgent: [], cursor: [], gemini: [], opencode: [] },
+        { codex: [], claudeAgent: [], cursor: [], gemini: [], kilo: [], opencode: [] },
         "sonnet",
       ),
     ).toBe("claude-sonnet-4-6");
@@ -177,7 +200,7 @@ describe("resolveAppModelSelection", () => {
     expect(
       resolveAppModelSelection(
         "codex",
-        { codex: [], claudeAgent: [], cursor: [], gemini: [], opencode: [] },
+        { codex: [], claudeAgent: [], cursor: [], gemini: [], kilo: [], opencode: [] },
         "custom/selected-model",
       ),
     ).toBe("custom/selected-model");
@@ -260,6 +283,9 @@ describe("getProviderStartOptions", () => {
         cursorApiEndpoint: "http://localhost:3000",
         cursorBinaryPath: "/usr/local/bin/agent",
         geminiBinaryPath: "/usr/local/bin/gemini",
+        kiloBinaryPath: "",
+        kiloServerPassword: "",
+        kiloServerUrl: "",
         openCodeBinaryPath: "",
         openCodeServerPassword: "",
         openCodeServerUrl: "",
@@ -290,6 +316,9 @@ describe("getProviderStartOptions", () => {
         cursorApiEndpoint: "",
         cursorBinaryPath: "",
         geminiBinaryPath: "",
+        kiloBinaryPath: "",
+        kiloServerPassword: "",
+        kiloServerUrl: "",
         openCodeBinaryPath: "",
         openCodeServerPassword: "",
         openCodeServerUrl: "",
@@ -304,6 +333,7 @@ describe("provider-indexed custom model settings", () => {
     customClaudeModels: ["claude/custom-opus"],
     customCursorModels: ["cursor/custom-model"],
     customGeminiModels: ["gemini/custom-flash"],
+    customKiloModels: ["openrouter/kilo-model"],
     customOpenCodeModels: ["openrouter/gpt-oss-120b"],
   } as const;
 
@@ -313,6 +343,7 @@ describe("provider-indexed custom model settings", () => {
       "claudeAgent",
       "cursor",
       "gemini",
+      "kilo",
       "opencode",
     ]);
   });
@@ -322,6 +353,7 @@ describe("provider-indexed custom model settings", () => {
     expect(getCustomModelsForProvider(settings, "claudeAgent")).toEqual(["claude/custom-opus"]);
     expect(getCustomModelsForProvider(settings, "cursor")).toEqual(["cursor/custom-model"]);
     expect(getCustomModelsForProvider(settings, "gemini")).toEqual(["gemini/custom-flash"]);
+    expect(getCustomModelsForProvider(settings, "kilo")).toEqual(["openrouter/kilo-model"]);
     expect(getCustomModelsForProvider(settings, "opencode")).toEqual(["openrouter/gpt-oss-120b"]);
   });
 
@@ -331,6 +363,7 @@ describe("provider-indexed custom model settings", () => {
       customClaudeModels: ["claude/default-opus"],
       customCursorModels: ["cursor/default-model"],
       customGeminiModels: ["gemini/default-flash"],
+      customKiloModels: ["openai/gpt-5"],
       customOpenCodeModels: ["openai/gpt-5"],
     } as const;
 
@@ -340,6 +373,7 @@ describe("provider-indexed custom model settings", () => {
     ]);
     expect(getDefaultCustomModelsForProvider(defaults, "cursor")).toEqual(["cursor/default-model"]);
     expect(getDefaultCustomModelsForProvider(defaults, "gemini")).toEqual(["gemini/default-flash"]);
+    expect(getDefaultCustomModelsForProvider(defaults, "kilo")).toEqual(["openai/gpt-5"]);
     expect(getDefaultCustomModelsForProvider(defaults, "opencode")).toEqual(["openai/gpt-5"]);
   });
 
@@ -367,6 +401,12 @@ describe("provider-indexed custom model settings", () => {
     });
   });
 
+  it("patches custom models for kilo", () => {
+    expect(patchCustomModels("kilo", ["openrouter/kilo-model"])).toEqual({
+      customKiloModels: ["openrouter/kilo-model"],
+    });
+  });
+
   it("patches custom models for opencode", () => {
     expect(patchCustomModels("opencode", ["openrouter/gpt-oss-120b"])).toEqual({
       customOpenCodeModels: ["openrouter/gpt-oss-120b"],
@@ -379,6 +419,7 @@ describe("provider-indexed custom model settings", () => {
       claudeAgent: ["claude/custom-opus"],
       cursor: ["cursor/custom-model"],
       gemini: ["gemini/custom-flash"],
+      kilo: ["openrouter/kilo-model"],
       opencode: ["openrouter/gpt-oss-120b"],
     });
   });
@@ -399,6 +440,9 @@ describe("provider-indexed custom model settings", () => {
       modelOptionsByProvider.gemini.some((option) => option.slug === "gemini/custom-flash"),
     ).toBe(true);
     expect(
+      modelOptionsByProvider.kilo.some((option) => option.slug === "openrouter/kilo-model"),
+    ).toBe(true);
+    expect(
       modelOptionsByProvider.opencode.some((option) => option.slug === "openrouter/gpt-oss-120b"),
     ).toBe(true);
   });
@@ -409,6 +453,7 @@ describe("provider-indexed custom model settings", () => {
       customClaudeModels: [" sonnet ", "claude/custom-opus", "claude/custom-opus"],
       customCursorModels: [" composer-2 ", "cursor/custom-model", "cursor/custom-model"],
       customGeminiModels: [" auto-gemini-3 ", "gemini/custom-flash", "gemini/custom-flash"],
+      customKiloModels: [" openai/gpt-5 ", "openrouter/kilo-model", "openrouter/kilo-model"],
       customOpenCodeModels: [
         " openai/gpt-5 ",
         "openrouter/gpt-oss-120b",
@@ -431,6 +476,9 @@ describe("provider-indexed custom model settings", () => {
     ).toHaveLength(1);
     expect(
       modelOptionsByProvider.cursor.filter((option) => option.slug === "cursor/custom-model"),
+    ).toHaveLength(1);
+    expect(
+      modelOptionsByProvider.kilo.filter((option) => option.slug === "openrouter/kilo-model"),
     ).toHaveLength(1);
     expect(modelOptionsByProvider.gemini.some((option) => option.slug === "auto-gemini-3")).toBe(
       true,

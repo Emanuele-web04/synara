@@ -29,6 +29,7 @@ const RuntimeEventRawSource = Schema.Literals([
   "gemini.acp.stderr",
   "acp.jsonrpc",
   "acp.cursor.extension",
+  "kilo.sdk.event",
   "opencode.sdk.event",
 ]);
 export type RuntimeEventRawSource = typeof RuntimeEventRawSource.Type;

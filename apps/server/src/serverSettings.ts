@@ -79,7 +79,13 @@ export class ServerSettingsService extends ServiceMap.Service<
     );
 }
 
-const PROVIDER_ORDER: readonly ProviderKind[] = ["codex", "claudeAgent", "gemini", "opencode"];
+const PROVIDER_ORDER: readonly ProviderKind[] = [
+  "codex",
+  "claudeAgent",
+  "gemini",
+  "kilo",
+  "opencode",
+];
 
 function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings {
   const selection = settings.textGenerationModelSelection;

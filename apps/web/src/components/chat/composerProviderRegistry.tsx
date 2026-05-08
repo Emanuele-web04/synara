@@ -5,6 +5,7 @@
 
 import {
   type ModelSlug,
+  type ProviderAgentDescriptor,
   type ProviderKind,
   type ProviderModelDescriptor,
   type ProviderModelOptions,
@@ -49,6 +50,7 @@ type ProviderTraitRenderInput = {
   model: ModelSlug;
   runtimeModel?: ProviderModelDescriptor | undefined;
   runtimeModels?: ReadonlyArray<ProviderModelDescriptor> | null | undefined;
+  runtimeAgents?: ReadonlyArray<ProviderAgentDescriptor> | null | undefined;
   modelOptions: ProviderModelOptions[ProviderKind] | undefined;
   prompt: string;
   includeFastMode?: boolean;
@@ -78,6 +80,7 @@ function renderTraitsMenuContentForProvider(
       model={input.model}
       runtimeModel={input.runtimeModel}
       runtimeModels={input.runtimeModels}
+      runtimeAgents={input.runtimeAgents}
       modelOptions={input.modelOptions}
       prompt={input.prompt}
       {...(input.includeFastMode === undefined ? {} : { includeFastMode: input.includeFastMode })}
@@ -97,6 +100,7 @@ function renderTraitsPickerForProvider(
       model={input.model}
       runtimeModel={input.runtimeModel}
       runtimeModels={input.runtimeModels}
+      runtimeAgents={input.runtimeAgents}
       modelOptions={input.modelOptions}
       prompt={input.prompt}
       {...(input.open !== undefined ? { open: input.open } : {})}
@@ -152,8 +156,9 @@ function getProviderStateFromCapabilities(
       normalizedOptions = normalizeGeminiModelOptions(model, providerOptions);
       break;
     }
+    case "kilo":
     case "opencode": {
-      const providerOptions = modelOptions?.opencode;
+      const providerOptions = provider === "kilo" ? modelOptions?.kilo : modelOptions?.opencode;
       rawEffort = trimOrNull(providerOptions?.variant);
       const variantOptions = caps.variantOptions ?? [];
       const reasoningVariant =
@@ -180,7 +185,7 @@ function getProviderStateFromCapabilities(
     ? caps.promptInjectedEffortLevels.includes(draftEffort)
     : false;
   const promptEffort =
-    provider === "opencode"
+      provider === "kilo" || provider === "opencode"
       ? resolveLabeledOptionValue(caps.variantOptions, draftEffort)
       : draftEffort && !isPromptInjected && hasEffortLevel(caps, draftEffort)
         ? draftEffort
@@ -224,6 +229,11 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
     renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("gemini", input),
     renderTraitsPicker: (input) => renderTraitsPickerForProvider("gemini", input),
   },
+  kilo: {
+    getState: (input) => getProviderStateFromCapabilities(input),
+    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("kilo", input),
+    renderTraitsPicker: (input) => renderTraitsPickerForProvider("kilo", input),
+  },
   opencode: {
     getState: (input) => getProviderStateFromCapabilities(input),
     renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("opencode", input),
@@ -241,6 +251,7 @@ export function renderProviderTraitsMenuContent(input: {
   model: ModelSlug;
   runtimeModel?: ProviderModelDescriptor | undefined;
   runtimeModels?: ReadonlyArray<ProviderModelDescriptor> | null | undefined;
+  runtimeAgents?: ReadonlyArray<ProviderAgentDescriptor> | null | undefined;
   modelOptions: ProviderModelOptions[ProviderKind] | undefined;
   prompt: string;
   includeFastMode?: boolean;
@@ -257,7 +268,9 @@ export function renderProviderTraitsMenuContent(input: {
     !hasVisibleComposerTraitControls(
       selection,
       input.includeFastMode === undefined ? undefined : { includeFastMode: input.includeFastMode },
-    )
+    ) &&
+    ((input.provider !== "kilo" && input.provider !== "opencode") ||
+      (input.runtimeAgents?.length ?? 0) === 0)
   ) {
     return null;
   }
@@ -270,6 +283,7 @@ export function renderProviderTraitsPicker(input: {
   model: ModelSlug;
   runtimeModel?: ProviderModelDescriptor | undefined;
   runtimeModels?: ReadonlyArray<ProviderModelDescriptor> | null | undefined;
+  runtimeAgents?: ReadonlyArray<ProviderAgentDescriptor> | null | undefined;
   modelOptions: ProviderModelOptions[ProviderKind] | undefined;
   prompt: string;
   includeFastMode?: boolean;
@@ -289,7 +303,9 @@ export function renderProviderTraitsPicker(input: {
     !hasVisibleComposerTraitControls(
       selection,
       input.includeFastMode === undefined ? undefined : { includeFastMode: input.includeFastMode },
-    )
+    ) &&
+    ((input.provider !== "kilo" && input.provider !== "opencode") ||
+      (input.runtimeAgents?.length ?? 0) === 0)
   ) {
     return null;
   }

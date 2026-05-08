@@ -3,7 +3,7 @@
 // Layer: Persistence compatibility helper
 // Exports: normalizeLegacyModelSelection, normalizePersistedModelSelection
 
-type ModelProviderKind = "codex" | "claudeAgent" | "cursor" | "gemini" | "opencode";
+type ModelProviderKind = "codex" | "claudeAgent" | "cursor" | "gemini" | "kilo" | "opencode";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -23,6 +23,9 @@ function inferProviderFromLabel(label: string): ModelProviderKind | undefined {
   const lowerLabel = label.toLowerCase();
   if (lowerLabel.includes("opencode")) {
     return "opencode";
+  }
+  if (lowerLabel.includes("kilo")) {
+    return "kilo";
   }
   if (lowerLabel.includes("cursor")) {
     return "cursor";
@@ -45,6 +48,7 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
     provider === "claudeAgent" ||
     provider === "cursor" ||
     provider === "gemini" ||
+    provider === "kilo" ||
     provider === "opencode"
   ) {
     return provider;

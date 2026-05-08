@@ -26,7 +26,7 @@ import {
   SiStripe,
   SiVercel,
 } from "react-icons/si";
-import { ClaudeAI, CursorIcon, Gemini, OpenCodeIcon } from "./Icons";
+import { ClaudeAI, CursorIcon, Gemini, KiloIcon, OpenCodeIcon } from "./Icons";
 import { useStore } from "~/store";
 import {
   buildPluginSearchBlob,
@@ -81,6 +81,7 @@ const PROVIDER_ICON: Record<ProviderKind, React.FC<React.SVGProps<SVGSVGElement>
   claudeAgent: ClaudeAI,
   cursor: CursorIcon,
   gemini: Gemini,
+  kilo: KiloIcon,
   opencode: OpenCodeIcon,
 };
 const PROVIDER_DISCOVERY_ORDER: ReadonlyArray<ProviderKind> = [
@@ -88,6 +89,7 @@ const PROVIDER_DISCOVERY_ORDER: ReadonlyArray<ProviderKind> = [
   "claudeAgent",
   "cursor",
   "gemini",
+  "kilo",
   "opencode",
 ];
 const KNOWN_PLUGIN_BRANDS: Record<string, PluginBrandArtwork> = {
@@ -389,6 +391,7 @@ export function PluginLibrary() {
   const claudeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("claudeAgent"));
   const cursorCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("cursor"));
   const geminiCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("gemini"));
+  const kiloCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("kilo"));
   const openCodeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("opencode"));
 
   const providerCapabilities = useMemo<Record<ProviderKind, ProviderCapabilities>>(
@@ -409,6 +412,10 @@ export function PluginLibrary() {
         plugins: supportsPluginDiscovery(geminiCapabilitiesQuery.data),
         skills: supportsSkillDiscovery(geminiCapabilitiesQuery.data),
       },
+      kilo: {
+        plugins: supportsPluginDiscovery(kiloCapabilitiesQuery.data),
+        skills: supportsSkillDiscovery(kiloCapabilitiesQuery.data),
+      },
       opencode: {
         plugins: supportsPluginDiscovery(openCodeCapabilitiesQuery.data),
         skills: supportsSkillDiscovery(openCodeCapabilitiesQuery.data),
@@ -419,6 +426,7 @@ export function PluginLibrary() {
       codexCapabilitiesQuery.data,
       cursorCapabilitiesQuery.data,
       geminiCapabilitiesQuery.data,
+      kiloCapabilitiesQuery.data,
       openCodeCapabilitiesQuery.data,
     ],
   );
