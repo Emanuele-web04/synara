@@ -191,6 +191,7 @@ import {
   pruneExpandedProjectThreadListsForCollapsedProjects,
   recoverExistingAddProjectTarget,
   DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY,
+  resolveProjectEmptyState,
   resolveSidebarNewThreadEnvMode,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
@@ -3413,6 +3414,11 @@ export default function Sidebar() {
       ),
     [homeDir, sortedProjects],
   );
+  const projectEmptyState = resolveProjectEmptyState({
+    projectCount: standardProjects.length,
+    shouldShowProjectPathEntry,
+    threadsHydrated,
+  });
   const standardProjectSidebarDataById = useMemo<ReadonlyMap<ProjectId, SidebarDerivedProjectData>>(
     () =>
       deriveSidebarProjectData({
@@ -5726,7 +5732,24 @@ export default function Sidebar() {
                   </SidebarMenu>
                 )}
 
-                {standardProjects.length === 0 && !shouldShowProjectPathEntry && (
+                {projectEmptyState === "loading" && (
+                  <div
+                    className="space-y-2 px-2 pt-4"
+                    aria-live="polite"
+                    aria-label="Loading projects"
+                  >
+                    <div className="text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
+                      Loading projects...
+                    </div>
+                    <div className="mx-auto grid w-full max-w-42 gap-1.5 opacity-70">
+                      <div className="h-2 rounded-full bg-muted/55 animate-pulse" />
+                      <div className="mx-auto h-2 w-4/5 rounded-full bg-muted/40 animate-pulse" />
+                      <div className="mx-auto h-2 w-3/5 rounded-full bg-muted/30 animate-pulse" />
+                    </div>
+                  </div>
+                )}
+
+                {projectEmptyState === "empty" && (
                   <div className="px-2 pt-4 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
                     No projects yet
                   </div>

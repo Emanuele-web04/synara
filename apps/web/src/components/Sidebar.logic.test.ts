@@ -23,6 +23,7 @@ import {
   isDuplicateProjectCreateError,
   pruneExpandedProjectThreadListsForCollapsedProjects,
   recoverExistingAddProjectTarget,
+  resolveProjectEmptyState,
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadEnvMode,
   resolveThreadRowClassName,
@@ -323,6 +324,30 @@ describe("pin helpers", () => {
   it("waits for thread hydration before pruning persisted pins", () => {
     expect(shouldPrunePinnedThreads({ threadsHydrated: false })).toBe(false);
     expect(shouldPrunePinnedThreads({ threadsHydrated: true })).toBe(true);
+  });
+
+  it("shows loading before the first project snapshot can prove the list is empty", () => {
+    expect(
+      resolveProjectEmptyState({
+        projectCount: 0,
+        shouldShowProjectPathEntry: false,
+        threadsHydrated: false,
+      }),
+    ).toBe("loading");
+    expect(
+      resolveProjectEmptyState({
+        projectCount: 0,
+        shouldShowProjectPathEntry: false,
+        threadsHydrated: true,
+      }),
+    ).toBe("empty");
+    expect(
+      resolveProjectEmptyState({
+        projectCount: 1,
+        shouldShowProjectPathEntry: false,
+        threadsHydrated: false,
+      }),
+    ).toBeNull();
   });
 });
 
