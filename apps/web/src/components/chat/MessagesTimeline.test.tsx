@@ -1502,6 +1502,55 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("&gt;/bin/zsh -lc");
   });
 
+  it("renders command text even when commandActions provide a short preview", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        timelineEntries={[
+          {
+            id: "entry-inline-command-actions",
+            kind: "work",
+            createdAt: "2026-05-09T10:06:54.443Z",
+            entry: {
+              id: "work-inline-command-actions",
+              createdAt: "2026-05-09T10:06:54.443Z",
+              label: "Ran command",
+              tone: "tool",
+              itemType: "command_execution",
+              toolTitle: "Listed",
+              preview: "web",
+              command: "find apps/web/src -maxdepth 2 -type d",
+              rawCommand: `/bin/zsh -lc "find apps/web/src -maxdepth 2 -type d | sort | sed -n '1,120p'"`,
+            },
+          },
+        ]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-05-09T10:07:00.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="dark"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("Listed");
+    expect(markup).toContain("find apps/web/src -maxdepth 2 -type d");
+    expect(markup).not.toContain(">Listed web<");
+  });
+
   it("renders plain location details as file basenames", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(

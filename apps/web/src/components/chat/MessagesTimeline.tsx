@@ -1603,6 +1603,11 @@ function workEntryPreview(
     workEntry.requestKind === "file-change" ||
     workEntry.itemType === "file_change";
 
+  if (workEntry.itemType === "command_execution" || workEntry.command || workEntry.rawCommand) {
+    const command = workEntry.command ?? workEntry.rawCommand;
+    if (command) return deriveInlineCommandCall(command);
+  }
+
   if (workEntry.preview) return workEntry.preview;
 
   // Prefer clean basenames from changedFiles
@@ -1611,8 +1616,6 @@ function workEntryPreview(
     if (names.length === 1) return names[0]!;
     return `${names.length} files`;
   }
-
-  if (workEntry.command) return deriveInlineCommandCall(workEntry.command);
 
   if (workEntry.itemType === "collab_agent_tool_call" && (workEntry.subagents?.length ?? 0) > 0) {
     if (workEntry.subagentAction?.summaryText) {
