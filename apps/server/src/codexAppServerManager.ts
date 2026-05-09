@@ -10,7 +10,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 
@@ -63,6 +63,11 @@ import {
   parseCodexCliVersion,
 } from "./provider/codexCliVersion";
 import { isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
+import {
+  resolveBaseCodexHomePath,
+  resolveDpCodeCodexHomeOverlayPath,
+  shouldDisableDpCodeBrowserPlugin,
+} from "./codexHomePaths.ts";
 import { transcribeVoiceWithChatGptSession } from "./voiceTranscription.ts";
 
 type PendingRequestKey = string;
@@ -248,8 +253,6 @@ const CODEX_SPARK_DISABLED_PLAN_TYPES = new Set<CodexPlanType>(["free", "go", "p
 const CODEX_PROCESS_SHELL_ENV_NAMES = ["PATH", "SSH_AUTH_SOCK"] as const;
 const CODEX_DISCOVERY_SESSION_IDLE_MS = 10 * 60 * 1000;
 const NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS = "NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS";
-const DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN_ENV = "DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN";
-const DPCODE_CODEX_HOME_OVERLAY_DIR = "codex-home-overlay";
 const DPCODE_BROWSER_PLUGIN_CONFIG_HEADER = '[plugins."dpcode-browser@local"]';
 
 export function resolveCodexBrowserUsePipePath(
@@ -267,14 +270,6 @@ export function resolveCodexBrowserUsePipePath(
   return (input.platform ?? process.platform) === "win32"
     ? String.raw`\\.\pipe\codex-browser-use`
     : "/tmp/codex-browser-use.sock";
-}
-
-function resolveBaseCodexHomePath(env: NodeJS.ProcessEnv, explicitHomePath?: string): string {
-  return explicitHomePath?.trim() || env.CODEX_HOME?.trim() || path.join(homedir(), ".codex");
-}
-
-function shouldDisableDpCodeBrowserPlugin(env: NodeJS.ProcessEnv): boolean {
-  return env[DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN_ENV] !== "0";
 }
 
 export function disableDpCodeBrowserPluginInCodexConfig(config: string): string {
@@ -320,12 +315,6 @@ export function disableDpCodeBrowserPluginInCodexConfig(config: string): string 
   }
 
   return output.join("\n");
-}
-
-function resolveDpCodeCodexHomeOverlayPath(env: NodeJS.ProcessEnv, sourceHomePath: string): string {
-  const runtimeHome = env.DPCODE_HOME?.trim() || env.T3CODE_HOME?.trim();
-  const overlayRoot = runtimeHome || path.join(path.dirname(sourceHomePath), ".dpcode", "runtime");
-  return path.join(overlayRoot, DPCODE_CODEX_HOME_OVERLAY_DIR);
 }
 
 function prepareDpCodeCodexHomeOverlay(input: {

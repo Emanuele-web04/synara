@@ -4,7 +4,6 @@
 // Exports: Codex image path, payload sanitization, and markdown helpers
 // Depends on: node path/os, image MIME allowlist, provider runtime artifact contract
 
-import os from "node:os";
 import path from "node:path";
 
 import {
@@ -14,6 +13,11 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { isSupportedLocalImagePath as isSupportedLocalImagePathShared } from "@t3tools/shared/localImage";
+
+import {
+  resolveActiveCodexHomeWritePath,
+  resolveCodexHomeAllowlistCandidates,
+} from "./codexHomePaths.ts";
 
 export { CODEX_GENERATED_IMAGE_ARTIFACT_KIND };
 
@@ -63,12 +67,30 @@ export function isCodexGeneratedImageItemType(raw: unknown): boolean {
 
 export const isSupportedLocalImagePath = isSupportedLocalImagePathShared;
 
+/**
+ * Resolves the home directory the codex app-server child process actually
+ * writes images under for the current process env. When DP Code wraps Codex
+ * with the dpcode-browser overlay (production default), this is the overlay
+ * home — not the user's `~/.codex`.
+ */
 export function resolveCodexHomePath(homePath?: string): string {
-  return homePath?.trim() || process.env.CODEX_HOME?.trim() || path.join(os.homedir(), ".codex");
+  return resolveActiveCodexHomeWritePath(homePath?.trim() ? { homePath } : {});
 }
 
+/** The single generated-images directory we predict against (overlay-aware). */
 export function resolveCodexGeneratedImagesRoot(homePath?: string): string {
   return path.join(resolveCodexHomePath(homePath), "generated_images");
+}
+
+/**
+ * All generated-images directories the local-image route should treat as
+ * legitimate. Includes both the source `~/.codex/generated_images` and the
+ * overlay `<DPCODE_HOME>/codex-home-overlay/generated_images` so we serve
+ * images regardless of which home Codex wrote them under.
+ */
+export function resolveCodexGeneratedImagesRoots(homePath?: string): readonly string[] {
+  const homes = resolveCodexHomeAllowlistCandidates(homePath?.trim() ? { homePath } : {});
+  return homes.map((home) => path.join(home, "generated_images"));
 }
 
 export function firstStringValue(

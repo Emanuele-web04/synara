@@ -612,7 +612,7 @@ label:has(> select#reasoning-effort) select {
   display: inline-block;
   margin: 0.55rem 0;
   width: fit-content;
-  max-width: min(364px, 100%);
+  max-width: min(255px, 100%);
   vertical-align: top;
   isolation: isolate;
 }
@@ -644,14 +644,14 @@ label:has(> select#reasoning-effort) select {
 }
 
 .chat-generated-image[data-status="loading"] .chat-generated-image__frame {
-  min-height: 112px;
+  min-height: 78px;
 }
 
 .chat-generated-image__img {
   display: block;
   width: 100%;
   max-width: 100%;
-  max-height: 336px;
+  max-height: 235px;
   object-fit: contain;
   background: transparent;
   user-select: none;

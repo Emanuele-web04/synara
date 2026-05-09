@@ -10,7 +10,7 @@ import path from "node:path";
 
 import { LOCAL_IMAGE_ROUTE_PATH, isSupportedLocalImagePath } from "@t3tools/shared/localImage";
 
-import { resolveCodexGeneratedImagesRoot } from "./codexGeneratedImages.ts";
+import { resolveCodexGeneratedImagesRoots } from "./codexGeneratedImages.ts";
 
 export { LOCAL_IMAGE_ROUTE_PATH };
 
@@ -100,14 +100,16 @@ export async function resolveAllowedLocalImageFile(input: {
     return null;
   }
 
-  const [workspaceRoot, generatedImagesRoot, tempRoots] = await Promise.all([
+  const [workspaceRoot, generatedImagesRoots, tempRoots] = await Promise.all([
     resolveWorkspaceRoot(input.cwd),
-    realpathOrNull(resolveCodexGeneratedImagesRoot(input.codexHomePath)),
+    Promise.all(resolveCodexGeneratedImagesRoots(input.codexHomePath).map(realpathOrNull)).then(
+      (roots) => roots.filter((root): root is string => root !== null),
+    ),
     temporaryImageRoots(),
   ]);
   const allowed =
     (workspaceRoot !== null && isPathInside(realImagePath, workspaceRoot)) ||
-    (generatedImagesRoot !== null && isPathInside(realImagePath, generatedImagesRoot)) ||
+    generatedImagesRoots.some((root) => isPathInside(realImagePath, root)) ||
     tempRoots.some((root) => isPathInside(realImagePath, root));
   if (!allowed) {
     return null;

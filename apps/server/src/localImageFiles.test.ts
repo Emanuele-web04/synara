@@ -61,6 +61,49 @@ describe("resolveAllowedLocalImageFile", () => {
     }
   });
 
+  it("allows images written to the DPCODE_HOME codex-home-overlay generated_images root", async () => {
+    // Codex app-server is launched with CODEX_HOME pointing at a DP Code overlay
+    // directory (see resolveDpCodeCodexHomeOverlayPath). Generated images therefore
+    // live under <DPCODE_HOME>/codex-home-overlay/generated_images/<thread>/<call>.png,
+    // which sits outside both the user's `~/.codex` source home and any workspace
+    // root. The allowlist must still serve them.
+    //
+    // We anchor the fake homes inside the worktree (process.cwd() resolves to
+    // apps/server/ when vitest runs) so neither path falls under os.tmpdir(); that
+    // way only the overlay candidate can satisfy the allowlist.
+    const fakeRoot = path.join(process.cwd(), `.test-codex-overlay-${process.pid}-${Date.now()}`);
+    const sourceHome = path.join(fakeRoot, "source", ".codex");
+    const dpcodeHome = path.join(fakeRoot, "dpcode", "runtime");
+    const overlayImageDir = path.join(
+      dpcodeHome,
+      "codex-home-overlay",
+      "generated_images",
+      "thread-overlay",
+    );
+    const imagePath = path.join(overlayImageDir, "call.png");
+    mkdirSync(overlayImageDir, { recursive: true });
+    writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+    const previousDpcodeHome = process.env.DPCODE_HOME;
+    process.env.DPCODE_HOME = dpcodeHome;
+    try {
+      const result = await resolveAllowedLocalImageFile({
+        requestedPath: imagePath,
+        cwd: null,
+        codexHomePath: sourceHome,
+      });
+
+      assert.equal(result?.path, realpathSync(imagePath));
+    } finally {
+      if (previousDpcodeHome === undefined) {
+        delete process.env.DPCODE_HOME;
+      } else {
+        process.env.DPCODE_HOME = previousDpcodeHome;
+      }
+      rmSync(fakeRoot, { recursive: true, force: true });
+    }
+  });
+
   it("rejects unsupported paths", async () => {
     const result = await resolveAllowedLocalImageFile({
       requestedPath: "/etc/hosts",
