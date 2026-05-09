@@ -161,6 +161,46 @@ function runtimePayloadRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function runtimeStatusForEvent(event: ProviderRuntimeEvent): "running" | "stopped" | "error" {
+  switch (event.type) {
+    case "session.state.changed":
+      switch (event.payload.state) {
+        case "stopped":
+          return "stopped";
+        case "error":
+          return "error";
+        default:
+          return "running";
+      }
+    case "session.exited":
+    case "turn.completed":
+    case "turn.aborted":
+      // A completed turn can still carry a resume cursor, but it must not keep
+      // the desktop app treating the provider process as active after restart.
+      return "stopped";
+    case "runtime.error":
+      return "error";
+    default:
+      return "running";
+  }
+}
+
+function runtimeLastErrorForEvent(event: ProviderRuntimeEvent): string | null | undefined {
+  switch (event.type) {
+    case "runtime.error":
+      return event.payload.message;
+    case "session.state.changed":
+      return event.payload.state === "error" ? (event.payload.reason ?? "Session error") : null;
+    case "turn.started":
+    case "turn.completed":
+    case "turn.aborted":
+    case "session.exited":
+      return null;
+    default:
+      return undefined;
+  }
+}
+
 const makeProviderService = (options?: ProviderServiceLiveOptions) =>
   Effect.gen(function* () {
     const analytics = yield* Effect.service(AnalyticsService);
@@ -289,11 +329,13 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     ): Effect.Effect<void> => {
       switch (event.type) {
         case "session.started":
+        case "session.state.changed":
         case "thread.started":
         case "turn.started":
         case "turn.completed":
         case "turn.aborted":
         case "session.exited":
+        case "runtime.error":
           break;
         default:
           return Effect.void;
@@ -310,21 +352,26 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             ? (event.turnId ?? null)
             : event.type === "turn.completed" ||
                 event.type === "turn.aborted" ||
-                event.type === "session.exited"
+                event.type === "session.exited" ||
+                event.type === "runtime.error" ||
+                (event.type === "session.state.changed" &&
+                  (event.payload.state === "stopped" || event.payload.state === "error"))
               ? null
               : (runtimePayloadRecord(binding.runtimePayload).activeTurnId ?? null);
+        const lastError = runtimeLastErrorForEvent(event);
 
         yield* directory.upsert({
           threadId: event.threadId,
           provider: binding.provider,
           ...(binding.adapterKey !== undefined ? { adapterKey: binding.adapterKey } : {}),
           ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
-          status: event.type === "session.exited" ? "stopped" : "running",
+          status: runtimeStatusForEvent(event),
           ...(binding.resumeCursor !== undefined ? { resumeCursor: binding.resumeCursor } : {}),
           runtimePayload: {
             activeTurnId,
             lastRuntimeEvent: event.type,
             lastRuntimeEventAt: event.createdAt,
+            ...(lastError !== undefined ? { lastError } : {}),
           },
         });
       }).pipe(

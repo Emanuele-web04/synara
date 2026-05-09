@@ -864,6 +864,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       });
       assert.equal(Option.isSome(runtime), true);
       if (Option.isSome(runtime)) {
+        assert.equal(runtime.value.status, "stopped");
         const payload = runtime.value.runtimePayload;
         assert.equal(payload !== null && typeof payload === "object", true);
         if (payload !== null && typeof payload === "object" && !Array.isArray(payload)) {
@@ -878,6 +879,55 @@ routing.layer("ProviderServiceLive routing", (it) => {
             provider: "opencode",
             model: "opencode/minimax-m2.5-free",
           });
+        }
+      }
+    }),
+  );
+
+  it.effect("marks persisted runtime bindings errored on runtime errors", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const runtimeRepository = yield* ProviderSessionRuntimeRepository;
+
+      const session = yield* provider.startSession(asThreadId("thread-runtime-error"), {
+        provider: "codex",
+        threadId: asThreadId("thread-runtime-error"),
+        runtimeMode: "full-access",
+      });
+      const turn = yield* provider.sendTurn({
+        threadId: session.threadId,
+        input: "hello",
+        attachments: [],
+      });
+
+      routing.codex.emit({
+        type: "runtime.error",
+        eventId: asEventId("runtime-error-event"),
+        provider: "codex",
+        createdAt: "2026-02-27T00:05:00.000Z",
+        threadId: session.threadId,
+        turnId: turn.turnId,
+        payload: { message: "Provider crashed", class: "provider_error" },
+      });
+      yield* sleep(50);
+
+      const runtime = yield* runtimeRepository.getByThreadId({
+        threadId: session.threadId,
+      });
+      assert.equal(Option.isSome(runtime), true);
+      if (Option.isSome(runtime)) {
+        assert.equal(runtime.value.status, "error");
+        const payload = runtime.value.runtimePayload;
+        assert.equal(payload !== null && typeof payload === "object", true);
+        if (payload !== null && typeof payload === "object" && !Array.isArray(payload)) {
+          const runtimePayload = payload as {
+            activeTurnId: string | null;
+            lastError: string | null;
+            lastRuntimeEvent: string | null;
+          };
+          assert.equal(runtimePayload.activeTurnId, null);
+          assert.equal(runtimePayload.lastError, "Provider crashed");
+          assert.equal(runtimePayload.lastRuntimeEvent, "runtime.error");
         }
       }
     }),

@@ -62,6 +62,7 @@ import { FilesystemBrowseInput } from "./filesystem";
 import { OpenInEditorInput } from "./editor";
 import {
   ServerConfigUpdatedPayload,
+  ServerLifecycleStreamEvent,
   ServerUpdateSettingsInput,
   ServerGetProviderUsageSnapshotInput,
   ServerProviderStatusesUpdatedPayload,
@@ -163,6 +164,7 @@ export const WS_CHANNELS = {
   gitActionProgress: "git.actionProgress",
   terminalEvent: "terminal.event",
   serverWelcome: "server.welcome",
+  serverMaintenanceUpdated: "server.maintenanceUpdated",
   serverConfigUpdated: "server.configUpdated",
   serverProviderStatusesUpdated: "server.providerStatusesUpdated",
   serverSettingsUpdated: "server.settingsUpdated",
@@ -292,6 +294,7 @@ export type WsWelcomePayload = typeof WsWelcomePayload.Type;
 
 export interface WsPushPayloadByChannel {
   readonly [WS_CHANNELS.serverWelcome]: WsWelcomePayload;
+  readonly [WS_CHANNELS.serverMaintenanceUpdated]: ServerLifecycleStreamEvent;
   readonly [WS_CHANNELS.serverConfigUpdated]: typeof ServerConfigUpdatedPayload.Type;
   readonly [WS_CHANNELS.serverProviderStatusesUpdated]: typeof ServerProviderStatusesUpdatedPayload.Type;
   readonly [WS_CHANNELS.serverSettingsUpdated]: typeof ServerSettingsUpdatedPayload.Type;
@@ -317,6 +320,10 @@ const makeWsPushSchema = <const Channel extends string, Payload extends Schema.S
   });
 
 export const WsPushServerWelcome = makeWsPushSchema(WS_CHANNELS.serverWelcome, WsWelcomePayload);
+export const WsPushServerMaintenanceUpdated = makeWsPushSchema(
+  WS_CHANNELS.serverMaintenanceUpdated,
+  ServerLifecycleStreamEvent,
+);
 export const WsPushServerConfigUpdated = makeWsPushSchema(
   WS_CHANNELS.serverConfigUpdated,
   ServerConfigUpdatedPayload,
@@ -350,6 +357,7 @@ export const WsPushOrchestrationThreadEvent = makeWsPushSchema(
 export const WsPushChannelSchema = Schema.Literals([
   WS_CHANNELS.gitActionProgress,
   WS_CHANNELS.serverWelcome,
+  WS_CHANNELS.serverMaintenanceUpdated,
   WS_CHANNELS.serverConfigUpdated,
   WS_CHANNELS.serverProviderStatusesUpdated,
   WS_CHANNELS.serverSettingsUpdated,
@@ -362,6 +370,7 @@ export type WsPushChannelSchema = typeof WsPushChannelSchema.Type;
 
 export const WsPush = Schema.Union([
   WsPushServerWelcome,
+  WsPushServerMaintenanceUpdated,
   WsPushServerConfigUpdated,
   WsPushServerProviderStatusesUpdated,
   WsPushServerSettingsUpdated,

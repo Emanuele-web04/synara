@@ -17,6 +17,7 @@ import {
   type OrchestrationShellStreamItem,
   type OrchestrationThreadStreamItem,
   type ServerProviderStatusesUpdatedPayload,
+  type ServerLifecycleStreamEvent,
   type ServerSettingsUpdatedPayload,
   type TerminalEvent,
   ORCHESTRATION_WS_CHANNELS,
@@ -39,6 +40,7 @@ const serverConfigUpdatedListeners = new Set<(payload: ServerConfigUpdatedPayloa
 const serverProviderStatusesUpdatedListeners = new Set<
   (payload: ServerProviderStatusesUpdatedPayload) => void
 >();
+const serverMaintenanceUpdatedListeners = new Set<(payload: ServerLifecycleStreamEvent) => void>();
 const serverSettingsUpdatedListeners = new Set<(payload: ServerSettingsUpdatedPayload) => void>();
 const gitActionProgressListeners = new Set<(payload: GitActionProgressEvent) => void>();
 const terminalEventListeners = new Set<(payload: TerminalEvent) => void>();
@@ -243,6 +245,26 @@ export function onServerProviderStatusesUpdated(
   };
 }
 
+export function onServerMaintenanceUpdated(
+  listener: (payload: ServerLifecycleStreamEvent) => void,
+): () => void {
+  serverMaintenanceUpdatedListeners.add(listener);
+
+  const latestMaintenance =
+    instance?.transport.getLatestPush(WS_CHANNELS.serverMaintenanceUpdated)?.data ?? null;
+  if (latestMaintenance) {
+    try {
+      listener(latestMaintenance);
+    } catch {
+      // Swallow listener errors
+    }
+  }
+
+  return () => {
+    serverMaintenanceUpdatedListeners.delete(listener);
+  };
+}
+
 export function onServerSettingsUpdated(
   listener: (payload: ServerSettingsUpdatedPayload) => void,
 ): () => void {
@@ -291,6 +313,16 @@ export function createWsNativeApi(): NativeApi {
   transport.subscribe(WS_CHANNELS.serverProviderStatusesUpdated, (message) => {
     const payload = message.data;
     for (const listener of serverProviderStatusesUpdatedListeners) {
+      try {
+        listener(payload);
+      } catch {
+        // Swallow listener errors
+      }
+    }
+  });
+  transport.subscribe(WS_CHANNELS.serverMaintenanceUpdated, (message) => {
+    const payload = message.data;
+    for (const listener of serverMaintenanceUpdatedListeners) {
       try {
         listener(payload);
       } catch {

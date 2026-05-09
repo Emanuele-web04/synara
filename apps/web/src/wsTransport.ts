@@ -70,6 +70,17 @@ function causeToError(cause: Cause.Cause<unknown>): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
+export function isServerLifecyclePushChannel(channel: string): boolean {
+  return channel === WS_CHANNELS.serverWelcome || channel === WS_CHANNELS.serverMaintenanceUpdated;
+}
+
+export function shouldKeepServerLifecycleStream(activeChannels: ReadonlySet<string>): boolean {
+  return (
+    activeChannels.has(WS_CHANNELS.serverWelcome) ||
+    activeChannels.has(WS_CHANNELS.serverMaintenanceUpdated)
+  );
+}
+
 export class WsTransport {
   private readonly explicitUrl: string | null;
   private readonly listeners = new Map<string, Set<(message: WsPush) => void>>();
@@ -290,15 +301,8 @@ export class WsTransport {
           }
         };
 
-        if (channel === WS_CHANNELS.serverWelcome) {
-          this.startStream(
-            "server.lifecycle",
-            client[WS_METHODS.subscribeServerLifecycle]({}),
-            (event: ServerLifecycleStreamEvent) => {
-              if (event.type === "welcome") this.emit(WS_CHANNELS.serverWelcome, event.payload);
-            },
-            restartChannel,
-          );
+        if (isServerLifecyclePushChannel(channel)) {
+          this.startLifecycleStream(client);
         } else if (channel === WS_CHANNELS.serverConfigUpdated) {
           this.startStream(
             "server.config",
@@ -356,14 +360,40 @@ export class WsTransport {
   }
 
   private stopChannelStream(channel: WsPushChannel): void {
-    if (channel === WS_CHANNELS.serverWelcome) this.stopStream("server.lifecycle");
-    else if (channel === WS_CHANNELS.serverConfigUpdated) this.stopStream("server.config");
+    if (isServerLifecyclePushChannel(channel)) {
+      if (!this.shouldKeepLifecycleStream()) this.stopStream("server.lifecycle");
+    } else if (channel === WS_CHANNELS.serverConfigUpdated) this.stopStream("server.config");
     else if (channel === WS_CHANNELS.serverProviderStatusesUpdated)
       this.stopStream("server.providers");
     else if (channel === WS_CHANNELS.serverSettingsUpdated) this.stopStream("server.settings");
     else if (channel === WS_CHANNELS.terminalEvent) this.stopStream("terminal.events");
     else if (channel === ORCHESTRATION_WS_CHANNELS.domainEvent)
       this.stopStream("orchestration.domain");
+  }
+
+  private shouldKeepLifecycleStream(): boolean {
+    return shouldKeepServerLifecycleStream(new Set(this.listeners.keys()));
+  }
+
+  private startLifecycleStream(client: RpcClientInstance): void {
+    const restartLifecycle = () => {
+      if (!this.shouldKeepLifecycleStream()) return;
+      void this.getClient()
+        .then((nextClient) => this.startLifecycleStream(nextClient))
+        .catch((error) => console.warn("WebSocket RPC lifecycle stream failed to restart", error));
+    };
+    this.startStream(
+      "server.lifecycle",
+      client[WS_METHODS.subscribeServerLifecycle]({}),
+      (event: ServerLifecycleStreamEvent) => {
+        if (event.type === "welcome") {
+          this.emit(WS_CHANNELS.serverWelcome, event.payload);
+        } else if (event.type === "maintenance") {
+          this.emit(WS_CHANNELS.serverMaintenanceUpdated, event);
+        }
+      },
+      restartLifecycle,
+    );
   }
 
   private startShellStream(client: RpcClientInstance): void {

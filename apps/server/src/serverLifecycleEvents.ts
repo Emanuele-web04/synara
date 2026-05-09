@@ -14,6 +14,17 @@ export interface ServerLifecycleReadyPayload {
   readonly at: string;
 }
 
+export interface ServerLifecycleMaintenancePayload {
+  readonly task: "thread-retention";
+  readonly state: "started" | "progress" | "compacting" | "completed" | "failed";
+  readonly at: string;
+  readonly deletedCount?: number;
+  readonly purgedCount?: number;
+  readonly totalCount?: number;
+  readonly freePageCount?: number;
+  readonly error?: string;
+}
+
 export type ServerLifecycleEvent =
   | {
       readonly sequence: number;
@@ -24,11 +35,17 @@ export type ServerLifecycleEvent =
       readonly sequence: number;
       readonly type: "ready";
       readonly payload: ServerLifecycleReadyPayload;
+    }
+  | {
+      readonly sequence: number;
+      readonly type: "maintenance";
+      readonly payload: ServerLifecycleMaintenancePayload;
     };
 
 type LifecycleEventInput =
   | Omit<Extract<ServerLifecycleEvent, { type: "welcome" }>, "sequence">
-  | Omit<Extract<ServerLifecycleEvent, { type: "ready" }>, "sequence">;
+  | Omit<Extract<ServerLifecycleEvent, { type: "ready" }>, "sequence">
+  | Omit<Extract<ServerLifecycleEvent, { type: "maintenance" }>, "sequence">;
 
 export interface ServerLifecycleSnapshot {
   readonly sequence: number;

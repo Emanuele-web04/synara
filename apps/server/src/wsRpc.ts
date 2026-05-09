@@ -536,7 +536,9 @@ export const makeWsRpcLayer = () =>
               (event): ServerLifecycleStreamEvent =>
                 event.type === "welcome"
                   ? { type: "welcome", payload: event.payload }
-                  : { type: "ready", payload: event.payload },
+                  : event.type === "ready"
+                    ? { type: "ready", payload: event.payload }
+                    : { type: "maintenance", payload: event.payload },
             ),
           ),
         [WS_METHODS.subscribeServerConfig]: () =>
