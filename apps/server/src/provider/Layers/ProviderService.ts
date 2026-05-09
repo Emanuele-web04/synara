@@ -27,7 +27,7 @@ import {
   type ProviderRuntimeEvent,
   type ProviderSession,
 } from "@t3tools/contracts";
-import { Effect, Layer, Option, PubSub, Schema, SchemaIssue, Stream } from "effect";
+import { Cause, Effect, Layer, Option, PubSub, Schema, SchemaIssue, Stream } from "effect";
 
 import { ProviderValidationError } from "../Errors.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
@@ -154,6 +154,12 @@ function readPersistedCwd(
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function runtimePayloadRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
 const makeProviderService = (options?: ProviderServiceLiveOptions) =>
   Effect.gen(function* () {
     const analytics = yield* Effect.service(AnalyticsService);
@@ -239,12 +245,105 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         runtimePayload: toRuntimePayloadFromSession(session, extra),
       });
 
+    const upsertStoppedSessionBinding = (
+      session: ProviderSession,
+      stoppedAt: string,
+    ): Effect.Effect<void> =>
+      directory.upsert({
+        threadId: session.threadId,
+        provider: session.provider,
+        runtimeMode: session.runtimeMode,
+        status: "stopped",
+        ...(session.resumeCursor !== undefined ? { resumeCursor: session.resumeCursor } : {}),
+        runtimePayload: {
+          ...toRuntimePayloadFromSession(session, {
+            lastRuntimeEvent: "provider.stopAll",
+            lastRuntimeEventAt: stoppedAt,
+          }),
+          activeTurnId: null,
+        },
+      });
+
+    const markPersistedThreadStopped = (
+      threadId: ThreadId,
+      stoppedAt: string,
+    ): Effect.Effect<void> =>
+      directory.getProvider(threadId).pipe(
+        Effect.flatMap((provider) =>
+          directory.upsert({
+            threadId,
+            provider,
+            status: "stopped",
+            runtimePayload: {
+              activeTurnId: null,
+              lastRuntimeEvent: "provider.stopAll",
+              lastRuntimeEventAt: stoppedAt,
+            },
+          }),
+        ),
+      );
+
+    const updateSessionBindingFromRuntimeEvent = (
+      event: ProviderRuntimeEvent,
+    ): Effect.Effect<void> => {
+      switch (event.type) {
+        case "session.started":
+        case "thread.started":
+        case "turn.started":
+        case "turn.completed":
+        case "turn.aborted":
+        case "session.exited":
+          break;
+        default:
+          return Effect.void;
+      }
+
+      return Effect.gen(function* () {
+        const binding = Option.getOrUndefined(yield* directory.getBinding(event.threadId));
+        if (!binding) {
+          return;
+        }
+
+        const activeTurnId =
+          event.type === "turn.started"
+            ? (event.turnId ?? null)
+            : event.type === "turn.completed" ||
+                event.type === "turn.aborted" ||
+                event.type === "session.exited"
+              ? null
+              : (runtimePayloadRecord(binding.runtimePayload).activeTurnId ?? null);
+
+        yield* directory.upsert({
+          threadId: event.threadId,
+          provider: binding.provider,
+          ...(binding.adapterKey !== undefined ? { adapterKey: binding.adapterKey } : {}),
+          ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
+          status: event.type === "session.exited" ? "stopped" : "running",
+          ...(binding.resumeCursor !== undefined ? { resumeCursor: binding.resumeCursor } : {}),
+          runtimePayload: {
+            activeTurnId,
+            lastRuntimeEvent: event.type,
+            lastRuntimeEventAt: event.createdAt,
+          },
+        });
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("provider.session.runtime_binding_update_failed", {
+            threadId: event.threadId,
+            eventType: event.type,
+            cause: Cause.pretty(cause),
+          }),
+        ),
+      );
+    };
+
     const providers = yield* registry.listProviders();
     const adapters = yield* Effect.forEach(providers, (provider) =>
       registry.getByProvider(provider),
     );
     const processRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
       Effect.sync(() => reconcileRuntimeIdleTimer(event)).pipe(
+        Effect.andThen(updateSessionBindingFromRuntimeEvent(event)),
         Effect.andThen(publishRuntimeEvent(event)),
       );
 
@@ -925,6 +1024,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
     const runStopAll = () =>
       Effect.gen(function* () {
+        const stoppedAt = new Date().toISOString();
         const threadIds = yield* directory.listThreadIds();
         const activeSessions = yield* Effect.forEach(adapters, (adapter) =>
           adapter.listSessions(),
@@ -932,28 +1032,12 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           Effect.map((sessionsByAdapter) => sessionsByAdapter.flatMap((sessions) => sessions)),
         );
         yield* Effect.forEach(activeSessions, (session) =>
-          upsertSessionBinding(session, session.threadId, {
-            lastRuntimeEvent: "provider.stopAll",
-            lastRuntimeEventAt: new Date().toISOString(),
-          }),
+          upsertStoppedSessionBinding(session, stoppedAt),
+        ).pipe(Effect.asVoid);
+        yield* Effect.forEach(threadIds, (threadId) =>
+          markPersistedThreadStopped(threadId, stoppedAt),
         ).pipe(Effect.asVoid);
         yield* Effect.forEach(adapters, (adapter) => adapter.stopAll()).pipe(Effect.asVoid);
-        yield* Effect.forEach(threadIds, (threadId) =>
-          directory.getProvider(threadId).pipe(
-            Effect.flatMap((provider) =>
-              directory.upsert({
-                threadId,
-                provider,
-                status: "stopped",
-                runtimePayload: {
-                  activeTurnId: null,
-                  lastRuntimeEvent: "provider.stopAll",
-                  lastRuntimeEventAt: new Date().toISOString(),
-                },
-              }),
-            ),
-          ),
-        ).pipe(Effect.asVoid);
         yield* analytics.record("provider.sessions.stopped_all", {
           sessionCount: threadIds.length,
         });

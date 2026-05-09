@@ -380,14 +380,16 @@ export class WsTransport {
   }
 
   private startThreadStream(client: RpcClientInstance, threadId: string, input: unknown): void {
-    this.stopStream(`orchestration.thread:${threadId}`);
+    const key = `orchestration.thread:${threadId}`;
+    this.stopStream(key);
+    this.stoppingStreams.delete(key);
     const restartThread = () => {
       void this.getClient()
         .then((nextClient) => this.startThreadStream(nextClient, threadId, input))
         .catch((error) => console.warn("WebSocket RPC thread stream failed to restart", error));
     };
     this.startStream(
-      `orchestration.thread:${threadId}`,
+      key,
       client[ORCHESTRATION_WS_METHODS.subscribeThread](input as never),
       (event: OrchestrationThreadStreamItem) =>
         this.emit(ORCHESTRATION_WS_CHANNELS.threadEvent, event),
@@ -407,7 +409,9 @@ export class WsTransport {
       Stream.runForEach(runnableStream, (event) => Effect.sync(() => listener(event))),
       {
         onExit: (exit) => {
-          this.streamCleanups.delete(key);
+          if (this.streamCleanups.get(key) === cancel) {
+            this.streamCleanups.delete(key);
+          }
           const wasStoppedIntentionally = this.stoppingStreams.delete(key);
           if (wasStoppedIntentionally || this.disposed) {
             return;

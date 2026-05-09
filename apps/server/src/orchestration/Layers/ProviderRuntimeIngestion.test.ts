@@ -2021,6 +2021,7 @@ describe("ProviderRuntimeIngestion", () => {
       );
     });
     expect(completionEvents).toHaveLength(1);
+    expect(completionEvents[0]?.payload.text).toBe("done");
   });
 
   it("reuses the live assistant message when item.completed omits the item id", async () => {
