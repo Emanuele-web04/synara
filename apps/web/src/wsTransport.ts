@@ -80,8 +80,12 @@ export class WsTransport {
   private runtime: ManagedRuntime.ManagedRuntime<RpcClient.Protocol, never>;
   private clientScope: Scope.Closeable;
   private clientPromise: Promise<RpcClientInstance>;
+  private reconnectPromise: Promise<RpcClientInstance> | null = null;
+  private reconnectFailures = 0;
   private readonly streamCleanups = new Map<string, () => void>();
   private readonly stoppingStreams = new Set<string>();
+  private shellSubscribed = false;
+  private readonly threadSubscriptions = new Map<string, unknown>();
 
   constructor(url?: string) {
     this.explicitUrl = url ?? null;
@@ -97,27 +101,31 @@ export class WsTransport {
     _options?: { readonly timeoutMs?: number | null },
   ): Promise<T> {
     if (this.disposed) throw new Error("Transport disposed");
-    const client = await this.clientPromise;
+    const client = await this.getClient();
 
     if (method === WS_METHODS.gitRunStackedAction) {
       return (await this.runGitActionStream(client, params)) as T;
     }
 
     if (method === ORCHESTRATION_WS_METHODS.subscribeShell) {
+      this.shellSubscribed = true;
       this.startShellStream(client);
       return undefined as T;
     }
     if (method === ORCHESTRATION_WS_METHODS.unsubscribeShell) {
+      this.shellSubscribed = false;
       this.stopStream("orchestration.shell");
       return undefined as T;
     }
     if (method === ORCHESTRATION_WS_METHODS.subscribeThread) {
       const threadId = (params as { threadId: string }).threadId;
+      this.threadSubscriptions.set(threadId, params);
       this.startThreadStream(client, threadId, params as never);
       return undefined as T;
     }
     if (method === ORCHESTRATION_WS_METHODS.unsubscribeThread) {
       const threadId = (params as { threadId: string }).threadId;
+      this.threadSubscriptions.delete(threadId);
       this.stopStream(`orchestration.thread:${threadId}`);
       return undefined as T;
     }
@@ -200,6 +208,60 @@ export class WsTransport {
     return { runtime, clientScope, clientPromise };
   }
 
+  private async getClient(): Promise<RpcClientInstance> {
+    try {
+      return await this.clientPromise;
+    } catch {
+      if (this.disposed) throw new Error("Transport disposed");
+      return this.reconnect();
+    }
+  }
+
+  private reconnect(): Promise<RpcClientInstance> {
+    if (this.reconnectPromise) return this.reconnectPromise;
+
+    const oldRuntime = this.runtime;
+    const oldClientScope = this.clientScope;
+    for (const cleanup of this.streamCleanups.values()) cleanup();
+    this.streamCleanups.clear();
+    this.stoppingStreams.clear();
+
+    this.state = "connecting";
+
+    void oldRuntime.runPromise(Scope.close(oldClientScope, Exit.void)).finally(() => {
+      oldRuntime.dispose();
+    });
+
+    this.reconnectPromise = this.openReconnectSession().finally(() => {
+      this.reconnectPromise = null;
+    });
+    return this.reconnectPromise;
+  }
+
+  private async openReconnectSession(): Promise<RpcClientInstance> {
+    const delayMs = Math.min(500 * 2 ** this.reconnectFailures, 5_000);
+    this.reconnectFailures += 1;
+    await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+
+    const session = this.createSession();
+    this.runtime = session.runtime;
+    this.clientScope = session.clientScope;
+    this.clientPromise = session.clientPromise;
+
+    const client = await session.clientPromise;
+    this.reconnectFailures = 0;
+    for (const channel of this.listeners.keys()) {
+      this.startChannelStream(channel as WsPushChannel);
+    }
+    if (this.shellSubscribed) {
+      this.startShellStream(client);
+    }
+    for (const [threadId, input] of this.threadSubscriptions) {
+      this.startThreadStream(client, threadId, input);
+    }
+    return client;
+  }
+
   private emit<C extends WsPushChannel>(channel: C, data: WsPushMessage<C>["data"]): void {
     const message = {
       type: "push" as const,
@@ -220,7 +282,7 @@ export class WsTransport {
   }
 
   private startChannelStream(channel: WsPushChannel): void {
-    void this.clientPromise.then((client) => {
+    void this.getClient().then((client) => {
       const restartChannel = () => {
         if (this.listeners.has(channel)) {
           this.startChannelStream(channel);
@@ -283,6 +345,11 @@ export class WsTransport {
           restartChannel,
         );
       }
+    }).catch((error) => {
+      if (!this.disposed && this.listeners.has(channel)) {
+        console.warn("WebSocket RPC channel failed to start", error);
+        window.setTimeout(() => this.startChannelStream(channel), 500);
+      }
     });
   }
 
@@ -298,20 +365,33 @@ export class WsTransport {
   }
 
   private startShellStream(client: RpcClientInstance): void {
+    const restartShell = () => {
+      void this.getClient()
+        .then((nextClient) => this.startShellStream(nextClient))
+        .catch((error) => console.warn("WebSocket RPC shell stream failed to restart", error));
+    };
     this.startStream(
       "orchestration.shell",
       client[ORCHESTRATION_WS_METHODS.subscribeShell]({}),
       (event: OrchestrationShellStreamItem) =>
         this.emit(ORCHESTRATION_WS_CHANNELS.shellEvent, event),
+      restartShell,
     );
   }
 
   private startThreadStream(client: RpcClientInstance, threadId: string, input: unknown): void {
+    this.stopStream(`orchestration.thread:${threadId}`);
+    const restartThread = () => {
+      void this.getClient()
+        .then((nextClient) => this.startThreadStream(nextClient, threadId, input))
+        .catch((error) => console.warn("WebSocket RPC thread stream failed to restart", error));
+    };
     this.startStream(
       `orchestration.thread:${threadId}`,
       client[ORCHESTRATION_WS_METHODS.subscribeThread](input as never),
       (event: OrchestrationThreadStreamItem) =>
         this.emit(ORCHESTRATION_WS_CHANNELS.threadEvent, event),
+      restartThread,
     );
   }
 
@@ -332,12 +412,14 @@ export class WsTransport {
           if (wasStoppedIntentionally || this.disposed) {
             return;
           }
-          if (restart && Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)) {
+          if (restart && Exit.isFailure(exit)) {
             window.setTimeout(() => {
               if (!this.disposed && !this.streamCleanups.has(key)) {
-                restart();
+                void this.reconnect()
+                  .then(() => restart())
+                  .catch((error) => console.warn("WebSocket RPC stream reconnect failed", error));
               }
-            }, 0);
+            }, Cause.hasInterruptsOnly(exit.cause) ? 0 : 500);
             return;
           }
           if (Exit.isFailure(exit) && !this.disposed && !Cause.hasInterruptsOnly(exit.cause)) {

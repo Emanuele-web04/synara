@@ -6,6 +6,7 @@ import { describe, it, expect } from "vitest";
 
 import { ServerConfig } from "../../config.ts";
 import {
+  type OpenCodeCliModelDescriptor,
   OpenCodeRuntimeError,
   type OpenCodeInventory,
   type OpenCodeRuntimeShape,
@@ -103,8 +104,12 @@ function makeModel(input: Omit<TestModelInput, "providerID"> & Pick<Model, "prov
   };
 }
 
-function createMockOpenCodeRuntime(input?: { readonly inventory?: OpenCodeInventory }) {
+function createMockOpenCodeRuntime(input?: {
+  readonly inventory?: OpenCodeInventory;
+  readonly cliModels?: ReadonlyArray<OpenCodeCliModelDescriptor>;
+}) {
   const abortCalls: Array<{ sessionID: string }> = [];
+  const createCalls: Array<Record<string, unknown>> = [];
   const promptCalls: Array<Record<string, unknown>> = [];
   const emptySubscription = {
     async *[Symbol.asyncIterator]() {
@@ -116,7 +121,10 @@ function createMockOpenCodeRuntime(input?: { readonly inventory?: OpenCodeInvent
       subscribe: async () => ({ stream: emptySubscription }),
     },
     session: {
-      create: async () => ({ data: { id: "opencode-session-1" } }),
+      create: async (input: Record<string, unknown>) => {
+        createCalls.push(input);
+        return { data: { id: "opencode-session-1" } };
+      },
       promptAsync: async (input: Record<string, unknown>) => {
         promptCalls.push(input);
         return { data: null };
@@ -165,11 +173,11 @@ function createMockOpenCodeRuntime(input?: { readonly inventory?: OpenCodeInvent
           consoleState: null,
         },
       ),
-    listOpenCodeCliModels: () => Effect.succeed([]),
+    listOpenCodeCliModels: () => Effect.succeed(input?.cliModels ?? []),
     loadOpenCodeCredentialProviderIDs: () => Effect.succeed([]),
   };
 
-  return { abortCalls, promptCalls, runtime };
+  return { abortCalls, createCalls, promptCalls, runtime };
 }
 
 function createSubscribedEventQueue() {
@@ -591,7 +599,6 @@ describe("flattenOpenCodeModels", () => {
           consoleManagedProviders: ["openai"],
         },
       },
-      credentialProviderIDs: ["openai"],
     });
 
     expect(models).toEqual([
@@ -770,9 +777,160 @@ describe("flattenOpenCodeModels", () => {
       },
     ]);
   });
+
+  it("prefers credential-backed OpenCode-connected providers when available", () => {
+    const models = flattenOpenCodeModels({
+      inventory: {
+        providerList: {
+          connected: ["opencode", "github-copilot"],
+          all: [
+            makeProvider({
+              id: "opencode",
+              name: "OpenCode",
+              source: "api",
+              models: {
+                "glm-4.6": {
+                  id: "glm-4.6",
+                  name: "GLM 4.6",
+                },
+              },
+            }),
+            makeProvider({
+              id: "github-copilot",
+              name: "GitHub Copilot",
+              source: "api",
+              models: {
+                "claude-opus-4.6": {
+                  id: "claude-opus-4.6",
+                  name: "Claude Opus 4.6",
+                },
+              },
+            }),
+            makeProvider({
+              id: "openrouter",
+              name: "OpenRouter",
+              source: "api",
+              models: {
+                "qwen/qwen3-coder": {
+                  id: "qwen/qwen3-coder",
+                  name: "Qwen3 Coder",
+                },
+              },
+            }),
+          ],
+        },
+        consoleState: null,
+      },
+    });
+
+    expect(models.map((model) => model.slug)).toEqual(["opencode/glm-4.6"]);
+  });
 });
 
 describe("OpenCodeAdapter runtime lifecycle", () => {
+  it("augments OpenCode server discovery with CLI models", async () => {
+    const runtime = createMockOpenCodeRuntime({
+      inventory: {
+        providerList: {
+          connected: ["openai"],
+          all: [
+            makeProvider({
+              id: "openai",
+              name: "OpenAI",
+              source: "api",
+              models: {
+                "gpt-5": {
+                  id: "gpt-5",
+                  name: "GPT-5",
+                },
+              },
+            }),
+          ],
+        },
+        agents: [],
+        consoleState: null,
+      },
+      cliModels: [
+        {
+          slug: "opencode/big-pickle",
+          providerID: "opencode",
+          modelID: "big-pickle",
+          name: "Big Pickle",
+          variants: [],
+          supportedReasoningEfforts: [],
+        },
+        {
+          slug: "kimi-for-coding/k2p6",
+          providerID: "kimi-for-coding",
+          modelID: "k2p6",
+          name: "Kimi K2P6",
+          variants: [],
+          supportedReasoningEfforts: [],
+        },
+      ],
+    });
+
+    const models = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        return yield* adapter.listModels!({});
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(models.models.map((model) => model.slug)).toContain("opencode/big-pickle");
+    expect(models.models.map((model) => model.slug)).toContain("kimi-for-coding/k2p6");
+  });
+
+  it("pins the initial model on new OpenCode sessions", async () => {
+    const runtime = createMockOpenCodeRuntime();
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-model-pin"),
+          runtimeMode: "full-access",
+          modelSelection: {
+            provider: "opencode",
+            model: "opencode/big-pickle",
+            options: {
+              agent: "build",
+              variant: "fast",
+            },
+          },
+        });
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(runtime.createCalls[0]).toMatchObject({
+      model: {
+        providerID: "opencode",
+        id: "big-pickle",
+        variant: "fast",
+      },
+      agent: "build",
+    });
+  });
+
   it("clears adapter session state when interrupting an active OpenCode turn", async () => {
     const runtime = createMockOpenCodeRuntime();
 

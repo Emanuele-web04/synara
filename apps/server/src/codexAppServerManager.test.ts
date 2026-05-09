@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ApprovalRequestId, ThreadId } from "@t3tools/contracts";
@@ -12,6 +12,7 @@ import {
   CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
   CodexAppServerManager,
   classifyCodexStderrLine,
+  disableDpCodeBrowserPluginInCodexConfig,
   ensureIsolatedScratchWorkspace,
   isRecoverableThreadResumeError,
   normalizeCodexModelSlug,
@@ -290,7 +291,11 @@ describe("buildCodexProcessEnv", () => {
       }));
 
       const env = buildCodexProcessEnv({
-        env: { SHELL: "/bin/zsh", PATH: "/usr/bin" },
+        env: {
+          SHELL: "/bin/zsh",
+          PATH: "/usr/bin",
+          DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0",
+        },
         homePath: tempDir,
         platform: "darwin",
         readEnvironment,
@@ -318,6 +323,7 @@ describe("buildCodexProcessEnv", () => {
         PATH: "/usr/bin",
         CODEX_HOME: "/tmp/.codex",
         AZURE_OPENAI_API_KEY: "existing-secret",
+        DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0",
       },
       platform: "darwin",
       readEnvironment,
@@ -332,6 +338,7 @@ describe("buildCodexProcessEnv", () => {
       env: {
         DPCODE_BROWSER_USE_PIPE_PATH: "/tmp/codex-browser-use/dpcode.sock",
         NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS: "/tmp/existing.sock",
+        DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0",
       },
       platform: "darwin",
     });
@@ -348,6 +355,44 @@ describe("buildCodexProcessEnv", () => {
         platform: "darwin",
       }),
     ).toBe("/tmp/codex-browser-use/t3.sock");
+  });
+
+  it("disables the local dpcode-browser plugin in DP Code's Codex home overlay", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "t3-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "t3-runtime-home-"));
+    try {
+      writeFileSync(
+        path.join(tempDir, "config.toml"),
+        [
+          '[plugins."github@openai-curated"]',
+          "enabled = true",
+          "",
+          '[plugins."dpcode-browser@local"]',
+          "enabled = true",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const env = buildCodexProcessEnv({
+        env: { DPCODE_HOME: runtimeHome },
+        homePath: tempDir,
+        platform: "darwin",
+      });
+
+      expect(env.CODEX_HOME).toBe(path.join(runtimeHome, "codex-home-overlay"));
+      expect(readFileSync(path.join(env.CODEX_HOME, "config.toml"), "utf8")).toContain(
+        '[plugins."dpcode-browser@local"]\nenabled = false',
+      );
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("adds a disabled dpcode-browser plugin section when Codex config does not contain one", () => {
+    expect(disableDpCodeBrowserPluginInCodexConfig('model = "gpt-5.5"')).toContain(
+      '[plugins."dpcode-browser@local"]\nenabled = false',
+    );
   });
 });
 

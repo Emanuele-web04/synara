@@ -621,6 +621,21 @@ export function shouldPrunePinnedThreads(input: { threadsHydrated: boolean }): b
   return input.threadsHydrated;
 }
 
+export type ProjectEmptyState = "loading" | "empty" | null;
+
+// Keep the initial shell bootstrap visually distinct from a genuinely empty project list.
+export function resolveProjectEmptyState(input: {
+  readonly projectCount: number;
+  readonly shouldShowProjectPathEntry: boolean;
+  readonly threadsHydrated: boolean;
+}): ProjectEmptyState {
+  if (input.projectCount > 0 || input.shouldShowProjectPathEntry) {
+    return null;
+  }
+
+  return input.threadsHydrated ? "empty" : "loading";
+}
+
 // Match the exact rows the sidebar renders for one project, including folded previews.
 export function getRenderedThreadsForSidebarProject<
   T extends Pick<SidebarThreadSummary, "id"> & SidebarThreadSortInput,

@@ -1106,6 +1106,51 @@ export function flattenOpenCodeModels(input: {
     .toSorted(compareOpenCodeModelDescriptors);
 }
 
+function fallbackOpenCodeProviderName(providerId: string): string {
+  return providerId
+    .split(/[-_/]+/u)
+    .filter((segment) => segment.length > 0)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(" ");
+}
+
+function mergeOpenCodeCliModelDescriptors(input: {
+  readonly inventory: OpenCodeModelInventory;
+  readonly models: ReadonlyArray<OpenCodeModelDescriptor>;
+  readonly cliModels: ReadonlyArray<OpenCodeCliModelDescriptor>;
+}): ProviderListModelsResult["models"] {
+  const providerById = new Map(
+    input.inventory.providerList.all.map((provider) => [provider.id, provider] as const),
+  );
+  const mergedBySlug = new Map(input.models.map((model) => [model.slug, model] as const));
+
+  for (const cliModel of input.cliModels) {
+    if (mergedBySlug.has(cliModel.slug)) {
+      continue;
+    }
+    const provider =
+      providerById.get(cliModel.providerID) ??
+      ({
+        id: cliModel.providerID,
+        name: fallbackOpenCodeProviderName(cliModel.providerID) || cliModel.providerID,
+      } satisfies Pick<OpenCodeInventoryProvider, "id" | "name">);
+    const descriptor = toOpenCodeModelDescriptor({
+      slug: cliModel.slug,
+      name: cliModel.name,
+      provider,
+      ...(providerById.get(cliModel.providerID)?.models[cliModel.modelID]
+        ? { model: providerById.get(cliModel.providerID)!.models[cliModel.modelID] }
+        : {}),
+      cliModel,
+    });
+    if (descriptor) {
+      mergedBySlug.set(descriptor.slug, descriptor);
+    }
+  }
+
+  return [...mergedBySlug.values()].toSorted(compareOpenCodeModelDescriptors);
+}
+
 function flattenOpenCodeAgents(agents: ReadonlyArray<Agent>): ProviderListAgentsResult["agents"] {
   return agents
     .filter((agent) => !agent.hidden && (agent.mode === "primary" || agent.mode === "all"))
@@ -1900,6 +1945,18 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           const serverUrl = providerOptions?.serverUrl?.trim();
           const serverPassword = providerOptions?.serverPassword?.trim();
           const directory = input.cwd ?? serverConfig.cwd;
+          const initialParsedModel =
+            input.modelSelection?.provider === adapterConfig.provider
+              ? parseOpenCodeModelSlug(input.modelSelection.model)
+              : null;
+          const initialAgent =
+            input.modelSelection?.provider === adapterConfig.provider
+              ? input.modelSelection.options?.agent
+              : undefined;
+          const initialVariant =
+            input.modelSelection?.provider === adapterConfig.provider
+              ? input.modelSelection.options?.variant
+              : undefined;
           const existing = sessions.get(input.threadId);
           if (existing) {
             yield* stopOpenCodeContext(existing);
@@ -1928,6 +1985,16 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   (yield* runOpenCodeSdk("session.create", () =>
                     client.session.create({
                       title: `DP Code ${input.threadId}`,
+                      ...(initialParsedModel
+                        ? {
+                            model: {
+                              providerID: initialParsedModel.providerID,
+                              id: initialParsedModel.modelID,
+                              ...(initialVariant ? { variant: initialVariant } : {}),
+                            },
+                          }
+                        : {}),
+                      ...(initialAgent ? { agent: initialAgent } : {}),
                       permission: buildOpenCodePermissionRules(input.runtimeMode),
                     }),
                   ).pipe(
@@ -2487,52 +2554,45 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
       const listModels: NonNullable<OpenCodeAdapterShape["listModels"]> = (input) => {
         const binaryPath = input.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
         return withDiscoveryInventory({ binaryPath }, ({ inventory, credentialProviderIDs }) =>
-          openCodeRuntime.listOpenCodeCliModels({ binaryPath, cliSpec: adapterConfig.cliSpec }).pipe(
-            Effect.map((models) => {
-              const preferredProviderIDs = new Set(
-                resolvePreferredOpenCodeModelProviders({
-                  inventory,
-                  credentialProviderIDs,
-                }).map((provider) => provider.id),
-              );
-              const providerById = new Map(
-                inventory.providerList.all.map((provider) => [provider.id, provider] as const),
-              );
-              const filteredModels = models
-                .filter((model) => preferredProviderIDs.has(model.providerID))
-                .flatMap((model) => {
-                  const provider = providerById.get(model.providerID);
-                  if (!provider) {
-                    return [];
-                  }
-                  const descriptor = toOpenCodeModelDescriptor({
-                    slug: model.slug,
-                    name: model.name,
-                    provider,
-                    ...(provider.models[model.modelID]
-                      ? { model: provider.models[model.modelID] }
-                      : {}),
-                    cliModel: model,
-                  });
-                  return descriptor ? [descriptor] : [];
-                })
-                .toSorted(compareOpenCodeModelDescriptors);
-
-              return {
-                models:
-                  filteredModels.length > 0
-                    ? filteredModels
-                    : flattenOpenCodeModels({
-                        inventory,
-                        credentialProviderIDs,
-                      }),
-                source:
-                  filteredModels.length > 0
-                    ? adapterConfig.cliModelSource
-                    : adapterConfig.fallbackModelSource,
-                cached: false,
-              };
-            }),
+          Effect.gen(function* () {
+            const preferredProviderIDs = new Set(
+              resolvePreferredOpenCodeModelProviders({
+                inventory,
+                credentialProviderIDs,
+              }).map((provider) => provider.id),
+            );
+            const inventoryModels = flattenOpenCodeModels({
+              inventory,
+              credentialProviderIDs,
+            });
+            const cliModels = yield* openCodeRuntime
+              .listOpenCodeCliModels({ binaryPath, cliSpec: adapterConfig.cliSpec })
+              .pipe(Effect.catch(() => Effect.succeed([])));
+            const preferredCliModels = cliModels.filter((model) =>
+              preferredProviderIDs.has(model.providerID),
+            );
+            const models = mergeOpenCodeCliModelDescriptors({
+              inventory,
+              models: inventoryModels,
+              cliModels: preferredCliModels.length > 0 ? preferredCliModels : cliModels,
+            });
+            yield* Effect.logDebug(`${adapterConfig.displayName} model discovery resolved`, {
+              binaryPath,
+              connectedProviders: inventory.providerList.connected,
+              inventoryModelCount: inventoryModels.length,
+              cliModelCount: cliModels.length,
+              modelCount: models.length,
+              sampleModels: models.slice(0, 12).map((model) => model.slug),
+            });
+            return {
+              models,
+              source:
+                cliModels.length > 0
+                  ? adapterConfig.cliModelSource
+                  : adapterConfig.fallbackModelSource,
+              cached: false,
+            };
+          }).pipe(
             Effect.catch(() =>
               Effect.succeed({
                 models: flattenOpenCodeModels({

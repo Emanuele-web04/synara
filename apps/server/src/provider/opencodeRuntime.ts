@@ -877,6 +877,19 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       Effect.map((result) => result.data ?? []),
     );
 
+  const loadOptionalAgents = (client: OpencodeClient) =>
+    loadAgents(client).pipe(
+      Effect.timeoutOption("2 seconds"),
+      Effect.map(
+        Option.getOrElse((): ReadonlyArray<Agent> => []),
+      ),
+      Effect.catch((cause) =>
+        Effect.logDebug("OpenCode agent discovery skipped", {
+          reason: openCodeRuntimeErrorDetail(cause),
+        }).pipe(Effect.as([] as ReadonlyArray<Agent>)),
+      ),
+    );
+
   const loadConsoleState = (client: OpencodeClient) =>
     runOpenCodeSdk("experimental.console.get", () => client.experimental.console.get()).pipe(
       Effect.map((result) => result.data ?? null),
@@ -885,7 +898,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
     );
 
   const loadOpenCodeInventory: OpenCodeRuntimeShape["loadOpenCodeInventory"] = (client) =>
-    Effect.all([loadProviders(client), loadAgents(client), loadConsoleState(client)], {
+    Effect.all([loadProviders(client), loadOptionalAgents(client), loadConsoleState(client)], {
       concurrency: "unbounded",
     }).pipe(
       Effect.map(([providerList, agents, consoleState]) => ({

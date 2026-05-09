@@ -1986,11 +1986,13 @@ async function bootstrap(): Promise<void> {
   writeDesktopLogHeader("bootstrap backend start requested");
 
   if (isDevelopment) {
-    mainWindow = createWindow();
-    writeDesktopLogHeader("bootstrap main window created");
     void waitForBackendWindowReady(backendHttpUrl)
       .then((source) => {
         writeDesktopLogHeader(`bootstrap backend ready source=${source}`);
+        if (!mainWindow) {
+          mainWindow = createWindow();
+          writeDesktopLogHeader("bootstrap main window created");
+        }
       })
       .catch((error) => {
         if (isBackendReadinessAborted(error)) {
@@ -2000,6 +2002,10 @@ async function bootstrap(): Promise<void> {
           `bootstrap backend readiness warning message=${formatErrorMessage(error)}`,
         );
         console.warn("[desktop] backend readiness check timed out during dev bootstrap", error);
+        if (!mainWindow) {
+          mainWindow = createWindow();
+          writeDesktopLogHeader("bootstrap main window created after readiness warning");
+        }
       });
     return;
   }
@@ -2051,7 +2057,18 @@ if (hasSingleInstanceLock) {
             ensureInitialBackendWindowOpen(backendHttpUrl);
             return;
           }
-          mainWindow = createWindow();
+          void waitForBackendWindowReady(backendHttpUrl)
+            .catch((error) => {
+              if (isBackendReadinessAborted(error)) {
+                return;
+              }
+              console.warn("[desktop] backend readiness check timed out during dev activate", error);
+            })
+            .finally(() => {
+              if (!mainWindow) {
+                mainWindow = createWindow();
+              }
+            });
           return;
         }
         focusMainWindow();

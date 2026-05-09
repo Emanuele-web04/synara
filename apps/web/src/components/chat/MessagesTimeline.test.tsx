@@ -1471,7 +1471,8 @@ describe("MessagesTimeline", () => {
               tone: "tool",
               itemType: "command_execution",
               toolTitle: "Searched",
-              command: `/bin/zsh -lc 'rg -n "ProjectionSnapshotQuery" apps/server/src'`,
+              command: `rg -n "ProjectionSnapshotQuery" apps/server/src`,
+              rawCommand: `/bin/zsh -lc 'rg -n "ProjectionSnapshotQuery" apps/server/src'`,
             },
           },
         ]}
@@ -1494,7 +1495,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Searched");
-    expect(markup).toContain("for ProjectionSnapshotQuery in server/src");
+    expect(markup).toContain("rg -n &quot;ProjectionSnapshotQuery&quot; apps/server/src");
     expect(markup).toContain(
       `title="/bin/zsh -lc &#x27;rg -n &quot;ProjectionSnapshotQuery&quot; apps/server/src&#x27;"`,
     );

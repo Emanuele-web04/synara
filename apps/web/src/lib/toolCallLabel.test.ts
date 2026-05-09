@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  deriveInlineCommandCall,
   deriveReadableCommandDisplay,
   deriveReadableToolTitle,
   normalizeCompactToolLabel,
@@ -9,6 +10,7 @@ describe("normalizeCompactToolLabel", () => {
   it("removes trailing completion wording", () => {
     expect(normalizeCompactToolLabel("Tool call completed")).toBe("Tool call");
     expect(normalizeCompactToolLabel("Ran command done")).toBe("Ran command");
+    expect(normalizeCompactToolLabel("Ran command started")).toBe("Ran command");
   });
 });
 
@@ -170,5 +172,13 @@ describe("deriveReadableCommandDisplay", () => {
       target: "in src/lib",
       fullCommand: `rg -n . src/lib`,
     });
+  });
+});
+
+describe("deriveInlineCommandCall", () => {
+  it("shows the actual command call without the shell wrapper", () => {
+    expect(deriveInlineCommandCall(`/bin/zsh -lc 'rg -n "tool call" apps/web/src'`)).toBe(
+      `rg -n "tool call" apps/web/src`,
+    );
   });
 });

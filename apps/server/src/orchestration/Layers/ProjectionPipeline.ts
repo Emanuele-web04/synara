@@ -1243,9 +1243,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                   : null),
               startedAt:
                 existingTurn.value.startedAt ??
-                (Option.isSome(pendingTurnStart)
-                  ? pendingTurnStart.value.requestedAt
-                  : event.occurredAt),
+                event.payload.session.updatedAt ??
+                event.occurredAt,
               requestedAt:
                 existingTurn.value.requestedAt ??
                 (Option.isSome(pendingTurnStart)
@@ -1270,9 +1269,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               requestedAt: Option.isSome(pendingTurnStart)
                 ? pendingTurnStart.value.requestedAt
                 : event.occurredAt,
-              startedAt: Option.isSome(pendingTurnStart)
-                ? pendingTurnStart.value.requestedAt
-                : event.occurredAt,
+              // Keep `startedAt` tied to provider runtime start, not the earlier user dispatch.
+              startedAt: event.payload.session.updatedAt ?? event.occurredAt,
               completedAt: null,
               checkpointTurnCount: null,
               checkpointRef: null,

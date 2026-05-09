@@ -306,6 +306,11 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
     const binaryPath = providerOptions?.binaryPath?.trim() || config.cliSpec.defaultBinaryPath;
     const serverUrl = providerOptions?.serverUrl?.trim() || "";
     const serverPassword = providerOptions?.serverPassword?.trim() || "";
+    const providerId = parsedModel.providerID;
+    const modelId = parsedModel.modelID;
+    const modelOptions = input.modelSelection.options as OpenCodeModelOptions | undefined;
+    const agent = modelOptions?.agent?.trim();
+    const variant = modelOptions?.variant?.trim();
 
     const fileParts = toOpenCodeFileParts({
       attachments: input.attachments,
@@ -324,15 +329,18 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
           });
           const session = await client.session.create({
             title: `T3 Code ${input.operation}`,
+            model: {
+              providerID: providerId,
+              id: modelId,
+              ...(variant ? { variant } : {}),
+            },
+            ...(agent ? { agent } : {}),
             permission: [{ permission: "*", pattern: "*", action: "deny" }],
           });
           if (!session.data) {
             throw new Error("OpenCode session.create returned no session payload.");
           }
 
-          const modelOptions = input.modelSelection.options as OpenCodeModelOptions | undefined;
-          const agent = modelOptions?.agent?.trim();
-          const variant = modelOptions?.variant?.trim();
           const result = await client.session.prompt({
             sessionID: session.data.id,
             model: parsedModel,
@@ -354,10 +362,31 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
         catch: (cause) =>
           new TextGenerationError({
             operation: input.operation,
-            detail: openCodeRuntimeErrorDetail(cause),
+            detail: [
+              openCodeRuntimeErrorDetail(cause),
+              `model=${providerId}/${modelId}`,
+              variant ? `variant=${variant}` : null,
+              agent ? `agent=${agent}` : null,
+              serverUrl.length > 0 ? "server=external" : "server=managed",
+            ]
+              .filter(Boolean)
+              .join(" "),
             cause,
           }),
       });
+
+    yield* Effect.logDebug("OpenCode text generation request", {
+      operation: input.operation,
+      cwd: input.cwd,
+      providerId,
+      modelId,
+      variant,
+      agent,
+      attachmentCount: input.attachments?.length ?? 0,
+      filePartCount: fileParts.length,
+      binaryPath,
+      usingExternalServer: serverUrl.length > 0,
+    });
 
     const rawOutput =
       serverUrl.length > 0

@@ -15,7 +15,7 @@ import {
   type ServerLifecycleStreamEvent,
 } from "@t3tools/contracts";
 import { clamp } from "effect/Number";
-import { Effect, FileSystem, Layer, Option, Path, Queue, Schema, Stream } from "effect";
+import { Cause, Effect, FileSystem, Layer, Option, Path, Schema, Stream } from "effect";
 import { HttpRouter, HttpServerRequest } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
@@ -240,6 +240,11 @@ export const makeWsRpcLayer = () =>
         }
       };
 
+      const isThreadDetailEventFor = (threadId: ThreadId, event: OrchestrationEvent) =>
+        event.aggregateKind === "thread" &&
+        event.aggregateId === threadId &&
+        isThreadDetailEvent(event);
+
       const rpcEffect = <A, E, R>(effect: Effect.Effect<A, E, R>, fallbackMessage: string) =>
         effect.pipe(Effect.mapError((cause) => toWsRpcError(cause, fallbackMessage)));
 
@@ -288,7 +293,7 @@ export const makeWsRpcLayer = () =>
             "Failed to replay orchestration events",
           ),
         [ORCHESTRATION_WS_METHODS.subscribeShell]: () =>
-          Stream.concat(
+          Stream.merge(
             Stream.fromEffect(
               projectionReadModelQuery.getShellSnapshot().pipe(
                 Effect.map((snapshot) => ({ kind: "snapshot" as const, snapshot })),
@@ -304,7 +309,7 @@ export const makeWsRpcLayer = () =>
           ),
         [ORCHESTRATION_WS_METHODS.unsubscribeShell]: () => Effect.void,
         [ORCHESTRATION_WS_METHODS.subscribeThread]: (input) =>
-          Stream.concat(
+          Stream.merge(
             Stream.fromEffect(
               Effect.all([
                 projectionReadModelQuery.getThreadDetailById(input.threadId),
@@ -318,20 +323,24 @@ export const makeWsRpcLayer = () =>
                         kind: "snapshot" as const,
                         snapshot: { snapshotSequence, thread: thread.value },
                       })
-                    : Effect.fail(
-                        new WsRpcError({ message: `Thread ${input.threadId} was not found` }),
-                      ),
+                    : Effect.fail(new Error(`Thread ${input.threadId} was not found yet`)),
                 ),
                 Effect.mapError((cause) => toWsRpcError(cause, "Failed to load thread snapshot")),
               ),
+            ).pipe(
+              Stream.catchCause((cause) => {
+                const error = Cause.squash(cause);
+                if (
+                  error instanceof WsRpcError &&
+                  error.message.includes("was not found yet")
+                ) {
+                  return Stream.empty;
+                }
+                return Stream.failCause(cause);
+              }),
             ),
             orchestrationEngine.streamDomainEvents.pipe(
-              Stream.filter(
-                (event): event is OrchestrationEvent & { readonly aggregateKind: "thread" } =>
-                  event.aggregateKind === "thread" &&
-                  event.aggregateId === input.threadId &&
-                  isThreadDetailEvent(event),
-              ),
+              Stream.filter((event) => isThreadDetailEventFor(input.threadId, event)),
               Stream.map(
                 (event): OrchestrationThreadStreamItem => ({
                   kind: "event",

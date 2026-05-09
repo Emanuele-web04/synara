@@ -1,8 +1,16 @@
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 
@@ -240,6 +248,10 @@ const CODEX_SPARK_DISABLED_PLAN_TYPES = new Set<CodexPlanType>(["free", "go", "p
 const CODEX_PROCESS_SHELL_ENV_NAMES = ["PATH", "SSH_AUTH_SOCK"] as const;
 const CODEX_DISCOVERY_SESSION_IDLE_MS = 10 * 60 * 1000;
 const NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS = "NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS";
+const DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN_ENV =
+  "DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN";
+const DPCODE_CODEX_HOME_OVERLAY_DIR = "codex-home-overlay";
+const DPCODE_BROWSER_PLUGIN_CONFIG_HEADER = '[plugins."dpcode-browser@local"]';
 
 export function resolveCodexBrowserUsePipePath(
   input: {
@@ -256,6 +268,107 @@ export function resolveCodexBrowserUsePipePath(
   return (input.platform ?? process.platform) === "win32"
     ? String.raw`\\.\pipe\codex-browser-use`
     : "/tmp/codex-browser-use.sock";
+}
+
+function resolveBaseCodexHomePath(env: NodeJS.ProcessEnv, explicitHomePath?: string): string {
+  return explicitHomePath?.trim() || env.CODEX_HOME?.trim() || path.join(homedir(), ".codex");
+}
+
+function shouldDisableDpCodeBrowserPlugin(env: NodeJS.ProcessEnv): boolean {
+  return env[DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN_ENV] !== "0";
+}
+
+export function disableDpCodeBrowserPluginInCodexConfig(config: string): string {
+  const lines = config.split(/\r?\n/);
+  const output: string[] = [];
+  let inTargetSection = false;
+  let sawTargetSection = false;
+  let targetSectionHasEnabled = false;
+
+  const closeTargetSection = () => {
+    if (inTargetSection && !targetSectionHasEnabled) {
+      output.push("enabled = false");
+    }
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+      closeTargetSection();
+      inTargetSection = trimmed === DPCODE_BROWSER_PLUGIN_CONFIG_HEADER;
+      sawTargetSection ||= inTargetSection;
+      targetSectionHasEnabled = false;
+      output.push(line);
+      continue;
+    }
+
+    if (inTargetSection && /^\s*enabled\s*=/.test(line)) {
+      output.push("enabled = false");
+      targetSectionHasEnabled = true;
+      continue;
+    }
+
+    output.push(line);
+  }
+
+  closeTargetSection();
+
+  if (!sawTargetSection) {
+    if (output.length > 0 && output.at(-1)?.trim()) {
+      output.push("");
+    }
+    output.push(DPCODE_BROWSER_PLUGIN_CONFIG_HEADER, "enabled = false");
+  }
+
+  return output.join("\n");
+}
+
+function resolveDpCodeCodexHomeOverlayPath(env: NodeJS.ProcessEnv, sourceHomePath: string): string {
+  const runtimeHome = env.DPCODE_HOME?.trim() || env.T3CODE_HOME?.trim();
+  const overlayRoot =
+    runtimeHome || path.join(path.dirname(sourceHomePath), ".dpcode", "runtime");
+  return path.join(overlayRoot, DPCODE_CODEX_HOME_OVERLAY_DIR);
+}
+
+function prepareDpCodeCodexHomeOverlay(input: {
+  readonly env: NodeJS.ProcessEnv;
+  readonly homePath?: string;
+}): string | undefined {
+  const sourceHomePath = resolveBaseCodexHomePath(input.env, input.homePath);
+  const overlayHomePath = resolveDpCodeCodexHomeOverlayPath(input.env, sourceHomePath);
+  if (path.resolve(sourceHomePath) === path.resolve(overlayHomePath)) {
+    return undefined;
+  }
+
+  mkdirSync(overlayHomePath, { recursive: true });
+
+  try {
+    for (const entry of readdirSync(sourceHomePath)) {
+      if (entry === "config.toml") {
+        continue;
+      }
+      const sourcePath = path.join(sourceHomePath, entry);
+      const targetPath = path.join(overlayHomePath, entry);
+      if (existsSync(targetPath)) {
+        continue;
+      }
+      const stat = lstatSync(sourcePath);
+      symlinkSync(sourcePath, targetPath, stat.isDirectory() ? "dir" : "file");
+    }
+  } catch {
+    // If the source home is partially missing, Codex can still start with the
+    // overlay config and create any required state lazily.
+  }
+
+  const sourceConfigPath = path.join(sourceHomePath, "config.toml");
+  const sourceConfig = existsSync(sourceConfigPath) ? readFileSync(sourceConfigPath, "utf8") : "";
+  writeFileSync(
+    path.join(overlayHomePath, "config.toml"),
+    disableDpCodeBrowserPluginInCodexConfig(sourceConfig),
+    "utf8",
+  );
+
+  return overlayHomePath;
 }
 
 function asObject(value: unknown): Record<string, unknown> | undefined {
@@ -278,7 +391,16 @@ export function buildCodexProcessEnv(
   } = {},
 ): NodeJS.ProcessEnv {
   const baseEnv = { ...(input.env ?? process.env) };
-  const effectiveEnv = input.homePath ? { ...baseEnv, CODEX_HOME: input.homePath } : baseEnv;
+  const overlayHomePath = shouldDisableDpCodeBrowserPlugin(baseEnv)
+    ? prepareDpCodeCodexHomeOverlay({
+        env: baseEnv,
+        ...(input.homePath ? { homePath: input.homePath } : {}),
+      })
+    : undefined;
+  const effectiveEnv =
+    overlayHomePath || input.homePath
+      ? { ...baseEnv, CODEX_HOME: overlayHomePath ?? input.homePath }
+      : baseEnv;
   const platform = input.platform ?? process.platform;
 
   if (platform === "darwin" || platform === "linux") {

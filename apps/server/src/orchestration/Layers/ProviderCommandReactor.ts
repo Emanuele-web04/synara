@@ -1069,6 +1069,24 @@ const make = Effect.gen(function* () {
       ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
       ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
     });
+    const textGenerationSelection =
+      "modelSelection" in textGenerationInput ? textGenerationInput.modelSelection : null;
+    const textGenerationModel =
+      textGenerationSelection?.model ?? ("model" in textGenerationInput ? textGenerationInput.model : null);
+    const textGenerationProviderOptions =
+      "providerOptions" in textGenerationInput ? textGenerationInput.providerOptions : undefined;
+    yield* Effect.logDebug("provider command reactor generating thread title", {
+      threadId: input.threadId,
+      cwd,
+      threadProvider: thread.modelSelection.provider,
+      threadModel: thread.modelSelection.model,
+      requestedProvider: input.modelSelection?.provider ?? null,
+      requestedModel: input.modelSelection?.model ?? null,
+      textGenerationProvider: textGenerationSelection?.provider ?? null,
+      textGenerationModel,
+      textGenerationOptions: textGenerationSelection?.options ?? null,
+      hasProviderOptions: Boolean(textGenerationProviderOptions),
+    });
     const nextTitle = yield* textGeneration
       .generateThreadTitle({
         cwd: cwd ?? process.cwd(),
@@ -1083,6 +1101,13 @@ const make = Effect.gen(function* () {
             threadId: input.threadId,
             cwd,
             reason: error.message,
+            threadProvider: thread.modelSelection.provider,
+            threadModel: thread.modelSelection.model,
+            requestedProvider: input.modelSelection?.provider ?? null,
+            requestedModel: input.modelSelection?.model ?? null,
+            textGenerationProvider: textGenerationSelection?.provider ?? null,
+            textGenerationModel,
+            textGenerationOptions: textGenerationSelection?.options ?? null,
           }).pipe(Effect.as(fallbackTitle)),
         ),
       );

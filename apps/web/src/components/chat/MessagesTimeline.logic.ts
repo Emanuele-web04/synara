@@ -312,6 +312,30 @@ export function computeStableMessagesTimelineRows(
   return anyChanged ? { byId: next, result } : previous;
 }
 
+function workLogEntryContentEqual(a: WorkLogEntry, b: WorkLogEntry): boolean {
+  return (
+    a.id === b.id &&
+    a.label === b.label &&
+    a.toolTitle === b.toolTitle &&
+    a.command === b.command &&
+    a.rawCommand === b.rawCommand &&
+    a.preview === b.preview &&
+    a.tone === b.tone &&
+    a.itemType === b.itemType &&
+    a.toolCallId === b.toolCallId
+  );
+}
+
+function workLogEntryArraysEqual(
+  left: ReadonlyArray<WorkLogEntry> | undefined,
+  right: ReadonlyArray<WorkLogEntry> | undefined,
+): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  if (left.length !== right.length) return false;
+  return left.every((entry, index) => workLogEntryContentEqual(entry, right[index]!));
+}
+
 function shallowEqualEntryArray<T>(
   left: ReadonlyArray<T> | undefined,
   right: ReadonlyArray<T> | undefined,
@@ -334,14 +358,14 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
     case "work":
       return (
         a.createdAt === (b as typeof a).createdAt &&
-        shallowEqualEntryArray(a.groupedEntries, (b as typeof a).groupedEntries)
+        workLogEntryArraysEqual(a.groupedEntries, (b as typeof a).groupedEntries)
       );
 
     case "message": {
       const bm = b as typeof a;
       return (
         a.message === bm.message &&
-        shallowEqualEntryArray(a.inlineWorkEntries, bm.inlineWorkEntries) &&
+        workLogEntryArraysEqual(a.inlineWorkEntries, bm.inlineWorkEntries) &&
         a.inlineWorkGroupId === bm.inlineWorkGroupId &&
         a.durationStart === bm.durationStart &&
         a.showCompletionDivider === bm.showCompletionDivider &&

@@ -403,9 +403,7 @@ function EventRouter() {
   const subscribedThreadIds = useMemo(() => {
     const nextThreadIds = new Set<ThreadId>();
     for (const threadId of visibleThreadIds) {
-      if (serverThreadIds.has(threadId)) {
-        nextThreadIds.add(threadId);
-      }
+      nextThreadIds.add(threadId);
     }
     for (const threadId of retainedThreadIds) {
       if (serverThreadIds.has(threadId)) {
