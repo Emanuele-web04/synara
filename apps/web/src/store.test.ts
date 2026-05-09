@@ -92,7 +92,7 @@ function makeActivity(overrides: {
   kind?: string;
   summary?: string;
   tone?: OrchestrationThreadActivity["tone"];
-  payload?: Record<string, unknown>;
+  payload?: OrchestrationThreadActivity["payload"];
   turnId?: string;
   sequence?: number;
 }): OrchestrationThreadActivity {
@@ -1581,6 +1581,7 @@ describe("store read model sync", () => {
             streaming: false,
             source: "native",
             dispatchMode: "queue",
+            turnId: null,
           },
         ],
       }),
@@ -2073,6 +2074,7 @@ describe("store read model sync", () => {
   });
 
   it("replaces duplicate live activities by id instead of appending duplicate ids", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
     const initialState = makeState(
       makeThread({
         activities: [
@@ -2103,18 +2105,19 @@ describe("store read model sync", () => {
 
     const next = applyOrchestrationEvents(initialState, [
       makeDomainEvent("thread.activity-appended", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
+        threadId,
         activity: richActivity,
       }),
     ]);
 
     expect(next.threads[0]?.activities).toHaveLength(1);
     expect(next.threads[0]?.activities[0]?.payload).toEqual(richActivity.payload);
-    expect(next.activityIdsByThreadId?.["thread-1"]).toEqual(["activity-command"]);
-    expect(Object.keys(next.activityByThreadId?.["thread-1"] ?? {})).toEqual(["activity-command"]);
+    expect(next.activityIdsByThreadId?.[threadId]).toEqual(["activity-command"]);
+    expect(Object.keys(next.activityByThreadId?.[threadId] ?? {})).toEqual(["activity-command"]);
   });
 
   it("keeps richer activity payloads when duplicate events arrive with generic data", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
     const richActivity = makeActivity({
       id: "activity-command",
       kind: "tool.completed",
@@ -2145,17 +2148,18 @@ describe("store read model sync", () => {
 
     const next = applyOrchestrationEvents(initialState, [
       makeDomainEvent("thread.activity-appended", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
+        threadId,
         activity: genericDuplicate,
       }),
     ]);
 
     expect(next.threads[0]?.activities).toHaveLength(1);
     expect(next.threads[0]?.activities[0]).toBe(richActivity);
-    expect(next.activityByThreadId?.["thread-1"]?.["activity-command"]).toBe(richActivity);
+    expect(next.activityByThreadId?.[threadId]?.["activity-command"]).toBe(richActivity);
   });
 
   it("dedupes read-model activity snapshots without losing rich command payloads", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
     const richActivity = makeActivity({
       id: "activity-command",
       kind: "tool.completed",
@@ -2188,8 +2192,8 @@ describe("store read model sync", () => {
     );
 
     expect(next.threads[0]?.activities).toEqual([richActivity]);
-    expect(next.activityIdsByThreadId?.["thread-1"]).toEqual(["activity-command"]);
-    expect(next.activityByThreadId?.["thread-1"]?.["activity-command"]).toBe(richActivity);
+    expect(next.activityIdsByThreadId?.[threadId]).toEqual(["activity-command"]);
+    expect(next.activityByThreadId?.[threadId]?.["activity-command"]).toBe(richActivity);
   });
 
   it("preserves the existing sidebar pending-user-input state during detail-only response events", () => {

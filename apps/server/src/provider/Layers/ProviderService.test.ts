@@ -872,6 +872,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
           const runtimePayload = payload as {
             activeTurnId: string | null;
             lastRuntimeEvent: string | null;
+            modelSelection?: unknown;
           };
           assert.equal(runtimePayload.activeTurnId, null);
           assert.equal(runtimePayload.lastRuntimeEvent, "turn.completed");

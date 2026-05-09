@@ -10,7 +10,7 @@ import {
 function makeActivity(
   id: string,
   kind: string,
-  payload: unknown,
+  payload: OrchestrationThreadActivity["payload"],
   createdAt = "2099-04-08T18:00:00.000Z",
 ): OrchestrationThreadActivity {
   return {

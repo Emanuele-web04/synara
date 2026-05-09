@@ -300,7 +300,7 @@ const makeOpenCodeTextGeneration = Effect.gen(function* () {
             directory: input.cwd,
             ...(serverPassword.length > 0 ? { serverPassword } : {}),
           });
-          const session = await client.session.create({
+          const sessionCreateInput = {
             title: `T3 Code ${input.operation}`,
             model: {
               providerID: providerId,
@@ -309,7 +309,10 @@ const makeOpenCodeTextGeneration = Effect.gen(function* () {
             },
             ...(agent ? { agent } : {}),
             permission: [{ permission: "*", pattern: "*", action: "deny" }],
-          });
+          };
+          const session = await client.session.create(
+            sessionCreateInput as unknown as Parameters<typeof client.session.create>[0],
+          );
           if (!session.data) {
             throw new Error("OpenCode session.create returned no session payload.");
           }

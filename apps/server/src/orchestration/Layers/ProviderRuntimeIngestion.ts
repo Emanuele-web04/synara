@@ -8,7 +8,6 @@ import {
   CheckpointRef,
   isToolLifecycleItemType,
   ThreadId,
-  type ThreadTokenUsageSnapshot,
   TurnId,
   type OrchestrationThreadActivity,
   type OrchestrationReadModel,
@@ -70,6 +69,12 @@ type RuntimeIngestionInput =
       event: TurnStartRequestedDomainEvent;
     };
 
+type ActivityPayload = OrchestrationThreadActivity["payload"];
+
+function toActivityPayload(payload: unknown): ActivityPayload {
+  return payload as ActivityPayload;
+}
+
 function toTurnId(value: TurnId | string | undefined): TurnId | undefined {
   return value === undefined ? undefined : TurnId.makeUnsafe(String(value));
 }
@@ -120,8 +125,8 @@ function truncateDetail(value: string, limit = 180): string {
 // Keep MCP progress payloads available to the web timeline so it can render the specific tool call.
 function buildToolProgressActivityPayload(
   event: Extract<ProviderRuntimeEvent, { type: "tool.progress" }>,
-) {
-  return {
+): ActivityPayload {
+  return toActivityPayload({
     itemType: "mcp_tool_call" as const,
     title: "MCP tool call",
     ...(event.payload.summary ? { detail: truncateDetail(event.payload.summary) } : {}),
@@ -133,7 +138,7 @@ function buildToolProgressActivityPayload(
         ? { elapsedSeconds: event.payload.elapsedSeconds }
         : {}),
     },
-  };
+  });
 }
 
 function normalizeProposedPlanMarkdown(planMarkdown: string | undefined): string | undefined {
@@ -232,7 +237,7 @@ function subagentThreadTitle(identity: {
 
 function buildContextWindowActivityPayload(
   event: ProviderRuntimeEvent,
-): ThreadTokenUsageSnapshot | undefined {
+): ActivityPayload | undefined {
   if (event.type !== "thread.token-usage.updated") {
     return undefined;
   }
@@ -244,7 +249,7 @@ function buildContextWindowActivityPayload(
   if (!hasTokenUsage && !hasPercentUsage && !hasKnownWindow) {
     return undefined;
   }
-  return usage;
+  return toActivityPayload(usage);
 }
 
 function asPositiveFiniteNumber(value: unknown): number | undefined {
@@ -254,7 +259,7 @@ function asPositiveFiniteNumber(value: unknown): number | undefined {
 // Convert session-configured Claude window labels into the max-token shape the web meter uses.
 function buildConfiguredContextWindowPayload(
   event: ProviderRuntimeEvent,
-): Record<string, unknown> | undefined {
+): ActivityPayload | undefined {
   if (event.type !== "session.configured") {
     return undefined;
   }
@@ -270,10 +275,10 @@ function buildConfiguredContextWindowPayload(
   if (maxTokens === undefined) {
     return undefined;
   }
-  return {
+  return toActivityPayload({
     maxTokens,
     ...(configuredContextWindow ? { contextWindow: configuredContextWindow } : {}),
-  };
+  });
 }
 
 function runtimePayloadRecord(event: ProviderRuntimeEvent): Record<string, unknown> | undefined {
@@ -417,12 +422,12 @@ function runtimeEventToActivities(
                 : requestKind === "file-change"
                   ? "File-change approval requested"
                   : "Approval requested",
-          payload: {
+          payload: toActivityPayload({
             requestId: toApprovalRequestId(event.requestId),
             ...(requestKind ? { requestKind } : {}),
             requestType: event.payload.requestType,
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
-          },
+          }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -441,12 +446,12 @@ function runtimeEventToActivities(
           tone: "approval",
           kind: "approval.resolved",
           summary: "Approval resolved",
-          payload: {
+          payload: toActivityPayload({
             requestId: toApprovalRequestId(event.requestId),
             ...(requestKind ? { requestKind } : {}),
             requestType: event.payload.requestType,
             ...(event.payload.decision ? { decision: event.payload.decision } : {}),
-          },
+          }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -465,9 +470,9 @@ function runtimeEventToActivities(
           tone: "error",
           kind: "runtime.error",
           summary: "Runtime error",
-          payload: {
+          payload: toActivityPayload({
             message: truncateDetail(message),
-          },
+          }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -482,10 +487,10 @@ function runtimeEventToActivities(
           tone: "info",
           kind: "runtime.warning",
           summary: "Runtime warning",
-          payload: {
+          payload: toActivityPayload({
             message: truncateDetail(event.payload.message),
             ...(event.payload.detail !== undefined ? { detail: event.payload.detail } : {}),
-          },
+          }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -500,12 +505,12 @@ function runtimeEventToActivities(
           tone: "info",
           kind: "turn.tasks.updated",
           summary: "Tasks updated",
-          payload: {
+          payload: toActivityPayload({
             tasks: event.payload.tasks,
             ...(event.payload.explanation !== undefined
               ? { explanation: event.payload.explanation }
               : {}),
-          },
+          }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -520,10 +525,10 @@ function runtimeEventToActivities(
           tone: "info",
           kind: "user-input.requested",
           summary: "User input requested",
-          payload: {
+          payload: toActivityPayload({
             ...(event.requestId ? { requestId: event.requestId } : {}),
             questions: event.payload.questions,
-          },
+          }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -538,10 +543,10 @@ function runtimeEventToActivities(
           tone: "info",
           kind: "user-input.resolved",
           summary: "User input submitted",
-          payload: {
+          payload: toActivityPayload({
             ...(event.requestId ? { requestId: event.requestId } : {}),
             answers: event.payload.answers,
-          },
+          }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -561,13 +566,13 @@ function runtimeEventToActivities(
               : event.payload.taskType
                 ? `${event.payload.taskType} task started`
                 : "Task started",
-          payload: {
+          payload: toActivityPayload({
             taskId: event.payload.taskId,
             ...(event.payload.taskType ? { taskType: event.payload.taskType } : {}),
             ...(event.payload.description
               ? { detail: truncateDetail(event.payload.description) }
               : {}),
-          },
+          }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -582,13 +587,13 @@ function runtimeEventToActivities(
           tone: "info",
           kind: "task.progress",
           summary: "Reasoning update",
-          payload: {
+          payload: toActivityPayload({
             taskId: event.payload.taskId,
             detail: truncateDetail(event.payload.summary ?? event.payload.description),
             ...(event.payload.summary ? { summary: truncateDetail(event.payload.summary) } : {}),
             ...(event.payload.lastToolName ? { lastToolName: event.payload.lastToolName } : {}),
             ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
-          },
+          }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -608,12 +613,12 @@ function runtimeEventToActivities(
               : event.payload.status === "stopped"
                 ? "Task stopped"
                 : "Task completed",
-          payload: {
+          payload: toActivityPayload({
             taskId: event.payload.taskId,
             status: event.payload.status,
             ...(event.payload.summary ? { detail: truncateDetail(event.payload.summary) } : {}),
             ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
-          },
+          }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -632,10 +637,10 @@ function runtimeEventToActivities(
           tone: "info",
           kind: "context-compaction",
           summary: "Context compacted manually",
-          payload: {
+          payload: toActivityPayload({
             state: event.payload.state,
             ...(event.payload.detail !== undefined ? { detail: event.payload.detail } : {}),
-          },
+          }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -671,12 +676,12 @@ function runtimeEventToActivities(
             tone: "info",
             kind: "context-compaction",
             summary: "Compacting conversation...",
-            payload: {
+            payload: toActivityPayload({
               itemType: event.payload.itemType,
               status: event.payload.status,
               ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
               ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
-            },
+            }),
             turnId: toTurnId(event.turnId) ?? null,
             ...maybeSequence,
           },
@@ -692,13 +697,13 @@ function runtimeEventToActivities(
           tone: "tool",
           kind: "tool.updated",
           summary: event.payload.title ?? "Tool updated",
-          payload: {
+          payload: toActivityPayload({
             itemType: event.payload.itemType,
             ...(event.payload.status ? { status: event.payload.status } : {}),
             ...(event.payload.title ? { title: event.payload.title } : {}),
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
             ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
-          },
+          }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -716,13 +721,13 @@ function runtimeEventToActivities(
           tone: "tool",
           kind: "tool.completed",
           summary: event.payload.title ?? "Tool",
-          payload: {
+          payload: toActivityPayload({
             itemType: event.payload.itemType,
             ...(event.payload.status ? { status: event.payload.status } : {}),
             ...(event.payload.title ? { title: event.payload.title } : {}),
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
             ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
-          },
+          }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -740,13 +745,13 @@ function runtimeEventToActivities(
           tone: "tool",
           kind: "tool.started",
           summary: `${event.payload.title ?? "Tool"} started`,
-          payload: {
+          payload: toActivityPayload({
             itemType: event.payload.itemType,
             ...(event.payload.status ? { status: event.payload.status } : {}),
             ...(event.payload.title ? { title: event.payload.title } : {}),
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
             ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
-          },
+          }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -776,7 +781,7 @@ function runtimeEventToActivities(
           tone: "info" as const,
           kind: "turn.completed",
           summary: "Turn completed",
-          payload: {
+          payload: toActivityPayload({
             state: runtimeTurnState(event),
             ...(typeof event.payload.totalCostUsd === "number"
               ? { totalCostUsd: event.payload.totalCostUsd }
@@ -787,7 +792,7 @@ function runtimeEventToActivities(
             ...(runtimeTurnErrorMessage(event)
               ? { errorMessage: runtimeTurnErrorMessage(event) }
               : {}),
-          },
+          }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -858,7 +863,7 @@ function runtimeEventToActivities(
           tone: "info",
           kind: "account.rate-limits.updated",
           summary: "Rate limits updated",
-          payload: normalizedPayload,
+          payload: toActivityPayload(normalizedPayload),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -874,10 +879,10 @@ function runtimeEventToActivities(
           tone: (status === "rejected" ? "error" : "info") as "error" | "info",
           kind: "account.rate-limited",
           summary: status === "rejected" ? "Rate limited" : "Approaching rate limit",
-          payload: {
+          payload: toActivityPayload({
             ...normalizedPayload,
             status,
-          },
+          }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },

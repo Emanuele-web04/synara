@@ -835,7 +835,6 @@ describe("flattenOpenCodeModels", () => {
         },
         consoleState: null,
       },
-      credentialProviderIDs: ["openai"],
     });
 
     expect(models).toEqual([
@@ -887,7 +886,6 @@ describe("flattenOpenCodeModels", () => {
         },
         consoleState: null,
       },
-      credentialProviderIDs: ["openai"],
     });
 
     expect(models).toEqual([
@@ -976,6 +974,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       inventory: {
         providerList: {
           connected: ["openai"],
+          default: {},
           all: [
             makeProvider({
               id: "openai",
@@ -998,7 +997,11 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const adapter = yield* OpenCodeAdapter;
-        return yield* adapter.listModels?.({
+        const listModels = adapter.listModels;
+        if (!listModels) {
+          throw new Error("Expected OpenCode adapter to support runtime model listing.");
+        }
+        return yield* listModels({
           provider: "opencode",
           binaryPath: "opencode",
         });

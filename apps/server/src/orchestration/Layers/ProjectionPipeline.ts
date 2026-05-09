@@ -3,6 +3,7 @@ import {
   type ChatAttachment,
   EventId,
   type OrchestrationEvent,
+  type OrchestrationThreadActivity,
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, FileSystem, Layer, Option, Path, Stream } from "effect";
@@ -208,7 +209,7 @@ const withRefreshedThreadShellSummary = Effect.fn(function* (input: {
       ...activities.map((activity) => ({
         id: activity.activityId,
         kind: activity.kind,
-        payload: activity.payload,
+        payload: activity.payload as OrchestrationThreadActivity["payload"],
         sequence: activity.sequence,
         createdAt: activity.createdAt,
       })),

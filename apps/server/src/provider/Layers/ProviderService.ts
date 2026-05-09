@@ -35,6 +35,7 @@ import { ProviderService, type ProviderServiceShape } from "../Services/Provider
 import {
   ProviderSessionDirectory,
   type ProviderRuntimeBinding,
+  type ProviderSessionDirectoryWriteError,
 } from "../Services/ProviderSessionDirectory.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { AnalyticsService } from "../../telemetry/Services/AnalyticsService.ts";
@@ -248,7 +249,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const upsertStoppedSessionBinding = (
       session: ProviderSession,
       stoppedAt: string,
-    ): Effect.Effect<void> =>
+    ): Effect.Effect<void, ProviderSessionDirectoryWriteError> =>
       directory.upsert({
         threadId: session.threadId,
         provider: session.provider,
@@ -267,7 +268,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const markPersistedThreadStopped = (
       threadId: ThreadId,
       stoppedAt: string,
-    ): Effect.Effect<void> =>
+    ): Effect.Effect<void, ProviderSessionDirectoryWriteError> =>
       directory.getProvider(threadId).pipe(
         Effect.flatMap((provider) =>
           directory.upsert({

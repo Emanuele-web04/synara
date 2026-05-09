@@ -1868,8 +1868,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 });
                 const openCodeSessionId =
                   resumedSessionId ??
-                  (yield* runOpenCodeSdk("session.create", () =>
-                    client.session.create({
+                  (yield* runOpenCodeSdk("session.create", () => {
+                    const sessionCreateInput = {
                       title: `DP Code ${input.threadId}`,
                       ...(initialParsedModel
                         ? {
@@ -1882,8 +1882,11 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                         : {}),
                       ...(initialAgent ? { agent: initialAgent } : {}),
                       permission: buildOpenCodePermissionRules(input.runtimeMode),
-                    }),
-                  ).pipe(
+                    };
+                    return client.session.create(
+                      sessionCreateInput as unknown as Parameters<typeof client.session.create>[0],
+                    );
+                  }).pipe(
                     Effect.flatMap((sessionResult) =>
                       sessionResult.data?.id
                         ? Effect.succeed(sessionResult.data.id)

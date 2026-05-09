@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type {
+  OrchestrationEvent,
   OrchestrationReadModel,
   ProviderKind,
   ProviderRuntimeEvent,
@@ -2021,7 +2022,10 @@ describe("ProviderRuntimeIngestion", () => {
       );
     });
     expect(completionEvents).toHaveLength(1);
-    expect(completionEvents[0]?.payload.text).toBe("done");
+    const completionEvent = completionEvents[0] as
+      | Extract<OrchestrationEvent, { type: "thread.message-sent" }>
+      | undefined;
+    expect(completionEvent?.payload.text).toBe("done");
   });
 
   it("reuses the live assistant message when item.completed omits the item id", async () => {

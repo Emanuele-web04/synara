@@ -172,6 +172,8 @@ describe("normalizeCompactToolLabel", () => {
 });
 
 describe("computeStableMessagesTimelineRows", () => {
+  type MessageTimelineRow = Extract<MessagesTimelineRow, { kind: "message" }>;
+
   const emptyStableRows = (): StableMessagesTimelineRowsState => ({
     byId: new Map(),
     result: [],
@@ -233,7 +235,7 @@ describe("computeStableMessagesTimelineRows", () => {
       createdAt: "2026-05-09T10:00:01.000Z",
       streaming: true,
     };
-    const firstRows: MessagesTimelineRow[] = [
+    const firstRows: MessageTimelineRow[] = [
       {
         kind: "message",
         id: "assistant-1",
@@ -257,7 +259,7 @@ describe("computeStableMessagesTimelineRows", () => {
     ];
     const first = computeStableMessagesTimelineRows(firstRows, emptyStableRows());
 
-    const enrichedRows: MessagesTimelineRow[] = [
+    const enrichedRows: MessageTimelineRow[] = [
       {
         ...firstRows[0]!,
         inlineWorkEntries: [
