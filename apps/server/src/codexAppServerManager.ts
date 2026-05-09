@@ -248,8 +248,7 @@ const CODEX_SPARK_DISABLED_PLAN_TYPES = new Set<CodexPlanType>(["free", "go", "p
 const CODEX_PROCESS_SHELL_ENV_NAMES = ["PATH", "SSH_AUTH_SOCK"] as const;
 const CODEX_DISCOVERY_SESSION_IDLE_MS = 10 * 60 * 1000;
 const NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS = "NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS";
-const DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN_ENV =
-  "DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN";
+const DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN_ENV = "DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN";
 const DPCODE_CODEX_HOME_OVERLAY_DIR = "codex-home-overlay";
 const DPCODE_BROWSER_PLUGIN_CONFIG_HEADER = '[plugins."dpcode-browser@local"]';
 
@@ -325,8 +324,7 @@ export function disableDpCodeBrowserPluginInCodexConfig(config: string): string 
 
 function resolveDpCodeCodexHomeOverlayPath(env: NodeJS.ProcessEnv, sourceHomePath: string): string {
   const runtimeHome = env.DPCODE_HOME?.trim() || env.T3CODE_HOME?.trim();
-  const overlayRoot =
-    runtimeHome || path.join(path.dirname(sourceHomePath), ".dpcode", "runtime");
+  const overlayRoot = runtimeHome || path.join(path.dirname(sourceHomePath), ".dpcode", "runtime");
   return path.join(overlayRoot, DPCODE_CODEX_HOME_OVERLAY_DIR);
 }
 

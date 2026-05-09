@@ -282,75 +282,77 @@ export class WsTransport {
   }
 
   private startChannelStream(channel: WsPushChannel): void {
-    void this.getClient().then((client) => {
-      const restartChannel = () => {
-        if (this.listeners.has(channel)) {
-          this.startChannelStream(channel);
-        }
-      };
+    void this.getClient()
+      .then((client) => {
+        const restartChannel = () => {
+          if (this.listeners.has(channel)) {
+            this.startChannelStream(channel);
+          }
+        };
 
-      if (channel === WS_CHANNELS.serverWelcome) {
-        this.startStream(
-          "server.lifecycle",
-          client[WS_METHODS.subscribeServerLifecycle]({}),
-          (event: ServerLifecycleStreamEvent) => {
-            if (event.type === "welcome") this.emit(WS_CHANNELS.serverWelcome, event.payload);
-          },
-          restartChannel,
-        );
-      } else if (channel === WS_CHANNELS.serverConfigUpdated) {
-        this.startStream(
-          "server.config",
-          client[WS_METHODS.subscribeServerConfig]({}),
-          (event: ServerConfigStreamEvent) => {
-            if (event.type === "snapshot") {
-              this.emit(WS_CHANNELS.serverConfigUpdated, {
-                issues: event.config.issues,
-                providers: event.config.providers,
-              });
-            } else if (event.type === "configUpdated") {
-              this.emit(WS_CHANNELS.serverConfigUpdated, event.payload);
-            }
-          },
-          restartChannel,
-        );
-      } else if (channel === WS_CHANNELS.serverProviderStatusesUpdated) {
-        this.startStream(
-          "server.providers",
-          client[WS_METHODS.subscribeServerProviderStatuses]({}),
-          (payload: ServerProviderStatusesUpdatedPayload) =>
-            this.emit(WS_CHANNELS.serverProviderStatusesUpdated, payload),
-          restartChannel,
-        );
-      } else if (channel === WS_CHANNELS.serverSettingsUpdated) {
-        this.startStream(
-          "server.settings",
-          client[WS_METHODS.subscribeServerSettings]({}),
-          (payload: ServerSettingsUpdatedPayload) =>
-            this.emit(WS_CHANNELS.serverSettingsUpdated, payload),
-          restartChannel,
-        );
-      } else if (channel === WS_CHANNELS.terminalEvent) {
-        this.startStream(
-          "terminal.events",
-          client[WS_METHODS.subscribeTerminalEvents]({}),
-          (event: TerminalEvent) => this.emit(WS_CHANNELS.terminalEvent, event),
-          restartChannel,
-        );
-      } else if (channel === ORCHESTRATION_WS_CHANNELS.domainEvent) {
-        this.startStream(
-          "orchestration.domain",
-          client[WS_METHODS.subscribeOrchestrationDomainEvents]({}),
-          (event: OrchestrationEvent) => this.emit(ORCHESTRATION_WS_CHANNELS.domainEvent, event),
-          restartChannel,
-        );
-      }
-    }).catch((error) => {
-      if (!this.disposed && this.listeners.has(channel)) {
-        console.warn("WebSocket RPC channel failed to start", error);
-        window.setTimeout(() => this.startChannelStream(channel), 500);
-      }
-    });
+        if (channel === WS_CHANNELS.serverWelcome) {
+          this.startStream(
+            "server.lifecycle",
+            client[WS_METHODS.subscribeServerLifecycle]({}),
+            (event: ServerLifecycleStreamEvent) => {
+              if (event.type === "welcome") this.emit(WS_CHANNELS.serverWelcome, event.payload);
+            },
+            restartChannel,
+          );
+        } else if (channel === WS_CHANNELS.serverConfigUpdated) {
+          this.startStream(
+            "server.config",
+            client[WS_METHODS.subscribeServerConfig]({}),
+            (event: ServerConfigStreamEvent) => {
+              if (event.type === "snapshot") {
+                this.emit(WS_CHANNELS.serverConfigUpdated, {
+                  issues: event.config.issues,
+                  providers: event.config.providers,
+                });
+              } else if (event.type === "configUpdated") {
+                this.emit(WS_CHANNELS.serverConfigUpdated, event.payload);
+              }
+            },
+            restartChannel,
+          );
+        } else if (channel === WS_CHANNELS.serverProviderStatusesUpdated) {
+          this.startStream(
+            "server.providers",
+            client[WS_METHODS.subscribeServerProviderStatuses]({}),
+            (payload: ServerProviderStatusesUpdatedPayload) =>
+              this.emit(WS_CHANNELS.serverProviderStatusesUpdated, payload),
+            restartChannel,
+          );
+        } else if (channel === WS_CHANNELS.serverSettingsUpdated) {
+          this.startStream(
+            "server.settings",
+            client[WS_METHODS.subscribeServerSettings]({}),
+            (payload: ServerSettingsUpdatedPayload) =>
+              this.emit(WS_CHANNELS.serverSettingsUpdated, payload),
+            restartChannel,
+          );
+        } else if (channel === WS_CHANNELS.terminalEvent) {
+          this.startStream(
+            "terminal.events",
+            client[WS_METHODS.subscribeTerminalEvents]({}),
+            (event: TerminalEvent) => this.emit(WS_CHANNELS.terminalEvent, event),
+            restartChannel,
+          );
+        } else if (channel === ORCHESTRATION_WS_CHANNELS.domainEvent) {
+          this.startStream(
+            "orchestration.domain",
+            client[WS_METHODS.subscribeOrchestrationDomainEvents]({}),
+            (event: OrchestrationEvent) => this.emit(ORCHESTRATION_WS_CHANNELS.domainEvent, event),
+            restartChannel,
+          );
+        }
+      })
+      .catch((error) => {
+        if (!this.disposed && this.listeners.has(channel)) {
+          console.warn("WebSocket RPC channel failed to start", error);
+          window.setTimeout(() => this.startChannelStream(channel), 500);
+        }
+      });
   }
 
   private stopChannelStream(channel: WsPushChannel): void {
@@ -417,13 +419,16 @@ export class WsTransport {
             return;
           }
           if (restart && Exit.isFailure(exit)) {
-            window.setTimeout(() => {
-              if (!this.disposed && !this.streamCleanups.has(key)) {
-                void this.reconnect()
-                  .then(() => restart())
-                  .catch((error) => console.warn("WebSocket RPC stream reconnect failed", error));
-              }
-            }, Cause.hasInterruptsOnly(exit.cause) ? 0 : 500);
+            window.setTimeout(
+              () => {
+                if (!this.disposed && !this.streamCleanups.has(key)) {
+                  void this.reconnect()
+                    .then(() => restart())
+                    .catch((error) => console.warn("WebSocket RPC stream reconnect failed", error));
+                }
+              },
+              Cause.hasInterruptsOnly(exit.cause) ? 0 : 500,
+            );
             return;
           }
           if (Exit.isFailure(exit) && !this.disposed && !Cause.hasInterruptsOnly(exit.cause)) {

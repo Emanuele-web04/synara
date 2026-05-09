@@ -114,6 +114,7 @@ export const TOOL_LIFECYCLE_ITEM_TYPES = [
   "collab_agent_tool_call",
   "web_search",
   "image_view",
+  "image_generation",
 ] as const;
 
 export const ToolLifecycleItemType = Schema.Literals(TOOL_LIFECYCLE_ITEM_TYPES);
@@ -414,6 +415,15 @@ export const ItemLifecyclePayload = Schema.Struct({
   data: Schema.optional(Schema.Unknown),
 });
 export type ItemLifecyclePayload = typeof ItemLifecyclePayload.Type;
+
+// Codex-generated images are persisted as local file references, never inline bytes.
+export const CODEX_GENERATED_IMAGE_ARTIFACT_KIND = "codex.generated_image" as const;
+export const CodexGeneratedImageArtifact = Schema.Struct({
+  kind: Schema.Literal(CODEX_GENERATED_IMAGE_ARTIFACT_KIND),
+  path: TrimmedNonEmptyStringSchema,
+  callId: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type CodexGeneratedImageArtifact = typeof CodexGeneratedImageArtifact.Type;
 
 const ContentDeltaPayload = Schema.Struct({
   streamKind: RuntimeContentStreamKind,

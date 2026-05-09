@@ -1244,7 +1244,10 @@ interface CommandActionDisplay {
   preview?: string;
 }
 
-function makeCommandActionDisplay(title: string, preview: string | undefined): CommandActionDisplay {
+function makeCommandActionDisplay(
+  title: string,
+  preview: string | undefined,
+): CommandActionDisplay {
   return preview === undefined ? { title } : { title, preview };
 }
 
@@ -1310,7 +1313,9 @@ function extractToolTitle(payload: Record<string, unknown> | null): string | nul
   return asTrimmedString(payload?.title);
 }
 
-function extractPrimaryCommandAction(payload: Record<string, unknown> | null): CommandAction | null {
+function extractPrimaryCommandAction(
+  payload: Record<string, unknown> | null,
+): CommandAction | null {
   const data = asRecord(payload?.data);
   const item = asRecord(data?.item);
   const actions = collectCommandActions(payload, data, item);
@@ -1380,14 +1385,20 @@ function deriveCommandActionDisplay(
         commandActionSearchPreview(action),
       );
     case "listfiles":
-      return makeCommandActionDisplay(running ? "Listing" : "Listed", commandActionListPreview(action));
+      return makeCommandActionDisplay(
+        running ? "Listing" : "Listed",
+        commandActionListPreview(action),
+      );
     default:
       return null;
   }
 }
 
 function normalizeCommandActionType(value: string): string {
-  return value.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
 }
 
 function commandActionTarget(action: CommandAction): string | undefined {

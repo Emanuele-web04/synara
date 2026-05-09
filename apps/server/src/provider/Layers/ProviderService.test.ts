@@ -373,9 +373,7 @@ it.effect(
 
       const providerLayer = makeProviderServiceLive().pipe(
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
-        Layer.provide(
-          ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer)),
-        ),
+        Layer.provide(ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer))),
         Layer.provide(AnalyticsService.layerTest),
       );
 

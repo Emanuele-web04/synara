@@ -6300,16 +6300,15 @@ export default function ChatView({
       onProviderModelChange={onProviderModelSelect}
     />
   );
-  const composerTraitsPickerControl =
-    showComposerModelBootstrapSkeleton ? (
-      cursorModelDiscoveryPending ? (
-        <ComposerModelLoadingControl widthClassName={composerTraitsPickerWidthClassName} />
-      ) : (
-        <ComposerControlSkeleton widthClassName={composerTraitsPickerWidthClassName} />
-      )
+  const composerTraitsPickerControl = showComposerModelBootstrapSkeleton ? (
+    cursorModelDiscoveryPending ? (
+      <ComposerModelLoadingControl widthClassName={composerTraitsPickerWidthClassName} />
     ) : (
-      providerTraitsPicker
-    );
+      <ComposerControlSkeleton widthClassName={composerTraitsPickerWidthClassName} />
+    )
+  ) : (
+    providerTraitsPicker
+  );
   const toggleFastMode = useCallback(() => {
     if (!composerTraitSelection.caps.supportsFastMode) {
       scheduleComposerFocus();

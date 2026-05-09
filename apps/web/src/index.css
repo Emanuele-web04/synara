@@ -606,6 +606,232 @@ label:has(> select#reasoning-effort) select {
   font-family: inherit !important;
 }
 
+/* Generated image preview/download card rendered inline from markdown ![alt](file.png) */
+.chat-generated-image {
+  position: relative;
+  display: inline-block;
+  margin: 0.55rem 0;
+  width: fit-content;
+  max-width: min(364px, 100%);
+  vertical-align: top;
+  isolation: isolate;
+}
+
+.chat-generated-image__frame {
+  position: relative;
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  border: 0;
+  padding: 0;
+  border-radius: 0.85rem;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--muted) 55%, transparent);
+  cursor: zoom-in;
+  outline: none;
+  transition:
+    box-shadow 140ms ease,
+    transform 140ms ease;
+}
+
+.chat-generated-image__frame:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.chat-generated-image__frame:hover {
+  box-shadow: 0 1px 18px -8px color-mix(in srgb, var(--foreground) 40%, transparent);
+}
+
+.chat-generated-image[data-status="loading"] .chat-generated-image__frame {
+  min-height: 112px;
+}
+
+.chat-generated-image__img {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  max-height: 336px;
+  object-fit: contain;
+  background: transparent;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.chat-generated-image[data-status="loading"] .chat-generated-image__img {
+  opacity: 0;
+}
+
+.chat-generated-image__skeleton {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(
+    100deg,
+    color-mix(in srgb, var(--muted) 80%, transparent) 0%,
+    color-mix(in srgb, var(--muted) 50%, transparent) 50%,
+    color-mix(in srgb, var(--muted) 80%, transparent) 100%
+  );
+  background-size: 200% 100%;
+  animation: chat-generated-image-shimmer 1.6s ease-in-out infinite;
+  color: var(--muted-foreground);
+}
+
+@keyframes chat-generated-image-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+.chat-generated-image__overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-start;
+  padding: 0.75rem;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, #000 22%, transparent) 0%,
+    transparent 35%,
+    transparent 65%,
+    color-mix(in srgb, #000 28%, transparent) 100%
+  );
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms ease;
+}
+
+.chat-generated-image[data-status="ready"]:hover .chat-generated-image__overlay,
+.chat-generated-image[data-status="ready"]:focus-within .chat-generated-image__overlay {
+  opacity: 1;
+}
+
+/* Shared pill styling for the Expand and Download actions on hover */
+.chat-generated-image__overlay-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.6rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, #000 55%, transparent);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  text-decoration: none;
+  user-select: none;
+}
+
+/* Download pill — placed in the top-right corner with the same padding as the bottom overlay */
+.chat-generated-image__overlay-pill--download {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 1;
+  opacity: 0;
+  transform: translateY(-2px);
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease,
+    background-color 140ms ease,
+    color 140ms ease;
+}
+
+.chat-generated-image[data-status="ready"]:hover .chat-generated-image__overlay-pill--download,
+.chat-generated-image[data-status="ready"]:focus-within
+  .chat-generated-image__overlay-pill--download {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.chat-generated-image__overlay-pill--download:hover,
+.chat-generated-image__overlay-pill--download:focus-visible {
+  background: color-mix(in srgb, #000 72%, transparent);
+  color: #fff;
+  text-decoration: none;
+}
+
+.chat-generated-image__overlay-pill--download:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* Inline action used inside the error fallback */
+.chat-generated-image__action--inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex: 0 0 auto;
+  padding: 0.3rem 0.55rem;
+  border-radius: 0.5rem;
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+  text-decoration: none;
+  font-size: 0.74rem;
+  font-weight: 500;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.chat-generated-image__action--inline:hover,
+.chat-generated-image__action--inline:focus-visible {
+  background: color-mix(in srgb, var(--foreground) 12%, transparent);
+  color: var(--foreground);
+  text-decoration: none;
+}
+
+.chat-generated-image--error {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  background: color-mix(in srgb, var(--muted) 35%, transparent);
+}
+
+.chat-generated-image__error-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--destructive) 18%, transparent);
+  color: var(--destructive);
+  flex: 0 0 auto;
+}
+
+.chat-generated-image__error-body {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.chat-generated-image__error-title {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--foreground);
+}
+
+.chat-generated-image__error-subtitle {
+  font-size: 0.72rem;
+  color: var(--muted-foreground);
+}
+
 .chat-markdown table {
   width: 100%;
   border-collapse: collapse;

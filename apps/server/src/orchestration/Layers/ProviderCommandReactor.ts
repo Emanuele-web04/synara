@@ -1086,7 +1086,8 @@ const make = Effect.gen(function* () {
     const textGenerationSelection =
       "modelSelection" in textGenerationInput ? textGenerationInput.modelSelection : null;
     const textGenerationModel =
-      textGenerationSelection?.model ?? ("model" in textGenerationInput ? textGenerationInput.model : null);
+      textGenerationSelection?.model ??
+      ("model" in textGenerationInput ? textGenerationInput.model : null);
     const textGenerationProviderOptions =
       "providerOptions" in textGenerationInput ? textGenerationInput.providerOptions : undefined;
     yield* Effect.logDebug("provider command reactor generating thread title", {

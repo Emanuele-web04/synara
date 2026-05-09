@@ -748,6 +748,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     cwd={markdownCwd}
                     isStreaming={Boolean(row.message.streaming)}
                     style={chatTypographyStyle}
+                    onImageExpand={onImageExpand}
                   />
                 </div>
                 {visibleRenderableInlineToolEntries.length > 0 && (
@@ -1663,6 +1664,7 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   }
   if (workEntry.itemType === "web_search") return GlobeIcon;
   if (workEntry.requestKind === "file-read") return EyeIcon;
+  if (workEntry.itemType === "image_generation") return ZapIcon;
   if (workEntry.itemType === "image_view") return EyeIcon;
 
   switch (workEntry.itemType) {
