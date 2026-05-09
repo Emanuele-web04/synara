@@ -1426,6 +1426,7 @@ export default function ChatView({
     providerModelsQueryOptions({
       provider: "kilo",
       binaryPath: settings.kiloBinaryPath || null,
+      enabled: selectedProvider === "kilo" || lockedProvider === "kilo" || isModelPickerOpen,
     }),
   );
   const claudeDynamicAgentsQuery = useQuery(
@@ -1450,6 +1451,16 @@ export default function ChatView({
     cursorModelDiscoveryEnabled &&
     !hasResolvedCursorModelDiscovery &&
     (cursorDynamicModelsQuery.isLoading || cursorDynamicModelsQuery.isFetching);
+  const kiloModelDiscoveryEnabled =
+    selectedProvider === "kilo" || lockedProvider === "kilo" || isModelPickerOpen;
+  const hasResolvedKiloModelDiscovery =
+    (kiloDynamicModelsQuery.data?.source === "kilo-cli" ||
+      kiloDynamicModelsQuery.data?.source === "kilo") &&
+    (kiloDynamicModelsQuery.data.models.length ?? 0) > 0;
+  const kiloModelDiscoveryPending =
+    kiloModelDiscoveryEnabled &&
+    !hasResolvedKiloModelDiscovery &&
+    (kiloDynamicModelsQuery.isLoading || kiloDynamicModelsQuery.isFetching);
   const modelOptionsByProvider = useMemo(() => {
     const staticOptions: Record<ProviderKind, ReturnType<typeof getAppModelOptions>> = {
       codex: getAppModelOptions(
@@ -1608,17 +1619,27 @@ export default function ChatView({
   const providerModelsLoading =
     selectedProvider === "cursor"
       ? cursorModelDiscoveryPending
+      : selectedProvider === "kilo"
+        ? kiloModelDiscoveryPending
       : selectedProviderModelsQuery !== undefined &&
         (selectedProviderModelsQuery.isLoading ||
           (selectedProviderModelsQuery.isFetching &&
             selectedProviderModelsQuery.data === undefined));
+  const selectedProviderRequiresRuntimeModels =
+    selectedProvider === "cursor" || selectedProvider === "kilo";
+  const selectedProviderRuntimeModelDiscoveryPending =
+    selectedProvider === "cursor"
+      ? cursorModelDiscoveryPending
+      : selectedProvider === "kilo"
+        ? kiloModelDiscoveryPending
+        : false;
   const showComposerModelBootstrapSkeleton = shouldShowComposerModelBootstrapSkeleton({
     selectedProvider,
     selectedModel,
     persistedModelSelection: persistedComposerModelSelection,
     draftModelSelection: draftModelSelectionForSelectedProvider,
     providerModelsLoading,
-    requiresDiscoveredModels: selectedProvider === "cursor",
+    requiresDiscoveredModels: selectedProviderRequiresRuntimeModels,
   });
   const searchableModelOptions = useMemo(
     () =>
@@ -6298,35 +6319,35 @@ export default function ChatView({
   });
   const composerModelPickerWidthClassName = isComposerFooterCompact ? "w-28" : "w-32 sm:w-36";
   const composerTraitsPickerWidthClassName = isComposerFooterCompact ? "w-16" : "w-20";
-  const composerModelPickerControl = showComposerModelBootstrapSkeleton ? (
-    cursorModelDiscoveryPending ? (
-      <ComposerModelLoadingControl widthClassName={composerModelPickerWidthClassName} />
-    ) : (
+  const composerModelPickerControl =
+    showComposerModelBootstrapSkeleton && !selectedProviderRuntimeModelDiscoveryPending ? (
       <ComposerControlSkeleton widthClassName={composerModelPickerWidthClassName} />
-    )
-  ) : (
-    <ProviderModelPicker
-      compact={isComposerFooterCompact}
-      provider={selectedProvider}
-      model={selectedModelForPickerWithCustomFallback}
-      lockedProvider={lockedProvider}
-      providers={providerStatuses}
-      modelOptionsByProvider={modelOptionsByProvider}
-      loadingModelProviders={{ cursor: cursorModelDiscoveryPending }}
-      open={isModelPickerOpen}
-      onOpenChange={handleModelPickerOpenChange}
-      shortcutLabel={modelPickerShortcutLabel}
-      {...(composerProviderState.modelPickerIconClassName
-        ? {
-            activeProviderIconClassName: composerProviderState.modelPickerIconClassName,
-          }
-        : {})}
-      onProviderModelChange={onProviderModelSelect}
-    />
-  );
+    ) : (
+      <ProviderModelPicker
+        compact={isComposerFooterCompact}
+        provider={selectedProvider}
+        model={selectedModelForPickerWithCustomFallback}
+        lockedProvider={lockedProvider}
+        providers={providerStatuses}
+        modelOptionsByProvider={modelOptionsByProvider}
+        loadingModelProviders={{
+          cursor: cursorModelDiscoveryPending,
+          kilo: kiloModelDiscoveryPending,
+        }}
+        open={isModelPickerOpen}
+        onOpenChange={handleModelPickerOpenChange}
+        shortcutLabel={modelPickerShortcutLabel}
+        {...(composerProviderState.modelPickerIconClassName
+          ? {
+              activeProviderIconClassName: composerProviderState.modelPickerIconClassName,
+            }
+          : {})}
+        onProviderModelChange={onProviderModelSelect}
+      />
+    );
   const composerTraitsPickerControl =
     showComposerModelBootstrapSkeleton ? (
-      cursorModelDiscoveryPending ? (
+      selectedProviderRuntimeModelDiscoveryPending ? (
         <ComposerModelLoadingControl widthClassName={composerTraitsPickerWidthClassName} />
       ) : (
         <ComposerControlSkeleton widthClassName={composerTraitsPickerWidthClassName} />

@@ -284,13 +284,6 @@ describe("wsNativeApi", () => {
           claudeAgent: { enabled: true, binaryPath: "claude", launchArgs: "", customModels: [] },
           cursor: { enabled: false, binaryPath: "agent", apiEndpoint: "", customModels: [] },
           gemini: { enabled: true, binaryPath: "gemini", customModels: [] },
-          kilo: {
-            enabled: true,
-            binaryPath: "kilo",
-            serverUrl: "",
-            serverPassword: "",
-            customModels: [],
-          },
           opencode: {
             enabled: true,
             binaryPath: "opencode",

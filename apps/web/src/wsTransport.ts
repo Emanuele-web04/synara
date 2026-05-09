@@ -415,9 +415,7 @@ export class WsTransport {
           if (restart && Exit.isFailure(exit)) {
             window.setTimeout(() => {
               if (!this.disposed && !this.streamCleanups.has(key)) {
-                void this.reconnect()
-                  .then(() => restart())
-                  .catch((error) => console.warn("WebSocket RPC stream reconnect failed", error));
+                restart();
               }
             }, Cause.hasInterruptsOnly(exit.cause) ? 0 : 500);
             return;

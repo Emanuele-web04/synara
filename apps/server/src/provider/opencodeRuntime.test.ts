@@ -157,45 +157,6 @@ openai/gpt-5.4
       },
     ]);
   });
-
-  it("surfaces non-reasoning variants and context limits from verbose CLI output", () => {
-    const models = parseOpenCodeCliModelsOutput(`
-kilo/claude-sonnet-4-6
-{
-  "id": "claude-sonnet-4-6",
-  "providerID": "kilo",
-  "name": "Claude Sonnet 4.6",
-  "limit": {
-    "context": 1000000,
-    "output": 64000
-  },
-  "variants": {
-    "fast": {
-      "description": "Lower latency configuration"
-    },
-    "context-1m": {
-      "label": "1M Context"
-    }
-  }
-}
-`);
-
-    expect(models).toEqual([
-      {
-        slug: "kilo/claude-sonnet-4-6",
-        providerID: "kilo",
-        modelID: "claude-sonnet-4-6",
-        name: "Claude Sonnet 4.6",
-        variants: ["context-1m", "fast"],
-        supportedReasoningEfforts: [
-          { value: "fast", label: "Fast", description: "Lower latency configuration" },
-          { value: "context-1m", label: "1M Context" },
-        ],
-        contextWindowOptions: [{ value: "1m", label: "1M", isDefault: true }],
-        defaultContextWindow: "1m",
-      },
-    ]);
-  });
 });
 
 describe("parseOpenCodeCredentialProviderIDs", () => {

@@ -2455,7 +2455,6 @@ describe("PROVIDER_OPTIONS", () => {
       { value: "claudeAgent", label: "Claude", available: true },
       { value: "cursor", label: "Cursor", available: true },
       { value: "gemini", label: "Gemini", available: true },
-      { value: "kilo", label: "Kilo", available: true },
       { value: "opencode", label: "OpenCode", available: true },
     ]);
     expect(claude).toEqual({

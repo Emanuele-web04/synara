@@ -142,11 +142,20 @@ export function resolveThreadHandoffModelSelection(input: {
   readonly projectDefaultModelSelection: ModelSelection | null | undefined;
   readonly stickyModelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>>;
 }): ModelSelection {
+  const isCompatibleSelection = (
+    selection: ModelSelection | null | undefined,
+  ): selection is ModelSelection => {
+    if (!selection || selection.provider !== input.targetProvider) {
+      return false;
+    }
+    return input.targetProvider !== "kilo" || selection.model.startsWith("kilo/");
+  };
+
   const stickySelection = input.stickyModelSelectionByProvider[input.targetProvider];
-  if (stickySelection) {
+  if (isCompatibleSelection(stickySelection)) {
     return stickySelection;
   }
-  if (input.projectDefaultModelSelection?.provider === input.targetProvider) {
+  if (isCompatibleSelection(input.projectDefaultModelSelection)) {
     return input.projectDefaultModelSelection;
   }
   return {

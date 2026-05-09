@@ -188,7 +188,7 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     title: "Kilo",
     description: "Save additional Kilo model slugs for the picker and provider runtime.",
     placeholder: "provider/model",
-    example: "openai/gpt-5",
+    example: "kilo/kilo-auto/free",
   },
   opencode: {
     provider: "opencode",

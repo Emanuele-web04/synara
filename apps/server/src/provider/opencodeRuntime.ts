@@ -147,6 +147,7 @@ export interface OpenCodeCliModelDescriptor {
     readonly isDefault?: true;
   }>;
   readonly defaultContextWindow?: string;
+  readonly isFree?: boolean;
 }
 
 export interface OpenCodePathInfo {
@@ -440,6 +441,7 @@ function parseOpenCodeCliModelJson(
           })?.[0]
         : undefined;
   const contextWindowOptions = parseOpenCodeContextWindowOptions(object);
+  const isFree = object.isFree;
 
   return {
     slug,
@@ -450,6 +452,7 @@ function parseOpenCodeCliModelJson(
     supportedReasoningEfforts,
     ...(defaultVariant ? { defaultReasoningEffort: defaultVariant } : {}),
     ...(contextWindowOptions ?? {}),
+    ...(typeof isFree === "boolean" ? { isFree } : {}),
   };
 }
 

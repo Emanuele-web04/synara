@@ -11,11 +11,9 @@ import {
   type OpenCodeInventory,
   type OpenCodeRuntimeShape,
 } from "../opencodeRuntime.ts";
-import { KiloAdapter } from "../Services/KiloAdapter.ts";
 import { OpenCodeAdapter } from "../Services/OpenCodeAdapter.ts";
 import {
   flattenOpenCodeModels,
-  makeKiloAdapterLive,
   makeOpenCodeAdapterLive,
   normalizeOpenCodeTokenUsage,
   resolvePreferredOpenCodeModelProviders,
@@ -607,16 +605,12 @@ describe("flattenOpenCodeModels", () => {
         name: "GPT-5",
         upstreamProviderId: "openai",
         upstreamProviderName: "OpenAI",
-        contextWindowOptions: [{ value: "128k", label: "128K", isDefault: true }],
-        defaultContextWindow: "128k",
       },
       {
         slug: "opencode/nemotron-3-super-free",
         name: "Nemotron 3 Super Free",
         upstreamProviderId: "opencode",
         upstreamProviderName: "OpenCode",
-        contextWindowOptions: [{ value: "128k", label: "128K", isDefault: true }],
-        defaultContextWindow: "128k",
       },
     ]);
   });
@@ -690,54 +684,8 @@ describe("flattenOpenCodeModels", () => {
           {
             value: "xhigh",
           },
-          {
-            value: "custom",
-            label: "Do not treat as thinking",
-          },
         ],
         defaultReasoningEffort: "medium",
-        contextWindowOptions: [{ value: "128k", label: "128K", isDefault: true }],
-        defaultContextWindow: "128k",
-      },
-    ]);
-  });
-
-  it("surfaces model context limits for OpenCode-compatible runtime models", () => {
-    const models = flattenOpenCodeModels({
-      inventory: {
-        providerList: {
-          connected: ["kilo"],
-          all: [
-            makeProvider({
-              id: "kilo",
-              name: "Kilo Gateway",
-              source: "api",
-              models: {
-                "claude-sonnet-4-6": {
-                  id: "claude-sonnet-4-6",
-                  name: "Claude Sonnet 4.6",
-                  limit: {
-                    context: 1_000_000,
-                    output: 64_000,
-                  },
-                },
-              },
-            }),
-          ],
-        },
-        consoleState: null,
-      },
-      credentialProviderIDs: ["kilo"],
-    });
-
-    expect(models).toEqual([
-      {
-        slug: "kilo/claude-sonnet-4-6",
-        name: "Claude Sonnet 4.6",
-        upstreamProviderId: "kilo",
-        upstreamProviderName: "Kilo Gateway",
-        contextWindowOptions: [{ value: "1m", label: "1M", isDefault: true }],
-        defaultContextWindow: "1m",
       },
     ]);
   });
@@ -772,13 +720,11 @@ describe("flattenOpenCodeModels", () => {
         name: "GPT-5.4",
         upstreamProviderId: "openai",
         upstreamProviderName: "OpenAI",
-        contextWindowOptions: [{ value: "128k", label: "128K", isDefault: true }],
-        defaultContextWindow: "128k",
       },
     ]);
   });
 
-  it("prefers credential-backed OpenCode-connected providers when available", () => {
+  it("keeps every OpenCode-connected provider instead of re-filtering from local auth metadata", () => {
     const models = flattenOpenCodeModels({
       inventory: {
         providerList: {
@@ -823,7 +769,10 @@ describe("flattenOpenCodeModels", () => {
       },
     });
 
-    expect(models.map((model) => model.slug)).toEqual(["opencode/glm-4.6"]);
+    expect(models.map((model) => model.slug)).toEqual([
+      "github-copilot/claude-opus-4.6",
+      "opencode/glm-4.6",
+    ]);
   });
 });
 
@@ -1286,46 +1235,6 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
 
     expect(runtime.promptCalls[0]).toMatchObject({
       agent: "build",
-    });
-  });
-
-  it("pins default-mode Kilo turns to the Kilo code agent", async () => {
-    const runtime = createMockOpenCodeRuntime();
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const adapter = yield* KiloAdapter;
-
-        yield* adapter.startSession({
-          provider: "kilo",
-          threadId: asThreadId("thread-default-kilo-code-agent"),
-          runtimeMode: "full-access",
-        });
-
-        yield* adapter.sendTurn({
-          threadId: asThreadId("thread-default-kilo-code-agent"),
-          input: "implement this",
-          interactionMode: "default",
-          attachments: [],
-          modelSelection: {
-            provider: "kilo",
-            model: "openai/gpt-5",
-          },
-        });
-      }).pipe(
-        Effect.provide(
-          makeKiloAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "kilo-adapter-test-" }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-          ),
-        ),
-      ),
-    );
-
-    expect(runtime.promptCalls[0]).toMatchObject({
-      agent: "code",
     });
   });
 

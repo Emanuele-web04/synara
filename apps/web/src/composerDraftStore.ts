@@ -432,26 +432,49 @@ export interface EffectiveComposerModelState {
   modelOptions: ProviderModelOptions | null;
 }
 
-function providerModelOptionsFromSelection(
-  modelSelection: ModelSelection | null | undefined,
+function mergeProviderModelOptionsFromSelections(
+  ...selections: ReadonlyArray<ModelSelection | null | undefined>
 ): ProviderModelOptions | null {
-  if (!modelSelection?.options) {
-    return null;
+  const result: Partial<Record<ProviderKind, ProviderModelOptions[ProviderKind]>> = {};
+  for (const selection of selections) {
+    if (!selection) continue;
+    if (selection.options) {
+      result[selection.provider] = selection.options;
+    } else {
+      delete result[selection.provider];
+    }
   }
-
-  return {
-    [modelSelection.provider]: modelSelection.options,
-  };
+  return Object.keys(result).length > 0 ? (result as ProviderModelOptions) : null;
 }
 
-function modelSelectionByProviderToOptions(
-  map: Partial<Record<ProviderKind, ModelSelection>> | null | undefined,
-): ProviderModelOptions | null {
-  if (!map) return null;
-  const result: Record<string, unknown> = {};
-  for (const [provider, selection] of Object.entries(map)) {
-    if (selection?.options) {
+function deriveEffectiveComposerModelOptions(input: {
+  draft:
+    | Pick<ComposerThreadDraftState, "modelSelectionByProvider" | "activeProvider">
+    | null
+    | undefined;
+  threadModelSelection: ModelSelection | null | undefined;
+  projectModelSelection: ModelSelection | null | undefined;
+}): ProviderModelOptions | null {
+  const baseOptions = mergeProviderModelOptionsFromSelections(
+    input.projectModelSelection,
+    input.threadModelSelection,
+  );
+  const draftSelections = input.draft?.modelSelectionByProvider;
+  if (!draftSelections) {
+    return baseOptions;
+  }
+
+  const result: Partial<Record<ProviderKind, ProviderModelOptions[ProviderKind]>> = {
+    ...(baseOptions ?? {}),
+  };
+  for (const [provider, selection] of Object.entries(draftSelections) as Array<
+    [ProviderKind, ModelSelection | undefined]
+  >) {
+    if (!selection) continue;
+    if (selection.options) {
       result[provider] = selection.options;
+    } else {
+      delete result[provider];
     }
   }
   return Object.keys(result).length > 0 ? (result as ProviderModelOptions) : null;
@@ -1111,11 +1134,7 @@ export function deriveEffectiveComposerModelState(input: {
     input.availableModelOptionsByProvider?.[input.selectedProvider]?.[0]?.slug ??
     selectedDraftModel ??
     baseModel;
-  const modelOptions =
-    modelSelectionByProviderToOptions(input.draft?.modelSelectionByProvider) ??
-    providerModelOptionsFromSelection(input.threadModelSelection) ??
-    providerModelOptionsFromSelection(input.projectModelSelection) ??
-    null;
+  const modelOptions = deriveEffectiveComposerModelOptions(input);
 
   return {
     selectedModel,

@@ -358,8 +358,8 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
   ],
   kilo: [
     {
-      slug: "openai/gpt-5",
-      name: "OpenAI GPT-5",
+      slug: "kilo/kilo-auto/free",
+      name: "Kilo Auto Free",
       capabilities: {
         reasoningEffortLevels: [],
         supportsFastMode: false,
@@ -436,7 +436,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderKind, ModelSlug> = {
   claudeAgent: "claude-sonnet-4-6",
   cursor: "auto",
   gemini: "auto-gemini-3",
-  kilo: "openai/gpt-5",
+  kilo: "kilo/kilo-auto/free",
   opencode: "openai/gpt-5",
 };
 
