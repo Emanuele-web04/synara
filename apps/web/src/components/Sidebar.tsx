@@ -2760,9 +2760,10 @@ export default function Sidebar() {
       const handoffTargets = canHandoff
         ? resolveAvailableHandoffTargetProviders(thread.modelSelection.provider)
         : [];
-      const handoffItems = handoffTargets.map((provider) => ({
+      const handoffItems = handoffTargets.map((provider, index) => ({
         id: `handoff:${provider}`,
         label: `Handoff to ${PROVIDER_DISPLAY_NAMES[provider]}`,
+        separatorBefore: index === 0,
       }));
       const threadWorkspacePath = resolveThreadWorkspaceCwd({
         projectCwd: projectCwdById.get(thread.projectId) ?? null,
@@ -2778,13 +2779,13 @@ export default function Sidebar() {
             : []),
           { id: "mark-unread", label: "Mark unread" },
           ...handoffItems,
-          { id: "copy-path", label: "Copy Path" },
+          { id: "copy-path", label: "Copy Path", separatorBefore: true },
           ...(threadWorkspacePath
             ? [{ id: "open-path-in-terminal", label: "Open Path in Terminal" }]
             : []),
           { id: "copy-thread-id", label: "Copy Thread ID" },
           ...(options?.extraItems ?? []),
-          { id: "archive", label: "Archive" },
+          { id: "archive", label: "Archive", separatorBefore: true },
           { id: "delete", label: "Delete", destructive: true },
         ],
         position,

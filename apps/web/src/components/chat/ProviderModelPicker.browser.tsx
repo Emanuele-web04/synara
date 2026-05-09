@@ -69,6 +69,21 @@ const MANY_CURSOR_MODELS = Array.from({ length: 16 }, (_, index) => ({
   upstreamProviderName: index % 2 === 0 ? "OpenAI" : "Anthropic",
 })) satisfies ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>;
 
+const CURSOR_FAVORITE_SORT_MODELS = [
+  {
+    slug: "cursor-claude-favorite-sort" as ModelSlug,
+    name: "Claude Cursor Favorite Sort",
+    upstreamProviderId: "anthropic",
+    upstreamProviderName: "Anthropic",
+  },
+  {
+    slug: "cursor-gpt-favorite-sort" as ModelSlug,
+    name: "GPT Cursor Favorite Sort",
+    upstreamProviderId: "openai",
+    upstreamProviderName: "OpenAI",
+  },
+] satisfies ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>;
+
 async function mountPicker(props: {
   provider: ProviderKind;
   model: ModelSlug;
@@ -312,6 +327,50 @@ describe("ProviderModelPicker", () => {
       await expect
         .element(page.getByRole("menuitemradio", { name: "GPT Cursor 1" }))
         .not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows favourited Cursor models in their own top category", async () => {
+    const mounted = await mountPicker({
+      provider: "cursor",
+      model: "cursor-claude-favorite-sort",
+      lockedProvider: "cursor",
+      modelOptionsByProvider: {
+        ...MODEL_OPTIONS_BY_PROVIDER,
+        cursor: CURSOR_FAVORITE_SORT_MODELS,
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+
+      await vi.waitFor(() => {
+        const text = document.body.textContent ?? "";
+        expect(text.indexOf("Anthropic")).toBeLessThan(text.indexOf("OpenAI"));
+      });
+
+      await page
+        .getByRole("button", { name: "Add GPT Cursor Favorite Sort to favourites" })
+        .click();
+
+      await vi.waitFor(() => {
+        const text = document.body.textContent ?? "";
+        expect(text.indexOf("Favourites")).toBeLessThan(text.indexOf("Anthropic"));
+        expect(text.indexOf("GPT Cursor Favorite Sort")).toBeGreaterThan(
+          text.indexOf("Favourites"),
+        );
+        expect(text.indexOf("GPT Cursor Favorite Sort")).toBeLessThan(text.indexOf("Anthropic"));
+      });
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "GPT Cursor Favorite Sort" }))
+        .toBeInTheDocument();
+      expect(
+        Array.from(document.querySelectorAll('[role="menuitemradio"]')).filter((element) =>
+          element.textContent?.includes("GPT Cursor Favorite Sort"),
+        ),
+      ).toHaveLength(1);
     } finally {
       await mounted.cleanup();
     }

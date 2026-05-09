@@ -1650,6 +1650,7 @@ function registerIpcHandlers(): void {
         .map((item) => ({
           id: item.id,
           label: item.label,
+          separatorBefore: item.separatorBefore === true,
           destructive: item.destructive === true,
         }));
       if (normalizedItems.length === 0) {
@@ -1675,8 +1676,13 @@ function registerIpcHandlers(): void {
         const template: MenuItemConstructorOptions[] = [];
         let hasInsertedDestructiveSeparator = false;
         for (const item of normalizedItems) {
-          if (item.destructive && !hasInsertedDestructiveSeparator && template.length > 0) {
+          const shouldInsertSeparator =
+            item.separatorBefore ||
+            (item.destructive && !hasInsertedDestructiveSeparator && template.length > 0);
+          if (shouldInsertSeparator && template.length > 0) {
             template.push({ type: "separator" });
+          }
+          if (item.destructive) {
             hasInsertedDestructiveSeparator = true;
           }
           const itemOption: MenuItemConstructorOptions = {

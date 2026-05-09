@@ -76,8 +76,8 @@ export function showContextMenuFallback<T extends string>(
       const item = items[i]!;
       const isDestructive = item.destructive === true || item.id === "delete";
 
-      // Add separator before destructive items
-      if (isDestructive && i > 0) {
+      // Keep explicit groups visible in the browser fallback; destructive items remain isolated by default.
+      if ((item.separatorBefore === true || isDestructive) && i > 0) {
         const sep = document.createElement("div");
         sep.className = "mx-2.5 my-1 h-px bg-border";
         inner.appendChild(sep);
