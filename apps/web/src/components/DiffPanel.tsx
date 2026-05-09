@@ -27,6 +27,7 @@ import {
 } from "react";
 import {
   gitBranchesQueryOptions,
+  gitQueryKeys,
   gitSummarizeDiffQueryOptions,
   gitWorkingTreeDiffQueryOptions,
 } from "~/lib/gitReactQuery";
@@ -395,6 +396,15 @@ export default function DiffPanel({
       : workingTreeDiffQuery.error
         ? "Failed to load total working tree diff."
         : null;
+
+  useEffect(() => {
+    if (!hasResolvedWorkingTreePatch || !activeCwd) {
+      return;
+    }
+    void queryClient.invalidateQueries({ queryKey: gitQueryKeys.status(activeCwd) });
+    void queryClient.invalidateQueries({ queryKey: gitQueryKeys.branches(activeCwd) });
+  }, [activeCwd, hasResolvedWorkingTreePatch, queryClient, workingTreePatch]);
+
   const activeReviewPatch = surfaceMode === "total" ? workingTreePatch : selectedPatch;
   const activeReviewError = surfaceMode === "total" ? workingTreeDiffError : checkpointDiffError;
   const activeReviewIsLoading =

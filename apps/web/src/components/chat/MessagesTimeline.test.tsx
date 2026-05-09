@@ -1087,6 +1087,66 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("Tool calls");
   });
 
+  it("highlights the action word on Cursor-style inline tool rows", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        timelineEntries={[
+          {
+            id: "entry-cursor-search",
+            kind: "work",
+            createdAt: "2026-05-09T16:31:20.000Z",
+            entry: {
+              id: "work-cursor-search",
+              createdAt: "2026-05-09T16:31:20.000Z",
+              label: "Tool",
+              tone: "tool",
+              itemType: "dynamic_tool_call",
+              toolTitle: "Searched",
+              detail: "2 files found",
+            },
+          },
+          {
+            id: "entry-cursor-assistant",
+            kind: "message",
+            createdAt: "2026-05-09T16:31:24.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-cursor-assistant"),
+              role: "assistant",
+              text: "done",
+              createdAt: "2026-05-09T16:31:24.000Z",
+              completedAt: "2026-05-09T16:31:25.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        completionDividerBeforeEntryId={null}
+        completionSummary={null}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-05-09T16:31:25.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain(
+      '<span class="font-medium text-muted-foreground/72" data-work-entry-action-word="true">Searched</span> 2 files found',
+    );
+  });
+
   it("keeps the latest inline tool calls visible while the turn is still active", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
@@ -1495,6 +1555,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Searched");
+    expect(markup).toContain('data-work-entry-action-word="true"');
     expect(markup).toContain("rg -n &quot;ProjectionSnapshotQuery&quot; apps/server/src");
     expect(markup).toContain(
       `title="/bin/zsh -lc &#x27;rg -n &quot;ProjectionSnapshotQuery&quot; apps/server/src&#x27;"`,
@@ -1547,6 +1608,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Listed");
+    expect(markup).toContain('data-work-entry-action-word="true"');
     expect(markup).toContain("find apps/web/src -maxdepth 2 -type d");
     expect(markup).not.toContain(">Listed web<");
   });

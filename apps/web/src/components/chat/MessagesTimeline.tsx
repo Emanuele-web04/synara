@@ -1709,6 +1709,15 @@ function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
   return capitalizePhrase(normalizeCompactToolLabel(workEntry.toolTitle));
 }
 
+// Splits compact work labels so the action verb can carry visual emphasis.
+function splitWorkEntryActionText(value: string): { action: string; rest: string } | null {
+  const match = /^(\S+)([\s\S]*)$/.exec(value.trim());
+  if (!match?.[1]) {
+    return null;
+  }
+  return { action: match[1], rest: match[2] ?? "" };
+}
+
 function isFileChangeWorkEntry(workEntry: TimelineWorkEntry): boolean {
   return workEntry.requestKind === "file-change" || workEntry.itemType === "file_change";
 }
@@ -1831,6 +1840,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const heading = toolWorkEntryHeading(workEntry);
   const preview = workEntryPreview(workEntry);
   const displayText = preview ? `${heading} ${preview}` : heading;
+  const displayTextParts = splitWorkEntryActionText(displayText);
   const rawCommand = workEntry.rawCommand ?? workEntry.command;
   const hoverText = rawCommand ?? displayText;
   const changedFiles = workEntry.changedFiles ?? [];
@@ -1876,7 +1886,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                 }}
               >
                 <span
-                  className="font-system-ui shrink-0 text-muted-foreground/60"
+                  className="font-system-ui shrink-0 font-medium text-muted-foreground/72"
                   style={{ fontSize: `${rowFontSizePx}px` }}
                 >
                   Edited
@@ -2111,7 +2121,21 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                       ) : null}
                     </span>
                   ) : null}
-                  <span className="text-muted-foreground/55">{displayText}</span>
+                  <span className="text-muted-foreground/48" data-work-entry-display-text="true">
+                    {displayTextParts ? (
+                      <>
+                        <span
+                          className="font-medium text-muted-foreground/72"
+                          data-work-entry-action-word="true"
+                        >
+                          {displayTextParts.action}
+                        </span>
+                        {displayTextParts.rest}
+                      </>
+                    ) : (
+                      displayText
+                    )}
+                  </span>
                 </p>
               </div>
               {showIconRight && (
