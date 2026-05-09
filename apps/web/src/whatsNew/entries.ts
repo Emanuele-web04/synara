@@ -22,20 +22,20 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
-    version: "0.0.42",
-    date: "May 6",
+    version: "0.0.43",
+    date: "May 9",
     features: [
       {
         id: "cursor-provider",
-        title: "Cursor is now a first-class provider",
+        title: "Cursor is now a first-class DP Code provider",
         description:
-          "DP Code can run Cursor CLI sessions through ACP, discover Cursor models, resume existing chats, and keep Cursor handoffs inside the same provider workflow as Codex and OpenCode.",
+          "Run Cursor CLI sessions directly from DP Code with ACP-backed startup, model discovery, existing-chat resume, handoff, and provider health checks alongside Codex and OpenCode.",
       },
       {
         id: "effect-acp-runtime",
-        title: "Effect ACP powers the new provider runtime",
+        title: "New Effect TS ACP runtime",
         description:
-          "A new Effect TS ACP package now owns generated schemas, JSON-RPC wiring, client and agent helpers, terminal release handling, and protocol tests for sturdier provider integrations.",
+          "The new Effect TS ACP package owns generated schemas, JSON-RPC transport, client and agent helpers, terminal release handling, and protocol tests so provider integrations have a sturdier core.",
       },
       {
         id: "effect-websocket-server",
@@ -45,7 +45,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
       },
       {
         id: "cursor-streaming-polish",
-        title: "Cursor output is easier to follow",
+        title: "Cursor output is easier to read and resume",
         description:
           "Cursor reasoning, tool progress, usage events, plan updates, composer behavior, and model-selection compatibility now render more consistently across fresh and resumed threads.",
       },
