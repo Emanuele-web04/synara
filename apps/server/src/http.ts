@@ -23,6 +23,7 @@ import type { SessionCredentialServiceShape } from "./auth/Services/SessionCrede
 import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
 import { deriveAuthClientMetadata } from "./auth/utils";
 import { ServerConfig, type ServerConfigShape } from "./config";
+import { LOCAL_IMAGE_ROUTE_PATH, resolveAllowedLocalImageFile } from "./localImageFiles.ts";
 import type { ProjectFaviconResolverShape } from "./project/Services/ProjectFaviconResolver";
 import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolver";
 import type { ServerReadiness } from "./server/readiness";
@@ -58,6 +59,7 @@ export function makeEffectHttpRouteLayer(readiness: ServerReadiness) {
     ),
     authEffectRouteLayer,
     projectFaviconEffectRouteLayer,
+    localImageEffectRouteLayer,
     attachmentsEffectRouteLayer,
     staticAndDevEffectRouteLayer,
   );
@@ -293,6 +295,53 @@ const projectFaviconEffectRouteLayer = HttpRouter.add(
         Effect.succeed(HttpServerResponse.text("Internal Server Error", { status: 500 })),
       ),
     );
+  }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
+);
+
+export const localImageEffectRouteLayer = HttpRouter.add(
+  "GET",
+  LOCAL_IMAGE_ROUTE_PATH,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = HttpServerRequest.toURL(request);
+    if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
+
+    const config = yield* ServerConfig;
+    if (!isLegacyTokenAuthorized({ config, url })) {
+      yield* requireAuthenticatedRequest;
+    }
+
+    const imageFile = yield* Effect.promise(() =>
+      resolveAllowedLocalImageFile({
+        requestedPath: url.searchParams.get("path"),
+        cwd: url.searchParams.get("cwd"),
+      }).catch(() => null),
+    );
+    if (!imageFile) {
+      return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+
+    // Read the bytes ourselves (mirrors the static-asset route) instead of relying on
+    // HttpServerResponse.file, which depends on Etag.Generator/Path services and was
+    // failing with a 500 on the local-image preview/download path.
+    const fileSystem = yield* FileSystem.FileSystem;
+    const data = yield* fileSystem
+      .readFile(imageFile.path)
+      .pipe(Effect.catch(() => Effect.succeed(null)));
+    if (!data) {
+      return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+
+    const isDownload = url.searchParams.get("download") === "1";
+    const safeFileName = imageFile.fileName.replaceAll('"', "");
+    return HttpServerResponse.uint8Array(data, {
+      status: 200,
+      contentType: Mime.getType(imageFile.path) ?? "application/octet-stream",
+      headers: {
+        "Cache-Control": "private, max-age=60",
+        ...(isDownload ? { "Content-Disposition": `attachment; filename="${safeFileName}"` } : {}),
+      },
+    });
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
 );
 

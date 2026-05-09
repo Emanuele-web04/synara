@@ -632,7 +632,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
                 cause,
               }),
           ),
-      );
+        );
       yield* Scope.addFinalizer(
         runtimeScope,
         child.kill({ killSignal: "SIGKILL", forceKillAfter: "1500 millis" }).pipe(Effect.ignore),
@@ -788,9 +788,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
   const loadOptionalAgents = (client: OpencodeClient) =>
     loadAgents(client).pipe(
       Effect.timeoutOption("2 seconds"),
-      Effect.map(
-        Option.getOrElse((): ReadonlyArray<Agent> => []),
-      ),
+      Effect.map(Option.getOrElse((): ReadonlyArray<Agent> => [])),
       Effect.catch((cause) =>
         Effect.logDebug("OpenCode agent discovery skipped", {
           reason: openCodeRuntimeErrorDetail(cause),

@@ -2068,7 +2068,10 @@ if (hasSingleInstanceLock) {
               if (isBackendReadinessAborted(error)) {
                 return;
               }
-              console.warn("[desktop] backend readiness check timed out during dev activate", error);
+              console.warn(
+                "[desktop] backend readiness check timed out during dev activate",
+                error,
+              );
             })
             .finally(() => {
               if (!mainWindow) {

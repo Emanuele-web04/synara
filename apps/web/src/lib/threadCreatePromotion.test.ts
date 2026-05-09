@@ -10,10 +10,7 @@ import {
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useStore } from "../store";
 import { getThreadFromState } from "../threadDerivation";
-import {
-  isDuplicateThreadCreateError,
-  promoteThreadCreate,
-} from "./threadCreatePromotion";
+import { isDuplicateThreadCreateError, promoteThreadCreate } from "./threadCreatePromotion";
 
 const initialStoreState = useStore.getState();
 const initialComposerDraftState = useComposerDraftStore.getState();
@@ -94,9 +91,7 @@ describe("threadCreatePromotion", () => {
   it("marks the draft as promoted when the thread already exists locally", async () => {
     const threadId = ThreadId.makeUnsafe("thread-existing-local");
     const projectId = ProjectId.makeUnsafe("project-promote");
-    useComposerDraftStore
-      .getState()
-      .setProjectDraftThreadId(projectId, threadId);
+    useComposerDraftStore.getState().setProjectDraftThreadId(projectId, threadId);
     useStore.getState().syncServerShellSnapshot({
       snapshotSequence: 1,
       projects: [

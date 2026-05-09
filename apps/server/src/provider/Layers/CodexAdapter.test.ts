@@ -348,6 +348,100 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("maps completed generated-image items to structured image artifacts", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-image-complete"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "item/completed",
+        threadId: asThreadId("thread-1"),
+        providerThreadId: "provider-thread-1",
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("img_call_1"),
+        payload: {
+          item: {
+            type: "image_generation_call",
+            id: "img_call_1",
+            saved_path: "/tmp/provider-thread-1/img_call_1.png",
+            result: "large-inline-base64",
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") {
+        return;
+      }
+      assert.equal(firstEvent.value.type, "item.completed");
+      if (firstEvent.value.type !== "item.completed") {
+        return;
+      }
+      assert.equal(firstEvent.value.payload.itemType, "image_generation");
+      assert.equal(firstEvent.value.payload.title, "Generated image");
+      assert.deepStrictEqual(firstEvent.value.payload.data, {
+        kind: "codex.generated_image",
+        path: "/tmp/provider-thread-1/img_call_1.png",
+        callId: "img_call_1",
+      });
+      const rawPayload = firstEvent.value.raw?.payload as {
+        item?: { result?: string; result_elided_for_relay?: boolean };
+      };
+      assert.equal(rawPayload.item?.result, undefined);
+      assert.equal(rawPayload.item?.result_elided_for_relay, true);
+    }),
+  );
+
+  it.effect("maps legacy image_generation_end notifications", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-image-end"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "codex/event/image_generation_end",
+        threadId: asThreadId("thread-1"),
+        payload: {
+          msg: {
+            type: "image_generation_end",
+            threadId: "provider-thread-1",
+            turn_id: "turn-1",
+            call_id: "img_call_2",
+            saved_path: "/tmp/provider-thread-1/img_call_2.png",
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") {
+        return;
+      }
+      assert.equal(firstEvent.value.type, "item.completed");
+      if (firstEvent.value.type !== "item.completed") {
+        return;
+      }
+      assert.equal(firstEvent.value.turnId, "turn-1");
+      assert.equal(firstEvent.value.itemId, "img_call_2");
+      assert.equal(firstEvent.value.payload.itemType, "image_generation");
+      assert.deepStrictEqual(firstEvent.value.payload.data, {
+        kind: "codex.generated_image",
+        path: "/tmp/provider-thread-1/img_call_2.png",
+        callId: "img_call_2",
+      });
+    }),
+  );
+
   it.effect("maps exited review items to assistant completion events with review text", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;

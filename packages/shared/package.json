@@ -87,6 +87,10 @@
     "./toolOutputSummary": {
       "types": "./src/toolOutputSummary.ts",
       "import": "./src/toolOutputSummary.ts"
+    },
+    "./localImage": {
+      "types": "./src/localImage.ts",
+      "import": "./src/localImage.ts"
     }
   },
   "scripts": {

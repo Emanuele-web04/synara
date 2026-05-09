@@ -97,6 +97,7 @@ function humanizeRequestKind(
   if (requestKind === "file-change" || itemType === "file_change") return "Edited";
   // Don't handle command types here — let humanizeCommandToolLabel produce more specific labels
   if (itemType === "web_search") return "Searched the web";
+  if (itemType === "image_generation") return "Generated image";
   if (itemType === "image_view") return "Viewed image";
   if (itemType === "collab_agent_tool_call") return "Agent task";
   return null;

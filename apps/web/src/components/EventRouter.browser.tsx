@@ -967,8 +967,9 @@ describe("EventRouter scoped orchestration sync", () => {
     try {
       await vi.waitFor(
         () => {
-          expect(subscribeThreadRequests.filter((threadId) => threadId === draftThreadId).length)
-            .toBeGreaterThanOrEqual(1);
+          expect(
+            subscribeThreadRequests.filter((threadId) => threadId === draftThreadId).length,
+          ).toBeGreaterThanOrEqual(1);
         },
         { timeout: 4_000, interval: 16 },
       );
@@ -1031,8 +1032,9 @@ describe("EventRouter scoped orchestration sync", () => {
             true,
           );
           expect(subscribeThreadRequestCountById.get(draftThreadId)).toBeGreaterThanOrEqual(2);
-          expect(subscribeThreadRequests.filter((threadId) => threadId === draftThreadId).length)
-            .toBeGreaterThanOrEqual(2);
+          expect(
+            subscribeThreadRequests.filter((threadId) => threadId === draftThreadId).length,
+          ).toBeGreaterThanOrEqual(2);
           const thread = getThreadFromState(useStore.getState(), draftThreadId);
           expect(thread?.messages.at(-1)?.text).toBe("draft promotion rendered");
         },

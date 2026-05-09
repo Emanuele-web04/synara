@@ -23,6 +23,11 @@ import {
   resolveSubagentIdentityFromDirectory,
 } from "@t3tools/shared/subagents";
 
+import {
+  generatedImageMarkdown,
+  generatedImagePathFromRuntimeEvent,
+  isGeneratedImageOnlyMarkdown,
+} from "../../codexGeneratedImages.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
@@ -1225,6 +1230,84 @@ const make = Effect.gen(function* () {
       yield* clearAssistantMessageState(input.messageId);
     });
 
+  const appendGeneratedImageReference = (input: {
+    event: ProviderRuntimeEvent;
+    thread: OrchestrationReadModel["threads"][number];
+    imagePath: string;
+    turnId?: TurnId;
+    createdAt: string;
+  }) =>
+    Effect.gen(function* () {
+      const markdown = generatedImageMarkdown(input.imagePath);
+      const messages = input.thread.messages;
+      const sameItemMessageId = input.event.itemId
+        ? MessageId.makeUnsafe(`assistant:${input.event.itemId}`)
+        : undefined;
+      const sameItemMessage = sameItemMessageId
+        ? messages.find(
+            (message) => message.role === "assistant" && message.id === sameItemMessageId,
+          )
+        : undefined;
+      const sameImageMessage = messages.find(
+        (message) =>
+          message.role === "assistant" &&
+          (message.text.includes(input.imagePath) || message.text.includes(markdown)),
+      );
+      const finalTurnMessage = input.turnId
+        ? messages
+            .filter(
+              (message) =>
+                message.role === "assistant" &&
+                message.turnId === input.turnId &&
+                !message.streaming &&
+                message.text.trim().length > 0 &&
+                !isGeneratedImageOnlyMarkdown(message.text),
+            )
+            .toSorted(
+              (left, right) =>
+                right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id),
+            )[0]
+        : undefined;
+      const existingMessage = sameItemMessage ?? sameImageMessage ?? finalTurnMessage;
+      const targetMessageId =
+        existingMessage?.id ??
+        MessageId.makeUnsafe(`assistant:image:${input.event.itemId ?? input.event.eventId}`);
+      const targetMessageText = existingMessage?.text ?? "";
+      const targetIsStreaming = existingMessage?.streaming ?? false;
+      const alreadyContainsImage =
+        targetMessageText.includes(input.imagePath) || targetMessageText.includes(markdown);
+
+      let dispatchedDelta = false;
+      if (!alreadyContainsImage) {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.message.assistant.delta",
+          commandId: providerCommandId(input.event, "generated-image-delta"),
+          threadId: input.thread.id,
+          messageId: targetMessageId,
+          delta: targetMessageText.trim().length > 0 ? `\n\n${markdown}` : markdown,
+          ...(input.turnId ? { turnId: input.turnId } : {}),
+          createdAt: input.createdAt,
+        });
+        dispatchedDelta = true;
+      }
+
+      // Only finalize when we actually changed the message (delta dispatched, or we
+      // just created a brand-new image-only message), or when the existing target was
+      // still streaming. Skipping complete on already-finalized targets keeps replays
+      // and duplicate provider notifications from emitting redundant message-sent events.
+      const shouldComplete = dispatchedDelta || !existingMessage || targetIsStreaming;
+      if (shouldComplete) {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.message.assistant.complete",
+          commandId: providerCommandId(input.event, "generated-image-complete"),
+          threadId: input.thread.id,
+          messageId: targetMessageId,
+          ...(input.turnId ? { turnId: input.turnId } : {}),
+          createdAt: input.createdAt,
+        });
+      }
+    });
+
   const upsertProposedPlan = (input: {
     event: ProviderRuntimeEvent;
     threadId: ThreadId;
@@ -1430,7 +1513,9 @@ const make = Effect.gen(function* () {
           // A single provider event can describe the child both as a collab receiver and
           // as the event's provider thread, so re-read after any earlier dispatch in this handler.
           const latestReadModel = yield* orchestrationEngine.getReadModel();
-          const existingThread = latestReadModel.threads.find((entry) => entry.id === childThreadId);
+          const existingThread = latestReadModel.threads.find(
+            (entry) => entry.id === childThreadId,
+          );
           const resolvedModelSelection =
             identity?.model && identity.modelIsRequestedHint !== true
               ? {
@@ -1802,6 +1887,18 @@ const make = Effect.gen(function* () {
           ...(proposedPlanCompletion.turnId ? { turnId: proposedPlanCompletion.turnId } : {}),
           fallbackMarkdown: proposedPlanCompletion.planMarkdown,
           updatedAt: now,
+        });
+      }
+
+      const generatedImagePath = generatedImagePathFromRuntimeEvent(event);
+      if (generatedImagePath) {
+        const generatedImageTurnId = toTurnId(event.turnId) ?? activeTurnId ?? undefined;
+        yield* appendGeneratedImageReference({
+          event,
+          thread,
+          imagePath: generatedImagePath,
+          ...(generatedImageTurnId ? { turnId: generatedImageTurnId } : {}),
+          createdAt: now,
         });
       }
 

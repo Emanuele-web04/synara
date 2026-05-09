@@ -43,6 +43,13 @@ import {
   type CodexAppServerStartSessionInput,
 } from "../../codexAppServerManager.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
+import {
+  codexGeneratedImageArtifact,
+  extractCodexGeneratedImageReference,
+  firstStringValue,
+  isCodexGeneratedImageItemType,
+  sanitizeNestedCodexGeneratedImagePayloads,
+} from "../../codexGeneratedImages.ts";
 import { isNonFatalCodexErrorMessage } from "../../codexErrorClassification.ts";
 import { ServerConfig } from "../../config.ts";
 import { extractProposedPlanMarkdown } from "../planMode.ts";
@@ -215,6 +222,7 @@ function normalizeItemType(raw: unknown): string {
 
 function toCanonicalItemType(raw: unknown): CanonicalItemType {
   const type = normalizeItemType(raw);
+  if (isCodexGeneratedImageItemType(raw)) return "image_generation";
   if (type.includes("user")) return "user_message";
   if (type.includes("agent message") || type.includes("assistant")) return "assistant_message";
   if (type.includes("reasoning") || type.includes("thought")) return "reasoning";
@@ -254,6 +262,8 @@ function itemTitle(itemType: CanonicalItemType): string | undefined {
       return "Tool call";
     case "web_search":
       return "Web search";
+    case "image_generation":
+      return "Generated image";
     case "image_view":
       return "Image view";
     case "error":
@@ -274,7 +284,10 @@ function itemDetail(
     asString(item.summary),
     asString(item.review),
     asString(item.text),
+    asString(item.saved_path),
+    asString(item.savedPath),
     asString(item.path),
+    asString(item.file_path),
     asString(item.prompt),
     asString(nestedResult?.command),
     asString(payload.command),
@@ -515,6 +528,135 @@ function codexEventBase(
   };
 }
 
+function codexGeneratedImageThreadId(
+  event: ProviderEvent,
+  payload: Record<string, unknown> | undefined,
+): string | undefined {
+  const msg = codexEventMessage(payload);
+  const nestedEvent = asObject(payload?.event);
+  return (
+    firstStringValue(msg, ["thread_id", "threadId", "threadID", "thread"]) ??
+    firstStringValue(nestedEvent, ["thread_id", "threadId", "threadID", "thread"]) ??
+    firstStringValue(payload, ["thread_id", "threadId", "threadID", "thread"]) ??
+    event.providerThreadId ??
+    event.threadId
+  );
+}
+
+function sanitizeGeneratedImagePayload(event: ProviderEvent, canonicalThreadId: ThreadId): unknown {
+  const payload = asObject(event.payload);
+  return sanitizeNestedCodexGeneratedImagePayloads({
+    value: event.payload ?? {},
+    threadId: codexGeneratedImageThreadId(event, payload) ?? canonicalThreadId,
+  });
+}
+
+function withSanitizedGeneratedImageRaw(
+  base: Omit<ProviderRuntimeEvent, "type" | "payload">,
+  event: ProviderEvent,
+  canonicalThreadId: ThreadId,
+): Omit<ProviderRuntimeEvent, "type" | "payload"> {
+  return {
+    ...base,
+    raw: {
+      source: eventRawSource(event),
+      method: event.method,
+      payload: sanitizeGeneratedImagePayload(event, canonicalThreadId),
+    },
+  };
+}
+
+function generatedImageEventCandidate(event: ProviderEvent): Record<string, unknown> | undefined {
+  const payload = asObject(event.payload);
+  const msg = codexEventMessage(payload);
+  const item = asObject(payload?.item);
+  const nestedEvent = asObject(payload?.event);
+  if (item) {
+    return item;
+  }
+  if (msg) {
+    return {
+      ...msg,
+      type: asString(msg.type) ?? "image_generation_end",
+    };
+  }
+  if (nestedEvent) {
+    return {
+      ...nestedEvent,
+      type: asString(nestedEvent.type) ?? "image_generation_end",
+    };
+  }
+  if (payload) {
+    return {
+      ...payload,
+      type: asString(payload.type) ?? "image_generation_end",
+    };
+  }
+  return undefined;
+}
+
+function mapGeneratedImageEndEvent(
+  event: ProviderEvent,
+  canonicalThreadId: ThreadId,
+): ProviderRuntimeEvent | undefined {
+  if (
+    event.method !== "codex/event/image_generation_end" &&
+    event.method !== "image_generation_end"
+  ) {
+    return undefined;
+  }
+  const payload = asObject(event.payload);
+  const candidate = generatedImageEventCandidate(event);
+  const reference = extractCodexGeneratedImageReference({
+    value: candidate,
+    threadId: codexGeneratedImageThreadId(event, payload) ?? canonicalThreadId,
+  });
+  if (!reference) {
+    return undefined;
+  }
+
+  const turnId =
+    event.turnId ??
+    toTurnId(
+      firstStringValue(candidate, ["turn_id", "turnId"]) ??
+        firstStringValue(payload, ["turn_id", "turnId"]),
+    );
+  const itemId =
+    event.itemId ??
+    toProviderItemId(
+      firstStringValue(candidate, ["item_id", "itemId", "call_id", "callId", "id"]) ??
+        firstStringValue(payload, ["item_id", "itemId", "call_id", "callId", "id"]),
+    );
+  const base = withSanitizedGeneratedImageRaw(
+    {
+      ...runtimeEventBase(
+        {
+          ...event,
+          ...(turnId ? { turnId } : {}),
+          ...(itemId ? { itemId } : {}),
+        },
+        canonicalThreadId,
+      ),
+      ...(turnId ? { turnId } : {}),
+      ...(itemId ? { itemId: asRuntimeItemId(itemId) } : {}),
+    },
+    event,
+    canonicalThreadId,
+  );
+
+  return {
+    ...base,
+    type: "item.completed",
+    payload: {
+      itemType: "image_generation",
+      status: "completed",
+      title: "Generated image",
+      detail: reference.path,
+      data: codexGeneratedImageArtifact(reference),
+    },
+  };
+}
+
 function eventRawSource(event: ProviderEvent): NonNullable<ProviderRuntimeEvent["raw"]>["source"] {
   return event.kind === "request" ? "codex.app-server.request" : "codex.app-server.notification";
 }
@@ -572,6 +714,20 @@ function mapItemLifecycle(
   if (itemType === "unknown" && lifecycle !== "item.updated") {
     return undefined;
   }
+  const generatedImageReference =
+    itemType === "image_generation"
+      ? extractCodexGeneratedImageReference({
+          value: source,
+          threadId: codexGeneratedImageThreadId(event, payload) ?? canonicalThreadId,
+        })
+      : undefined;
+  if (
+    lifecycle === "item.completed" &&
+    itemType === "image_generation" &&
+    !generatedImageReference
+  ) {
+    return undefined;
+  }
 
   const canonicalItemType =
     lifecycle === "item.completed" && itemType === "review_exited" ? "assistant_message" : itemType;
@@ -585,14 +741,28 @@ function mapItemLifecycle(
         : undefined;
 
   return {
-    ...runtimeEventBase(event, canonicalThreadId),
+    ...(generatedImageReference
+      ? withSanitizedGeneratedImageRaw(
+          runtimeEventBase(event, canonicalThreadId),
+          event,
+          canonicalThreadId,
+        )
+      : runtimeEventBase(event, canonicalThreadId)),
     type: lifecycle,
     payload: {
       itemType: canonicalItemType,
       ...(status ? { status } : {}),
       ...(itemTitle(canonicalItemType) ? { title: itemTitle(canonicalItemType) } : {}),
-      ...(detail ? { detail } : {}),
-      ...(event.payload !== undefined ? { data: event.payload } : {}),
+      ...(generatedImageReference
+        ? { detail: generatedImageReference.path }
+        : detail
+          ? { detail }
+          : {}),
+      ...(generatedImageReference
+        ? { data: codexGeneratedImageArtifact(generatedImageReference) }
+        : event.payload !== undefined
+          ? { data: event.payload }
+          : {}),
     },
   };
 }
@@ -603,6 +773,10 @@ function mapToRuntimeEvents(
 ): ReadonlyArray<ProviderRuntimeEvent> {
   const payload = asObject(event.payload);
   const turn = asObject(payload?.turn);
+  const generatedImageEndEvent = mapGeneratedImageEndEvent(event, canonicalThreadId);
+  if (generatedImageEndEvent) {
+    return [generatedImageEndEvent];
+  }
 
   if (event.kind === "error") {
     if (!event.message) {

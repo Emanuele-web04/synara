@@ -111,9 +111,7 @@ function supportsModelFavorites(provider: ProviderKind): provider is FavoriteMod
 
 // Keeps persisted favorite slugs compact and stable while preserving the user's order.
 function toggleFavoriteModelSlug(current: ReadonlyArray<string>, slug: string): string[] {
-  const normalizedCurrent = Array.from(
-    new Set(current.filter((entry) => entry.trim().length > 0)),
-  );
+  const normalizedCurrent = Array.from(new Set(current.filter((entry) => entry.trim().length > 0)));
   return normalizedCurrent.includes(slug)
     ? normalizedCurrent.filter((entry) => entry !== slug)
     : [...normalizedCurrent, slug];

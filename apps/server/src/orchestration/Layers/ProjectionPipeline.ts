@@ -1243,9 +1243,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                   ? pendingTurnStart.value.sourceProposedPlanId
                   : null),
               startedAt:
-                existingTurn.value.startedAt ??
-                event.payload.session.updatedAt ??
-                event.occurredAt,
+                existingTurn.value.startedAt ?? event.payload.session.updatedAt ?? event.occurredAt,
               requestedAt:
                 existingTurn.value.requestedAt ??
                 (Option.isSome(pendingTurnStart)
