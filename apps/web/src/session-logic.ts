@@ -62,7 +62,7 @@ export interface WorkLogEntry {
   subagentAction?: WorkLogSubagentAction;
 }
 
-export const WORK_LOG_PRESENTATION_VERSION = 4;
+export const WORK_LOG_PRESENTATION_VERSION = 5;
 
 export interface WorkLogSubagent {
   threadId: string;

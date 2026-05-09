@@ -10,6 +10,7 @@ import {
   OrchestrationEvent,
   OrchestrationGetTurnDiffInput,
   OrchestrationLatestTurn,
+  OrchestrationReadModel,
   ProjectCreatedPayload,
   ProjectMetaUpdatedPayload,
   OrchestrationProposedPlan,
@@ -39,6 +40,87 @@ const decodeThreadMetaUpdatedPayload = Schema.decodeUnknownEffect(ThreadMetaUpda
 const decodeClientOrchestrationCommand = Schema.decodeUnknownEffect(ClientOrchestrationCommand);
 const decodeOrchestrationCommand = Schema.decodeUnknownEffect(OrchestrationCommand);
 const decodeOrchestrationEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
+
+it.effect("preserves thread activity payloads through the RPC JSON codec", () =>
+  Effect.gen(function* () {
+    const codec = Schema.toCodecJson(OrchestrationReadModel);
+    const readModel = {
+      snapshotSequence: 1,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      projects: [],
+      threads: [
+        {
+          id: "thread-1",
+          codexThreadId: null,
+          projectId: "project-1",
+          title: "Thread 1",
+          modelSelection: {
+            provider: "codex",
+            model: "gpt-5.5",
+          },
+          interactionMode: "default",
+          runtimeMode: "full-access",
+          envMode: "local",
+          branch: null,
+          worktreePath: null,
+          associatedWorktreePath: null,
+          associatedWorktreeBranch: null,
+          associatedWorktreeRef: null,
+          createBranchFlowCompleted: false,
+          parentThreadId: null,
+          subagentAgentId: null,
+          subagentNickname: null,
+          subagentRole: null,
+          forkSourceThreadId: null,
+          sidechatSourceThreadId: null,
+          lastKnownPr: null,
+          handoff: null,
+          latestTurn: null,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          archivedAt: null,
+          deletedAt: null,
+          messages: [],
+          proposedPlans: [],
+          activities: [
+            {
+              id: "activity-1",
+              tone: "tool",
+              kind: "tool.completed",
+              summary: "Ran command",
+              payload: {
+                itemType: "command_execution",
+                data: {
+                  item: {
+                    command: "git status --short",
+                  },
+                },
+              },
+              turnId: null,
+              sequence: 1,
+              createdAt: "2026-01-01T00:00:00.000Z",
+            },
+          ],
+          checkpoints: [],
+          session: null,
+        },
+      ],
+    };
+
+    const encoded = yield* Schema.encodeUnknownEffect(codec)(readModel);
+    const decoded = yield* Schema.decodeUnknownEffect(codec)(encoded);
+    const activity = decoded.threads[0]?.activities[0];
+
+    assert.deepStrictEqual(activity?.payload, {
+      itemType: "command_execution",
+      data: {
+        item: {
+          command: "git status --short",
+        },
+      },
+    });
+  }),
+);
 
 it.effect("parses turn diff input when fromTurnCount <= toTurnCount", () =>
   Effect.gen(function* () {

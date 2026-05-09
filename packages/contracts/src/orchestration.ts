@@ -402,7 +402,7 @@ export const OrchestrationThreadActivity = Schema.Struct({
   tone: OrchestrationThreadActivityTone,
   kind: TrimmedNonEmptyString,
   summary: TrimmedNonEmptyString,
-  payload: Schema.Unknown,
+  payload: Schema.Json,
   turnId: Schema.NullOr(TurnId),
   sequence: Schema.optional(NonNegativeInt),
   createdAt: IsoDateTime,
