@@ -312,17 +312,76 @@ export function computeStableMessagesTimelineRows(
   return anyChanged ? { byId: next, result } : previous;
 }
 
+function stringArraysEqual(
+  left: ReadonlyArray<string> | undefined,
+  right: ReadonlyArray<string> | undefined,
+): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  return left.length === right.length && left.every((entry, index) => entry === right[index]);
+}
+
+function workLogSubagentActionsEqual(
+  a: WorkLogEntry["subagentAction"],
+  b: WorkLogEntry["subagentAction"],
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.tool === b.tool &&
+    a.status === b.status &&
+    a.summaryText === b.summaryText &&
+    a.model === b.model &&
+    a.prompt === b.prompt
+  );
+}
+
+function workLogSubagentsEqual(
+  left: WorkLogEntry["subagents"],
+  right: WorkLogEntry["subagents"],
+): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  if (left.length !== right.length) return false;
+  return left.every((a, index) => {
+    const b = right[index];
+    return (
+      b !== undefined &&
+      a.threadId === b.threadId &&
+      a.providerThreadId === b.providerThreadId &&
+      a.resolvedThreadId === b.resolvedThreadId &&
+      a.agentId === b.agentId &&
+      a.nickname === b.nickname &&
+      a.role === b.role &&
+      a.model === b.model &&
+      a.prompt === b.prompt &&
+      a.rawStatus === b.rawStatus &&
+      a.latestUpdate === b.latestUpdate &&
+      a.title === b.title &&
+      a.statusLabel === b.statusLabel &&
+      a.isActive === b.isActive
+    );
+  });
+}
+
 function workLogEntryContentEqual(a: WorkLogEntry, b: WorkLogEntry): boolean {
   return (
     a.id === b.id &&
+    a.createdAt === b.createdAt &&
     a.label === b.label &&
+    a.detail === b.detail &&
     a.toolTitle === b.toolTitle &&
     a.command === b.command &&
     a.rawCommand === b.rawCommand &&
     a.preview === b.preview &&
     a.tone === b.tone &&
     a.itemType === b.itemType &&
-    a.toolCallId === b.toolCallId
+    a.requestKind === b.requestKind &&
+    a.toolName === b.toolName &&
+    a.toolCallId === b.toolCallId &&
+    stringArraysEqual(a.changedFiles, b.changedFiles) &&
+    workLogSubagentActionsEqual(a.subagentAction, b.subagentAction) &&
+    workLogSubagentsEqual(a.subagents, b.subagents)
   );
 }
 
