@@ -357,7 +357,7 @@ export const runThreadRetentionSweep = Effect.fn("runThreadRetentionSweep")(func
     Effect.catch((error) =>
       Effect.logWarning("failed to compact database after retention sweep").pipe(
         Effect.annotateLogs({ error: String(error) }),
-        Effect.zipRight(
+        Effect.andThen(
           publishRetentionMaintenance("failed", {
             deletedCount,
             purgedCount,

@@ -1,21 +1,29 @@
 import * as Http from "node:http";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, it, vi } from "@effect/vitest";
+import { assert, it } from "@effect/vitest";
 import type { OrchestrationReadModel } from "@t3tools/contracts";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Command from "effect/unstable/cli/Command";
 import { FetchHttpClient } from "effect/unstable/http";
-import { beforeEach } from "vitest";
+import { beforeEach, vi } from "vitest";
 import { NetService } from "@t3tools/shared/Net";
 
-import { CliConfig, recordStartupHeartbeat, t3Cli, type CliConfigShape } from "./main";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { Open, type OpenShape } from "./open";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService";
 import { Server, type ServerShape } from "./effectServer";
+
+vi.mock("./threadRetention", async () => {
+  const Effect = await import("effect/Effect");
+  return {
+    startThreadRetentionJob: () => Effect.void,
+  };
+});
+
+import { CliConfig, recordStartupHeartbeat, t3Cli, type CliConfigShape } from "./main";
 
 const start = vi.fn(() => undefined);
 const stop = vi.fn(() => undefined);
@@ -58,19 +66,25 @@ const testLayer = Layer.mergeAll(
 
 const runCli = (
   args: ReadonlyArray<string>,
-  env: Record<string, string> = { T3CODE_NO_BROWSER: "true" },
+  env: Record<string, string> = {
+    T3CODE_HOME: "/tmp/t3-test-home",
+    T3CODE_NO_BROWSER: "true",
+  },
 ) => {
-  return Command.runWith(t3Cli, { version: "0.0.0-test" })(args).pipe(
+  const program = Command.runWith(t3Cli, { version: "0.0.0-test" })(args).pipe(
     Effect.provide(
       ConfigProvider.layer(
         ConfigProvider.fromEnv({
           env: {
+            T3CODE_HOME: "/tmp/t3-test-home",
+            T3CODE_NO_BROWSER: "true",
             ...env,
           },
         }),
       ),
     ),
   );
+  return program as Effect.Effect<void, unknown, never>;
 };
 
 beforeEach(() => {

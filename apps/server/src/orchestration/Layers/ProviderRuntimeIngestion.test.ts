@@ -572,7 +572,8 @@ describe("ProviderRuntimeIngestion", () => {
         (message) =>
           message.id === "assistant:answer-image" &&
           message.text.includes("Here is the generated result.") &&
-          message.text.includes(`![Generated image](${imagePath})`),
+          message.text.includes(`![Generated image](${imagePath})`) &&
+          message.streaming === false,
       ),
     );
     const assistantMessage = thread.messages.find(

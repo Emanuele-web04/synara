@@ -22,6 +22,42 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.0.44",
+    date: "May 10",
+    features: [
+      {
+        id: "codex-generated-images",
+        title: "Codex image generation now renders in chat",
+        description:
+          "Generated images from Codex are captured as local artifacts, rendered inline in assistant messages, and include expand and download controls without dragging bulky base64 payloads through the transcript.",
+      },
+      {
+        id: "secure-local-image-route",
+        title: "Generated images use a safer local route",
+        description:
+          "DP Code now serves generated files through a dedicated local-image endpoint with MIME checks, workspace-aware path resolution, and Codex generated_images allowlists for both the normal home and desktop overlay home.",
+      },
+      {
+        id: "provider-favorites",
+        title: "Provider favorites are quicker to manage",
+        description:
+          "The provider model picker gained native favorite toggles and cleaner context-menu separators, making large Codex, Cursor, and OpenCode model lists easier to shape around the models you actually use.",
+      },
+      {
+        id: "thread-retention-cleanup",
+        title: "Old inactive threads clean up after seven days",
+        description:
+          "A safer retention job now removes stale inactive threads in batches, publishes maintenance progress, protects running work and approvals, and compacts SQLite when enough space can be reclaimed.",
+      },
+      {
+        id: "websocket-and-server-polish",
+        title: "Transport and server edges are steadier",
+        description:
+          "WebSocket HTTP URL helpers, lifecycle events, provider runtime ingestion, and chat-route plumbing were tightened so generated artifacts and cleanup events move through the app more predictably.",
+      },
+    ],
+  },
+  {
     version: "0.0.43",
     date: "May 9",
     features: [

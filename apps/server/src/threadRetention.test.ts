@@ -5,7 +5,7 @@
 
 import { ProjectId, ThreadId, type OrchestrationReadModel } from "@t3tools/contracts";
 import { it as effectIt } from "@effect/vitest";
-import { Effect, Layer } from "effect";
+import { Effect } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vitest";
 
