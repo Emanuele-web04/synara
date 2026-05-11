@@ -1,7 +1,7 @@
 import { type ResolvedKeybindingsConfig } from "@t3tools/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { Outlet, createFileRoute, useLocation, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   goBackInAppHistory,
@@ -27,6 +27,7 @@ import { resolveShortcutCommand } from "../keybindings";
 import { useStore } from "../store";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
+import { onServerMaintenanceUpdated } from "../wsNativeApi";
 import { useAppSettings } from "~/appSettings";
 import {
   isProviderUsable,
@@ -40,6 +41,126 @@ const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_SIDEBAR_WIDTH_STORAGE_KEY = "chat_thread_sidebar_width";
 const THREAD_SIDEBAR_MIN_WIDTH = 13 * 16;
 const THREAD_MAIN_CONTENT_MIN_WIDTH = 40 * 16;
+const MAINTENANCE_EVENT_STALE_MS = 5 * 60 * 1000;
+
+type MaintenanceToastId = ReturnType<typeof toastManager.add>;
+
+function ThreadRetentionMaintenanceToast() {
+  const toastIdRef = useRef<MaintenanceToastId | null>(null);
+
+  useEffect(() => {
+    return onServerMaintenanceUpdated((event) => {
+      if (event.type !== "maintenance" || event.payload.task !== "thread-retention") {
+        return;
+      }
+
+      const { state, purgedCount, totalCount, freePageCount, error } = event.payload;
+      const eventMs = Date.parse(event.payload.at);
+      const isStaleEvent = Number.isFinite(eventMs)
+        ? Date.now() - eventMs > MAINTENANCE_EVENT_STALE_MS
+        : false;
+      if (isStaleEvent && toastIdRef.current === null) {
+        return;
+      }
+
+      if (state === "started") {
+        toastIdRef.current = toastManager.add({
+          type: "loading",
+          title: "Cleaning old chats...",
+          description: "Preparing background cleanup.",
+          timeout: 0,
+          data: { allowCrossThreadVisibility: true },
+        });
+        return;
+      }
+
+      if (state === "progress") {
+        const toastId =
+          toastIdRef.current ??
+          toastManager.add({
+            type: "loading",
+            title: "Cleaning old chats...",
+            timeout: 0,
+            data: { allowCrossThreadVisibility: true },
+          });
+        toastIdRef.current = toastId;
+        toastManager.update(toastId, {
+          type: "loading",
+          title: "Cleaning old chats...",
+          description:
+            totalCount && totalCount > 0
+              ? `${purgedCount ?? 0} of ${totalCount} chats removed.`
+              : `${purgedCount ?? 0} chats removed.`,
+          timeout: 0,
+          data: { allowCrossThreadVisibility: true },
+        });
+        return;
+      }
+
+      if (state === "compacting") {
+        const toastId =
+          toastIdRef.current ??
+          toastManager.add({
+            type: "loading",
+            title: "Compacting chat database...",
+            timeout: 0,
+            data: { allowCrossThreadVisibility: true },
+          });
+        toastIdRef.current = toastId;
+        toastManager.update(toastId, {
+          type: "loading",
+          title: "Compacting chat database...",
+          description:
+            freePageCount && freePageCount > 0
+              ? "Reclaiming unused database space."
+              : "Finishing cleanup.",
+          timeout: 0,
+          data: { allowCrossThreadVisibility: true },
+        });
+        return;
+      }
+
+      if (state === "failed") {
+        const toastId = toastIdRef.current;
+        toastIdRef.current = null;
+        if (toastId) {
+          toastManager.update(toastId, {
+            type: "warning",
+            title: "Cleanup paused",
+            description: error ?? "Old chats will be retried later.",
+            timeout: 6000,
+            data: { allowCrossThreadVisibility: true },
+          });
+          return;
+        }
+        toastManager.add({
+          type: "warning",
+          title: "Cleanup paused",
+          description: error ?? "Old chats will be retried later.",
+          timeout: 6000,
+          data: { allowCrossThreadVisibility: true },
+        });
+        return;
+      }
+
+      const toastId = toastIdRef.current;
+      toastIdRef.current = null;
+      if (!toastId) return;
+      toastManager.update(toastId, {
+        type: "success",
+        title: "Old chats cleaned",
+        description:
+          purgedCount && purgedCount > 0
+            ? `${purgedCount} chats removed from the database.`
+            : "No old chats needed cleanup.",
+        timeout: 3500,
+        data: { allowCrossThreadVisibility: true },
+      });
+    });
+  }, []);
+
+  return null;
+}
 
 function resolveBrowserNavigationShortcut(
   event: KeyboardEvent,
@@ -391,6 +512,7 @@ function ChatRouteLayout() {
 
   return (
     <SidebarProvider defaultOpen>
+      <ThreadRetentionMaintenanceToast />
       <ChatRouteGlobalShortcuts />
       {side === "left" ? sidebarElement : null}
       <Outlet />

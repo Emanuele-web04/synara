@@ -3,9 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   buildTurnDiffSummaryByAssistantMessageId,
   computeMessageDurationStart,
+  computeStableMessagesTimelineRows,
   deriveTerminalAssistantMessageIds,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
+  type MessagesTimelineRow,
+  type StableMessagesTimelineRowsState,
 } from "./MessagesTimeline.logic";
 import type { TurnDiffSummary } from "../../types";
 
@@ -165,6 +168,118 @@ describe("normalizeCompactToolLabel", () => {
 
   it("removes trailing completion wording from other labels", () => {
     expect(normalizeCompactToolLabel("Read file completed")).toBe("Read file");
+  });
+});
+
+describe("computeStableMessagesTimelineRows", () => {
+  type MessageTimelineRow = Extract<MessagesTimelineRow, { kind: "message" }>;
+
+  const emptyStableRows = (): StableMessagesTimelineRowsState => ({
+    byId: new Map(),
+    result: [],
+  });
+
+  it("replaces work rows when later tool metadata adds visible details", () => {
+    const firstRows: MessagesTimelineRow[] = [
+      {
+        kind: "work",
+        id: "work-group-1",
+        createdAt: "2026-05-09T10:00:00.000Z",
+        groupedEntries: [
+          {
+            id: "activity-read",
+            createdAt: "2026-05-09T10:00:00.000Z",
+            label: "Read",
+            tone: "tool",
+            itemType: "dynamic_tool_call",
+            toolTitle: "Read",
+          },
+        ],
+      },
+    ];
+    const first = computeStableMessagesTimelineRows(firstRows, emptyStableRows());
+
+    const enrichedRows: MessagesTimelineRow[] = [
+      {
+        kind: "work",
+        id: "work-group-1",
+        createdAt: "2026-05-09T10:00:00.000Z",
+        groupedEntries: [
+          {
+            id: "activity-read",
+            createdAt: "2026-05-09T10:00:00.000Z",
+            label: "Read",
+            tone: "tool",
+            itemType: "dynamic_tool_call",
+            toolTitle: "Read",
+            detail: "apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts:12",
+            changedFiles: ["apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts"],
+          },
+        ],
+      },
+    ];
+
+    const second = computeStableMessagesTimelineRows(enrichedRows, first);
+
+    expect(second).not.toBe(first);
+    expect(second.result[0]).toBe(enrichedRows[0]);
+  });
+
+  it("replaces assistant rows when inline tool metadata becomes richer", () => {
+    const assistantMessage = {
+      id: MessageId.makeUnsafe("assistant-1"),
+      role: "assistant" as const,
+      text: "Working on it.",
+      createdAt: "2026-05-09T10:00:01.000Z",
+      streaming: true,
+    };
+    const firstRows: MessageTimelineRow[] = [
+      {
+        kind: "message",
+        id: "assistant-1",
+        createdAt: "2026-05-09T10:00:01.000Z",
+        message: assistantMessage,
+        inlineWorkEntries: [
+          {
+            id: "activity-command",
+            createdAt: "2026-05-09T10:00:00.000Z",
+            label: "Ran command",
+            tone: "tool",
+            itemType: "command_execution",
+            toolTitle: "Ran",
+          },
+        ],
+        inlineWorkGroupId: "activity-command",
+        durationStart: "2026-05-09T10:00:01.000Z",
+        showCompletionDivider: false,
+        showAssistantCopyButton: false,
+      },
+    ];
+    const first = computeStableMessagesTimelineRows(firstRows, emptyStableRows());
+
+    const enrichedRows: MessageTimelineRow[] = [
+      {
+        ...firstRows[0]!,
+        inlineWorkEntries: [
+          {
+            id: "activity-command",
+            createdAt: "2026-05-09T10:00:00.000Z",
+            label: "Ran command",
+            tone: "tool",
+            itemType: "command_execution",
+            toolTitle: "Ran",
+            command: 'git grep -n "model.rerouted"',
+            rawCommand: "/bin/zsh -lc 'git grep -n \"model.rerouted\"'",
+            requestKind: "command",
+          },
+        ],
+      },
+    ];
+
+    const second = computeStableMessagesTimelineRows(enrichedRows, first);
+
+    expect(second).not.toBe(first);
+    expect(second.result[0]).toBe(enrichedRows[0]);
   });
 });
 

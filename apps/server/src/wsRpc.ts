@@ -15,7 +15,7 @@ import {
   type ServerLifecycleStreamEvent,
 } from "@t3tools/contracts";
 import { clamp } from "effect/Number";
-import { Cause, Effect, FileSystem, Layer, Option, Path, Schema, Stream } from "effect";
+import { Effect, FileSystem, Layer, Option, Path, Queue, Schema, Stream } from "effect";
 import { HttpRouter, HttpServerRequest } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
@@ -317,27 +317,20 @@ export const makeWsRpcLayer = () =>
                   .getReadModel()
                   .pipe(Effect.map((model) => model.snapshotSequence)),
               ]).pipe(
-                Effect.flatMap(([thread, snapshotSequence]) =>
+                Effect.map(([thread, snapshotSequence]) =>
                   Option.isSome(thread)
-                    ? Effect.succeed({
+                    ? Option.some({
                         kind: "snapshot" as const,
                         snapshot: { snapshotSequence, thread: thread.value },
                       })
-                    : Effect.fail(new Error(`Thread ${input.threadId} was not found yet`)),
+                    : Option.none(),
                 ),
                 Effect.mapError((cause) => toWsRpcError(cause, "Failed to load thread snapshot")),
               ),
             ).pipe(
-              Stream.catchCause((cause) => {
-                const error = Cause.squash(cause);
-                if (
-                  error instanceof WsRpcError &&
-                  error.message.includes("was not found yet")
-                ) {
-                  return Stream.empty;
-                }
-                return Stream.failCause(cause);
-              }),
+              Stream.flatMap((snapshot) =>
+                Option.isSome(snapshot) ? Stream.succeed(snapshot.value) : Stream.empty,
+              ),
             ),
             orchestrationEngine.streamDomainEvents.pipe(
               Stream.filter((event) => isThreadDetailEventFor(input.threadId, event)),
@@ -543,7 +536,9 @@ export const makeWsRpcLayer = () =>
               (event): ServerLifecycleStreamEvent =>
                 event.type === "welcome"
                   ? { type: "welcome", payload: event.payload }
-                  : { type: "ready", payload: event.payload },
+                  : event.type === "ready"
+                    ? { type: "ready", payload: event.payload }
+                    : { type: "maintenance", payload: event.payload },
             ),
           ),
         [WS_METHODS.subscribeServerConfig]: () =>

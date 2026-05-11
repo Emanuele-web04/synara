@@ -31,7 +31,7 @@ function makeActivity(overrides: {
   kind?: string;
   summary?: string;
   tone?: OrchestrationThreadActivity["tone"];
-  payload?: Record<string, unknown>;
+  payload?: OrchestrationThreadActivity["payload"];
   turnId?: string;
   sequence?: number;
 }): OrchestrationThreadActivity {
@@ -1108,7 +1108,7 @@ describe("deriveWorkLogEntries", () => {
             item: {
               type: "command_execution",
               arguments: JSON.stringify({
-                command: "rg -n \"thread.create\" apps/server/src",
+                command: 'rg -n "thread.create" apps/server/src',
               }),
             },
           },
@@ -1202,13 +1202,11 @@ describe("deriveWorkLogEntries", () => {
           itemType: "command_execution",
           status: "completed",
           title: "Ran command",
-          detail:
-            "/bin/zsh -lc 'find apps packages -maxdepth 2 -name package.json -print'",
+          detail: "/bin/zsh -lc 'find apps packages -maxdepth 2 -name package.json -print'",
           data: {
             item: {
               type: "commandExecution",
-              command:
-                "/bin/zsh -lc 'find apps packages -maxdepth 2 -name package.json -print'",
+              command: "/bin/zsh -lc 'find apps packages -maxdepth 2 -name package.json -print'",
               commandActions: [
                 {
                   type: "search",
@@ -2490,13 +2488,13 @@ describe("PROVIDER_OPTIONS", () => {
           status: "inProgress",
           title: "Ran command",
           detail:
-            '/bin/zsh -lc "find apps packages -maxdepth 2 -name package.json -print -exec sed -n \'1,120p\' {} \\\\;"',
+            "/bin/zsh -lc \"find apps packages -maxdepth 2 -name package.json -print -exec sed -n '1,120p' {} \\\\;\"",
           data: {
             item: {
               type: "commandExecution",
               id: "call_UmQKQmLCCrj9PF82rupLIFDO",
               command:
-                '/bin/zsh -lc "find apps packages -maxdepth 2 -name package.json -print -exec sed -n \'1,120p\' {} \\\\;"',
+                "/bin/zsh -lc \"find apps packages -maxdepth 2 -name package.json -print -exec sed -n '1,120p' {} \\\\;\"",
               cwd: "/Users/emanueledipietro/Developer/Testing/t3code",
               processId: "38005",
               source: "unifiedExecStartup",
@@ -2528,13 +2526,13 @@ describe("PROVIDER_OPTIONS", () => {
           status: "completed",
           title: "Ran command",
           detail:
-            '/bin/zsh -lc "find apps packages -maxdepth 2 -name package.json -print -exec sed -n \'1,120p\' {} \\\\;"',
+            "/bin/zsh -lc \"find apps packages -maxdepth 2 -name package.json -print -exec sed -n '1,120p' {} \\\\;\"",
           data: {
             item: {
               type: "commandExecution",
               id: "call_UmQKQmLCCrj9PF82rupLIFDO",
               command:
-                '/bin/zsh -lc "find apps packages -maxdepth 2 -name package.json -print -exec sed -n \'1,120p\' {} \\\\;"',
+                "/bin/zsh -lc \"find apps packages -maxdepth 2 -name package.json -print -exec sed -n '1,120p' {} \\\\;\"",
               cwd: "/Users/emanueledipietro/Developer/Testing/t3code",
               processId: "38005",
               source: "unifiedExecStartup",

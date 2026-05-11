@@ -1202,6 +1202,89 @@ function toOpenCodeModelDescriptor(input: {
   };
 }
 
+function formatOpenCodeCliProviderName(providerId: string): string {
+  const normalizedProviderId = providerId.trim();
+  const knownNames: Record<string, string> = {
+    "302-ai": "302.AI",
+    "amazon-bedrock": "Amazon Bedrock",
+    anthropic: "Anthropic",
+    "atomic-chat": "Atomic Chat",
+    "azure-openai": "Azure OpenAI",
+    "azure-cognitive-services": "Azure Cognitive Services",
+    baseten: "Baseten",
+    cerebras: "Cerebras",
+    "cloudflare-ai-gateway": "Cloudflare AI Gateway",
+    "cloudflare-workers-ai": "Cloudflare Workers AI",
+    cortecs: "Cortecs",
+    deepinfra: "Deep Infra",
+    deepseek: "DeepSeek",
+    fireworks: "Fireworks AI",
+    "fireworks-ai": "Fireworks AI",
+    frogbot: "FrogBot",
+    "github-copilot": "GitHub Copilot",
+    "gitlab-duo": "GitLab Duo",
+    "google-vertex": "Google Vertex AI",
+    "google-vertex-ai": "Google Vertex AI",
+    groq: "Groq",
+    "hugging-face": "Hugging Face",
+    huggingface: "Hugging Face",
+    "io-net": "IO.NET",
+    "kimi-for-coding": "Kimi For Coding",
+    "llama.cpp": "llama.cpp",
+    lmstudio: "LM Studio",
+    minimax: "MiniMax",
+    "moonshot-ai": "Moonshot AI",
+    "nebius-token-factory": "Nebius Token Factory",
+    nvidia: "NVIDIA",
+    ollama: "Ollama",
+    "ollama-cloud": "Ollama Cloud",
+    openai: "OpenAI",
+    opencode: "OpenCode",
+    "opencode-go": "OpenCode Go",
+    "opencode-zen": "OpenCode Zen",
+    openrouter: "OpenRouter",
+    "ovhcloud-ai-endpoints": "OVHcloud AI Endpoints",
+    "sap-ai-core": "SAP AI Core",
+    scaleway: "Scaleway",
+    stackit: "STACKIT",
+    "together-ai": "Together AI",
+    "venice-ai": "Venice AI",
+    "vercel-ai-gateway": "Vercel AI Gateway",
+    xai: "xAI",
+    "z-ai": "Z.AI",
+    zenmux: "ZenMux",
+  };
+  const knownName = knownNames[normalizedProviderId.toLowerCase()];
+  if (knownName) {
+    return knownName;
+  }
+
+  return normalizedProviderId
+    .split(/[-_/]+/u)
+    .filter((segment) => segment.length > 0)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(" ");
+}
+
+export function flattenOpenCodeCliModels(input: {
+  readonly models: ReadonlyArray<OpenCodeCliModelDescriptor>;
+}): ProviderListModelsResult["models"] {
+  return input.models
+    .flatMap((model) => {
+      const descriptor = toOpenCodeModelDescriptor({
+        slug: model.slug,
+        name: model.name,
+        provider: {
+          id: model.providerID,
+          name: formatOpenCodeCliProviderName(model.providerID),
+        },
+        cliModel: model,
+      });
+      return descriptor ? [descriptor] : [];
+    })
+    .toSorted(compareOpenCodeModelDescriptors);
+}
+
 export function flattenOpenCodeModels(input: {
   readonly inventory: OpenCodeModelInventory;
   readonly credentialProviderIDs?: ReadonlyArray<string>;
@@ -2277,8 +2360,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 });
                 const openCodeSessionId =
                   resumedSessionId ??
-                  (yield* runOpenCodeSdk("session.create", () =>
-                    client.session.create({
+                  (yield* runOpenCodeSdk("session.create", () => {
+                    const sessionCreateInput = {
                       title: `DP Code ${input.threadId}`,
                       ...(initialParsedModel
                         ? {
@@ -2291,8 +2374,11 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                         : {}),
                       ...(initialAgent ? { agent: initialAgent } : {}),
                       permission: buildOpenCodePermissionRules(input.runtimeMode),
-                    }),
-                  ).pipe(
+                    };
+                    return client.session.create(
+                      sessionCreateInput as unknown as Parameters<typeof client.session.create>[0],
+                    );
+                  }).pipe(
                     Effect.flatMap((sessionResult) =>
                       sessionResult.data?.id
                         ? Effect.succeed(sessionResult.data.id)

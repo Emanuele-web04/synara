@@ -4,8 +4,9 @@
 // Depends on: the global WebSocket constructor shim and desktop bridge URL contract.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { WS_CHANNELS } from "@t3tools/contracts";
 
-import { WsTransport } from "./wsTransport";
+import { shouldKeepServerLifecycleStream, WsTransport } from "./wsTransport";
 
 type WsEventType = "open" | "message" | "close" | "error";
 type WsListener = (event?: { data?: unknown }) => void;
@@ -76,6 +77,19 @@ afterEach(() => {
 });
 
 describe("WsTransport", () => {
+  it("keeps the shared lifecycle stream while either lifecycle channel is active", () => {
+    expect(shouldKeepServerLifecycleStream(new Set([WS_CHANNELS.serverWelcome]))).toBe(true);
+    expect(
+      shouldKeepServerLifecycleStream(new Set([WS_CHANNELS.serverMaintenanceUpdated])),
+    ).toBe(true);
+    expect(
+      shouldKeepServerLifecycleStream(
+        new Set([WS_CHANNELS.serverWelcome, WS_CHANNELS.serverMaintenanceUpdated]),
+      ),
+    ).toBe(true);
+    expect(shouldKeepServerLifecycleStream(new Set([WS_CHANNELS.serverConfigUpdated]))).toBe(false);
+  });
+
   it("normalizes explicit websocket URLs to the RPC endpoint", () => {
     const transport = new WsTransport("ws://localhost:3020");
 

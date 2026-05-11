@@ -119,6 +119,8 @@ import type { ProviderCompactThreadInput } from "./provider";
 export interface ContextMenuItem<T extends string = string> {
   id: T;
   label: string;
+  /** Starts a new visual group before this actionable row. */
+  separatorBefore?: boolean;
   destructive?: boolean;
 }
 

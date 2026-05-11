@@ -22,20 +22,56 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
-    version: "0.0.42",
-    date: "May 6",
+    version: "0.0.44",
+    date: "May 10",
+    features: [
+      {
+        id: "codex-generated-images",
+        title: "Codex image generation now renders in chat",
+        description:
+          "Generated images from Codex are captured as local artifacts, rendered inline in assistant messages, and include expand and download controls without dragging bulky base64 payloads through the transcript.",
+      },
+      {
+        id: "secure-local-image-route",
+        title: "Generated images use a safer local route",
+        description:
+          "DP Code now serves generated files through a dedicated local-image endpoint with MIME checks, workspace-aware path resolution, and Codex generated_images allowlists for both the normal home and desktop overlay home.",
+      },
+      {
+        id: "provider-favorites",
+        title: "Provider favorites are quicker to manage",
+        description:
+          "The provider model picker gained native favorite toggles and cleaner context-menu separators, making large Codex, Cursor, and OpenCode model lists easier to shape around the models you actually use.",
+      },
+      {
+        id: "thread-retention-cleanup",
+        title: "Old inactive threads clean up after seven days",
+        description:
+          "A safer retention job now removes stale inactive threads in batches, publishes maintenance progress, protects running work and approvals, and compacts SQLite when enough space can be reclaimed.",
+      },
+      {
+        id: "websocket-and-server-polish",
+        title: "Transport and server edges are steadier",
+        description:
+          "WebSocket HTTP URL helpers, lifecycle events, provider runtime ingestion, and chat-route plumbing were tightened so generated artifacts and cleanup events move through the app more predictably.",
+      },
+    ],
+  },
+  {
+    version: "0.0.43",
+    date: "May 9",
     features: [
       {
         id: "cursor-provider",
-        title: "Cursor is now a first-class provider",
+        title: "Cursor is now a first-class DP Code provider",
         description:
-          "DP Code can run Cursor CLI sessions through ACP, discover Cursor models, resume existing chats, and keep Cursor handoffs inside the same provider workflow as Codex and OpenCode.",
+          "Run Cursor CLI sessions directly from DP Code with ACP-backed startup, model discovery, existing-chat resume, handoff, and provider health checks alongside Codex and OpenCode.",
       },
       {
         id: "effect-acp-runtime",
-        title: "Effect ACP powers the new provider runtime",
+        title: "New Effect TS ACP runtime",
         description:
-          "A new Effect TS ACP package now owns generated schemas, JSON-RPC wiring, client and agent helpers, terminal release handling, and protocol tests for sturdier provider integrations.",
+          "The new Effect TS ACP package owns generated schemas, JSON-RPC transport, client and agent helpers, terminal release handling, and protocol tests so provider integrations have a sturdier core.",
       },
       {
         id: "effect-websocket-server",
@@ -45,7 +81,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
       },
       {
         id: "cursor-streaming-polish",
-        title: "Cursor output is easier to follow",
+        title: "Cursor output is easier to read and resume",
         description:
           "Cursor reasoning, tool progress, usage events, plan updates, composer behavior, and model-selection compatibility now render more consistently across fresh and resumed threads.",
       },

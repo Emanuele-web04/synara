@@ -1,13 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { NativeApi } from "@t3tools/contracts";
+import {
+  CommandId,
+  ProjectId,
+  ThreadId,
+  type ClientOrchestrationCommand,
+  type NativeApi,
+} from "@t3tools/contracts";
 
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useStore } from "../store";
 import { getThreadFromState } from "../threadDerivation";
-import {
-  isDuplicateThreadCreateError,
-  promoteThreadCreate,
-} from "./threadCreatePromotion";
+import { isDuplicateThreadCreateError, promoteThreadCreate } from "./threadCreatePromotion";
 
 const initialStoreState = useStore.getState();
 const initialComposerDraftState = useComposerDraftStore.getState();
@@ -32,9 +35,9 @@ function makeApi(input: {
 function makeThreadCreateCommand(threadId = "thread-promote") {
   return {
     type: "thread.create",
-    commandId: `cmd-${threadId}`,
-    threadId,
-    projectId: "project-promote",
+    commandId: CommandId.makeUnsafe(`cmd-${threadId}`),
+    threadId: ThreadId.makeUnsafe(threadId),
+    projectId: ProjectId.makeUnsafe("project-promote"),
     title: "Promoted thread",
     modelSelection: {
       provider: "codex",
@@ -46,7 +49,7 @@ function makeThreadCreateCommand(threadId = "thread-promote") {
     branch: null,
     worktreePath: null,
     createdAt: "2026-05-06T20:00:00.000Z",
-  } as const;
+  } satisfies Extract<ClientOrchestrationCommand, { type: "thread.create" }>;
 }
 
 describe("threadCreatePromotion", () => {
@@ -56,7 +59,7 @@ describe("threadCreatePromotion", () => {
         new Error(
           "Orchestration command invariant failed (thread.create): Thread 'thread-promote' already exists and cannot be created twice.",
         ),
-        "thread-promote" as never,
+        ThreadId.makeUnsafe("thread-promote"),
       ),
     ).toBe(true);
   });
@@ -74,10 +77,11 @@ describe("threadCreatePromotion", () => {
 
     const first = promoteThreadCreate(command, api);
     const second = promoteThreadCreate(
-      { ...command, commandId: "cmd-thread-concurrent-second" },
+      { ...command, commandId: CommandId.makeUnsafe("cmd-thread-concurrent-second") },
       api,
     );
-    resolveDispatch?.();
+    expect(resolveDispatch).not.toBeNull();
+    (resolveDispatch as unknown as () => void)();
 
     await expect(first).resolves.toBe("created");
     await expect(second).resolves.toBe("exists");
@@ -85,15 +89,14 @@ describe("threadCreatePromotion", () => {
   });
 
   it("marks the draft as promoted when the thread already exists locally", async () => {
-    const threadId = "thread-existing-local";
-    useComposerDraftStore
-      .getState()
-      .setProjectDraftThreadId("project-promote" as never, threadId as never);
+    const threadId = ThreadId.makeUnsafe("thread-existing-local");
+    const projectId = ProjectId.makeUnsafe("project-promote");
+    useComposerDraftStore.getState().setProjectDraftThreadId(projectId, threadId);
     useStore.getState().syncServerShellSnapshot({
       snapshotSequence: 1,
       projects: [
         {
-          id: "project-promote",
+          id: projectId,
           kind: "project",
           title: "Project",
           workspaceRoot: "/tmp/project",
@@ -106,7 +109,7 @@ describe("threadCreatePromotion", () => {
       threads: [
         {
           id: threadId,
-          projectId: "project-promote",
+          projectId,
           title: "Promoted thread",
           modelSelection: {
             provider: "codex",
@@ -144,13 +147,12 @@ describe("threadCreatePromotion", () => {
       "exists",
     );
 
-    expect(useComposerDraftStore.getState().getDraftThread(threadId as never)?.promotedTo).toBe(
-      threadId,
-    );
+    expect(useComposerDraftStore.getState().getDraftThread(threadId)?.promotedTo).toBe(threadId);
   });
 
   it("recovers duplicate promotions by syncing the shell snapshot", async () => {
-    const threadId = "thread-duplicate-recovered";
+    const threadId = ThreadId.makeUnsafe("thread-duplicate-recovered");
+    const projectId = ProjectId.makeUnsafe("project-promote");
     const dispatchCommand = vi.fn(() =>
       Promise.reject(
         new Error(
@@ -163,7 +165,7 @@ describe("threadCreatePromotion", () => {
         snapshotSequence: 1,
         projects: [
           {
-            id: "project-promote",
+            id: projectId,
             kind: "project",
             title: "Project",
             workspaceRoot: "/tmp/project",
@@ -176,7 +178,7 @@ describe("threadCreatePromotion", () => {
         threads: [
           {
             id: threadId,
-            projectId: "project-promote",
+            projectId,
             title: "Promoted thread",
             modelSelection: {
               provider: "codex",
@@ -215,6 +217,6 @@ describe("threadCreatePromotion", () => {
       "exists",
     );
     expect(getShellSnapshot).toHaveBeenCalledTimes(1);
-    expect(getThreadFromState(useStore.getState(), threadId as never)?.id).toBe(threadId);
+    expect(getThreadFromState(useStore.getState(), threadId)?.id).toBe(threadId);
   });
 });

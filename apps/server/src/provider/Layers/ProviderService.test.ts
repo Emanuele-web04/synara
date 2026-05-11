@@ -336,6 +336,82 @@ it.effect("ProviderServiceLive keeps persisted resumable sessions on startup", (
 );
 
 it.effect(
+  "ProviderServiceLive persists active sessions as stopped before adapter cleanup runs",
+  () =>
+    Effect.gen(function* () {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3-provider-service-stopall-"));
+      const dbPath = path.join(tempDir, "orchestration.sqlite");
+      const persistenceLayer = makeSqlitePersistenceLive(dbPath);
+      const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
+        Layer.provide(persistenceLayer),
+      );
+
+      const codex = makeFakeCodexAdapter();
+      const threadId = asThreadId("thread-stopall");
+      const resumeCursor = {
+        threadId,
+        resume: "resume-session-stopall",
+        resumeSessionAt: "assistant-message-stopall",
+        turnCount: 1,
+      };
+      codex.stopAll.mockImplementation(() =>
+        Effect.fail(
+          new ProviderAdapterSessionNotFoundError({
+            provider: "codex",
+            threadId,
+          }),
+        ),
+      );
+
+      const registry: typeof ProviderAdapterRegistry.Service = {
+        getByProvider: (provider) =>
+          provider === "codex"
+            ? Effect.succeed(codex.adapter)
+            : Effect.fail(new ProviderUnsupportedError({ provider })),
+        listProviders: () => Effect.succeed(["codex"]),
+      };
+
+      const providerLayer = makeProviderServiceLive().pipe(
+        Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
+        Layer.provide(ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer))),
+        Layer.provide(AnalyticsService.layerTest),
+      );
+
+      yield* Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        yield* provider.startSession(threadId, {
+          provider: "codex",
+          cwd: "/tmp/project",
+          runtimeMode: "full-access",
+          threadId,
+        });
+        codex.updateSession(threadId, (existing) => ({
+          ...existing,
+          status: "running",
+          activeTurnId: asTurnId("turn-stopall"),
+          resumeCursor,
+        }));
+      }).pipe(Effect.provide(providerLayer));
+
+      const persisted = yield* Effect.gen(function* () {
+        const repository = yield* ProviderSessionRuntimeRepository;
+        return yield* repository.getByThreadId({ threadId });
+      }).pipe(Effect.provide(runtimeRepositoryLayer));
+
+      assert.equal(Option.isSome(persisted), true);
+      if (Option.isSome(persisted)) {
+        const runtimePayload = persisted.value.runtimePayload as Record<string, unknown>;
+        assert.equal(persisted.value.status, "stopped");
+        assert.deepEqual(persisted.value.resumeCursor, resumeCursor);
+        assert.equal(runtimePayload.activeTurnId, null);
+        assert.equal(runtimePayload.lastRuntimeEvent, "provider.stopAll");
+      }
+
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
   "ProviderServiceLive restores rollback routing after restart using persisted thread mapping",
   () =>
     Effect.gen(function* () {
@@ -746,6 +822,112 @@ routing.layer("ProviderServiceLive routing", (it) => {
           assert.equal(runtimePayload.activeTurnId, `turn-${String(session.threadId)}`);
           assert.equal(runtimePayload.lastError, null);
           assert.equal(runtimePayload.lastRuntimeEvent, "provider.sendTurn");
+        }
+      }
+    }),
+  );
+
+  it.effect("clears persisted active turn metadata when a runtime turn completes", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const runtimeRepository = yield* ProviderSessionRuntimeRepository;
+
+      const session = yield* provider.startSession(asThreadId("thread-runtime-complete"), {
+        provider: "codex",
+        threadId: asThreadId("thread-runtime-complete"),
+        runtimeMode: "full-access",
+      });
+      const turn = yield* provider.sendTurn({
+        threadId: session.threadId,
+        input: "hello",
+        attachments: [],
+        modelSelection: {
+          provider: "opencode",
+          model: "opencode/minimax-m2.5-free",
+        },
+      });
+      yield* sleep(50);
+
+      routing.codex.emit({
+        type: "turn.completed",
+        eventId: asEventId("runtime-complete-event"),
+        provider: "codex",
+        createdAt: "2026-02-27T00:04:00.000Z",
+        threadId: session.threadId,
+        turnId: turn.turnId,
+        payload: { state: "completed" },
+      });
+      yield* sleep(50);
+
+      const runtime = yield* runtimeRepository.getByThreadId({
+        threadId: session.threadId,
+      });
+      assert.equal(Option.isSome(runtime), true);
+      if (Option.isSome(runtime)) {
+        assert.equal(runtime.value.status, "stopped");
+        const payload = runtime.value.runtimePayload;
+        assert.equal(payload !== null && typeof payload === "object", true);
+        if (payload !== null && typeof payload === "object" && !Array.isArray(payload)) {
+          const runtimePayload = payload as {
+            activeTurnId: string | null;
+            lastRuntimeEvent: string | null;
+            modelSelection?: unknown;
+          };
+          assert.equal(runtimePayload.activeTurnId, null);
+          assert.equal(runtimePayload.lastRuntimeEvent, "turn.completed");
+          assert.deepEqual(runtimePayload.modelSelection, {
+            provider: "opencode",
+            model: "opencode/minimax-m2.5-free",
+          });
+        }
+      }
+    }),
+  );
+
+  it.effect("marks persisted runtime bindings errored on runtime errors", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const runtimeRepository = yield* ProviderSessionRuntimeRepository;
+
+      const session = yield* provider.startSession(asThreadId("thread-runtime-error"), {
+        provider: "codex",
+        threadId: asThreadId("thread-runtime-error"),
+        runtimeMode: "full-access",
+      });
+      const turn = yield* provider.sendTurn({
+        threadId: session.threadId,
+        input: "hello",
+        attachments: [],
+      });
+
+      routing.codex.emit({
+        type: "runtime.error",
+        eventId: asEventId("runtime-error-event"),
+        provider: "codex",
+        createdAt: "2026-02-27T00:05:00.000Z",
+        threadId: session.threadId,
+        turnId: turn.turnId,
+        payload: { message: "Provider crashed", class: "provider_error" },
+      });
+      yield* sleep(50);
+
+      const runtime = yield* runtimeRepository.getByThreadId({
+        threadId: session.threadId,
+      });
+      assert.equal(Option.isSome(runtime), true);
+      if (Option.isSome(runtime)) {
+        assert.equal(runtime.value.status, "error");
+        const payload = runtime.value.runtimePayload;
+        assert.equal(payload !== null && typeof payload === "object", true);
+        if (payload !== null && typeof payload === "object" && !Array.isArray(payload)) {
+          const runtimePayload = payload as {
+            activeTurnId: string | null;
+            lastError: string | null;
+            lastRuntimeEvent: string | null;
+          };
+          assert.equal(runtimePayload.activeTurnId, null);
+          assert.equal(runtimePayload.lastError, "Provider crashed");
+          assert.equal(runtimePayload.lastRuntimeEvent, "runtime.error");
         }
       }
     }),

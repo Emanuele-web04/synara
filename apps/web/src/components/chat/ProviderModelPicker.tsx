@@ -99,9 +99,25 @@ function providerIconClassName(
 }
 
 const SEARCHABLE_MODEL_PICKER_THRESHOLD = 15;
-const KILO_FAVORITE_MODEL_STORAGE_KEY = "dpcode:kilo-favourite-models:v1";
-const OPENCODE_FAVORITE_MODEL_STORAGE_KEY = "dpcode:opencode-favourite-models:v1";
+const FAVORITE_MODEL_STORAGE_KEYS = {
+  cursor: "dpcode:cursor-favourite-models:v1",
+  kilo: "dpcode:kilo-favourite-models:v1",
+  opencode: "dpcode:opencode-favourite-models:v1",
+} as const;
 const FavoriteModelSlugs = Schema.Array(Schema.String);
+type FavoriteModelProvider = keyof typeof FAVORITE_MODEL_STORAGE_KEYS;
+
+function supportsModelFavorites(provider: ProviderKind): provider is FavoriteModelProvider {
+  return provider === "cursor" || provider === "kilo" || provider === "opencode";
+}
+
+// Keeps persisted favorite slugs compact and stable while preserving the user's order.
+function toggleFavoriteModelSlug(current: ReadonlyArray<string>, slug: string): string[] {
+  const normalizedCurrent = Array.from(new Set(current.filter((entry) => entry.trim().length > 0)));
+  return normalizedCurrent.includes(slug)
+    ? normalizedCurrent.filter((entry) => entry !== slug)
+    : [...normalizedCurrent, slug];
+}
 
 function stripParameterizedModelSuffix(model: string): string {
   return model.trim().replace(/\[[^\]]*\]$/u, "");
@@ -157,12 +173,17 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   const [uncontrolledMenuOpen, setUncontrolledMenuOpen] = useState(false);
   const [modelSearchQuery, setModelSearchQuery] = useState("");
   const [kiloFavoriteModelSlugs, setKiloFavoriteModelSlugs] = useLocalStorage(
-    KILO_FAVORITE_MODEL_STORAGE_KEY,
+    FAVORITE_MODEL_STORAGE_KEYS.kilo,
+    [],
+    FavoriteModelSlugs,
+  );
+  const [cursorFavoriteModelSlugs, setCursorFavoriteModelSlugs] = useLocalStorage(
+    FAVORITE_MODEL_STORAGE_KEYS.cursor,
     [],
     FavoriteModelSlugs,
   );
   const [openCodeFavoriteModelSlugs, setOpenCodeFavoriteModelSlugs] = useLocalStorage(
-    OPENCODE_FAVORITE_MODEL_STORAGE_KEY,
+    FAVORITE_MODEL_STORAGE_KEYS.opencode,
     [],
     FavoriteModelSlugs,
   );
@@ -176,6 +197,18 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   const openCodeFavoriteModelSlugSet = useMemo(
     () => new Set(openCodeFavoriteModelSlugs),
     [openCodeFavoriteModelSlugs],
+  );
+  const cursorFavoriteModelSlugSet = useMemo(
+    () => new Set(cursorFavoriteModelSlugs),
+    [cursorFavoriteModelSlugs],
+  );
+  const favoriteModelSlugSets = useMemo(
+    () => ({
+      cursor: cursorFavoriteModelSlugSet,
+      kilo: kiloFavoriteModelSlugSet,
+      opencode: openCodeFavoriteModelSlugSet,
+    }),
+    [cursorFavoriteModelSlugSet, kiloFavoriteModelSlugSet, openCodeFavoriteModelSlugSet],
   );
   const selectedProviderOptions = props.modelOptionsByProvider[activeProvider];
   const selectedModelLabel = resolveSelectedModelLabel({
@@ -208,31 +241,17 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     props.onProviderModelChange(provider, resolvedModel);
     setMenuOpen(false);
   };
-  const toggleOpenCodeFavorite = useCallback(
-    (slug: string) => {
-      setOpenCodeFavoriteModelSlugs((current) => {
-        const normalizedCurrent = Array.from(
-          new Set(current.filter((entry) => entry.trim().length > 0)),
-        );
-        return normalizedCurrent.includes(slug)
-          ? normalizedCurrent.filter((entry) => entry !== slug)
-          : [...normalizedCurrent, slug];
-      });
+  const toggleFavoriteModel = useCallback(
+    (provider: FavoriteModelProvider, slug: string) => {
+      const setFavoriteModelSlugs =
+        provider === "cursor"
+          ? setCursorFavoriteModelSlugs
+          : provider === "kilo"
+            ? setKiloFavoriteModelSlugs
+            : setOpenCodeFavoriteModelSlugs;
+      setFavoriteModelSlugs((current) => toggleFavoriteModelSlug(current, slug));
     },
-    [setOpenCodeFavoriteModelSlugs],
-  );
-  const toggleKiloFavorite = useCallback(
-    (slug: string) => {
-      setKiloFavoriteModelSlugs((current) => {
-        const normalizedCurrent = Array.from(
-          new Set(current.filter((entry) => entry.trim().length > 0)),
-        );
-        return normalizedCurrent.includes(slug)
-          ? normalizedCurrent.filter((entry) => entry !== slug)
-          : [...normalizedCurrent, slug];
-      });
-    },
-    [setKiloFavoriteModelSlugs],
+    [setCursorFavoriteModelSlugs, setKiloFavoriteModelSlugs, setOpenCodeFavoriteModelSlugs],
   );
 
   const renderModelRadioGroup = (provider: ProviderKind) => {
@@ -260,12 +279,14 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
             buildModelSearchText(option).includes(normalizedModelSearchQuery),
           )
         : providerOptions;
+    const favoriteProvider = supportsModelFavorites(provider) ? provider : null;
+    const favoriteModelSlugSet =
+      favoriteProvider !== null ? favoriteModelSlugSets[favoriteProvider] : undefined;
     const groupedOptions =
-      provider === "kilo" || provider === "opencode"
+      favoriteModelSlugSet !== undefined
         ? groupProviderModelOptionsWithFavorites({
             options: filteredOptions,
-            favoriteSlugs:
-              provider === "kilo" ? kiloFavoriteModelSlugSet : openCodeFavoriteModelSlugSet,
+            favoriteSlugs: favoriteModelSlugSet,
           })
         : groupProviderModelOptions(filteredOptions);
 
@@ -280,18 +301,14 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
               <MenuGroup>
                 {group.label ? <MenuGroupLabel>{group.label}</MenuGroupLabel> : null}
                 {group.options.map((modelOption) => {
-                  const isFavorite =
-                    provider === "kilo"
-                      ? kiloFavoriteModelSlugSet.has(modelOption.slug)
-                      : provider === "opencode" &&
-                        openCodeFavoriteModelSlugSet.has(modelOption.slug);
+                  const isFavorite = favoriteModelSlugSet?.has(modelOption.slug) ?? false;
                   return (
                     <MenuRadioItem
                       key={`${provider}:${modelOption.slug}`}
                       value={modelOption.slug}
                       onClick={() => setMenuOpen(false)}
                     >
-                      {provider === "kilo" || provider === "opencode" ? (
+                      {favoriteModelSlugSet !== undefined ? (
                         <span className="flex w-full min-w-0 items-center gap-2">
                           <span className="block min-w-0 flex-1 truncate">{modelOption.name}</span>
                           <button
@@ -308,10 +325,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                             onClick={(event) => {
                               event.preventDefault();
                               event.stopPropagation();
-                              if (provider === "kilo") {
-                                toggleKiloFavorite(modelOption.slug);
-                              } else {
-                                toggleOpenCodeFavorite(modelOption.slug);
+                              if (favoriteProvider !== null) {
+                                toggleFavoriteModel(favoriteProvider, modelOption.slug);
                               }
                             }}
                             onPointerDown={(event) => {

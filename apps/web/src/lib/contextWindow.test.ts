@@ -12,7 +12,11 @@ import {
   inferContextWindowSelectionValue,
 } from "./contextWindow";
 
-function makeActivity(id: string, kind: string, payload: unknown): OrchestrationThreadActivity {
+function makeActivity(
+  id: string,
+  kind: string,
+  payload: OrchestrationThreadActivity["payload"],
+): OrchestrationThreadActivity {
   return {
     id: EventId.makeUnsafe(id),
     tone: "info",

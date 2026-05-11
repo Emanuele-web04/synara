@@ -8,7 +8,6 @@ import {
   CheckpointRef,
   isToolLifecycleItemType,
   ThreadId,
-  type ThreadTokenUsageSnapshot,
   TurnId,
   type OrchestrationThreadActivity,
   type OrchestrationReadModel,
@@ -24,6 +23,11 @@ import {
   resolveSubagentIdentityFromDirectory,
 } from "@t3tools/shared/subagents";
 
+import {
+  generatedImageMarkdown,
+  generatedImagePathFromRuntimeEvent,
+  isGeneratedImageOnlyMarkdown,
+} from "../../codexGeneratedImages.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
@@ -69,6 +73,12 @@ type RuntimeIngestionInput =
       source: "domain";
       event: TurnStartRequestedDomainEvent;
     };
+
+type ActivityPayload = OrchestrationThreadActivity["payload"];
+
+function toActivityPayload(payload: unknown): ActivityPayload {
+  return payload as ActivityPayload;
+}
 
 function toTurnId(value: TurnId | string | undefined): TurnId | undefined {
   return value === undefined ? undefined : TurnId.makeUnsafe(String(value));
@@ -120,8 +130,8 @@ function truncateDetail(value: string, limit = 180): string {
 // Keep MCP progress payloads available to the web timeline so it can render the specific tool call.
 function buildToolProgressActivityPayload(
   event: Extract<ProviderRuntimeEvent, { type: "tool.progress" }>,
-) {
-  return {
+): ActivityPayload {
+  return toActivityPayload({
     itemType: "mcp_tool_call" as const,
     title: "MCP tool call",
     ...(event.payload.summary ? { detail: truncateDetail(event.payload.summary) } : {}),
@@ -133,7 +143,7 @@ function buildToolProgressActivityPayload(
         ? { elapsedSeconds: event.payload.elapsedSeconds }
         : {}),
     },
-  };
+  });
 }
 
 function normalizeProposedPlanMarkdown(planMarkdown: string | undefined): string | undefined {
@@ -232,7 +242,7 @@ function subagentThreadTitle(identity: {
 
 function buildContextWindowActivityPayload(
   event: ProviderRuntimeEvent,
-): ThreadTokenUsageSnapshot | undefined {
+): ActivityPayload | undefined {
   if (event.type !== "thread.token-usage.updated") {
     return undefined;
   }
@@ -244,7 +254,7 @@ function buildContextWindowActivityPayload(
   if (!hasTokenUsage && !hasPercentUsage && !hasKnownWindow) {
     return undefined;
   }
-  return usage;
+  return toActivityPayload(usage);
 }
 
 function asPositiveFiniteNumber(value: unknown): number | undefined {
@@ -254,7 +264,7 @@ function asPositiveFiniteNumber(value: unknown): number | undefined {
 // Convert session-configured Claude window labels into the max-token shape the web meter uses.
 function buildConfiguredContextWindowPayload(
   event: ProviderRuntimeEvent,
-): Record<string, unknown> | undefined {
+): ActivityPayload | undefined {
   if (event.type !== "session.configured") {
     return undefined;
   }
@@ -270,10 +280,10 @@ function buildConfiguredContextWindowPayload(
   if (maxTokens === undefined) {
     return undefined;
   }
-  return {
+  return toActivityPayload({
     maxTokens,
     ...(configuredContextWindow ? { contextWindow: configuredContextWindow } : {}),
-  };
+  });
 }
 
 function runtimePayloadRecord(event: ProviderRuntimeEvent): Record<string, unknown> | undefined {
@@ -417,12 +427,12 @@ function runtimeEventToActivities(
                 : requestKind === "file-change"
                   ? "File-change approval requested"
                   : "Approval requested",
-          payload: {
+          payload: toActivityPayload({
             requestId: toApprovalRequestId(event.requestId),
             ...(requestKind ? { requestKind } : {}),
             requestType: event.payload.requestType,
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
-          },
+          }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -441,12 +451,12 @@ function runtimeEventToActivities(
           tone: "approval",
           kind: "approval.resolved",
           summary: "Approval resolved",
-          payload: {
+          payload: toActivityPayload({
             requestId: toApprovalRequestId(event.requestId),
             ...(requestKind ? { requestKind } : {}),
             requestType: event.payload.requestType,
             ...(event.payload.decision ? { decision: event.payload.decision } : {}),
-          },
+          }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -465,9 +475,9 @@ function runtimeEventToActivities(
           tone: "error",
           kind: "runtime.error",
           summary: "Runtime error",
-          payload: {
+          payload: toActivityPayload({
             message: truncateDetail(message),
-          },
+          }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -482,10 +492,10 @@ function runtimeEventToActivities(
           tone: "info",
           kind: "runtime.warning",
           summary: "Runtime warning",
-          payload: {
+          payload: toActivityPayload({
             message: truncateDetail(event.payload.message),
             ...(event.payload.detail !== undefined ? { detail: event.payload.detail } : {}),
-          },
+          }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -500,12 +510,12 @@ function runtimeEventToActivities(
           tone: "info",
           kind: "turn.tasks.updated",
           summary: "Tasks updated",
-          payload: {
+          payload: toActivityPayload({
             tasks: event.payload.tasks,
             ...(event.payload.explanation !== undefined
               ? { explanation: event.payload.explanation }
               : {}),
-          },
+          }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -520,10 +530,10 @@ function runtimeEventToActivities(
           tone: "info",
           kind: "user-input.requested",
           summary: "User input requested",
-          payload: {
+          payload: toActivityPayload({
             ...(event.requestId ? { requestId: event.requestId } : {}),
             questions: event.payload.questions,
-          },
+          }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -538,10 +548,10 @@ function runtimeEventToActivities(
           tone: "info",
           kind: "user-input.resolved",
           summary: "User input submitted",
-          payload: {
+          payload: toActivityPayload({
             ...(event.requestId ? { requestId: event.requestId } : {}),
             answers: event.payload.answers,
-          },
+          }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -561,13 +571,13 @@ function runtimeEventToActivities(
               : event.payload.taskType
                 ? `${event.payload.taskType} task started`
                 : "Task started",
-          payload: {
+          payload: toActivityPayload({
             taskId: event.payload.taskId,
             ...(event.payload.taskType ? { taskType: event.payload.taskType } : {}),
             ...(event.payload.description
               ? { detail: truncateDetail(event.payload.description) }
               : {}),
-          },
+          }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -582,13 +592,13 @@ function runtimeEventToActivities(
           tone: "info",
           kind: "task.progress",
           summary: "Reasoning update",
-          payload: {
+          payload: toActivityPayload({
             taskId: event.payload.taskId,
             detail: truncateDetail(event.payload.summary ?? event.payload.description),
             ...(event.payload.summary ? { summary: truncateDetail(event.payload.summary) } : {}),
             ...(event.payload.lastToolName ? { lastToolName: event.payload.lastToolName } : {}),
             ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
-          },
+          }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -608,12 +618,12 @@ function runtimeEventToActivities(
               : event.payload.status === "stopped"
                 ? "Task stopped"
                 : "Task completed",
-          payload: {
+          payload: toActivityPayload({
             taskId: event.payload.taskId,
             status: event.payload.status,
             ...(event.payload.summary ? { detail: truncateDetail(event.payload.summary) } : {}),
             ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
-          },
+          }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -632,10 +642,10 @@ function runtimeEventToActivities(
           tone: "info",
           kind: "context-compaction",
           summary: "Context compacted manually",
-          payload: {
+          payload: toActivityPayload({
             state: event.payload.state,
             ...(event.payload.detail !== undefined ? { detail: event.payload.detail } : {}),
-          },
+          }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -671,12 +681,12 @@ function runtimeEventToActivities(
             tone: "info",
             kind: "context-compaction",
             summary: "Compacting conversation...",
-            payload: {
+            payload: toActivityPayload({
               itemType: event.payload.itemType,
               status: event.payload.status,
               ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
               ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
-            },
+            }),
             turnId: toTurnId(event.turnId) ?? null,
             ...maybeSequence,
           },
@@ -692,13 +702,13 @@ function runtimeEventToActivities(
           tone: "tool",
           kind: "tool.updated",
           summary: event.payload.title ?? "Tool updated",
-          payload: {
+          payload: toActivityPayload({
             itemType: event.payload.itemType,
             ...(event.payload.status ? { status: event.payload.status } : {}),
             ...(event.payload.title ? { title: event.payload.title } : {}),
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
             ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
-          },
+          }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -716,13 +726,13 @@ function runtimeEventToActivities(
           tone: "tool",
           kind: "tool.completed",
           summary: event.payload.title ?? "Tool",
-          payload: {
+          payload: toActivityPayload({
             itemType: event.payload.itemType,
             ...(event.payload.status ? { status: event.payload.status } : {}),
             ...(event.payload.title ? { title: event.payload.title } : {}),
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
             ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
-          },
+          }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -740,13 +750,13 @@ function runtimeEventToActivities(
           tone: "tool",
           kind: "tool.started",
           summary: `${event.payload.title ?? "Tool"} started`,
-          payload: {
+          payload: toActivityPayload({
             itemType: event.payload.itemType,
             ...(event.payload.status ? { status: event.payload.status } : {}),
             ...(event.payload.title ? { title: event.payload.title } : {}),
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
             ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
-          },
+          }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -776,7 +786,7 @@ function runtimeEventToActivities(
           tone: "info" as const,
           kind: "turn.completed",
           summary: "Turn completed",
-          payload: {
+          payload: toActivityPayload({
             state: runtimeTurnState(event),
             ...(typeof event.payload.totalCostUsd === "number"
               ? { totalCostUsd: event.payload.totalCostUsd }
@@ -787,7 +797,7 @@ function runtimeEventToActivities(
             ...(runtimeTurnErrorMessage(event)
               ? { errorMessage: runtimeTurnErrorMessage(event) }
               : {}),
-          },
+          }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -858,7 +868,7 @@ function runtimeEventToActivities(
           tone: "info",
           kind: "account.rate-limits.updated",
           summary: "Rate limits updated",
-          payload: normalizedPayload,
+          payload: toActivityPayload(normalizedPayload),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -874,10 +884,10 @@ function runtimeEventToActivities(
           tone: (status === "rejected" ? "error" : "info") as "error" | "info",
           kind: "account.rate-limited",
           summary: status === "rejected" ? "Rate limited" : "Approaching rate limit",
-          payload: {
+          payload: toActivityPayload({
             ...normalizedPayload,
             status,
-          },
+          }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -1220,6 +1230,84 @@ const make = Effect.gen(function* () {
       yield* clearAssistantMessageState(input.messageId);
     });
 
+  const appendGeneratedImageReference = (input: {
+    event: ProviderRuntimeEvent;
+    thread: OrchestrationReadModel["threads"][number];
+    imagePath: string;
+    turnId?: TurnId;
+    createdAt: string;
+  }) =>
+    Effect.gen(function* () {
+      const markdown = generatedImageMarkdown(input.imagePath);
+      const messages = input.thread.messages;
+      const sameItemMessageId = input.event.itemId
+        ? MessageId.makeUnsafe(`assistant:${input.event.itemId}`)
+        : undefined;
+      const sameItemMessage = sameItemMessageId
+        ? messages.find(
+            (message) => message.role === "assistant" && message.id === sameItemMessageId,
+          )
+        : undefined;
+      const sameImageMessage = messages.find(
+        (message) =>
+          message.role === "assistant" &&
+          (message.text.includes(input.imagePath) || message.text.includes(markdown)),
+      );
+      const finalTurnMessage = input.turnId
+        ? messages
+            .filter(
+              (message) =>
+                message.role === "assistant" &&
+                message.turnId === input.turnId &&
+                !message.streaming &&
+                message.text.trim().length > 0 &&
+                !isGeneratedImageOnlyMarkdown(message.text),
+            )
+            .toSorted(
+              (left, right) =>
+                right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id),
+            )[0]
+        : undefined;
+      const existingMessage = sameItemMessage ?? sameImageMessage ?? finalTurnMessage;
+      const targetMessageId =
+        existingMessage?.id ??
+        MessageId.makeUnsafe(`assistant:image:${input.event.itemId ?? input.event.eventId}`);
+      const targetMessageText = existingMessage?.text ?? "";
+      const targetIsStreaming = existingMessage?.streaming ?? false;
+      const alreadyContainsImage =
+        targetMessageText.includes(input.imagePath) || targetMessageText.includes(markdown);
+
+      let dispatchedDelta = false;
+      if (!alreadyContainsImage) {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.message.assistant.delta",
+          commandId: providerCommandId(input.event, "generated-image-delta"),
+          threadId: input.thread.id,
+          messageId: targetMessageId,
+          delta: targetMessageText.trim().length > 0 ? `\n\n${markdown}` : markdown,
+          ...(input.turnId ? { turnId: input.turnId } : {}),
+          createdAt: input.createdAt,
+        });
+        dispatchedDelta = true;
+      }
+
+      // Only finalize when we actually changed the message (delta dispatched, or we
+      // just created a brand-new image-only message), or when the existing target was
+      // still streaming. Skipping complete on already-finalized targets keeps replays
+      // and duplicate provider notifications from emitting redundant message-sent events.
+      const shouldComplete = dispatchedDelta || !existingMessage || targetIsStreaming;
+      if (shouldComplete) {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.message.assistant.complete",
+          commandId: providerCommandId(input.event, "generated-image-complete"),
+          threadId: input.thread.id,
+          messageId: targetMessageId,
+          ...(input.turnId ? { turnId: input.turnId } : {}),
+          createdAt: input.createdAt,
+        });
+      }
+    });
+
   const upsertProposedPlan = (input: {
     event: ProviderRuntimeEvent;
     threadId: ThreadId;
@@ -1425,7 +1513,9 @@ const make = Effect.gen(function* () {
           // A single provider event can describe the child both as a collab receiver and
           // as the event's provider thread, so re-read after any earlier dispatch in this handler.
           const latestReadModel = yield* orchestrationEngine.getReadModel();
-          const existingThread = latestReadModel.threads.find((entry) => entry.id === childThreadId);
+          const existingThread = latestReadModel.threads.find(
+            (entry) => entry.id === childThreadId,
+          );
           const resolvedModelSelection =
             identity?.model && identity.modelIsRequestedHint !== true
               ? {
@@ -1797,6 +1887,18 @@ const make = Effect.gen(function* () {
           ...(proposedPlanCompletion.turnId ? { turnId: proposedPlanCompletion.turnId } : {}),
           fallbackMarkdown: proposedPlanCompletion.planMarkdown,
           updatedAt: now,
+        });
+      }
+
+      const generatedImagePath = generatedImagePathFromRuntimeEvent(event);
+      if (generatedImagePath) {
+        const generatedImageTurnId = toTurnId(event.turnId) ?? activeTurnId ?? undefined;
+        yield* appendGeneratedImageReference({
+          event,
+          thread,
+          imagePath: generatedImagePath,
+          ...(generatedImageTurnId ? { turnId: generatedImageTurnId } : {}),
+          createdAt: now,
         });
       }
 

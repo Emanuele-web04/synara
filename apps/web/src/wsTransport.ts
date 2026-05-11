@@ -70,6 +70,17 @@ function causeToError(cause: Cause.Cause<unknown>): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
+export function isServerLifecyclePushChannel(channel: string): boolean {
+  return channel === WS_CHANNELS.serverWelcome || channel === WS_CHANNELS.serverMaintenanceUpdated;
+}
+
+export function shouldKeepServerLifecycleStream(activeChannels: ReadonlySet<string>): boolean {
+  return (
+    activeChannels.has(WS_CHANNELS.serverWelcome) ||
+    activeChannels.has(WS_CHANNELS.serverMaintenanceUpdated)
+  );
+}
+
 export class WsTransport {
   private readonly explicitUrl: string | null;
   private readonly listeners = new Map<string, Set<(message: WsPush) => void>>();
@@ -282,86 +293,107 @@ export class WsTransport {
   }
 
   private startChannelStream(channel: WsPushChannel): void {
-    void this.getClient().then((client) => {
-      const restartChannel = () => {
-        if (this.listeners.has(channel)) {
-          this.startChannelStream(channel);
-        }
-      };
+    void this.getClient()
+      .then((client) => {
+        const restartChannel = () => {
+          if (this.listeners.has(channel)) {
+            this.startChannelStream(channel);
+          }
+        };
 
-      if (channel === WS_CHANNELS.serverWelcome) {
-        this.startStream(
-          "server.lifecycle",
-          client[WS_METHODS.subscribeServerLifecycle]({}),
-          (event: ServerLifecycleStreamEvent) => {
-            if (event.type === "welcome") this.emit(WS_CHANNELS.serverWelcome, event.payload);
-          },
-          restartChannel,
-        );
-      } else if (channel === WS_CHANNELS.serverConfigUpdated) {
-        this.startStream(
-          "server.config",
-          client[WS_METHODS.subscribeServerConfig]({}),
-          (event: ServerConfigStreamEvent) => {
-            if (event.type === "snapshot") {
-              this.emit(WS_CHANNELS.serverConfigUpdated, {
-                issues: event.config.issues,
-                providers: event.config.providers,
-              });
-            } else if (event.type === "configUpdated") {
-              this.emit(WS_CHANNELS.serverConfigUpdated, event.payload);
-            }
-          },
-          restartChannel,
-        );
-      } else if (channel === WS_CHANNELS.serverProviderStatusesUpdated) {
-        this.startStream(
-          "server.providers",
-          client[WS_METHODS.subscribeServerProviderStatuses]({}),
-          (payload: ServerProviderStatusesUpdatedPayload) =>
-            this.emit(WS_CHANNELS.serverProviderStatusesUpdated, payload),
-          restartChannel,
-        );
-      } else if (channel === WS_CHANNELS.serverSettingsUpdated) {
-        this.startStream(
-          "server.settings",
-          client[WS_METHODS.subscribeServerSettings]({}),
-          (payload: ServerSettingsUpdatedPayload) =>
-            this.emit(WS_CHANNELS.serverSettingsUpdated, payload),
-          restartChannel,
-        );
-      } else if (channel === WS_CHANNELS.terminalEvent) {
-        this.startStream(
-          "terminal.events",
-          client[WS_METHODS.subscribeTerminalEvents]({}),
-          (event: TerminalEvent) => this.emit(WS_CHANNELS.terminalEvent, event),
-          restartChannel,
-        );
-      } else if (channel === ORCHESTRATION_WS_CHANNELS.domainEvent) {
-        this.startStream(
-          "orchestration.domain",
-          client[WS_METHODS.subscribeOrchestrationDomainEvents]({}),
-          (event: OrchestrationEvent) => this.emit(ORCHESTRATION_WS_CHANNELS.domainEvent, event),
-          restartChannel,
-        );
-      }
-    }).catch((error) => {
-      if (!this.disposed && this.listeners.has(channel)) {
-        console.warn("WebSocket RPC channel failed to start", error);
-        window.setTimeout(() => this.startChannelStream(channel), 500);
-      }
-    });
+        if (isServerLifecyclePushChannel(channel)) {
+          this.startLifecycleStream(client);
+        } else if (channel === WS_CHANNELS.serverConfigUpdated) {
+          this.startStream(
+            "server.config",
+            client[WS_METHODS.subscribeServerConfig]({}),
+            (event: ServerConfigStreamEvent) => {
+              if (event.type === "snapshot") {
+                this.emit(WS_CHANNELS.serverConfigUpdated, {
+                  issues: event.config.issues,
+                  providers: event.config.providers,
+                });
+              } else if (event.type === "configUpdated") {
+                this.emit(WS_CHANNELS.serverConfigUpdated, event.payload);
+              }
+            },
+            restartChannel,
+          );
+        } else if (channel === WS_CHANNELS.serverProviderStatusesUpdated) {
+          this.startStream(
+            "server.providers",
+            client[WS_METHODS.subscribeServerProviderStatuses]({}),
+            (payload: ServerProviderStatusesUpdatedPayload) =>
+              this.emit(WS_CHANNELS.serverProviderStatusesUpdated, payload),
+            restartChannel,
+          );
+        } else if (channel === WS_CHANNELS.serverSettingsUpdated) {
+          this.startStream(
+            "server.settings",
+            client[WS_METHODS.subscribeServerSettings]({}),
+            (payload: ServerSettingsUpdatedPayload) =>
+              this.emit(WS_CHANNELS.serverSettingsUpdated, payload),
+            restartChannel,
+          );
+        } else if (channel === WS_CHANNELS.terminalEvent) {
+          this.startStream(
+            "terminal.events",
+            client[WS_METHODS.subscribeTerminalEvents]({}),
+            (event: TerminalEvent) => this.emit(WS_CHANNELS.terminalEvent, event),
+            restartChannel,
+          );
+        } else if (channel === ORCHESTRATION_WS_CHANNELS.domainEvent) {
+          this.startStream(
+            "orchestration.domain",
+            client[WS_METHODS.subscribeOrchestrationDomainEvents]({}),
+            (event: OrchestrationEvent) => this.emit(ORCHESTRATION_WS_CHANNELS.domainEvent, event),
+            restartChannel,
+          );
+        }
+      })
+      .catch((error) => {
+        if (!this.disposed && this.listeners.has(channel)) {
+          console.warn("WebSocket RPC channel failed to start", error);
+          window.setTimeout(() => this.startChannelStream(channel), 500);
+        }
+      });
   }
 
   private stopChannelStream(channel: WsPushChannel): void {
-    if (channel === WS_CHANNELS.serverWelcome) this.stopStream("server.lifecycle");
-    else if (channel === WS_CHANNELS.serverConfigUpdated) this.stopStream("server.config");
+    if (isServerLifecyclePushChannel(channel)) {
+      if (!this.shouldKeepLifecycleStream()) this.stopStream("server.lifecycle");
+    } else if (channel === WS_CHANNELS.serverConfigUpdated) this.stopStream("server.config");
     else if (channel === WS_CHANNELS.serverProviderStatusesUpdated)
       this.stopStream("server.providers");
     else if (channel === WS_CHANNELS.serverSettingsUpdated) this.stopStream("server.settings");
     else if (channel === WS_CHANNELS.terminalEvent) this.stopStream("terminal.events");
     else if (channel === ORCHESTRATION_WS_CHANNELS.domainEvent)
       this.stopStream("orchestration.domain");
+  }
+
+  private shouldKeepLifecycleStream(): boolean {
+    return shouldKeepServerLifecycleStream(new Set(this.listeners.keys()));
+  }
+
+  private startLifecycleStream(client: RpcClientInstance): void {
+    const restartLifecycle = () => {
+      if (!this.shouldKeepLifecycleStream()) return;
+      void this.getClient()
+        .then((nextClient) => this.startLifecycleStream(nextClient))
+        .catch((error) => console.warn("WebSocket RPC lifecycle stream failed to restart", error));
+    };
+    this.startStream(
+      "server.lifecycle",
+      client[WS_METHODS.subscribeServerLifecycle]({}),
+      (event: ServerLifecycleStreamEvent) => {
+        if (event.type === "welcome") {
+          this.emit(WS_CHANNELS.serverWelcome, event.payload);
+        } else if (event.type === "maintenance") {
+          this.emit(WS_CHANNELS.serverMaintenanceUpdated, event);
+        }
+      },
+      restartLifecycle,
+    );
   }
 
   private startShellStream(client: RpcClientInstance): void {
@@ -380,14 +412,16 @@ export class WsTransport {
   }
 
   private startThreadStream(client: RpcClientInstance, threadId: string, input: unknown): void {
-    this.stopStream(`orchestration.thread:${threadId}`);
+    const key = `orchestration.thread:${threadId}`;
+    this.stopStream(key);
+    this.stoppingStreams.delete(key);
     const restartThread = () => {
       void this.getClient()
         .then((nextClient) => this.startThreadStream(nextClient, threadId, input))
         .catch((error) => console.warn("WebSocket RPC thread stream failed to restart", error));
     };
     this.startStream(
-      `orchestration.thread:${threadId}`,
+      key,
       client[ORCHESTRATION_WS_METHODS.subscribeThread](input as never),
       (event: OrchestrationThreadStreamItem) =>
         this.emit(ORCHESTRATION_WS_CHANNELS.threadEvent, event),
@@ -407,17 +441,24 @@ export class WsTransport {
       Stream.runForEach(runnableStream, (event) => Effect.sync(() => listener(event))),
       {
         onExit: (exit) => {
-          this.streamCleanups.delete(key);
+          if (this.streamCleanups.get(key) === cancel) {
+            this.streamCleanups.delete(key);
+          }
           const wasStoppedIntentionally = this.stoppingStreams.delete(key);
           if (wasStoppedIntentionally || this.disposed) {
             return;
           }
           if (restart && Exit.isFailure(exit)) {
-            window.setTimeout(() => {
-              if (!this.disposed && !this.streamCleanups.has(key)) {
-                restart();
-              }
-            }, Cause.hasInterruptsOnly(exit.cause) ? 0 : 500);
+            window.setTimeout(
+              () => {
+                if (!this.disposed && !this.streamCleanups.has(key)) {
+                  void this.reconnect()
+                    .then(() => restart())
+                    .catch((error) => console.warn("WebSocket RPC stream reconnect failed", error));
+                }
+              },
+              Cause.hasInterruptsOnly(exit.cause) ? 0 : 500,
+            );
             return;
           }
           if (Exit.isFailure(exit) && !this.disposed && !Cause.hasInterruptsOnly(exit.cause)) {

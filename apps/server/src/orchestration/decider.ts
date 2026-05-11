@@ -1125,11 +1125,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.message.assistant.complete": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      const existingMessage = thread.messages.find((message) => message.id === command.messageId);
       return {
         ...withEventBase({
           aggregateKind: "thread",
@@ -1142,7 +1143,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           messageId: command.messageId,
           role: "assistant",
-          text: "",
+          text: existingMessage?.text ?? "",
           turnId: command.turnId ?? null,
           streaming: false,
           createdAt: command.createdAt,

@@ -1059,6 +1059,20 @@ const make = Effect.gen(function* () {
     if (!isGenericChatThreadTitle(currentTitle) && currentTitle !== fallbackTitle) {
       return;
     }
+    const titleModelSelection =
+      input.modelSelection ?? threadModelSelections.get(input.threadId) ?? thread.modelSelection;
+    if (titleModelSelection.provider === "opencode") {
+      if (currentTitle === fallbackTitle) {
+        return;
+      }
+      yield* orchestrationEngine.dispatch({
+        type: "thread.meta.update",
+        commandId: serverCommandId("thread-title-fallback"),
+        threadId: input.threadId,
+        title: fallbackTitle,
+      });
+      return;
+    }
 
     const cwd = resolveThreadWorkspaceCwd({
       thread,
@@ -1072,7 +1086,8 @@ const make = Effect.gen(function* () {
     const textGenerationSelection =
       "modelSelection" in textGenerationInput ? textGenerationInput.modelSelection : null;
     const textGenerationModel =
-      textGenerationSelection?.model ?? ("model" in textGenerationInput ? textGenerationInput.model : null);
+      textGenerationSelection?.model ??
+      ("model" in textGenerationInput ? textGenerationInput.model : null);
     const textGenerationProviderOptions =
       "providerOptions" in textGenerationInput ? textGenerationInput.providerOptions : undefined;
     yield* Effect.logDebug("provider command reactor generating thread title", {

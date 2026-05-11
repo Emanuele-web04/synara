@@ -1245,6 +1245,13 @@ interface CommandActionDisplay {
   preview?: string;
 }
 
+function makeCommandActionDisplay(
+  title: string,
+  preview: string | undefined,
+): CommandActionDisplay {
+  return preview === undefined ? { title } : { title, preview };
+}
+
 function extractToolCommand(
   payload: Record<string, unknown> | null,
   commandAction: CommandAction | null = extractPrimaryCommandAction(payload),
@@ -1307,7 +1314,9 @@ function extractToolTitle(payload: Record<string, unknown> | null): string | nul
   return asTrimmedString(payload?.title);
 }
 
-function extractPrimaryCommandAction(payload: Record<string, unknown> | null): CommandAction | null {
+function extractPrimaryCommandAction(
+  payload: Record<string, unknown> | null,
+): CommandAction | null {
   const data = asRecord(payload?.data);
   const item = asRecord(data?.item);
   const actions = collectCommandActions(payload, data, item);
@@ -1369,28 +1378,28 @@ function deriveCommandActionDisplay(
   switch (normalizeCommandActionType(action.type)) {
     case "read":
     case "readfile":
-      return {
-        title: running ? "Reading" : "Read",
-        preview: commandActionTarget(action),
-      };
+      return makeCommandActionDisplay(running ? "Reading" : "Read", commandActionTarget(action));
     case "search":
     case "find":
-      return {
-        title: running ? "Searching" : "Searched",
-        preview: commandActionSearchPreview(action),
-      };
+      return makeCommandActionDisplay(
+        running ? "Searching" : "Searched",
+        commandActionSearchPreview(action),
+      );
     case "listfiles":
-      return {
-        title: running ? "Listing" : "Listed",
-        preview: commandActionListPreview(action),
-      };
+      return makeCommandActionDisplay(
+        running ? "Listing" : "Listed",
+        commandActionListPreview(action),
+      );
     default:
       return null;
   }
 }
 
 function normalizeCommandActionType(value: string): string {
-  return value.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
 }
 
 function commandActionTarget(action: CommandAction): string | undefined {

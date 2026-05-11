@@ -272,7 +272,7 @@ function toProjectedActivity(row: ProjectionThreadActivityDbRow): OrchestrationT
     tone: row.tone,
     kind: row.kind,
     summary: row.summary,
-    payload: row.payload,
+    payload: row.payload as OrchestrationThreadActivity["payload"],
     turnId: row.turnId,
     ...(row.sequence !== null ? { sequence: row.sequence } : {}),
     createdAt: row.createdAt,

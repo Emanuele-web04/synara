@@ -380,7 +380,11 @@ describe("buildCodexProcessEnv", () => {
       });
 
       expect(env.CODEX_HOME).toBe(path.join(runtimeHome, "codex-home-overlay"));
-      expect(readFileSync(path.join(env.CODEX_HOME, "config.toml"), "utf8")).toContain(
+      const codexHome = env.CODEX_HOME;
+      if (typeof codexHome !== "string") {
+        throw new Error("Expected CODEX_HOME to be set.");
+      }
+      expect(readFileSync(path.join(codexHome, "config.toml"), "utf8")).toContain(
         '[plugins."dpcode-browser@local"]\nenabled = false',
       );
     } finally {

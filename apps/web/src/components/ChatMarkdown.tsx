@@ -29,10 +29,13 @@ import { openInPreferredEditor } from "../editorPreferences";
 import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
 import { fnv1a32 } from "../lib/diffRendering";
+import { isLocalImageMarkdownSrc } from "../lib/localImageUrls";
 import { LRUCache } from "../lib/lruCache";
 import { useTheme } from "../hooks/useTheme";
 import { resolveMarkdownFileLinkTarget, rewriteMarkdownFileUriHref } from "../markdown-links";
 import { readNativeApi } from "../nativeApi";
+import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
+import { GeneratedMarkdownImage } from "./chat/GeneratedMarkdownImage";
 
 class CodeHighlightErrorBoundary extends React.Component<
   { fallback: ReactNode; children: ReactNode },
@@ -61,6 +64,7 @@ interface ChatMarkdownProps {
   isStreaming?: boolean;
   className?: string | undefined;
   style?: CSSProperties | undefined;
+  onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
 }
 
 const CODE_FENCE_LANGUAGE_REGEX = /(?:^|\s)language-([^\s]+)/;
@@ -611,6 +615,7 @@ function ChatMarkdown({
   isStreaming = false,
   className = "text-sm leading-relaxed",
   style,
+  onImageExpand,
 }: ChatMarkdownProps) {
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
@@ -666,8 +671,22 @@ function ChatMarkdown({
           </MarkdownCodeBlock>
         );
       },
+      img({ node: _node, src, alt = "", ...props }) {
+        const restoredSrc = src ? restoreLiteralDollarPlaceholders(src) : "";
+        if (isLocalImageMarkdownSrc(restoredSrc)) {
+          return (
+            <GeneratedMarkdownImage
+              src={restoredSrc}
+              alt={alt}
+              cwd={cwd}
+              onImageExpand={onImageExpand}
+            />
+          );
+        }
+        return <img {...props} src={restoredSrc} alt={alt} loading="lazy" />;
+      },
     }),
-    [cwd, diffThemeName, isStreaming],
+    [cwd, diffThemeName, isStreaming, onImageExpand],
   );
 
   return (

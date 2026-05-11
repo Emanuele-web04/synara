@@ -327,7 +327,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
             ...(serverPassword.length > 0 ? { serverPassword } : {}),
             cliSpec: config.cliSpec,
           });
-          const session = await client.session.create({
+          const sessionCreateInput = {
             title: `T3 Code ${input.operation}`,
             model: {
               providerID: providerId,
@@ -336,7 +336,10 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
             },
             ...(agent ? { agent } : {}),
             permission: [{ permission: "*", pattern: "*", action: "deny" }],
-          });
+          };
+          const session = await client.session.create(
+            sessionCreateInput as unknown as Parameters<typeof client.session.create>[0],
+          );
           if (!session.data) {
             throw new Error("OpenCode session.create returned no session payload.");
           }

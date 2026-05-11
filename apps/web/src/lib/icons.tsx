@@ -31,6 +31,7 @@ import {
   IconColumns2,
   IconCopy,
   IconDots,
+  IconDownload,
   IconExternalLink,
   IconEye,
   IconFile,
@@ -135,6 +136,7 @@ export const CloudUploadIcon = adaptIcon(IconCloudUpload);
 export const Columns2Icon = adaptIcon(IconColumns2);
 export const CopyIcon = adaptIcon(IconCopy);
 export const DiffIcon = adaptIcon(IconGitCompare);
+export const DownloadIcon = adaptIcon(IconDownload);
 export const EllipsisIcon = adaptIcon(IconDots);
 export const ExternalLinkIcon = adaptIcon(IconExternalLink);
 export const EyeIcon = adaptIcon(IconEye);

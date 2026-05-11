@@ -17,6 +17,20 @@ const CodexTextGenerationTestLayer = CodexTextGenerationLive.pipe(
   Layer.provideMerge(NodeServices.layer),
 );
 
+let codexEnvQueue = Promise.resolve();
+
+function acquireCodexEnvLock() {
+  return Effect.promise(async () => {
+    let releaseLock = () => {};
+    const previous = codexEnvQueue;
+    codexEnvQueue = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    await previous;
+    return releaseLock;
+  });
+}
+
 function makeFakeCodexBinary(dir: string) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -133,6 +147,7 @@ function withFakeCodexEnv<A, E, R>(
 ) {
   return Effect.acquireUseRelease(
     Effect.gen(function* () {
+      const releaseLock = yield* acquireCodexEnvLock();
       const fs = yield* FileSystem.FileSystem;
       const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-codex-text-" });
       const binDir = yield* makeFakeCodexBinary(tempDir);
@@ -151,10 +166,12 @@ function withFakeCodexEnv<A, E, R>(
         process.env.T3_FAKE_CODEX_CODEX_HOME_CONFIG_MUST_CONTAIN;
       const previousCodexHomeConfigMustNotContain =
         process.env.T3_FAKE_CODEX_CODEX_HOME_CONFIG_MUST_NOT_CONTAIN;
+      const previousDisableBrowserPlugin = process.env.DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN;
 
       yield* Effect.sync(() => {
         process.env.PATH = `${binDir}:${previousPath ?? ""}`;
         process.env.T3_FAKE_CODEX_OUTPUT_B64 = Buffer.from(input.output, "utf8").toString("base64");
+        process.env.DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN = "0";
 
         if (input.exitCode !== undefined) {
           process.env.T3_FAKE_CODEX_EXIT_CODE = String(input.exitCode);
@@ -239,6 +256,8 @@ function withFakeCodexEnv<A, E, R>(
         previousRequireApprovalNever,
         previousCodexHomeConfigMustContain,
         previousCodexHomeConfigMustNotContain,
+        previousDisableBrowserPlugin,
+        releaseLock,
       };
     }),
     () => effect,
@@ -320,6 +339,15 @@ function withFakeCodexEnv<A, E, R>(
           process.env.T3_FAKE_CODEX_CODEX_HOME_CONFIG_MUST_NOT_CONTAIN =
             previous.previousCodexHomeConfigMustNotContain;
         }
+
+        if (previous.previousDisableBrowserPlugin === undefined) {
+          delete process.env.DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN;
+        } else {
+          process.env.DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN =
+            previous.previousDisableBrowserPlugin;
+        }
+
+        previous.releaseLock();
       }),
   );
 }
