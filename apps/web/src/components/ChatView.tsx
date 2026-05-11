@@ -7273,7 +7273,7 @@ export default function ChatView({
               <div className="rounded-t-[23px] border-b border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)]">
                 <ComposerPendingUserInputPanel
                   pendingUserInputs={pendingUserInputs}
-                  respondingRequestIds={respondingRequestIds}
+                  respondingRequestIds={respondingUserInputRequestIds}
                   answers={activePendingDraftAnswers}
                   questionIndex={activePendingQuestionIndex}
                   onToggleOption={onToggleActivePendingUserInputOption}
@@ -8006,7 +8006,7 @@ export default function ChatView({
                           <div className="rounded-t-[23px] border-b border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)]">
                             <ComposerPendingUserInputPanel
                               pendingUserInputs={pendingUserInputs}
-                              respondingRequestIds={respondingRequestIds}
+                              respondingRequestIds={respondingUserInputRequestIds}
                               answers={activePendingDraftAnswers}
                               questionIndex={activePendingQuestionIndex}
                               onToggleOption={onToggleActivePendingUserInputOption}

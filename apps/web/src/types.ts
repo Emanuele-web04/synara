@@ -172,6 +172,7 @@ export interface Thread extends ThreadWorkspaceState {
   createdAt: string;
   archivedAt?: string | null;
   updatedAt?: string | undefined;
+  isPinned?: boolean;
   latestTurn: OrchestrationLatestTurn | null;
   pendingSourceProposedPlan?: OrchestrationLatestTurn["sourceProposedPlan"];
   lastVisitedAt?: string | undefined;
@@ -203,6 +204,7 @@ export interface ThreadShell extends ThreadWorkspaceState {
   createdAt: string;
   archivedAt?: string | null;
   updatedAt?: string | undefined;
+  isPinned?: boolean;
   parentThreadId?: ThreadId | null;
   subagentAgentId?: string | null;
   subagentNickname?: string | null;
@@ -236,6 +238,7 @@ export interface SidebarThreadSummary {
   createdAt: string;
   archivedAt?: string | null;
   updatedAt?: string | undefined;
+  isPinned?: boolean;
   latestTurn: OrchestrationLatestTurn | null;
   lastVisitedAt?: string | undefined;
   parentThreadId?: ThreadId | null;

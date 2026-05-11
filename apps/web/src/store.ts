@@ -358,6 +358,7 @@ function threadShellsEqual(left: ThreadShell | undefined, right: ThreadShell): b
     left.createdAt === right.createdAt &&
     (left.archivedAt ?? null) === (right.archivedAt ?? null) &&
     left.updatedAt === right.updatedAt &&
+    (left.isPinned ?? false) === (right.isPinned ?? false) &&
     left.envMode === right.envMode &&
     left.branch === right.branch &&
     left.worktreePath === right.worktreePath &&
@@ -402,6 +403,7 @@ function toThreadShell(thread: Thread): ThreadShell {
     createdAt: thread.createdAt,
     archivedAt: thread.archivedAt ?? null,
     updatedAt: thread.updatedAt,
+    isPinned: thread.isPinned ?? false,
     envMode: thread.envMode,
     branch: thread.branch,
     worktreePath: thread.worktreePath,
@@ -1510,6 +1512,7 @@ function normalizeThreadFromReadModel(
     previous.createdAt === incoming.createdAt &&
     (previous.archivedAt ?? null) === (incoming.archivedAt ?? null) &&
     previous.updatedAt === incoming.updatedAt &&
+    (previous.isPinned ?? false) === (incoming.isPinned ?? false) &&
     previous.latestTurn === latestTurn &&
     previous.pendingSourceProposedPlan === pendingSourceProposedPlan &&
     previous.lastVisitedAt === lastVisitedAt &&
@@ -1553,6 +1556,7 @@ function normalizeThreadFromReadModel(
     createdAt: incoming.createdAt,
     archivedAt: incoming.archivedAt ?? null,
     updatedAt: incoming.updatedAt,
+    isPinned: incoming.isPinned ?? false,
     latestTurn,
     ...(pendingSourceProposedPlan ? { pendingSourceProposedPlan } : {}),
     lastVisitedAt,
@@ -1645,6 +1649,7 @@ function normalizeThreadShellSnapshot(
     createdAt: incoming.createdAt,
     archivedAt: incoming.archivedAt ?? null,
     updatedAt: incoming.updatedAt,
+    isPinned: incoming.isPinned ?? false,
     envMode: incoming.envMode ?? "local",
     branch: resolvedBranch,
     worktreePath: nextWorktreePath,
@@ -1931,6 +1936,7 @@ function sidebarThreadSummariesEqual(
     left.createdAt === right.createdAt &&
     (left.archivedAt ?? null) === (right.archivedAt ?? null) &&
     left.updatedAt === right.updatedAt &&
+    (left.isPinned ?? false) === (right.isPinned ?? false) &&
     left.latestTurn === right.latestTurn &&
     left.lastVisitedAt === right.lastVisitedAt &&
     (left.parentThreadId ?? null) === (right.parentThreadId ?? null) &&
@@ -1969,6 +1975,7 @@ function buildSidebarThreadSummary(
     createdAt: thread.createdAt,
     archivedAt: thread.archivedAt ?? null,
     updatedAt: thread.updatedAt,
+    isPinned: thread.isPinned ?? false,
     latestTurn: thread.latestTurn,
     lastVisitedAt: thread.lastVisitedAt,
     parentThreadId: thread.parentThreadId ?? null,
@@ -2968,6 +2975,8 @@ function applyOrchestrationEvent(
             nextAssociatedWorktreeBranch === (thread.associatedWorktreeBranch ?? null) &&
             nextAssociatedWorktreeRef === (thread.associatedWorktreeRef ?? null) &&
             nextCreateBranchFlowCompleted === (thread.createBranchFlowCompleted ?? false) &&
+            (event.payload.isPinned === undefined ||
+              event.payload.isPinned === (thread.isPinned ?? false)) &&
             (event.payload.parentThreadId === undefined ||
               (event.payload.parentThreadId ?? null) === (thread.parentThreadId ?? null)) &&
             (event.payload.subagentAgentId === undefined ||
@@ -2996,6 +3005,7 @@ function applyOrchestrationEvent(
             associatedWorktreeBranch: nextAssociatedWorktreeBranch,
             associatedWorktreeRef: nextAssociatedWorktreeRef,
             createBranchFlowCompleted: nextCreateBranchFlowCompleted,
+            ...(event.payload.isPinned !== undefined ? { isPinned: event.payload.isPinned } : {}),
             ...(event.payload.parentThreadId !== undefined
               ? { parentThreadId: event.payload.parentThreadId }
               : {}),
@@ -3145,9 +3155,32 @@ function applyOrchestrationEvent(
         state,
         event.payload.threadId,
         (thread) => {
+          // Hide the composer prompt as soon as the response command is accepted;
+          // the provider may append its own resolved activity shortly after.
+          const syntheticResolvedActivity = {
+            id: EventId.makeUnsafe(
+              `synthetic-user-input-resolved:${event.payload.requestId}:${event.sequence}`,
+            ),
+            tone: "info",
+            kind: "user-input.resolved",
+            summary: "User input submitted",
+            payload: {
+              requestId: event.payload.requestId,
+            },
+            turnId: null,
+            sequence: event.sequence,
+            createdAt: event.payload.createdAt,
+          } satisfies Thread["activities"][number];
+          const hasResolvedActivity = thread.activities.some(
+            (activity) => activity.id === syntheticResolvedActivity.id,
+          );
+          const activities = hasResolvedActivity
+            ? thread.activities
+            : [...thread.activities, syntheticResolvedActivity];
           const summary = resolveThreadSummaryAfterUserInputResponseRequested(thread, event);
           return {
             ...thread,
+            activities,
             hasPendingUserInput: summary.hasPendingUserInput,
             updatedAt:
               (thread.updatedAt ?? thread.createdAt) > event.payload.createdAt

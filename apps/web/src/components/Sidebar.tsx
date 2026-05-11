@@ -1116,8 +1116,8 @@ export default function Sidebar() {
   const draftThreadsByThreadId = useComposerDraftStore((store) => store.draftThreadsByThreadId);
   const temporaryThreadIds = useTemporaryThreadStore((store) => store.temporaryThreadIds);
   const clearTemporaryThread = useTemporaryThreadStore((store) => store.clearTemporaryThread);
-  const pinnedThreadIds = usePinnedThreadsStore((store) => store.pinnedThreadIds);
-  const togglePinnedThread = usePinnedThreadsStore((store) => store.togglePinnedThread);
+  const persistedPinnedThreadIds = usePinnedThreadsStore((store) => store.pinnedThreadIds);
+  const pinThreadLocally = usePinnedThreadsStore((store) => store.pinThread);
   const unpinThread = usePinnedThreadsStore((store) => store.unpinThread);
   const prunePinnedThreads = usePinnedThreadsStore((store) => store.prunePinnedThreads);
   const workspacePages = useWorkspaceStore((store) => store.workspacePages);
@@ -1391,10 +1391,53 @@ export default function Sidebar() {
     presentationMode: routeTerminalState?.presentationMode ?? "drawer",
     terminalOpen,
   });
+  const pinnedThreadIds = useMemo(() => {
+    const next = new Set<ThreadId>();
+    for (const thread of sidebarDisplayThreads) {
+      if (thread.isPinned === true) {
+        next.add(thread.id);
+      }
+    }
+    for (const threadId of persistedPinnedThreadIds) {
+      next.add(threadId);
+    }
+    return [...next];
+  }, [persistedPinnedThreadIds, sidebarDisplayThreads]);
   const pinnedThreadIdSet = useMemo(() => new Set(pinnedThreadIds), [pinnedThreadIds]);
   const pinnedThreads = useMemo(
     () => getPinnedThreadsForSidebar(sidebarDisplayThreads, pinnedThreadIds),
     [pinnedThreadIds, sidebarDisplayThreads],
+  );
+  const setThreadPinned = useCallback(
+    async (threadId: ThreadId, isPinned: boolean) => {
+      const api = readNativeApi();
+      if (!api) return;
+      await api.orchestration.dispatchCommand({
+        type: "thread.meta.update",
+        commandId: newCommandId(),
+        threadId,
+        isPinned,
+      });
+      if (isPinned) {
+        pinThreadLocally(threadId);
+      } else {
+        unpinThread(threadId);
+      }
+    },
+    [pinThreadLocally, unpinThread],
+  );
+  const toggleThreadPinned = useCallback(
+    (threadId: ThreadId) => {
+      const isPinned = pinnedThreadIdSet.has(threadId);
+      void setThreadPinned(threadId, !isPinned).catch((error) => {
+        console.error("Failed to update pinned thread state", { threadId, error });
+        toastManager.add({
+          type: "error",
+          title: isPinned ? "Unable to unpin thread" : "Unable to pin thread",
+        });
+      });
+    },
+    [pinnedThreadIdSet, setThreadPinned],
   );
   const projectCwdById = useMemo(
     () => new Map(projects.map((project) => [project.id, project.cwd] as const)),
@@ -2798,7 +2841,7 @@ export default function Sidebar() {
         return;
       }
       if (clicked === "toggle-pin") {
-        togglePinnedThread(threadId);
+        toggleThreadPinned(threadId);
         return;
       }
 
@@ -2948,7 +2991,7 @@ export default function Sidebar() {
       projectCwdById,
       resolveThreadStatusForSidebar,
       sidebarThreadSummaryById,
-      togglePinnedThread,
+      toggleThreadPinned,
     ],
   );
   const handleMultiSelectContextMenu = useCallback(
@@ -3465,6 +3508,25 @@ export default function Sidebar() {
     }
     prunePinnedThreads(sidebarThreads.map((thread) => thread.id));
   }, [prunePinnedThreads, sidebarThreads, threadsHydrated]);
+
+  useEffect(() => {
+    if (!threadsHydrated || persistedPinnedThreadIds.length === 0) {
+      return;
+    }
+
+    // Older builds stored pins only in localStorage; mirror them to the server
+    // projection so the retention job can protect those threads too.
+    const threadsById = new Map(sidebarThreads.map((thread) => [thread.id, thread] as const));
+    for (const threadId of persistedPinnedThreadIds) {
+      const thread = threadsById.get(threadId);
+      if (!thread || thread.isPinned === true) {
+        continue;
+      }
+      void setThreadPinned(threadId, true).catch((error) => {
+        console.error("Failed to migrate pinned thread state", { threadId, error });
+      });
+    }
+  }, [persistedPinnedThreadIds, setThreadPinned, sidebarThreads, threadsHydrated]);
 
   useEffect(() => {
     const retainedThreadIds = new Set(sidebarThreads.map((thread) => thread.id));
@@ -3991,7 +4053,7 @@ export default function Sidebar() {
               onToggle={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
-                togglePinnedThread(thread.id);
+                toggleThreadPinned(thread.id);
               }}
             />
             {threadStatus?.label === "Completed" ? (
@@ -4171,7 +4233,7 @@ export default function Sidebar() {
           onToggle={(event) => {
             event.preventDefault();
             event.stopPropagation();
-            togglePinnedThread(thread.id);
+            toggleThreadPinned(thread.id);
           }}
         />
         {threadStatus &&

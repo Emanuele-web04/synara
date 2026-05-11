@@ -2264,6 +2264,13 @@ describe("store read model sync", () => {
     ]);
 
     expect(next.threads[0]?.hasPendingUserInput).toBe(false);
+    expect(
+      next.threads[0]?.activities.some(
+        (activity) =>
+          activity.kind === "user-input.resolved" &&
+          (activity.payload as Record<string, unknown>).requestId === "request-1",
+      ),
+    ).toBe(true);
     expect(next.sidebarThreadSummaryById["thread-1"]?.hasPendingUserInput).toBe(false);
   });
 

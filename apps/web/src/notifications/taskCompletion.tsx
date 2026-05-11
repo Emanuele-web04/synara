@@ -25,6 +25,7 @@ import {
   collectCompletedTerminalCandidates,
   collectInputNeededThreadCandidates,
   collectTerminalAttentionCandidates,
+  isNotificationRuntimeFreshTimestamp,
   shouldShowThreadNotificationToast,
 } from "./taskCompletion.logic";
 
@@ -158,6 +159,7 @@ export function TaskCompletionNotifications() {
   }, [activeThreadId, splitView]);
   const previousThreadsRef = useRef<readonly Thread[]>([]);
   const previousTerminalStateRef = useRef(terminalStateByThreadId);
+  const runtimeStartedAtMsRef = useRef(Date.now());
   const readyRef = useRef(false);
 
   useEffect(() => {
@@ -195,7 +197,12 @@ export function TaskCompletionNotifications() {
       return;
     }
 
-    const completions = collectCompletedThreadCandidates(previousThreadsRef.current, threads);
+    const completions = collectCompletedThreadCandidates(
+      previousThreadsRef.current,
+      threads,
+    ).filter((candidate) =>
+      isNotificationRuntimeFreshTimestamp(candidate.completedAt, runtimeStartedAtMsRef.current),
+    );
     const terminalCompletions = collectCompletedTerminalCandidates(
       previousTerminalStateRef.current,
       terminalStateByThreadId,
@@ -203,6 +210,8 @@ export function TaskCompletionNotifications() {
     const inputNeededCandidates = collectInputNeededThreadCandidates(
       previousThreadsRef.current,
       threads,
+    ).filter((candidate) =>
+      isNotificationRuntimeFreshTimestamp(candidate.createdAt, runtimeStartedAtMsRef.current),
     );
     const terminalAttentionCandidates = collectTerminalAttentionCandidates(
       previousTerminalStateRef.current,

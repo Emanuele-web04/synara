@@ -54,6 +54,7 @@ import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./Dif
 import { Button } from "./ui/button";
 import { ToggleGroup, Toggle } from "./ui/toggle-group";
 import { FileEntryIcon } from "./chat/FileEntryIcon";
+import { DiffStatLabel, hasNonZeroStat } from "./chat/DiffStatLabel";
 import { type SplitViewPanePanelState } from "../splitViewStore";
 
 type DiffRenderMode = "stacked" | "split";
@@ -196,6 +197,31 @@ function resolveFileDiffPath(fileDiff: FileDiffMetadata): string {
 
 function buildFileDiffRenderKey(fileDiff: FileDiffMetadata): string {
   return fileDiff.cacheKey ?? `${fileDiff.prevName ?? "none"}:${fileDiff.name}`;
+}
+
+// Summarize parsed hunks for compact diff stats in the panel chrome.
+function summarizeFileDiffStats(files: ReadonlyArray<FileDiffMetadata>): {
+  additions: number;
+  deletions: number;
+} {
+  return files.reduce(
+    (total, file) => {
+      for (const hunk of file.hunks) {
+        total.additions += hunk.additionLines;
+        total.deletions += hunk.deletionLines;
+      }
+      return total;
+    },
+    { additions: 0, deletions: 0 },
+  );
+}
+
+function summarizePatchStats(
+  patch: string | undefined,
+): { additions: number; deletions: number } | null {
+  const renderable = getRenderablePatch(patch, "diff-panel:stats");
+  if (renderable?.kind !== "files") return null;
+  return summarizeFileDiffStats(renderable.files);
 }
 
 interface DiffPanelProps {
@@ -382,7 +408,7 @@ export default function DiffPanel({
   const workingTreeDiffQuery = useQuery(
     gitWorkingTreeDiffQueryOptions({
       cwd: activeCwd ?? null,
-      enabled: diffOpen && surfaceMode !== "review" && !diffEnvironmentPending,
+      enabled: diffOpen && !diffEnvironmentPending,
     }),
   );
   const workingTreePatch = workingTreeDiffQuery.data?.patch;
@@ -430,6 +456,10 @@ export default function DiffPanel({
       }),
     );
   }, [renderablePatch]);
+  const totalPatchStat = useMemo(
+    () => summarizePatchStats(workingTreePatch),
+    [workingTreePatch],
+  );
 
   useEffect(() => {
     if (diffOpen && !previousDiffOpenRef.current) {
@@ -891,6 +921,14 @@ export default function DiffPanel({
               >
                 <DiffIcon className="size-3.5 opacity-80" />
                 <span>Total</span>
+                {totalPatchStat && hasNonZeroStat(totalPatchStat) ? (
+                  <span className="ml-0.5 inline-flex items-center font-mono text-[11px] font-medium">
+                    <DiffStatLabel
+                      additions={totalPatchStat.additions}
+                      deletions={totalPatchStat.deletions}
+                    />
+                  </span>
+                ) : null}
               </button>
               {surfaceMode !== "summary" && diffCopyText ? (
                 <Button

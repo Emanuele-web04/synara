@@ -189,6 +189,7 @@ export function getInactiveThreadIdsForRetention(
 
   for (const thread of readModel.threads) {
     if (thread.deletedAt !== null) continue;
+    if (thread.isPinned === true) continue;
     if (isThreadBusy(thread)) continue;
     const lastActivityMs = getThreadLastActivityMs(thread);
     if (lastActivityMs === null || lastActivityMs > cutoffMs) continue;
