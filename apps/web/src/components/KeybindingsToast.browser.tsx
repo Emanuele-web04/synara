@@ -324,16 +324,15 @@ describe("Keybindings update toast", () => {
     document.body.innerHTML = "";
   });
 
-  it("shows a toast for each consecutive keybinding update with no issues", async () => {
+  it("does not show success toasts for passive keybinding reloads", async () => {
     const mounted = await mountApp();
 
     try {
       sendServerConfigUpdatedPush([]);
-      await waitForToast("Keybindings updated", 1);
+      await waitForNoToast("Keybindings updated");
 
-      // Each server push represents a distinct file change, so it should produce its own toast.
       sendServerConfigUpdatedPush([]);
-      await waitForToast("Keybindings updated", 2);
+      await waitForNoToast("Keybindings updated");
     } finally {
       await mounted.cleanup();
     }
@@ -357,7 +356,6 @@ describe("Keybindings update toast", () => {
 
     try {
       sendServerConfigUpdatedPush([]);
-      await waitForToast("Keybindings updated");
       await waitForNoToast("Keybindings updated");
 
       // Remount the app — onServerConfigUpdated replays the cached value

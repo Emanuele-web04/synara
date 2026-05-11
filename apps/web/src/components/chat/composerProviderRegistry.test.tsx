@@ -34,6 +34,20 @@ const OPENCODE_RUNTIME_MODEL_WITHOUT_DEFAULT: ProviderModelDescriptor = {
   ],
 };
 
+const CURSOR_RUNTIME_MODEL_300K: ProviderModelDescriptor = {
+  slug: "claude-opus-4-7",
+  name: "Claude Opus 4.7",
+  upstreamProviderId: "anthropic",
+  upstreamProviderName: "Anthropic",
+  supportedReasoningEfforts: [
+    { value: "high", label: "High" },
+    { value: "xhigh", label: "Extra High" },
+  ],
+  defaultReasoningEffort: "high",
+  contextWindowOptions: [{ value: "300k", label: "300K", isDefault: true }],
+  defaultContextWindow: "300k",
+};
+
 describe("getComposerProviderState", () => {
   it("returns codex defaults when no codex draft options exist", () => {
     const state = getComposerProviderState({
@@ -344,6 +358,30 @@ describe("getComposerProviderState", () => {
       provider: "gemini",
       promptEffort: "HIGH",
       modelOptionsForDispatch: undefined,
+    });
+  });
+
+  it("drops stale Cursor context options once runtime metadata is authoritative", () => {
+    const state = getComposerProviderState({
+      provider: "cursor",
+      model: "claude-opus-4-7",
+      runtimeModel: CURSOR_RUNTIME_MODEL_300K,
+      prompt: "",
+      modelOptions: {
+        cursor: {
+          reasoningEffort: "xhigh",
+          contextWindow: "1m",
+          fastMode: true,
+        },
+      },
+    });
+
+    expect(state).toEqual({
+      provider: "cursor",
+      promptEffort: "xhigh",
+      modelOptionsForDispatch: {
+        reasoningEffort: "xhigh",
+      },
     });
   });
 

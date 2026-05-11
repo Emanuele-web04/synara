@@ -1,3 +1,7 @@
+// FILE: GitCore.test.ts
+// Purpose: Exercises GitCore repository operations, branch/worktree flows, and status summaries.
+// Layer: Server Git service tests
+// Depends on: Effect test layers plus real temporary Git repositories.
 import { existsSync } from "node:fs";
 import path from "node:path";
 
@@ -1504,6 +1508,40 @@ it.layer(TestLayer)("git integration", (it) => {
         expect(details.workingTree.files).toEqual([
           { path: "new-file.ts", insertions: 2, deletions: 0 },
           { path: "README.md", insertions: 1, deletions: 1 },
+        ]);
+      }),
+    );
+
+    it.effect("uses rename-aware totals when deleted files move into untracked directories", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+        const fileSystem = yield* FileSystem.FileSystem;
+
+        const originalDir = path.join(tmp, "Views", "Turn");
+        const movedDir = path.join(tmp, "Views", "Turn", "Core");
+        const originalPath = path.join(originalDir, "TurnView.swift");
+        const movedPath = path.join(movedDir, "TurnView.swift");
+        const originalContents = Array.from(
+          { length: 40 },
+          (_, index) => `line ${index + 1}`,
+        ).join("\n");
+
+        yield* fileSystem.makeDirectory(originalDir, { recursive: true });
+        yield* writeTextFile(originalPath, `${originalContents}\n`);
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "add turn view"]);
+
+        yield* fileSystem.makeDirectory(movedDir, { recursive: true });
+        yield* fileSystem.rename(originalPath, movedPath);
+        yield* writeTextFile(movedPath, `${originalContents}\nnew helper line\n`);
+
+        const details = yield* core.statusDetails(tmp);
+        expect(details.workingTree.insertions).toBe(1);
+        expect(details.workingTree.deletions).toBe(0);
+        expect(details.workingTree.files).toEqual([
+          { path: "Views/Turn/Core/TurnView.swift", insertions: 1, deletions: 0 },
         ]);
       }),
     );

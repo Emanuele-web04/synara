@@ -11,12 +11,13 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import {
+  getDefaultContextWindow,
   getDefaultEffort,
   getGeminiThinkingSelectionValue,
+  hasContextWindowOption,
   hasEffortLevel,
   isClaudeUltrathinkPrompt,
   normalizeClaudeModelOptions,
-  normalizeCursorModelOptions,
   normalizeGeminiModelOptions,
   normalizeOpenCodeModelOptions,
   resolveLabeledOptionValue,
@@ -143,7 +144,31 @@ function getProviderStateFromCapabilities(
     case "cursor": {
       const providerOptions = modelOptions?.cursor;
       rawEffort = trimOrNull(providerOptions?.reasoningEffort);
-      normalizedOptions = normalizeCursorModelOptions(providerOptions);
+      const defaultReasoningEffort = getDefaultEffort(caps);
+      const reasoningEffort =
+        rawEffort && hasEffortLevel(caps, rawEffort) && rawEffort !== defaultReasoningEffort
+          ? rawEffort
+          : undefined;
+      const rawContextWindow = trimOrNull(providerOptions?.contextWindow);
+      const defaultContextWindow = getDefaultContextWindow(caps);
+      const contextWindow =
+        rawContextWindow &&
+        hasContextWindowOption(caps, rawContextWindow) &&
+        rawContextWindow !== defaultContextWindow
+          ? rawContextWindow
+          : undefined;
+      const fastModeEnabled = caps.supportsFastMode && providerOptions?.fastMode === true;
+      const thinking =
+        caps.supportsThinkingToggle && providerOptions?.thinking !== undefined
+          ? providerOptions.thinking
+          : undefined;
+      const nextOptions = {
+        ...(reasoningEffort ? { reasoningEffort } : {}),
+        ...(fastModeEnabled ? { fastMode: true } : {}),
+        ...(thinking !== undefined ? { thinking } : {}),
+        ...(contextWindow ? { contextWindow } : {}),
+      };
+      normalizedOptions = Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
       break;
     }
     case "gemini": {

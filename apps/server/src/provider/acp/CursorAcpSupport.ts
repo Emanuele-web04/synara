@@ -414,9 +414,6 @@ function isCursorCliOneMillionContextModel(model: string): boolean {
   if (/^gpt-5\.4-(?:low|medium|high|xhigh|extra-high)$/u.test(normalized)) {
     return true;
   }
-  if (/^claude-opus-4-7(?:-|$)/u.test(normalized)) {
-    return true;
-  }
   if (/^claude-4\.6-(?:opus|sonnet)(?:-|$)/u.test(normalized)) {
     return true;
   }
@@ -449,6 +446,7 @@ function cursorAcpParameterKeyForModel(baseModel: string, options: CursorModelOp
 function buildCursorParameterizedModelFromCliModelId(input: {
   readonly acpModelValue: string;
   readonly cliModel: string;
+  readonly choices: ReadonlyArray<CursorAcpModelChoice>;
 }): string | undefined {
   if (!input.acpModelValue.includes("[")) {
     return undefined;
@@ -461,9 +459,14 @@ function buildCursorParameterizedModelFromCliModelId(input: {
   const baseModel = stripCursorParameterizedSuffix(input.acpModelValue);
   const params = cursorModelParametersToObject(input.acpModelValue);
   if (cliOptions.reasoningEffort) {
-    params[cursorAcpParameterKeyForModel(baseModel, cliOptions)] = cursorReasoningParameterValue(
-      cliOptions.reasoningEffort,
-    );
+    const parameterKey = cursorAcpParameterKeyForModel(baseModel, cliOptions);
+    params[parameterKey] =
+      resolveCursorChoiceParameterValue({
+        choices: input.choices,
+        baseModel,
+        key: parameterKey,
+        requestedValue: cliOptions.reasoningEffort,
+      }) ?? cursorReasoningParameterValue(cliOptions.reasoningEffort);
   }
   if (cliOptions.contextWindow) {
     params.context = cliOptions.contextWindow;
@@ -480,6 +483,7 @@ function buildCursorParameterizedModelFromCliModelId(input: {
 function buildCursorParameterizedModelFromOptions(input: {
   readonly acpModelValue: string;
   readonly options: CursorModelOptions | null | undefined;
+  readonly choices: ReadonlyArray<CursorAcpModelChoice>;
 }): string | undefined {
   if (!input.acpModelValue.includes("[")) {
     return undefined;
@@ -491,9 +495,14 @@ function buildCursorParameterizedModelFromOptions(input: {
   const baseModel = stripCursorParameterizedSuffix(input.acpModelValue);
   const params = cursorModelParametersToObject(input.acpModelValue);
   if (input.options.reasoningEffort) {
-    params[cursorAcpParameterKeyForModel(baseModel, input.options)] = cursorReasoningParameterValue(
-      input.options.reasoningEffort,
-    );
+    const parameterKey = cursorAcpParameterKeyForModel(baseModel, input.options);
+    params[parameterKey] =
+      resolveCursorChoiceParameterValue({
+        choices: input.choices,
+        baseModel,
+        key: parameterKey,
+        requestedValue: input.options.reasoningEffort,
+      }) ?? cursorReasoningParameterValue(input.options.reasoningEffort);
   }
   if (input.options.contextWindow) {
     params.context = input.options.contextWindow;
@@ -807,7 +816,7 @@ function toConfigValue(
   const normalized = normalizedText(stringValue);
   const normalizedAliases =
     normalized === "xhigh" || normalized === "extra high"
-      ? new Set([normalized, "extra high", "extra high"])
+      ? new Set([normalized, "xhigh", "extra high"])
       : new Set([normalized]);
   for (const entry of option.options) {
     const candidates =
@@ -823,7 +832,152 @@ function toConfigValue(
       }
     }
   }
-  return stringValue;
+  return undefined;
+}
+
+function cursorChoiceMatchesBase(choice: CursorAcpModelChoice, baseModel: string): boolean {
+  const choiceBase = resolveCursorAcpBaseModelId(choice.slug);
+  const cliBaseModel = normalizeCursorCliBaseModelId(baseModel);
+  return choiceBase === baseModel || choiceBase === cliBaseModel;
+}
+
+function cursorParameterValuesMatch(key: string, left: string, right: string): boolean {
+  if (key === "reasoning" || key === "effort") {
+    return normalizeCursorReasoningValue(left) === normalizeCursorReasoningValue(right);
+  }
+  return normalizedText(left) === normalizedText(right);
+}
+
+function resolveCursorChoiceParameterValue(input: {
+  readonly choices: ReadonlyArray<CursorAcpModelChoice>;
+  readonly baseModel: string;
+  readonly key: string;
+  readonly requestedValue: string;
+}): string | undefined {
+  // Match ACP's own parameter spelling so xhigh/extra-high variants remain valid.
+  let sawParameterizedChoice = false;
+  for (const choice of input.choices) {
+    if (!cursorChoiceMatchesBase(choice, input.baseModel)) {
+      continue;
+    }
+    const value = parseCursorModelParameters(choice.slug).get(input.key);
+    if (!value) {
+      continue;
+    }
+    sawParameterizedChoice = true;
+    if (cursorParameterValuesMatch(input.key, value, input.requestedValue)) {
+      return value;
+    }
+  }
+  return sawParameterizedChoice ? undefined : input.requestedValue;
+}
+
+function cursorModelOptionValueSupported(input: {
+  readonly configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>;
+  readonly choices: ReadonlyArray<CursorAcpModelChoice>;
+  readonly baseModel: string;
+  readonly aliases: ReadonlyArray<string>;
+  readonly parameterKey: string;
+  readonly value: string | boolean;
+}): boolean {
+  const option = findConfigOption(input.configOptions, input.aliases);
+  if (option) {
+    return toConfigValue(option, input.value) !== undefined;
+  }
+  if (typeof input.value === "boolean") {
+    if (
+      input.value === false &&
+      (input.parameterKey === "fast" || input.parameterKey === "thinking")
+    ) {
+      return true;
+    }
+    return (
+      resolveCursorChoiceParameterValue({
+        choices: input.choices,
+        baseModel: input.baseModel,
+        key: input.parameterKey,
+        requestedValue: String(input.value),
+      }) !== undefined
+    );
+  }
+  return (
+    resolveCursorChoiceParameterValue({
+      choices: input.choices,
+      baseModel: input.baseModel,
+      key: input.parameterKey,
+      requestedValue: input.value,
+    }) !== undefined
+  );
+}
+
+function normalizeCursorAcpRuntimeOptions(input: {
+  readonly configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>;
+  readonly choices: ReadonlyArray<CursorAcpModelChoice>;
+  readonly baseModel: string;
+  readonly options: CursorModelOptions | null | undefined;
+}): CursorModelOptions | undefined {
+  // Runtime choices are authoritative; persisted traits can outlive Cursor's model matrix.
+  if (!input.options) {
+    return undefined;
+  }
+
+  const nextOptions: CursorModelOptions = {};
+  if (input.options.reasoningEffort) {
+    const parameterKey = cursorAcpParameterKeyForModel(input.baseModel, input.options);
+    if (
+      cursorModelOptionValueSupported({
+        configOptions: input.configOptions,
+        choices: input.choices,
+        baseModel: input.baseModel,
+        aliases: ["effort", "reasoning", "thought level"],
+        parameterKey,
+        value: input.options.reasoningEffort,
+      })
+    ) {
+      nextOptions.reasoningEffort = input.options.reasoningEffort;
+    }
+  }
+  if (
+    input.options.contextWindow &&
+    cursorModelOptionValueSupported({
+      configOptions: input.configOptions,
+      choices: input.choices,
+      baseModel: input.baseModel,
+      aliases: ["context", "context size", "context window"],
+      parameterKey: "context",
+      value: input.options.contextWindow,
+    })
+  ) {
+    nextOptions.contextWindow = input.options.contextWindow;
+  }
+  if (
+    input.options.fastMode !== undefined &&
+    cursorModelOptionValueSupported({
+      configOptions: input.configOptions,
+      choices: input.choices,
+      baseModel: input.baseModel,
+      aliases: ["fast", "fast mode"],
+      parameterKey: "fast",
+      value: input.options.fastMode,
+    })
+  ) {
+    nextOptions.fastMode = input.options.fastMode;
+  }
+  if (
+    input.options.thinking !== undefined &&
+    cursorModelOptionValueSupported({
+      configOptions: input.configOptions,
+      choices: input.choices,
+      baseModel: input.baseModel,
+      aliases: ["thinking"],
+      parameterKey: "thinking",
+      value: input.options.thinking,
+    })
+  ) {
+    nextOptions.thinking = input.options.thinking;
+  }
+
+  return Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
 }
 
 function collectCursorAcpConfigUpdates(
@@ -984,11 +1138,13 @@ function resolveCursorAcpModelValue(
     buildCursorParameterizedModelFromCliModelId({
       acpModelValue,
       cliModel: trimmed,
+      choices,
     }) ?? acpModelValue;
   const resolvedModel =
     buildCursorParameterizedModelFromOptions({
       acpModelValue: inferredModel,
       options,
+      choices,
     }) ?? inferredModel;
   if (choices.some((choice) => choice.slug === resolvedModel)) {
     return resolvedModel;
@@ -1008,12 +1164,20 @@ export function applyCursorAcpModelSelection<E>(input: {
 }): Effect.Effect<void, E> {
   return Effect.gen(function* () {
     const initialConfigOptions = yield* input.runtime.getConfigOptions;
-    const mergedOptions = mergeCursorModelOptions(
-      mergeCursorModelOptions(
-        cursorModelOptionsFromCliModelId(input.model),
+    const choices = flattenCursorAcpModelChoices(initialConfigOptions);
+    const baseModel = resolveCursorAcpBaseModelId(input.model);
+    const runtimeSafeOptions = normalizeCursorAcpRuntimeOptions({
+      configOptions: initialConfigOptions,
+      choices,
+      baseModel,
+      options: mergeCursorModelOptions(
         cursorModelOptionsFromModelParameters(input.model),
+        input.options,
       ),
-      input.options,
+    });
+    const mergedOptions = mergeCursorModelOptions(
+      cursorModelOptionsFromCliModelId(input.model),
+      runtimeSafeOptions,
     );
     const modelValue = resolveCursorAcpModelValue(initialConfigOptions, input.model, mergedOptions);
     if (modelValue) {

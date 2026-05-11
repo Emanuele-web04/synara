@@ -1,3 +1,7 @@
+// FILE: GitCore.ts
+// Purpose: Implements low-level Git operations used by server orchestration and UI status.
+// Layer: Server Git service
+// Exports: GitCoreLive plus makeGitCore test factory.
 import {
   Cache,
   Data,
@@ -42,6 +46,7 @@ const DEFAULT_BASE_BRANCH_CANDIDATES = ["main", "master"] as const;
 const EMPTY_TREE_OBJECT_ID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const WORKING_TREE_DIFF_TIMEOUT_MS = 15_000;
 const MAX_UNTRACKED_DIFF_CONCURRENCY = 4;
+const MOVE_AWARE_WORKING_TREE_STATUS_TIMEOUT_MS = 15_000;
 const AUTO_DETACHED_WORKTREE_DIRNAME = "dpcode";
 const NON_REPOSITORY_STATUS_DETAILS = Object.freeze({
   isRepo: false,
@@ -72,8 +77,17 @@ interface ExecuteGitOptions {
   timeoutMs?: number | undefined;
   allowNonZeroExit?: boolean | undefined;
   fallbackErrorMessage?: string | undefined;
+  env?: NodeJS.ProcessEnv | undefined;
   progress?: ExecuteGitProgress | undefined;
 }
+
+type WorkingTreeFileStat = { path: string; insertions: number; deletions: number };
+
+type WorkingTreeStatSummary = {
+  files: WorkingTreeFileStat[];
+  insertions: number;
+  deletions: number;
+};
 
 function parseBranchAb(value: string): { ahead: number; behind: number } {
   const match = value.match(/^\+(\d+)\s+-(\d+)$/);
@@ -84,10 +98,25 @@ function parseBranchAb(value: string): { ahead: number; behind: number } {
   };
 }
 
+function normalizeNumstatPath(rawPath: string): string {
+  const renameArrowIndex = rawPath.indexOf(" => ");
+  if (renameArrowIndex < 0) return rawPath;
+
+  const compactRenameMatch = /^(.*)\{[^{}]* => ([^{}]*)\}(.*)$/.exec(rawPath);
+  if (compactRenameMatch) {
+    const [, prefix = "", targetSegment = "", suffix = ""] = compactRenameMatch;
+    const normalized = `${prefix}${targetSegment}${suffix}`.trim();
+    return normalized.length > 0 ? normalized : rawPath;
+  }
+
+  const normalized = rawPath.slice(renameArrowIndex + " => ".length).trim();
+  return normalized.length > 0 ? normalized : rawPath;
+}
+
 function parseNumstatEntries(
   stdout: string,
-): Array<{ path: string; insertions: number; deletions: number }> {
-  const entries: Array<{ path: string; insertions: number; deletions: number }> = [];
+): Array<WorkingTreeFileStat> {
+  const entries: Array<WorkingTreeFileStat> = [];
   for (const line of stdout.split(/\r?\n/g)) {
     if (line.trim().length === 0) continue;
     const [addedRaw, deletedRaw, ...pathParts] = line.split("\t");
@@ -96,9 +125,7 @@ function parseNumstatEntries(
     if (rawPath.length === 0) continue;
     const added = Number.parseInt(addedRaw ?? "0", 10);
     const deleted = Number.parseInt(deletedRaw ?? "0", 10);
-    const renameArrowIndex = rawPath.indexOf(" => ");
-    const normalizedPath =
-      renameArrowIndex >= 0 ? rawPath.slice(renameArrowIndex + " => ".length).trim() : rawPath;
+    const normalizedPath = normalizeNumstatPath(rawPath);
     entries.push({
       path: normalizedPath.length > 0 ? normalizedPath : rawPath,
       insertions: Number.isFinite(added) ? added : 0,
@@ -106,6 +133,43 @@ function parseNumstatEntries(
     });
   }
   return entries;
+}
+
+function summarizeNumstatEntries(
+  entries: ReadonlyArray<WorkingTreeFileStat>,
+): WorkingTreeStatSummary {
+  const fileStatMap = new Map<string, { insertions: number; deletions: number }>();
+  for (const entry of entries) {
+    const existing = fileStatMap.get(entry.path) ?? { insertions: 0, deletions: 0 };
+    existing.insertions += entry.insertions;
+    existing.deletions += entry.deletions;
+    fileStatMap.set(entry.path, existing);
+  }
+
+  let insertions = 0;
+  let deletions = 0;
+  const files = Array.from(fileStatMap.entries())
+    .map(([filePath, stat]) => {
+      insertions += stat.insertions;
+      deletions += stat.deletions;
+      return { path: filePath, insertions: stat.insertions, deletions: stat.deletions };
+    })
+    .toSorted((a, b) => a.path.localeCompare(b.path));
+
+  return { files, insertions, deletions };
+}
+
+function resolveGitPath(cwd: string, gitPath: string): string {
+  return nodePath.isAbsolute(gitPath) ? gitPath : nodePath.join(cwd, gitPath);
+}
+
+function hasNodeErrorCode(cause: unknown, code: string): boolean {
+  return (
+    typeof cause === "object" &&
+    cause !== null &&
+    "code" in cause &&
+    (cause as { code?: unknown }).code === code
+  );
 }
 
 function parsePorcelainPath(line: string): string | null {
@@ -719,6 +783,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         args,
         allowNonZeroExit: true,
         ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+        ...(options.env ? { env: options.env } : {}),
         ...(options.progress ? { progress: options.progress } : {}),
       }).pipe(
         Effect.flatMap((result) => {
@@ -761,6 +826,68 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
     ): Effect.Effect<string, GitCommandError> =>
       executeGit(operation, cwd, args, { allowNonZeroExit }).pipe(
         Effect.map((result) => result.stdout),
+      );
+
+    const readMoveAwareWorkingTreeSummary = (
+      cwd: string,
+    ): Effect.Effect<WorkingTreeStatSummary | null, never> =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const indexPathRaw = yield* runGitStdout(
+            "GitCore.statusDetails.moveAwareIndexPath",
+            cwd,
+            ["rev-parse", "--git-path", "index"],
+          ).pipe(Effect.map((stdout) => stdout.trim()));
+          if (indexPathRaw.length === 0) {
+            return null;
+          }
+
+          const tempIndexDir = yield* fileSystem.makeTempDirectoryScoped({
+            prefix: `t3code-git-status-index-${process.pid}-`,
+          });
+          const tempIndexPath = nodePath.join(tempIndexDir, "index");
+          yield* Effect.tryPromise(() =>
+            nodeFs.copyFile(resolveGitPath(cwd, indexPathRaw), tempIndexPath),
+          ).pipe(
+            Effect.catch((cause) =>
+              hasNodeErrorCode(cause, "ENOENT") ? Effect.void : Effect.fail(cause),
+            ),
+          );
+
+          const tempIndexEnv = { GIT_INDEX_FILE: tempIndexPath };
+          // Stage into a copied index only; this lets Git detect directory refactors
+          // without touching the user's real staging area.
+          yield* executeGit(
+            "GitCore.statusDetails.moveAwareAddAll",
+            cwd,
+            ["add", "-A", "--", ":/"],
+            {
+              env: tempIndexEnv,
+              timeoutMs: MOVE_AWARE_WORKING_TREE_STATUS_TIMEOUT_MS,
+              fallbackErrorMessage: "git add -A failed while summarizing working tree status",
+            },
+          );
+
+          const numstatStdout = yield* executeGit(
+            "GitCore.statusDetails.moveAwareNumstat",
+            cwd,
+            ["diff", "--cached", "--numstat", "--find-renames"],
+            {
+              env: tempIndexEnv,
+              allowNonZeroExit: true,
+              timeoutMs: MOVE_AWARE_WORKING_TREE_STATUS_TIMEOUT_MS,
+            },
+          ).pipe(Effect.map((result) => result.stdout));
+
+          return summarizeNumstatEntries(parseNumstatEntries(numstatStdout));
+        }),
+      ).pipe(
+        Effect.catch((cause) =>
+          Effect.logDebug(
+            "GitCore.statusDetails: move-aware working tree summary failed",
+            cause,
+          ).pipe(Effect.as(null)),
+        ),
       );
 
     const listStashEntries = (
@@ -1174,28 +1301,13 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           return NON_REPOSITORY_STATUS_DETAILS;
         }
 
-        const numstatOutputs = yield* Effect.all(
-          [
-            runGitStdout("GitCore.statusDetails.unstagedNumstat", cwd, ["diff", "--numstat"]),
-            runGitStdout("GitCore.statusDetails.stagedNumstat", cwd, [
-              "diff",
-              "--cached",
-              "--numstat",
-            ]),
-          ],
-          { concurrency: "unbounded" },
-        ).pipe(Effect.catchIf(isMissingGitCwdError, () => Effect.succeed(null)));
-        if (numstatOutputs === null) {
-          return NON_REPOSITORY_STATUS_DETAILS;
-        }
-
-        const [unstagedNumstatStdout, stagedNumstatStdout] = numstatOutputs;
-
         let branch: string | null = null;
         let upstreamRef: string | null = null;
         let aheadCount = 0;
         let behindCount = 0;
         let hasWorkingTreeChanges = false;
+        let hasTrackedDeletion = false;
+        let hasUntrackedDirectory = false;
         const changedFilesWithoutNumstat = new Set<string>();
         const untrackedFilesWithoutNumstat = new Set<string>();
 
@@ -1219,11 +1331,19 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           }
           if (line.trim().length > 0 && !line.startsWith("#")) {
             hasWorkingTreeChanges = true;
+            const statusCode =
+              line.startsWith("1 ") || line.startsWith("2 ") ? line.slice(2, 4) : "";
+            if (statusCode.includes("D")) {
+              hasTrackedDeletion = true;
+            }
             const pathValue = parsePorcelainPath(line);
             if (pathValue) {
               changedFilesWithoutNumstat.add(pathValue);
               if (line.startsWith("? ")) {
                 untrackedFilesWithoutNumstat.add(pathValue);
+                if (pathValue.endsWith("/")) {
+                  hasUntrackedDirectory = true;
+                }
               }
             }
           }
@@ -1236,28 +1356,51 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           behindCount = 0;
         }
 
-        const stagedEntries = parseNumstatEntries(stagedNumstatStdout);
-        const unstagedEntries = parseNumstatEntries(unstagedNumstatStdout);
-        const fileStatMap = new Map<string, { insertions: number; deletions: number }>();
-        for (const entry of [...stagedEntries, ...unstagedEntries]) {
-          const existing = fileStatMap.get(entry.path) ?? { insertions: 0, deletions: 0 };
-          existing.insertions += entry.insertions;
-          existing.deletions += entry.deletions;
-          fileStatMap.set(entry.path, existing);
+        const moveAwareWorkingTree =
+          hasWorkingTreeChanges &&
+          untrackedFilesWithoutNumstat.size > 0 &&
+          (hasTrackedDeletion || hasUntrackedDirectory)
+            ? yield* readMoveAwareWorkingTreeSummary(cwd)
+            : null;
+        if (moveAwareWorkingTree) {
+          return {
+            branch,
+            upstreamRef,
+            hasWorkingTreeChanges,
+            workingTree: moveAwareWorkingTree,
+            hasUpstream: upstreamRef !== null,
+            aheadCount,
+            behindCount,
+          };
         }
 
-        let insertions = 0;
-        let deletions = 0;
-        const files = Array.from(fileStatMap.entries())
-          .map(([filePath, stat]) => {
-            insertions += stat.insertions;
-            deletions += stat.deletions;
-            return { path: filePath, insertions: stat.insertions, deletions: stat.deletions };
-          })
-          .toSorted((a, b) => a.path.localeCompare(b.path));
+        const numstatOutputs = yield* Effect.all(
+          [
+            runGitStdout("GitCore.statusDetails.unstagedNumstat", cwd, ["diff", "--numstat"]),
+            runGitStdout("GitCore.statusDetails.stagedNumstat", cwd, [
+              "diff",
+              "--cached",
+              "--numstat",
+            ]),
+          ],
+          { concurrency: "unbounded" },
+        ).pipe(Effect.catchIf(isMissingGitCwdError, () => Effect.succeed(null)));
+        if (numstatOutputs === null) {
+          return NON_REPOSITORY_STATUS_DETAILS;
+        }
+
+        const [unstagedNumstatStdout, stagedNumstatStdout] = numstatOutputs;
+        const stagedEntries = parseNumstatEntries(stagedNumstatStdout);
+        const unstagedEntries = parseNumstatEntries(unstagedNumstatStdout);
+        const workingTree = summarizeNumstatEntries([...stagedEntries, ...unstagedEntries]);
+        const files = [...workingTree.files];
+        const numstatFilePaths = new Set(files.map((file) => file.path));
+        const filePathsWithStats = new Set(numstatFilePaths);
+        let insertions = workingTree.insertions;
+        let deletions = workingTree.deletions;
 
         for (const filePath of changedFilesWithoutNumstat) {
-          if (fileStatMap.has(filePath)) continue;
+          if (filePathsWithStats.has(filePath)) continue;
 
           const insertions = untrackedFilesWithoutNumstat.has(filePath)
             ? yield* Effect.tryPromise(() => nodeFs.readFile(nodePath.join(cwd, filePath))).pipe(
@@ -1267,11 +1410,12 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             : 0;
 
           files.push({ path: filePath, insertions, deletions: 0 });
+          filePathsWithStats.add(filePath);
         }
         files.sort((a, b) => a.path.localeCompare(b.path));
 
         for (const file of files) {
-          if (fileStatMap.has(file.path)) continue;
+          if (numstatFilePaths.has(file.path)) continue;
           insertions += file.insertions;
           deletions += file.deletions;
         }
