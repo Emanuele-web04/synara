@@ -22,7 +22,7 @@ export interface FeatureSectionProps {
  *   - Title + description at the top, always visible.
  *   - Image below when provided; we frame it in a rounded border and let the
  *     natural aspect ratio dictate height (no cropping).
- *   - Details text sits tight under the image as a small tracking-tighter
+ *   - Details text sits tight under the image as a compact
  *     muted blurb — think "release note footnote", not body copy.
  */
 export function FeatureSection({ feature, className }: FeatureSectionProps) {
@@ -50,7 +50,7 @@ export function FeatureSection({ feature, className }: FeatureSectionProps) {
             </div>
           )}
           {feature.details !== undefined && (
-            <p className="text-xs leading-relaxed tracking-tight text-muted-foreground/85">
+            <p className="text-xs leading-relaxed text-muted-foreground/85">
               {feature.details}
             </p>
           )}

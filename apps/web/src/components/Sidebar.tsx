@@ -62,6 +62,7 @@ import {
   type GitStatusResult,
   type ResolvedKeybindingsConfig,
 } from "@t3tools/contracts";
+import { isGenericChatThreadTitle } from "@t3tools/shared/chatThreads";
 import { resolveThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams, useSearch } from "@tanstack/react-router";
@@ -804,7 +805,7 @@ function T3Wordmark() {
   return (
     <span
       aria-label="DP"
-      className="shrink-0 text-[14px] font-semibold tracking-tight text-foreground"
+      className="shrink-0 text-[14px] font-semibold text-foreground"
     >
       DP
     </span>
@@ -1034,7 +1035,7 @@ function SidebarSegmentedPicker({
               key={view}
               type="button"
               className={cn(
-                "flex-1 rounded-sm px-2.5 py-1 text-[11.5px] font-medium tracking-tight transition-colors",
+                "flex-1 rounded-sm px-2.5 py-1 text-[11.5px] font-medium transition-colors",
                 active
                   ? "bg-[var(--composer-surface)] text-[var(--color-text-foreground)] shadow-xs"
                   : "text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]",
@@ -4007,6 +4008,8 @@ export default function Sidebar() {
     const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
     const threadJumpLabelParts =
       visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
+    const showThreadProviderAvatar = !isGenericChatThreadTitle(thread.title);
+    const showThreadIdentityGlyph = threadEntryPoint === "terminal" || showThreadProviderAvatar;
     const pinnedTimestampClassName = isSubagentThread
       ? "mr-1 w-[1.2rem] text-right text-[10px] leading-none tabular-nums text-muted-foreground/26 transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0"
       : "mr-1 w-[1.625rem] text-right text-[length:var(--app-font-size-ui-meta,11px)] leading-none tabular-nums text-muted-foreground/38 transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0";
@@ -4018,7 +4021,10 @@ export default function Sidebar() {
           tabIndex={0}
           data-thread-item
           className={cn(
-            "grid h-8 w-full grid-cols-[auto_auto_minmax(0,1fr)_auto_3.5rem] items-center gap-x-1.5 rounded-md px-2 text-left text-[length:var(--app-font-size-ui,12px)] transition-colors cursor-pointer",
+            "grid h-8 w-full items-center gap-x-1.5 rounded-md px-2 text-left text-[length:var(--app-font-size-ui,12px)] transition-colors cursor-pointer",
+            showThreadIdentityGlyph
+              ? "grid-cols-[auto_auto_minmax(0,1fr)_auto_3.5rem]"
+              : "grid-cols-[auto_minmax(0,1fr)_auto_3.5rem]",
             isActive
               ? "bg-[var(--sidebar-accent-active)] text-[var(--sidebar-accent-foreground)]"
               : "text-foreground/72 hover:bg-[var(--sidebar-accent)]",
@@ -4067,7 +4073,7 @@ export default function Sidebar() {
           </div>
           {threadEntryPoint === "terminal" ? (
             <TerminalIcon aria-hidden="true" className="size-3.5 shrink-0 text-teal-600/85" />
-          ) : (
+          ) : showThreadProviderAvatar ? (
             <ProviderAvatarWithTerminal
               provider={thread.modelSelection.provider}
               handoffSourceProvider={thread.handoff?.sourceProvider ?? null}
@@ -4075,7 +4081,7 @@ export default function Sidebar() {
               terminalStatus={terminalStatus}
               terminalCount={terminalCount}
             />
-          )}
+          ) : null}
           <div className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
             {leadingPrStatus ? (
               <ThreadPrStatusBadge prStatus={leadingPrStatus} onOpen={openPrLink} />
@@ -4210,6 +4216,8 @@ export default function Sidebar() {
     const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
     const threadJumpLabelParts =
       visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
+    // Untouched draft chat threads are intentionally text-only until they get a real title.
+    const showThreadProviderAvatar = !isGenericChatThreadTitle(thread.title);
     const childCountLabel = `${childCount} subagent${childCount === 1 ? "" : "s"}`;
     const trailingTimestampClassName = isSubagentThread
       ? cn(
@@ -4342,7 +4350,7 @@ export default function Sidebar() {
             </span>
           ) : threadEntryPoint === "terminal" ? (
             <TerminalIcon aria-hidden="true" className="size-3.5 shrink-0 text-teal-600/85" />
-          ) : (
+          ) : showThreadProviderAvatar ? (
             <ProviderAvatarWithTerminal
               provider={thread.modelSelection.provider}
               handoffSourceProvider={thread.handoff?.sourceProvider ?? null}
@@ -4350,7 +4358,7 @@ export default function Sidebar() {
               terminalStatus={terminalStatus}
               terminalCount={terminalCount}
             />
-          )}
+          ) : null}
           <div
             className={cn(
               "flex min-w-0 flex-1 items-center text-left",
@@ -5281,7 +5289,7 @@ export default function Sidebar() {
           <div className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 font-system-ui">
             <div className="flex min-w-0 items-center gap-1">
               <T3Wordmark />
-              <span className="truncate text-[14px] font-normal tracking-tight text-foreground/89">
+              <span className="truncate text-[14px] font-normal text-foreground/89">
                 Code
               </span>
             </div>
@@ -5395,7 +5403,7 @@ export default function Sidebar() {
                 return (
                   <div key={group.id} className={groupIndex > 0 ? "pt-4" : undefined}>
                     <div className="mb-1.5 px-2">
-                      <span className="text-[length:var(--app-font-size-ui,12px)] font-normal tracking-tight text-muted-foreground/58">
+                      <span className="text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/58">
                         {group.label}
                       </span>
                     </div>
@@ -5481,7 +5489,7 @@ export default function Sidebar() {
               <SidebarGroup className="px-1.5 pt-1 pb-1.5">
                 <div className="my-2 h-px w-full bg-border" />
                 <div className="mb-1.5 flex items-center px-2">
-                  <span className="text-[length:var(--app-font-size-ui,12px)] font-normal tracking-tight text-muted-foreground/58">
+                  <span className="text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/58">
                     Workspace
                   </span>
                 </div>
@@ -5596,7 +5604,7 @@ export default function Sidebar() {
                 {pinnedThreads.length > 0 ? (
                   <>
                     <div className="my-1 flex items-center justify-between px-2 py-1">
-                      <span className="text-[length:var(--app-font-size-ui,12px)] font-normal tracking-tight text-muted-foreground/58">
+                      <span className="text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/58">
                         Pinned
                       </span>
                     </div>
@@ -5609,7 +5617,7 @@ export default function Sidebar() {
                   <div className="-mx-1.5 my-1 h-px bg-border" />
                 )}
                 <div className="my-1 flex items-center justify-between px-2 py-1">
-                  <span className="text-[length:var(--app-font-size-ui,12px)] font-normal tracking-tight text-muted-foreground/58">
+                  <span className="text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/58">
                     Threads
                   </span>
                   <div className="-mr-1 flex items-center gap-1.5">

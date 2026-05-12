@@ -11,6 +11,7 @@ import {
   type ResolvedKeybindingsConfig,
   type ThreadId,
 } from "@t3tools/contracts";
+import { isGenericChatThreadTitle } from "@t3tools/shared/chatThreads";
 import { useQuery } from "@tanstack/react-query";
 import React, { memo, useEffect, useRef, useState } from "react";
 import { BsLayoutSplit, BsTerminal } from "react-icons/bs";
@@ -98,11 +99,15 @@ interface ChatHeaderProps {
   onCloseThreadPane?: () => void;
 }
 
-export type ChatHeaderThreadIconKind = "provider" | "terminal";
+export type ChatHeaderThreadIconKind = "none" | "provider" | "terminal";
 
 export function resolveChatHeaderThreadIconKind(
   entryPoint: ThreadPrimarySurface,
+  title?: string,
 ): ChatHeaderThreadIconKind {
+  if (entryPoint === "chat" && isGenericChatThreadTitle(title)) {
+    return "none";
+  }
   return entryPoint === "terminal" ? "terminal" : "provider";
 }
 
@@ -168,7 +173,10 @@ export const ChatHeader = memo(function ChatHeader({
   const isSplitPane = surfaceMode === "split";
   const inlineChatLayoutAction = chatLayoutAction?.kind === "maximize" ? chatLayoutAction : null;
   const menuChatLayoutAction = inlineChatLayoutAction ? null : chatLayoutAction;
-  const threadIconKind = resolveChatHeaderThreadIconKind(activeThreadEntryPoint);
+  const threadIconKind = resolveChatHeaderThreadIconKind(
+    activeThreadEntryPoint,
+    activeThreadTitle,
+  );
   const showSidechatTitleChip = isSidechat && compact;
 
   useEffect(() => {
@@ -238,20 +246,22 @@ export const ChatHeader = memo(function ChatHeader({
                     "rounded-lg bg-secondary py-1 pl-2 pr-1 text-secondary-foreground",
                 )}
               >
-                <span
-                  className="inline-flex size-3.5 shrink-0 items-center justify-center"
-                  title={
-                    threadIconKind === "terminal"
-                      ? "Terminal"
-                      : PROVIDER_DISPLAY_NAMES[activeProvider]
-                  }
-                >
-                  {threadIconKind === "terminal" ? (
-                    <TerminalIcon className="size-3.5 text-teal-600/85" />
-                  ) : (
-                    renderProviderIcon(activeProvider, "size-3.5")
-                  )}
-                </span>
+                {threadIconKind === "none" ? null : (
+                  <span
+                    className="inline-flex size-3.5 shrink-0 items-center justify-center"
+                    title={
+                      threadIconKind === "terminal"
+                        ? "Terminal"
+                        : PROVIDER_DISPLAY_NAMES[activeProvider]
+                    }
+                  >
+                    {threadIconKind === "terminal" ? (
+                      <TerminalIcon className="size-3.5 text-teal-600/85" />
+                    ) : (
+                      renderProviderIcon(activeProvider, "size-3.5")
+                    )}
+                  </span>
+                )}
                 <h2
                   className="max-w-[clamp(12rem,42vw,36rem)] truncate text-sm font-medium text-foreground"
                   title={activeThreadTitle}
@@ -500,10 +510,10 @@ export const ChatHeader = memo(function ChatHeader({
               >
                 {showDiffTotals ? (
                   <span className="inline-flex items-center gap-1">
-                    <span className="font-chat-code text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-xs,10px)] font-normal tracking-normal tabular-nums text-success">
+                    <span className="font-system-ui text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-xs,10px)] font-normal tracking-normal tabular-nums text-success">
                       +{diffTotals?.insertions ?? 0}
                     </span>
-                    <span className="font-chat-code text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-xs,10px)] font-normal tracking-normal tabular-nums text-destructive">
+                    <span className="font-system-ui text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-xs,10px)] font-normal tracking-normal tabular-nums text-destructive">
                       -{diffTotals?.deletions ?? 0}
                     </span>
                   </span>

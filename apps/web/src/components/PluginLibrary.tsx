@@ -577,7 +577,7 @@ export function PluginLibrary() {
         <div className="min-h-0 flex-1 overflow-y-auto">
           {/* Hero */}
           <div className="px-6 py-10 text-center">
-            <h1 className="text-[28px] font-semibold tracking-tight text-foreground">
+            <h1 className="text-[28px] font-semibold text-foreground">
               Make {providerLabel} work your way
             </h1>
           </div>

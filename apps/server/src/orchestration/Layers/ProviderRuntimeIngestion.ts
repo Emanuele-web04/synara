@@ -1698,7 +1698,12 @@ const make = Effect.gen(function* () {
         const nextActiveTurnId =
           event.type === "turn.started"
             ? (eventTurnId ?? null)
-            : isTerminalTurnEvent || event.type === "session.exited"
+            : isTerminalTurnEvent ||
+                event.type === "session.exited" ||
+                (event.type === "session.state.changed" &&
+                  (event.payload.state === "ready" ||
+                    event.payload.state === "stopped" ||
+                    event.payload.state === "error"))
               ? null
               : activeTurnId;
         const status = (() => {

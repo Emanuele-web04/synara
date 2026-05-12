@@ -1301,7 +1301,7 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  it("uses deterministic first-turn titles for OpenCode threads without launching title generation", async () => {
+  it("renames generic OpenCode first-turn thread titles using text generation", async () => {
     const harness = await createHarness({
       threadModelSelection: {
         provider: "opencode",
@@ -1360,14 +1360,32 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
+    await waitFor(() => harness.generateThreadTitle.mock.calls.length === 1);
+    expect(harness.generateThreadTitle.mock.calls[0]?.[0]).toMatchObject({
+      message: "Plan the release workflow and deployment checklist",
+      modelSelection: {
+        provider: "opencode",
+        model: "openai/gpt-5",
+        options: {
+          agent: "plan",
+          variant: "balanced",
+        },
+      },
+      providerOptions: {
+        opencode: {
+          binaryPath: "/custom/bin/opencode",
+          serverUrl: "http://127.0.0.1:4096",
+          serverPassword: "secret",
+        },
+      },
+    });
     await waitFor(async () => {
       const readModel = await Effect.runPromise(harness.engine.getReadModel());
       return (
         readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"))?.title ===
-        "Plan the release workflow"
+        "Plan release work"
       );
     });
-    expect(harness.generateThreadTitle.mock.calls.length).toBe(0);
   });
 
   it("queues a follow-up turn while the current turn is still running", async () => {

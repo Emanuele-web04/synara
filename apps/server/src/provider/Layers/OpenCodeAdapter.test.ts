@@ -1,6 +1,6 @@
 import { ThreadId } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import type { Model, OpencodeClient, Provider } from "@opencode-ai/sdk/v2";
+import type { Model, OpencodeClient, Part, Provider } from "@opencode-ai/sdk/v2";
 import { Effect, Fiber, Layer, Stream } from "effect";
 import { describe, it, expect } from "vitest";
 
@@ -106,6 +106,8 @@ function makeModel(input: Omit<TestModelInput, "providerID"> & Pick<Model, "prov
 function createMockOpenCodeRuntime(input?: {
   readonly inventory?: OpenCodeInventory;
   readonly cliModels?: ReadonlyArray<OpenCodeCliModelDescriptor>;
+  readonly messages?: () => Promise<{ data: Array<{ info: Record<string, unknown>; parts: Part[] }> }>;
+  readonly session?: Record<string, unknown>;
 }) {
   const abortCalls: Array<{ sessionID: string }> = [];
   const createCalls: Array<Record<string, unknown>> = [];
@@ -132,8 +134,8 @@ function createMockOpenCodeRuntime(input?: {
         abortCalls.push(input);
         return { data: null };
       },
-      messages: async () => ({ data: [] }),
-      get: async () => ({ data: { directory: process.cwd() } }),
+      messages: input?.messages ?? (async () => ({ data: [] })),
+      get: async () => ({ data: { directory: process.cwd(), ...(input?.session ?? {}) } }),
       revert: async () => ({ data: null }),
       summarize: async () => ({ data: null }),
       fork: async () => ({ data: { id: "forked-session-1" } }),
@@ -815,6 +817,11 @@ describe("flattenOpenCodeModels", () => {
                     low: {
                       reasoningEffort: "low",
                     },
+                    minimal: {
+                      reasoning: {
+                        effort: "minimal",
+                      },
+                    },
                     medium: {
                       reasoningEffort: "medium",
                     },
@@ -849,6 +856,9 @@ describe("flattenOpenCodeModels", () => {
           },
           {
             value: "low",
+          },
+          {
+            value: "minimal",
           },
           {
             value: "medium",
@@ -1065,6 +1075,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         variant: "fast",
       },
       agent: "build",
+      title: "DP Code thread-model-pin",
     });
   });
 
@@ -1423,6 +1434,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
 
     expect(runtime.promptCalls[0]).toMatchObject({
       agent: "build",
+      noReply: false,
     });
   });
 
@@ -1982,5 +1994,725 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         { task: "Report back", status: "pending" },
       ]);
     }
+  });
+
+  it("streams and completes turns from newer OpenCode session.next events", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+    const client = runtime.runtime.createOpenCodeSdkClient({
+      baseUrl: "http://127.0.0.1:4099",
+      directory: process.cwd(),
+    }) as unknown as {
+      event: {
+        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
+      };
+    };
+    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 6)).pipe(
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-next-events"),
+          runtimeMode: "full-access",
+        });
+
+        yield* adapter.sendTurn({
+          threadId: asThreadId("thread-next-events"),
+          input: "hello",
+          attachments: [],
+          modelSelection: {
+            provider: "opencode",
+            model: "openai/gpt-5.4",
+          },
+        });
+
+        eventQueue.push({
+          id: "evt-next-text-delta",
+          type: "session.next.text.delta",
+          properties: {
+            timestamp: 1,
+            sessionID: "opencode-session-1",
+            delta: "Hello",
+          },
+        });
+        eventQueue.push({
+          id: "evt-next-text-ended",
+          type: "session.next.text.ended",
+          properties: {
+            timestamp: 2,
+            sessionID: "opencode-session-1",
+            text: "Hello",
+          },
+        });
+        eventQueue.push({
+          id: "evt-next-step-ended",
+          type: "session.next.step.ended",
+          properties: {
+            timestamp: 3,
+            sessionID: "opencode-session-1",
+            finish: "stop",
+            cost: 0.025,
+            tokens: {
+              input: 0,
+              output: 0,
+              reasoning: 0,
+              cache: {
+                read: 0,
+                write: 0,
+              },
+            },
+          },
+        });
+
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        eventQueue.close();
+        return events;
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(result.map((event) => event.type)).toEqual([
+      "session.started",
+      "thread.started",
+      "turn.started",
+      "content.delta",
+      "item.completed",
+      "turn.completed",
+    ]);
+    expect(result[3]).toMatchObject({
+      type: "content.delta",
+      payload: {
+        streamKind: "assistant_text",
+        delta: "Hello",
+      },
+    });
+    expect(result[4]).toMatchObject({
+      type: "item.completed",
+      payload: {
+        itemType: "assistant_message",
+        detail: "Hello",
+      },
+    });
+  });
+
+  it("keeps newer OpenCode tool-call steps attached to the active turn", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+    const client = runtime.runtime.createOpenCodeSdkClient({
+      baseUrl: "http://127.0.0.1:4099",
+      directory: process.cwd(),
+    }) as unknown as {
+      event: {
+        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
+      };
+    };
+    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-next-tool-call"),
+          runtimeMode: "full-access",
+        });
+
+        yield* adapter.sendTurn({
+          threadId: asThreadId("thread-next-tool-call"),
+          input: "inspect files",
+          attachments: [],
+          modelSelection: {
+            provider: "opencode",
+            model: "openai/gpt-5.4",
+          },
+        });
+
+        eventQueue.push({
+          id: "evt-next-step-tool-calls",
+          type: "session.next.step.ended",
+          properties: {
+            timestamp: 3,
+            sessionID: "opencode-session-1",
+            finish: "tool-calls",
+            cost: 0.01,
+            tokens: {
+              input: 0,
+              output: 0,
+              reasoning: 0,
+              cache: {
+                read: 0,
+                write: 0,
+              },
+            },
+          },
+        });
+        eventQueue.push({
+          id: "evt-next-tool-called",
+          type: "session.next.tool.called",
+          properties: {
+            timestamp: 4,
+            sessionID: "opencode-session-1",
+            callID: "tool-call-1",
+            tool: "read",
+            input: {
+              filePath: "README.md",
+            },
+            provider: {
+              executed: true,
+            },
+          },
+        });
+
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        eventQueue.close();
+        return events;
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(result.map((event) => event.type)).toEqual([
+      "session.started",
+      "thread.started",
+      "turn.started",
+      "item.started",
+    ]);
+    expect(result[3]).toMatchObject({
+      type: "item.started",
+      turnId: result[2]?.turnId,
+      payload: {
+        itemType: "dynamic_tool_call",
+        status: "inProgress",
+      },
+    });
+  });
+
+  it("recovers completed OpenCode replies from session messages when live events are missed", async () => {
+    let messagesCallCount = 0;
+    const runtime = createMockOpenCodeRuntime({
+      messages: async () => {
+        messagesCallCount += 1;
+        return {
+          data:
+            messagesCallCount === 1
+              ? []
+              : [
+                  {
+                    info: {
+                      id: "msg-user-1",
+                      sessionID: "opencode-session-1",
+                      role: "user",
+                      time: { created: 1 },
+                    },
+                    parts: [
+                      {
+                        id: "part-user-1",
+                        sessionID: "opencode-session-1",
+                        messageID: "msg-user-1",
+                        type: "text",
+                        text: "yo",
+                      } as Part,
+                    ],
+                  },
+                  {
+                    info: {
+                      id: "msg-assistant-1",
+                      sessionID: "opencode-session-1",
+                      role: "assistant",
+                      time: { created: 2, completed: 3 },
+                      cost: 0.012,
+                      tokens: {
+                        input: 0,
+                        output: 0,
+                        reasoning: 0,
+                        cache: { read: 0, write: 0 },
+                      },
+                      finish: "stop",
+                    },
+                    parts: [
+                      {
+                        id: "part-assistant-1",
+                        sessionID: "opencode-session-1",
+                        messageID: "msg-assistant-1",
+                        type: "text",
+                        text: "yo, what's up?",
+                        time: { start: 2, end: 3 },
+                      } as Part,
+                    ],
+                  },
+                ],
+        };
+      },
+    });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 6)).pipe(
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-recovered-messages"),
+          runtimeMode: "full-access",
+        });
+
+        yield* adapter.sendTurn({
+          threadId: asThreadId("thread-recovered-messages"),
+          input: "yo",
+          attachments: [],
+          modelSelection: {
+            provider: "opencode",
+            model: "opencode/claude-opus-4-7",
+          },
+        });
+
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        return events;
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({
+            runtime: runtime.runtime,
+            promptAcceptedRecoveryDelaysMs: [1],
+            promptAcceptedActivityTimeoutMs: 10,
+          }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(result.map((event) => event.type)).toEqual([
+      "session.started",
+      "thread.started",
+      "turn.started",
+      "content.delta",
+      "item.completed",
+      "turn.completed",
+    ]);
+    expect(result[3]).toMatchObject({
+      type: "content.delta",
+      payload: {
+        streamKind: "assistant_text",
+        delta: "yo, what's up?",
+      },
+    });
+    expect(result[5]).toMatchObject({
+      type: "turn.completed",
+      payload: {
+        state: "completed",
+        totalCostUsd: 0.012,
+      },
+    });
+  });
+
+  it("does not recover a new OpenCode turn from an older completed assistant message", async () => {
+    let messagesCallCount = 0;
+    const previousMessages = [
+      {
+        info: {
+          id: "msg-user-old",
+          sessionID: "opencode-session-1",
+          role: "user",
+          time: { created: 1 },
+        },
+        parts: [
+          {
+            id: "part-user-old",
+            sessionID: "opencode-session-1",
+            messageID: "msg-user-old",
+            type: "text",
+            text: "old question",
+          } as Part,
+        ],
+      },
+      {
+        info: {
+          id: "msg-assistant-old",
+          sessionID: "opencode-session-1",
+          role: "assistant",
+          time: { created: 2, completed: 3 },
+          cost: 0.01,
+          tokens: {
+            input: 0,
+            output: 0,
+            reasoning: 0,
+            cache: { read: 0, write: 0 },
+          },
+          finish: "stop",
+        },
+        parts: [
+          {
+            id: "part-assistant-old",
+            sessionID: "opencode-session-1",
+            messageID: "msg-assistant-old",
+            type: "text",
+            text: "old answer",
+            time: { start: 2, end: 3 },
+          } as Part,
+        ],
+      },
+    ];
+    const runtime = createMockOpenCodeRuntime({
+      messages: async () => {
+        messagesCallCount += 1;
+        return {
+          data:
+            messagesCallCount < 3
+              ? previousMessages
+              : [
+                  ...previousMessages,
+                  {
+                    info: {
+                      id: "msg-user-new",
+                      sessionID: "opencode-session-1",
+                      role: "user",
+                      time: { created: 4 },
+                    },
+                    parts: [
+                      {
+                        id: "part-user-new",
+                        sessionID: "opencode-session-1",
+                        messageID: "msg-user-new",
+                        type: "text",
+                        text: "new question",
+                      } as Part,
+                    ],
+                  },
+                  {
+                    info: {
+                      id: "msg-assistant-new",
+                      sessionID: "opencode-session-1",
+                      role: "assistant",
+                      time: { created: 5, completed: 6 },
+                      cost: 0.02,
+                      tokens: {
+                        input: 0,
+                        output: 0,
+                        reasoning: 0,
+                        cache: { read: 0, write: 0 },
+                      },
+                      finish: "stop",
+                    },
+                    parts: [
+                      {
+                        id: "part-assistant-new",
+                        sessionID: "opencode-session-1",
+                        messageID: "msg-assistant-new",
+                        type: "text",
+                        text: "new answer",
+                        time: { start: 5, end: 6 },
+                      } as Part,
+                    ],
+                  },
+                ],
+        };
+      },
+    });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 6)).pipe(
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-recovered-second-turn"),
+          runtimeMode: "full-access",
+        });
+
+        yield* adapter.sendTurn({
+          threadId: asThreadId("thread-recovered-second-turn"),
+          input: "new question",
+          attachments: [],
+          modelSelection: {
+            provider: "opencode",
+            model: "opencode/claude-opus-4-7",
+          },
+        });
+
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        return events;
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({
+            runtime: runtime.runtime,
+            promptAcceptedRecoveryDelaysMs: [1, 1],
+            promptAcceptedActivityTimeoutMs: 10,
+          }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(messagesCallCount).toBeGreaterThanOrEqual(3);
+    expect(result.map((event) => event.type)).toEqual([
+      "session.started",
+      "thread.started",
+      "turn.started",
+      "content.delta",
+      "item.completed",
+      "turn.completed",
+    ]);
+    expect(result[3]).toMatchObject({
+      type: "content.delta",
+      payload: {
+        streamKind: "assistant_text",
+        delta: "new answer",
+      },
+    });
+    expect(result[5]).toMatchObject({
+      type: "turn.completed",
+      payload: {
+        state: "completed",
+        totalCostUsd: 0.02,
+      },
+    });
+    expect(result).not.toContainEqual(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          delta: "old answer",
+        }),
+      }),
+    );
+  });
+
+  it("completes recovered OpenCode turns without replaying already streamed next text", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    let messagesCallCount = 0;
+    const runtime = createMockOpenCodeRuntime({
+      messages: async () => {
+        messagesCallCount += 1;
+        return {
+          data:
+            messagesCallCount === 1
+              ? []
+              : [
+                  {
+                    info: {
+                      id: "msg-assistant-1",
+                      sessionID: "opencode-session-1",
+                      role: "assistant",
+                      time: { created: 2, completed: 3 },
+                      cost: 0.012,
+                      tokens: {
+                        input: 0,
+                        output: 0,
+                        reasoning: 0,
+                        cache: { read: 0, write: 0 },
+                      },
+                      finish: "stop",
+                    },
+                    parts: [
+                      {
+                        id: "part-assistant-1",
+                        sessionID: "opencode-session-1",
+                        messageID: "msg-assistant-1",
+                        type: "text",
+                        text: "hello from opencode",
+                        time: { start: 2, end: 3 },
+                      } as Part,
+                    ],
+                  },
+                ],
+        };
+      },
+    });
+    const client = runtime.runtime.createOpenCodeSdkClient({
+      baseUrl: "http://127.0.0.1:4099",
+      directory: process.cwd(),
+    }) as unknown as {
+      event: {
+        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
+      };
+    };
+    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 6)).pipe(
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-recovered-next-text"),
+          runtimeMode: "full-access",
+        });
+
+        yield* adapter.sendTurn({
+          threadId: asThreadId("thread-recovered-next-text"),
+          input: "hello",
+          attachments: [],
+          modelSelection: {
+            provider: "opencode",
+            model: "opencode/claude-opus-4-7",
+          },
+        });
+
+        eventQueue.push({
+          id: "evt-next-text-delta",
+          type: "session.next.text.delta",
+          properties: {
+            timestamp: 1,
+            sessionID: "opencode-session-1",
+            delta: "hello from opencode",
+          },
+        });
+        eventQueue.push({
+          id: "evt-next-text-ended",
+          type: "session.next.text.ended",
+          properties: {
+            timestamp: 2,
+            sessionID: "opencode-session-1",
+            text: "hello from opencode",
+          },
+        });
+
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        eventQueue.close();
+        return events;
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({
+            runtime: runtime.runtime,
+            promptAcceptedRecoveryDelaysMs: [25],
+            promptAcceptedActivityTimeoutMs: 10,
+          }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(result.map((event) => event.type)).toEqual([
+      "session.started",
+      "thread.started",
+      "turn.started",
+      "content.delta",
+      "item.completed",
+      "turn.completed",
+    ]);
+    expect(
+      result.filter(
+        (event) =>
+          event.type === "content.delta" &&
+          event.payload.streamKind === "assistant_text" &&
+          event.payload.delta === "hello from opencode",
+      ),
+    ).toHaveLength(1);
+    expect(result[5]).toMatchObject({
+      type: "turn.completed",
+      payload: {
+        state: "completed",
+        totalCostUsd: 0.012,
+      },
+    });
+  });
+
+  it("treats OpenCode session.idle as turn completion", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+    const client = runtime.runtime.createOpenCodeSdkClient({
+      baseUrl: "http://127.0.0.1:4099",
+      directory: process.cwd(),
+    }) as unknown as {
+      event: {
+        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
+      };
+    };
+    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-session-idle"),
+          runtimeMode: "full-access",
+        });
+
+        yield* adapter.sendTurn({
+          threadId: asThreadId("thread-session-idle"),
+          input: "hello",
+          attachments: [],
+          modelSelection: {
+            provider: "opencode",
+            model: "openai/gpt-5.4",
+          },
+        });
+
+        eventQueue.push({
+          id: "evt-session-idle",
+          type: "session.idle",
+          properties: {
+            sessionID: "opencode-session-1",
+          },
+        });
+
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        eventQueue.close();
+        return events;
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(result.map((event) => event.type)).toEqual([
+      "session.started",
+      "thread.started",
+      "turn.started",
+      "turn.completed",
+    ]);
   });
 });

@@ -961,7 +961,7 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
               setIsAddressFocused(false);
             }}
             placeholder="Search or enter a URL"
-            className="font-mono h-8 min-w-0 bg-background/70 text-xs tracking-tight [-webkit-app-region:no-drag]"
+            className="font-mono h-8 min-w-0 bg-background/70 text-xs [-webkit-app-region:no-drag]"
           />
         </form>
         {showBrowserAddressSuggestions ? (

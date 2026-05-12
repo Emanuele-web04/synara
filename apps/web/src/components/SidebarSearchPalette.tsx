@@ -14,6 +14,7 @@ import {
   SunIcon,
 } from "~/lib/icons";
 import { type FilesystemBrowseResult, type ProviderKind } from "@t3tools/contracts";
+import { isGenericChatThreadTitle } from "@t3tools/shared/chatThreads";
 import { BsChat } from "react-icons/bs";
 import { HiOutlineFolderOpen } from "react-icons/hi2";
 import { LuArrowDownToLine, LuArrowLeft, LuCornerLeftUp, LuFolderPlus } from "react-icons/lu";
@@ -897,7 +898,9 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                               props.onOpenThread(thread.id);
                             }}
                           >
-                            <ProviderIcon provider={thread.provider} />
+                            {isGenericChatThreadTitle(thread.title) ? null : (
+                              <ProviderIcon provider={thread.provider} />
+                            )}
                             <div className="min-w-0 flex-1">
                               <div className="flex items-baseline gap-3">
                                 <div className="min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)] text-foreground">

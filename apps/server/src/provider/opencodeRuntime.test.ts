@@ -157,6 +157,142 @@ openai/gpt-5.4
       },
     ]);
   });
+
+  it("reads current OpenCode variant effort shapes from verbose CLI output", () => {
+    const models = parseOpenCodeCliModelsOutput(`
+opencode/claude-opus-4-7
+{
+  "id": "claude-opus-4-7",
+  "providerID": "opencode",
+  "name": "Claude Opus 4.7",
+  "options": {
+    "effort": "high"
+  },
+  "variants": {
+    "low": {
+      "thinking": {
+        "type": "adaptive"
+      }
+    },
+    "medium": {
+      "thinking": {
+        "type": "adaptive"
+      },
+      "effort": "medium"
+    },
+    "high": {
+      "thinking": {
+        "type": "adaptive"
+      },
+      "effort": "high"
+    },
+    "xhigh": {
+      "thinking": {
+        "type": "adaptive"
+      },
+      "effort": "xhigh"
+    },
+    "max": {
+      "thinking": {
+        "type": "adaptive"
+      },
+      "effort": "max"
+    }
+  }
+}
+opencode/gemini-3-flash
+{
+  "id": "gemini-3-flash",
+  "providerID": "opencode",
+  "name": "Gemini 3 Flash",
+  "variants": {
+    "minimal": {
+      "thinkingConfig": {
+        "thinkingLevel": "minimal"
+      }
+    },
+    "high": {
+      "thinkingConfig": {
+        "thinkingLevel": "high"
+      }
+    }
+  }
+}
+openrouter/grok-3-mini
+{
+  "id": "grok-3-mini",
+  "providerID": "openrouter",
+  "name": "Grok 3 Mini",
+  "variants": {
+    "low": {
+      "reasoning": {
+        "effort": "low"
+      }
+    },
+    "high": {
+      "reasoning": {
+        "effort": "high"
+      }
+    }
+  }
+}
+amazon-bedrock/nova-reel
+{
+  "id": "nova-reel",
+  "providerID": "amazon-bedrock",
+  "name": "Nova Reel",
+  "variants": {
+    "medium": {
+      "reasoningConfig": {
+        "maxReasoningEffort": "medium"
+      }
+    }
+  }
+}
+`);
+
+    expect(models).toEqual([
+      {
+        slug: "opencode/claude-opus-4-7",
+        providerID: "opencode",
+        modelID: "claude-opus-4-7",
+        name: "Claude Opus 4.7",
+        variants: ["high", "low", "max", "medium", "xhigh"],
+        supportedReasoningEfforts: [
+          { value: "low" },
+          { value: "medium" },
+          { value: "high" },
+          { value: "xhigh" },
+          { value: "max" },
+        ],
+        defaultReasoningEffort: "high",
+      },
+      {
+        slug: "opencode/gemini-3-flash",
+        providerID: "opencode",
+        modelID: "gemini-3-flash",
+        name: "Gemini 3 Flash",
+        variants: ["high", "minimal"],
+        supportedReasoningEfforts: [{ value: "minimal" }, { value: "high" }],
+      },
+      {
+        slug: "openrouter/grok-3-mini",
+        providerID: "openrouter",
+        modelID: "grok-3-mini",
+        name: "Grok 3 Mini",
+        variants: ["high", "low"],
+        supportedReasoningEfforts: [{ value: "low" }, { value: "high" }],
+      },
+      {
+        slug: "amazon-bedrock/nova-reel",
+        providerID: "amazon-bedrock",
+        modelID: "nova-reel",
+        name: "Nova Reel",
+        variants: ["medium"],
+        supportedReasoningEfforts: [{ value: "medium" }],
+      },
+    ]);
+  });
 });
 
 describe("parseOpenCodeCredentialProviderIDs", () => {

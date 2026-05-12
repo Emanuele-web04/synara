@@ -2416,7 +2416,7 @@ function SettingsRouteView() {
           <div className="mx-auto w-full max-w-2xl px-6 py-6">
             {/* Section header */}
             <div className="mb-6">
-              <h1 className="text-2xl font-semibold tracking-tight text-foreground">
+              <h1 className="text-2xl font-semibold text-foreground">
                 {activeSectionItem.label}
               </h1>
               <p className="mt-1 text-sm text-muted-foreground">{activeSectionItem.description}</p>

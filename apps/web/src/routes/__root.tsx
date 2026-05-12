@@ -251,7 +251,7 @@ function RootRouteErrorView({ error, reset }: ErrorComponentProps) {
         <p className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
           {APP_DISPLAY_NAME}
         </p>
-        <h1 className="mt-3 text-2xl font-semibold tracking-tight sm:text-3xl">
+        <h1 className="mt-3 text-2xl font-semibold sm:text-3xl">
           Something went wrong.
         </h1>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{message}</p>

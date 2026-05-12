@@ -202,6 +202,72 @@ function fallbackOpenCodeModelName(slug: string, parsedSlug: ParsedOpenCodeModel
   return trimToNull(parsedSlug.modelID) ?? slug;
 }
 
+function readOpenCodeVariantEffort(
+  variantKey: string,
+  variantObject: Record<string, unknown>,
+): string | null {
+  const directEffort =
+    trimToNull(variantObject.reasoningEffort) ??
+    trimToNull(variantObject.reasoning_effort) ??
+    trimToNull(variantObject.effort);
+  if (directEffort) {
+    return directEffort;
+  }
+
+  const thinkingConfig =
+    variantObject.thinkingConfig &&
+    typeof variantObject.thinkingConfig === "object" &&
+    !Array.isArray(variantObject.thinkingConfig)
+      ? (variantObject.thinkingConfig as Record<string, unknown>)
+      : variantObject.thinking_config &&
+          typeof variantObject.thinking_config === "object" &&
+          !Array.isArray(variantObject.thinking_config)
+        ? (variantObject.thinking_config as Record<string, unknown>)
+      : null;
+  const thinkingLevel =
+    trimToNull(thinkingConfig?.thinkingLevel) ?? trimToNull(thinkingConfig?.thinking_level);
+  if (thinkingLevel) {
+    return thinkingLevel;
+  }
+
+  const reasoning =
+    variantObject.reasoning &&
+    typeof variantObject.reasoning === "object" &&
+    !Array.isArray(variantObject.reasoning)
+      ? (variantObject.reasoning as Record<string, unknown>)
+      : null;
+  const reasoningConfig =
+    variantObject.reasoningConfig &&
+    typeof variantObject.reasoningConfig === "object" &&
+    !Array.isArray(variantObject.reasoningConfig)
+      ? (variantObject.reasoningConfig as Record<string, unknown>)
+      : variantObject.reasoning_config &&
+          typeof variantObject.reasoning_config === "object" &&
+          !Array.isArray(variantObject.reasoning_config)
+        ? (variantObject.reasoning_config as Record<string, unknown>)
+      : null;
+  const nestedReasoningEffort =
+    trimToNull(reasoning?.effort) ??
+    trimToNull(reasoningConfig?.maxReasoningEffort) ??
+    trimToNull(reasoningConfig?.max_reasoning_effort);
+  if (nestedReasoningEffort) {
+    return nestedReasoningEffort;
+  }
+
+  if (
+    "thinking" in variantObject ||
+    "thinkingConfig" in variantObject ||
+    "thinking_config" in variantObject ||
+    "reasoning" in variantObject ||
+    "reasoningConfig" in variantObject ||
+    "reasoning_config" in variantObject ||
+    Object.keys(variantObject).length === 0
+  ) {
+    return trimToNull(variantKey);
+  }
+  return null;
+}
+
 function resolveOpenCodeDataDirectory(homeDirectory: string): string {
   if (process.platform === "win32") {
     const appDataDirectory =
@@ -306,7 +372,7 @@ function parseOpenCodeCliModelJson(
     .toSorted((left, right) => left.localeCompare(right));
   const supportedReasoningEfforts = Array.from(
     new Map(
-      Object.values(variantsObject).flatMap((variant) => {
+      Object.entries(variantsObject).flatMap(([variantKey, variant]) => {
         const variantObject =
           variant && typeof variant === "object" && !Array.isArray(variant)
             ? (variant as Record<string, unknown>)
@@ -315,8 +381,7 @@ function parseOpenCodeCliModelJson(
           return [];
         }
 
-        const reasoningValue =
-          trimToNull(variantObject.reasoningEffort) ?? trimToNull(variantObject.reasoning_effort);
+        const reasoningValue = readOpenCodeVariantEffort(variantKey, variantObject);
         if (!reasoningValue) {
           return [];
         }
@@ -341,7 +406,8 @@ function parseOpenCodeCliModelJson(
     trimToNull(object.default_reasoning_effort) ??
     (object.options && typeof object.options === "object" && !Array.isArray(object.options)
       ? (trimToNull((object.options as Record<string, unknown>).reasoningEffort) ??
-        trimToNull((object.options as Record<string, unknown>).reasoning_effort))
+        trimToNull((object.options as Record<string, unknown>).reasoning_effort) ??
+        trimToNull((object.options as Record<string, unknown>).effort))
       : null) ??
     undefined;
 
