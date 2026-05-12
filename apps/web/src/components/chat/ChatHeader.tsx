@@ -173,10 +173,7 @@ export const ChatHeader = memo(function ChatHeader({
   const isSplitPane = surfaceMode === "split";
   const inlineChatLayoutAction = chatLayoutAction?.kind === "maximize" ? chatLayoutAction : null;
   const menuChatLayoutAction = inlineChatLayoutAction ? null : chatLayoutAction;
-  const threadIconKind = resolveChatHeaderThreadIconKind(
-    activeThreadEntryPoint,
-    activeThreadTitle,
-  );
+  const threadIconKind = resolveChatHeaderThreadIconKind(activeThreadEntryPoint, activeThreadTitle);
   const showSidechatTitleChip = isSidechat && compact;
 
   useEffect(() => {

@@ -50,9 +50,7 @@ export function FeatureSection({ feature, className }: FeatureSectionProps) {
             </div>
           )}
           {feature.details !== undefined && (
-            <p className="text-xs leading-relaxed text-muted-foreground/85">
-              {feature.details}
-            </p>
+            <p className="text-xs leading-relaxed text-muted-foreground/85">{feature.details}</p>
           )}
         </div>
       )}

@@ -803,10 +803,7 @@ function prStatusIndicator(pr: ThreadPr): PrStatusIndicator | null {
 
 function T3Wordmark() {
   return (
-    <span
-      aria-label="DP"
-      className="shrink-0 text-[14px] font-semibold text-foreground"
-    >
+    <span aria-label="DP" className="shrink-0 text-[14px] font-semibold text-foreground">
       DP
     </span>
   );
@@ -5289,9 +5286,7 @@ export default function Sidebar() {
           <div className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 font-system-ui">
             <div className="flex min-w-0 items-center gap-1">
               <T3Wordmark />
-              <span className="truncate text-[14px] font-normal text-foreground/89">
-                Code
-              </span>
+              <span className="truncate text-[14px] font-normal text-foreground/89">Code</span>
             </div>
           </div>
         }

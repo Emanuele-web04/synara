@@ -106,7 +106,9 @@ function makeModel(input: Omit<TestModelInput, "providerID"> & Pick<Model, "prov
 function createMockOpenCodeRuntime(input?: {
   readonly inventory?: OpenCodeInventory;
   readonly cliModels?: ReadonlyArray<OpenCodeCliModelDescriptor>;
-  readonly messages?: () => Promise<{ data: Array<{ info: Record<string, unknown>; parts: Part[] }> }>;
+  readonly messages?: () => Promise<{
+    data: Array<{ info: Record<string, unknown>; parts: Part[] }>;
+  }>;
   readonly session?: Record<string, unknown>;
 }) {
   const abortCalls: Array<{ sessionID: string }> = [];

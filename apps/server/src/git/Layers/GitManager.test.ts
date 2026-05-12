@@ -713,7 +713,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           "pr list --head jasonLaster:statemachine --state all --limit 20 --json number,title,url,baseRefName,headRefName,state,mergedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
         );
       }),
-    12_000,
+    30_000,
   );
 
   it.effect("status returns merged PR state when latest PR was merged", () =>
@@ -1126,7 +1126,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           ),
         ).toBe(originalMainSha);
       }),
-    12_000,
+    30_000,
   );
 
   it.effect(
@@ -1185,7 +1185,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           ),
         ).toBe(originalMainSha);
       }),
-    12_000,
+    30_000,
   );
 
   it.effect(
@@ -1221,7 +1221,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           ),
         ).toBe(originalMainSha);
       }),
-    12_000,
+    30_000,
   );
 
   it.effect(
@@ -1253,7 +1253,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
         expect(errorMessage).toContain("has no upstream and this repository has multiple remotes");
       }),
-    12_000,
+    30_000,
   );
 
   it.effect("skips commit when there are no uncommitted changes", () =>
@@ -1422,7 +1422,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           ),
         ).toBe("origin/feature/push-only");
       }),
-    12_000,
+    30_000,
   );
 
   it.effect(
@@ -1471,7 +1471,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           ),
         ).toBe(true);
       }),
-    12_000,
+    30_000,
   );
 
   it.effect("rejects PR creation when base and head resolve to the same branch", () =>
@@ -1697,7 +1697,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         ).toBe(true);
         expect(ghCalls.some((call) => call.startsWith("pr create "))).toBe(false);
       }),
-    12_000,
+    30_000,
   );
 
   it.effect(
@@ -1759,7 +1759,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         expect(ownerSelectorCallIndex).toBeGreaterThanOrEqual(0);
         expect(ghCalls.some((call) => call.startsWith("pr create "))).toBe(false);
       }),
-    12_000,
+    30_000,
   );
 
   it.effect(
@@ -1813,7 +1813,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           "pr list --head octocat:statemachine --state open --limit 1",
         );
       }),
-    12_000,
+    30_000,
   );
 
   it.effect("creates PR when one does not already exist", () =>

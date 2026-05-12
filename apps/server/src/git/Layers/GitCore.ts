@@ -113,9 +113,7 @@ function normalizeNumstatPath(rawPath: string): string {
   return normalized.length > 0 ? normalized : rawPath;
 }
 
-function parseNumstatEntries(
-  stdout: string,
-): Array<WorkingTreeFileStat> {
+function parseNumstatEntries(stdout: string): Array<WorkingTreeFileStat> {
   const entries: Array<WorkingTreeFileStat> = [];
   for (const line of stdout.split(/\r?\n/g)) {
     if (line.trim().length === 0) continue;

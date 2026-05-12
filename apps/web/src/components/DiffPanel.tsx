@@ -456,10 +456,7 @@ export default function DiffPanel({
       }),
     );
   }, [renderablePatch]);
-  const totalPatchStat = useMemo(
-    () => summarizePatchStats(workingTreePatch),
-    [workingTreePatch],
-  );
+  const totalPatchStat = useMemo(() => summarizePatchStats(workingTreePatch), [workingTreePatch]);
 
   useEffect(() => {
     if (diffOpen && !previousDiffOpenRef.current) {

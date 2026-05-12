@@ -1,5 +1,6 @@
 # Recap: Plan Mode User Input Submit
-> Generated: 2026-05-11  |  Scope: 6 files changed
+
+> Generated: 2026-05-11 | Scope: 6 files changed
 
 ---
 
@@ -11,14 +12,14 @@ The goal was to fix Plan Mode user-input submission getting stuck after clicking
 
 ## Files Affected
 
-| File | Status | Role |
-|---|---|---|
-| `apps/web/src/components/ChatView.tsx` | Modified | Wires pending user-input panels to `respondingUserInputRequestIds` instead of approval response state. |
-| `apps/web/src/store.ts` | Modified | Adds a synthetic `user-input.resolved` activity when a user-input response command is accepted. |
-| `apps/web/src/session-logic.ts` | Modified | Preserves `multiSelect: true` when deriving pending user-input questions. |
-| `apps/server/src/provider/Layers/CodexAdapter.ts` | Modified | Preserves `multiSelect: true` when mapping Codex requestUserInput payloads. |
-| `apps/web/src/store.test.ts` | Modified | Verifies accepted user-input responses add a resolved activity for detail state. |
-| `apps/web/src/session-logic.test.ts` | Modified | Verifies multi-select user-input metadata survives parsing. |
+| File                                              | Status   | Role                                                                                                   |
+| ------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------ |
+| `apps/web/src/components/ChatView.tsx`            | Modified | Wires pending user-input panels to `respondingUserInputRequestIds` instead of approval response state. |
+| `apps/web/src/store.ts`                           | Modified | Adds a synthetic `user-input.resolved` activity when a user-input response command is accepted.        |
+| `apps/web/src/session-logic.ts`                   | Modified | Preserves `multiSelect: true` when deriving pending user-input questions.                              |
+| `apps/server/src/provider/Layers/CodexAdapter.ts` | Modified | Preserves `multiSelect: true` when mapping Codex requestUserInput payloads.                            |
+| `apps/web/src/store.test.ts`                      | Modified | Verifies accepted user-input responses add a resolved activity for detail state.                       |
+| `apps/web/src/session-logic.test.ts`              | Modified | Verifies multi-select user-input metadata survives parsing.                                            |
 
 ---
 

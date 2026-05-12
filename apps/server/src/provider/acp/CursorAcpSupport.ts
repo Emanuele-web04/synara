@@ -921,7 +921,12 @@ function normalizeCursorAcpRuntimeOptions(input: {
     return undefined;
   }
 
-  const nextOptions: CursorModelOptions = {};
+  const nextOptions: {
+    reasoningEffort?: string;
+    contextWindow?: string;
+    fastMode?: boolean;
+    thinking?: boolean;
+  } = {};
   if (input.options.reasoningEffort) {
     const parameterKey = cursorAcpParameterKeyForModel(input.baseModel, input.options);
     if (

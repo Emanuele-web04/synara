@@ -13,9 +13,7 @@ export default Effect.gen(function* () {
     ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0
   `.pipe(
     Effect.catchTag("SqlError", (error) =>
-      String(error).includes("duplicate column name")
-        ? Effect.void
-        : Effect.fail(error),
+      String(error).includes("duplicate column name") ? Effect.void : Effect.fail(error),
     ),
   );
 });

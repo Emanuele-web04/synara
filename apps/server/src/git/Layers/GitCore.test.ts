@@ -1523,10 +1523,9 @@ it.layer(TestLayer)("git integration", (it) => {
         const movedDir = path.join(tmp, "Views", "Turn", "Core");
         const originalPath = path.join(originalDir, "TurnView.swift");
         const movedPath = path.join(movedDir, "TurnView.swift");
-        const originalContents = Array.from(
-          { length: 40 },
-          (_, index) => `line ${index + 1}`,
-        ).join("\n");
+        const originalContents = Array.from({ length: 40 }, (_, index) => `line ${index + 1}`).join(
+          "\n",
+        );
 
         yield* fileSystem.makeDirectory(originalDir, { recursive: true });
         yield* writeTextFile(originalPath, `${originalContents}\n`);

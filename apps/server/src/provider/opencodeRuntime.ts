@@ -223,7 +223,7 @@ function readOpenCodeVariantEffort(
           typeof variantObject.thinking_config === "object" &&
           !Array.isArray(variantObject.thinking_config)
         ? (variantObject.thinking_config as Record<string, unknown>)
-      : null;
+        : null;
   const thinkingLevel =
     trimToNull(thinkingConfig?.thinkingLevel) ?? trimToNull(thinkingConfig?.thinking_level);
   if (thinkingLevel) {
@@ -245,7 +245,7 @@ function readOpenCodeVariantEffort(
           typeof variantObject.reasoning_config === "object" &&
           !Array.isArray(variantObject.reasoning_config)
         ? (variantObject.reasoning_config as Record<string, unknown>)
-      : null;
+        : null;
   const nestedReasoningEffort =
     trimToNull(reasoning?.effort) ??
     trimToNull(reasoningConfig?.maxReasoningEffort) ??
