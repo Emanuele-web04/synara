@@ -2,7 +2,6 @@
 // Purpose: Renders the chat thread's compact workspace controls, including the
 // local usage popover, inline workspace handoff actions, and runtime access toggle.
 import type { ThreadId, RuntimeMode } from "@t3tools/contracts";
-import { deriveAssociatedWorktreeMetadata } from "@t3tools/shared/threadWorkspace";
 import { LuSplit } from "react-icons/lu";
 import { ChevronDownIcon, ChevronRightIcon, HandoffIcon } from "~/lib/icons";
 import { FiThumbsUp } from "react-icons/fi";
@@ -24,6 +23,7 @@ import {
 } from "../storeSelectors";
 import {
   EnvMode,
+  resolveAssociatedWorktreeMetadataAfterWorkspacePatch,
   resolveDraftEnvModeAfterBranchChange,
   resolveEffectiveEnvMode,
 } from "./BranchToolbar.logic";
@@ -176,17 +176,21 @@ export default function BranchToolbar({
         patch.worktreePath !== undefined ? patch.worktreePath : activeWorktreePath;
       const nextEnvMode =
         patch.envMode !== undefined ? patch.envMode : worktreePath ? "worktree" : effectiveEnvMode;
-      const nextAssociatedWorktree = deriveAssociatedWorktreeMetadata({
+      const nextAssociatedWorktree = resolveAssociatedWorktreeMetadataAfterWorkspacePatch({
         branch,
         worktreePath,
-        associatedWorktreePath:
-          patch.associatedWorktreePath !== undefined
-            ? patch.associatedWorktreePath
-            : (serverThread?.associatedWorktreePath ?? null),
-        associatedWorktreeBranch:
-          patch.associatedWorktreeBranch !== undefined ? patch.associatedWorktreeBranch : branch,
-        associatedWorktreeRef:
-          patch.associatedWorktreeRef !== undefined ? patch.associatedWorktreeRef : branch,
+        existingAssociatedWorktreePath: serverThread?.associatedWorktreePath ?? null,
+        existingAssociatedWorktreeBranch: serverThread?.associatedWorktreeBranch ?? null,
+        existingAssociatedWorktreeRef: serverThread?.associatedWorktreeRef ?? null,
+        ...(patch.associatedWorktreePath !== undefined
+          ? { patchAssociatedWorktreePath: patch.associatedWorktreePath }
+          : {}),
+        ...(patch.associatedWorktreeBranch !== undefined
+          ? { patchAssociatedWorktreeBranch: patch.associatedWorktreeBranch }
+          : {}),
+        ...(patch.associatedWorktreeRef !== undefined
+          ? { patchAssociatedWorktreeRef: patch.associatedWorktreeRef }
+          : {}),
       });
       const api = readNativeApi();
       // If the effective cwd is about to change, stop the running session so the
@@ -242,6 +246,8 @@ export default function BranchToolbar({
       hasServerThread,
       setThreadWorkspaceAction,
       serverThread?.associatedWorktreePath,
+      serverThread?.associatedWorktreeBranch,
+      serverThread?.associatedWorktreeRef,
       setDraftThreadContext,
       threadId,
       effectiveEnvMode,

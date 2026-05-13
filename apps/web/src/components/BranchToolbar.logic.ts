@@ -1,4 +1,8 @@
 import type { GitBranch } from "@t3tools/contracts";
+import {
+  deriveAssociatedWorktreeMetadata,
+  type AssociatedWorktreeMetadata,
+} from "@t3tools/shared/threadWorkspace";
 import { Schema } from "effect";
 
 export const EnvMode = Schema.Literals(["local", "worktree"]);
@@ -44,6 +48,59 @@ export function resolveBranchToolbarValue(input: {
     return activeThreadBranch ?? currentGitBranch;
   }
   return currentGitBranch ?? activeThreadBranch;
+}
+
+// Local threads should mirror the concrete checkout; stale thread metadata makes
+// the current Git branch appear selectable while clicks only perform a no-op.
+export function shouldSyncLocalThreadBranch(input: {
+  envMode: EnvMode;
+  activeWorktreePath: string | null;
+  activeThreadBranch: string | null;
+  currentGitBranch: string | null;
+  isBranchActionPending: boolean;
+}): boolean {
+  return (
+    input.envMode === "local" &&
+    input.activeWorktreePath === null &&
+    !input.isBranchActionPending &&
+    input.currentGitBranch !== null &&
+    input.activeThreadBranch !== input.currentGitBranch
+  );
+}
+
+// Branch-only local updates should keep the paired worktree metadata intact.
+export function resolveAssociatedWorktreeMetadataAfterWorkspacePatch(input: {
+  branch: string | null;
+  worktreePath: string | null;
+  existingAssociatedWorktreePath: string | null;
+  existingAssociatedWorktreeBranch: string | null;
+  existingAssociatedWorktreeRef: string | null;
+  patchAssociatedWorktreePath?: string | null;
+  patchAssociatedWorktreeBranch?: string | null;
+  patchAssociatedWorktreeRef?: string | null;
+}): AssociatedWorktreeMetadata {
+  const shouldPreserveExistingAssociation =
+    !input.worktreePath && input.patchAssociatedWorktreePath === undefined;
+
+  return deriveAssociatedWorktreeMetadata({
+    branch: input.branch,
+    worktreePath: input.worktreePath,
+    ...(input.patchAssociatedWorktreePath !== undefined
+      ? { associatedWorktreePath: input.patchAssociatedWorktreePath }
+      : shouldPreserveExistingAssociation
+        ? { associatedWorktreePath: input.existingAssociatedWorktreePath }
+        : {}),
+    ...(input.patchAssociatedWorktreeBranch !== undefined
+      ? { associatedWorktreeBranch: input.patchAssociatedWorktreeBranch }
+      : shouldPreserveExistingAssociation
+        ? { associatedWorktreeBranch: input.existingAssociatedWorktreeBranch }
+        : {}),
+    ...(input.patchAssociatedWorktreeRef !== undefined
+      ? { associatedWorktreeRef: input.patchAssociatedWorktreeRef }
+      : input.patchAssociatedWorktreeBranch === undefined && shouldPreserveExistingAssociation
+        ? { associatedWorktreeRef: input.existingAssociatedWorktreeRef }
+        : {}),
+  });
 }
 
 export function deriveLocalBranchNameFromRemoteRef(branchName: string): string {

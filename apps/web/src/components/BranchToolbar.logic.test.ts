@@ -4,8 +4,10 @@ import {
   dedupeRemoteBranchesWithLocalMatches,
   deriveLocalBranchNameFromRemoteRef,
   resolveBranchSelectionTarget,
+  resolveAssociatedWorktreeMetadataAfterWorkspacePatch,
   resolveDraftEnvModeAfterBranchChange,
   resolveBranchToolbarValue,
+  shouldSyncLocalThreadBranch,
 } from "./BranchToolbar.logic";
 
 describe("resolveDraftEnvModeAfterBranchChange", () => {
@@ -82,6 +84,95 @@ describe("resolveBranchToolbarValue", () => {
         currentGitBranch: "main",
       }),
     ).toBe("main");
+  });
+});
+
+describe("shouldSyncLocalThreadBranch", () => {
+  it("syncs stale local thread metadata to the concrete git checkout", () => {
+    expect(
+      shouldSyncLocalThreadBranch({
+        envMode: "local",
+        activeWorktreePath: null,
+        activeThreadBranch: "dpcode/pi",
+        currentGitBranch: "main",
+        isBranchActionPending: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not sync while a branch action is pending", () => {
+    expect(
+      shouldSyncLocalThreadBranch({
+        envMode: "local",
+        activeWorktreePath: null,
+        activeThreadBranch: "dpcode/pi",
+        currentGitBranch: "main",
+        isBranchActionPending: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps explicit base branch selection in new-worktree mode", () => {
+    expect(
+      shouldSyncLocalThreadBranch({
+        envMode: "worktree",
+        activeWorktreePath: null,
+        activeThreadBranch: "feature/base",
+        currentGitBranch: "main",
+        isBranchActionPending: false,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("resolveAssociatedWorktreeMetadataAfterWorkspacePatch", () => {
+  it("preserves associated worktree metadata during local branch-only syncs", () => {
+    expect(
+      resolveAssociatedWorktreeMetadataAfterWorkspacePatch({
+        branch: "main",
+        worktreePath: null,
+        existingAssociatedWorktreePath: "/repo/.worktrees/dpcode-pi",
+        existingAssociatedWorktreeBranch: "dpcode/pi",
+        existingAssociatedWorktreeRef: "dpcode/pi",
+      }),
+    ).toEqual({
+      associatedWorktreePath: "/repo/.worktrees/dpcode-pi",
+      associatedWorktreeBranch: "dpcode/pi",
+      associatedWorktreeRef: "dpcode/pi",
+    });
+  });
+
+  it("derives associated metadata from an active worktree checkout", () => {
+    expect(
+      resolveAssociatedWorktreeMetadataAfterWorkspacePatch({
+        branch: "feature/worktree",
+        worktreePath: "/repo/.worktrees/feature-worktree",
+        existingAssociatedWorktreePath: "/repo/.worktrees/old",
+        existingAssociatedWorktreeBranch: "old",
+        existingAssociatedWorktreeRef: "old",
+      }),
+    ).toEqual({
+      associatedWorktreePath: "/repo/.worktrees/feature-worktree",
+      associatedWorktreeBranch: "feature/worktree",
+      associatedWorktreeRef: "feature/worktree",
+    });
+  });
+
+  it("lets explicit associated branch patches update the associated ref", () => {
+    expect(
+      resolveAssociatedWorktreeMetadataAfterWorkspacePatch({
+        branch: "main",
+        worktreePath: null,
+        existingAssociatedWorktreePath: "/repo/.worktrees/dpcode-pi",
+        existingAssociatedWorktreeBranch: "dpcode/pi",
+        existingAssociatedWorktreeRef: "dpcode/pi",
+        patchAssociatedWorktreeBranch: "feature/new-pair",
+      }),
+    ).toEqual({
+      associatedWorktreePath: "/repo/.worktrees/dpcode-pi",
+      associatedWorktreeBranch: "feature/new-pair",
+      associatedWorktreeRef: "feature/new-pair",
+    });
   });
 });
 

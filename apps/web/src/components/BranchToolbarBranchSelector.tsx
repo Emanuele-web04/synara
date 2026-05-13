@@ -32,6 +32,7 @@ import {
   EnvMode,
   resolveBranchSelectionTarget,
   resolveBranchToolbarValue,
+  shouldSyncLocalThreadBranch,
 } from "./BranchToolbar.logic";
 import { Button } from "./ui/button";
 import {
@@ -418,6 +419,29 @@ export function BranchToolbarBranchSelector({
   );
   const [isDroppingStash, setIsDroppingStash] = useState(false);
   const shouldVirtualizeBranchList = filteredBranchPickerItems.length > 40;
+
+  useEffect(() => {
+    if (
+      !shouldSyncLocalThreadBranch({
+        envMode: effectiveEnvMode,
+        activeWorktreePath,
+        activeThreadBranch,
+        currentGitBranch,
+        isBranchActionPending,
+      })
+    ) {
+      return;
+    }
+
+    onSetThreadWorkspace({ branch: currentGitBranch, worktreePath: null });
+  }, [
+    activeThreadBranch,
+    activeWorktreePath,
+    currentGitBranch,
+    effectiveEnvMode,
+    isBranchActionPending,
+    onSetThreadWorkspace,
+  ]);
 
   const runBranchAction = (action: () => Promise<void>) => {
     startBranchActionTransition(async () => {
