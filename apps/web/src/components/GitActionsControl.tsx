@@ -30,6 +30,7 @@ import {
   resolveLiveThreadBranchUpdate,
   resolveDefaultCreateBranchName,
   resolveDefaultBranchActionDialogCopy,
+  resolveCreatePrActionAvailability,
   resolveQuickAction,
   shouldOfferCreateBranchPrompt,
   summarizeGitResult,
@@ -653,6 +654,23 @@ export default function GitActionsControl({
         });
         return;
       }
+      if (action === "create_pr" && !featureBranch) {
+        const createPrAvailability = resolveCreatePrActionAvailability({
+          gitStatus: actionStatus,
+          isDefaultBranch: actionIsDefaultBranch,
+          hasOriginRemote,
+          defaultBranchName,
+        });
+        if (!createPrAvailability.canRun) {
+          toastManager.add({
+            type: "info",
+            title: "Create PR unavailable",
+            description: createPrAvailability.hint ?? "No branch changes to include in a PR.",
+            data: threadToastData,
+          });
+          return;
+        }
+      }
       onConfirmed?.();
 
       const progressStages = buildGitActionProgressStages({
@@ -743,18 +761,27 @@ export default function GitActionsControl({
           (!actionIsDefaultBranch ||
             result.pr.status === "created" ||
             result.pr.status === "opened_existing");
-        const shouldOfferCreatePrCta =
-          (action === "push" || action === "commit_push") &&
-          !prUrl &&
-          result.push.status === "pushed" &&
-          !actionIsDefaultBranch;
         const postPushStatus = actionStatus
           ? {
               ...actionStatus,
               hasUpstream: true,
+              upstreamBranch:
+                actionStatus.upstreamBranch ??
+                (!actionStatus.hasUpstream ? (result.push.branch ?? actionStatus.branch) : null),
               aheadCount: 0,
             }
           : null;
+        const shouldOfferCreatePrCta =
+          (action === "push" || action === "commit_push") &&
+          !prUrl &&
+          result.push.status === "pushed" &&
+          !actionIsDefaultBranch &&
+          resolveCreatePrActionAvailability({
+            gitStatus: postPushStatus,
+            isDefaultBranch: actionIsDefaultBranch,
+            hasOriginRemote,
+            defaultBranchName,
+          }).canRun;
         const closeResultToast = () => {
           toastManager.close(resolvedProgressToastId);
         };

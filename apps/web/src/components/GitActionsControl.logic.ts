@@ -27,6 +27,7 @@ export interface GitQuickAction {
 }
 
 const FALLBACK_DEFAULT_BRANCH_NAMES = new Set(["main", "master"]);
+const CREATE_PR_UNAVAILABLE_HINT = "No branch changes to include in a PR.";
 
 export interface DefaultBranchActionDialogCopy {
   title: string;
@@ -395,7 +396,7 @@ export function resolveQuickAction(
       label: "Create PR",
       disabled: true,
       kind: "show_hint",
-      hint: "No branch changes to include in a PR.",
+      hint: CREATE_PR_UNAVAILABLE_HINT,
     };
   }
 
@@ -404,7 +405,7 @@ export function resolveQuickAction(
       label: "Create PR",
       disabled: true,
       kind: "show_hint",
-      hint: "No branch changes to include in a PR.",
+      hint: CREATE_PR_UNAVAILABLE_HINT,
     };
   }
 
@@ -422,6 +423,32 @@ export function resolveQuickAction(
     disabled: true,
     kind: "show_hint",
     hint: "Branch is up to date. No action needed.",
+  };
+}
+
+export function resolveCreatePrActionAvailability(input: {
+  gitStatus: GitStatusResult | null;
+  isDefaultBranch?: boolean;
+  hasOriginRemote?: boolean;
+  defaultBranchName?: string | null;
+}): { canRun: boolean; hint: string | null } {
+  const quickAction = resolveQuickAction(
+    input.gitStatus,
+    false,
+    input.isDefaultBranch ?? false,
+    input.hasOriginRemote ?? true,
+    false,
+    input.defaultBranchName,
+  );
+
+  const canRun =
+    quickAction.kind === "run_action" &&
+    quickAction.action === "create_pr" &&
+    !quickAction.disabled;
+
+  return {
+    canRun,
+    hint: canRun ? null : (quickAction.hint ?? CREATE_PR_UNAVAILABLE_HINT),
   };
 }
 
