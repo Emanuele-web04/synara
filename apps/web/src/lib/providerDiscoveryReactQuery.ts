@@ -48,10 +48,10 @@ export const providerDiscoveryQueryKeys = {
   all: ["provider-discovery"] as const,
   composerCapabilities: (provider: ProviderKind) =>
     ["provider-discovery", "composer-capabilities", provider] as const,
-  commands: (provider: ProviderKind, cwd: string | null, query: string) =>
-    ["provider-discovery", "commands", provider, cwd, query] as const,
-  skills: (provider: ProviderKind, cwd: string | null, query: string) =>
-    ["provider-discovery", "skills", provider, cwd, query] as const,
+  commands: (provider: ProviderKind, cwd: string | null, query: string, agentDir: string | null) =>
+    ["provider-discovery", "commands", provider, cwd, query, agentDir] as const,
+  skills: (provider: ProviderKind, cwd: string | null, query: string, agentDir: string | null) =>
+    ["provider-discovery", "skills", provider, cwd, query, agentDir] as const,
   plugins: (provider: ProviderKind, cwd: string | null) =>
     ["provider-discovery", "plugins", provider, cwd] as const,
   plugin: (provider: ProviderKind, marketplacePath: string, pluginName: string) =>
@@ -80,11 +80,17 @@ export function providerSkillsQueryOptions(input: {
   provider: ProviderKind;
   cwd: string | null;
   threadId?: string | null;
+  agentDir?: string | null;
   query: string;
   enabled?: boolean;
 }) {
   return queryOptions({
-    queryKey: providerDiscoveryQueryKeys.skills(input.provider, input.cwd, input.query),
+    queryKey: providerDiscoveryQueryKeys.skills(
+      input.provider,
+      input.cwd,
+      input.query,
+      input.agentDir ?? null,
+    ),
     queryFn: async () => {
       const api = ensureNativeApi();
       if (!input.cwd) {
@@ -94,6 +100,7 @@ export function providerSkillsQueryOptions(input: {
         provider: input.provider,
         cwd: input.cwd,
         ...(input.threadId ? { threadId: input.threadId } : {}),
+        ...(input.agentDir ? { agentDir: input.agentDir } : {}),
       });
     },
     enabled: (input.enabled ?? true) && input.cwd !== null,
@@ -106,11 +113,17 @@ export function providerCommandsQueryOptions(input: {
   provider: ProviderKind;
   cwd: string | null;
   threadId?: string | null;
+  agentDir?: string | null;
   query: string;
   enabled?: boolean;
 }) {
   return queryOptions({
-    queryKey: providerDiscoveryQueryKeys.commands(input.provider, input.cwd, input.query),
+    queryKey: providerDiscoveryQueryKeys.commands(
+      input.provider,
+      input.cwd,
+      input.query,
+      input.agentDir ?? null,
+    ),
     queryFn: async () => {
       const api = ensureNativeApi();
       if (!input.cwd) {
@@ -120,6 +133,7 @@ export function providerCommandsQueryOptions(input: {
         provider: input.provider,
         cwd: input.cwd,
         ...(input.threadId ? { threadId: input.threadId } : {}),
+        ...(input.agentDir ? { agentDir: input.agentDir } : {}),
       });
     },
     enabled: (input.enabled ?? true) && input.cwd !== null,

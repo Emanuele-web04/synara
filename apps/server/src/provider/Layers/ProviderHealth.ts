@@ -9,6 +9,7 @@
  * @module ProviderHealthLive
  */
 import * as OS from "node:os";
+import * as nodePath from "node:path";
 import type {
   ServerProviderAuthStatus,
   ServerProviderStatus,
@@ -44,6 +45,7 @@ import {
   parseCodexCliVersion,
 } from "../codexCliVersion";
 import { ServerConfig } from "../../config";
+import { ServerSettingsService } from "../../serverSettings";
 import { isWindowsShellCommandMissingResult } from "../../shell-command-detection";
 import { normalizeGeminiCapabilityProbeResult, probeGeminiCapabilities } from "../geminiAcpProbe";
 import { ProviderHealth, type ProviderHealthShape } from "../Services/ProviderHealth";
@@ -1188,22 +1190,46 @@ export const checkOpenCodeProviderStatus: Effect.Effect<
 
 // ── Pi health check ─────────────────────────────────────────────
 
-export const checkPiProviderStatus: Effect.Effect<ServerProviderStatus> = Effect.sync(() => {
-  const checkedAt = new Date().toISOString();
-  const registry = ModelRegistry.create(AuthStorage.create());
-  const modelCount = registry.getAvailable().length;
-  return {
-    provider: PI_PROVIDER,
-    status: modelCount > 0 ? "ready" : "warning",
-    available: modelCount > 0,
-    authStatus: modelCount > 0 ? "authenticated" : "unknown",
-    checkedAt,
-    message:
-      modelCount > 0
-        ? `Pi SDK is available with ${modelCount} authenticated model${modelCount === 1 ? "" : "s"}.`
-        : "Pi SDK is available, but no authenticated models were found in ~/.pi/agent/auth.json.",
-  } satisfies ServerProviderStatus;
-});
+export const checkPiProviderStatus = (
+  agentDir?: string,
+): Effect.Effect<ServerProviderStatus> =>
+  Effect.sync(() => {
+    const checkedAt = new Date().toISOString();
+    try {
+      const trimmedAgentDir = nonEmptyTrimmed(agentDir);
+      const authStorage = trimmedAgentDir
+        ? AuthStorage.create(nodePath.join(trimmedAgentDir, "auth.json"))
+        : AuthStorage.create();
+      const registry = trimmedAgentDir
+        ? ModelRegistry.create(authStorage, nodePath.join(trimmedAgentDir, "models.json"))
+        : ModelRegistry.create(authStorage);
+      registry.refresh();
+      const modelCount = registry.getAvailable().length;
+      const authPath = trimmedAgentDir
+        ? nodePath.join(trimmedAgentDir, "auth.json")
+        : "~/.pi/agent/auth.json";
+      return {
+        provider: PI_PROVIDER,
+        status: modelCount > 0 ? "ready" : "warning",
+        available: modelCount > 0,
+        authStatus: modelCount > 0 ? "authenticated" : "unknown",
+        checkedAt,
+        message:
+          modelCount > 0
+            ? `Pi SDK is available with ${modelCount} authenticated model${modelCount === 1 ? "" : "s"}.`
+            : `Pi SDK is available, but no authenticated models were found in ${authPath}.`,
+      } satisfies ServerProviderStatus;
+    } catch (cause) {
+      return {
+        provider: PI_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: `Failed to read Pi auth/model registry: ${cause instanceof Error ? cause.message : String(cause)}.`,
+      } satisfies ServerProviderStatus;
+    }
+  });
 
 // ── Cursor health check ─────────────────────────────────────────────
 
@@ -1301,6 +1327,7 @@ export const ProviderHealthLive = Layer.effect(
     const path = yield* Path.Path;
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const serverConfig = yield* ServerConfig;
+    const serverSettings = yield* ServerSettingsService;
     const changesPubSub = yield* Effect.acquireRelease(
       PubSub.unbounded<ReadonlyArray<ServerProviderStatus>>(),
       PubSub.shutdown,
@@ -1368,18 +1395,22 @@ export const ProviderHealthLive = Layer.effect(
 
     const checkClaude = makeCheckClaudeProviderStatus(resolveClaudeSubscription);
 
-    const loadProviderStatuses = Effect.all(
-      [
-        checkCodexProviderStatus,
-        checkClaude,
-        checkCursorProviderStatus,
-        checkGeminiProviderStatus,
-        checkOpenCodeProviderStatus,
-        checkPiProviderStatus,
-      ],
-      {
-        concurrency: "unbounded",
-      },
+    const loadProviderStatuses = serverSettings.getSettings.pipe(
+      Effect.flatMap((settings) =>
+        Effect.all(
+          [
+            checkCodexProviderStatus,
+            checkClaude,
+            checkCursorProviderStatus,
+            checkGeminiProviderStatus,
+            checkOpenCodeProviderStatus,
+            checkPiProviderStatus(settings.providers.pi.agentDir),
+          ],
+          {
+            concurrency: "unbounded",
+          },
+        ),
+      ),
     ).pipe(
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       Effect.provideService(FileSystem.FileSystem, fileSystem),

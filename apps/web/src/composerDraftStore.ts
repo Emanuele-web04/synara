@@ -1080,8 +1080,12 @@ export function deriveEffectiveComposerModelState(input: {
   };
   const baseModel = resolveModelSlugForProvider(
     input.selectedProvider,
-    input.threadModelSelection?.model ??
-      input.projectModelSelection?.model ??
+    (input.threadModelSelection?.provider === input.selectedProvider
+      ? input.threadModelSelection.model
+      : null) ??
+      (input.projectModelSelection?.provider === input.selectedProvider
+        ? input.projectModelSelection.model
+        : null) ??
       getDefaultModel(input.selectedProvider),
   );
   const persistedThreadModel =
@@ -2681,15 +2685,18 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             "cursor",
             "gemini",
             "opencode",
+            "pi",
           ] as const) {
             // Only touch providers explicitly present in the input
             if (!normalizedOpts || !(provider in normalizedOpts)) continue;
             const opts = normalizedOpts[provider];
             const current = nextMap[provider];
             if (opts) {
+              const model = current?.model ?? getDefaultModel(provider);
+              if (!model) continue;
               nextMap[provider] = makeModelSelection(
                 provider,
-                current?.model ?? getDefaultModel(provider),
+                model,
                 opts,
               );
             } else if (current?.options) {

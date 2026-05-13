@@ -779,6 +779,13 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       return context;
     });
 
+    const disposeSessionContext = async (context: PiSessionContext) => {
+      context.unsubscribe?.();
+      context.unsubscribe = undefined;
+      context.stopped = true;
+      await context.runtime.dispose();
+    };
+
     const handleMessageUpdate = (
       context: PiSessionContext,
       event: Extract<AgentSessionEvent, { type: "message_update" }>,
@@ -1137,6 +1144,20 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           input.modelSelection?.provider === "pi"
             ? normalizePiThinkingLevel(input.modelSelection.options?.thinkingLevel)
             : undefined;
+        const existingContext = sessions.get(input.threadId);
+        if (existingContext) {
+          sessions.delete(input.threadId);
+          yield* Effect.tryPromise({
+            try: () => disposeSessionContext(existingContext),
+            catch: (cause) =>
+              new ProviderAdapterRequestError({
+                provider: PROVIDER,
+                method: "session/restart",
+                detail: toMessage(cause, "Failed to dispose previous Pi session."),
+                cause,
+              }),
+          });
+        }
         const { runtime, modelRegistry } = yield* Effect.tryPromise({
           try: () =>
             createSdkRuntime({
@@ -1455,10 +1476,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       requireSession(threadId).pipe(
         Effect.flatMap((context) =>
           Effect.tryPromise({
-            try: async () => {
-              context.unsubscribe?.();
-              await context.runtime.dispose();
-            },
+            try: () => disposeSessionContext(context),
             catch: (cause) =>
               new ProviderAdapterRequestError({
                 provider: PROVIDER,
@@ -1600,9 +1618,18 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             ? sessions.get(ThreadId.makeUnsafe(input.threadId))
             : undefined;
           const loader = active?.runtime.session.resourceLoader;
+          if (active && input.forceReload) {
+            await active.runtime.session.reload();
+          }
           const services = loader
             ? undefined
-            : await createAgentSessionServices({ cwd: input.cwd, agentDir: getAgentDir() });
+            : await createAgentSessionServices({
+                cwd: input.cwd,
+                agentDir: makeAgentDir(input.agentDir),
+              });
+          if (services && input.forceReload) {
+            await services.resourceLoader.reload();
+          }
           const result = (loader ?? services!.resourceLoader).getSkills();
           return {
             skills: result.skills.map((skill) => {
@@ -1641,6 +1668,9 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             description: "Reload Pi extensions, skills, prompts, themes, tools, and settings",
           };
           if (session) {
+            if (input.forceReload) {
+              await session.reload();
+            }
             const extensionCommands = session.extensionRunner
               .getRegisteredCommands()
               .map((command) => ({
@@ -1663,8 +1693,11 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           }
           const services = await createAgentSessionServices({
             cwd: input.cwd,
-            agentDir: getAgentDir(),
+            agentDir: makeAgentDir(input.agentDir),
           });
+          if (input.forceReload) {
+            await services.resourceLoader.reload();
+          }
           const promptCommands = services.resourceLoader.getPrompts().prompts.map((template) => ({
             name: template.name,
             description: trimToUndefined(template.description) ?? "Prompt template",
