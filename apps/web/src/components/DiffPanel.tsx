@@ -1,4 +1,3 @@
-import { parsePatchFiles } from "@pierre/diffs";
 import { FileDiff, type FileDiffMetadata, Virtualizer } from "@pierre/diffs/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
@@ -37,8 +36,10 @@ import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch"
 import { useTheme } from "../hooks/useTheme";
 import {
   buildPatchCacheKey,
+  getRenderablePatch,
   resolveDiffCopyText,
   resolveDiffThemeName,
+  summarizePatchStats,
 } from "../lib/diffRendering";
 import { resolveDiffEnvironmentState } from "../lib/threadEnvironment";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
@@ -144,49 +145,6 @@ function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
 `;
 }
 
-type RenderablePatch =
-  | {
-      kind: "files";
-      files: FileDiffMetadata[];
-    }
-  | {
-      kind: "raw";
-      text: string;
-      reason: string;
-    };
-
-function getRenderablePatch(
-  patch: string | undefined,
-  cacheScope = "diff-panel",
-): RenderablePatch | null {
-  if (!patch) return null;
-  const normalizedPatch = patch.trim();
-  if (normalizedPatch.length === 0) return null;
-
-  try {
-    const parsedPatches = parsePatchFiles(
-      normalizedPatch,
-      buildPatchCacheKey(normalizedPatch, cacheScope),
-    );
-    const files = parsedPatches.flatMap((parsedPatch) => parsedPatch.files);
-    if (files.length > 0) {
-      return { kind: "files", files };
-    }
-
-    return {
-      kind: "raw",
-      text: normalizedPatch,
-      reason: "Unsupported diff format. Showing raw patch.",
-    };
-  } catch {
-    return {
-      kind: "raw",
-      text: normalizedPatch,
-      reason: "Failed to parse patch. Showing raw patch.",
-    };
-  }
-}
-
 function resolveFileDiffPath(fileDiff: FileDiffMetadata): string {
   const raw = fileDiff.name ?? fileDiff.prevName ?? "";
   if (raw.startsWith("a/") || raw.startsWith("b/")) {
@@ -197,31 +155,6 @@ function resolveFileDiffPath(fileDiff: FileDiffMetadata): string {
 
 function buildFileDiffRenderKey(fileDiff: FileDiffMetadata): string {
   return fileDiff.cacheKey ?? `${fileDiff.prevName ?? "none"}:${fileDiff.name}`;
-}
-
-// Summarize parsed hunks for compact diff stats in the panel chrome.
-function summarizeFileDiffStats(files: ReadonlyArray<FileDiffMetadata>): {
-  additions: number;
-  deletions: number;
-} {
-  return files.reduce(
-    (total, file) => {
-      for (const hunk of file.hunks) {
-        total.additions += hunk.additionLines;
-        total.deletions += hunk.deletionLines;
-      }
-      return total;
-    },
-    { additions: 0, deletions: 0 },
-  );
-}
-
-function summarizePatchStats(
-  patch: string | undefined,
-): { additions: number; deletions: number } | null {
-  const renderable = getRenderablePatch(patch, "diff-panel:stats");
-  if (renderable?.kind !== "files") return null;
-  return summarizeFileDiffStats(renderable.files);
 }
 
 interface DiffPanelProps {

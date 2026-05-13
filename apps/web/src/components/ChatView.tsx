@@ -377,6 +377,20 @@ const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
 const EMPTY_PROVIDER_NATIVE_COMMANDS: ProviderNativeCommandDescriptor[] = [];
 const EMPTY_PROVIDER_SKILLS: ProviderSkillDescriptor[] = [];
+
+function revokeBlobPreviewUrlsAfterPaint(previewUrls: readonly string[]): void {
+  if (previewUrls.length === 0 || typeof window === "undefined") {
+    return;
+  }
+  window.requestAnimationFrame(() => {
+    window.setTimeout(() => {
+      for (const previewUrl of previewUrls) {
+        revokeBlobPreviewUrl(previewUrl);
+      }
+    }, 0);
+  });
+}
+
 function eventTargetsComposer(
   event: globalThis.KeyboardEvent,
   composerForm: HTMLFormElement | null,
@@ -1980,11 +1994,10 @@ export default function ChatView({
     if (previewUrls.length === 0) return;
 
     const previousPreviewUrls = attachmentPreviewHandoffByMessageIdRef.current[messageId] ?? [];
-    for (const previewUrl of previousPreviewUrls) {
-      if (!previewUrls.includes(previewUrl)) {
-        revokeBlobPreviewUrl(previewUrl);
-      }
-    }
+    const replacedPreviewUrls = previousPreviewUrls.filter(
+      (previewUrl) => !previewUrls.includes(previewUrl),
+    );
+    revokeBlobPreviewUrlsAfterPaint(replacedPreviewUrls);
     setAttachmentPreviewHandoffByMessageId((existing) => {
       const next = {
         ...existing,
@@ -2000,11 +2013,6 @@ export default function ChatView({
     }
     attachmentPreviewHandoffTimeoutByMessageIdRef.current[messageId] = window.setTimeout(() => {
       const currentPreviewUrls = attachmentPreviewHandoffByMessageIdRef.current[messageId];
-      if (currentPreviewUrls) {
-        for (const previewUrl of currentPreviewUrls) {
-          revokeBlobPreviewUrl(previewUrl);
-        }
-      }
       setAttachmentPreviewHandoffByMessageId((existing) => {
         if (!(messageId in existing)) return existing;
         const next = { ...existing };
@@ -2013,6 +2021,11 @@ export default function ChatView({
         return next;
       });
       delete attachmentPreviewHandoffTimeoutByMessageIdRef.current[messageId];
+      // Let React swap the transcript back to persisted /attachments URLs before
+      // invalidating blob previews that may still be mounted in the old row.
+      if (currentPreviewUrls) {
+        revokeBlobPreviewUrlsAfterPaint(currentPreviewUrls);
+      }
     }, ATTACHMENT_PREVIEW_HANDOFF_TTL_MS);
   }, []);
   const serverMessages = activeThread?.messages;
