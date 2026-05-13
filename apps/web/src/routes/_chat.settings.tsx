@@ -148,7 +148,8 @@ type InstallBinarySettingsKey =
   | "cursorBinaryPath"
   | "geminiBinaryPath"
   | "kiloBinaryPath"
-  | "openCodeBinaryPath";
+  | "openCodeBinaryPath"
+  | "piBinaryPath";
 type InstallProviderSettings = {
   provider: ProviderKind;
   title: string;
@@ -167,6 +168,9 @@ type InstallProviderSettings = {
   serverPasswordKey?: "kiloServerPassword" | "openCodeServerPassword";
   serverPasswordPlaceholder?: string;
   serverPasswordDescription?: ReactNode;
+  agentDirKey?: "piAgentDir";
+  agentDirPlaceholder?: string;
+  agentDirDescription?: ReactNode;
 };
 
 const PROVIDER_VISIBILITY_OPTIONS: ReadonlyArray<{ provider: ProviderKind; title: string }> = [
@@ -323,6 +327,21 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     serverPasswordKey: "openCodeServerPassword",
     serverPasswordPlaceholder: "OpenCode server password",
     serverPasswordDescription: "Optional password for an externally managed OpenCode server.",
+  },
+  {
+    provider: "pi",
+    title: "Pi",
+    binaryPathKey: "piBinaryPath",
+    binaryPlaceholder: "Pi binary path",
+    binaryDescription: (
+      <>
+        Leave blank to use <code>pi</code> from your PATH.
+      </>
+    ),
+    agentDirKey: "piAgentDir",
+    agentDirPlaceholder: "Pi agent directory",
+    agentDirDescription:
+      "Optional custom Pi agent directory for auth, models, skills, and commands.",
   },
 ];
 
@@ -520,6 +539,8 @@ function SettingsRouteView() {
   const openCodeBinaryPath = settings.openCodeBinaryPath;
   const openCodeServerUrl = settings.openCodeServerUrl;
   const openCodeServerPassword = settings.openCodeServerPassword;
+  const piBinaryPath = settings.piBinaryPath;
+  const piAgentDir = settings.piAgentDir;
   const keybindingsConfigPath = serverConfigQuery.data?.keybindingsConfigPath ?? null;
   const availableEditors = serverConfigQuery.data?.availableEditors;
   const managedWorktrees = serverWorktreesQuery.data?.worktrees ?? [];
@@ -608,7 +629,9 @@ function SettingsRouteView() {
     settings.codexHomePath !== defaults.codexHomePath ||
     settings.openCodeBinaryPath !== defaults.openCodeBinaryPath ||
     settings.openCodeServerUrl !== defaults.openCodeServerUrl ||
-    settings.openCodeServerPassword !== defaults.openCodeServerPassword;
+    settings.openCodeServerPassword !== defaults.openCodeServerPassword ||
+    settings.piBinaryPath !== defaults.piBinaryPath ||
+    settings.piAgentDir !== defaults.piAgentDir;
 
   const changedSettingLabels = [
     ...(theme !== "system" ? ["Theme"] : []),
@@ -656,7 +679,8 @@ function SettingsRouteView() {
     settings.customCursorModels.length > 0 ||
     settings.customGeminiModels.length > 0 ||
     settings.customKiloModels.length > 0 ||
-    settings.customOpenCodeModels.length > 0
+    settings.customOpenCodeModels.length > 0 ||
+    settings.customPiModels.length > 0
       ? ["Custom models"]
       : []),
     ...(isInstallSettingsDirty ? ["Provider installs"] : []),
@@ -2322,6 +2346,9 @@ function SettingsRouteView() {
                               ? settings.kiloBinaryPath !== defaults.kiloBinaryPath ||
                                 settings.kiloServerUrl !== defaults.kiloServerUrl ||
                                 settings.kiloServerPassword !== defaults.kiloServerPassword
+                            : providerSettings.provider === "pi"
+                              ? settings.piBinaryPath !== defaults.piBinaryPath ||
+                                settings.piAgentDir !== defaults.piAgentDir
                               : settings.openCodeBinaryPath !== defaults.openCodeBinaryPath ||
                                 settings.openCodeServerUrl !== defaults.openCodeServerUrl ||
                                 settings.openCodeServerPassword !== defaults.openCodeServerPassword;
@@ -2336,7 +2363,9 @@ function SettingsRouteView() {
                             ? kiloBinaryPath
                             : providerSettings.binaryPathKey === "openCodeBinaryPath"
                               ? openCodeBinaryPath
-                              : codexBinaryPath;
+                              : providerSettings.binaryPathKey === "piBinaryPath"
+                                ? piBinaryPath
+                                : codexBinaryPath;
 
                   return (
                     <Collapsible
@@ -2394,13 +2423,15 @@ function SettingsRouteView() {
                                         ? { claudeBinaryPath: event.target.value }
                                         : providerSettings.binaryPathKey === "cursorBinaryPath"
                                           ? { cursorBinaryPath: event.target.value }
-                                          : providerSettings.binaryPathKey === "geminiBinaryPath"
-                                            ? { geminiBinaryPath: event.target.value }
-                                            : providerSettings.binaryPathKey === "kiloBinaryPath"
-                                              ? { kiloBinaryPath: event.target.value }
-                                              : providerSettings.binaryPathKey ===
-                                                  "openCodeBinaryPath"
-                                                ? { openCodeBinaryPath: event.target.value }
+                                        : providerSettings.binaryPathKey === "geminiBinaryPath"
+                                          ? { geminiBinaryPath: event.target.value }
+                                          : providerSettings.binaryPathKey === "kiloBinaryPath"
+                                            ? { kiloBinaryPath: event.target.value }
+                                            : providerSettings.binaryPathKey ===
+                                                "openCodeBinaryPath"
+                                              ? { openCodeBinaryPath: event.target.value }
+                                              : providerSettings.binaryPathKey === "piBinaryPath"
+                                                ? { piBinaryPath: event.target.value }
                                                 : { codexBinaryPath: event.target.value },
                                     )
                                   }
@@ -2435,6 +2466,34 @@ function SettingsRouteView() {
                                   {providerSettings.homeDescription ? (
                                     <span className="mt-1 block text-xs text-muted-foreground">
                                       {providerSettings.homeDescription}
+                                    </span>
+                                  ) : null}
+                                </label>
+                              ) : null}
+
+                              {providerSettings.agentDirKey ? (
+                                <label
+                                  htmlFor={`provider-install-${providerSettings.agentDirKey}`}
+                                  className="block"
+                                >
+                                  <span className="block text-xs font-medium text-foreground">
+                                    Pi agent directory
+                                  </span>
+                                  <Input
+                                    id={`provider-install-${providerSettings.agentDirKey}`}
+                                    className="mt-1"
+                                    value={piAgentDir}
+                                    onChange={(event) =>
+                                      updateSettings({
+                                        piAgentDir: event.target.value,
+                                      })
+                                    }
+                                    placeholder={providerSettings.agentDirPlaceholder}
+                                    spellCheck={false}
+                                  />
+                                  {providerSettings.agentDirDescription ? (
+                                    <span className="mt-1 block text-xs text-muted-foreground">
+                                      {providerSettings.agentDirDescription}
                                     </span>
                                   ) : null}
                                 </label>

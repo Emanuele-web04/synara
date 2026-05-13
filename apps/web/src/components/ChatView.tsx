@@ -2352,6 +2352,7 @@ export default function ChatView({
       provider: selectedProvider,
       cwd: composerSkillCwd,
       threadId,
+      agentDir: selectedProvider === "pi" ? settings.piAgentDir || null : null,
       query:
         composerTriggerKind === "slash-command" || composerTriggerKind === "slash-model"
           ? (composerTrigger?.query ?? "")
@@ -2369,6 +2370,7 @@ export default function ChatView({
       provider: selectedProvider,
       cwd: composerSkillCwd,
       threadId,
+      agentDir: selectedProvider === "pi" ? settings.piAgentDir || null : null,
       query: skillTriggerQuery,
       enabled:
         (isSkillTrigger || selectedProvider === "pi") &&
