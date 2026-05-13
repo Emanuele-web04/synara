@@ -1,3 +1,11 @@
+// FILE: diffRendering.ts
+// Purpose: Shared helpers for rendering, caching, copying, and summarizing git patches.
+// Layer: Web diff utilities
+// Depends on: @pierre/diffs patch parsing
+
+import { parsePatchFiles } from "@pierre/diffs";
+import type { FileDiffMetadata } from "@pierre/diffs/react";
+
 export const DIFF_THEME_NAMES = {
   // Keep diff syntax highlighting on the bundled GitHub themes for better parity with git tooling.
   light: "github-light",
@@ -45,4 +53,72 @@ export function resolveDiffCopyText(patch: string | undefined): string | null {
     return null;
   }
   return patch.trim().length > 0 ? patch : null;
+}
+
+export type RenderablePatch =
+  | {
+      kind: "files";
+      files: FileDiffMetadata[];
+    }
+  | {
+      kind: "raw";
+      text: string;
+      reason: string;
+    };
+
+export function getRenderablePatch(
+  patch: string | undefined,
+  cacheScope = "diff-panel",
+): RenderablePatch | null {
+  if (!patch) return null;
+  const normalizedPatch = patch.trim();
+  if (normalizedPatch.length === 0) return null;
+
+  try {
+    const parsedPatches = parsePatchFiles(
+      normalizedPatch,
+      buildPatchCacheKey(normalizedPatch, cacheScope),
+    );
+    const files = parsedPatches.flatMap((parsedPatch) => parsedPatch.files);
+    if (files.length > 0) {
+      return { kind: "files", files };
+    }
+
+    return {
+      kind: "raw",
+      text: normalizedPatch,
+      reason: "Unsupported diff format. Showing raw patch.",
+    };
+  } catch {
+    return {
+      kind: "raw",
+      text: normalizedPatch,
+      reason: "Failed to parse patch. Showing raw patch.",
+    };
+  }
+}
+
+// Summarize parsed hunks for compact, consistent diff stats across panel chrome.
+export function summarizeFileDiffStats(files: ReadonlyArray<FileDiffMetadata>): {
+  additions: number;
+  deletions: number;
+} {
+  return files.reduce(
+    (total, file) => {
+      for (const hunk of file.hunks) {
+        total.additions += hunk.additionLines;
+        total.deletions += hunk.deletionLines;
+      }
+      return total;
+    },
+    { additions: 0, deletions: 0 },
+  );
+}
+
+export function summarizePatchStats(
+  patch: string | undefined,
+): { additions: number; deletions: number } | null {
+  const renderable = getRenderablePatch(patch, "diff-panel:stats");
+  if (renderable?.kind !== "files") return null;
+  return summarizeFileDiffStats(renderable.files);
 }

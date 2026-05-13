@@ -36,7 +36,8 @@ import { resolveEditorIcon } from "../../editorMetadata";
 import { usePreferredEditor } from "../../editorPreferences";
 import { useIsDisposableThread } from "~/hooks/useIsDisposableThread";
 import { ClaudeAI, CursorIcon, Gemini, KiloIcon, OpenAI, OpenCodeIcon } from "../Icons";
-import { gitStatusQueryOptions } from "~/lib/gitReactQuery";
+import { gitWorkingTreeDiffQueryOptions } from "~/lib/gitReactQuery";
+import { summarizePatchStats } from "~/lib/diffRendering";
 
 /** Width (px) below which collapsible header controls fold into the ellipsis menu. */
 const HEADER_COMPACT_BREAKPOINT = 480;
@@ -163,11 +164,12 @@ export const ChatHeader = memo(function ChatHeader({
   const [openAddActionNonce, setOpenAddActionNonce] = useState(0);
   const [preferredEditor] = usePreferredEditor(availableEditors);
   const EditorIcon = preferredEditor ? resolveEditorIcon(preferredEditor) : null;
-  // Reuse the shared git status query so the diff toggle can show live totals
-  // without introducing a second API shape just for the header control.
-  const { data: gitStatus = null } = useQuery(gitStatusQueryOptions(gitCwd));
-  const diffTotals = gitStatus?.workingTree ?? null;
-  const showDiffTotals = (diffTotals?.insertions ?? 0) > 0 || (diffTotals?.deletions ?? 0) > 0;
+  // Match the Diff panel's Total tab by deriving the header badge from the same full patch.
+  const { data: workingTreeDiff = null } = useQuery(
+    gitWorkingTreeDiffQueryOptions({ cwd: gitCwd, enabled: isGitRepo }),
+  );
+  const diffTotals = summarizePatchStats(workingTreeDiff?.patch);
+  const showDiffTotals = (diffTotals?.additions ?? 0) > 0 || (diffTotals?.deletions ?? 0) > 0;
   const isDisposableThread = useIsDisposableThread(activeThreadId);
 
   const isSplitPane = surfaceMode === "split";
@@ -511,7 +513,7 @@ export const ChatHeader = memo(function ChatHeader({
                 {showDiffTotals ? (
                   <span className="inline-flex items-center gap-1">
                     <span className="font-system-ui text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-xs,10px)] font-normal tracking-normal tabular-nums text-success">
-                      +{diffTotals?.insertions ?? 0}
+                      +{diffTotals?.additions ?? 0}
                     </span>
                     <span className="font-system-ui text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-xs,10px)] font-normal tracking-normal tabular-nums text-destructive">
                       -{diffTotals?.deletions ?? 0}
