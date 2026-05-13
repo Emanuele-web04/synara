@@ -1,4 +1,4 @@
-import { formatModelDisplayName } from "@t3tools/shared/model";
+import { formatModelDisplayName, geminiModelOptionsFromEffortValue } from "@t3tools/shared/model";
 import type {
   ClaudeModelOptions,
   ClaudeModelSelection,
@@ -170,6 +170,21 @@ export function buildNextProviderOptions(
     ...(modelOptions as OpenCodeModelOptions | undefined),
     ...patch,
   } as OpenCodeModelOptions;
+}
+
+export function buildProviderOptionPatch(
+  provider: ProviderKind,
+  optionId: string,
+  value: string | boolean,
+): Record<string, unknown> {
+  if (
+    provider === "gemini" &&
+    typeof value === "string" &&
+    (optionId === "thinkingLevel" || optionId === "thinkingBudget")
+  ) {
+    return geminiModelOptionsFromEffortValue(value) ?? {};
+  }
+  return { [optionId]: value };
 }
 
 export function buildModelSelection(

@@ -234,6 +234,7 @@ import {
 } from "../appSettings";
 import { resolveTerminalNewAction } from "../lib/terminalNewAction";
 import { isTerminalFocused } from "../lib/terminalFocus";
+import { compareProvidersByOrder } from "../providerOrdering";
 import {
   type ComposerImageAttachment,
   type ComposerAssistantSelectionAttachment,
@@ -1525,7 +1526,14 @@ export default function ChatView({
       opencode: openCodeDynamicModelsQuery.data,
     };
 
-    for (const provider of ["claudeAgent", "codex", "cursor", "gemini", "kilo", "opencode"] as const) {
+    for (const provider of [
+      "claudeAgent",
+      "codex",
+      "cursor",
+      "gemini",
+      "kilo",
+      "opencode",
+    ] as const) {
       const dynamicModels = dynamicSources[provider]?.models;
       if (dynamicModels && dynamicModels.length > 0) {
         result[provider] = mergeDynamicModelOptions({
@@ -1635,10 +1643,10 @@ export default function ChatView({
       ? cursorModelDiscoveryPending
       : selectedProvider === "kilo"
         ? kiloModelDiscoveryPending
-      : selectedProviderModelsQuery !== undefined &&
-        (selectedProviderModelsQuery.isLoading ||
-          (selectedProviderModelsQuery.isFetching &&
-            selectedProviderModelsQuery.data === undefined));
+        : selectedProviderModelsQuery !== undefined &&
+          (selectedProviderModelsQuery.isLoading ||
+            (selectedProviderModelsQuery.isFetching &&
+              selectedProviderModelsQuery.data === undefined));
   const selectedProviderRequiresRuntimeModels =
     selectedProvider === "cursor" || selectedProvider === "kilo";
   const selectedProviderRuntimeModelDiscoveryPending =
@@ -1655,11 +1663,26 @@ export default function ChatView({
     providerModelsLoading,
     requiresDiscoveredModels: selectedProviderRequiresRuntimeModels,
   });
+  const hiddenProviderSet = useMemo(
+    () => new Set<ProviderKind>(settings.hiddenProviders),
+    [settings.hiddenProviders],
+  );
   const searchableModelOptions = useMemo(
     () =>
-      AVAILABLE_PROVIDER_OPTIONS.filter(
-        (option) => lockedProvider === null || option.value === lockedProvider,
-      ).flatMap((option) =>
+      [...AVAILABLE_PROVIDER_OPTIONS].sort((left, right) =>
+        compareProvidersByOrder(settings.providerOrder, left.value, right.value),
+      ).filter((option) => {
+        if (lockedProvider !== null) {
+          return option.value === lockedProvider;
+        }
+        // Always keep the currently selected provider visible in search even if
+        // it's hidden in the picker, so the user can still see and switch from
+        // its models without first unhiding the provider in settings.
+        if (option.value === selectedProvider) {
+          return true;
+        }
+        return !hiddenProviderSet.has(option.value);
+      }).flatMap((option) =>
         modelOptionsByProvider[option.value].map(
           ({ slug, name, upstreamProviderId, upstreamProviderName }) => ({
             provider: option.value,
@@ -1677,7 +1700,13 @@ export default function ChatView({
           }),
         ),
       ),
-    [lockedProvider, modelOptionsByProvider],
+    [
+      hiddenProviderSet,
+      lockedProvider,
+      modelOptionsByProvider,
+      selectedProvider,
+      settings.providerOrder,
+    ],
   );
   const phase = derivePhase(activeThread?.session ?? null);
   const isConnecting = isLocalConnecting || phase === "connecting";
@@ -2423,9 +2452,9 @@ export default function ChatView({
         ? claudeDynamicAgentsQuery
         : selectedProvider === "kilo"
           ? kiloDynamicAgentsQuery
-        : selectedProvider === "opencode"
-          ? openCodeDynamicAgentsQuery
-          : codexDynamicAgentsQuery;
+          : selectedProvider === "opencode"
+            ? openCodeDynamicAgentsQuery
+            : codexDynamicAgentsQuery;
     return (query.data?.agents ?? []).map((a) => ({
       name: a.name,
       displayName: a.displayName,
@@ -6347,6 +6376,8 @@ export default function ChatView({
           cursor: cursorModelDiscoveryPending,
           kilo: kiloModelDiscoveryPending,
         }}
+        hiddenProviders={settings.hiddenProviders}
+        providerOrder={settings.providerOrder}
         open={isModelPickerOpen}
         onOpenChange={handleModelPickerOpenChange}
         shortcutLabel={modelPickerShortcutLabel}
@@ -6358,16 +6389,15 @@ export default function ChatView({
         onProviderModelChange={onProviderModelSelect}
       />
     );
-  const composerTraitsPickerControl =
-    showComposerModelBootstrapSkeleton ? (
-      selectedProviderRuntimeModelDiscoveryPending ? (
-        <ComposerModelLoadingControl widthClassName={composerTraitsPickerWidthClassName} />
-      ) : (
-        <ComposerControlSkeleton widthClassName={composerTraitsPickerWidthClassName} />
-      )
+  const composerTraitsPickerControl = showComposerModelBootstrapSkeleton ? (
+    selectedProviderRuntimeModelDiscoveryPending ? (
+      <ComposerModelLoadingControl widthClassName={composerTraitsPickerWidthClassName} />
     ) : (
-      providerTraitsPicker
-    );
+      <ComposerControlSkeleton widthClassName={composerTraitsPickerWidthClassName} />
+    )
+  ) : (
+    providerTraitsPicker
+  );
   const toggleFastMode = useCallback(() => {
     if (!composerTraitSelection.caps.supportsFastMode) {
       scheduleComposerFocus();

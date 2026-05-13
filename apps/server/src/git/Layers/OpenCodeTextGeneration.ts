@@ -10,6 +10,7 @@ import type {
 } from "@t3tools/contracts";
 import { sanitizeGeneratedThreadTitle } from "@t3tools/shared/chatThreads";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
+import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
@@ -143,445 +144,445 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
       idleCloseFiber: null,
     };
 
-  const closeSharedServer = Effect.fn("closeSharedServer")(function* () {
-    const scope = sharedServerState.serverScope;
-    sharedServerState.server = null;
-    sharedServerState.serverScope = null;
-    sharedServerState.binaryPath = null;
-    if (scope !== null) {
-      yield* Scope.close(scope, Exit.void).pipe(Effect.ignore);
-    }
-  });
+    const closeSharedServer = Effect.fn("closeSharedServer")(function* () {
+      const scope = sharedServerState.serverScope;
+      sharedServerState.server = null;
+      sharedServerState.serverScope = null;
+      sharedServerState.binaryPath = null;
+      if (scope !== null) {
+        yield* Scope.close(scope, Exit.void).pipe(Effect.ignore);
+      }
+    });
 
-  const cancelIdleCloseFiber = Effect.fn("cancelIdleCloseFiber")(function* () {
-    const idleCloseFiber = sharedServerState.idleCloseFiber;
-    sharedServerState.idleCloseFiber = null;
-    if (idleCloseFiber !== null) {
-      yield* Fiber.interrupt(idleCloseFiber).pipe(Effect.ignore);
-    }
-  });
+    const cancelIdleCloseFiber = Effect.fn("cancelIdleCloseFiber")(function* () {
+      const idleCloseFiber = sharedServerState.idleCloseFiber;
+      sharedServerState.idleCloseFiber = null;
+      if (idleCloseFiber !== null) {
+        yield* Fiber.interrupt(idleCloseFiber).pipe(Effect.ignore);
+      }
+    });
 
-  const scheduleIdleClose = Effect.fn("scheduleIdleClose")(function* (
-    server: OpenCodeServerProcess,
-  ) {
-    yield* cancelIdleCloseFiber();
-    const fiber = yield* Effect.sleep(OPENCODE_TEXT_GENERATION_IDLE_TTL).pipe(
-      Effect.andThen(
-        sharedServerMutex.withPermit(
-          Effect.gen(function* () {
-            if (sharedServerState.server !== server || sharedServerState.activeRequests > 0) {
-              return;
-            }
-            sharedServerState.idleCloseFiber = null;
-            yield* closeSharedServer();
-          }),
+    const scheduleIdleClose = Effect.fn("scheduleIdleClose")(function* (
+      server: OpenCodeServerProcess,
+    ) {
+      yield* cancelIdleCloseFiber();
+      const fiber = yield* Effect.sleep(OPENCODE_TEXT_GENERATION_IDLE_TTL).pipe(
+        Effect.andThen(
+          sharedServerMutex.withPermit(
+            Effect.gen(function* () {
+              if (sharedServerState.server !== server || sharedServerState.activeRequests > 0) {
+                return;
+              }
+              sharedServerState.idleCloseFiber = null;
+              yield* closeSharedServer();
+            }),
+          ),
         ),
-      ),
-      Effect.forkIn(idleFiberScope),
-    );
-    sharedServerState.idleCloseFiber = fiber;
-  });
+        Effect.forkIn(idleFiberScope),
+      );
+      sharedServerState.idleCloseFiber = fiber;
+    });
 
-  const acquireSharedServer = (input: {
-    readonly binaryPath: string;
-    readonly operation:
-      | "generateCommitMessage"
-      | "generatePrContent"
-      | "generateDiffSummary"
-      | "generateBranchName"
-      | "generateThreadTitle";
-  }) =>
-    sharedServerMutex.withPermit(
-      Effect.gen(function* () {
-        yield* cancelIdleCloseFiber();
+    const acquireSharedServer = (input: {
+      readonly binaryPath: string;
+      readonly operation:
+        | "generateCommitMessage"
+        | "generatePrContent"
+        | "generateDiffSummary"
+        | "generateBranchName"
+        | "generateThreadTitle";
+    }) =>
+      sharedServerMutex.withPermit(
+        Effect.gen(function* () {
+          yield* cancelIdleCloseFiber();
 
-        const existingServer = sharedServerState.server;
-        if (existingServer !== null) {
-          if (
-            sharedServerState.binaryPath !== input.binaryPath &&
-            sharedServerState.activeRequests === 0
-          ) {
-            yield* closeSharedServer();
-          } else {
-            if (sharedServerState.binaryPath !== input.binaryPath) {
-              yield* Effect.logWarning(
-                `${config.displayName} shared server binary path mismatch: requested ` +
-                  input.binaryPath +
-                  " but active server uses " +
-                  sharedServerState.binaryPath +
-                  "; reusing existing server because there are active requests",
-              );
+          const existingServer = sharedServerState.server;
+          if (existingServer !== null) {
+            if (
+              sharedServerState.binaryPath !== input.binaryPath &&
+              sharedServerState.activeRequests === 0
+            ) {
+              yield* closeSharedServer();
+            } else {
+              if (sharedServerState.binaryPath !== input.binaryPath) {
+                yield* Effect.logWarning(
+                  `${config.displayName} shared server binary path mismatch: requested ` +
+                    input.binaryPath +
+                    " but active server uses " +
+                    sharedServerState.binaryPath +
+                    "; reusing existing server because there are active requests",
+                );
+              }
+              sharedServerState.activeRequests += 1;
+              return existingServer;
             }
-            sharedServerState.activeRequests += 1;
-            return existingServer;
           }
-        }
 
-        return yield* Effect.uninterruptibleMask((restore) =>
-          Effect.gen(function* () {
-            const serverScope = yield* Scope.make();
-            const startedExit = yield* Effect.exit(
-              restore(
-                openCodeRuntime
-                  .startOpenCodeServerProcess({
-                    binaryPath: input.binaryPath,
-                    cliSpec: config.cliSpec,
-                  })
-                  .pipe(
-                    Effect.provideService(Scope.Scope, serverScope),
-                    Effect.mapError(
-                      (cause) =>
-                        new TextGenerationError({
-                          operation: input.operation,
-                          detail: openCodeRuntimeErrorDetail(cause),
-                          cause,
-                        }),
+          return yield* Effect.uninterruptibleMask((restore) =>
+            Effect.gen(function* () {
+              const serverScope = yield* Scope.make();
+              const startedExit = yield* Effect.exit(
+                restore(
+                  openCodeRuntime
+                    .startOpenCodeServerProcess({
+                      binaryPath: input.binaryPath,
+                      cliSpec: config.cliSpec,
+                    })
+                    .pipe(
+                      Effect.provideService(Scope.Scope, serverScope),
+                      Effect.mapError(
+                        (cause) =>
+                          new TextGenerationError({
+                            operation: input.operation,
+                            detail: openCodeRuntimeErrorDetail(cause),
+                            cause,
+                          }),
+                      ),
                     ),
-                  ),
-              ),
+                ),
+              );
+
+              if (startedExit._tag === "Failure") {
+                yield* Scope.close(serverScope, Exit.void).pipe(Effect.ignore);
+                return yield* Effect.failCause(startedExit.cause);
+              }
+
+              const server = startedExit.value;
+              sharedServerState.server = server;
+              sharedServerState.serverScope = serverScope;
+              sharedServerState.binaryPath = input.binaryPath;
+              sharedServerState.activeRequests = 1;
+              return server;
+            }),
+          );
+        }),
+      );
+
+    const releaseSharedServer = (server: OpenCodeServerProcess) =>
+      sharedServerMutex.withPermit(
+        Effect.gen(function* () {
+          if (sharedServerState.server !== server) {
+            return;
+          }
+          sharedServerState.activeRequests = Math.max(0, sharedServerState.activeRequests - 1);
+          if (sharedServerState.activeRequests === 0) {
+            yield* scheduleIdleClose(server);
+          }
+        }),
+      );
+
+    yield* Effect.addFinalizer(() =>
+      sharedServerMutex.withPermit(
+        Effect.gen(function* () {
+          yield* cancelIdleCloseFiber();
+          sharedServerState.activeRequests = 0;
+          yield* closeSharedServer();
+        }),
+      ),
+    );
+
+    const runOpenCodeJson = Effect.fn("runOpenCodeJson")(function* <S extends Schema.Top>(input: {
+      readonly operation:
+        | "generateCommitMessage"
+        | "generatePrContent"
+        | "generateDiffSummary"
+        | "generateBranchName"
+        | "generateThreadTitle";
+      readonly cwd: string;
+      readonly prompt: string;
+      readonly outputSchemaJson: S;
+      readonly modelSelection: OpenCodeCompatibleModelSelection;
+      readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;
+      readonly providerOptions?: ProviderStartOptions;
+    }) {
+      const parsedModel = parseOpenCodeModelSlug(input.modelSelection.model);
+      if (!parsedModel) {
+        return yield* new TextGenerationError({
+          operation: input.operation,
+          detail: `${config.displayName} model selection must use the 'provider/model' format.`,
+        });
+      }
+
+      const providerOptions = input.providerOptions?.[config.provider];
+      const binaryPath = providerOptions?.binaryPath?.trim() || config.cliSpec.defaultBinaryPath;
+      const serverUrl = providerOptions?.serverUrl?.trim() || "";
+      const serverPassword = providerOptions?.serverPassword?.trim() || "";
+      const providerId = parsedModel.providerID;
+      const modelId = parsedModel.modelID;
+      const modelOptions = input.modelSelection.options as OpenCodeModelOptions | undefined;
+      const agent = modelOptions?.agent?.trim();
+      const variant = getModelSelectionStringOptionValue(input.modelSelection, "variant")?.trim();
+
+      const fileParts = toOpenCodeFileParts({
+        attachments: input.attachments,
+        resolveAttachmentPath: (attachment) =>
+          resolveAttachmentPath({ attachmentsDir: serverConfig.attachmentsDir, attachment }),
+      });
+
+      const runAgainstServer = (server: Pick<OpenCodeServerConnection, "url">) =>
+        Effect.tryPromise({
+          try: async () => {
+            const client = openCodeRuntime.createOpenCodeSdkClient({
+              baseUrl: server.url,
+              directory: input.cwd,
+              ...(serverPassword.length > 0 ? { serverPassword } : {}),
+              cliSpec: config.cliSpec,
+            });
+            const sessionCreateInput = {
+              title: `T3 Code ${input.operation}`,
+              model: {
+                providerID: providerId,
+                id: modelId,
+                ...(variant ? { variant } : {}),
+              },
+              ...(agent ? { agent } : {}),
+              permission: [{ permission: "*", pattern: "*", action: "deny" }],
+            };
+            const session = await client.session.create(
+              sessionCreateInput as unknown as Parameters<typeof client.session.create>[0],
+            );
+            if (!session.data) {
+              throw new Error("OpenCode session.create returned no session payload.");
+            }
+
+            const result = await client.session.prompt({
+              sessionID: session.data.id,
+              model: parsedModel,
+              ...(agent ? { agent } : {}),
+              ...(variant ? { variant } : {}),
+              parts: [{ type: "text", text: input.prompt }, ...fileParts],
+            });
+            const info = result.data?.info;
+            const errorMessage = getOpenCodePromptErrorMessage(info?.error);
+            if (errorMessage) {
+              throw new Error(errorMessage);
+            }
+            const rawText = getOpenCodeTextResponse(result.data?.parts);
+            if (rawText.length === 0) {
+              throw new Error("OpenCode returned empty output.");
+            }
+            return rawText;
+          },
+          catch: (cause) =>
+            new TextGenerationError({
+              operation: input.operation,
+              detail: [
+                openCodeRuntimeErrorDetail(cause),
+                `model=${providerId}/${modelId}`,
+                variant ? `variant=${variant}` : null,
+                agent ? `agent=${agent}` : null,
+                serverUrl.length > 0 ? "server=external" : "server=managed",
+              ]
+                .filter(Boolean)
+                .join(" "),
+              cause,
+            }),
+        });
+
+      yield* Effect.logDebug("OpenCode text generation request", {
+        operation: input.operation,
+        cwd: input.cwd,
+        providerId,
+        modelId,
+        variant,
+        agent,
+        attachmentCount: input.attachments?.length ?? 0,
+        filePartCount: fileParts.length,
+        binaryPath,
+        usingExternalServer: serverUrl.length > 0,
+      });
+
+      const rawOutput =
+        serverUrl.length > 0
+          ? yield* runAgainstServer({ url: serverUrl })
+          : yield* Effect.acquireUseRelease(
+              acquireSharedServer({
+                binaryPath,
+                operation: input.operation,
+              }),
+              runAgainstServer,
+              releaseSharedServer,
             );
 
-            if (startedExit._tag === "Failure") {
-              yield* Scope.close(serverScope, Exit.void).pipe(Effect.ignore);
-              return yield* Effect.failCause(startedExit.cause);
-            }
-
-            const server = startedExit.value;
-            sharedServerState.server = server;
-            sharedServerState.serverScope = serverScope;
-            sharedServerState.binaryPath = input.binaryPath;
-            sharedServerState.activeRequests = 1;
-            return server;
-          }),
-        );
-      }),
-    );
-
-  const releaseSharedServer = (server: OpenCodeServerProcess) =>
-    sharedServerMutex.withPermit(
-      Effect.gen(function* () {
-        if (sharedServerState.server !== server) {
-          return;
-        }
-        sharedServerState.activeRequests = Math.max(0, sharedServerState.activeRequests - 1);
-        if (sharedServerState.activeRequests === 0) {
-          yield* scheduleIdleClose(server);
-        }
-      }),
-    );
-
-  yield* Effect.addFinalizer(() =>
-    sharedServerMutex.withPermit(
-      Effect.gen(function* () {
-        yield* cancelIdleCloseFiber();
-        sharedServerState.activeRequests = 0;
-        yield* closeSharedServer();
-      }),
-    ),
-  );
-
-  const runOpenCodeJson = Effect.fn("runOpenCodeJson")(function* <S extends Schema.Top>(input: {
-    readonly operation:
-      | "generateCommitMessage"
-      | "generatePrContent"
-      | "generateDiffSummary"
-      | "generateBranchName"
-      | "generateThreadTitle";
-    readonly cwd: string;
-    readonly prompt: string;
-    readonly outputSchemaJson: S;
-    readonly modelSelection: OpenCodeCompatibleModelSelection;
-    readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;
-    readonly providerOptions?: ProviderStartOptions;
-  }) {
-    const parsedModel = parseOpenCodeModelSlug(input.modelSelection.model);
-    if (!parsedModel) {
-      return yield* new TextGenerationError({
-        operation: input.operation,
-        detail: `${config.displayName} model selection must use the 'provider/model' format.`,
-      });
-    }
-
-    const providerOptions = input.providerOptions?.[config.provider];
-    const binaryPath = providerOptions?.binaryPath?.trim() || config.cliSpec.defaultBinaryPath;
-    const serverUrl = providerOptions?.serverUrl?.trim() || "";
-    const serverPassword = providerOptions?.serverPassword?.trim() || "";
-    const providerId = parsedModel.providerID;
-    const modelId = parsedModel.modelID;
-    const modelOptions = input.modelSelection.options as OpenCodeModelOptions | undefined;
-    const agent = modelOptions?.agent?.trim();
-    const variant = modelOptions?.variant?.trim();
-
-    const fileParts = toOpenCodeFileParts({
-      attachments: input.attachments,
-      resolveAttachmentPath: (attachment) =>
-        resolveAttachmentPath({ attachmentsDir: serverConfig.attachmentsDir, attachment }),
-    });
-
-    const runAgainstServer = (server: Pick<OpenCodeServerConnection, "url">) =>
-      Effect.tryPromise({
-        try: async () => {
-          const client = openCodeRuntime.createOpenCodeSdkClient({
-            baseUrl: server.url,
-            directory: input.cwd,
-            ...(serverPassword.length > 0 ? { serverPassword } : {}),
-            cliSpec: config.cliSpec,
-          });
-          const sessionCreateInput = {
-            title: `T3 Code ${input.operation}`,
-            model: {
-              providerID: providerId,
-              id: modelId,
-              ...(variant ? { variant } : {}),
-            },
-            ...(agent ? { agent } : {}),
-            permission: [{ permission: "*", pattern: "*", action: "deny" }],
-          };
-          const session = await client.session.create(
-            sessionCreateInput as unknown as Parameters<typeof client.session.create>[0],
-          );
-          if (!session.data) {
-            throw new Error("OpenCode session.create returned no session payload.");
-          }
-
-          const result = await client.session.prompt({
-            sessionID: session.data.id,
-            model: parsedModel,
-            ...(agent ? { agent } : {}),
-            ...(variant ? { variant } : {}),
-            parts: [{ type: "text", text: input.prompt }, ...fileParts],
-          });
-          const info = result.data?.info;
-          const errorMessage = getOpenCodePromptErrorMessage(info?.error);
-          if (errorMessage) {
-            throw new Error(errorMessage);
-          }
-          const rawText = getOpenCodeTextResponse(result.data?.parts);
-          if (rawText.length === 0) {
-            throw new Error("OpenCode returned empty output.");
-          }
-          return rawText;
-        },
-        catch: (cause) =>
-          new TextGenerationError({
-            operation: input.operation,
-            detail: [
-              openCodeRuntimeErrorDetail(cause),
-              `model=${providerId}/${modelId}`,
-              variant ? `variant=${variant}` : null,
-              agent ? `agent=${agent}` : null,
-              serverUrl.length > 0 ? "server=external" : "server=managed",
-            ]
-              .filter(Boolean)
-              .join(" "),
-            cause,
-          }),
-      });
-
-    yield* Effect.logDebug("OpenCode text generation request", {
-      operation: input.operation,
-      cwd: input.cwd,
-      providerId,
-      modelId,
-      variant,
-      agent,
-      attachmentCount: input.attachments?.length ?? 0,
-      filePartCount: fileParts.length,
-      binaryPath,
-      usingExternalServer: serverUrl.length > 0,
-    });
-
-    const rawOutput =
-      serverUrl.length > 0
-        ? yield* runAgainstServer({ url: serverUrl })
-        : yield* Effect.acquireUseRelease(
-            acquireSharedServer({
-              binaryPath,
+      return yield* Schema.decodeEffect(Schema.fromJsonString(input.outputSchemaJson))(
+        extractJsonObject(rawOutput),
+      ).pipe(
+        Effect.catchTag("SchemaError", (cause) =>
+          Effect.fail(
+            new TextGenerationError({
               operation: input.operation,
+              detail: "OpenCode returned invalid structured output.",
+              cause,
             }),
-            runAgainstServer,
-            releaseSharedServer,
-          );
-
-    return yield* Schema.decodeEffect(Schema.fromJsonString(input.outputSchemaJson))(
-      extractJsonObject(rawOutput),
-    ).pipe(
-      Effect.catchTag("SchemaError", (cause) =>
-        Effect.fail(
-          new TextGenerationError({
-            operation: input.operation,
-            detail: "OpenCode returned invalid structured output.",
-            cause,
-          }),
+          ),
         ),
-      ),
-    );
-  });
+      );
+    });
 
-  const generateCommitMessage: TextGenerationShape["generateCommitMessage"] = Effect.fn(
-    `${config.serviceName}.generateCommitMessage`,
-  )(function* (input) {
-    const modelSelection = resolveOpenCodeCompatibleModelSelection(config, input);
-    if (!modelSelection) {
-      return yield* new TextGenerationError({
+    const generateCommitMessage: TextGenerationShape["generateCommitMessage"] = Effect.fn(
+      `${config.serviceName}.generateCommitMessage`,
+    )(function* (input) {
+      const modelSelection = resolveOpenCodeCompatibleModelSelection(config, input);
+      if (!modelSelection) {
+        return yield* new TextGenerationError({
+          operation: "generateCommitMessage",
+          detail: `Invalid ${config.displayName} model selection.`,
+        });
+      }
+
+      const { prompt, outputSchemaJson } = buildCommitMessagePrompt({
+        branch: input.branch,
+        stagedSummary: input.stagedSummary,
+        stagedPatch: input.stagedPatch,
+        includeBranch: input.includeBranch === true,
+      });
+      const generated = yield* runOpenCodeJson({
         operation: "generateCommitMessage",
-        detail: `Invalid ${config.displayName} model selection.`,
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson,
+        modelSelection,
+        ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
       });
-    }
 
-    const { prompt, outputSchemaJson } = buildCommitMessagePrompt({
-      branch: input.branch,
-      stagedSummary: input.stagedSummary,
-      stagedPatch: input.stagedPatch,
-      includeBranch: input.includeBranch === true,
-    });
-    const generated = yield* runOpenCodeJson({
-      operation: "generateCommitMessage",
-      cwd: input.cwd,
-      prompt,
-      outputSchemaJson,
-      modelSelection,
-      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+      return {
+        subject: sanitizeCommitSubject(generated.subject),
+        body: generated.body.trim(),
+        ...("branch" in generated && typeof generated.branch === "string"
+          ? { branch: sanitizeFeatureBranchName(generated.branch) }
+          : {}),
+      };
     });
 
-    return {
-      subject: sanitizeCommitSubject(generated.subject),
-      body: generated.body.trim(),
-      ...("branch" in generated && typeof generated.branch === "string"
-        ? { branch: sanitizeFeatureBranchName(generated.branch) }
-        : {}),
-    };
-  });
+    const generatePrContent: TextGenerationShape["generatePrContent"] = Effect.fn(
+      `${config.serviceName}.generatePrContent`,
+    )(function* (input) {
+      const modelSelection = resolveOpenCodeCompatibleModelSelection(config, input);
+      if (!modelSelection) {
+        return yield* new TextGenerationError({
+          operation: "generatePrContent",
+          detail: `Invalid ${config.displayName} model selection.`,
+        });
+      }
 
-  const generatePrContent: TextGenerationShape["generatePrContent"] = Effect.fn(
-    `${config.serviceName}.generatePrContent`,
-  )(function* (input) {
-    const modelSelection = resolveOpenCodeCompatibleModelSelection(config, input);
-    if (!modelSelection) {
-      return yield* new TextGenerationError({
+      const { prompt, outputSchemaJson } = buildPrContentPrompt({
+        baseBranch: input.baseBranch,
+        headBranch: input.headBranch,
+        commitSummary: input.commitSummary,
+        diffSummary: input.diffSummary,
+        diffPatch: input.diffPatch,
+      });
+      const generated = yield* runOpenCodeJson({
         operation: "generatePrContent",
-        detail: `Invalid ${config.displayName} model selection.`,
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson,
+        modelSelection,
+        ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
       });
-    }
 
-    const { prompt, outputSchemaJson } = buildPrContentPrompt({
-      baseBranch: input.baseBranch,
-      headBranch: input.headBranch,
-      commitSummary: input.commitSummary,
-      diffSummary: input.diffSummary,
-      diffPatch: input.diffPatch,
-    });
-    const generated = yield* runOpenCodeJson({
-      operation: "generatePrContent",
-      cwd: input.cwd,
-      prompt,
-      outputSchemaJson,
-      modelSelection,
-      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+      return {
+        title: sanitizePrTitle(generated.title),
+        body: generated.body.trim(),
+      };
     });
 
-    return {
-      title: sanitizePrTitle(generated.title),
-      body: generated.body.trim(),
-    };
-  });
+    const generateDiffSummary: TextGenerationShape["generateDiffSummary"] = Effect.fn(
+      `${config.serviceName}.generateDiffSummary`,
+    )(function* (input) {
+      const modelSelection = resolveOpenCodeCompatibleModelSelection(config, input);
+      if (!modelSelection) {
+        return yield* new TextGenerationError({
+          operation: "generateDiffSummary",
+          detail: `Invalid ${config.displayName} model selection.`,
+        });
+      }
 
-  const generateDiffSummary: TextGenerationShape["generateDiffSummary"] = Effect.fn(
-    `${config.serviceName}.generateDiffSummary`,
-  )(function* (input) {
-    const modelSelection = resolveOpenCodeCompatibleModelSelection(config, input);
-    if (!modelSelection) {
-      return yield* new TextGenerationError({
+      const { prompt, outputSchemaJson } = buildDiffSummaryPrompt({
+        patch: input.patch,
+      });
+      const generated = yield* runOpenCodeJson({
         operation: "generateDiffSummary",
-        detail: `Invalid ${config.displayName} model selection.`,
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson,
+        modelSelection,
+        ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
       });
-    }
 
-    const { prompt, outputSchemaJson } = buildDiffSummaryPrompt({
-      patch: input.patch,
-    });
-    const generated = yield* runOpenCodeJson({
-      operation: "generateDiffSummary",
-      cwd: input.cwd,
-      prompt,
-      outputSchemaJson,
-      modelSelection,
-      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+      return {
+        summary: sanitizeDiffSummary(generated.summary),
+      };
     });
 
-    return {
-      summary: sanitizeDiffSummary(generated.summary),
-    };
-  });
+    const generateBranchName: TextGenerationShape["generateBranchName"] = Effect.fn(
+      `${config.serviceName}.generateBranchName`,
+    )(function* (input) {
+      const modelSelection = resolveOpenCodeCompatibleModelSelection(config, input);
+      if (!modelSelection) {
+        return yield* new TextGenerationError({
+          operation: "generateBranchName",
+          detail: `Invalid ${config.displayName} model selection.`,
+        });
+      }
 
-  const generateBranchName: TextGenerationShape["generateBranchName"] = Effect.fn(
-    `${config.serviceName}.generateBranchName`,
-  )(function* (input) {
-    const modelSelection = resolveOpenCodeCompatibleModelSelection(config, input);
-    if (!modelSelection) {
-      return yield* new TextGenerationError({
+      const { prompt, outputSchemaJson } = buildBranchNamePrompt({
+        message: input.message,
+        ...(input.attachments ? { attachments: input.attachments } : {}),
+      });
+      const generated = yield* runOpenCodeJson({
         operation: "generateBranchName",
-        detail: `Invalid ${config.displayName} model selection.`,
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson,
+        modelSelection,
+        ...(input.attachments ? { attachments: input.attachments } : {}),
+        ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
       });
-    }
 
-    const { prompt, outputSchemaJson } = buildBranchNamePrompt({
-      message: input.message,
-      ...(input.attachments ? { attachments: input.attachments } : {}),
-    });
-    const generated = yield* runOpenCodeJson({
-      operation: "generateBranchName",
-      cwd: input.cwd,
-      prompt,
-      outputSchemaJson,
-      modelSelection,
-      ...(input.attachments ? { attachments: input.attachments } : {}),
-      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+      return {
+        branch: sanitizeBranchFragment(generated.branch),
+      };
     });
 
-    return {
-      branch: sanitizeBranchFragment(generated.branch),
-    };
-  });
+    const generateThreadTitle: TextGenerationShape["generateThreadTitle"] = Effect.fn(
+      `${config.serviceName}.generateThreadTitle`,
+    )(function* (input) {
+      const modelSelection = resolveOpenCodeCompatibleModelSelection(config, input);
+      if (!modelSelection) {
+        return yield* new TextGenerationError({
+          operation: "generateThreadTitle",
+          detail: `Invalid ${config.displayName} model selection.`,
+        });
+      }
 
-  const generateThreadTitle: TextGenerationShape["generateThreadTitle"] = Effect.fn(
-    `${config.serviceName}.generateThreadTitle`,
-  )(function* (input) {
-    const modelSelection = resolveOpenCodeCompatibleModelSelection(config, input);
-    if (!modelSelection) {
-      return yield* new TextGenerationError({
+      const { prompt, outputSchemaJson } = buildThreadTitlePrompt({
+        message: input.message,
+        ...(input.attachments ? { attachments: input.attachments } : {}),
+      });
+      const generated = yield* runOpenCodeJson({
         operation: "generateThreadTitle",
-        detail: `Invalid ${config.displayName} model selection.`,
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson,
+        modelSelection,
+        ...(input.attachments ? { attachments: input.attachments } : {}),
+        ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
       });
-    }
 
-    const { prompt, outputSchemaJson } = buildThreadTitlePrompt({
-      message: input.message,
-      ...(input.attachments ? { attachments: input.attachments } : {}),
-    });
-    const generated = yield* runOpenCodeJson({
-      operation: "generateThreadTitle",
-      cwd: input.cwd,
-      prompt,
-      outputSchemaJson,
-      modelSelection,
-      ...(input.attachments ? { attachments: input.attachments } : {}),
-      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+      return {
+        title: sanitizeGeneratedThreadTitle(generated.title),
+      };
     });
 
     return {
-      title: sanitizeGeneratedThreadTitle(generated.title),
-    };
+      generateCommitMessage,
+      generatePrContent,
+      generateDiffSummary,
+      generateBranchName,
+      generateThreadTitle,
+    } satisfies TextGenerationShape;
   });
-
-  return {
-    generateCommitMessage,
-    generatePrContent,
-    generateDiffSummary,
-    generateBranchName,
-    generateThreadTitle,
-  } satisfies TextGenerationShape;
-});
 
 export const OpenCodeTextGenerationServiceLive = Layer.effect(
   OpenCodeTextGeneration,

@@ -339,7 +339,8 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
       resumeCursor:
         thread.modelSelection.provider === "claudeAgent"
           ? { resume: externalId }
-          : thread.modelSelection.provider === "kilo" || thread.modelSelection.provider === "opencode"
+          : thread.modelSelection.provider === "kilo" ||
+              thread.modelSelection.provider === "opencode"
             ? { openCodeSessionId: externalId }
             : { threadId: externalId },
       runtimeMode: thread.runtimeMode,

@@ -9,6 +9,7 @@ import * as Schema from "effect/Schema";
 import { Fragment, memo, useCallback, useDeferredValue, useMemo, useState } from "react";
 import { type ProviderPickerKind, PROVIDER_OPTIONS } from "../../session-logic";
 import { formatProviderModelOptionName } from "../../providerModelOptions";
+import { compareProvidersByOrder } from "../../providerOrdering";
 import {
   Menu,
   MenuGroup,
@@ -89,6 +90,24 @@ function resolveLiveProviderAvailability(provider: ServerProviderStatus | undefi
 export const AVAILABLE_PROVIDER_OPTIONS = PROVIDER_OPTIONS.filter(isAvailableProviderOption);
 const UNAVAILABLE_PROVIDER_OPTIONS = PROVIDER_OPTIONS.filter((option) => !option.available);
 
+// Removes user-hidden providers from a provider option list while always
+// preserving any providers the caller marks as protected (the active and
+// locked provider for the current thread). Without that carve-out, hiding the
+// provider you're already using would erase the entry that lets you switch
+// away from it.
+function filterProviderOptionsByVisibility<T extends { value: ProviderKind }>(
+  options: ReadonlyArray<T>,
+  hiddenProviders: ReadonlySet<ProviderKind>,
+  protectedProviders: ReadonlySet<ProviderKind>,
+): ReadonlyArray<T> {
+  if (hiddenProviders.size === 0) {
+    return options;
+  }
+  return options.filter(
+    (option) => protectedProviders.has(option.value) || !hiddenProviders.has(option.value),
+  );
+}
+
 function providerIconClassName(
   provider: ProviderKind | ProviderPickerKind,
   fallbackClassName: string,
@@ -161,6 +180,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   providers?: ReadonlyArray<ServerProviderStatus>;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
   loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
+  hiddenProviders?: ReadonlyArray<ProviderKind>;
+  providerOrder?: ReadonlyArray<ProviderKind>;
   activeProviderIconClassName?: string;
   compact?: boolean;
   disabled?: boolean;
@@ -190,6 +211,41 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   const deferredModelSearchQuery = useDeferredValue(modelSearchQuery);
   const activeProvider = props.lockedProvider ?? props.provider;
   const isMenuOpen = open ?? uncontrolledMenuOpen;
+  const hiddenProviders = props.hiddenProviders;
+  const providerOrder = props.providerOrder;
+  const hiddenProviderSet = useMemo(
+    () => new Set<ProviderKind>(hiddenProviders ?? []),
+    [hiddenProviders],
+  );
+  const protectedProviderSet = useMemo(() => {
+    const set = new Set<ProviderKind>([props.provider]);
+    if (props.lockedProvider !== null) {
+      set.add(props.lockedProvider);
+    }
+    return set;
+  }, [props.provider, props.lockedProvider]);
+  const visibleAvailableProviderOptions = useMemo(
+    () =>
+      filterProviderOptionsByVisibility(
+        [...AVAILABLE_PROVIDER_OPTIONS].sort((left, right) =>
+          compareProvidersByOrder(providerOrder ?? [], left.value, right.value),
+        ),
+        hiddenProviderSet,
+        protectedProviderSet,
+      ),
+    [hiddenProviderSet, protectedProviderSet, providerOrder],
+  );
+  const visibleUnavailableProviderOptions = useMemo(
+    () =>
+      filterProviderOptionsByVisibility(
+        [...UNAVAILABLE_PROVIDER_OPTIONS].sort((left, right) =>
+          compareProvidersByOrder(providerOrder ?? [], left.value, right.value),
+        ),
+        hiddenProviderSet,
+        protectedProviderSet,
+      ),
+    [hiddenProviderSet, protectedProviderSet, providerOrder],
+  );
   const kiloFavoriteModelSlugSet = useMemo(
     () => new Set(kiloFavoriteModelSlugs),
     [kiloFavoriteModelSlugs],
@@ -452,7 +508,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
           renderModelRadioGroup(props.lockedProvider)
         ) : (
           <>
-            {AVAILABLE_PROVIDER_OPTIONS.map((option) => {
+            {visibleAvailableProviderOptions.map((option) => {
               const OptionIcon = PROVIDER_ICON_BY_PROVIDER[option.value];
               const liveProvider = props.providers?.find(
                 (entry) => entry.provider === option.value,
@@ -493,8 +549,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                 </MenuSub>
               );
             })}
-            {UNAVAILABLE_PROVIDER_OPTIONS.length > 0 && <MenuSeparator />}
-            {UNAVAILABLE_PROVIDER_OPTIONS.map((option) => {
+            {visibleUnavailableProviderOptions.length > 0 && <MenuSeparator />}
+            {visibleUnavailableProviderOptions.map((option) => {
               const OptionIcon = PROVIDER_ICON_BY_PROVIDER[option.value];
               return (
                 <MenuItem key={option.value} disabled>

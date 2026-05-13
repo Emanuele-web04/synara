@@ -4,61 +4,19 @@
 // Depends on: shared model capability helpers and provider model option types.
 
 import {
-  type ClaudeModelOptions,
-  type CodexModelOptions,
-  type CursorModelOptions,
-  type GeminiModelOptions,
-  type OpenCodeModelOptions,
+  type ProviderOptionDescriptor,
   type ProviderKind,
   type ProviderModelDescriptor,
 } from "@t3tools/contracts";
 import {
-  getDefaultEffort,
-  getDefaultContextWindow,
-  getGeminiThinkingSelectionValue,
-  getModelCapabilities,
-  hasEffortLevel,
-  hasContextWindowOption,
+  getProviderOptionCurrentValue,
+  getProviderOptionDescriptors,
   isClaudeUltrathinkPrompt,
-  resolveLabeledOptionValue,
   trimOrNull,
 } from "@t3tools/shared/model";
 
 import type { ProviderOptions } from "../../providerModelOptions";
 import { getRuntimeAwareModelCapabilities } from "./runtimeModelCapabilities";
-
-function getRawEffort(
-  provider: ProviderKind,
-  model: string | null | undefined,
-  modelOptions: ProviderOptions | null | undefined,
-): string | null {
-  if (provider === "codex") {
-    return trimOrNull((modelOptions as CodexModelOptions | undefined)?.reasoningEffort);
-  }
-  if (provider === "claudeAgent") {
-    return trimOrNull((modelOptions as ClaudeModelOptions | undefined)?.effort);
-  }
-  if (provider === "cursor") {
-    return trimOrNull((modelOptions as CursorModelOptions | undefined)?.reasoningEffort);
-  }
-  if (provider === "kilo" || provider === "opencode") {
-    return trimOrNull((modelOptions as OpenCodeModelOptions | undefined)?.variant);
-  }
-  const caps = getModelCapabilities(provider, model);
-  return getGeminiThinkingSelectionValue(caps, modelOptions as GeminiModelOptions | undefined);
-}
-
-function getRawContextWindow(
-  provider: ProviderKind,
-  modelOptions: ProviderOptions | null | undefined,
-): string | null {
-  if (provider !== "claudeAgent" && provider !== "cursor") {
-    return null;
-  }
-  return provider === "claudeAgent"
-    ? trimOrNull((modelOptions as ClaudeModelOptions | undefined)?.contextWindow)
-    : trimOrNull((modelOptions as CursorModelOptions | undefined)?.contextWindow);
-}
 
 function getCursorBooleanModelParameter(
   model: string | null | undefined,
@@ -91,6 +49,50 @@ function getCursorBooleanModelParameter(
   return null;
 }
 
+function asSelectDescriptor(
+  descriptor: ProviderOptionDescriptor | undefined,
+): Extract<ProviderOptionDescriptor, { type: "select" }> | null {
+  return descriptor?.type === "select" ? descriptor : null;
+}
+
+function asBooleanDescriptor(
+  descriptor: ProviderOptionDescriptor | undefined,
+): Extract<ProviderOptionDescriptor, { type: "boolean" }> | null {
+  return descriptor?.type === "boolean" ? descriptor : null;
+}
+
+function primaryTraitSelectDescriptor(
+  descriptors: ReadonlyArray<ProviderOptionDescriptor>,
+): Extract<ProviderOptionDescriptor, { type: "select" }> | null {
+  return (
+    descriptors.find(
+      (descriptor): descriptor is Extract<ProviderOptionDescriptor, { type: "select" }> =>
+        descriptor.type === "select" && descriptor.id !== "contextWindow",
+    ) ?? null
+  );
+}
+
+function selectOptions(descriptor: Extract<ProviderOptionDescriptor, { type: "select" }> | null) {
+  return (
+    descriptor?.options.map((option) => ({
+      value: option.id,
+      label: option.label,
+      ...(option.description ? { description: option.description } : {}),
+      ...(option.isDefault ? { isDefault: true as const } : {}),
+    })) ?? []
+  );
+}
+
+// Merges legacy capability flags with descriptor-specific prompt injection hints.
+function promptInjectedValuesForDescriptor(
+  capsPromptInjectedValues: ReadonlyArray<string>,
+  descriptor: Extract<ProviderOptionDescriptor, { type: "select" }> | null,
+) {
+  return Array.from(
+    new Set([...capsPromptInjectedValues, ...(descriptor?.promptInjectedValues ?? [])]),
+  );
+}
+
 // Resolve the currently selected composer traits from capabilities plus draft overrides.
 export function getComposerTraitSelection(
   provider: ProviderKind,
@@ -100,53 +102,72 @@ export function getComposerTraitSelection(
   runtimeModel?: ProviderModelDescriptor,
 ) {
   const caps = getRuntimeAwareModelCapabilities({ provider, model, runtimeModel });
-  const effortLevels =
-    provider === "kilo" || provider === "opencode"
-      ? (caps.variantOptions ?? [])
-      : caps.reasoningEffortLevels;
+  const descriptors = getProviderOptionDescriptors({
+    provider,
+    caps,
+    selections: modelOptions as Record<string, unknown> | undefined,
+  });
+  const primarySelectDescriptor = primaryTraitSelectDescriptor(descriptors);
+  const contextWindowDescriptor = asSelectDescriptor(
+    descriptors.find((descriptor) => descriptor.id === "contextWindow"),
+  );
+  const fastModeDescriptor = asBooleanDescriptor(
+    descriptors.find((descriptor) => descriptor.id === "fastMode"),
+  );
+  const thinkingDescriptor = asBooleanDescriptor(
+    descriptors.find((descriptor) => descriptor.id === "thinking"),
+  );
+  const effortLevels = selectOptions(primarySelectDescriptor);
+  const contextWindowOptions = selectOptions(contextWindowDescriptor);
   const defaultEffort =
-    provider === "kilo" || provider === "opencode"
-      ? resolveLabeledOptionValue(caps.variantOptions, null)
-      : getDefaultEffort(caps);
-  const defaultContextWindow = getDefaultContextWindow(caps);
-  const resolvedContextWindow = getRawContextWindow(provider, modelOptions);
-  const resolvedEffort = getRawEffort(provider, model, modelOptions);
+    primarySelectDescriptor?.options.find((option) => option.isDefault)?.id ??
+    primarySelectDescriptor?.options[0]?.id ??
+    null;
+  const defaultContextWindow =
+    contextWindowDescriptor?.options.find((option) => option.isDefault)?.id ??
+    contextWindowDescriptor?.options[0]?.id ??
+    null;
+  const resolvedEffort = trimOrNull(
+    getProviderOptionCurrentValue(primarySelectDescriptor) as string | undefined,
+  );
+  const resolvedContextWindow = trimOrNull(
+    getProviderOptionCurrentValue(contextWindowDescriptor) as string | undefined,
+  );
+  const promptInjectedValues = promptInjectedValuesForDescriptor(
+    caps.promptInjectedEffortLevels,
+    primarySelectDescriptor,
+  );
   const isPromptInjected = resolvedEffort
-    ? caps.promptInjectedEffortLevels.includes(resolvedEffort)
+    ? promptInjectedValues.includes(resolvedEffort)
     : false;
-  const effort =
-    provider === "kilo" || provider === "opencode"
-      ? resolveLabeledOptionValue(caps.variantOptions, resolvedEffort)
-      : resolvedEffort && !isPromptInjected && hasEffortLevel(caps, resolvedEffort)
-        ? resolvedEffort
-        : defaultEffort && hasEffortLevel(caps, defaultEffort)
-          ? defaultEffort
-          : null;
+  const effort = resolvedEffort && !isPromptInjected ? resolvedEffort : defaultEffort;
 
-  const thinkingEnabled = caps.supportsThinkingToggle
+  const thinkingEnabled = thinkingDescriptor
     ? provider === "cursor"
-      ? ((modelOptions as CursorModelOptions | undefined)?.thinking ??
+      ? (thinkingDescriptor.currentValue ??
         getCursorBooleanModelParameter(model, "thinking") ??
         true)
-      : ((modelOptions as ClaudeModelOptions | undefined)?.thinking ?? true)
+      : (thinkingDescriptor.currentValue ?? true)
     : null;
 
   const fastModeEnabled =
-    caps.supportsFastMode &&
-    ((modelOptions as { fastMode?: boolean } | undefined)?.fastMode ??
+    Boolean(fastModeDescriptor) &&
+    (fastModeDescriptor?.currentValue ??
       (provider === "cursor" ? getCursorBooleanModelParameter(model, "fast") : false)) === true;
 
-  const contextWindowOptions = caps.contextWindowOptions;
-  const contextWindow =
-    resolvedContextWindow && hasContextWindowOption(caps, resolvedContextWindow)
-      ? resolvedContextWindow
-      : defaultContextWindow;
+  const contextWindow = resolvedContextWindow ?? defaultContextWindow;
 
   const ultrathinkPromptControlled =
-    caps.promptInjectedEffortLevels.length > 0 && isClaudeUltrathinkPrompt(prompt);
+    promptInjectedValues.length > 0 && isClaudeUltrathinkPrompt(prompt);
 
   return {
     caps,
+    descriptors,
+    primarySelectDescriptor,
+    fastModeDescriptor,
+    thinkingDescriptor,
+    contextWindowDescriptor,
+    promptInjectedValues,
     defaultEffort,
     effort,
     effortLevels,
@@ -162,7 +183,7 @@ export function getComposerTraitSelection(
 export function hasVisibleComposerTraitControls(
   selection: Pick<
     ReturnType<typeof getComposerTraitSelection>,
-    "caps" | "effortLevels" | "thinkingEnabled" | "contextWindowOptions"
+    "caps" | "effortLevels" | "thinkingEnabled" | "contextWindowOptions" | "fastModeDescriptor"
   >,
   options?: {
     includeFastMode?: boolean;
@@ -172,6 +193,7 @@ export function hasVisibleComposerTraitControls(
     selection.effortLevels.length > 0 ||
     selection.thinkingEnabled !== null ||
     selection.contextWindowOptions.length > 1 ||
-    ((options?.includeFastMode ?? true) && selection.caps.supportsFastMode)
+    ((options?.includeFastMode ?? true) &&
+      (selection.fastModeDescriptor !== null || selection.caps.supportsFastMode))
   );
 }

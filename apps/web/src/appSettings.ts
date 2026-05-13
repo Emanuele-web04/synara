@@ -19,6 +19,11 @@ import {
 import { useLocalStorage } from "./hooks/useLocalStorage";
 import { EnvMode } from "./components/BranchToolbar.logic";
 import { formatProviderModelOptionName, type ProviderModelOption } from "./providerModelOptions";
+import {
+  DEFAULT_PROVIDER_ORDER,
+  normalizeHiddenProviders,
+  normalizeProviderOrder,
+} from "./providerOrdering";
 import { ensureNativeApi } from "./nativeApi";
 import { serverQueryKeys, serverSettingsQueryOptions } from "./lib/serverReactQuery";
 
@@ -130,6 +135,20 @@ export const AppSettingsSchema = Schema.Struct({
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
   uiFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
   defaultProvider: ProviderKind.pipe(withDefaults(() => "codex" as const)),
+  // Local-only UI preference: providers explicitly hidden from the composer picker.
+  // The active/locked provider for a thread is always shown regardless, so users
+  // never get stuck on a thread whose provider they later chose to hide.
+  hiddenProviders: Schema.Array(ProviderKind).pipe(withDefaults(() => [])),
+  // Local-only UI preference: top-level provider order in Settings and the composer picker.
+  providerOrder: Schema.Array(ProviderKind).pipe(withDefaults(() => [...DEFAULT_PROVIDER_ORDER])),
+  // Deprecated local-only preference kept for backward-compatible decoding.
+  // Model-level hiding caused too many edge cases, so the app now normalizes it away.
+  hiddenModels: Schema.Array(
+    Schema.Struct({
+      provider: ProviderKind,
+      slug: Schema.String,
+    }),
+  ).pipe(withDefaults(() => [])),
 });
 export type AppSettings = typeof AppSettingsSchema.Type;
 type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
@@ -250,6 +269,9 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     customGeminiModels: normalizeCustomModelSlugs(settings.customGeminiModels, "gemini"),
     customKiloModels: normalizeCustomModelSlugs(settings.customKiloModels, "kilo"),
     customOpenCodeModels: normalizeCustomModelSlugs(settings.customOpenCodeModels, "opencode"),
+    hiddenProviders: normalizeHiddenProviders(settings.hiddenProviders),
+    providerOrder: normalizeProviderOrder(settings.providerOrder),
+    hiddenModels: [],
   };
 }
 

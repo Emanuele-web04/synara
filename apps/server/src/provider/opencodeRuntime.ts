@@ -262,7 +262,10 @@ function parseOpenCodeContextWindowOptions(object: Record<string, unknown>):
       readonly defaultContextWindow: string;
     }
   | undefined {
-  const limit = object.limit && typeof object.limit === "object" ? (object.limit as Record<string, unknown>) : null;
+  const limit =
+    object.limit && typeof object.limit === "object"
+      ? (object.limit as Record<string, unknown>)
+      : null;
   const context =
     typeof limit?.context === "number"
       ? numberToContextWindowValue(limit.context)
@@ -340,7 +343,10 @@ function readOpenCodeVariantEffort(
   return null;
 }
 
-function resolveOpenCodeDataDirectory(homeDirectory: string, dataDirectoryName = "opencode"): string {
+function resolveOpenCodeDataDirectory(
+  homeDirectory: string,
+  dataDirectoryName = "opencode",
+): string {
   if (process.platform === "win32") {
     const appDataDirectory =
       trimToNull(process.env.APPDATA) ?? join(homeDirectory, "AppData", "Roaming");

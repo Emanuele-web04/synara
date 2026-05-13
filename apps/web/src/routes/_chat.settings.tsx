@@ -14,6 +14,22 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import {
+  closestCenter,
+  DndContext,
+  PointerSensor,
+  type DragEndEvent,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import {
+  arrayMove,
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
+import { CSS } from "@dnd-kit/utilities";
+import {
   MAX_CHAT_FONT_SIZE_PX,
   getCustomModelsForProvider,
   getGitTextGenerationModelOptions,
@@ -26,7 +42,15 @@ import {
 } from "../appSettings";
 import { APP_VERSION } from "../branding";
 import { SidebarHeaderNavigationControls } from "../components/SidebarHeaderNavigationControls";
-import { ClaudeAI, CursorIcon, Gemini, KiloIcon, OpenAI, OpenCodeIcon } from "../components/Icons";
+import {
+  ClaudeAI,
+  CursorIcon,
+  DotGrid2x3Icon,
+  Gemini,
+  KiloIcon,
+  OpenAI,
+  OpenCodeIcon,
+} from "../components/Icons";
 import { Button } from "../components/ui/button";
 import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
 import { Input } from "../components/ui/input";
@@ -73,6 +97,7 @@ import ReleaseHistoryDialog from "../components/ReleaseHistoryDialog";
 import { createAllThreadsSelector } from "../storeSelectors";
 import { formatRelativeTime } from "../components/Sidebar";
 import { formatWorktreePathForDisplay } from "../worktreeCleanup";
+import { sameProviderOrder } from "../providerOrdering";
 
 // ── Settings taxonomy ──────────────────────────────────────────────────────
 
@@ -142,6 +167,75 @@ type InstallProviderSettings = {
   serverPasswordPlaceholder?: string;
   serverPasswordDescription?: ReactNode;
 };
+
+const PROVIDER_VISIBILITY_OPTIONS: ReadonlyArray<{ provider: ProviderKind; title: string }> = [
+  { provider: "codex", title: PROVIDER_DISPLAY_NAMES.codex },
+  { provider: "claudeAgent", title: PROVIDER_DISPLAY_NAMES.claudeAgent },
+  { provider: "cursor", title: PROVIDER_DISPLAY_NAMES.cursor },
+  { provider: "gemini", title: PROVIDER_DISPLAY_NAMES.gemini },
+  { provider: "kilo", title: PROVIDER_DISPLAY_NAMES.kilo },
+  { provider: "opencode", title: PROVIDER_DISPLAY_NAMES.opencode },
+];
+
+// Pure helper kept at module scope so the toggle handler stays trivial and the
+// dedupe logic is shared between the toggle and the schema normalizer.
+function setProviderHidden(
+  current: ReadonlyArray<ProviderKind>,
+  provider: ProviderKind,
+  hidden: boolean,
+): ProviderKind[] {
+  const withoutTarget = current.filter((entry) => entry !== provider);
+  return hidden ? [...withoutTarget, provider] : withoutTarget;
+}
+
+function SortableProviderVisibilityRow(props: {
+  option: { provider: ProviderKind; title: string };
+  isHidden: boolean;
+  onHiddenChange: (hidden: boolean) => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setActivatorNodeRef,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: props.option.provider });
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={{
+        transform: CSS.Translate.toString(transform),
+        transition,
+      }}
+      className={cn(
+        "flex items-center justify-between gap-3 rounded-lg border border-border/60 bg-[var(--color-background-elevated-secondary)]/40 px-3 py-2.5",
+        isDragging && "z-10 opacity-80 shadow-lg",
+      )}
+    >
+      <div className="flex min-w-0 items-center gap-2.5">
+        <button
+          type="button"
+          ref={setActivatorNodeRef}
+          className="inline-flex size-6 shrink-0 cursor-grab touch-none items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-foreground active:cursor-grabbing"
+          aria-label={`Reorder ${props.option.title}`}
+          {...attributes}
+          {...listeners}
+        >
+          <DotGrid2x3Icon className="size-4" />
+        </button>
+        <span className="min-w-0 text-sm text-foreground">{props.option.title}</span>
+      </div>
+      <Switch
+        checked={!props.isHidden}
+        onCheckedChange={(checked) => props.onHiddenChange(!Boolean(checked))}
+        aria-label={`Show ${props.option.title} in the provider picker`}
+      />
+    </div>
+  );
+}
 
 const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
   {
@@ -386,6 +480,31 @@ function SettingsRouteView() {
     typeof navigator === "undefined" ? "" : navigator.platform,
   );
 
+  const hiddenProviderSet = useMemo(
+    () => new Set<ProviderKind>(settings.hiddenProviders),
+    [settings.hiddenProviders],
+  );
+  const hiddenProviderCount = hiddenProviderSet.size;
+  const providerVisibilityOptionsByProvider = useMemo(
+    () => new Map(PROVIDER_VISIBILITY_OPTIONS.map((option) => [option.provider, option])),
+    [],
+  );
+  const orderedProviderVisibilityOptions = useMemo(
+    () =>
+      settings.providerOrder.flatMap((provider) => {
+        const option = providerVisibilityOptionsByProvider.get(provider);
+        return option ? [option] : [];
+      }),
+    [providerVisibilityOptionsByProvider, settings.providerOrder],
+  );
+  const providerVisibilitySensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 4,
+      },
+    }),
+  );
+  const isProviderOrderDirty = !sameProviderOrder(settings.providerOrder, defaults.providerOrder);
   const codexBinaryPath = settings.codexBinaryPath;
   const codexHomePath = settings.codexHomePath;
   const claudeBinaryPath = settings.claudeBinaryPath;
@@ -537,6 +656,8 @@ function SettingsRouteView() {
       ? ["Custom models"]
       : []),
     ...(isInstallSettingsDirty ? ["Provider installs"] : []),
+    ...(hiddenProviderCount > 0 ? ["Provider visibility"] : []),
+    ...(isProviderOrderDirty ? ["Provider order"] : []),
   ];
 
   const openKeybindingsFile = useCallback(() => {
@@ -628,6 +749,24 @@ function SettingsRouteView() {
       }));
     },
     [settings, updateSettings],
+  );
+
+  const handleProviderOrderDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) {
+        return;
+      }
+      const fromIndex = settings.providerOrder.indexOf(active.id as ProviderKind);
+      const toIndex = settings.providerOrder.indexOf(over.id as ProviderKind);
+      if (fromIndex < 0 || toIndex < 0) {
+        return;
+      }
+      updateSettings({
+        providerOrder: arrayMove(settings.providerOrder, fromIndex, toIndex),
+      });
+    },
+    [settings.providerOrder, updateSettings],
   );
 
   async function restoreDefaults() {
@@ -2041,6 +2180,70 @@ function SettingsRouteView() {
     </div>
   );
 
+  const renderProvidersPanel = () => (
+    <div className="space-y-6">
+      <SettingsSection title="Provider picker">
+        <div className="space-y-2">
+          <SettingsRow
+            title="Visible providers"
+            description="Drag providers into your preferred picker order and hide the ones you don't use. The provider you're currently using on a thread always stays visible."
+            status={
+              hiddenProviderCount > 0
+                ? `${hiddenProviderCount} provider${hiddenProviderCount === 1 ? "" : "s"} hidden`
+                : isProviderOrderDirty
+                  ? "Custom order"
+                : "All providers visible"
+            }
+            resetAction={
+              hiddenProviderCount > 0 || isProviderOrderDirty ? (
+                <SettingResetButton
+                  label="provider picker"
+                  onClick={() =>
+                    updateSettings({
+                      hiddenProviders: defaults.hiddenProviders,
+                      providerOrder: defaults.providerOrder,
+                    })
+                  }
+                />
+              ) : null
+            }
+          >
+            <DndContext
+              sensors={providerVisibilitySensors}
+              collisionDetection={closestCenter}
+              modifiers={[restrictToVerticalAxis]}
+              onDragEnd={handleProviderOrderDragEnd}
+            >
+              <SortableContext
+                items={orderedProviderVisibilityOptions.map((option) => option.provider)}
+                strategy={verticalListSortingStrategy}
+              >
+                <div className="mt-4 space-y-2">
+                  {orderedProviderVisibilityOptions.map((option) => (
+                    <SortableProviderVisibilityRow
+                      key={option.provider}
+                      option={option}
+                      isHidden={hiddenProviderSet.has(option.provider)}
+                      onHiddenChange={(hidden) =>
+                        updateSettings({
+                          hiddenProviders: setProviderHidden(
+                            settings.hiddenProviders,
+                            option.provider,
+                            hidden,
+                          ),
+                        })
+                      }
+                    />
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
+          </SettingsRow>
+        </div>
+      </SettingsSection>
+    </div>
+  );
+
   const renderAdvancedPanel = () => (
     <div className="space-y-6">
       <SettingsSection title="Provider installs">
@@ -2111,9 +2314,9 @@ function SettingsRouteView() {
                           ? geminiBinaryPath
                           : providerSettings.binaryPathKey === "kiloBinaryPath"
                             ? kiloBinaryPath
-                          : providerSettings.binaryPathKey === "openCodeBinaryPath"
-                            ? openCodeBinaryPath
-                            : codexBinaryPath;
+                            : providerSettings.binaryPathKey === "openCodeBinaryPath"
+                              ? openCodeBinaryPath
+                              : codexBinaryPath;
 
                   return (
                     <Collapsible
@@ -2175,10 +2378,10 @@ function SettingsRouteView() {
                                             ? { geminiBinaryPath: event.target.value }
                                             : providerSettings.binaryPathKey === "kiloBinaryPath"
                                               ? { kiloBinaryPath: event.target.value }
-                                            : providerSettings.binaryPathKey ===
-                                                "openCodeBinaryPath"
-                                              ? { openCodeBinaryPath: event.target.value }
-                                              : { codexBinaryPath: event.target.value },
+                                              : providerSettings.binaryPathKey ===
+                                                  "openCodeBinaryPath"
+                                                ? { openCodeBinaryPath: event.target.value }
+                                                : { codexBinaryPath: event.target.value },
                                     )
                                   }
                                   placeholder={providerSettings.binaryPlaceholder}
@@ -2250,24 +2453,24 @@ function SettingsRouteView() {
                                   htmlFor={`provider-install-${providerSettings.serverUrlKey}`}
                                   className="block"
                                 >
-	                                  <span className="block text-xs font-medium text-foreground">
-	                                    {providerSettings.title} server URL
-	                                  </span>
+                                  <span className="block text-xs font-medium text-foreground">
+                                    {providerSettings.title} server URL
+                                  </span>
                                   <Input
                                     id={`provider-install-${providerSettings.serverUrlKey}`}
                                     className="mt-1"
-	                                    value={
-	                                      providerSettings.serverUrlKey === "kiloServerUrl"
-	                                        ? kiloServerUrl
-	                                        : openCodeServerUrl
-	                                    }
-	                                    onChange={(event) =>
-	                                      updateSettings(
-	                                        providerSettings.serverUrlKey === "kiloServerUrl"
-	                                          ? { kiloServerUrl: event.target.value }
-	                                          : { openCodeServerUrl: event.target.value },
-	                                      )
-	                                    }
+                                    value={
+                                      providerSettings.serverUrlKey === "kiloServerUrl"
+                                        ? kiloServerUrl
+                                        : openCodeServerUrl
+                                    }
+                                    onChange={(event) =>
+                                      updateSettings(
+                                        providerSettings.serverUrlKey === "kiloServerUrl"
+                                          ? { kiloServerUrl: event.target.value }
+                                          : { openCodeServerUrl: event.target.value },
+                                      )
+                                    }
                                     placeholder={providerSettings.serverUrlPlaceholder}
                                     spellCheck={false}
                                   />
@@ -2284,25 +2487,24 @@ function SettingsRouteView() {
                                   htmlFor={`provider-install-${providerSettings.serverPasswordKey}`}
                                   className="block"
                                 >
-	                                  <span className="block text-xs font-medium text-foreground">
-	                                    {providerSettings.title} server password
-	                                  </span>
+                                  <span className="block text-xs font-medium text-foreground">
+                                    {providerSettings.title} server password
+                                  </span>
                                   <Input
                                     id={`provider-install-${providerSettings.serverPasswordKey}`}
                                     className="mt-1"
-	                                    value={
-	                                      providerSettings.serverPasswordKey === "kiloServerPassword"
-	                                        ? kiloServerPassword
-	                                        : openCodeServerPassword
-	                                    }
-	                                    onChange={(event) =>
-	                                      updateSettings(
-	                                        providerSettings.serverPasswordKey ===
-	                                          "kiloServerPassword"
-	                                          ? { kiloServerPassword: event.target.value }
-	                                          : { openCodeServerPassword: event.target.value },
-	                                      )
-	                                    }
+                                    value={
+                                      providerSettings.serverPasswordKey === "kiloServerPassword"
+                                        ? kiloServerPassword
+                                        : openCodeServerPassword
+                                    }
+                                    onChange={(event) =>
+                                      updateSettings(
+                                        providerSettings.serverPasswordKey === "kiloServerPassword"
+                                          ? { kiloServerPassword: event.target.value }
+                                          : { openCodeServerPassword: event.target.value },
+                                      )
+                                    }
                                     placeholder={providerSettings.serverPasswordPlaceholder}
                                     spellCheck={false}
                                   />
@@ -2440,6 +2642,8 @@ function SettingsRouteView() {
         return renderArchivedPanel();
       case "models":
         return renderModelsPanel();
+      case "providers":
+        return renderProvidersPanel();
       case "advanced":
         return renderAdvancedPanel();
       default:

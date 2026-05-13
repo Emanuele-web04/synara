@@ -27,6 +27,9 @@ import {
   resolveModelSlug,
   resolveModelSlugForProvider,
   getDefaultEffort,
+  getProviderOptionCurrentLabel,
+  getProviderOptionDescriptors,
+  buildProviderOptionSelectionsFromDescriptors,
   hasEffortLevel,
 } from "./model";
 
@@ -247,6 +250,69 @@ describe("hasEffortLevel", () => {
     const codexCaps = getModelCapabilities("codex", "gpt-5.4");
     expect(hasEffortLevel(codexCaps, "xhigh")).toBe(true);
     expect(hasEffortLevel(codexCaps, "max")).toBe(false);
+  });
+});
+
+describe("provider option descriptor helpers", () => {
+  it("projects legacy Codex capability flags into generic option descriptors", () => {
+    const descriptors = getProviderOptionDescriptors({
+      provider: "codex",
+      caps: getModelCapabilities("codex", "gpt-5.4"),
+      selections: { reasoningEffort: "xhigh", fastMode: true },
+    });
+
+    const reasoning = descriptors.find((descriptor) => descriptor.id === "reasoningEffort");
+    const fastMode = descriptors.find((descriptor) => descriptor.id === "fastMode");
+
+    expect(reasoning).toMatchObject({
+      type: "select",
+      currentValue: "xhigh",
+    });
+    expect(getProviderOptionCurrentLabel(reasoning)).toBe("Extra High");
+    expect(fastMode).toMatchObject({
+      type: "boolean",
+      currentValue: true,
+    });
+  });
+
+  it("coerces legacy numeric Gemini budgets into string select values", () => {
+    const descriptors = getProviderOptionDescriptors({
+      provider: "gemini",
+      caps: getModelCapabilities("gemini", "gemini-2.5-pro"),
+      selections: { thinkingBudget: 512 },
+    });
+
+    expect(descriptors.find((descriptor) => descriptor.id === "thinkingBudget")).toMatchObject({
+      type: "select",
+      currentValue: "512",
+    });
+  });
+
+  it("honors explicit descriptors and serializes their current values", () => {
+    const descriptors = getProviderOptionDescriptors({
+      provider: "codex",
+      caps: {
+        ...getModelCapabilities("codex", "gpt-5.4"),
+        optionDescriptors: [
+          {
+            id: "reasoningDepth",
+            label: "Reasoning Depth",
+            type: "select",
+            options: [
+              { id: "normal", label: "Normal", isDefault: true },
+              { id: "deep", label: "Deep" },
+            ],
+          },
+        ],
+      },
+      selections: [{ id: "reasoningDepth", value: "deep" }],
+    });
+
+    expect(descriptors).toHaveLength(1);
+    expect(descriptors[0]).toMatchObject({ id: "reasoningDepth", currentValue: "deep" });
+    expect(buildProviderOptionSelectionsFromDescriptors(descriptors)).toEqual([
+      { id: "reasoningDepth", value: "deep" },
+    ]);
   });
 });
 

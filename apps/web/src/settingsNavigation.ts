@@ -10,6 +10,7 @@ import {
   BrainIcon,
   type LucideIcon,
   PaletteIcon,
+  PlugIcon,
   SettingsIcon,
   WrenchIcon,
   WorktreeIcon,
@@ -23,6 +24,7 @@ export const SETTINGS_SECTION_IDS = [
   "worktrees",
   "archived",
   "models",
+  "providers",
   "advanced",
 ] as const;
 
@@ -102,6 +104,14 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     description: "Git writing defaults and custom model slugs.",
     icon: BrainIcon,
     eyebrow: "AI configuration",
+  },
+  {
+    id: "providers",
+    group: "dpcode",
+    label: "Providers",
+    description: "Choose which providers show up in the composer picker.",
+    icon: PlugIcon,
+    eyebrow: "Picker visibility",
   },
   {
     id: "advanced",

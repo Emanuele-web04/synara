@@ -5,6 +5,7 @@
 
 import { Schema } from "effect";
 import { TrimmedNonEmptyString } from "./baseSchemas";
+import { ProviderOptionDescriptor } from "./model";
 
 const ProviderDiscoveryKind = Schema.Literals([
   "codex",
@@ -243,6 +244,7 @@ export const ProviderModelDescriptor = Schema.Struct({
   name: TrimmedNonEmptyString,
   upstreamProviderId: Schema.optional(TrimmedNonEmptyString),
   upstreamProviderName: Schema.optional(TrimmedNonEmptyString),
+  optionDescriptors: Schema.optional(Schema.Array(ProviderOptionDescriptor)),
   // Codex model/list results are normalized here so the web app can consume both
   // the legacy string array and Remodex-style reasoning objects uniformly.
   supportedReasoningEfforts: Schema.optional(Schema.Array(ProviderReasoningEffortDescriptor)),

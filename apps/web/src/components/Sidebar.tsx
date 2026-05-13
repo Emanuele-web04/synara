@@ -2073,9 +2073,9 @@ export default function Sidebar() {
             ? `Imported Cursor session${suffix ? ` ${suffix}` : ""}`
             : provider === "kilo"
               ? `Imported Kilo session${suffix ? ` ${suffix}` : ""}`
-            : provider === "opencode"
-              ? `Imported OpenCode session${suffix ? ` ${suffix}` : ""}`
-              : `Imported Codex thread${suffix ? ` ${suffix}` : ""}`;
+              : provider === "opencode"
+                ? `Imported OpenCode session${suffix ? ` ${suffix}` : ""}`
+                : `Imported Codex thread${suffix ? ` ${suffix}` : ""}`;
       let createdThread = false;
 
       try {
@@ -4029,7 +4029,7 @@ export default function Sidebar() {
               : "grid-cols-[auto_minmax(0,1fr)_auto_3.5rem]",
             isActive
               ? "bg-[var(--sidebar-accent-active)] text-[var(--sidebar-accent-foreground)]"
-              : "text-foreground/72 hover:bg-[var(--sidebar-accent)]",
+              : "text-foreground/89 hover:bg-[var(--sidebar-accent)]",
           )}
           onPointerDown={(event) => primeThreadActivation(event, thread.id)}
           onClick={() => activateThreadFromSidebarIntent(thread.id)}
@@ -4092,10 +4092,7 @@ export default function Sidebar() {
               <TooltipTrigger
                 render={
                   <span
-                    className={cn(
-                      "min-w-0 flex-1 truncate transition-opacity group-hover/thread-row:opacity-100",
-                      isActive ? "opacity-100" : "opacity-80",
-                    )}
+                    className="min-w-0 flex-1 truncate"
                     data-testid={`thread-title-${thread.id}`}
                   >
                     {isSubagentThread ? (
@@ -4404,8 +4401,13 @@ export default function Sidebar() {
             ) : (
               <span
                 className={cn(
-                  "min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)] text-foreground/86 transition-opacity group-hover/thread-row:opacity-100",
-                  isActive ? "opacity-100" : "opacity-80",
+                  "min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)]",
+                  // Mirror the constant 89% foreground used by the "New chat" /
+                  // "Search" primary actions so the inactive thread label sits
+                  // at the same emphasis level. Active rows still pop via the
+                  // row background and full-foreground color from
+                  // resolveThreadRowClassName.
+                  isActive ? "text-foreground" : "text-foreground/89",
                   isSubagentThread ? "leading-[18px] text-foreground/80" : "leading-5",
                 )}
               >
@@ -5432,8 +5434,12 @@ export default function Sidebar() {
                               <Icon className="size-3.5 shrink-0" />
                               <span
                                 className={cn(
-                                  "truncate text-[length:var(--app-font-size-ui,12px)] leading-5 transition-opacity group-hover/settings-nav-item:opacity-100",
-                                  isActive ? "opacity-100" : "opacity-80",
+                                  "truncate text-[length:var(--app-font-size-ui,12px)] leading-5",
+                                  // Matches the constant 89% foreground used by
+                                  // SidebarPrimaryAction ("New chat" / "Search")
+                                  // so settings nav labels sit at the same
+                                  // visual weight as the rest of the sidebar.
+                                  isActive ? "text-foreground" : "text-foreground/89",
                                 )}
                               >
                                 {item.label}

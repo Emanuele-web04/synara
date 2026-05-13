@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildProviderOptionPatch,
   formatProviderModelOptionName,
   groupProviderModelOptions,
   groupProviderModelOptionsWithFavorites,
@@ -38,6 +39,24 @@ describe("formatProviderModelOptionName", () => {
         slug: "custom/internal-model",
       }),
     ).toBe("custom/internal-model");
+  });
+});
+
+describe("buildProviderOptionPatch", () => {
+  it("maps generic Gemini thinking selections back to the provider-specific option shape", () => {
+    expect(buildProviderOptionPatch("gemini", "thinkingBudget", "512")).toEqual({
+      thinkingBudget: 512,
+    });
+    expect(buildProviderOptionPatch("gemini", "thinkingLevel", "HIGH")).toEqual({
+      thinkingLevel: "HIGH",
+    });
+  });
+
+  it("passes through non-Gemini option ids unchanged", () => {
+    expect(buildProviderOptionPatch("codex", "reasoningEffort", "xhigh")).toEqual({
+      reasoningEffort: "xhigh",
+    });
+    expect(buildProviderOptionPatch("cursor", "fastMode", true)).toEqual({ fastMode: true });
   });
 });
 

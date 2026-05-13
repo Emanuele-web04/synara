@@ -992,11 +992,11 @@ function normalizeModelSelection(
           ? modelOptions?.gemini
           : provider === "kilo"
             ? modelOptions?.kilo
-          : provider === "cursor"
-            ? modelOptions?.cursor
-            : provider === "opencode"
-              ? modelOptions?.opencode
-              : undefined;
+            : provider === "cursor"
+              ? modelOptions?.cursor
+              : provider === "opencode"
+                ? modelOptions?.opencode
+                : undefined;
   return makeModelSelection(provider, model, options);
 }
 
@@ -1054,7 +1054,14 @@ function legacyToModelSelectionByProvider(
   const result: Partial<Record<ProviderKind, ModelSelection>> = {};
   // Add entries from the options bag (for non-active providers)
   if (modelOptions) {
-    for (const provider of ["codex", "claudeAgent", "cursor", "gemini", "kilo", "opencode"] as const) {
+    for (const provider of [
+      "codex",
+      "claudeAgent",
+      "cursor",
+      "gemini",
+      "kilo",
+      "opencode",
+    ] as const) {
       const options = modelOptions[provider];
       if (options && Object.keys(options).length > 0) {
         result[provider] = makeModelSelection(

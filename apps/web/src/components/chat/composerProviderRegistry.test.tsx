@@ -5,6 +5,7 @@ import {
   renderProviderTraitsMenuContent,
   renderProviderTraitsPicker,
 } from "./composerProviderRegistry";
+import { getComposerTraitSelection } from "./composerTraits";
 
 const OPENCODE_RUNTIME_MODEL_WITH_REASONING: ProviderModelDescriptor = {
   slug: "openai/gpt-5.4",
@@ -218,6 +219,35 @@ describe("getComposerProviderState", () => {
       composerSurfaceClassName: "shadow-[0_0_0_1px_rgba(255,255,255,0.04)_inset]",
       modelPickerIconClassName: "ultrathink-chroma",
     });
+  });
+
+  it("treats descriptor prompt-injected choices like legacy prompt-controlled efforts", () => {
+    const selection = getComposerTraitSelection(
+      "claudeAgent",
+      "claude-sonnet-4-6",
+      "Ultrathink:\nInvestigate this",
+      { effort: "ultrathink" },
+      {
+        slug: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        optionDescriptors: [
+          {
+            id: "effort",
+            label: "Effort",
+            type: "select",
+            promptInjectedValues: ["ultrathink"],
+            options: [
+              { id: "high", label: "High", isDefault: true },
+              { id: "ultrathink", label: "Ultrathink" },
+            ],
+          },
+        ],
+      },
+    );
+
+    expect(selection.promptInjectedValues).toContain("ultrathink");
+    expect(selection.effort).toBe("high");
+    expect(selection.ultrathinkPromptControlled).toBe(true);
   });
 
   it("drops unsupported Claude effort options for models without effort controls", () => {

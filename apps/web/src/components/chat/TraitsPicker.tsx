@@ -10,10 +10,7 @@ import {
   type ProviderModelDescriptor,
   type ThreadId,
 } from "@t3tools/contracts";
-import {
-  applyClaudePromptEffortPrefix,
-  geminiModelOptionsFromEffortValue,
-} from "@t3tools/shared/model";
+import { applyClaudePromptEffortPrefix } from "@t3tools/shared/model";
 import { memo, useCallback, useState } from "react";
 import { IoFlash } from "react-icons/io5";
 import { ChevronDownIcon } from "~/lib/icons";
@@ -28,7 +25,11 @@ import {
   MenuTrigger,
 } from "../ui/menu";
 import { useComposerDraftStore } from "../../composerDraftStore";
-import { buildNextProviderOptions, type ProviderOptions } from "../../providerModelOptions";
+import {
+  buildNextProviderOptions,
+  buildProviderOptionPatch,
+  type ProviderOptions,
+} from "../../providerModelOptions";
 import { COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME } from "./composerPickerStyles";
 import { getComposerTraitSelection, hasVisibleComposerTraitControls } from "./composerTraits";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -107,11 +108,15 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     contextWindow,
     defaultContextWindow,
     ultrathinkPromptControlled,
+    primarySelectDescriptor,
+    fastModeDescriptor,
+    promptInjectedValues,
   } = getComposerTraitSelection(provider, model, prompt, modelOptions, runtimeModel);
   const hasVisibleControls = hasVisibleComposerTraitControls(
-    { caps, effortLevels, thinkingEnabled, contextWindowOptions },
+    { caps, effortLevels, thinkingEnabled, contextWindowOptions, fastModeDescriptor },
     { includeFastMode },
   );
+  const supportsFastModeControl = fastModeDescriptor !== null || caps.supportsFastMode;
   const agentOptions = getAgentOptions(provider, runtimeAgents);
   const defaultAgent = defaultAgentForProvider(provider);
   const selectedAgent = getSelectedAgentValue(provider, modelOptions);
@@ -125,7 +130,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
       if (!value) return;
       const nextOption = effortLevels.find((option) => option.value === value);
       if (!nextOption) return;
-      if (caps.promptInjectedEffortLevels.includes(nextOption.value)) {
+      if (promptInjectedValues.includes(nextOption.value)) {
         const nextPrompt =
           prompt.trim().length === 0
             ? ULTRATHINK_PROMPT_PREFIX
@@ -134,14 +139,16 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
         onSelectionComplete?.();
         return;
       }
-      const nextModelOptionsPatch =
-        provider === "gemini"
-          ? (geminiModelOptionsFromEffortValue(nextOption.value) ?? {})
-          : provider === "kilo" || provider === "opencode"
-            ? { variant: nextOption.value }
-            : provider === "codex"
-              ? { reasoningEffort: nextOption.value }
-              : { effort: nextOption.value };
+      const optionId =
+        primarySelectDescriptor?.id ??
+        (provider === "kilo" || provider === "opencode"
+          ? "variant"
+          : provider === "claudeAgent"
+            ? "effort"
+            : provider === "gemini"
+              ? "thinkingLevel"
+              : "reasoningEffort");
+      const nextModelOptionsPatch = buildProviderOptionPatch(provider, optionId, nextOption.value);
       setProviderModelOptions(
         threadId,
         provider,
@@ -159,9 +166,10 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
       setProviderModelOptions,
       effortLevels,
       prompt,
-      caps.promptInjectedEffortLevels,
+      promptInjectedValues,
       model,
       provider,
+      primarySelectDescriptor?.id,
     ],
   );
 
@@ -233,7 +241,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
           </MenuRadioGroup>
         </MenuGroup>
       ) : null}
-      {includeFastMode && caps.supportsFastMode ? (
+      {includeFastMode && supportsFastModeControl ? (
         <>
           {hasPriorFastModeSection ? <MenuDivider /> : null}
           <MenuGroup>
@@ -384,11 +392,13 @@ export const TraitsPicker = memo(function TraitsPicker({
     contextWindow,
     defaultContextWindow,
     ultrathinkPromptControlled,
+    fastModeDescriptor,
   } = getComposerTraitSelection(provider, model, prompt, modelOptions, runtimeModel);
   const hasVisibleControls = hasVisibleComposerTraitControls(
-    { caps, effortLevels, thinkingEnabled, contextWindowOptions },
+    { caps, effortLevels, thinkingEnabled, contextWindowOptions, fastModeDescriptor },
     { includeFastMode },
   );
+  const supportsFastModeControl = fastModeDescriptor !== null || caps.supportsFastMode;
   const agentOptions = getAgentOptions(provider, runtimeAgents);
   const defaultAgent = defaultAgentForProvider(provider);
   const selectedAgent = getSelectedAgentValue(provider, modelOptions);
@@ -406,7 +416,7 @@ export const TraitsPicker = memo(function TraitsPicker({
       ? (contextWindowOptions.find((option) => option.value === contextWindow)?.label ?? null)
       : null;
   const isFastOnlyControl =
-    caps.supportsFastMode &&
+    supportsFastModeControl &&
     effortLevels.length === 0 &&
     thinkingEnabled === null &&
     contextWindowOptions.length <= 1;
@@ -423,7 +433,7 @@ export const TraitsPicker = memo(function TraitsPicker({
           : null;
   const agentLabel = findAgentLabel(agentOptions, selectedAgent);
   const visiblePrimaryTriggerLabel = primaryTriggerLabel ?? agentLabel;
-  const showsFastBadge = caps.supportsFastMode && fastModeEnabled && !isFastOnlyControl;
+  const showsFastBadge = supportsFastModeControl && fastModeEnabled && !isFastOnlyControl;
 
   const isCodexStyle = provider === "codex";
 
@@ -442,7 +452,9 @@ export const TraitsPicker = memo(function TraitsPicker({
   const triggerContent = isCodexStyle ? (
     <span className="flex min-w-0 w-full items-center gap-2 overflow-hidden">
       <span className="min-w-0 flex flex-1 items-center gap-1.5 truncate">
-        {visiblePrimaryTriggerLabel ? <span className="truncate">{visiblePrimaryTriggerLabel}</span> : null}
+        {visiblePrimaryTriggerLabel ? (
+          <span className="truncate">{visiblePrimaryTriggerLabel}</span>
+        ) : null}
         {showsFastBadge ? (
           <>
             {visiblePrimaryTriggerLabel ? (
@@ -471,7 +483,9 @@ export const TraitsPicker = memo(function TraitsPicker({
         {visiblePrimaryTriggerLabel ? <span>{visiblePrimaryTriggerLabel}</span> : null}
         {showsFastBadge ? (
           <>
-            {visiblePrimaryTriggerLabel ? <span className="text-muted-foreground/45">·</span> : null}
+            {visiblePrimaryTriggerLabel ? (
+              <span className="text-muted-foreground/45">·</span>
+            ) : null}
             <span className="inline-flex items-center gap-1">
               <IoFlash aria-hidden="true" className="size-3 text-[hsl(var(--chart-4))]" />
               <span>Fast</span>

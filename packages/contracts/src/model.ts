@@ -23,6 +23,51 @@ export type ProviderReasoningEffort =
   | GeminiThinkingLevel
   | `${GeminiThinkingBudget}`;
 
+export const ProviderOptionChoice = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  label: TrimmedNonEmptyString,
+  description: Schema.optional(TrimmedNonEmptyString),
+  isDefault: Schema.optional(Schema.Literal(true)),
+});
+export type ProviderOptionChoice = typeof ProviderOptionChoice.Type;
+
+const ProviderOptionDescriptorBase = {
+  id: TrimmedNonEmptyString,
+  label: TrimmedNonEmptyString,
+  description: Schema.optional(TrimmedNonEmptyString),
+} as const;
+
+export const SelectProviderOptionDescriptor = Schema.Struct({
+  ...ProviderOptionDescriptorBase,
+  type: Schema.Literal("select"),
+  options: Schema.Array(ProviderOptionChoice),
+  currentValue: Schema.optional(TrimmedNonEmptyString),
+  promptInjectedValues: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+});
+export type SelectProviderOptionDescriptor = typeof SelectProviderOptionDescriptor.Type;
+
+export const BooleanProviderOptionDescriptor = Schema.Struct({
+  ...ProviderOptionDescriptorBase,
+  type: Schema.Literal("boolean"),
+  currentValue: Schema.optional(Schema.Boolean),
+});
+export type BooleanProviderOptionDescriptor = typeof BooleanProviderOptionDescriptor.Type;
+
+export const ProviderOptionDescriptor = Schema.Union([
+  SelectProviderOptionDescriptor,
+  BooleanProviderOptionDescriptor,
+]);
+export type ProviderOptionDescriptor = typeof ProviderOptionDescriptor.Type;
+
+export const ProviderOptionSelection = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  value: Schema.Union([TrimmedNonEmptyString, Schema.Boolean]),
+});
+export type ProviderOptionSelection = typeof ProviderOptionSelection.Type;
+
+export const ProviderOptionSelections = Schema.Array(ProviderOptionSelection);
+export type ProviderOptionSelections = typeof ProviderOptionSelections.Type;
+
 export const CodexModelOptions = Schema.Struct({
   // Codex runtime discovery can expose early-access effort values outside the built-in enum.
   reasoningEffort: Schema.optional(TrimmedNonEmptyString),
@@ -82,6 +127,7 @@ export type ContextWindowOption = {
 };
 
 export type ModelCapabilities = {
+  readonly optionDescriptors?: readonly ProviderOptionDescriptor[];
   readonly reasoningEffortLevels: readonly EffortOption[];
   readonly supportsFastMode: boolean;
   readonly supportsThinkingToggle: boolean;

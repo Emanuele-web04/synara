@@ -144,6 +144,7 @@ interface OpenCodeSessionContext {
   latestTurnCostUsd: number | undefined;
   activeTurnId: TurnId | undefined;
   activeTurnEventSerial: number;
+  activeTurnProviderActivitySerial: number;
   activeInteractionMode: "default" | "plan" | undefined;
   activeAgent: string | undefined;
   activeVariant: string | undefined;
@@ -670,10 +671,21 @@ function updateProviderSession(
 function clearActiveTurnState(context: OpenCodeSessionContext): void {
   context.activeTurnId = undefined;
   context.activeTurnEventSerial = 0;
+  context.activeTurnProviderActivitySerial = 0;
   context.activeInteractionMode = undefined;
   context.activeAgent = undefined;
   context.activeVariant = undefined;
   context.latestTurnCostUsd = undefined;
+}
+
+function markOpenCodeTurnProviderActivity(
+  context: OpenCodeSessionContext,
+  turnId: TurnId | undefined,
+): void {
+  if (!turnId || context.activeTurnId !== turnId) {
+    return;
+  }
+  context.activeTurnProviderActivitySerial += 1;
 }
 
 function openCodeNextTextItemId(turnId: TurnId): string {
@@ -825,6 +837,33 @@ function shouldHandleSubscribedEvent(
     context.activeTurnId !== undefined &&
     (event.type === "session.error" || event.type === "session.idle")
   );
+}
+
+function isOpenCodeTurnProviderActivityEvent(
+  context: OpenCodeSessionContext,
+  event: OpenCodeSubscribedEvent,
+): boolean {
+  switch (event.type) {
+    case "message.updated":
+      return event.properties.info.role === "assistant";
+    case "message.part.delta": {
+      const part = context.partById.get(event.properties.partID);
+      return part ? messageRoleForPart(context, part) === "assistant" : false;
+    }
+    case "message.part.updated":
+      return messageRoleForPart(context, event.properties.part) === "assistant";
+    case "session.status":
+      return event.properties.status.type === "busy" || event.properties.status.type === "retry";
+    case "permission.asked":
+    case "question.asked":
+    case "todo.updated":
+    case "session.compacted":
+    case "session.error":
+    case "session.idle":
+      return true;
+    default:
+      return event.type.startsWith("session.next.");
+  }
 }
 
 type OpenCodeAssistantTokens = AssistantMessage["tokens"];
@@ -1549,7 +1588,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
       const openCodeRuntime = yield* OpenCodeRuntime;
       const provider = adapterConfig.provider;
       const buildEventBase = (
-        input: Omit<Parameters<typeof buildProviderEventBase>[0], "provider" | "runtimeEventSource">,
+        input: Omit<
+          Parameters<typeof buildProviderEventBase>[0],
+          "provider" | "runtimeEventSource"
+        >,
       ) =>
         buildProviderEventBase({
           provider,
@@ -1897,6 +1939,59 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         });
       });
 
+      const recoverOpenCodeTurnFromAssistantMessage = Effect.fn(
+        "recoverOpenCodeTurnFromAssistantMessage",
+      )(function* (
+        context: OpenCodeSessionContext,
+        input: {
+          readonly turnId: TurnId;
+          readonly assistantEntry: OpenCodeMessageSnapshot & {
+            readonly info: Record<string, unknown>;
+          };
+          readonly raw: unknown;
+        },
+      ) {
+        context.messageRoleById.set(input.assistantEntry.info.id, "assistant");
+        for (const part of input.assistantEntry.parts) {
+          context.partById.set(part.id, part);
+          yield* emitRecoveredAssistantTextDelta(context, part, input.turnId, input.raw);
+        }
+
+        const selectedModel = context.session.model;
+        const maxTokens =
+          selectedModel !== undefined
+            ? context.modelContextLimitBySlug.get(selectedModel)
+            : undefined;
+        const normalizedUsage = normalizeOpenCodeTokenUsage(
+          (input.assistantEntry.info as Partial<AssistantMessage>).tokens,
+          maxTokens,
+        );
+        if (normalizedUsage !== undefined) {
+          context.lastKnownTokenUsage = normalizedUsage;
+          yield* emit({
+            ...buildEventBase({
+              threadId: context.session.threadId,
+              turnId: input.turnId,
+              raw: input.raw,
+            }),
+            type: "thread.token-usage.updated",
+            payload: {
+              usage: normalizedUsage,
+            },
+          });
+        }
+        const cost = asFiniteNonNegativeNumber(
+          (input.assistantEntry.info as Partial<AssistantMessage>).cost,
+        );
+        context.latestTurnCostUsd = cost;
+        yield* completeOpenCodeTurn(context, {
+          turnId: input.turnId,
+          raw: input.raw,
+          totalCostUsd: cost,
+        });
+        return true;
+      });
+
       const recoverOpenCodeTurnFromMessages = Effect.fn("recoverOpenCodeTurnFromMessages")(
         function* (
           context: OpenCodeSessionContext,
@@ -1938,49 +2033,14 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             return false;
           }
 
-          context.messageRoleById.set(assistantEntry.info.id, "assistant");
-          const raw = {
-            source: "dpcode.opencode.prompt_async.recovery",
-            message: assistantEntry,
-          };
-          for (const part of assistantEntry.parts) {
-            context.partById.set(part.id, part);
-            yield* emitRecoveredAssistantTextDelta(context, part, input.turnId, raw);
-          }
-
-          const selectedModel = context.session.model;
-          const maxTokens =
-            selectedModel !== undefined
-              ? context.modelContextLimitBySlug.get(selectedModel)
-              : undefined;
-          const normalizedUsage = normalizeOpenCodeTokenUsage(
-            (assistantEntry.info as Partial<AssistantMessage>).tokens,
-            maxTokens,
-          );
-          if (normalizedUsage !== undefined) {
-            context.lastKnownTokenUsage = normalizedUsage;
-            yield* emit({
-              ...buildEventBase({
-                threadId: context.session.threadId,
-                turnId: input.turnId,
-                raw,
-              }),
-              type: "thread.token-usage.updated",
-              payload: {
-                usage: normalizedUsage,
-              },
-            });
-          }
-          const cost = asFiniteNonNegativeNumber(
-            (assistantEntry.info as Partial<AssistantMessage>).cost,
-          );
-          context.latestTurnCostUsd = cost;
-          yield* completeOpenCodeTurn(context, {
+          return yield* recoverOpenCodeTurnFromAssistantMessage(context, {
             turnId: input.turnId,
-            raw,
-            totalCostUsd: cost,
+            assistantEntry,
+            raw: {
+              source: "dpcode.opencode.prompt.recovery",
+              message: assistantEntry,
+            },
           });
-          return true;
         },
       );
 
@@ -2014,7 +2074,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         context: OpenCodeSessionContext,
         input: {
           readonly turnId: TurnId;
-          readonly eventSerial: number;
+          readonly providerActivitySerial: number;
           readonly excludedMessageIds: ReadonlySet<string>;
         },
       ) {
@@ -2041,16 +2101,16 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               }
               if (
                 context.activeTurnId !== input.turnId ||
-                context.activeTurnEventSerial !== input.eventSerial
+                context.activeTurnProviderActivitySerial !== input.providerActivitySerial
               ) {
                 return;
               }
 
               const message =
-                "OpenCode accepted the prompt but did not emit any session activity. This can happen when OpenCode prompt_async does not wake an idle session.";
+                "OpenCode did not produce any activity for this prompt. The session may be stuck; try sending again or restart OpenCode.";
               yield* completeOpenCodeTurn(context, {
                 turnId: input.turnId,
-                raw: { source: "dpcode.opencode.prompt_async.watchdog" },
+                raw: { source: "dpcode.opencode.prompt.watchdog" },
                 errorMessage: message,
               });
               updateProviderSession(
@@ -2065,7 +2125,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 ...buildEventBase({
                   threadId: context.session.threadId,
                   turnId: input.turnId,
-                  raw: { source: "dpcode.opencode.prompt_async.watchdog" },
+                  raw: { source: "dpcode.opencode.prompt.watchdog" },
                 }),
                 type: "runtime.error",
                 payload: {
@@ -2080,23 +2140,51 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         );
       });
 
-      const submitOpenCodePromptAsync = Effect.fn("submitOpenCodePromptAsync")(function* (
+      const submitOpenCodePrompt = Effect.fn("submitOpenCodePrompt")(function* (
         context: OpenCodeSessionContext,
         input: {
           readonly turnId: TurnId;
-          readonly eventSerial: number;
-          readonly promptInput: Parameters<OpencodeClient["session"]["promptAsync"]>[0];
+          readonly promptInput: Parameters<OpencodeClient["session"]["prompt"]>[0];
         },
       ) {
         const settled = yield* Deferred.make<ProviderAdapterRequestError | null, never>();
 
-        // OpenCode can block the prompt_async HTTP call during cold starts; keep DP Code's
-        // orchestration responsive and let runtime events/watchdogs settle the turn.
-        yield* runOpenCodeSdk("session.promptAsync", () =>
-          context.client.session.promptAsync(input.promptInput),
+        // Keep the documented prompt request off the command path; SSE streams live
+        // updates, and the final HTTP response lets us recover if events are missed.
+        yield* runOpenCodeSdk("session.prompt", () =>
+          context.client.session.prompt(input.promptInput),
         ).pipe(
           Effect.mapError(toAdapterRequestError),
-          Effect.as(null),
+          Effect.flatMap((response) =>
+            Effect.gen(function* () {
+              if (yield* Ref.get(context.stopped)) {
+                return null;
+              }
+              if (context.activeTurnId !== input.turnId) {
+                return null;
+              }
+              const assistantEntry =
+                response.data && response.data.info.role === "assistant"
+                  ? ({
+                      info: response.data.info,
+                      parts: response.data.parts,
+                    } satisfies OpenCodeMessageSnapshot & {
+                      readonly info: Record<string, unknown>;
+                    })
+                  : null;
+              if (assistantEntry && isOpenCodeCompletedAssistantMessage(assistantEntry)) {
+                yield* recoverOpenCodeTurnFromAssistantMessage(context, {
+                  turnId: input.turnId,
+                  assistantEntry,
+                  raw: {
+                    source: "dpcode.opencode.prompt.response",
+                    message: assistantEntry,
+                  },
+                });
+              }
+              return null;
+            }),
+          ),
           Effect.catch((requestError) =>
             Effect.gen(function* () {
               if (yield* Ref.get(context.stopped)) {
@@ -2104,7 +2192,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               }
               if (
                 context.activeTurnId !== input.turnId ||
-                context.activeTurnEventSerial !== input.eventSerial
+                context.activeTurnProviderActivitySerial > 0
               ) {
                 return requestError;
               }
@@ -2151,6 +2239,11 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         const turnId = context.activeTurnId;
         if (turnId) {
           context.activeTurnEventSerial += 1;
+          // User-message echoes should not disable prompt recovery; track provider-side
+          // activity separately for the "accepted but nothing started" watchdog.
+          if (isOpenCodeTurnProviderActivityEvent(context, event)) {
+            markOpenCodeTurnProviderActivity(context, turnId);
+          }
         }
         yield* writeNativeEventBestEffort(context.session.threadId, {
           observedAt: nowIso(),
@@ -2930,44 +3023,42 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         },
       );
 
-      const replayOpenCodeMessageSnapshots = Effect.fn("replayOpenCodeMessageSnapshots")(
-        function* (
-          context: OpenCodeSessionContext,
-          snapshots: ReadonlyArray<OpenCodeMessageSnapshot>,
-          turnId: TurnId,
-        ) {
-          for (const snapshot of snapshots) {
-            const messageKey = openCodeSnapshotKey(snapshot.info);
-            if (context.messageSnapshotKeyById.get(snapshot.info.id) !== messageKey) {
-              yield* handleSubscribedEvent(context, {
-                type: "message.updated",
-                properties: {
-                  sessionID: context.openCodeSessionId,
-                  info: snapshot.info,
-                },
-              } as OpenCodeSubscribedEvent);
-            }
-
-            for (const part of snapshot.parts) {
-              const partKey = openCodeSnapshotKey(part);
-              if (context.partSnapshotKeyById.get(part.id) === partKey) {
-                continue;
-              }
-              yield* handleSubscribedEvent(context, {
-                type: "message.part.updated",
-                properties: {
-                  sessionID: context.openCodeSessionId,
-                  part,
-                },
-              } as OpenCodeSubscribedEvent);
-            }
+      const replayOpenCodeMessageSnapshots = Effect.fn("replayOpenCodeMessageSnapshots")(function* (
+        context: OpenCodeSessionContext,
+        snapshots: ReadonlyArray<OpenCodeMessageSnapshot>,
+        turnId: TurnId,
+      ) {
+        for (const snapshot of snapshots) {
+          const messageKey = openCodeSnapshotKey(snapshot.info);
+          if (context.messageSnapshotKeyById.get(snapshot.info.id) !== messageKey) {
+            yield* handleSubscribedEvent(context, {
+              type: "message.updated",
+              properties: {
+                sessionID: context.openCodeSessionId,
+                info: snapshot.info,
+              },
+            } as OpenCodeSubscribedEvent);
           }
 
-          if (context.activeTurnId !== turnId) {
-            return;
+          for (const part of snapshot.parts) {
+            const partKey = openCodeSnapshotKey(part);
+            if (context.partSnapshotKeyById.get(part.id) === partKey) {
+              continue;
+            }
+            yield* handleSubscribedEvent(context, {
+              type: "message.part.updated",
+              properties: {
+                sessionID: context.openCodeSessionId,
+                part,
+              },
+            } as OpenCodeSubscribedEvent);
           }
-        },
-      );
+        }
+
+        if (context.activeTurnId !== turnId) {
+          return;
+        }
+      });
 
       const startKiloTurnSnapshotWatchdog = Effect.fn("startKiloTurnSnapshotWatchdog")(function* (
         context: OpenCodeSessionContext,
@@ -3109,8 +3200,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
       const startSession: OpenCodeAdapterShape["startSession"] = Effect.fn("startSession")(
         function* (input) {
           const providerOptions = input.providerOptions?.[adapterConfig.providerOptionsKey];
-          const binaryPath =
-            providerOptions?.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
+          const binaryPath = providerOptions?.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
           const serverUrl = providerOptions?.serverUrl?.trim();
           const serverPassword = providerOptions?.serverPassword?.trim();
           const directory = input.cwd ?? serverConfig.cwd;
@@ -3244,6 +3334,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             latestTurnCostUsd: undefined,
             activeTurnId: undefined,
             activeTurnEventSerial: 0,
+            activeTurnProviderActivitySerial: 0,
             activeInteractionMode: undefined,
             activeAgent: undefined,
             activeVariant: undefined,
@@ -3280,9 +3371,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         const turnId = TurnId.makeUnsafe(`${adapterConfig.turnIdPrefix}-${randomUUID()}`);
         const modelSelection =
           input.modelSelection ??
-          (context.session.model
-            ? { provider, model: context.session.model }
-            : undefined);
+          (context.session.model ? { provider, model: context.session.model } : undefined);
         const parsedModel = parseOpenCodeModelSlug(modelSelection?.model);
         if (!parsedModel) {
           return yield* new ProviderAdapterValidationError({
@@ -3323,14 +3412,13 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
         context.activeTurnId = turnId;
         context.activeTurnEventSerial = 0;
+        context.activeTurnProviderActivitySerial = 0;
         context.activeInteractionMode = input.interactionMode === "plan" ? "plan" : "default";
         // Always pin DP Code's interaction mode to OpenCode's primary agent.
         // Otherwise a user config with default agent=plan can trap default turns in plan mode.
         context.activeAgent =
           agent ??
-          (input.interactionMode === "plan"
-            ? adapterConfig.planAgent
-            : adapterConfig.defaultAgent);
+          (input.interactionMode === "plan" ? adapterConfig.planAgent : adapterConfig.defaultAgent);
         context.activeVariant = variant;
         updateProviderSession(
           context,
@@ -3359,17 +3447,17 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             : new Set<string>();
         const recoveryBaselineMessageIds = yield* captureOpenCodeRecoveryBaseline(context);
 
-        const eventSerial = context.activeTurnEventSerial;
+        const providerActivitySerial = context.activeTurnProviderActivitySerial;
         yield* schedulePromptAcceptedWatchdog(context, {
           turnId,
-          eventSerial,
+          providerActivitySerial,
           excludedMessageIds: recoveryBaselineMessageIds,
         });
-        yield* submitOpenCodePromptAsync(context, {
+        yield* submitOpenCodePrompt(context, {
           turnId,
-          eventSerial,
           promptInput: {
             sessionID: context.openCodeSessionId,
+            messageID: `msg_${randomUUID()}`,
             model: parsedModel,
             ...(context.activeAgent ? { agent: context.activeAgent } : {}),
             ...(context.activeVariant ? { variant: context.activeVariant } : {}),
@@ -3611,8 +3699,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           }
 
           const providerOptions = input.providerOptions?.[adapterConfig.providerOptionsKey];
-          const binaryPath =
-            providerOptions?.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
+          const binaryPath = providerOptions?.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
           const serverUrl = providerOptions?.serverUrl?.trim();
           const serverPassword = providerOptions?.serverPassword?.trim();
           const directory = input.cwd ?? sourceContext?.directory ?? serverConfig.cwd;
@@ -3858,9 +3945,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
 export const OpenCodeAdapterLive = makeOpenCodeAdapterLive();
 
-export function makeKiloAdapterLive(
-  options?: Omit<OpenCodeAdapterLiveOptions, "adapterConfig">,
-) {
+export function makeKiloAdapterLive(options?: Omit<OpenCodeAdapterLiveOptions, "adapterConfig">) {
   const kiloOpenCodeCompatibleLayer = makeOpenCodeAdapterLive({
     ...options,
     adapterConfig: KILO_ADAPTER_CONFIG,

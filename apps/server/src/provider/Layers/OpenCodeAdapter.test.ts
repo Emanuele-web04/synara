@@ -106,6 +106,8 @@ function makeModel(input: Omit<TestModelInput, "providerID"> & Pick<Model, "prov
 function createMockOpenCodeRuntime(options?: {
   readonly inventory?: OpenCodeInventory;
   readonly cliModels?: ReadonlyArray<OpenCodeCliModelDescriptor>;
+  readonly events?: AsyncIterable<unknown>;
+  readonly prompt?: (input: Record<string, unknown>) => Promise<unknown>;
   readonly promptAsync?: (input: Record<string, unknown>) => Promise<unknown>;
   readonly messages?: () => Promise<{
     data: Array<{ info: Record<string, unknown>; parts: Part[] }>;
@@ -122,7 +124,7 @@ function createMockOpenCodeRuntime(options?: {
   };
   const client = {
     event: {
-      subscribe: async () => ({ stream: emptySubscription }),
+      subscribe: async () => ({ stream: options?.events ?? emptySubscription }),
     },
     session: {
       create: async (input: Record<string, unknown>) => {
@@ -133,6 +135,13 @@ function createMockOpenCodeRuntime(options?: {
         promptCalls.push(promptInput);
         if (options?.promptAsync) {
           return options.promptAsync(promptInput);
+        }
+        return { data: null };
+      },
+      prompt: async (promptInput: Record<string, unknown>) => {
+        promptCalls.push(promptInput);
+        if (options?.prompt) {
+          return options.prompt(promptInput);
         }
         return { data: null };
       },
@@ -2793,9 +2802,9 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     });
   });
 
-  it("does not block sendTurn when OpenCode prompt_async stalls during startup", async () => {
+  it("does not block sendTurn when the OpenCode prompt request stalls during startup", async () => {
     const runtime = createMockOpenCodeRuntime({
-      promptAsync: async () => await new Promise(() => {}),
+      prompt: async () => await new Promise(() => {}),
     });
 
     const result = await Effect.runPromise(
@@ -2858,14 +2867,244 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       type: "turn.completed",
       payload: {
         state: "failed",
-        errorMessage: expect.stringContaining("prompt_async"),
+        errorMessage: expect.stringContaining("did not produce any activity"),
       },
     });
   });
 
-  it("keeps immediate OpenCode prompt_async failures on the sendTurn failure path", async () => {
+  it("recovers completed OpenCode replies from the prompt response when live events are missed", async () => {
     const runtime = createMockOpenCodeRuntime({
-      promptAsync: async () => {
+      prompt: async () => ({
+        data: {
+          info: {
+            id: "msg-assistant-response",
+            sessionID: "opencode-session-1",
+            role: "assistant",
+            time: { created: 2, completed: 3 },
+            cost: 0.02,
+            tokens: {
+              input: 0,
+              output: 0,
+              reasoning: 0,
+              cache: { read: 0, write: 0 },
+            },
+            finish: "stop",
+          },
+          parts: [
+            {
+              id: "part-assistant-response",
+              sessionID: "opencode-session-1",
+              messageID: "msg-assistant-response",
+              type: "text",
+              text: "response from prompt",
+              time: { start: 2, end: 3 },
+            } as Part,
+          ],
+        },
+      }),
+    });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 6)).pipe(
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-prompt-response-recovery"),
+          runtimeMode: "full-access",
+        });
+
+        yield* adapter.sendTurn({
+          threadId: asThreadId("thread-prompt-response-recovery"),
+          input: "hello",
+          attachments: [],
+          modelSelection: {
+            provider: "opencode",
+            model: "opencode/claude-opus-4-7",
+          },
+        });
+
+        return Array.from(yield* Fiber.join(eventsFiber));
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({
+            runtime: runtime.runtime,
+          }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(result.map((event) => event.type)).toEqual([
+      "session.started",
+      "thread.started",
+      "turn.started",
+      "content.delta",
+      "item.completed",
+      "turn.completed",
+    ]);
+    expect(result[3]).toMatchObject({
+      type: "content.delta",
+      payload: {
+        streamKind: "assistant_text",
+        delta: "response from prompt",
+      },
+    });
+    expect(result[5]).toMatchObject({
+      type: "turn.completed",
+      payload: {
+        state: "completed",
+        totalCostUsd: 0.02,
+      },
+    });
+  });
+
+  it("recovers prompt responses after user-message SSE activity", async () => {
+    let markUserEventHandled: () => void = () => {};
+    const userEventHandled = new Promise<void>((resolve) => {
+      markUserEventHandled = resolve;
+    });
+    const eventQueue = createSubscribedEventQueue();
+    const userMessageEvent = {
+      type: "message.updated",
+      properties: {
+        sessionID: "opencode-session-1",
+        info: {
+          id: "msg-user-echo",
+          sessionID: "opencode-session-1",
+          role: "user",
+          time: { created: 1 },
+        },
+      },
+    };
+    const runtime = createMockOpenCodeRuntime({
+      events: eventQueue.stream,
+      prompt: async () => {
+        eventQueue.push(userMessageEvent);
+        await userEventHandled;
+        return {
+          data: {
+            info: {
+              id: "msg-assistant-after-user-event",
+              sessionID: "opencode-session-1",
+              role: "assistant",
+              time: { created: 2, completed: 3 },
+              cost: 0.03,
+              tokens: {
+                input: 0,
+                output: 0,
+                reasoning: 0,
+                cache: { read: 0, write: 0 },
+              },
+              finish: "stop",
+            },
+            parts: [
+              {
+                id: "part-assistant-after-user-event",
+                sessionID: "opencode-session-1",
+                messageID: "msg-assistant-after-user-event",
+                type: "text",
+                text: "response after user event",
+                time: { start: 2, end: 3 },
+              } as Part,
+            ],
+          },
+        };
+      },
+    });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 6)).pipe(
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-prompt-response-after-user-event"),
+          runtimeMode: "full-access",
+        });
+
+        yield* adapter.sendTurn({
+          threadId: asThreadId("thread-prompt-response-after-user-event"),
+          input: "hello",
+          attachments: [],
+          modelSelection: {
+            provider: "opencode",
+            model: "opencode/claude-opus-4-7",
+          },
+        });
+
+        const eventsOption = yield* Fiber.join(eventsFiber).pipe(Effect.timeoutOption(500));
+        if (eventsOption._tag === "None") {
+          yield* Fiber.interrupt(eventsFiber);
+          return null;
+        }
+        return Array.from(eventsOption.value);
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({
+            runtime: runtime.runtime,
+            nativeEventLogger: {
+              filePath: "native-event-test",
+              write: (event) =>
+                Effect.sync(() => {
+                  const eventType =
+                    event && typeof event === "object" && "event" in event
+                      ? (event.event as { readonly type?: unknown }).type
+                      : undefined;
+                  if (eventType === "message.updated") {
+                    markUserEventHandled();
+                  }
+                }),
+              close: () => Effect.void,
+            },
+            promptSubmissionInlineWaitMs: 50,
+          }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(result?.map((event) => event.type)).toEqual([
+      "session.started",
+      "thread.started",
+      "turn.started",
+      "content.delta",
+      "item.completed",
+      "turn.completed",
+    ]);
+    expect(result?.[3]).toMatchObject({
+      type: "content.delta",
+      payload: {
+        streamKind: "assistant_text",
+        delta: "response after user event",
+      },
+    });
+    expect(result?.[5]).toMatchObject({
+      type: "turn.completed",
+      payload: {
+        state: "completed",
+        totalCostUsd: 0.03,
+      },
+    });
+  });
+
+  it("keeps immediate OpenCode prompt failures on the sendTurn failure path", async () => {
+    const runtime = createMockOpenCodeRuntime({
+      prompt: async () => {
         throw new Error("prompt rejected");
       },
     });

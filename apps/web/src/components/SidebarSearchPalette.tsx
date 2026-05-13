@@ -478,9 +478,9 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
         ? "Paste a Cursor session id"
         : importProvider === "kilo"
           ? "Paste a Kilo session id"
-        : importProvider === "opencode"
-          ? "Paste an OpenCode session id"
-          : "Paste a Codex thread id";
+          : importProvider === "opencode"
+            ? "Paste an OpenCode session id"
+            : "Paste a Codex thread id";
 
   const hasHighlightedFolderItem =
     highlightedItemValue !== null && highlightedItemValue.startsWith("folder:");
@@ -671,9 +671,9 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                       ? "Cursor resumes a persisted session by session id."
                       : importProvider === "kilo"
                         ? "Kilo resumes a persisted session by session id."
-                      : importProvider === "opencode"
-                        ? "OpenCode resumes a persisted session by session id."
-                        : "Codex resumes a persisted thread by thread id."}
+                        : importProvider === "opencode"
+                          ? "OpenCode resumes a persisted session by session id."
+                          : "Codex resumes a persisted thread by thread id."}
                 </p>
               </div>
               {importError ? (

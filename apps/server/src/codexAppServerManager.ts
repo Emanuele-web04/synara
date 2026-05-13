@@ -49,7 +49,7 @@ import {
   type ServerVoiceTranscriptionResult,
 } from "@t3tools/contracts";
 import { readActiveCodexProviderEnvKey } from "@t3tools/shared/codexConfig";
-import { normalizeModelSlug } from "@t3tools/shared/model";
+import { getModelSelectionBooleanOptionValue, normalizeModelSlug } from "@t3tools/shared/model";
 import {
   readEnvironmentFromLoginShell,
   resolveLoginShell,
@@ -1556,12 +1556,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
               context.account,
             )
           : undefined;
+      const useFastServiceTier =
+        input.modelSelection?.provider === "codex" &&
+        getModelSelectionBooleanOptionValue(input.modelSelection, "fastMode") === true;
       const forkParams = {
         threadId: sourceProviderThreadId,
         ...(normalizedModel ? { model: normalizedModel } : {}),
-        ...(input.modelSelection?.provider === "codex" && input.modelSelection.options?.fastMode
-          ? { serviceTier: "fast" as const }
-          : {}),
+        ...(useFastServiceTier ? { serviceTier: "fast" as const } : {}),
         cwd: resolvedCwd,
         ...mapCodexRuntimeMode(input.runtimeMode),
       };

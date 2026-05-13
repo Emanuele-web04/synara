@@ -89,6 +89,8 @@ export function getRuntimeAwareModelCapabilities(input: {
       label: option.label,
       ...(option.isDefault === true ? { isDefault: true as const } : {}),
     })) ?? staticCapabilities.contextWindowOptions;
+  const optionDescriptors =
+    input.runtimeModel?.optionDescriptors ?? staticCapabilities.optionDescriptors;
   const runtimeEfforts = input.runtimeModel?.supportedReasoningEfforts;
   if (
     (input.provider !== "codex" &&
@@ -100,6 +102,7 @@ export function getRuntimeAwareModelCapabilities(input: {
   ) {
     return {
       ...staticCapabilities,
+      ...(optionDescriptors ? { optionDescriptors } : {}),
       supportsFastMode,
       supportsThinkingToggle,
       contextWindowOptions,
@@ -126,6 +129,7 @@ export function getRuntimeAwareModelCapabilities(input: {
   if (input.provider === "kilo" || input.provider === "opencode") {
     return {
       ...staticCapabilities,
+      ...(optionDescriptors ? { optionDescriptors } : {}),
       variantOptions: runtimeOptions,
       supportsThinkingToggle,
       contextWindowOptions,
@@ -134,6 +138,7 @@ export function getRuntimeAwareModelCapabilities(input: {
 
   return {
     ...staticCapabilities,
+    ...(optionDescriptors ? { optionDescriptors } : {}),
     supportsFastMode,
     supportsThinkingToggle,
     contextWindowOptions,

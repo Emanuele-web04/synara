@@ -210,7 +210,7 @@ function getProviderStateFromCapabilities(
     ? caps.promptInjectedEffortLevels.includes(draftEffort)
     : false;
   const promptEffort =
-      provider === "kilo" || provider === "opencode"
+    provider === "kilo" || provider === "opencode"
       ? resolveLabeledOptionValue(caps.variantOptions, draftEffort)
       : draftEffort && !isPromptInjected && hasEffortLevel(caps, draftEffort)
         ? draftEffort
