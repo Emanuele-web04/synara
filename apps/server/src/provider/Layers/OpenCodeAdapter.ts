@@ -17,7 +17,7 @@ import {
   TurnId,
   type UserInputQuestion,
 } from "@t3tools/contracts";
-import { Cause, Effect, Exit, Layer, Queue, Ref, Scope, Stream } from "effect";
+import { Cause, Deferred, Effect, Exit, Layer, Queue, Ref, Scope, Stream } from "effect";
 import type {
   Agent,
   AssistantMessage,
@@ -108,6 +108,7 @@ const KILO_ADAPTER_CONFIG: OpenCodeCompatibleAdapterConfig = {
 
 const OPENCODE_PROMPT_ACCEPTED_ACTIVITY_TIMEOUT_MS = 60_000;
 const OPENCODE_PROMPT_ACCEPTED_RECOVERY_DELAYS_MS = [2_000, 5_000, 10_000, 20_000] as const;
+const OPENCODE_PROMPT_SUBMISSION_INLINE_WAIT_MS = 500;
 
 type OpenCodeSubscribedEvent =
   Awaited<ReturnType<OpencodeClient["event"]["subscribe"]>> extends {
@@ -169,6 +170,7 @@ export interface OpenCodeAdapterLiveOptions {
   readonly adapterConfig?: OpenCodeCompatibleAdapterConfig;
   readonly promptAcceptedActivityTimeoutMs?: number;
   readonly promptAcceptedRecoveryDelaysMs?: ReadonlyArray<number>;
+  readonly promptSubmissionInlineWaitMs?: number;
 }
 
 function nowIso(): string {
@@ -335,7 +337,11 @@ function rememberOpenCodeMessageSnapshot(
     if (text !== undefined) {
       context.emittedTextByPartId.set(part.id, text);
     }
-    if (part.type === "text" && part.time?.end !== undefined) {
+    if (
+      part.type === "text" &&
+      shouldProjectOpenCodeTextPart(part) &&
+      part.time?.end !== undefined
+    ) {
       context.completedAssistantPartIds.add(part.id);
     }
   }
@@ -468,9 +474,15 @@ function resolveTextStreamKind(part: Part | undefined): "assistant_text" | "reas
   return part?.type === "reasoning" ? "reasoning_text" : "assistant_text";
 }
 
+function shouldProjectOpenCodeTextPart(part: Part): boolean {
+  // Kilo uses synthetic/ignored text parts for local UI progress such as snapshot setup.
+  return part.type !== "text" || (!part.synthetic && !part.ignored);
+}
+
 function textFromPart(part: Part): string | undefined {
   switch (part.type) {
     case "text":
+      return shouldProjectOpenCodeTextPart(part) ? part.text : undefined;
     case "reasoning":
       return part.text;
     default:
@@ -1556,6 +1568,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         options?.promptAcceptedRecoveryDelaysMs?.filter(
           (delayMs) => Number.isFinite(delayMs) && delayMs > 0,
         ) ?? OPENCODE_PROMPT_ACCEPTED_RECOVERY_DELAYS_MS;
+      const promptSubmissionInlineWaitMs =
+        options?.promptSubmissionInlineWaitMs ?? OPENCODE_PROMPT_SUBMISSION_INLINE_WAIT_MS;
       const nativeEventLogger =
         options?.nativeEventLogger ??
         (options?.nativeEventLogPath !== undefined
@@ -2066,6 +2080,66 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         );
       });
 
+      const submitOpenCodePromptAsync = Effect.fn("submitOpenCodePromptAsync")(function* (
+        context: OpenCodeSessionContext,
+        input: {
+          readonly turnId: TurnId;
+          readonly eventSerial: number;
+          readonly promptInput: Parameters<OpencodeClient["session"]["promptAsync"]>[0];
+        },
+      ) {
+        const settled = yield* Deferred.make<ProviderAdapterRequestError | null, never>();
+
+        // OpenCode can block the prompt_async HTTP call during cold starts; keep DP Code's
+        // orchestration responsive and let runtime events/watchdogs settle the turn.
+        yield* runOpenCodeSdk("session.promptAsync", () =>
+          context.client.session.promptAsync(input.promptInput),
+        ).pipe(
+          Effect.mapError(toAdapterRequestError),
+          Effect.as(null),
+          Effect.catch((requestError) =>
+            Effect.gen(function* () {
+              if (yield* Ref.get(context.stopped)) {
+                return requestError;
+              }
+              if (
+                context.activeTurnId !== input.turnId ||
+                context.activeTurnEventSerial !== input.eventSerial
+              ) {
+                return requestError;
+              }
+              clearActiveTurnState(context);
+              updateProviderSession(
+                context,
+                {
+                  status: "ready",
+                  model: context.session.model,
+                  lastError: requestError.detail,
+                },
+                { clearActiveTurnId: true },
+              );
+              yield* emit({
+                ...buildEventBase({ threadId: context.session.threadId, turnId: input.turnId }),
+                type: "turn.aborted",
+                payload: {
+                  reason: requestError.detail,
+                },
+              });
+              return requestError;
+            }),
+          ),
+          Effect.flatMap((result) => Deferred.succeed(settled, result)),
+          Effect.forkIn(context.sessionScope),
+        );
+
+        const quickResult = yield* Deferred.await(settled).pipe(
+          Effect.timeoutOption(promptSubmissionInlineWaitMs),
+        );
+        if (quickResult._tag === "Some" && quickResult.value) {
+          return yield* quickResult.value;
+        }
+      });
+
       const handleSubscribedEvent = Effect.fn("handleSubscribedEvent")(function* (
         context: OpenCodeSessionContext,
         event: OpenCodeSubscribedEvent,
@@ -2177,6 +2251,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             const role = messageRoleForPart(context, resolvedPart);
             if (role !== "assistant") {
               bufferPendingTextDelta(context, event.properties.partID, delta);
+              break;
+            }
+            if (!shouldProjectOpenCodeTextPart(resolvedPart)) {
               break;
             }
             const streamKind = resolveTextStreamKind(resolvedPart);
@@ -3282,46 +3359,24 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             : new Set<string>();
         const recoveryBaselineMessageIds = yield* captureOpenCodeRecoveryBaseline(context);
 
-        yield* runOpenCodeSdk("session.promptAsync", () =>
-          context.client.session.promptAsync({
+        const eventSerial = context.activeTurnEventSerial;
+        yield* schedulePromptAcceptedWatchdog(context, {
+          turnId,
+          eventSerial,
+          excludedMessageIds: recoveryBaselineMessageIds,
+        });
+        yield* submitOpenCodePromptAsync(context, {
+          turnId,
+          eventSerial,
+          promptInput: {
             sessionID: context.openCodeSessionId,
             model: parsedModel,
             ...(context.activeAgent ? { agent: context.activeAgent } : {}),
             ...(context.activeVariant ? { variant: context.activeVariant } : {}),
             noReply: false,
             parts: [...(text ? [{ type: "text" as const, text }] : []), ...fileParts],
-          }),
-        ).pipe(
-          Effect.tap(() =>
-            schedulePromptAcceptedWatchdog(context, {
-              turnId,
-              eventSerial: context.activeTurnEventSerial,
-              excludedMessageIds: recoveryBaselineMessageIds,
-            }),
-          ),
-          Effect.mapError(toAdapterRequestError),
-          Effect.tapError((requestError) =>
-            Effect.gen(function* () {
-              clearActiveTurnState(context);
-              updateProviderSession(
-                context,
-                {
-                  status: "ready",
-                  model: modelSelection?.model ?? context.session.model,
-                  lastError: requestError.detail,
-                },
-                { clearActiveTurnId: true },
-              );
-              yield* emit({
-                ...buildEventBase({ threadId: input.threadId, turnId }),
-                type: "turn.aborted",
-                payload: {
-                  reason: requestError.detail,
-                },
-              });
-            }),
-          ),
-        );
+          },
+        });
 
         if (provider === "kilo") {
           yield* startKiloTurnSnapshotWatchdog(context, turnId, baselineMessageIds);
