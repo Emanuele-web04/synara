@@ -1578,6 +1578,40 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("reads branch, staged, and unstaged patches as separate scopes", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+
+        yield* core.createBranch({ cwd: tmp, branch: "feature/diff-scopes" });
+        yield* core.checkoutBranch({ cwd: tmp, branch: "feature/diff-scopes" });
+        yield* writeTextFile(path.join(tmp, "branch.txt"), "branch change\n");
+        yield* git(tmp, ["add", "branch.txt"]);
+        yield* git(tmp, ["commit", "-m", "branch change"]);
+
+        yield* writeTextFile(path.join(tmp, "staged.txt"), "staged change\n");
+        yield* git(tmp, ["add", "staged.txt"]);
+        yield* writeTextFile(path.join(tmp, "README.md"), "# test\nunstaged change\n");
+        yield* writeTextFile(path.join(tmp, "untracked.txt"), "untracked change\n");
+
+        const branchPatch = (yield* core.readBranchPatch(tmp)).patch;
+        expect(branchPatch).toContain("diff --git a/branch.txt b/branch.txt");
+        expect(branchPatch).not.toContain("staged.txt");
+        expect(branchPatch).not.toContain("untracked.txt");
+
+        const stagedPatch = (yield* core.readStagedPatch(tmp)).patch;
+        expect(stagedPatch).toContain("diff --git a/staged.txt b/staged.txt");
+        expect(stagedPatch).not.toContain("README.md");
+        expect(stagedPatch).not.toContain("untracked.txt");
+
+        const unstagedPatch = (yield* core.readUnstagedPatch(tmp)).patch;
+        expect(unstagedPatch).toContain("diff --git a/README.md b/README.md");
+        expect(unstagedPatch).toContain("diff --git a/untracked.txt b/untracked.txt");
+        expect(unstagedPatch).not.toContain("staged.txt");
+      }),
+    );
+
     it.effect("computes ahead count against base branch when no upstream is configured", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();

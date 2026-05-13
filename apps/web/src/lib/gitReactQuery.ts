@@ -1,4 +1,8 @@
-import type { GitStackedAction, ProviderStartOptions } from "@t3tools/contracts";
+import type {
+  GitReadWorkingTreeDiffInput,
+  GitStackedAction,
+  ProviderStartOptions,
+} from "@t3tools/contracts";
 import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "../nativeApi";
 import { buildPatchCacheKey } from "./diffRendering";
@@ -14,7 +18,10 @@ export const gitQueryKeys = {
   all: ["git"] as const,
   status: (cwd: string | null) => ["git", "status", cwd] as const,
   branches: (cwd: string | null) => ["git", "branches", cwd] as const,
-  workingTreeDiff: (cwd: string | null) => ["git", "working-tree-diff", cwd] as const,
+  workingTreeDiff: (
+    cwd: string | null,
+    scope: GitReadWorkingTreeDiffInput["scope"] = "workingTree",
+  ) => ["git", "working-tree-diff", cwd, scope] as const,
   diffSummary: (
     cacheScope: string | null,
     model: string | null,
@@ -104,15 +111,20 @@ export function gitResolvePullRequestQueryOptions(input: {
   });
 }
 
-export function gitWorkingTreeDiffQueryOptions(input: { cwd: string | null; enabled?: boolean }) {
+export function gitWorkingTreeDiffQueryOptions(input: {
+  cwd: string | null;
+  scope?: GitReadWorkingTreeDiffInput["scope"];
+  enabled?: boolean;
+}) {
+  const scope = input.scope ?? "workingTree";
   return queryOptions({
-    queryKey: gitQueryKeys.workingTreeDiff(input.cwd),
+    queryKey: gitQueryKeys.workingTreeDiff(input.cwd, scope),
     queryFn: async () => {
       const api = ensureNativeApi();
       if (!input.cwd) {
         throw new Error("Working tree diff is unavailable.");
       }
-      return api.git.readWorkingTreeDiff({ cwd: input.cwd });
+      return api.git.readWorkingTreeDiff({ cwd: input.cwd, scope });
     },
     enabled: (input.enabled ?? true) && input.cwd !== null,
     staleTime: GIT_WORKING_TREE_DIFF_STALE_TIME_MS,

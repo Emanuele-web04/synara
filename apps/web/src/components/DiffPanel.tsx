@@ -27,6 +27,7 @@ import {
 import {
   gitBranchesQueryOptions,
   gitQueryKeys,
+  gitStatusQueryOptions,
   gitSummarizeDiffQueryOptions,
   gitWorkingTreeDiffQueryOptions,
 } from "~/lib/gitReactQuery";
@@ -44,6 +45,11 @@ import {
 import { resolveDiffEnvironmentState } from "../lib/threadEnvironment";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
+import {
+  isRepoDiffScope,
+  REPO_DIFF_SCOPE_LABELS,
+  useRepoDiffScopeStore,
+} from "../repoDiffScopeStore";
 import { useStore } from "../store";
 import { createProjectSelector, createThreadSelector } from "../storeSelectors";
 import { getProviderStartOptions, useAppSettings } from "../appSettings";
@@ -53,6 +59,7 @@ import ChatMarkdown from "./ChatMarkdown";
 import { resolveDiffPanelThread } from "./DiffPanel.logic";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { Button } from "./ui/button";
+import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
 import { ToggleGroup, Toggle } from "./ui/toggle-group";
 import { FileEntryIcon } from "./chat/FileEntryIcon";
 import { DiffStatLabel, hasNonZeroStat } from "./chat/DiffStatLabel";
@@ -184,6 +191,8 @@ export default function DiffPanel({
   const [diffRenderMode, setDiffRenderMode] = useState<DiffRenderMode>("stacked");
   const [diffWordWrap, setDiffWordWrap] = useState(settings.diffWordWrap);
   const [surfaceMode, setSurfaceMode] = useState<DiffSurfaceMode>("review");
+  const repoDiffScope = useRepoDiffScopeStore((store) => store.scope);
+  const setRepoDiffScope = useRepoDiffScopeStore((store) => store.setScope);
   const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(() => new Set());
   const patchViewportRef = useRef<HTMLDivElement>(null);
   const turnStripRef = useRef<HTMLDivElement>(null);
@@ -234,6 +243,7 @@ export default function DiffPanel({
   const diffEnvironmentPending = diffEnvironmentState.pending;
   const activeCwd = diffEnvironmentState.cwd;
   const gitBranchesQuery = useQuery(gitBranchesQueryOptions(activeCwd ?? null));
+  const gitStatusQuery = useQuery(gitStatusQueryOptions(activeCwd ?? null));
   const isGitRepo = gitBranchesQuery.data?.isRepo ?? true;
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
     useTurnDiffSummaries(activeThread);
@@ -338,38 +348,58 @@ export default function DiffPanel({
   const hasResolvedPatch = typeof selectedPatch === "string";
   const hasNoNetChanges = hasResolvedPatch && selectedPatch.trim().length === 0;
   const normalizedSelectedPatch = hasResolvedPatch ? selectedPatch.trim() : null;
-  const workingTreeDiffQuery = useQuery(
+  const repoDiffQuery = useQuery(
     gitWorkingTreeDiffQueryOptions({
       cwd: activeCwd ?? null,
+      scope: repoDiffScope,
       enabled: diffOpen && !diffEnvironmentPending,
     }),
   );
-  const workingTreePatch = workingTreeDiffQuery.data?.patch;
-  const hasResolvedWorkingTreePatch = typeof workingTreePatch === "string";
-  const hasNoWorkingTreeChanges =
-    hasResolvedWorkingTreePatch && workingTreePatch.trim().length === 0;
-  const normalizedWorkingTreePatch = hasResolvedWorkingTreePatch ? workingTreePatch.trim() : null;
-  const workingTreeDiffError =
-    workingTreeDiffQuery.error instanceof Error
-      ? workingTreeDiffQuery.error.message
-      : workingTreeDiffQuery.error
-        ? "Failed to load total working tree diff."
+  const repoPatch = repoDiffQuery.data?.patch;
+  const hasResolvedRepoPatch = typeof repoPatch === "string";
+  const hasNoRepoChanges = hasResolvedRepoPatch && repoPatch.trim().length === 0;
+  const normalizedRepoPatch = hasResolvedRepoPatch ? repoPatch.trim() : null;
+  const repoDiffError =
+    repoDiffQuery.error instanceof Error
+      ? repoDiffQuery.error.message
+      : repoDiffQuery.error
+        ? "Failed to load repo diff."
         : null;
+  const branchHasCommittedChanges = (gitStatusQuery.data?.aheadCount ?? 0) > 0;
 
   useEffect(() => {
-    if (!hasResolvedWorkingTreePatch || !activeCwd) {
+    if (!hasResolvedRepoPatch || !activeCwd) {
       return;
     }
     void queryClient.invalidateQueries({ queryKey: gitQueryKeys.status(activeCwd) });
     void queryClient.invalidateQueries({ queryKey: gitQueryKeys.branches(activeCwd) });
-  }, [activeCwd, hasResolvedWorkingTreePatch, queryClient, workingTreePatch]);
+  }, [activeCwd, hasResolvedRepoPatch, queryClient, repoPatch]);
 
-  const activeReviewPatch = surfaceMode === "total" ? workingTreePatch : selectedPatch;
-  const activeReviewError = surfaceMode === "total" ? workingTreeDiffError : checkpointDiffError;
+  useEffect(() => {
+    if (
+      diffOpen &&
+      repoDiffScope === "workingTree" &&
+      hasResolvedRepoPatch &&
+      hasNoRepoChanges &&
+      branchHasCommittedChanges
+    ) {
+      setRepoDiffScope("branch");
+      setSurfaceMode("total");
+    }
+  }, [
+    branchHasCommittedChanges,
+    diffOpen,
+    hasNoRepoChanges,
+    hasResolvedRepoPatch,
+    repoDiffScope,
+    setRepoDiffScope,
+  ]);
+
+  const activeReviewPatch = surfaceMode === "total" ? repoPatch : selectedPatch;
+  const activeReviewError = surfaceMode === "total" ? repoDiffError : checkpointDiffError;
   const activeReviewIsLoading =
-    surfaceMode === "total" ? workingTreeDiffQuery.isLoading : isLoadingCheckpointDiff;
-  const activeReviewHasNoChanges =
-    surfaceMode === "total" ? hasNoWorkingTreeChanges : hasNoNetChanges;
+    surfaceMode === "total" ? repoDiffQuery.isLoading : isLoadingCheckpointDiff;
+  const activeReviewHasNoChanges = surfaceMode === "total" ? hasNoRepoChanges : hasNoNetChanges;
   const isSidebarMode = mode === "sidebar";
   const { copyToClipboard, isCopied: isSummaryCopied } = useCopyToClipboard();
   const { copyToClipboard: copyDiffToClipboard, isCopied: isDiffCopied } = useCopyToClipboard();
@@ -389,7 +419,7 @@ export default function DiffPanel({
       }),
     );
   }, [renderablePatch]);
-  const totalPatchStat = useMemo(() => summarizePatchStats(workingTreePatch), [workingTreePatch]);
+  const totalPatchStat = useMemo(() => summarizePatchStats(repoPatch), [repoPatch]);
 
   useEffect(() => {
     if (diffOpen && !previousDiffOpenRef.current) {
@@ -418,10 +448,10 @@ export default function DiffPanel({
   }, [activeCwd, activeProjectId, activeThread?.worktreePath]);
 
   useEffect(() => {
-    if (surfaceMode === "summary" && hasResolvedWorkingTreePatch && hasNoWorkingTreeChanges) {
+    if (surfaceMode === "summary" && hasResolvedRepoPatch && hasNoRepoChanges) {
       setSurfaceMode("review");
     }
-  }, [hasNoWorkingTreeChanges, hasResolvedWorkingTreePatch, surfaceMode]);
+  }, [hasNoRepoChanges, hasResolvedRepoPatch, surfaceMode]);
 
   useEffect(() => {
     setSurfaceMode("review");
@@ -432,7 +462,7 @@ export default function DiffPanel({
       gitSummarizeDiffQueryOptions({
         cwd: activeCwd ?? null,
         cacheScope: diffSummaryCacheScope,
-        patch: normalizedWorkingTreePatch,
+        patch: normalizedRepoPatch,
         codexHomePath: settings.codexHomePath || null,
         model: settings.textGenerationModel ?? null,
         ...(providerOptions ? { providerOptions } : {}),
@@ -441,7 +471,7 @@ export default function DiffPanel({
     [
       activeCwd,
       diffSummaryCacheScope,
-      normalizedWorkingTreePatch,
+      normalizedRepoPatch,
       settings.codexHomePath,
       settings.textGenerationModel,
       providerOptions,
@@ -452,7 +482,7 @@ export default function DiffPanel({
       gitSummarizeDiffQueryOptions({
         cwd: activeCwd ?? null,
         cacheScope: diffSummaryCacheScope,
-        patch: normalizedWorkingTreePatch,
+        patch: normalizedRepoPatch,
         codexHomePath: settings.codexHomePath || null,
         model: settings.textGenerationModel ?? null,
         ...(providerOptions ? { providerOptions } : {}),
@@ -461,7 +491,7 @@ export default function DiffPanel({
     [
       activeCwd,
       diffSummaryCacheScope,
-      normalizedWorkingTreePatch,
+      normalizedRepoPatch,
       settings.codexHomePath,
       settings.textGenerationModel,
       providerOptions,
@@ -479,14 +509,14 @@ export default function DiffPanel({
   const canShowSummary = Boolean(
     !diffEnvironmentPending &&
     activeCwd &&
-    (!hasResolvedWorkingTreePatch || !hasNoWorkingTreeChanges),
+    (!hasResolvedRepoPatch || !hasNoRepoChanges),
   );
   const canPrefetchSummary = Boolean(
     diffOpen &&
     !diffEnvironmentPending &&
     activeCwd &&
-    normalizedWorkingTreePatch &&
-    !hasNoWorkingTreeChanges,
+    normalizedRepoPatch &&
+    !hasNoRepoChanges,
   );
   const canShowTotal = Boolean(!diffEnvironmentPending && activeCwd);
 
@@ -834,32 +864,57 @@ export default function DiffPanel({
                 </span>
                 <span>Review</span>
               </button>
-              <button
-                type="button"
-                className={cn(
-                  "relative -mb-px inline-flex h-10 items-center gap-1.5 border-b-2 px-2.5 text-[13px] font-medium tracking-[-0.01em] transition-colors",
-                  surfaceMode === "total"
-                    ? "border-foreground text-foreground"
-                    : "border-transparent text-muted-foreground hover:text-foreground",
-                  !canShowTotal && "cursor-not-allowed opacity-45 hover:text-muted-foreground",
-                )}
-                disabled={!canShowTotal}
-                onClick={() => {
-                  setSurfaceMode("total");
-                }}
-                aria-pressed={surfaceMode === "total"}
-              >
-                <DiffIcon className="size-3.5 opacity-80" />
-                <span>Total</span>
-                {totalPatchStat && hasNonZeroStat(totalPatchStat) ? (
-                  <span className="ml-0.5 inline-flex items-center font-mono text-[11px] font-medium">
-                    <DiffStatLabel
-                      additions={totalPatchStat.additions}
-                      deletions={totalPatchStat.deletions}
+              <Menu>
+                <MenuTrigger
+                  render={
+                    <button
+                      type="button"
+                      className={cn(
+                        "relative -mb-px inline-flex h-10 items-center gap-1.5 border-b-2 px-2.5 text-[13px] font-medium tracking-[-0.01em] transition-colors",
+                        surfaceMode === "total"
+                          ? "border-foreground text-foreground"
+                          : "border-transparent text-muted-foreground hover:text-foreground",
+                        !canShowTotal &&
+                          "cursor-not-allowed opacity-45 hover:text-muted-foreground",
+                      )}
+                      disabled={!canShowTotal}
+                      onClick={() => {
+                        setSurfaceMode("total");
+                      }}
+                      aria-pressed={surfaceMode === "total"}
+                      aria-label="Choose repo diff source"
                     />
-                  </span>
-                ) : null}
-              </button>
+                  }
+                >
+                  <DiffIcon className="size-3.5 opacity-80" />
+                  <span>{REPO_DIFF_SCOPE_LABELS[repoDiffScope]}</span>
+                  {totalPatchStat && hasNonZeroStat(totalPatchStat) ? (
+                    <span className="ml-0.5 inline-flex items-center font-mono text-[11px] font-medium">
+                      <DiffStatLabel
+                        additions={totalPatchStat.additions}
+                        deletions={totalPatchStat.deletions}
+                      />
+                    </span>
+                  ) : null}
+                  <ChevronDownIcon className="size-3 opacity-70" />
+                </MenuTrigger>
+                <MenuPopup align="start">
+                  <MenuRadioGroup
+                    value={repoDiffScope}
+                    onValueChange={(value) => {
+                      if (isRepoDiffScope(value)) {
+                        setRepoDiffScope(value);
+                        setSurfaceMode("total");
+                      }
+                    }}
+                  >
+                    <MenuRadioItem value="branch">Branch</MenuRadioItem>
+                    <MenuRadioItem value="workingTree">Working tree</MenuRadioItem>
+                    <MenuRadioItem value="unstaged">Unstaged</MenuRadioItem>
+                    <MenuRadioItem value="staged">Staged</MenuRadioItem>
+                  </MenuRadioGroup>
+                </MenuPopup>
+              </Menu>
               {surfaceMode !== "summary" && diffCopyText ? (
                 <Button
                   variant="ghost"
@@ -888,7 +943,8 @@ export default function DiffPanel({
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-foreground">Repo summary</p>
                   <p className="text-[11px] text-muted-foreground">
-                    Generated from the current total repo/worktree diff.
+                    Generated from the current{" "}
+                    {REPO_DIFF_SCOPE_LABELS[repoDiffScope].toLowerCase()} diff.
                   </p>
                 </div>
                 {diffSummaryText ? (
@@ -912,15 +968,17 @@ export default function DiffPanel({
                 ) : null}
               </div>
 
-              {workingTreeDiffQuery.isLoading && !hasResolvedWorkingTreePatch ? (
-                <DiffPanelLoadingState label="Loading total repo diff..." />
-              ) : workingTreeDiffError ? (
+              {repoDiffQuery.isLoading && !hasResolvedRepoPatch ? (
+                <DiffPanelLoadingState
+                  label={`Loading ${REPO_DIFF_SCOPE_LABELS[repoDiffScope].toLowerCase()} diff...`}
+                />
+              ) : repoDiffError ? (
                 <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
-                  {workingTreeDiffError}
+                  {repoDiffError}
                 </div>
-              ) : hasNoWorkingTreeChanges ? (
+              ) : hasNoRepoChanges ? (
                 <div className="flex h-full items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
-                  No uncommitted repo changes in this worktree.
+                  No changes in the selected diff source.
                 </div>
               ) : diffSummaryQuery.isLoading ? (
                 <DiffPanelLoadingState label="Generating repo summary..." />
@@ -936,7 +994,7 @@ export default function DiffPanel({
                 />
               ) : (
                 <div className="flex h-full items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
-                  Summary unavailable for the current total repo diff.
+                  Summary unavailable for the selected repo diff.
                 </div>
               )}
             </div>
@@ -955,7 +1013,7 @@ export default function DiffPanel({
                   <DiffPanelLoadingState
                     label={
                       surfaceMode === "total"
-                        ? "Loading total working tree diff..."
+                        ? `Loading ${REPO_DIFF_SCOPE_LABELS[repoDiffScope].toLowerCase()} diff...`
                         : "Loading checkpoint diff..."
                     }
                   />
@@ -964,10 +1022,10 @@ export default function DiffPanel({
                     <p>
                       {activeReviewHasNoChanges
                         ? surfaceMode === "total"
-                          ? "No uncommitted repo changes in this worktree."
+                          ? "No changes in the selected diff source."
                           : "No net changes in this selection."
                         : surfaceMode === "total"
-                          ? "No total repo diff is available right now."
+                          ? "No repo diff is available right now."
                           : "No patch available for this selection."}
                     </p>
                   </div>

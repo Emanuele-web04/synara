@@ -38,6 +38,7 @@ import { useIsDisposableThread } from "~/hooks/useIsDisposableThread";
 import { ClaudeAI, CursorIcon, Gemini, KiloIcon, OpenAI, OpenCodeIcon, PiIcon } from "../Icons";
 import { gitWorkingTreeDiffQueryOptions } from "~/lib/gitReactQuery";
 import { summarizePatchStats } from "~/lib/diffRendering";
+import { useRepoDiffScopeStore } from "~/repoDiffScopeStore";
 
 /** Width (px) below which collapsible header controls fold into the ellipsis menu. */
 const HEADER_COMPACT_BREAKPOINT = 480;
@@ -164,11 +165,12 @@ export const ChatHeader = memo(function ChatHeader({
   const [openAddActionNonce, setOpenAddActionNonce] = useState(0);
   const [preferredEditor] = usePreferredEditor(availableEditors);
   const EditorIcon = preferredEditor ? resolveEditorIcon(preferredEditor) : null;
-  // Match the Diff panel's Total tab by deriving the header badge from the same full patch.
-  const { data: workingTreeDiff = null } = useQuery(
-    gitWorkingTreeDiffQueryOptions({ cwd: gitCwd, enabled: isGitRepo }),
+  const repoDiffScope = useRepoDiffScopeStore((store) => store.scope);
+  // Match the Diff panel source selector so the sidebar badge shows the selected scope.
+  const { data: selectedRepoDiff = null } = useQuery(
+    gitWorkingTreeDiffQueryOptions({ cwd: gitCwd, scope: repoDiffScope, enabled: isGitRepo }),
   );
-  const diffTotals = summarizePatchStats(workingTreeDiff?.patch);
+  const diffTotals = summarizePatchStats(selectedRepoDiff?.patch);
   const showDiffTotals = (diffTotals?.additions ?? 0) > 0 || (diffTotals?.deletions ?? 0) > 0;
   const isDisposableThread = useIsDisposableThread(activeThreadId);
 

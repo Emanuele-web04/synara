@@ -1483,7 +1483,17 @@ export const makeGitManager = Effect.gen(function* () {
 
   const readWorkingTreeDiff: GitManagerShape["readWorkingTreeDiff"] = Effect.fnUntraced(
     function* (input) {
-      return yield* gitCore.readWorkingTreePatch(input.cwd);
+      switch (input.scope) {
+        case "branch":
+          return yield* gitCore.readBranchPatch(input.cwd);
+        case "staged":
+          return yield* gitCore.readStagedPatch(input.cwd);
+        case "unstaged":
+          return yield* gitCore.readUnstagedPatch(input.cwd);
+        case "workingTree":
+        default:
+          return yield* gitCore.readWorkingTreePatch(input.cwd);
+      }
     },
   );
 

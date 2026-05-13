@@ -1453,6 +1453,72 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         })),
       );
 
+    const readUntrackedPatches = (cwd: string, operationPrefix: string) =>
+      runGitStdout(
+        `${operationPrefix}.untrackedFiles`,
+        cwd,
+        ["ls-files", "--others", "--exclude-standard", "-z"],
+        true,
+      ).pipe(
+        Effect.map((stdout) => stdout.split("\0").filter((entry) => entry.length > 0)),
+        Effect.flatMap((untrackedFiles) =>
+          Effect.forEach(
+            untrackedFiles,
+            (filePath) =>
+              // Git diff omits untracked files, so synthesize a normal patch for each one.
+              executeGit(
+                `${operationPrefix}.untrackedPatch`,
+                cwd,
+                [
+                  "diff",
+                  "--no-index",
+                  "--patch",
+                  "--no-color",
+                  "--src-prefix=a/",
+                  "--dst-prefix=b/",
+                  "--",
+                  "/dev/null",
+                  filePath,
+                ],
+                {
+                  allowNonZeroExit: true,
+                  timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
+                },
+              ).pipe(Effect.map((result) => result.stdout)),
+            { concurrency: MAX_UNTRACKED_DIFF_CONCURRENCY },
+          ),
+        ),
+      );
+
+    const readUnstagedPatch: GitCoreShape["readUnstagedPatch"] = (cwd) =>
+      Effect.gen(function* () {
+        const trackedPatch = yield* executeGit(
+          "GitCore.readUnstagedPatch.trackedPatch",
+          cwd,
+          ["diff", "--patch", "--no-color", "--no-ext-diff"],
+          {
+            allowNonZeroExit: true,
+            timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
+          },
+        ).pipe(Effect.map((result) => result.stdout));
+        const untrackedPatches = yield* readUntrackedPatches(cwd, "GitCore.readUnstagedPatch");
+
+        return {
+          patch: joinPatchSegments([trackedPatch, ...untrackedPatches]),
+        };
+      });
+
+    const readStagedPatch: GitCoreShape["readStagedPatch"] = (cwd) =>
+      executeGit(
+        "GitCore.readStagedPatch",
+        cwd,
+        ["diff", "--cached", "--patch", "--no-color", "--no-ext-diff"],
+        {
+          allowNonZeroExit: true,
+          timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
+        },
+      ).pipe(Effect.map((result) => ({ patch: result.stdout })));
+
     const readWorkingTreePatch: GitCoreShape["readWorkingTreePatch"] = (cwd) =>
       Effect.gen(function* () {
         const headExists = yield* executeGit(
@@ -1474,41 +1540,47 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           },
         ).pipe(Effect.map((result) => result.stdout));
 
-        const untrackedFiles = yield* runGitStdout(
-          "GitCore.readWorkingTreePatch.untrackedFiles",
-          cwd,
-          ["ls-files", "--others", "--exclude-standard", "-z"],
-          true,
-        ).pipe(Effect.map((stdout) => stdout.split("\0").filter((entry) => entry.length > 0)));
-
-        const untrackedPatches = yield* Effect.forEach(
-          untrackedFiles,
-          (filePath) =>
-            executeGit(
-              "GitCore.readWorkingTreePatch.untrackedPatch",
-              cwd,
-              [
-                "diff",
-                "--no-index",
-                "--patch",
-                "--no-color",
-                "--src-prefix=a/",
-                "--dst-prefix=b/",
-                "--",
-                "/dev/null",
-                filePath,
-              ],
-              {
-                allowNonZeroExit: true,
-                timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
-              },
-            ).pipe(Effect.map((result) => result.stdout)),
-          { concurrency: MAX_UNTRACKED_DIFF_CONCURRENCY },
-        );
+        const untrackedPatches = yield* readUntrackedPatches(cwd, "GitCore.readWorkingTreePatch");
 
         return {
           patch: joinPatchSegments([trackedPatch, ...untrackedPatches]),
         };
+      });
+
+    const readBranchPatch: GitCoreShape["readBranchPatch"] = (cwd) =>
+      Effect.gen(function* () {
+        const details = yield* statusDetails(cwd);
+        const baseBranch =
+          details.upstreamRef ??
+          (details.branch
+            ? yield* resolveBaseBranchForNoUpstream(cwd, details.branch).pipe(
+                Effect.catch(() => Effect.succeed(null)),
+              )
+            : null);
+        if (!baseBranch) {
+          return yield* createGitCommandError(
+            "GitCore.readBranchPatch.base",
+            cwd,
+            ["diff", "--patch", "--minimal", "<base>...HEAD"],
+            "Cannot resolve a base branch for the current branch diff.",
+          );
+        }
+
+        const result = yield* execute({
+          operation: "GitCore.readBranchPatch.diffPatch",
+          cwd,
+          args: [
+            "diff",
+            "--patch",
+            "--minimal",
+            "--no-color",
+            "--no-ext-diff",
+            `${baseBranch}...HEAD`,
+          ],
+          maxOutputBytes: 10_000_000,
+        });
+
+        return { patch: result.stdout };
       });
 
     const prepareCommitContext: GitCoreShape["prepareCommitContext"] = (cwd, filePaths) =>
@@ -2465,6 +2537,9 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       status,
       statusDetails,
       readWorkingTreePatch,
+      readUnstagedPatch,
+      readStagedPatch,
+      readBranchPatch,
       prepareCommitContext,
       commit,
       pushCurrentBranch,

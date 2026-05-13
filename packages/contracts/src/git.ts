@@ -85,6 +85,9 @@ export type GitStatusInput = typeof GitStatusInput.Type;
 
 export const GitReadWorkingTreeDiffInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
+  scope: Schema.optional(Schema.Literals(["workingTree", "unstaged", "staged", "branch"])).pipe(
+    Schema.withConstructorDefault(() => Option.some("workingTree" as const)),
+  ),
 });
 export type GitReadWorkingTreeDiffInput = typeof GitReadWorkingTreeDiffInput.Type;
 

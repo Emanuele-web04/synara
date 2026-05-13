@@ -171,6 +171,25 @@ export interface GitCoreShape {
   ) => Effect.Effect<GitWorkingTreePatch, GitCommandError>;
 
   /**
+   * Read only unstaged tracked changes plus untracked files.
+   */
+  readonly readUnstagedPatch: (
+    cwd: string,
+  ) => Effect.Effect<GitWorkingTreePatch, GitCommandError>;
+
+  /**
+   * Read only staged changes.
+   */
+  readonly readStagedPatch: (
+    cwd: string,
+  ) => Effect.Effect<GitWorkingTreePatch, GitCommandError>;
+
+  /**
+   * Read committed branch changes against the upstream/base branch.
+   */
+  readonly readBranchPatch: (cwd: string) => Effect.Effect<GitWorkingTreePatch, GitCommandError>;
+
+  /**
    * Build staged change context for commit generation.
    */
   readonly prepareCommitContext: (
