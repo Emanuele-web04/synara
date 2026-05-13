@@ -353,6 +353,7 @@ function openCodeMessageSnapshotFromEntry(entry: {
     readonly id: string;
     readonly role: string;
     readonly time?: {
+      readonly created?: number;
       readonly completed?: number;
     };
     readonly finish?: string;
@@ -377,6 +378,7 @@ function openCodeMessageSnapshotsFromResponse(
       readonly id: string;
       readonly role: string;
       readonly time?: {
+        readonly created?: number;
         readonly completed?: number;
       };
       readonly finish?: string;
@@ -3814,9 +3816,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
       const listModels: NonNullable<OpenCodeAdapterShape["listModels"]> = (input) => {
         const binaryPath = input.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
+        const freeOnlyProviderID = adapterConfig.provider === "kilo" ? "kilo" : undefined;
         return withDiscoveryInventory({ binaryPath }, ({ inventory, credentialProviderIDs }) =>
           Effect.gen(function* () {
-            const freeOnlyProviderID = adapterConfig.provider === "kilo" ? "kilo" : undefined;
             const preferredProviderIDs = new Set(
               resolvePreferredOpenCodeModelProviders({
                 inventory,

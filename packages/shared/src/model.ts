@@ -298,7 +298,8 @@ function providerOptionSelectionValue(
   if (Array.isArray(selections)) {
     return selections.find((selection) => selection.id === id)?.value;
   }
-  const value = selections[id];
+  const selectionRecord = selections as Record<string, unknown>;
+  const value = selectionRecord[id];
   if (typeof value === "number" && Number.isFinite(value)) {
     return String(value);
   }

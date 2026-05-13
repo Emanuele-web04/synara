@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   CodexTextGeneration,
   CursorTextGeneration,
+  KiloTextGeneration,
   OpenCodeTextGeneration,
   type TextGenerationShape,
   TextGeneration,
@@ -58,14 +59,16 @@ function createTextGenerationDouble(label: string) {
 function makeProviderTextGenerationTestLayer() {
   const codex = createTextGenerationDouble("codex");
   const cursor = createTextGenerationDouble("cursor");
+  const kilo = createTextGenerationDouble("kilo");
   const opencode = createTextGenerationDouble("opencode");
   const layer = ProviderTextGenerationLive.pipe(
     Layer.provide(Layer.succeed(CodexTextGeneration, codex.service)),
     Layer.provide(Layer.succeed(CursorTextGeneration, cursor.service)),
+    Layer.provide(Layer.succeed(KiloTextGeneration, kilo.service)),
     Layer.provide(Layer.succeed(OpenCodeTextGeneration, opencode.service)),
   );
 
-  return { layer, codex, cursor, opencode };
+  return { layer, codex, cursor, kilo, opencode };
 }
 
 describe("ProviderTextGenerationLive", () => {

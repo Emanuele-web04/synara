@@ -763,7 +763,7 @@ function SettingsRouteView() {
         return;
       }
       updateSettings({
-        providerOrder: arrayMove(settings.providerOrder, fromIndex, toIndex),
+        providerOrder: arrayMove([...settings.providerOrder], fromIndex, toIndex),
       });
     },
     [settings.providerOrder, updateSettings],
@@ -2192,7 +2192,7 @@ function SettingsRouteView() {
                 ? `${hiddenProviderCount} provider${hiddenProviderCount === 1 ? "" : "s"} hidden`
                 : isProviderOrderDirty
                   ? "Custom order"
-                : "All providers visible"
+                  : "All providers visible"
             }
             resetAction={
               hiddenProviderCount > 0 || isProviderOrderDirty ? (

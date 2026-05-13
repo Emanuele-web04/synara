@@ -107,7 +107,7 @@ function makeFakeServerAuth(): ServerAuthShape {
 
 async function withEffectServer(
   config: ServerConfigShape,
-  routeLayer: Layer.Layer<HttpRouter.HttpRouter, never, never>,
+  routeLayer: typeof localImageEffectRouteLayer | typeof attachmentsEffectRouteLayer,
   run: (origin: string) => Promise<void>,
 ): Promise<void> {
   const scope = await Effect.runPromise(Scope.make("sequential"));
