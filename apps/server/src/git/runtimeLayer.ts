@@ -6,13 +6,17 @@ import { GitManagerLive } from "./Layers/GitManager";
 import { GitStatusBroadcasterLive } from "./Layers/GitStatusBroadcaster";
 import { CodexTextGenerationServiceLive } from "./Layers/CodexTextGeneration";
 import { CursorTextGenerationServiceLive } from "./Layers/CursorTextGeneration";
-import { OpenCodeTextGenerationServiceLive } from "./Layers/OpenCodeTextGeneration";
+import {
+  KiloTextGenerationServiceLive,
+  OpenCodeTextGenerationServiceLive,
+} from "./Layers/OpenCodeTextGeneration";
 import { ProviderTextGenerationLive } from "./Layers/ProviderTextGeneration";
 import { OpenCodeRuntimeLive } from "../provider/opencodeRuntime";
 
 export const TextGenerationLayerLive = ProviderTextGenerationLive.pipe(
   Layer.provide(CodexTextGenerationServiceLive),
   Layer.provide(CursorTextGenerationServiceLive),
+  Layer.provide(KiloTextGenerationServiceLive.pipe(Layer.provide(OpenCodeRuntimeLive))),
   Layer.provide(OpenCodeTextGenerationServiceLive.pipe(Layer.provide(OpenCodeRuntimeLive))),
 );
 

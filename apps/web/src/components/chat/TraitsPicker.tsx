@@ -3,7 +3,13 @@
 // Layer: Chat composer presentation
 // Depends on: shared trait resolution helpers, provider model option updates, and shared menu primitives.
 
-import { type ProviderKind, type ProviderModelDescriptor, type ThreadId } from "@t3tools/contracts";
+import {
+  type OpenCodeModelOptions,
+  type ProviderAgentDescriptor,
+  type ProviderKind,
+  type ProviderModelDescriptor,
+  type ThreadId,
+} from "@t3tools/contracts";
 import {
   applyClaudePromptEffortPrefix,
   geminiModelOptionsFromEffortValue,
@@ -30,12 +36,46 @@ import { ShortcutKbd } from "../ui/shortcut-kbd";
 
 const ULTRATHINK_PROMPT_PREFIX = "Ultrathink:\n";
 
+function defaultAgentForProvider(provider: ProviderKind): string | null {
+  if (provider === "kilo") return "code";
+  if (provider === "opencode") return "build";
+  return null;
+}
+
+function getAgentOptions(
+  provider: ProviderKind,
+  runtimeAgents: ReadonlyArray<ProviderAgentDescriptor> | null | undefined,
+): ReadonlyArray<ProviderAgentDescriptor> {
+  if (provider !== "kilo" && provider !== "opencode") return [];
+  return runtimeAgents ?? [];
+}
+
+function getSelectedAgentValue(
+  provider: ProviderKind,
+  modelOptions: ProviderOptions | null | undefined,
+): string | null {
+  const defaultAgent = defaultAgentForProvider(provider);
+  if (!defaultAgent) return null;
+  const selectedAgent = (modelOptions as OpenCodeModelOptions | undefined)?.agent?.trim();
+  return selectedAgent && selectedAgent.length > 0 ? selectedAgent : defaultAgent;
+}
+
+function findAgentLabel(
+  agents: ReadonlyArray<ProviderAgentDescriptor>,
+  value: string | null,
+): string | null {
+  if (!value) return null;
+  const agent = agents.find((candidate) => candidate.name === value);
+  return agent?.displayName ?? value;
+}
+
 export interface TraitsMenuContentProps {
   provider: ProviderKind;
   threadId: ThreadId;
   model: string | null | undefined;
   runtimeModel?: ProviderModelDescriptor | undefined;
   runtimeModels?: ReadonlyArray<ProviderModelDescriptor> | null | undefined;
+  runtimeAgents?: ReadonlyArray<ProviderAgentDescriptor> | null | undefined;
   prompt: string;
   onPromptChange: (prompt: string) => void;
   includeFastMode?: boolean;
@@ -48,7 +88,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   threadId,
   model,
   runtimeModel,
-  runtimeModels: _runtimeModels,
+  runtimeAgents,
   prompt,
   onPromptChange,
   includeFastMode = true,
@@ -72,6 +112,10 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     { caps, effortLevels, thinkingEnabled, contextWindowOptions },
     { includeFastMode },
   );
+  const agentOptions = getAgentOptions(provider, runtimeAgents);
+  const defaultAgent = defaultAgentForProvider(provider);
+  const selectedAgent = getSelectedAgentValue(provider, modelOptions);
+  const hasAgentControls = agentOptions.length > 0 && defaultAgent !== null;
   const hasPriorFastModeSection =
     effortLevels.length > 0 || thinkingEnabled !== null || contextWindowOptions.length > 1;
 
@@ -93,7 +137,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
       const nextModelOptionsPatch =
         provider === "gemini"
           ? (geminiModelOptionsFromEffortValue(nextOption.value) ?? {})
-          : provider === "opencode"
+          : provider === "kilo" || provider === "opencode"
             ? { variant: nextOption.value }
             : provider === "codex"
               ? { reasoningEffort: nextOption.value }
@@ -121,7 +165,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     ],
   );
 
-  if (!hasVisibleControls) {
+  if (!hasVisibleControls && !hasAgentControls) {
     return null;
   }
 
@@ -131,7 +175,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
         <>
           <MenuGroup>
             <div className="px-2 pt-1.5 pb-1 font-medium text-muted-foreground text-xs">
-              {provider === "opencode" ? "Variant" : "Effort"}
+              {provider === "kilo" || provider === "opencode" ? "Variant" : "Effort"}
             </div>
             {ultrathinkPromptControlled ? (
               <div className="px-2 pb-1.5 text-muted-foreground/80 text-xs">
@@ -249,6 +293,54 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
           </MenuGroup>
         </>
       ) : null}
+      {hasAgentControls ? (
+        <>
+          {hasVisibleControls ? <MenuDivider /> : null}
+          <MenuGroup>
+            <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">
+              {provider === "kilo" ? "Mode" : "Agent"}
+            </div>
+            <MenuRadioGroup
+              value={selectedAgent ?? defaultAgent ?? ""}
+              onValueChange={(value) => {
+                if (!value || !defaultAgent) return;
+                setProviderModelOptions(
+                  threadId,
+                  provider,
+                  buildNextProviderOptions(provider, modelOptions, {
+                    agent: value === defaultAgent ? undefined : value,
+                  }),
+                  { ...(model !== undefined ? { model } : {}), persistSticky: true },
+                );
+                onSelectionComplete?.();
+              }}
+            >
+              {agentOptions.map((agent) => {
+                const item = (
+                  <MenuRadioItem
+                    key={agent.name}
+                    value={agent.name}
+                    onClick={() => onSelectionComplete?.()}
+                  >
+                    {agent.displayName}
+                    {agent.name === defaultAgent ? " (default)" : ""}
+                  </MenuRadioItem>
+                );
+                return agent.description ? (
+                  <Tooltip key={agent.name}>
+                    <TooltipTrigger render={item} />
+                    <TooltipPopup side="right" className="max-w-80 whitespace-normal leading-tight">
+                      {agent.description}
+                    </TooltipPopup>
+                  </Tooltip>
+                ) : (
+                  item
+                );
+              })}
+            </MenuRadioGroup>
+          </MenuGroup>
+        </>
+      ) : null}
     </>
   );
 });
@@ -258,7 +350,7 @@ export const TraitsPicker = memo(function TraitsPicker({
   threadId,
   model,
   runtimeModel,
-  runtimeModels: _runtimeModels,
+  runtimeAgents,
   prompt,
   onPromptChange,
   includeFastMode = true,
@@ -297,8 +389,12 @@ export const TraitsPicker = memo(function TraitsPicker({
     { caps, effortLevels, thinkingEnabled, contextWindowOptions },
     { includeFastMode },
   );
+  const agentOptions = getAgentOptions(provider, runtimeAgents);
+  const defaultAgent = defaultAgentForProvider(provider);
+  const selectedAgent = getSelectedAgentValue(provider, modelOptions);
+  const hasAgentControls = agentOptions.length > 0 && defaultAgent !== null;
 
-  if (!hasVisibleControls) {
+  if (!hasVisibleControls && !hasAgentControls) {
     return null;
   }
 
@@ -325,6 +421,8 @@ export const TraitsPicker = memo(function TraitsPicker({
             ? "Fast"
             : "Default"
           : null;
+  const agentLabel = findAgentLabel(agentOptions, selectedAgent);
+  const visiblePrimaryTriggerLabel = primaryTriggerLabel ?? agentLabel;
   const showsFastBadge = caps.supportsFastMode && fastModeEnabled && !isFastOnlyControl;
 
   const isCodexStyle = provider === "codex";
@@ -344,10 +442,10 @@ export const TraitsPicker = memo(function TraitsPicker({
   const triggerContent = isCodexStyle ? (
     <span className="flex min-w-0 w-full items-center gap-2 overflow-hidden">
       <span className="min-w-0 flex flex-1 items-center gap-1.5 truncate">
-        {primaryTriggerLabel ? <span className="truncate">{primaryTriggerLabel}</span> : null}
+        {visiblePrimaryTriggerLabel ? <span className="truncate">{visiblePrimaryTriggerLabel}</span> : null}
         {showsFastBadge ? (
           <>
-            {primaryTriggerLabel ? (
+            {visiblePrimaryTriggerLabel ? (
               <span className="shrink-0 text-muted-foreground/45">·</span>
             ) : null}
             <span className="inline-flex shrink-0 items-center gap-1">
@@ -358,7 +456,7 @@ export const TraitsPicker = memo(function TraitsPicker({
         ) : null}
         {contextWindowLabel ? (
           <>
-            {primaryTriggerLabel || showsFastBadge ? (
+            {visiblePrimaryTriggerLabel || showsFastBadge ? (
               <span className="shrink-0 text-muted-foreground/45">·</span>
             ) : null}
             <span className="shrink-0">{contextWindowLabel}</span>
@@ -370,10 +468,10 @@ export const TraitsPicker = memo(function TraitsPicker({
   ) : (
     <>
       <span className="inline-flex items-center gap-1.5">
-        {primaryTriggerLabel ? <span>{primaryTriggerLabel}</span> : null}
+        {visiblePrimaryTriggerLabel ? <span>{visiblePrimaryTriggerLabel}</span> : null}
         {showsFastBadge ? (
           <>
-            {primaryTriggerLabel ? <span className="text-muted-foreground/45">·</span> : null}
+            {visiblePrimaryTriggerLabel ? <span className="text-muted-foreground/45">·</span> : null}
             <span className="inline-flex items-center gap-1">
               <IoFlash aria-hidden="true" className="size-3 text-[hsl(var(--chart-4))]" />
               <span>Fast</span>
@@ -382,7 +480,7 @@ export const TraitsPicker = memo(function TraitsPicker({
         ) : null}
         {contextWindowLabel ? (
           <>
-            {primaryTriggerLabel || showsFastBadge ? (
+            {visiblePrimaryTriggerLabel || showsFastBadge ? (
               <span className="text-muted-foreground/45">·</span>
             ) : null}
             <span>{contextWindowLabel}</span>
@@ -426,6 +524,7 @@ export const TraitsPicker = memo(function TraitsPicker({
           threadId={threadId}
           model={model}
           runtimeModel={runtimeModel}
+          runtimeAgents={runtimeAgents}
           prompt={prompt}
           onPromptChange={onPromptChange}
           includeFastMode={includeFastMode}

@@ -51,6 +51,14 @@ export const OpenCodeServerProviderSettings = Schema.Struct({
 });
 export type OpenCodeServerProviderSettings = typeof OpenCodeServerProviderSettings.Type;
 
+export const KiloServerProviderSettings = Schema.Struct({
+  ...ProviderSettingsBase,
+  binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "kilo")),
+  serverUrl: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
+  serverPassword: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
+});
+export type KiloServerProviderSettings = typeof KiloServerProviderSettings.Type;
+
 export const ServerSettings = Schema.Struct({
   enableAssistantStreaming: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
   defaultThreadEnvMode: ThreadEnvironmentMode.pipe(Schema.withDecodingDefault(() => "local")),
@@ -66,6 +74,7 @@ export const ServerSettings = Schema.Struct({
     claudeAgent: ClaudeServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     cursor: CursorServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     gemini: GeminiServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+    kilo: KiloServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     opencode: OpenCodeServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   }).pipe(Schema.withDecodingDefault(() => ({}))),
 });
@@ -111,6 +120,13 @@ export const ServerSettingsPatch = Schema.Struct({
         }),
       ),
       gemini: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
+      kilo: Schema.optionalKey(
+        Schema.Struct({
+          ...ProviderSettingsBasePatch,
+          serverUrl: Schema.optionalKey(StringSetting),
+          serverPassword: Schema.optionalKey(StringSetting),
+        }),
+      ),
       opencode: Schema.optionalKey(
         Schema.Struct({
           ...ProviderSettingsBasePatch,

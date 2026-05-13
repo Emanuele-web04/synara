@@ -24,6 +24,14 @@ const MODEL_OPTIONS_BY_PROVIDER = {
     { slug: "auto-gemini-3", name: "Auto Gemini 3" },
     { slug: "gemini-2.5-pro", name: "Gemini 2.5 Pro" },
   ],
+  kilo: [
+    {
+      slug: "kilo/kilo-auto/free",
+      name: "Kilo Auto Free",
+      upstreamProviderId: "kilo",
+      upstreamProviderName: "Kilo",
+    },
+  ],
   opencode: [
     {
       slug: "opencode/nemotron-3-super-free",

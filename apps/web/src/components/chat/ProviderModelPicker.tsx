@@ -23,7 +23,7 @@ import {
   MenuSubTrigger,
   MenuTrigger,
 } from "../ui/menu";
-import { ClaudeAI, CursorIcon, Gemini, Icon, OpenAI, OpenCodeIcon } from "../Icons";
+import { ClaudeAI, CursorIcon, Gemini, Icon, KiloIcon, OpenAI, OpenCodeIcon } from "../Icons";
 import { cn } from "~/lib/utils";
 import { PickerPanelShell } from "./PickerPanelShell";
 import { PickerTriggerButton } from "./PickerTriggerButton";
@@ -51,6 +51,7 @@ const PROVIDER_ICON_BY_PROVIDER: Record<ProviderPickerKind, Icon> = {
   claudeAgent: ClaudeAI,
   cursor: CursorIcon,
   gemini: Gemini,
+  kilo: KiloIcon,
   opencode: OpenCodeIcon,
 };
 
@@ -100,13 +101,14 @@ function providerIconClassName(
 const SEARCHABLE_MODEL_PICKER_THRESHOLD = 15;
 const FAVORITE_MODEL_STORAGE_KEYS = {
   cursor: "dpcode:cursor-favourite-models:v1",
+  kilo: "dpcode:kilo-favourite-models:v1",
   opencode: "dpcode:opencode-favourite-models:v1",
 } as const;
 const FavoriteModelSlugs = Schema.Array(Schema.String);
 type FavoriteModelProvider = keyof typeof FAVORITE_MODEL_STORAGE_KEYS;
 
 function supportsModelFavorites(provider: ProviderKind): provider is FavoriteModelProvider {
-  return provider === "cursor" || provider === "opencode";
+  return provider === "cursor" || provider === "kilo" || provider === "opencode";
 }
 
 // Keeps persisted favorite slugs compact and stable while preserving the user's order.
@@ -170,6 +172,11 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   const { onOpenChange, open } = props;
   const [uncontrolledMenuOpen, setUncontrolledMenuOpen] = useState(false);
   const [modelSearchQuery, setModelSearchQuery] = useState("");
+  const [kiloFavoriteModelSlugs, setKiloFavoriteModelSlugs] = useLocalStorage(
+    FAVORITE_MODEL_STORAGE_KEYS.kilo,
+    [],
+    FavoriteModelSlugs,
+  );
   const [cursorFavoriteModelSlugs, setCursorFavoriteModelSlugs] = useLocalStorage(
     FAVORITE_MODEL_STORAGE_KEYS.cursor,
     [],
@@ -183,6 +190,10 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   const deferredModelSearchQuery = useDeferredValue(modelSearchQuery);
   const activeProvider = props.lockedProvider ?? props.provider;
   const isMenuOpen = open ?? uncontrolledMenuOpen;
+  const kiloFavoriteModelSlugSet = useMemo(
+    () => new Set(kiloFavoriteModelSlugs),
+    [kiloFavoriteModelSlugs],
+  );
   const openCodeFavoriteModelSlugSet = useMemo(
     () => new Set(openCodeFavoriteModelSlugs),
     [openCodeFavoriteModelSlugs],
@@ -194,9 +205,10 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   const favoriteModelSlugSets = useMemo(
     () => ({
       cursor: cursorFavoriteModelSlugSet,
+      kilo: kiloFavoriteModelSlugSet,
       opencode: openCodeFavoriteModelSlugSet,
     }),
-    [cursorFavoriteModelSlugSet, openCodeFavoriteModelSlugSet],
+    [cursorFavoriteModelSlugSet, kiloFavoriteModelSlugSet, openCodeFavoriteModelSlugSet],
   );
   const selectedProviderOptions = props.modelOptionsByProvider[activeProvider];
   const selectedModelLabel = resolveSelectedModelLabel({
@@ -232,10 +244,14 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   const toggleFavoriteModel = useCallback(
     (provider: FavoriteModelProvider, slug: string) => {
       const setFavoriteModelSlugs =
-        provider === "cursor" ? setCursorFavoriteModelSlugs : setOpenCodeFavoriteModelSlugs;
+        provider === "cursor"
+          ? setCursorFavoriteModelSlugs
+          : provider === "kilo"
+            ? setKiloFavoriteModelSlugs
+            : setOpenCodeFavoriteModelSlugs;
       setFavoriteModelSlugs((current) => toggleFavoriteModelSlug(current, slug));
     },
-    [setCursorFavoriteModelSlugs, setOpenCodeFavoriteModelSlugs],
+    [setCursorFavoriteModelSlugs, setKiloFavoriteModelSlugs, setOpenCodeFavoriteModelSlugs],
   );
 
   const renderModelRadioGroup = (provider: ProviderKind) => {
@@ -254,7 +270,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
 
     const providerOptions = props.modelOptionsByProvider[provider];
     const shouldShowSearch =
-      (provider === "opencode" || provider === "cursor") &&
+      (provider === "kilo" || provider === "opencode" || provider === "cursor") &&
       providerOptions.length >= SEARCHABLE_MODEL_PICKER_THRESHOLD;
     const normalizedModelSearchQuery = deferredModelSearchQuery.trim().toLowerCase();
     const filteredOptions =

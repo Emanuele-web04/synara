@@ -4,27 +4,16 @@ import { parseOpenCodeModelSlug } from "../../provider/opencodeRuntime.ts";
 import {
   CodexTextGeneration,
   CursorTextGeneration,
+  KiloTextGeneration,
   OpenCodeTextGeneration,
   type TextGenerationShape,
   TextGeneration,
 } from "../Services/TextGeneration.ts";
 
-function shouldUseOpenCode(input: {
-  readonly model?: string;
-  readonly modelSelection?: { provider: string };
-}): boolean {
-  if (input.modelSelection?.provider === "opencode") {
-    return true;
-  }
-  if (input.modelSelection?.provider === "codex") {
-    return false;
-  }
-  return parseOpenCodeModelSlug(input.model) !== null;
-}
-
 const makeProviderTextGeneration = Effect.gen(function* () {
   const codexTextGeneration = yield* CodexTextGeneration;
   const cursorTextGeneration = yield* CursorTextGeneration;
+  const kiloTextGeneration = yield* KiloTextGeneration;
   const openCodeTextGeneration = yield* OpenCodeTextGeneration;
 
   const resolveImplementation = (input: {
@@ -34,7 +23,15 @@ const makeProviderTextGeneration = Effect.gen(function* () {
     if (input.modelSelection?.provider === "cursor") {
       return cursorTextGeneration;
     }
-    return shouldUseOpenCode(input) ? openCodeTextGeneration : codexTextGeneration;
+    if (input.modelSelection?.provider === "kilo") {
+      return kiloTextGeneration;
+    }
+    if (input.modelSelection?.provider === "opencode") {
+      return openCodeTextGeneration;
+    }
+    return parseOpenCodeModelSlug(input.model) !== null
+      ? openCodeTextGeneration
+      : codexTextGeneration;
   };
 
   return {

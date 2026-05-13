@@ -52,6 +52,7 @@ type CustomModelSettingsKey =
   | "customClaudeModels"
   | "customCursorModels"
   | "customGeminiModels"
+  | "customKiloModels"
   | "customOpenCodeModels";
 export type ProviderCustomModelConfig = {
   provider: ProviderKind;
@@ -68,6 +69,7 @@ const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>
   claudeAgent: new Set(getModelOptions("claudeAgent").map((option) => option.slug)),
   cursor: new Set(getModelOptions("cursor").map((option) => option.slug)),
   gemini: new Set(getModelOptions("gemini").map((option) => option.slug)),
+  kilo: new Set(getModelOptions("kilo").map((option) => option.slug)),
   opencode: new Set(getModelOptions("opencode").map((option) => option.slug)),
 };
 
@@ -93,6 +95,9 @@ export const AppSettingsSchema = Schema.Struct({
   cursorBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   cursorApiEndpoint: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   geminiBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  kiloBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  kiloServerUrl: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  kiloServerPassword: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   openCodeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   openCodeServerUrl: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   openCodeServerPassword: Schema.String.check(Schema.isMaxLength(4096)).pipe(
@@ -119,7 +124,9 @@ export const AppSettingsSchema = Schema.Struct({
   customClaudeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customCursorModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customGeminiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
+  customKiloModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customOpenCodeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
+  textGenerationProvider: ProviderKind.pipe(withDefaults(() => "codex" as const)),
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
   uiFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
   defaultProvider: ProviderKind.pipe(withDefaults(() => "codex" as const)),
@@ -130,6 +137,7 @@ type MutableServerSettingsPatch = Mutable<ServerSettingsPatch>;
 type MutableServerSettingsProvidersPatch = Mutable<NonNullable<ServerSettingsPatch["providers"]>>;
 
 export interface AppModelOption extends ProviderModelOption {
+  provider: ProviderKind;
   isCustom: boolean;
 }
 
@@ -172,6 +180,15 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     description: "Save additional Gemini model slugs for the picker and `/model` command.",
     placeholder: "your-gemini-model-slug",
     example: "gemini-3.5-pro-preview",
+  },
+  kilo: {
+    provider: "kilo",
+    settingsKey: "customKiloModels",
+    defaultSettingsKey: "customKiloModels",
+    title: "Kilo",
+    description: "Save additional Kilo model slugs for the picker and provider runtime.",
+    placeholder: "provider/model",
+    example: "kilo/kilo-auto/free",
   },
   opencode: {
     provider: "opencode",
@@ -231,6 +248,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     customClaudeModels: normalizeCustomModelSlugs(settings.customClaudeModels, "claudeAgent"),
     customCursorModels: normalizeCustomModelSlugs(settings.customCursorModels, "cursor"),
     customGeminiModels: normalizeCustomModelSlugs(settings.customGeminiModels, "gemini"),
+    customKiloModels: normalizeCustomModelSlugs(settings.customKiloModels, "kilo"),
     customOpenCodeModels: normalizeCustomModelSlugs(settings.customOpenCodeModels, "opencode"),
   };
 }
@@ -245,6 +263,9 @@ function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSetti
     defaultThreadEnvMode: settings.defaultThreadEnvMode,
     enableAssistantStreaming: settings.enableAssistantStreaming,
     geminiBinaryPath: settings.providers.gemini.binaryPath,
+    kiloBinaryPath: settings.providers.kilo.binaryPath,
+    kiloServerPassword: settings.providers.kilo.serverPassword,
+    kiloServerUrl: settings.providers.kilo.serverUrl,
     openCodeBinaryPath: settings.providers.opencode.binaryPath,
     openCodeServerPassword: settings.providers.opencode.serverPassword,
     openCodeServerUrl: settings.providers.opencode.serverUrl,
@@ -252,12 +273,21 @@ function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSetti
     customClaudeModels: settings.providers.claudeAgent.customModels,
     customCursorModels: settings.providers.cursor.customModels,
     customGeminiModels: settings.providers.gemini.customModels,
+    customKiloModels: settings.providers.kilo.customModels,
     customOpenCodeModels: settings.providers.opencode.customModels,
+    textGenerationProvider: settings.textGenerationModelSelection.provider,
     textGenerationModel: settings.textGenerationModelSelection.model,
   };
 }
 
-function resolveTextGenerationProvider(model: string | null | undefined): "codex" | "opencode" {
+function resolveTextGenerationProvider(input: {
+  readonly provider?: ProviderKind | null;
+  readonly model?: string | null;
+}): ProviderKind {
+  if (input.provider) {
+    return input.provider;
+  }
+  const model = input.model;
   return model?.includes("/") ? "opencode" : "codex";
 }
 
@@ -275,10 +305,15 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
   if (patch.defaultThreadEnvMode === "local" || patch.defaultThreadEnvMode === "worktree") {
     serverPatch.defaultThreadEnvMode = patch.defaultThreadEnvMode;
   }
-  if (hasOwn(patch, "textGenerationModel")) {
+  if (hasOwn(patch, "textGenerationModel") || hasOwn(patch, "textGenerationProvider")) {
     const model = patch.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
     serverPatch.textGenerationModelSelection = {
-      provider: resolveTextGenerationProvider(model),
+      provider: resolveTextGenerationProvider({
+        ...(patch.textGenerationProvider !== undefined
+          ? { provider: patch.textGenerationProvider }
+          : {}),
+        model,
+      }),
       model,
     };
   }
@@ -326,6 +361,21 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
     };
   }
   if (
+    hasOwn(patch, "kiloBinaryPath") ||
+    hasOwn(patch, "kiloServerUrl") ||
+    hasOwn(patch, "kiloServerPassword") ||
+    hasOwn(patch, "customKiloModels")
+  ) {
+    providers.kilo = {
+      ...(hasOwn(patch, "kiloBinaryPath") ? { binaryPath: patch.kiloBinaryPath ?? "" } : {}),
+      ...(hasOwn(patch, "kiloServerUrl") ? { serverUrl: patch.kiloServerUrl ?? "" } : {}),
+      ...(hasOwn(patch, "kiloServerPassword")
+        ? { serverPassword: patch.kiloServerPassword ?? "" }
+        : {}),
+      ...(hasOwn(patch, "customKiloModels") ? { customModels: patch.customKiloModels ?? [] } : {}),
+    };
+  }
+  if (
     hasOwn(patch, "openCodeBinaryPath") ||
     hasOwn(patch, "openCodeServerUrl") ||
     hasOwn(patch, "openCodeServerPassword") ||
@@ -368,10 +418,14 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "defaultThreadEnvMode",
     "enableAssistantStreaming",
     "geminiBinaryPath",
+    "kiloBinaryPath",
+    "kiloServerPassword",
+    "kiloServerUrl",
     "openCodeBinaryPath",
     "openCodeServerPassword",
     "openCodeServerUrl",
     "textGenerationModel",
+    "textGenerationProvider",
   ] as const) {
     if (settings[key] !== defaults[key]) {
       patch[key] = settings[key] as never;
@@ -383,6 +437,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "customClaudeModels",
     "customCursorModels",
     "customGeminiModels",
+    "customKiloModels",
     "customOpenCodeModels",
   ] as const) {
     if (settings[key].length > 0) {
@@ -428,6 +483,7 @@ export function getCustomModelsByProvider(
     claudeAgent: getCustomModelsForProvider(settings, "claudeAgent"),
     cursor: getCustomModelsForProvider(settings, "cursor"),
     gemini: getCustomModelsForProvider(settings, "gemini"),
+    kilo: getCustomModelsForProvider(settings, "kilo"),
     opencode: getCustomModelsForProvider(settings, "opencode"),
   };
 }
@@ -438,6 +494,7 @@ export function getAppModelOptions(
   selectedModel?: string | null,
 ): AppModelOption[] {
   const options: AppModelOption[] = getModelOptions(provider).map(({ slug, name }) => ({
+    provider,
     slug,
     name,
     isCustom: false,
@@ -452,6 +509,7 @@ export function getAppModelOptions(
 
     seen.add(slug);
     options.push({
+      provider,
       slug,
       name: formatProviderModelOptionName({ provider, slug }),
       isCustom: true,
@@ -468,6 +526,7 @@ export function getAppModelOptions(
     !selectedModelMatchesExistingName
   ) {
     options.push({
+      provider,
       slug: normalizedSelectedModel,
       name: formatProviderModelOptionName({ provider, slug: normalizedSelectedModel }),
       isCustom: true,
@@ -478,28 +537,41 @@ export function getAppModelOptions(
 }
 
 export function getGitTextGenerationModelOptions(
-  settings: Pick<AppSettings, "customCodexModels" | "customOpenCodeModels" | "textGenerationModel">,
+  settings: Pick<
+    AppSettings,
+    | "customCodexModels"
+    | "customKiloModels"
+    | "customOpenCodeModels"
+    | "textGenerationModel"
+    | "textGenerationProvider"
+  >,
 ): AppModelOption[] {
   const options = [
     ...getAppModelOptions("codex", settings.customCodexModels),
+    ...getAppModelOptions("kilo", settings.customKiloModels),
     ...getAppModelOptions("opencode", settings.customOpenCodeModels),
   ];
   const deduped: AppModelOption[] = [];
   const seen = new Set<string>();
 
   for (const option of options) {
-    if (seen.has(option.slug)) {
+    const key = `${option.provider}:${option.slug}`;
+    if (seen.has(key)) {
       continue;
     }
-    seen.add(option.slug);
+    seen.add(key);
     deduped.push(option);
   }
 
   const selectedModel = settings.textGenerationModel?.trim();
-  if (selectedModel && !seen.has(selectedModel)) {
+  const selectedProvider =
+    settings.textGenerationProvider ??
+    resolveTextGenerationProvider(selectedModel !== undefined ? { model: selectedModel } : {});
+  if (selectedModel && !seen.has(`${selectedProvider}:${selectedModel}`)) {
     deduped.push({
+      provider: selectedProvider,
       slug: selectedModel,
-      name: formatProviderModelOptionName({ provider: "opencode", slug: selectedModel }),
+      name: formatProviderModelOptionName({ provider: selectedProvider, slug: selectedModel }),
       isCustom: true,
     });
   }
@@ -526,6 +598,7 @@ export function getCustomModelOptionsByProvider(
     claudeAgent: getAppModelOptions("claudeAgent", customModelsByProvider.claudeAgent),
     cursor: getAppModelOptions("cursor", customModelsByProvider.cursor),
     gemini: getAppModelOptions("gemini", customModelsByProvider.gemini),
+    kilo: getAppModelOptions("kilo", customModelsByProvider.kilo),
     opencode: getAppModelOptions("opencode", customModelsByProvider.opencode),
   };
 }
@@ -539,6 +612,9 @@ export function getProviderStartOptions(
     | "cursorApiEndpoint"
     | "cursorBinaryPath"
     | "geminiBinaryPath"
+    | "kiloBinaryPath"
+    | "kiloServerPassword"
+    | "kiloServerUrl"
     | "openCodeBinaryPath"
     | "openCodeServerPassword"
     | "openCodeServerUrl"
@@ -575,6 +651,15 @@ export function getProviderStartOptions(
           },
         }
       : {}),
+    ...(settings.kiloBinaryPath || settings.kiloServerUrl || settings.kiloServerPassword
+      ? {
+          kilo: {
+            ...(settings.kiloBinaryPath ? { binaryPath: settings.kiloBinaryPath } : {}),
+            ...(settings.kiloServerUrl ? { serverUrl: settings.kiloServerUrl } : {}),
+            ...(settings.kiloServerPassword ? { serverPassword: settings.kiloServerPassword } : {}),
+          },
+        }
+      : {}),
     ...(settings.openCodeBinaryPath || settings.openCodeServerUrl || settings.openCodeServerPassword
       ? {
           opencode: {
@@ -598,6 +683,7 @@ export function getCustomBinaryPathForProvider(
     | "codexBinaryPath"
     | "cursorBinaryPath"
     | "geminiBinaryPath"
+    | "kiloBinaryPath"
     | "openCodeBinaryPath"
   >,
   provider: ProviderKind,
@@ -611,6 +697,8 @@ export function getCustomBinaryPathForProvider(
       return settings.cursorBinaryPath;
     case "gemini":
       return settings.geminiBinaryPath;
+    case "kilo":
+      return settings.kiloBinaryPath;
     case "opencode":
       return settings.openCodeBinaryPath;
   }

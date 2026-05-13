@@ -171,6 +171,13 @@ export class OpenCodeTextGeneration extends ServiceMap.Service<
 >()("t3/git/Services/TextGeneration/OpenCodeTextGeneration") {}
 
 /**
+ * KiloTextGeneration - Provider-specific Kilo implementation for git text generation.
+ */
+export class KiloTextGeneration extends ServiceMap.Service<KiloTextGeneration, TextGenerationShape>()(
+  "t3/git/Services/TextGeneration/KiloTextGeneration",
+) {}
+
+/**
  * CursorTextGeneration - Provider-specific Cursor implementation for git text generation.
  */
 export class CursorTextGeneration extends ServiceMap.Service<

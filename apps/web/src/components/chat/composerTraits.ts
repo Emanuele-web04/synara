@@ -41,7 +41,7 @@ function getRawEffort(
   if (provider === "cursor") {
     return trimOrNull((modelOptions as CursorModelOptions | undefined)?.reasoningEffort);
   }
-  if (provider === "opencode") {
+  if (provider === "kilo" || provider === "opencode") {
     return trimOrNull((modelOptions as OpenCodeModelOptions | undefined)?.variant);
   }
   const caps = getModelCapabilities(provider, model);
@@ -101,9 +101,11 @@ export function getComposerTraitSelection(
 ) {
   const caps = getRuntimeAwareModelCapabilities({ provider, model, runtimeModel });
   const effortLevels =
-    provider === "opencode" ? (caps.variantOptions ?? []) : caps.reasoningEffortLevels;
+    provider === "kilo" || provider === "opencode"
+      ? (caps.variantOptions ?? [])
+      : caps.reasoningEffortLevels;
   const defaultEffort =
-    provider === "opencode"
+    provider === "kilo" || provider === "opencode"
       ? resolveLabeledOptionValue(caps.variantOptions, null)
       : getDefaultEffort(caps);
   const defaultContextWindow = getDefaultContextWindow(caps);
@@ -113,7 +115,7 @@ export function getComposerTraitSelection(
     ? caps.promptInjectedEffortLevels.includes(resolvedEffort)
     : false;
   const effort =
-    provider === "opencode"
+    provider === "kilo" || provider === "opencode"
       ? resolveLabeledOptionValue(caps.variantOptions, resolvedEffort)
       : resolvedEffort && !isPromptInjected && hasEffortLevel(caps, resolvedEffort)
         ? resolvedEffort

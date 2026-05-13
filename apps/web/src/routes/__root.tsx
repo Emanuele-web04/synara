@@ -873,12 +873,18 @@ function EventRouter() {
         ...currentConfig,
         providers: payload.providers,
       });
-      // OpenCode model availability depends on which underlying providers are connected.
+      // OpenCode-compatible model availability depends on which underlying providers are connected.
+      void queryClient.invalidateQueries({
+        queryKey: ["provider-discovery", "models", "kilo"],
+      });
       void queryClient.invalidateQueries({
         queryKey: ["provider-discovery", "models", "opencode"],
       });
       void queryClient.invalidateQueries({
         queryKey: ["provider-discovery", "models", "cursor"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: providerDiscoveryQueryKeys.agents("kilo"),
       });
       void queryClient.invalidateQueries({
         queryKey: providerDiscoveryQueryKeys.agents("opencode"),

@@ -35,9 +35,35 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { NetService } from "@t3tools/shared/Net";
 import { isWindowsShellCommandMissingResult } from "../shell-command-detection.ts";
 
-const OPENCODE_SERVER_READY_PREFIX = "opencode server listening";
 const DEFAULT_OPENCODE_SERVER_TIMEOUT_MS = 5_000;
 const DEFAULT_HOSTNAME = "127.0.0.1";
+
+export interface OpenCodeCompatibleCliSpec {
+  readonly defaultBinaryPath: string;
+  readonly displayName: string;
+  readonly serverReadyPrefix: string;
+  readonly configContentEnvVar: string;
+  readonly dataDirectoryName: string;
+  readonly serverAuthUsername: string;
+}
+
+export const OPENCODE_CLI_SPEC: OpenCodeCompatibleCliSpec = {
+  defaultBinaryPath: "opencode",
+  displayName: "OpenCode",
+  serverReadyPrefix: "opencode server listening",
+  configContentEnvVar: "OPENCODE_CONFIG_CONTENT",
+  dataDirectoryName: "opencode",
+  serverAuthUsername: "opencode",
+};
+
+export const KILO_CLI_SPEC: OpenCodeCompatibleCliSpec = {
+  defaultBinaryPath: "kilo",
+  displayName: "Kilo",
+  serverReadyPrefix: "kilo server listening",
+  configContentEnvVar: "KILO_CONFIG_CONTENT",
+  dataDirectoryName: "kilo",
+  serverAuthUsername: "kilo",
+};
 
 export interface OpenCodeServerProcess {
   readonly url: string;
@@ -115,6 +141,13 @@ export interface OpenCodeCliModelDescriptor {
     readonly description?: string;
   }>;
   readonly defaultReasoningEffort?: string;
+  readonly contextWindowOptions?: ReadonlyArray<{
+    readonly value: string;
+    readonly label: string;
+    readonly isDefault?: true;
+  }>;
+  readonly defaultContextWindow?: string;
+  readonly isFree?: boolean;
 }
 
 export interface OpenCodePathInfo {
@@ -128,12 +161,14 @@ export interface OpenCodePathInfo {
 export interface OpenCodeRuntimeShape {
   readonly startOpenCodeServerProcess: (input: {
     readonly binaryPath: string;
+    readonly cliSpec?: OpenCodeCompatibleCliSpec;
     readonly port?: number;
     readonly hostname?: string;
     readonly timeoutMs?: number;
   }) => Effect.Effect<OpenCodeServerProcess, OpenCodeRuntimeError, Scope.Scope>;
   readonly connectToOpenCodeServer: (input: {
     readonly binaryPath: string;
+    readonly cliSpec?: OpenCodeCompatibleCliSpec;
     readonly serverUrl?: string | null;
     readonly port?: number;
     readonly hostname?: string;
@@ -141,11 +176,13 @@ export interface OpenCodeRuntimeShape {
   }) => Effect.Effect<OpenCodeServerConnection, OpenCodeRuntimeError, Scope.Scope>;
   readonly runOpenCodeCommand: (input: {
     readonly binaryPath: string;
+    readonly cliSpec?: OpenCodeCompatibleCliSpec;
     readonly args: ReadonlyArray<string>;
   }) => Effect.Effect<OpenCodeCommandResult, OpenCodeRuntimeError>;
   readonly createOpenCodeSdkClient: (input: {
     readonly baseUrl: string;
     readonly directory: string;
+    readonly cliSpec?: OpenCodeCompatibleCliSpec;
     readonly serverPassword?: string;
   }) => OpencodeClient;
   readonly loadOpenCodeInventory: (
@@ -153,15 +190,17 @@ export interface OpenCodeRuntimeShape {
   ) => Effect.Effect<OpenCodeInventory, OpenCodeRuntimeError>;
   readonly listOpenCodeCliModels: (input: {
     readonly binaryPath: string;
+    readonly cliSpec?: OpenCodeCompatibleCliSpec;
   }) => Effect.Effect<ReadonlyArray<OpenCodeCliModelDescriptor>, OpenCodeRuntimeError>;
   readonly loadOpenCodeCredentialProviderIDs: (
     client: OpencodeClient,
+    cliSpec?: OpenCodeCompatibleCliSpec,
   ) => Effect.Effect<ReadonlyArray<string>, never>;
 }
 
-function parseServerUrlFromOutput(output: string): string | null {
+function parseServerUrlFromOutput(output: string, readyPrefix: string): string | null {
   for (const line of output.split("\n")) {
-    if (!line.startsWith(OPENCODE_SERVER_READY_PREFIX)) {
+    if (!line.startsWith(readyPrefix)) {
       continue;
     }
     const match = line.match(/on\s+(https?:\/\/[^\s]+)/);
@@ -200,6 +239,39 @@ function trimToNull(value: unknown): string | null {
 
 function fallbackOpenCodeModelName(slug: string, parsedSlug: ParsedOpenCodeModelSlug): string {
   return trimToNull(parsedSlug.modelID) ?? slug;
+}
+
+function numberToContextWindowValue(value: number): string | null {
+  if (!Number.isFinite(value) || value <= 0) return null;
+  if (value >= 1_000_000 && value % 1_000_000 === 0) return `${value / 1_000_000}m`;
+  if (value >= 1_000 && value % 1_000 === 0) return `${value / 1_000}k`;
+  return String(value);
+}
+
+function contextWindowLabel(value: string): string {
+  return value.toUpperCase();
+}
+
+function parseOpenCodeContextWindowOptions(object: Record<string, unknown>):
+  | {
+      readonly contextWindowOptions: ReadonlyArray<{
+        readonly value: string;
+        readonly label: string;
+        readonly isDefault?: true;
+      }>;
+      readonly defaultContextWindow: string;
+    }
+  | undefined {
+  const limit = object.limit && typeof object.limit === "object" ? (object.limit as Record<string, unknown>) : null;
+  const context =
+    typeof limit?.context === "number"
+      ? numberToContextWindowValue(limit.context)
+      : trimToNull(limit?.context);
+  if (!context) return undefined;
+  return {
+    contextWindowOptions: [{ value: context, label: contextWindowLabel(context), isDefault: true }],
+    defaultContextWindow: context,
+  };
 }
 
 function readOpenCodeVariantEffort(
@@ -268,20 +340,23 @@ function readOpenCodeVariantEffort(
   return null;
 }
 
-function resolveOpenCodeDataDirectory(homeDirectory: string): string {
+function resolveOpenCodeDataDirectory(homeDirectory: string, dataDirectoryName = "opencode"): string {
   if (process.platform === "win32") {
     const appDataDirectory =
       trimToNull(process.env.APPDATA) ?? join(homeDirectory, "AppData", "Roaming");
-    return join(appDataDirectory, "opencode");
+    return join(appDataDirectory, dataDirectoryName);
   }
 
   const xdgDataHome =
     trimToNull(process.env.XDG_DATA_HOME) ?? join(homeDirectory, ".local", "share");
-  return join(xdgDataHome, "opencode");
+  return join(xdgDataHome, dataDirectoryName);
 }
 
-export function resolveOpenCodeAuthFilePath(pathInfo: Pick<OpenCodePathInfo, "home">): string {
-  return join(resolveOpenCodeDataDirectory(pathInfo.home), "auth.json");
+export function resolveOpenCodeAuthFilePath(
+  pathInfo: Pick<OpenCodePathInfo, "home">,
+  cliSpec: OpenCodeCompatibleCliSpec = OPENCODE_CLI_SPEC,
+): string {
+  return join(resolveOpenCodeDataDirectory(pathInfo.home, cliSpec.dataDirectoryName), "auth.json");
 }
 
 export function parseOpenCodeCredentialProviderIDs(content: string): ReadonlyArray<string> {
@@ -410,6 +485,8 @@ function parseOpenCodeCliModelJson(
         trimToNull((object.options as Record<string, unknown>).effort))
       : null) ??
     undefined;
+  const contextWindowOptions = parseOpenCodeContextWindowOptions(object);
+  const isFree = object.isFree;
 
   return {
     slug,
@@ -419,6 +496,8 @@ function parseOpenCodeCliModelJson(
     variants,
     supportedReasoningEfforts,
     ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
+    ...(contextWindowOptions ?? {}),
+    ...(typeof isFree === "boolean" ? { isFree } : {}),
   };
 }
 
@@ -659,6 +738,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
   const startOpenCodeServerProcess: OpenCodeRuntimeShape["startOpenCodeServerProcess"] = (input) =>
     Effect.gen(function* () {
       const runtimeScope = yield* Scope.Scope;
+      const cliSpec = input.cliSpec ?? OPENCODE_CLI_SPEC;
 
       const hostname = input.hostname ?? DEFAULT_HOSTNAME;
       const port =
@@ -681,7 +761,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
           ChildProcess.make(input.binaryPath, args, {
             env: {
               ...process.env,
-              OPENCODE_CONFIG_CONTENT: JSON.stringify({}),
+              [cliSpec.configContentEnvVar]: JSON.stringify({}),
             },
             detached: false,
             killSignal: "SIGKILL",
@@ -711,7 +791,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       const setReadyFromStdoutChunk = (chunk: string) =>
         Ref.updateAndGet(stdoutRef, (stdout) => `${stdout}${chunk}`).pipe(
           Effect.flatMap((nextStdout) => {
-            const parsed = parseServerUrlFromOutput(nextStdout);
+            const parsed = parseServerUrlFromOutput(nextStdout, cliSpec.serverReadyPrefix);
             return parsed
               ? Deferred.succeed(readyDeferred, parsed).pipe(Effect.ignore)
               : Effect.void;
@@ -804,6 +884,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
 
     return startOpenCodeServerProcess({
       binaryPath: input.binaryPath,
+      ...(input.cliSpec !== undefined ? { cliSpec: input.cliSpec } : {}),
       ...(input.port !== undefined ? { port: input.port } : {}),
       ...(input.hostname !== undefined ? { hostname: input.hostname } : {}),
       ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
@@ -823,7 +904,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       ...(input.serverPassword
         ? {
             headers: {
-              Authorization: `Basic ${Buffer.from(`opencode:${input.serverPassword}`, "utf8").toString("base64")}`,
+              Authorization: `Basic ${Buffer.from(`${(input.cliSpec ?? OPENCODE_CLI_SPEC).serverAuthUsername}:${input.serverPassword}`, "utf8").toString("base64")}`,
             },
           }
         : {}),
@@ -898,10 +979,12 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
 
   const listOpenCodeCliModelsFromArgs = (input: {
     readonly binaryPath: string;
+    readonly cliSpec?: OpenCodeCompatibleCliSpec;
     readonly args: ReadonlyArray<string>;
   }) =>
     runOpenCodeCommand({
       binaryPath: input.binaryPath,
+      ...(input.cliSpec !== undefined ? { cliSpec: input.cliSpec } : {}),
       args: input.args,
     }).pipe(
       Effect.flatMap((result) =>
@@ -922,6 +1005,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
   const listOpenCodeCliModels: OpenCodeRuntimeShape["listOpenCodeCliModels"] = (input) =>
     listOpenCodeCliModelsFromArgs({
       binaryPath: input.binaryPath,
+      ...(input.cliSpec !== undefined ? { cliSpec: input.cliSpec } : {}),
       args: ["models", "--verbose"],
     }).pipe(
       Effect.catch((error) => {
@@ -944,17 +1028,18 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
 
         return listOpenCodeCliModelsFromArgs({
           binaryPath: input.binaryPath,
+          ...(input.cliSpec !== undefined ? { cliSpec: input.cliSpec } : {}),
           args: ["models"],
         });
       }),
     );
 
   const loadOpenCodeCredentialProviderIDs: OpenCodeRuntimeShape["loadOpenCodeCredentialProviderIDs"] =
-    (client) =>
+    (client, cliSpec = OPENCODE_CLI_SPEC) =>
       loadOpenCodePaths(client).pipe(
         Effect.flatMap((pathInfo) =>
           Effect.tryPromise({
-            try: () => readFile(resolveOpenCodeAuthFilePath(pathInfo), "utf8"),
+            try: () => readFile(resolveOpenCodeAuthFilePath(pathInfo, cliSpec), "utf8"),
             catch: (cause) =>
               new OpenCodeRuntimeError({
                 operation: "readOpenCodeCredentialProviderIDs",

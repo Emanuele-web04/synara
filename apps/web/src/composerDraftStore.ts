@@ -432,26 +432,49 @@ export interface EffectiveComposerModelState {
   modelOptions: ProviderModelOptions | null;
 }
 
-function providerModelOptionsFromSelection(
-  modelSelection: ModelSelection | null | undefined,
+function mergeProviderModelOptionsFromSelections(
+  ...selections: ReadonlyArray<ModelSelection | null | undefined>
 ): ProviderModelOptions | null {
-  if (!modelSelection?.options) {
-    return null;
+  const result: Partial<Record<ProviderKind, ProviderModelOptions[ProviderKind]>> = {};
+  for (const selection of selections) {
+    if (!selection) continue;
+    if (selection.options) {
+      result[selection.provider] = selection.options;
+    } else {
+      delete result[selection.provider];
+    }
   }
-
-  return {
-    [modelSelection.provider]: modelSelection.options,
-  };
+  return Object.keys(result).length > 0 ? (result as ProviderModelOptions) : null;
 }
 
-function modelSelectionByProviderToOptions(
-  map: Partial<Record<ProviderKind, ModelSelection>> | null | undefined,
-): ProviderModelOptions | null {
-  if (!map) return null;
-  const result: Record<string, unknown> = {};
-  for (const [provider, selection] of Object.entries(map)) {
-    if (selection?.options) {
+function deriveEffectiveComposerModelOptions(input: {
+  draft:
+    | Pick<ComposerThreadDraftState, "modelSelectionByProvider" | "activeProvider">
+    | null
+    | undefined;
+  threadModelSelection: ModelSelection | null | undefined;
+  projectModelSelection: ModelSelection | null | undefined;
+}): ProviderModelOptions | null {
+  const baseOptions = mergeProviderModelOptionsFromSelections(
+    input.projectModelSelection,
+    input.threadModelSelection,
+  );
+  const draftSelections = input.draft?.modelSelectionByProvider;
+  if (!draftSelections) {
+    return baseOptions;
+  }
+
+  const result: Partial<Record<ProviderKind, ProviderModelOptions[ProviderKind]>> = {
+    ...(baseOptions ?? {}),
+  };
+  for (const [provider, selection] of Object.entries(draftSelections) as Array<
+    [ProviderKind, ModelSelection | undefined]
+  >) {
+    if (!selection) continue;
+    if (selection.options) {
       result[provider] = selection.options;
+    } else {
+      delete result[provider];
     }
   }
   return Object.keys(result).length > 0 ? (result as ProviderModelOptions) : null;
@@ -670,6 +693,7 @@ function normalizeProviderKind(value: unknown): ProviderKind | null {
     value === "claudeAgent" ||
     value === "cursor" ||
     value === "gemini" ||
+    value === "kilo" ||
     value === "opencode"
     ? value
     : null;
@@ -723,6 +747,14 @@ function makeModelSelection(
           ? { options: options as Extract<ModelSelection, { provider: "gemini" }>["options"] }
           : {}),
       };
+    case "kilo":
+      return {
+        provider,
+        model,
+        ...(options
+          ? { options: options as Extract<ModelSelection, { provider: "kilo" }>["options"] }
+          : {}),
+      };
     case "opencode":
       return {
         provider,
@@ -759,6 +791,10 @@ function normalizeProviderModelOptions(
   const openCodeCandidate =
     candidate?.opencode && typeof candidate.opencode === "object"
       ? (candidate.opencode as Record<string, unknown>)
+      : null;
+  const kiloCandidate =
+    candidate?.kilo && typeof candidate.kilo === "object"
+      ? (candidate.kilo as Record<string, unknown>)
       : null;
 
   const codexReasoningEffort: CodexReasoningEffort | undefined =
@@ -890,7 +926,16 @@ function normalizeProviderModelOptions(
           ...(openCodeAgent !== undefined ? { agent: openCodeAgent } : {}),
         }
       : undefined;
-  if (!codex && !claude && !cursor && !gemini && !opencode) {
+  const kiloVariant = trimStringOrUndefined(kiloCandidate?.variant);
+  const kiloAgent = trimStringOrUndefined(kiloCandidate?.agent);
+  const kilo =
+    kiloVariant !== undefined || kiloAgent !== undefined
+      ? {
+          ...(kiloVariant !== undefined ? { variant: kiloVariant } : {}),
+          ...(kiloAgent !== undefined ? { agent: kiloAgent } : {}),
+        }
+      : undefined;
+  if (!codex && !claude && !cursor && !gemini && !kilo && !opencode) {
     return null;
   }
   return {
@@ -898,6 +943,7 @@ function normalizeProviderModelOptions(
     ...(claude ? { claudeAgent: claude } : {}),
     ...(cursor ? { cursor } : {}),
     ...(gemini ? { gemini } : {}),
+    ...(kilo ? { kilo } : {}),
     ...(opencode ? { opencode } : {}),
   };
 }
@@ -944,6 +990,8 @@ function normalizeModelSelection(
           : modelOptions?.claudeAgent
         : provider === "gemini"
           ? modelOptions?.gemini
+          : provider === "kilo"
+            ? modelOptions?.kilo
           : provider === "cursor"
             ? modelOptions?.cursor
             : provider === "opencode"
@@ -1006,7 +1054,7 @@ function legacyToModelSelectionByProvider(
   const result: Partial<Record<ProviderKind, ModelSelection>> = {};
   // Add entries from the options bag (for non-active providers)
   if (modelOptions) {
-    for (const provider of ["codex", "claudeAgent", "cursor", "gemini", "opencode"] as const) {
+    for (const provider of ["codex", "claudeAgent", "cursor", "gemini", "kilo", "opencode"] as const) {
       const options = modelOptions[provider];
       if (options && Object.keys(options).length > 0) {
         result[provider] = makeModelSelection(
@@ -1086,11 +1134,7 @@ export function deriveEffectiveComposerModelState(input: {
     input.availableModelOptionsByProvider?.[input.selectedProvider]?.[0]?.slug ??
     selectedDraftModel ??
     baseModel;
-  const modelOptions =
-    modelSelectionByProviderToOptions(input.draft?.modelSelectionByProvider) ??
-    providerModelOptionsFromSelection(input.threadModelSelection) ??
-    providerModelOptionsFromSelection(input.projectModelSelection) ??
-    null;
+  const modelOptions = deriveEffectiveComposerModelOptions(input);
 
   return {
     selectedModel,
@@ -1110,7 +1154,7 @@ export function resolvePreferredComposerModelSelection(input: {
   defaultProvider?: ProviderKind | null | undefined;
 }): ModelSelection {
   const draftProviderWithSelection =
-    (["codex", "claudeAgent", "cursor", "gemini", "opencode"] as const).find(
+    (["codex", "claudeAgent", "cursor", "gemini", "kilo", "opencode"] as const).find(
       (provider) => input.draft?.modelSelectionByProvider?.[provider] !== undefined,
     ) ?? null;
   const preferredProvider =
@@ -2643,6 +2687,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             "claudeAgent",
             "cursor",
             "gemini",
+            "kilo",
             "opencode",
           ] as const) {
             // Only touch providers explicitly present in the input

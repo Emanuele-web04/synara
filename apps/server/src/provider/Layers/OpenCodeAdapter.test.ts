@@ -103,9 +103,10 @@ function makeModel(input: Omit<TestModelInput, "providerID"> & Pick<Model, "prov
   };
 }
 
-function createMockOpenCodeRuntime(input?: {
+function createMockOpenCodeRuntime(options?: {
   readonly inventory?: OpenCodeInventory;
   readonly cliModels?: ReadonlyArray<OpenCodeCliModelDescriptor>;
+  readonly promptAsync?: (input: Record<string, unknown>) => Promise<unknown>;
   readonly messages?: () => Promise<{
     data: Array<{ info: Record<string, unknown>; parts: Part[] }>;
   }>;
@@ -128,16 +129,19 @@ function createMockOpenCodeRuntime(input?: {
         createCalls.push(input);
         return { data: { id: "opencode-session-1" } };
       },
-      promptAsync: async (input: Record<string, unknown>) => {
-        promptCalls.push(input);
+      promptAsync: async (promptInput: Record<string, unknown>) => {
+        promptCalls.push(promptInput);
+        if (options?.promptAsync) {
+          return options.promptAsync(promptInput);
+        }
         return { data: null };
       },
       abort: async (input: { sessionID: string }) => {
         abortCalls.push(input);
         return { data: null };
       },
-      messages: input?.messages ?? (async () => ({ data: [] })),
-      get: async () => ({ data: { directory: process.cwd(), ...(input?.session ?? {}) } }),
+      messages: options?.messages ?? (async () => ({ data: [] })),
+      get: async () => ({ data: { directory: process.cwd(), ...(options?.session ?? {}) } }),
       revert: async () => ({ data: null }),
       summarize: async () => ({ data: null }),
       fork: async () => ({ data: { id: "forked-session-1" } }),
@@ -170,13 +174,13 @@ function createMockOpenCodeRuntime(input?: {
     createOpenCodeSdkClient: () => client as unknown as OpencodeClient,
     loadOpenCodeInventory: () =>
       Effect.succeed(
-        input?.inventory ?? {
+        options?.inventory ?? {
           providerList: { connected: [], all: [], default: {} },
           agents: [],
           consoleState: null,
         },
       ),
-    listOpenCodeCliModels: () => Effect.succeed(input?.cliModels ?? []),
+    listOpenCodeCliModels: () => Effect.succeed(options?.cliModels ?? []),
     loadOpenCodeCredentialProviderIDs: () => Effect.succeed([]),
   };
 
@@ -1296,6 +1300,144 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         detail: "Hello",
       },
     });
+  });
+
+  it("filters Kilo synthetic and ignored text parts from assistant transcript", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+    const client = runtime.runtime.createOpenCodeSdkClient({
+      baseUrl: "http://127.0.0.1:4099",
+      directory: process.cwd(),
+    }) as unknown as {
+      event: {
+        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
+      };
+    };
+    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 6)).pipe(
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-synthetic-kilo-parts"),
+          runtimeMode: "full-access",
+        });
+
+        yield* adapter.sendTurn({
+          threadId: asThreadId("thread-synthetic-kilo-parts"),
+          input: "hello",
+          attachments: [],
+          modelSelection: {
+            provider: "opencode",
+            model: "openai/gpt-5.4",
+          },
+        });
+
+        eventQueue.push({
+          type: "message.updated",
+          properties: {
+            sessionID: "opencode-session-1",
+            info: {
+              id: "assistant-message-filtered",
+              role: "assistant",
+            },
+          },
+        });
+        eventQueue.push({
+          type: "message.part.updated",
+          properties: {
+            sessionID: "opencode-session-1",
+            part: {
+              id: "part-synthetic",
+              messageID: "assistant-message-filtered",
+              type: "text",
+              text: "Initializing snapshot...",
+              synthetic: true,
+              time: {
+                start: 1,
+              },
+            },
+          },
+        });
+        eventQueue.push({
+          type: "message.part.updated",
+          properties: {
+            sessionID: "opencode-session-1",
+            part: {
+              id: "part-ignored",
+              messageID: "assistant-message-filtered",
+              type: "text",
+              text: "Internal warning",
+              ignored: true,
+              time: {
+                start: 2,
+              },
+            },
+          },
+        });
+        eventQueue.push({
+          type: "message.part.updated",
+          properties: {
+            sessionID: "opencode-session-1",
+            part: {
+              id: "part-visible",
+              messageID: "assistant-message-filtered",
+              type: "text",
+              text: "Actual answer",
+              time: {
+                start: 3,
+                end: 4,
+              },
+            },
+          },
+        });
+        eventQueue.push({
+          type: "session.status",
+          properties: {
+            sessionID: "opencode-session-1",
+            status: {
+              type: "idle",
+            },
+          },
+        });
+
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        eventQueue.close();
+        return events;
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(result.map((event) => event.type)).toEqual([
+      "session.started",
+      "thread.started",
+      "turn.started",
+      "content.delta",
+      "item.completed",
+      "turn.completed",
+    ]);
+    expect(result[3]).toMatchObject({
+      type: "content.delta",
+      payload: {
+        streamKind: "assistant_text",
+        delta: "Actual answer",
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("Initializing snapshot");
+    expect(JSON.stringify(result)).not.toContain("Internal warning");
   });
 
   it("sends plan-mode prompt instructions and captures tagged markdown as a proposed plan", async () => {
@@ -2647,6 +2789,140 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       payload: {
         state: "completed",
         totalCostUsd: 0.012,
+      },
+    });
+  });
+
+  it("does not block sendTurn when OpenCode prompt_async stalls during startup", async () => {
+    const runtime = createMockOpenCodeRuntime({
+      promptAsync: async () => await new Promise(() => {}),
+    });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 5)).pipe(
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-stalled-prompt-async"),
+          runtimeMode: "full-access",
+        });
+
+        const turnReturned = yield* adapter
+          .sendTurn({
+            threadId: asThreadId("thread-stalled-prompt-async"),
+            input: "hello",
+            attachments: [],
+            modelSelection: {
+              provider: "opencode",
+              model: "opencode/claude-opus-4-7",
+            },
+          })
+          .pipe(
+            Effect.timeoutOption(50),
+            Effect.map((turnOption) => turnOption._tag === "Some"),
+          );
+
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        return { events, turnReturned };
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({
+            runtime: runtime.runtime,
+            promptAcceptedRecoveryDelaysMs: [1],
+            promptAcceptedActivityTimeoutMs: 10,
+            promptSubmissionInlineWaitMs: 1,
+          }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(result.turnReturned).toBe(true);
+    expect(runtime.promptCalls).toHaveLength(1);
+    expect(result.events.map((event) => event.type)).toEqual([
+      "session.started",
+      "thread.started",
+      "turn.started",
+      "turn.completed",
+      "runtime.error",
+    ]);
+    expect(result.events[3]).toMatchObject({
+      type: "turn.completed",
+      payload: {
+        state: "failed",
+        errorMessage: expect.stringContaining("prompt_async"),
+      },
+    });
+  });
+
+  it("keeps immediate OpenCode prompt_async failures on the sendTurn failure path", async () => {
+    const runtime = createMockOpenCodeRuntime({
+      promptAsync: async () => {
+        throw new Error("prompt rejected");
+      },
+    });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-rejected-prompt-async"),
+          runtimeMode: "full-access",
+        });
+
+        const sendExit = yield* Effect.exit(
+          adapter.sendTurn({
+            threadId: asThreadId("thread-rejected-prompt-async"),
+            input: "hello",
+            attachments: [],
+            modelSelection: {
+              provider: "opencode",
+              model: "opencode/claude-opus-4-7",
+            },
+          }),
+        );
+
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        return { events, sendFailed: sendExit._tag === "Failure" };
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({
+            runtime: runtime.runtime,
+            promptSubmissionInlineWaitMs: 50,
+          }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(result.sendFailed).toBe(true);
+    expect(result.events.map((event) => event.type)).toEqual([
+      "session.started",
+      "thread.started",
+      "turn.started",
+      "turn.aborted",
+    ]);
+    expect(result.events[3]).toMatchObject({
+      type: "turn.aborted",
+      payload: {
+        reason: "prompt rejected",
       },
     });
   });
