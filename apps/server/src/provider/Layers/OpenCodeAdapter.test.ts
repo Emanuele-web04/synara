@@ -798,12 +798,16 @@ describe("flattenOpenCodeModels", () => {
         name: "GPT-5",
         upstreamProviderId: "openai",
         upstreamProviderName: "OpenAI",
+        contextWindowOptions: [{ value: "128k", label: "128K", isDefault: true }],
+        defaultContextWindow: "128k",
       },
       {
         slug: "opencode/nemotron-3-super-free",
         name: "Nemotron 3 Super Free",
         upstreamProviderId: "opencode",
         upstreamProviderName: "OpenCode",
+        contextWindowOptions: [{ value: "128k", label: "128K", isDefault: true }],
+        defaultContextWindow: "128k",
       },
     ]);
   });
@@ -865,6 +869,8 @@ describe("flattenOpenCodeModels", () => {
         name: "GPT-5.4",
         upstreamProviderId: "openai",
         upstreamProviderName: "OpenAI",
+        contextWindowOptions: [{ value: "128k", label: "128K", isDefault: true }],
+        defaultContextWindow: "128k",
         supportedReasoningEfforts: [
           {
             value: "none",
@@ -919,11 +925,13 @@ describe("flattenOpenCodeModels", () => {
         name: "GPT-5.4",
         upstreamProviderId: "openai",
         upstreamProviderName: "OpenAI",
+        contextWindowOptions: [{ value: "128k", label: "128K", isDefault: true }],
+        defaultContextWindow: "128k",
       },
     ]);
   });
 
-  it("keeps every OpenCode-connected provider instead of re-filtering from local auth metadata", () => {
+  it("prefers OpenCode-managed connected providers when no stronger auth metadata exists", () => {
     const models = flattenOpenCodeModels({
       inventory: {
         providerList: {
@@ -968,10 +976,7 @@ describe("flattenOpenCodeModels", () => {
       },
     });
 
-    expect(models.map((model) => model.slug)).toEqual([
-      "github-copilot/claude-opus-4.6",
-      "opencode/glm-4.6",
-    ]);
+    expect(models.map((model) => model.slug)).toEqual(["opencode/glm-4.6"]);
   });
 });
 
@@ -1047,6 +1052,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       cached: false,
     });
     expect(result?.models.map((model) => model.slug)).toEqual([
+      "openai/gpt-5",
       "opencode/minimax-m2.5-free",
       "opencode-go/kimi-k2.6",
     ]);
