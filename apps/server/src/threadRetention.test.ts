@@ -98,6 +98,24 @@ describe("thread retention", () => {
     ).toEqual([]);
   });
 
+  it("does not select pinned threads even when they are old", () => {
+    const nowMs = Date.parse("2026-04-20T00:00:00.000Z");
+    const oldActivityAt = new Date(nowMs - THREAD_RETENTION_UNUSED_MS - 1).toISOString();
+    const pinnedThread = makeReadModelThread({
+      id: ThreadId.makeUnsafe("thread-pinned"),
+      isPinned: true,
+      latestUserMessageAt: oldActivityAt,
+    });
+    const unpinnedThread = makeReadModelThread({
+      id: ThreadId.makeUnsafe("thread-unpinned"),
+      latestUserMessageAt: oldActivityAt,
+    });
+
+    expect(
+      getInactiveThreadIdsForRetention(makeReadModel([pinnedThread, unpinnedThread]), nowMs),
+    ).toEqual([unpinnedThread.id]);
+  });
+
   it("selects already deleted threads for physical purge retry", () => {
     const deletedThread = makeReadModelThread({
       id: ThreadId.makeUnsafe("thread-deleted"),

@@ -417,6 +417,7 @@ function toUserInputQuestions(payload: Record<string, unknown> | undefined) {
         header,
         question: prompt,
         options,
+        ...(question.multiSelect === true ? { multiSelect: true } : {}),
       };
     })
     .filter(

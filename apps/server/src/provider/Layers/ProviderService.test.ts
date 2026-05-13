@@ -1373,6 +1373,40 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
       );
     }),
   );
+
+  it.effect("clears persisted active turn when provider session reports ready", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-ready");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* provider.sendTurn({ threadId, input: "hello" });
+      yield* sleep(50);
+
+      fanout.codex.emit({
+        type: "session.state.changed",
+        eventId: asEventId("evt-ready"),
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        threadId,
+        payload: {
+          state: "ready",
+        },
+      });
+      yield* sleep(50);
+
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      const runtimePayload =
+        binding?.runtimePayload && typeof binding.runtimePayload === "object"
+          ? (binding.runtimePayload as Record<string, unknown>)
+          : {};
+      assert.equal(runtimePayload.activeTurnId, null);
+    }),
+  );
 });
 
 const validation = makeProviderServiceLayer();

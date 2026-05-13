@@ -12,6 +12,7 @@ import {
   buildTaskCompletionCopy,
   collectCompletedThreadCandidates,
   collectInputNeededThreadCandidates,
+  isNotificationRuntimeFreshTimestamp,
   shouldShowThreadNotificationToast,
 } from "./taskCompletion.logic";
 import type { Thread } from "../types";
@@ -494,5 +495,23 @@ describe("buildInputNeededCopy", () => {
       title: "Input needed",
       body: "Polish notifications: User input requested.",
     });
+  });
+});
+
+describe("isNotificationRuntimeFreshTimestamp", () => {
+  it("suppresses hydrated notifications from before the notification runtime mounted", () => {
+    const runtimeStartedAtMs = Date.parse("2026-04-05T10:00:10.000Z");
+
+    expect(
+      isNotificationRuntimeFreshTimestamp("2026-04-05T10:00:05.000Z", runtimeStartedAtMs),
+    ).toBe(false);
+  });
+
+  it("allows live notifications created after the notification runtime mounted", () => {
+    const runtimeStartedAtMs = Date.parse("2026-04-05T10:00:10.000Z");
+
+    expect(
+      isNotificationRuntimeFreshTimestamp("2026-04-05T10:00:11.000Z", runtimeStartedAtMs),
+    ).toBe(true);
   });
 });

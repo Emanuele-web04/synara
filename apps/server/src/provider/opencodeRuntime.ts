@@ -241,12 +241,6 @@ function fallbackOpenCodeModelName(slug: string, parsedSlug: ParsedOpenCodeModel
   return trimToNull(parsedSlug.modelID) ?? slug;
 }
 
-function humanizeOpenCodeVariant(value: string): string {
-  if (/^\d+k$/iu.test(value)) return value.toUpperCase();
-  if (/^\d+m$/iu.test(value)) return value.toUpperCase();
-  return value.replace(/[-_/]+/g, " ").replace(/\b\w/gu, (char) => char.toUpperCase());
-}
-
 function numberToContextWindowValue(value: number): string | null {
   if (!Number.isFinite(value) || value <= 0) return null;
   if (value >= 1_000_000 && value % 1_000_000 === 0) return `${value / 1_000_000}m`;
@@ -278,6 +272,72 @@ function parseOpenCodeContextWindowOptions(object: Record<string, unknown>):
     contextWindowOptions: [{ value: context, label: contextWindowLabel(context), isDefault: true }],
     defaultContextWindow: context,
   };
+}
+
+function readOpenCodeVariantEffort(
+  variantKey: string,
+  variantObject: Record<string, unknown>,
+): string | null {
+  const directEffort =
+    trimToNull(variantObject.reasoningEffort) ??
+    trimToNull(variantObject.reasoning_effort) ??
+    trimToNull(variantObject.effort);
+  if (directEffort) {
+    return directEffort;
+  }
+
+  const thinkingConfig =
+    variantObject.thinkingConfig &&
+    typeof variantObject.thinkingConfig === "object" &&
+    !Array.isArray(variantObject.thinkingConfig)
+      ? (variantObject.thinkingConfig as Record<string, unknown>)
+      : variantObject.thinking_config &&
+          typeof variantObject.thinking_config === "object" &&
+          !Array.isArray(variantObject.thinking_config)
+        ? (variantObject.thinking_config as Record<string, unknown>)
+        : null;
+  const thinkingLevel =
+    trimToNull(thinkingConfig?.thinkingLevel) ?? trimToNull(thinkingConfig?.thinking_level);
+  if (thinkingLevel) {
+    return thinkingLevel;
+  }
+
+  const reasoning =
+    variantObject.reasoning &&
+    typeof variantObject.reasoning === "object" &&
+    !Array.isArray(variantObject.reasoning)
+      ? (variantObject.reasoning as Record<string, unknown>)
+      : null;
+  const reasoningConfig =
+    variantObject.reasoningConfig &&
+    typeof variantObject.reasoningConfig === "object" &&
+    !Array.isArray(variantObject.reasoningConfig)
+      ? (variantObject.reasoningConfig as Record<string, unknown>)
+      : variantObject.reasoning_config &&
+          typeof variantObject.reasoning_config === "object" &&
+          !Array.isArray(variantObject.reasoning_config)
+        ? (variantObject.reasoning_config as Record<string, unknown>)
+        : null;
+  const nestedReasoningEffort =
+    trimToNull(reasoning?.effort) ??
+    trimToNull(reasoningConfig?.maxReasoningEffort) ??
+    trimToNull(reasoningConfig?.max_reasoning_effort);
+  if (nestedReasoningEffort) {
+    return nestedReasoningEffort;
+  }
+
+  if (
+    "thinking" in variantObject ||
+    "thinkingConfig" in variantObject ||
+    "thinking_config" in variantObject ||
+    "reasoning" in variantObject ||
+    "reasoningConfig" in variantObject ||
+    "reasoning_config" in variantObject ||
+    Object.keys(variantObject).length === 0
+  ) {
+    return trimToNull(variantKey);
+  }
+  return null;
 }
 
 function resolveOpenCodeDataDirectory(homeDirectory: string, dataDirectoryName = "opencode"): string {
@@ -388,27 +448,26 @@ function parseOpenCodeCliModelJson(
   const supportedReasoningEfforts = Array.from(
     new Map(
       Object.entries(variantsObject).flatMap(([variantKey, variant]) => {
-        const value = variantKey.trim();
-        if (!value) {
-          return [];
-        }
         const variantObject =
           variant && typeof variant === "object" && !Array.isArray(variant)
             ? (variant as Record<string, unknown>)
             : null;
-        const hasReasoningValue = Boolean(
-          variantObject &&
-            (trimToNull(variantObject.reasoningEffort) ?? trimToNull(variantObject.reasoning_effort)),
-        );
-        const label =
-          (variantObject ? trimToNull(variantObject.label) : null) ??
-          (hasReasoningValue ? null : humanizeOpenCodeVariant(value));
-        const description = variantObject ? (trimToNull(variantObject.description) ?? undefined) : undefined;
+        if (!variantObject) {
+          return [];
+        }
+
+        const reasoningValue = readOpenCodeVariantEffort(variantKey, variantObject);
+        if (!reasoningValue) {
+          return [];
+        }
+
+        const label = trimToNull(variantObject.label) ?? undefined;
+        const description = trimToNull(variantObject.description) ?? undefined;
         return [
           [
-            value,
+            reasoningValue,
             {
-              value,
+              value: reasoningValue,
               ...(label ? { label } : {}),
               ...(description ? { description } : {}),
             },
@@ -422,24 +481,10 @@ function parseOpenCodeCliModelJson(
     trimToNull(object.default_reasoning_effort) ??
     (object.options && typeof object.options === "object" && !Array.isArray(object.options)
       ? (trimToNull((object.options as Record<string, unknown>).reasoningEffort) ??
-        trimToNull((object.options as Record<string, unknown>).reasoning_effort))
+        trimToNull((object.options as Record<string, unknown>).reasoning_effort) ??
+        trimToNull((object.options as Record<string, unknown>).effort))
       : null) ??
     undefined;
-  const defaultVariant =
-    defaultReasoningEffort && variants.includes(defaultReasoningEffort)
-      ? defaultReasoningEffort
-      : defaultReasoningEffort
-        ? Object.entries(variantsObject).find(([, variant]) => {
-            const variantObject =
-              variant && typeof variant === "object" && !Array.isArray(variant)
-                ? (variant as Record<string, unknown>)
-                : null;
-            return (
-              trimToNull(variantObject?.reasoningEffort) === defaultReasoningEffort ||
-              trimToNull(variantObject?.reasoning_effort) === defaultReasoningEffort
-            );
-          })?.[0]
-        : undefined;
   const contextWindowOptions = parseOpenCodeContextWindowOptions(object);
   const isFree = object.isFree;
 
@@ -450,7 +495,7 @@ function parseOpenCodeCliModelJson(
     name,
     variants,
     supportedReasoningEfforts,
-    ...(defaultVariant ? { defaultReasoningEffort: defaultVariant } : {}),
+    ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
     ...(contextWindowOptions ?? {}),
     ...(typeof isFree === "boolean" ? { isFree } : {}),
   };

@@ -355,7 +355,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 event.type === "session.exited" ||
                 event.type === "runtime.error" ||
                 (event.type === "session.state.changed" &&
-                  (event.payload.state === "stopped" || event.payload.state === "error"))
+                  (event.payload.state === "ready" ||
+                    event.payload.state === "stopped" ||
+                    event.payload.state === "error"))
               ? null
               : (runtimePayloadRecord(binding.runtimePayload).activeTurnId ?? null);
         const lastError = runtimeLastErrorForEvent(event);

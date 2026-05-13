@@ -38,6 +38,7 @@ export const ProjectionThread = Schema.Struct({
   associatedWorktreeBranch: Schema.NullOr(Schema.String),
   associatedWorktreeRef: Schema.NullOr(Schema.String),
   createBranchFlowCompleted: Schema.Boolean,
+  isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   subagentAgentId: Schema.optional(Schema.NullOr(Schema.String)),
   subagentNickname: Schema.optional(Schema.NullOr(Schema.String)),

@@ -79,9 +79,9 @@ afterEach(() => {
 describe("WsTransport", () => {
   it("keeps the shared lifecycle stream while either lifecycle channel is active", () => {
     expect(shouldKeepServerLifecycleStream(new Set([WS_CHANNELS.serverWelcome]))).toBe(true);
-    expect(
-      shouldKeepServerLifecycleStream(new Set([WS_CHANNELS.serverMaintenanceUpdated])),
-    ).toBe(true);
+    expect(shouldKeepServerLifecycleStream(new Set([WS_CHANNELS.serverMaintenanceUpdated]))).toBe(
+      true,
+    );
     expect(
       shouldKeepServerLifecycleStream(
         new Set([WS_CHANNELS.serverWelcome, WS_CHANNELS.serverMaintenanceUpdated]),

@@ -251,9 +251,7 @@ function RootRouteErrorView({ error, reset }: ErrorComponentProps) {
         <p className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
           {APP_DISPLAY_NAME}
         </p>
-        <h1 className="mt-3 text-2xl font-semibold tracking-tight sm:text-3xl">
-          Something went wrong.
-        </h1>
+        <h1 className="mt-3 text-2xl font-semibold sm:text-3xl">Something went wrong.</h1>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{message}</p>
 
         <div className="mt-5 flex flex-wrap gap-2">
@@ -834,11 +832,6 @@ function EventRouter() {
       if (!subscribed) return;
       const issue = payload.issues.find((entry) => entry.kind.startsWith("keybindings."));
       if (!issue) {
-        toastManager.add({
-          type: "success",
-          title: "Keybindings updated",
-          description: "Keybindings configuration reloaded successfully.",
-        });
         return;
       }
 

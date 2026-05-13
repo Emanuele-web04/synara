@@ -387,9 +387,7 @@ function ColorPill({
             className="block size-5 shrink-0 rounded-full border"
             style={{ borderColor: ringColor }}
           />
-          <span className="font-system-ui flex-1 text-[12px] uppercase tracking-tight">
-            {previewColor}
-          </span>
+          <span className="font-system-ui flex-1 text-[12px] uppercase">{previewColor}</span>
         </PopoverTrigger>
         <PopoverPopup
           align="end"

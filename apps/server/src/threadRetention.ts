@@ -189,6 +189,7 @@ export function getInactiveThreadIdsForRetention(
 
   for (const thread of readModel.threads) {
     if (thread.deletedAt !== null) continue;
+    if (thread.isPinned === true) continue;
     if (isThreadBusy(thread)) continue;
     const lastActivityMs = getThreadLastActivityMs(thread);
     if (lastActivityMs === null || lastActivityMs > cutoffMs) continue;
@@ -209,18 +210,18 @@ export function getSoftDeletedThreadIdsForRetentionPurge(
   return deletedThreadIds;
 }
 
-const listSoftDeletedThreadIdsFromDatabase = Effect.fn(
-  "listSoftDeletedThreadIdsFromDatabase",
-)(function* () {
-  const sql = yield* SqlClient.SqlClient;
-  const rows = yield* sql<{ readonly threadId: ThreadId }>`
+const listSoftDeletedThreadIdsFromDatabase = Effect.fn("listSoftDeletedThreadIdsFromDatabase")(
+  function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const rows = yield* sql<{ readonly threadId: ThreadId }>`
     SELECT thread_id AS "threadId"
     FROM projection_threads
     WHERE deleted_at IS NOT NULL
     ORDER BY deleted_at ASC, thread_id ASC
   `;
-  return rows.map((row) => row.threadId);
-});
+    return rows.map((row) => row.threadId);
+  },
+);
 
 export const runThreadRetentionSweep = Effect.fn("runThreadRetentionSweep")(function* (
   orchestrationEngine: OrchestrationEngineShape,

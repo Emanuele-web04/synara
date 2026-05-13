@@ -383,3 +383,16 @@ export function shouldSuppressVisibleThreadNotification(input: {
 export const collectInputNeededThreadCandidates = collectThreadAttentionCandidates;
 
 export const buildInputNeededCopy = buildThreadAttentionCopy;
+
+// Hydration can replay old thread details after refresh; only timestamps after
+// this notification runtime mounted should be treated as live events.
+export function isNotificationRuntimeFreshTimestamp(
+  candidateTimestamp: string,
+  runtimeStartedAtMs: number,
+): boolean {
+  const candidateMs = Date.parse(candidateTimestamp);
+  if (!Number.isFinite(candidateMs) || !Number.isFinite(runtimeStartedAtMs)) {
+    return true;
+  }
+  return candidateMs > runtimeStartedAtMs;
+}

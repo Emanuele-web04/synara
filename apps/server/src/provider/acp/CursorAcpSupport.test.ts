@@ -224,6 +224,21 @@ Tip: use --model <id> (or /model <id> in interactive mode) to switch.
       },
     ]);
   });
+
+  it("does not infer 1M context for Opus 4.7 Cursor aliases", () => {
+    expect(
+      parseCursorCliModelList(`
+claude-opus-4-7 - Claude Opus 4.7
+`),
+    ).toEqual([
+      {
+        slug: "claude-opus-4-7",
+        name: "Claude Opus 4.7",
+        upstreamProviderId: "anthropic",
+        upstreamProviderName: "Anthropic",
+      },
+    ]);
+  });
 });
 
 describe("buildCursorAcpModelDescriptors", () => {
@@ -784,6 +799,116 @@ describe("applyCursorAcpModelSelection", () => {
       { type: "config", configId: "reasoning", value: "extra-high" },
       { type: "config", configId: "context", value: "1m" },
       { type: "config", configId: "fast", value: "true" },
+    ]);
+  });
+
+  it("drops stale Cursor context traits that are no longer exposed by ACP", async () => {
+    const calls: Array<
+      | { readonly type: "model"; readonly value: string }
+      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
+    > = [];
+
+    const runtime = {
+      getConfigOptions: Effect.succeed([
+        {
+          id: "model",
+          name: "Model",
+          category: "model",
+          type: "select",
+          currentValue: "claude-opus-4-7[thinking=true,context=300k,effort=high]",
+          options: [
+            {
+              value: "claude-opus-4-7[thinking=true,context=300k,effort=high]",
+              name: "Claude Opus 4.7",
+            },
+            {
+              value: "claude-opus-4-7[thinking=true,context=300k,effort=xhigh]",
+              name: "Claude Opus 4.7 Extra High",
+            },
+          ],
+        },
+      ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
+      setModel: (value: string) =>
+        Effect.sync(() => {
+          calls.push({ type: "model", value });
+        }),
+      setConfigOption: (configId: string, value: string | boolean) =>
+        Effect.sync(() => {
+          calls.push({ type: "config", configId, value });
+        }),
+    };
+
+    await Effect.runPromise(
+      applyCursorAcpModelSelection({
+        runtime,
+        model: "claude-opus-4-7",
+        options: {
+          reasoningEffort: "xhigh",
+          contextWindow: "1m",
+          thinking: true,
+        },
+        mapError: ({ cause }) => cause,
+      }),
+    );
+
+    expect(calls).toEqual([
+      {
+        type: "model",
+        value: "claude-opus-4-7[thinking=true,context=300k,effort=xhigh]",
+      },
+    ]);
+  });
+
+  it("repairs stale parameterized Cursor model strings against ACP choices", async () => {
+    const calls: Array<
+      | { readonly type: "model"; readonly value: string }
+      | { readonly type: "config"; readonly configId: string; readonly value: string | boolean }
+    > = [];
+
+    const runtime = {
+      getConfigOptions: Effect.succeed([
+        {
+          id: "model",
+          name: "Model",
+          category: "model",
+          type: "select",
+          currentValue: "claude-opus-4-7[thinking=true,context=300k,effort=high]",
+          options: [
+            {
+              value: "claude-opus-4-7[thinking=true,context=300k,effort=high]",
+              name: "Claude Opus 4.7",
+            },
+            {
+              value: "claude-opus-4-7[thinking=true,context=300k,effort=xhigh]",
+              name: "Claude Opus 4.7 Extra High",
+            },
+          ],
+        },
+      ] satisfies ReadonlyArray<EffectAcpSchema.SessionConfigOption>),
+      setModel: (value: string) =>
+        Effect.sync(() => {
+          calls.push({ type: "model", value });
+        }),
+      setConfigOption: (configId: string, value: string | boolean) =>
+        Effect.sync(() => {
+          calls.push({ type: "config", configId, value });
+        }),
+    };
+
+    await Effect.runPromise(
+      applyCursorAcpModelSelection({
+        runtime,
+        model: "claude-opus-4-7[thinking=true,context=1m,effort=xhigh]",
+        options: undefined,
+        mapError: ({ cause }) => cause,
+      }),
+    );
+
+    expect(calls).toEqual([
+      {
+        type: "model",
+        value: "claude-opus-4-7[thinking=true,context=300k,effort=xhigh]",
+      },
     ]);
   });
 });

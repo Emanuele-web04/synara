@@ -478,6 +478,7 @@ export const OrchestrationThread = Schema.Struct({
   createBranchFlowCompleted: Schema.optional(Schema.Boolean).pipe(
     Schema.withDecodingDefault(() => false),
   ),
+  isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
@@ -541,6 +542,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   createBranchFlowCompleted: Schema.optional(Schema.Boolean).pipe(
     Schema.withDecodingDefault(() => false),
   ),
+  isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
@@ -675,6 +677,7 @@ const ThreadCreateCommand = Schema.Struct({
   createBranchFlowCompleted: Schema.optional(Schema.Boolean).pipe(
     Schema.withDecodingDefault(() => false),
   ),
+  isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
@@ -785,6 +788,7 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   associatedWorktreeBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   associatedWorktreeRef: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   createBranchFlowCompleted: Schema.optional(Schema.Boolean),
+  isPinned: Schema.optional(Schema.Boolean),
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   subagentAgentId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   subagentNickname: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -1184,6 +1188,7 @@ export const ThreadCreatedPayload = Schema.Struct({
   createBranchFlowCompleted: Schema.optional(Schema.Boolean).pipe(
     Schema.withDecodingDefault(() => false),
   ),
+  isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
@@ -1239,6 +1244,7 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   associatedWorktreeBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   associatedWorktreeRef: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   createBranchFlowCompleted: Schema.optional(Schema.Boolean),
+  isPinned: Schema.optional(Schema.Boolean),
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   subagentAgentId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   subagentNickname: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),

@@ -22,6 +22,42 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.0.45",
+    date: "May 12",
+    features: [
+      {
+        id: "opencode-latest-events",
+        title: "OpenCode sessions understand the latest event stream",
+        description:
+          "DP Code now tracks the newer OpenCode SDK session events, keeps titles fresher, and has much deeper coverage around OpenCode startup, output, and recovery flows.",
+      },
+      {
+        id: "turn-recovery-stability",
+        title: "Interrupted turns recover more predictably",
+        description:
+          "Ready and idle transitions now clear or restore turn state more carefully, reducing stuck busy states after reconnects, restarts, and partial provider streams.",
+      },
+      {
+        id: "cursor-live-model-options",
+        title: "Cursor model choices follow live ACP metadata",
+        description:
+          "Cursor model selection now normalizes against the provider's current ACP options instead of relying on stale context traits, so the composer better matches what Cursor can actually run.",
+      },
+      {
+        id: "diff-and-pinned-state",
+        title: "Diff and pinned-thread state stay in sync",
+        description:
+          "Projection, sidebar, and store updates now carry pinned-thread metadata through the app, while the diff panel handles refreshed content with fewer display glitches.",
+      },
+      {
+        id: "quieter-git-keybinding-polish",
+        title: "Small workflow polish for Git and keybindings",
+        description:
+          "Git summaries are clearer for rename-like moves into untracked folders, and routine keybinding reloads no longer pop a success toast every time they quietly refresh.",
+      },
+    ],
+  },
+  {
     version: "0.0.44",
     date: "May 10",
     features: [

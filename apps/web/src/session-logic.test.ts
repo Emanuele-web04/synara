@@ -303,6 +303,37 @@ describe("derivePendingUserInputs", () => {
 
     expect(derivePendingUserInputs(activities)).toEqual([]);
   });
+
+  it("preserves multi-select user-input question metadata", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "user-input-open-multi",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "user-input.requested",
+        summary: "User input requested",
+        tone: "info",
+        payload: {
+          requestId: "req-user-input-multi-1",
+          questions: [
+            {
+              id: "scope",
+              header: "Scope",
+              question: "Which areas should change?",
+              multiSelect: true,
+              options: [
+                {
+                  label: "Server",
+                  description: "Update server behavior",
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    ];
+
+    expect(derivePendingUserInputs(activities)[0]?.questions[0]?.multiSelect).toBe(true);
+  });
 });
 
 describe("deriveActiveTaskListState", () => {
