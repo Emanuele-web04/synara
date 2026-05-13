@@ -1493,6 +1493,25 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("reports the tracked branch name without the remote prefix", () =>
+      Effect.gen(function* () {
+        const remote = yield* makeTmpDir();
+        const tmp = yield* makeTmpDir();
+        const remoteName = "my-org/upstream";
+        const branchName = "feature/status-upstream";
+
+        yield* git(remote, ["init", "--bare"]);
+        yield* initRepoWithCommit(tmp);
+        yield* git(tmp, ["remote", "add", remoteName, remote]);
+        yield* git(tmp, ["checkout", "-b", branchName]);
+        yield* git(tmp, ["push", "-u", remoteName, branchName]);
+
+        const details = yield* (yield* GitCore).statusDetails(tmp);
+        expect(details.upstreamRef).toBe(`${remoteName}/${branchName}`);
+        expect(details.upstreamBranch).toBe(branchName);
+      }),
+    );
+
     it.effect("counts untracked text files in working tree totals", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();

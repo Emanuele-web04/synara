@@ -46,6 +46,7 @@ export function splitLocalStatusDetails(status: GitStatusDetails): GitStatusLoca
 export function splitRemoteStatus(status: GitStatusResult): GitStatusRemoteResult {
   return {
     hasUpstream: status.hasUpstream,
+    upstreamBranch: status.upstreamBranch,
     aheadCount: status.aheadCount,
     behindCount: status.behindCount,
     pr: status.pr,
@@ -58,6 +59,7 @@ export function splitRemoteStatusDetails(
 ): GitStatusRemoteResult {
   return {
     hasUpstream: status.hasUpstream,
+    upstreamBranch: status.upstreamBranch,
     aheadCount: status.aheadCount,
     behindCount: status.behindCount,
     pr: cachedRemote?.pr ?? null,
@@ -71,7 +73,9 @@ export function canReuseCachedRemoteStatus(input: {
   readonly ttlMs?: number;
 }): boolean {
   if (!input.cached.local || !input.cached.remote) return false;
+  if (!input.cached.remote.value) return false;
   if (input.details.branch !== input.cached.local.value.branch) return false;
+  if (input.details.upstreamBranch !== input.cached.remote.value.upstreamBranch) return false;
   return (
     (input.now ?? Date.now()) - input.cached.remote.updatedAt <
     (input.ttlMs ?? REMOTE_STATUS_CACHE_TTL_MS)

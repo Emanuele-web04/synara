@@ -54,6 +54,7 @@ const NON_REPOSITORY_STATUS_DETAILS = Object.freeze({
   isDefaultBranch: false,
   branch: null,
   upstreamRef: null,
+  upstreamBranch: null,
   hasWorkingTreeChanges: false,
   workingTree: { files: [], insertions: 0, deletions: 0 },
   hasUpstream: false,
@@ -96,6 +97,13 @@ function parseBranchAb(value: string): { ahead: number; behind: number } {
     ahead: Number(match[1] ?? "0"),
     behind: Number(match[2] ?? "0"),
   };
+}
+
+function normalizeConfiguredMergeBranch(value: string): string | null {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return null;
+  const normalized = trimmed.replace(/^refs\/heads\//, "");
+  return normalized.length > 0 ? normalized : null;
 }
 
 function normalizeNumstatPath(rawPath: string): string {
@@ -1308,6 +1316,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
         let branch: string | null = null;
         let upstreamRef: string | null = null;
+        let upstreamBranch: string | null = null;
         let aheadCount = 0;
         let behindCount = 0;
         let hasWorkingTreeChanges = false;
@@ -1354,6 +1363,18 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           }
         }
 
+        if (branch && upstreamRef) {
+          upstreamBranch = yield* runGitStdout(
+            "GitCore.statusDetails.upstreamMergeBranch",
+            cwd,
+            ["config", "--get", `branch.${branch}.merge`],
+            true,
+          ).pipe(
+            Effect.map(normalizeConfiguredMergeBranch),
+            Effect.catch(() => Effect.succeed(null)),
+          );
+        }
+
         if (!upstreamRef && branch) {
           aheadCount = yield* computeAheadCountAgainstBase(cwd, branch).pipe(
             Effect.catch(() => Effect.succeed(0)),
@@ -1371,6 +1392,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           return {
             branch,
             upstreamRef,
+            upstreamBranch,
             hasWorkingTreeChanges,
             workingTree: moveAwareWorkingTree,
             hasUpstream: upstreamRef !== null,
@@ -1428,6 +1450,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         return {
           branch,
           upstreamRef,
+          upstreamBranch,
           hasWorkingTreeChanges,
           workingTree: {
             files,
@@ -1447,6 +1470,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           hasWorkingTreeChanges: details.hasWorkingTreeChanges,
           workingTree: details.workingTree,
           hasUpstream: details.hasUpstream,
+          upstreamBranch: details.upstreamBranch,
           aheadCount: details.aheadCount,
           behindCount: details.behindCount,
           pr: null,

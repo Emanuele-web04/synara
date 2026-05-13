@@ -13,6 +13,7 @@ const baseStatus: GitStatusResult = {
   hasWorkingTreeChanges: false,
   workingTree: { files: [], insertions: 0, deletions: 0 },
   hasUpstream: true,
+  upstreamBranch: "feature/status-broadcast",
   aheadCount: 0,
   behindCount: 0,
   pr: null,
@@ -21,6 +22,7 @@ const baseStatus: GitStatusResult = {
 const baseDetails: GitStatusDetails = {
   branch: baseStatus.branch,
   upstreamRef: "origin/feature/status-broadcast",
+  upstreamBranch: baseStatus.upstreamBranch,
   hasWorkingTreeChanges: baseStatus.hasWorkingTreeChanges,
   workingTree: baseStatus.workingTree,
   hasUpstream: baseStatus.hasUpstream,
@@ -267,6 +269,7 @@ describe("GitStatusBroadcasterLive", () => {
           },
           remote: {
             hasUpstream: baseStatus.hasUpstream,
+            upstreamBranch: baseStatus.upstreamBranch,
             aheadCount: baseStatus.aheadCount,
             behindCount: baseStatus.behindCount,
             pr: baseStatus.pr,

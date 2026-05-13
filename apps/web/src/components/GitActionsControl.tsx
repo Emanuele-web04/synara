@@ -399,6 +399,11 @@ export default function GitActionsControl({
     const current = branchList?.branches.find((branch) => branch.name === branchName);
     return current?.isDefault ?? (branchName === "main" || branchName === "master");
   }, [branchList?.branches, gitStatusForActions?.branch]);
+  const defaultBranchName = useMemo(
+    () =>
+      branchList?.branches.find((branch) => !branch.isRemote && branch.isDefault)?.name ?? null,
+    [branchList?.branches],
+  );
   const shouldOfferCreateBranch = useMemo(() => {
     return shouldOfferCreateBranchPrompt({
       activeWorktreePath: activeThread?.worktreePath ?? null,
@@ -438,8 +443,10 @@ export default function GitActionsControl({
         isDefaultBranch,
         hasOriginRemote,
         shouldOfferCreateBranch,
+        defaultBranchName,
       ),
     [
+      defaultBranchName,
       gitStatusForActions,
       hasOriginRemote,
       isDefaultBranch,
@@ -448,8 +455,21 @@ export default function GitActionsControl({
     ],
   );
   const gitActionMenuItems = useMemo(
-    () => buildMenuItems(gitStatusForActions, isGitActionRunning, hasOriginRemote, isDefaultBranch),
-    [gitStatusForActions, hasOriginRemote, isDefaultBranch, isGitActionRunning],
+    () =>
+      buildMenuItems(
+        gitStatusForActions,
+        isGitActionRunning,
+        hasOriginRemote,
+        isDefaultBranch,
+        defaultBranchName,
+      ),
+    [
+      defaultBranchName,
+      gitStatusForActions,
+      hasOriginRemote,
+      isDefaultBranch,
+      isGitActionRunning,
+    ],
   );
   const quickActionDisabledReason = quickAction.disabled
     ? (quickAction.hint ?? "This action is currently unavailable.")

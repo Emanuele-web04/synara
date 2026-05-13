@@ -24,6 +24,7 @@ function status(overrides: Partial<GitStatusResult> = {}): GitStatusResult {
       deletions: 0,
     },
     hasUpstream: true,
+    upstreamBranch: "feature/test",
     aheadCount: 0,
     behindCount: 0,
     pr: null,
@@ -295,6 +296,92 @@ describe("when: branch is clean, up to date, and has no open PR", () => {
         dialogAction: "create_pr",
       },
     ]);
+  });
+
+  it("resolveQuickAction blocks PR when the branch tracks the default branch", () => {
+    const quick = resolveQuickAction(
+      status({
+        branch: "dpcode/pi-cleanup",
+        upstreamBranch: "main",
+        aheadCount: 0,
+        behindCount: 0,
+        pr: null,
+      }),
+      false,
+      false,
+      true,
+      false,
+      "main",
+    );
+
+    assert.deepEqual(quick, {
+      kind: "show_hint",
+      label: "Create PR",
+      hint: "No branch changes to include in a PR.",
+      disabled: true,
+    });
+  });
+
+  it("buildMenuItems disables create PR when the branch tracks the default branch", () => {
+    const items = buildMenuItems(
+      status({
+        branch: "dpcode/pi-cleanup",
+        upstreamBranch: "main",
+        aheadCount: 0,
+        behindCount: 0,
+        pr: null,
+      }),
+      false,
+      true,
+      false,
+      "main",
+    );
+
+    assert.deepEqual(items, [
+      {
+        id: "commit",
+        label: "Commit",
+        disabled: true,
+        icon: "commit",
+        kind: "open_dialog",
+        dialogAction: "commit",
+      },
+      {
+        id: "push",
+        label: "Push",
+        disabled: true,
+        icon: "push",
+        kind: "open_dialog",
+        dialogAction: "push",
+      },
+      {
+        id: "pr",
+        label: "Create PR",
+        disabled: true,
+        icon: "pr",
+        kind: "open_dialog",
+        dialogAction: "create_pr",
+      },
+    ]);
+  });
+
+  it("resolveQuickAction blocks PR when the upstream branch name is unknown", () => {
+    const quick = resolveQuickAction(
+      status({
+        upstreamBranch: null,
+        aheadCount: 0,
+        behindCount: 0,
+        pr: null,
+      }),
+      false,
+    );
+
+    assert.deepEqual(quick, {
+      kind: "show_hint",
+      label: "Create PR",
+      hint: "No branch changes to include in a PR.",
+      disabled: true,
+    });
   });
 });
 

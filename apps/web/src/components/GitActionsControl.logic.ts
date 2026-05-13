@@ -26,6 +26,8 @@ export interface GitQuickAction {
   hint?: string;
 }
 
+const FALLBACK_DEFAULT_BRANCH_NAMES = new Set(["main", "master"]);
+
 export interface DefaultBranchActionDialogCopy {
   title: string;
   description: string;
@@ -105,6 +107,22 @@ export function buildGitActionProgressStages(input: {
 const withDescription = (title: string, description: string | undefined) =>
   description ? { title, description } : { title };
 
+function extractTrackedBranchName(upstreamBranch: string | null | undefined): string | null {
+  if (!upstreamBranch) return null;
+  const branchName = upstreamBranch.trim();
+  return branchName.length > 0 ? branchName : null;
+}
+
+function tracksDefaultUpstream(
+  gitStatus: GitStatusResult,
+  defaultBranchName?: string | null,
+): boolean {
+  const trackedBranchName = extractTrackedBranchName(gitStatus.upstreamBranch);
+  if (!trackedBranchName) return false;
+  if (defaultBranchName) return trackedBranchName === defaultBranchName;
+  return FALLBACK_DEFAULT_BRANCH_NAMES.has(trackedBranchName);
+}
+
 export function summarizeGitResult(result: GitRunStackedActionResult): {
   title: string;
   description?: string;
@@ -140,6 +158,7 @@ export function buildMenuItems(
   isBusy: boolean,
   hasOriginRemote = true,
   isDefaultBranch = false,
+  defaultBranchName?: string | null,
 ): GitActionMenuItem[] {
   if (!gitStatus) return [];
 
@@ -147,6 +166,11 @@ export function buildMenuItems(
   const hasChanges = gitStatus.hasWorkingTreeChanges;
   const hasOpenPr = gitStatus.pr?.state === "open";
   const isBehind = gitStatus.behindCount > 0;
+  const canCreateCleanPublishedPr =
+    !isDefaultBranch &&
+    gitStatus.hasUpstream &&
+    gitStatus.upstreamBranch !== null &&
+    !tracksDefaultUpstream(gitStatus, defaultBranchName);
   const canPushWithoutUpstream = hasOriginRemote && !gitStatus.hasUpstream;
   const canCommit = !isBusy && hasChanges;
   const canPush =
@@ -168,7 +192,7 @@ export function buildMenuItems(
     !hasChanges &&
     !hasOpenPr &&
     !isBehind &&
-    ((!isDefaultBranch && gitStatus.hasUpstream) ||
+    (canCreateCleanPublishedPr ||
       (gitStatus.aheadCount > 0 && (gitStatus.hasUpstream || canPushWithoutUpstream)));
   const canOpenPr = !isBusy && hasOpenPr;
 
@@ -226,6 +250,7 @@ export function resolveQuickAction(
   isDefaultBranch = false,
   hasOriginRemote = true,
   shouldOfferCreateBranch = false,
+  defaultBranchName?: string | null,
 ): GitQuickAction {
   if (isBusy) {
     return { label: "Commit", disabled: true, kind: "show_hint", hint: "Git action in progress." };
@@ -246,6 +271,8 @@ export function resolveQuickAction(
   const isAhead = gitStatus.aheadCount > 0;
   const isBehind = gitStatus.behindCount > 0;
   const isDiverged = isAhead && isBehind;
+  const isTrackingDefaultUpstream = tracksDefaultUpstream(gitStatus, defaultBranchName);
+  const hasKnownUpstreamBranch = gitStatus.upstreamBranch !== null;
 
   if (!hasBranch) {
     return {
@@ -288,7 +315,12 @@ export function resolveQuickAction(
       return { label: "Commit", disabled: false, kind: "run_action", action: "commit" };
     }
     if (hasOpenPr || isDefaultBranch) {
-      return { label: "Commit & push", disabled: false, kind: "run_action", action: "commit_push" };
+      return {
+        label: "Commit & push",
+        disabled: false,
+        kind: "run_action",
+        action: "commit_push",
+      };
     }
     return {
       label: "Commit, push & PR",
@@ -356,6 +388,24 @@ export function resolveQuickAction(
 
   if (hasOpenPr && gitStatus.hasUpstream) {
     return { label: "View PR", disabled: false, kind: "open_pr" };
+  }
+
+  if (gitStatus.hasUpstream && !hasKnownUpstreamBranch) {
+    return {
+      label: "Create PR",
+      disabled: true,
+      kind: "show_hint",
+      hint: "No branch changes to include in a PR.",
+    };
+  }
+
+  if (isTrackingDefaultUpstream) {
+    return {
+      label: "Create PR",
+      disabled: true,
+      kind: "show_hint",
+      hint: "No branch changes to include in a PR.",
+    };
   }
 
   if (!isDefaultBranch) {
