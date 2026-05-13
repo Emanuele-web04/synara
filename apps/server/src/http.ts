@@ -345,7 +345,7 @@ export const localImageEffectRouteLayer = HttpRouter.add(
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
 );
 
-const attachmentsEffectRouteLayer = HttpRouter.add(
+export const attachmentsEffectRouteLayer = HttpRouter.add(
   "GET",
   `${ATTACHMENTS_ROUTE_PREFIX}/*`,
   Effect.gen(function* () {
@@ -391,14 +391,20 @@ const attachmentsEffectRouteLayer = HttpRouter.add(
       return HttpServerResponse.text("Not Found", { status: 404 });
     }
 
-    return yield* HttpServerResponse.file(filePath, {
+    // Mirror local-image serving instead of using HttpServerResponse.file; the Effect
+    // route stack used by the desktop server can miss that helper's file services.
+    const data = yield* fileSystem
+      .readFile(filePath)
+      .pipe(Effect.catch(() => Effect.succeed(null)));
+    if (!data) {
+      return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+
+    return HttpServerResponse.uint8Array(data, {
       status: 200,
+      contentType: Mime.getType(filePath) ?? "application/octet-stream",
       headers: { "Cache-Control": "public, max-age=31536000, immutable" },
-    }).pipe(
-      Effect.catch(() =>
-        Effect.succeed(HttpServerResponse.text("Internal Server Error", { status: 500 })),
-      ),
-    );
+    });
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
 );
 

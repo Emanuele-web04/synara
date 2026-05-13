@@ -2,7 +2,7 @@
 // Boots the same `localImageEffectRouteLayer` that `makeEffectHttpRouteLayer` wires
 // into `effectServer.ts` and exercises it through a real HTTP listener.
 import http from "node:http";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -14,7 +14,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { ServerAuth, type ServerAuthShape } from "./auth/Services/ServerAuth";
 import { ServerConfig, type ServerConfigShape } from "./config";
-import { localImageEffectRouteLayer } from "./http";
+import { attachmentsEffectRouteLayer, localImageEffectRouteLayer } from "./http";
 
 const tempDirs: string[] = [];
 
@@ -107,6 +107,7 @@ function makeFakeServerAuth(): ServerAuthShape {
 
 async function withEffectServer(
   config: ServerConfigShape,
+  routeLayer: Layer.Layer<HttpRouter.HttpRouter, never, never>,
   run: (origin: string) => Promise<void>,
 ): Promise<void> {
   const scope = await Effect.runPromise(Scope.make("sequential"));
@@ -122,7 +123,7 @@ async function withEffectServer(
             },
             { port: 0, host: "127.0.0.1" },
           );
-          const httpApp = yield* HttpRouter.toHttpEffect(localImageEffectRouteLayer);
+          const httpApp = yield* HttpRouter.toHttpEffect(routeLayer);
           yield* httpServer.serve(httpApp);
         }).pipe(
           Effect.provide(
@@ -155,7 +156,7 @@ describe("localImageEffectRouteLayer", () => {
     writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
     const config = makeServerConfig({ cwd: workspace });
 
-    await withEffectServer(config, async (origin) => {
+    await withEffectServer(config, localImageEffectRouteLayer, async (origin) => {
       const params = new URLSearchParams({ path: imagePath, cwd: workspace });
       const previewResponse = await fetch(`${origin}/api/local-image?${params}`);
       expect(previewResponse.status).toBe(200);
@@ -176,7 +177,7 @@ describe("localImageEffectRouteLayer", () => {
     writeFileSync(docPath, "hello");
     const config = makeServerConfig({ cwd: workspace });
 
-    await withEffectServer(config, async (origin) => {
+    await withEffectServer(config, localImageEffectRouteLayer, async (origin) => {
       const params = new URLSearchParams({ path: docPath, cwd: workspace });
       const response = await fetch(`${origin}/api/local-image?${params}`);
       expect(response.status).toBe(404);
@@ -189,10 +190,32 @@ describe("localImageEffectRouteLayer", () => {
     const ghostPath = path.join(workspace, "does-not-exist.png");
     const config = makeServerConfig({ cwd: workspace });
 
-    await withEffectServer(config, async (origin) => {
+    await withEffectServer(config, localImageEffectRouteLayer, async (origin) => {
       const params = new URLSearchParams({ path: ghostPath, cwd: workspace });
       const response = await fetch(`${origin}/api/local-image?${params}`);
       expect(response.status).toBe(404);
+    });
+  });
+});
+
+describe("attachmentsEffectRouteLayer", () => {
+  it("serves persisted image attachments by id without the file response helper", async () => {
+    const config = makeServerConfig({ authToken: "desktop-secret" });
+    mkdirSync(config.attachmentsDir, { recursive: true });
+    writeFileSync(
+      path.join(config.attachmentsDir, "thread-1-6ec544e7-9130-4a8b-993d-9635297d04d3.png"),
+      Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+    );
+
+    await withEffectServer(config, attachmentsEffectRouteLayer, async (origin) => {
+      const response = await fetch(
+        `${origin}/attachments/thread-1-6ec544e7-9130-4a8b-993d-9635297d04d3?token=desktop-secret`,
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("image/png");
+      expect(response.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+      await expect(response.arrayBuffer()).resolves.toHaveProperty("byteLength", 4);
     });
   });
 });
