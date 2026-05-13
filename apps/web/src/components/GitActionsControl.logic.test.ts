@@ -6,6 +6,7 @@ import {
   requiresFeatureBranchForDefaultBranchAction,
   requiresDefaultBranchConfirmation,
   resolveAutoFeatureBranchName,
+  resolveCreatePrActionAvailability,
   resolveDefaultCreateBranchName,
   resolveDefaultBranchActionDialogCopy,
   resolveLiveThreadBranchUpdate,
@@ -319,6 +320,42 @@ describe("when: branch is clean, up to date, and has no open PR", () => {
       label: "Create PR",
       hint: "No branch changes to include in a PR.",
       disabled: true,
+    });
+  });
+
+  it("resolveCreatePrActionAvailability blocks stale create-pr calls for default upstream", () => {
+    const availability = resolveCreatePrActionAvailability({
+      gitStatus: status({
+        branch: "dpcode/pi-cleanup",
+        upstreamBranch: "main",
+        aheadCount: 0,
+        behindCount: 0,
+        pr: null,
+      }),
+      defaultBranchName: "main",
+    });
+
+    assert.deepEqual(availability, {
+      canRun: false,
+      hint: "No branch changes to include in a PR.",
+    });
+  });
+
+  it("resolveCreatePrActionAvailability allows clean published feature branches", () => {
+    const availability = resolveCreatePrActionAvailability({
+      gitStatus: status({
+        branch: "feature/test",
+        upstreamBranch: "feature/test",
+        aheadCount: 0,
+        behindCount: 0,
+        pr: null,
+      }),
+      defaultBranchName: "main",
+    });
+
+    assert.deepEqual(availability, {
+      canRun: true,
+      hint: null,
     });
   });
 
