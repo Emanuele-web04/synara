@@ -26,7 +26,7 @@ import {
   SiStripe,
   SiVercel,
 } from "react-icons/si";
-import { ClaudeAI, CursorIcon, Gemini, KiloIcon, OpenCodeIcon } from "./Icons";
+import { ClaudeAI, CursorIcon, Gemini, KiloIcon, OpenCodeIcon, PiIcon } from "./Icons";
 import { useStore } from "~/store";
 import {
   buildPluginSearchBlob,
@@ -83,6 +83,7 @@ const PROVIDER_ICON: Record<ProviderKind, React.FC<React.SVGProps<SVGSVGElement>
   gemini: Gemini,
   kilo: KiloIcon,
   opencode: OpenCodeIcon,
+  pi: PiIcon,
 };
 const PROVIDER_DISCOVERY_ORDER: ReadonlyArray<ProviderKind> = [
   "codex",
@@ -91,6 +92,7 @@ const PROVIDER_DISCOVERY_ORDER: ReadonlyArray<ProviderKind> = [
   "gemini",
   "kilo",
   "opencode",
+  "pi",
 ];
 const KNOWN_PLUGIN_BRANDS: Record<string, PluginBrandArtwork> = {
   canva: { icon: SiCanva, color: "#00C4CC" },
@@ -393,6 +395,7 @@ export function PluginLibrary() {
   const geminiCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("gemini"));
   const kiloCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("kilo"));
   const openCodeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("opencode"));
+  const piCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("pi"));
 
   const providerCapabilities = useMemo<Record<ProviderKind, ProviderCapabilities>>(
     () => ({
@@ -420,6 +423,10 @@ export function PluginLibrary() {
         plugins: supportsPluginDiscovery(openCodeCapabilitiesQuery.data),
         skills: supportsSkillDiscovery(openCodeCapabilitiesQuery.data),
       },
+      pi: {
+        plugins: supportsPluginDiscovery(piCapabilitiesQuery.data),
+        skills: supportsSkillDiscovery(piCapabilitiesQuery.data),
+      },
     }),
     [
       claudeCapabilitiesQuery.data,
@@ -428,6 +435,7 @@ export function PluginLibrary() {
       geminiCapabilitiesQuery.data,
       kiloCapabilitiesQuery.data,
       openCodeCapabilitiesQuery.data,
+      piCapabilitiesQuery.data,
     ],
   );
 

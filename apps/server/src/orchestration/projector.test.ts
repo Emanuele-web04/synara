@@ -112,6 +112,73 @@ describe("orchestration projector", () => {
     ]);
   });
 
+  it("updates thread settings from turn start events", async () => {
+    const createdAt = "2026-02-23T08:00:00.000Z";
+    const turnRequestedAt = "2026-02-23T08:00:05.000Z";
+    const model = createEmptyReadModel(createdAt);
+
+    const afterCreate = await Effect.runPromise(
+      projectEvent(
+        model,
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: createdAt,
+          commandId: "cmd-create",
+          payload: {
+            threadId: "thread-1",
+            projectId: "project-1",
+            title: "demo",
+            modelSelection: {
+              provider: "pi",
+              model: "openai/gpt-5.1",
+            },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+      ),
+    );
+
+    const next = await Effect.runPromise(
+      projectEvent(
+        afterCreate,
+        makeEvent({
+          sequence: 2,
+          type: "thread.turn-start-requested",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: turnRequestedAt,
+          commandId: "cmd-turn-start",
+          payload: {
+            threadId: "thread-1",
+            messageId: "message-1",
+            modelSelection: {
+              provider: "pi",
+              model: "openai/gpt-5.5",
+            },
+            runtimeMode: "approval-required",
+            interactionMode: "default",
+            createdAt: turnRequestedAt,
+          },
+        }),
+      ),
+    );
+
+    expect(next.threads[0]?.modelSelection).toEqual({
+      provider: "pi",
+      model: "openai/gpt-5.5",
+    });
+    expect(next.threads[0]?.runtimeMode).toBe("approval-required");
+    expect(next.threads[0]?.interactionMode).toBe("default");
+    expect(next.threads[0]?.updatedAt).toBe(turnRequestedAt);
+  });
+
   it("fails when event payload cannot be decoded by runtime schema", async () => {
     const now = new Date().toISOString();
     const model = createEmptyReadModel(now);
@@ -155,7 +222,7 @@ describe("orchestration projector", () => {
         model,
         makeEvent({
           sequence: 7,
-          type: "thread.turn-start-requested",
+          type: "thread.turn-interrupt-requested",
           aggregateKind: "thread",
           aggregateId: "thread-1",
           occurredAt: "2026-01-01T00:00:00.000Z",

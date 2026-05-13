@@ -92,6 +92,11 @@ export function ContextWindowMeter(props: {
               {display.tokenUsageLabel} tokens used so far
             </div>
           )}
+          {usage.maxTokens !== null ? (
+            <div className="text-xs text-muted-foreground">
+              Model window: {formatContextWindowTokens(usage.maxTokens)} tokens
+            </div>
+          ) : null}
           {pendingWindowLabel ? (
             <div className="text-xs text-muted-foreground">Next turn: {pendingWindowLabel}</div>
           ) : null}

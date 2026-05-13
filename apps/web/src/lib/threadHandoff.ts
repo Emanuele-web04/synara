@@ -1,5 +1,4 @@
 import {
-  DEFAULT_MODEL_BY_PROVIDER,
   EventId,
   MessageId,
   type OrchestrationThreadActivity,
@@ -8,6 +7,7 @@ import {
   type ProviderKind,
   type ThreadHandoffImportedMessage,
 } from "@t3tools/contracts";
+import { getDefaultModel } from "@t3tools/shared/model";
 import { type Thread } from "../types";
 import { stripEmbeddedAssistantSelections } from "./assistantSelections";
 import { randomUUID } from "./utils";
@@ -19,6 +19,7 @@ const HANDOFF_PROVIDER_ORDER: ReadonlyArray<ProviderKind> = [
   "gemini",
   "kilo",
   "opencode",
+  "pi",
 ];
 const IMPORTABLE_THREAD_ACTIVITY_KINDS = new Set([
   "account.rate-limits.updated",
@@ -158,8 +159,12 @@ export function resolveThreadHandoffModelSelection(input: {
   if (isCompatibleSelection(input.projectDefaultModelSelection)) {
     return input.projectDefaultModelSelection;
   }
+  const defaultModel = getDefaultModel(input.targetProvider);
+  if (!defaultModel) {
+    throw new Error("Select a Pi model before handing off to Pi.");
+  }
   return {
     provider: input.targetProvider,
-    model: DEFAULT_MODEL_BY_PROVIDER[input.targetProvider],
+    model: defaultModel,
   };
 }

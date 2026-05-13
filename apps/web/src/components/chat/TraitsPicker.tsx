@@ -143,6 +143,8 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
         primarySelectDescriptor?.id ??
         (provider === "kilo" || provider === "opencode"
           ? "variant"
+          : provider === "pi"
+            ? "thinkingLevel"
           : provider === "claudeAgent"
             ? "effort"
             : provider === "gemini"

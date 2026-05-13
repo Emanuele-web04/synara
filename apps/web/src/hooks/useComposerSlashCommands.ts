@@ -164,11 +164,6 @@ export function useComposerSlashCommands(input: {
                 : "An error occurred while compacting context.",
           });
         });
-      toastManager.add({
-        type: "success",
-        title: "Compaction started",
-        description: "The current provider is compacting the thread context.",
-      });
       return true;
     } catch (error) {
       toastManager.add({

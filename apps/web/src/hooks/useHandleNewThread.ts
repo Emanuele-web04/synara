@@ -1,4 +1,5 @@
-import { type ProjectId, ThreadId, DEFAULT_MODEL_BY_PROVIDER } from "@t3tools/contracts";
+import { type ProjectId, ThreadId } from "@t3tools/contracts";
+import { getDefaultModel } from "@t3tools/shared/model";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback } from "react";
 import { useAppSettings } from "../appSettings";
@@ -42,9 +43,13 @@ export function useHandleNewThread() {
         if (!options?.provider) {
           return;
         }
+        const defaultModel = getDefaultModel(options.provider);
+        if (!defaultModel) {
+          return;
+        }
         setModelSelection(threadId, {
           provider: options.provider,
-          model: DEFAULT_MODEL_BY_PROVIDER[options.provider],
+          model: defaultModel,
         });
       };
       const restoreComposerDraft = (

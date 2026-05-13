@@ -1,4 +1,5 @@
-import { DEFAULT_MODEL_BY_PROVIDER, ModelSelection, ThreadId } from "@t3tools/contracts";
+import { ModelSelection, ThreadId } from "@t3tools/contracts";
+import { getDefaultModel } from "@t3tools/shared/model";
 import "../../index.css";
 
 import { page } from "vitest/browser";
@@ -20,7 +21,7 @@ async function mountMenu(props?: {
   const draftsByThreadId = {} as ReturnType<
     typeof useComposerDraftStore.getState
   >["draftsByThreadId"];
-  const model = props?.modelSelection?.model ?? DEFAULT_MODEL_BY_PROVIDER[provider];
+  const model = props?.modelSelection?.model ?? getDefaultModel(provider) ?? getDefaultModel("codex");
 
   draftsByThreadId[threadId] = {
     prompt: props?.prompt ?? "",

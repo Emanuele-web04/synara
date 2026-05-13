@@ -718,6 +718,28 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           return;
         }
 
+        case "thread.turn-start-requested": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          const modelSelectionPatch =
+            event.payload.modelSelection !== undefined &&
+            event.payload.modelSelection.provider === existingRow.value.modelSelection.provider
+              ? { modelSelection: event.payload.modelSelection }
+              : {};
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            ...modelSelectionPatch,
+            runtimeMode: event.payload.runtimeMode,
+            interactionMode: event.payload.interactionMode,
+            updatedAt: event.payload.createdAt,
+          });
+          return;
+        }
+
         case "thread.deleted": {
           attachmentSideEffects.deletedThreadIds.add(event.payload.threadId);
           const existingRow = yield* projectionThreadRepository.getById({

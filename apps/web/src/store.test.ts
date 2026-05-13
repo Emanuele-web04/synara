@@ -1725,6 +1725,32 @@ describe("store read model sync", () => {
     expect(next.threads[0]?.session?.provider).toBe("opencode");
   });
 
+  it("preserves Pi as the active session provider", () => {
+    const initialState = makeState(makeThread());
+    const readModel = makeReadModel(
+      makeReadModelThread({
+        modelSelection: {
+          provider: "pi",
+          model: "anthropic/claude-sonnet-4-5",
+        },
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "ready",
+          providerName: "pi",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: "2026-02-27T00:00:00.000Z",
+        },
+      }),
+    );
+
+    const next = syncServerReadModel(initialState, readModel);
+
+    expect(next.threads[0]?.modelSelection.provider).toBe("pi");
+    expect(next.threads[0]?.session?.provider).toBe("pi");
+  });
+
   it("preserves exact OpenCode thread model slugs from the read model", () => {
     const initialState = makeState(makeThread());
     const readModel = makeReadModel(

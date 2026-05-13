@@ -52,7 +52,6 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS } from "@dnd-kit/utilities";
 import {
-  DEFAULT_MODEL_BY_PROVIDER,
   type DesktopUpdateState,
   type OrchestrationReadModel,
   PROVIDER_DISPLAY_NAMES,
@@ -63,6 +62,7 @@ import {
   type ResolvedKeybindingsConfig,
 } from "@t3tools/contracts";
 import { isGenericChatThreadTitle } from "@t3tools/shared/chatThreads";
+import { getDefaultModel } from "@t3tools/shared/model";
 import { resolveThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams, useSearch } from "@tanstack/react-router";
@@ -112,7 +112,7 @@ import { dispatchThreadRename } from "../lib/threadRename";
 import { quotePosixShellArgument } from "../lib/shellQuote";
 import { DEFAULT_THREAD_TERMINAL_ID, type SidebarThreadSummary, type Thread } from "../types";
 import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
-import { ClaudeAI, CursorIcon, Gemini, KiloIcon, OpenAI, OpenCodeIcon } from "./Icons";
+import { ClaudeAI, CursorIcon, Gemini, KiloIcon, OpenAI, OpenCodeIcon, PiIcon } from "./Icons";
 import { AppNavigationButtons } from "./AppNavigationButtons";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
@@ -372,6 +372,9 @@ function ProviderGlyph({ provider, className }: { provider: ProviderKind; classN
     return (
       <OpenCodeIcon aria-hidden="true" className={cn("text-muted-foreground/70", className)} />
     );
+  }
+  if (provider === "pi") {
+    return <PiIcon aria-hidden="true" className={cn("text-foreground", className)} />;
   }
   return <OpenAI aria-hidden="true" className={cn("text-muted-foreground/60", className)} />;
 }
@@ -1883,7 +1886,7 @@ export default function Sidebar() {
           createWorkspaceRootIfMissing: options.createIfMissing === true,
           defaultModelSelection: {
             provider: "codex",
-            model: DEFAULT_MODEL_BY_PROVIDER.codex,
+            model: getDefaultModel("codex"),
           },
           createdAt,
         });
@@ -2055,13 +2058,19 @@ export default function Sidebar() {
         throw new Error("The target project could not be resolved.");
       }
 
+      const providerDefaultModel = getDefaultModel(provider);
       const modelSelection =
         activeProject.defaultModelSelection?.provider === provider
           ? activeProject.defaultModelSelection
-          : {
-              provider,
-              model: DEFAULT_MODEL_BY_PROVIDER[provider],
-            };
+          : providerDefaultModel
+            ? {
+                provider,
+                model: providerDefaultModel,
+              }
+            : null;
+      if (!modelSelection) {
+        throw new Error("Select a Pi model before importing a Pi thread.");
+      }
       const threadId = newThreadId();
       const createdAt = new Date().toISOString();
       const trimmedExternalId = externalId.trim();
@@ -4077,7 +4086,7 @@ export default function Sidebar() {
             <TerminalIcon aria-hidden="true" className="size-3.5 shrink-0 text-teal-600/85" />
           ) : showThreadProviderAvatar ? (
             <ProviderAvatarWithTerminal
-              provider={thread.modelSelection.provider}
+              provider={thread.session?.provider ?? thread.modelSelection.provider}
               handoffSourceProvider={thread.handoff?.sourceProvider ?? null}
               handoffTooltip={handoffBadgeLabel}
               terminalStatus={terminalStatus}
@@ -4351,7 +4360,7 @@ export default function Sidebar() {
             <TerminalIcon aria-hidden="true" className="size-3.5 shrink-0 text-teal-600/85" />
           ) : showThreadProviderAvatar ? (
             <ProviderAvatarWithTerminal
-              provider={thread.modelSelection.provider}
+              provider={thread.session?.provider ?? thread.modelSelection.provider}
               handoffSourceProvider={thread.handoff?.sourceProvider ?? null}
               handoffTooltip={handoffBadgeLabel}
               terminalStatus={terminalStatus}

@@ -6,6 +6,7 @@ import {
   ClientOrchestrationCommand,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
+  ModelSelection,
   OrchestrationCommand,
   OrchestrationEvent,
   OrchestrationGetTurnDiffInput,
@@ -37,6 +38,7 @@ const decodeOrchestrationProposedPlan = Schema.decodeUnknownEffect(Orchestration
 const decodeOrchestrationSession = Schema.decodeUnknownEffect(OrchestrationSession);
 const decodeThreadCreatedPayload = Schema.decodeUnknownEffect(ThreadCreatedPayload);
 const decodeThreadMetaUpdatedPayload = Schema.decodeUnknownEffect(ThreadMetaUpdatedPayload);
+const decodeModelSelection = Schema.decodeUnknownEffect(ModelSelection);
 const decodeClientOrchestrationCommand = Schema.decodeUnknownEffect(ClientOrchestrationCommand);
 const decodeOrchestrationCommand = Schema.decodeUnknownEffect(OrchestrationCommand);
 const decodeOrchestrationEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
@@ -118,6 +120,37 @@ it.effect("preserves thread activity payloads through the RPC JSON codec", () =>
           command: "git status --short",
         },
       },
+    });
+  }),
+);
+
+it.effect("preserves Pi model selections when decoding model selections", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeModelSelection({
+      provider: "pi",
+      model: "openai/gpt-5.5",
+    });
+
+    assert.deepStrictEqual(parsed, {
+      provider: "pi",
+      model: "openai/gpt-5.5",
+    });
+  }),
+);
+
+it.effect("preserves Pi model selections through the JSON codec", () =>
+  Effect.gen(function* () {
+    const codec = Schema.fromJsonString(ModelSelection);
+    const parsed = yield* Schema.decodeUnknownEffect(codec)(
+      JSON.stringify({
+        provider: "pi",
+        model: "openai/gpt-5.5",
+      }),
+    );
+
+    assert.deepStrictEqual(parsed, {
+      provider: "pi",
+      model: "openai/gpt-5.5",
     });
   }),
 );

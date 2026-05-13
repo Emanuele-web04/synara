@@ -12,6 +12,8 @@ import type {
   ModelSelection,
   OpenCodeModelOptions,
   OpenCodeModelSelection,
+  PiModelOptions,
+  PiModelSelection,
   ProviderKind,
   ProviderModelOptions,
 } from "@t3tools/contracts";
@@ -49,7 +51,7 @@ export function formatProviderModelOptionName(input: {
     return trimmedSlug;
   }
 
-  if (input.provider === "kilo" || input.provider === "opencode") {
+  if (input.provider === "kilo" || input.provider === "opencode" || input.provider === "pi") {
     const modelIdentifier = trimmedSlug.includes("/")
       ? trimmedSlug.slice(trimmedSlug.lastIndexOf("/") + 1)
       : trimmedSlug;
@@ -166,10 +168,16 @@ export function buildNextProviderOptions(
       ...patch,
     } as GeminiModelOptions;
   }
+  if (provider === "opencode") {
+    return {
+      ...(modelOptions as OpenCodeModelOptions | undefined),
+      ...patch,
+    } as OpenCodeModelOptions;
+  }
   return {
-    ...(modelOptions as OpenCodeModelOptions | undefined),
+    ...(modelOptions as PiModelOptions | undefined),
     ...patch,
-  } as OpenCodeModelOptions;
+  } as PiModelOptions;
 }
 
 export function buildProviderOptionPatch(
@@ -217,6 +225,11 @@ export function buildModelSelection(
   model: string,
   options?: OpenCodeModelOptions | null | undefined,
 ): KiloModelSelection;
+export function buildModelSelection(
+  provider: "pi",
+  model: string,
+  options?: PiModelOptions | null | undefined,
+): PiModelSelection;
 export function buildModelSelection(
   provider: ProviderKind,
   model: string,
@@ -274,6 +287,14 @@ export function buildModelSelection(
             provider,
             model,
             options: options as OpenCodeModelOptions,
+          }
+        : { provider, model };
+    case "pi":
+      return options
+        ? {
+            provider,
+            model,
+            options: options as PiModelOptions,
           }
         : { provider, model };
   }

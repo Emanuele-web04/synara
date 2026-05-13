@@ -1807,7 +1807,8 @@ function toLegacyProvider(providerName: string | null): ProviderKind {
     providerName === "cursor" ||
     providerName === "gemini" ||
     providerName === "kilo" ||
-    providerName === "opencode"
+    providerName === "opencode" ||
+    providerName === "pi"
   ) {
     return providerName;
   }

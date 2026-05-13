@@ -17,11 +17,21 @@ export const GEMINI_THINKING_LEVEL_OPTIONS = ["LOW", "HIGH"] as const;
 export type GeminiThinkingLevel = (typeof GEMINI_THINKING_LEVEL_OPTIONS)[number];
 export const GEMINI_THINKING_BUDGET_OPTIONS = [-1, 512, 0] as const;
 export type GeminiThinkingBudget = (typeof GEMINI_THINKING_BUDGET_OPTIONS)[number];
+export const PI_THINKING_LEVEL_OPTIONS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const;
+export type PiThinkingLevel = (typeof PI_THINKING_LEVEL_OPTIONS)[number];
 export type ProviderReasoningEffort =
   | CodexReasoningEffort
   | ClaudeCodeEffort
   | GeminiThinkingLevel
-  | `${GeminiThinkingBudget}`;
+  | `${GeminiThinkingBudget}`
+  | PiThinkingLevel;
 
 export const ProviderOptionChoice = Schema.Struct({
   id: TrimmedNonEmptyString,
@@ -95,6 +105,11 @@ export const OpenCodeModelOptions = Schema.Struct({
 });
 export type OpenCodeModelOptions = typeof OpenCodeModelOptions.Type;
 
+export const PiModelOptions = Schema.Struct({
+  thinkingLevel: Schema.optional(Schema.Literals(PI_THINKING_LEVEL_OPTIONS)),
+});
+export type PiModelOptions = typeof PiModelOptions.Type;
+
 export const CursorModelOptions = Schema.Struct({
   reasoningEffort: Schema.optional(TrimmedNonEmptyString),
   fastMode: Schema.optional(Schema.Boolean),
@@ -110,6 +125,7 @@ export const ProviderModelOptions = Schema.Struct({
   gemini: Schema.optional(GeminiModelOptions),
   kilo: Schema.optional(OpenCodeModelOptions),
   opencode: Schema.optional(OpenCodeModelOptions),
+  pi: Schema.optional(PiModelOptions),
 });
 export type ProviderModelOptions = typeof ProviderModelOptions.Type;
 
@@ -415,6 +431,7 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       },
     },
   ],
+  pi: [],
   cursor: [
     {
       slug: "auto",
@@ -477,7 +494,9 @@ export type ModelOptionsByProvider = typeof MODEL_OPTIONS_BY_PROVIDER;
 type BuiltInModelSlug = (typeof MODEL_OPTIONS_BY_PROVIDER)[ProviderKind][number]["slug"];
 export type ModelSlug = BuiltInModelSlug | (string & {});
 
-export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderKind, ModelSlug> = {
+export type ProviderWithDefaultModel = Exclude<ProviderKind, "pi">;
+
+export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSlug> = {
   codex: "gpt-5.5",
   claudeAgent: "claude-sonnet-4-6",
   cursor: "auto",
@@ -546,6 +565,7 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
   },
   kilo: {},
   opencode: {},
+  pi: {},
 };
 
 // ── Agent mention aliases ─────────────────────────────────────────────
@@ -579,4 +599,5 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   gemini: "Gemini",
   kilo: "Kilo",
   opencode: "OpenCode",
+  pi: "Pi",
 };

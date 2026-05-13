@@ -168,6 +168,112 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       }
     }),
   );
+
+  it.effect("persists turn-start thread settings into projection rows", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const createdAt = "2026-02-26T13:00:00.000Z";
+      const turnRequestedAt = "2026-02-26T13:00:05.000Z";
+
+      yield* eventStore.append({
+        type: "project.created",
+        eventId: EventId.makeUnsafe("evt-turn-settings-project"),
+        aggregateKind: "project",
+        aggregateId: ProjectId.makeUnsafe("project-turn-settings"),
+        occurredAt: createdAt,
+        commandId: CommandId.makeUnsafe("cmd-turn-settings-project"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-turn-settings-project"),
+        metadata: {},
+        payload: {
+          projectId: ProjectId.makeUnsafe("project-turn-settings"),
+          title: "Project",
+          workspaceRoot: "/tmp/project-turn-settings",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+
+      yield* eventStore.append({
+        type: "thread.created",
+        eventId: EventId.makeUnsafe("evt-turn-settings-thread"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.makeUnsafe("thread-turn-settings"),
+        occurredAt: createdAt,
+        commandId: CommandId.makeUnsafe("cmd-turn-settings-thread"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-turn-settings-thread"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.makeUnsafe("thread-turn-settings"),
+          projectId: ProjectId.makeUnsafe("project-turn-settings"),
+          title: "Thread",
+          modelSelection: {
+            provider: "pi",
+            model: "openai/gpt-5.1",
+          },
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+
+      yield* eventStore.append({
+        type: "thread.turn-start-requested",
+        eventId: EventId.makeUnsafe("evt-turn-settings-start"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.makeUnsafe("thread-turn-settings"),
+        occurredAt: turnRequestedAt,
+        commandId: CommandId.makeUnsafe("cmd-turn-settings-start"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-turn-settings-start"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.makeUnsafe("thread-turn-settings"),
+          messageId: MessageId.makeUnsafe("message-turn-settings"),
+          modelSelection: {
+            provider: "pi",
+            model: "openai/gpt-5.5",
+          },
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          createdAt: turnRequestedAt,
+        },
+      });
+
+      yield* projectionPipeline.bootstrap;
+
+      const rows = yield* sql<{
+        readonly modelSelectionJson: string;
+        readonly runtimeMode: string;
+        readonly interactionMode: string;
+        readonly updatedAt: string;
+      }>`
+        SELECT
+          model_selection_json AS "modelSelectionJson",
+          runtime_mode AS "runtimeMode",
+          interaction_mode AS "interactionMode",
+          updated_at AS "updatedAt"
+        FROM projection_threads
+        WHERE thread_id = 'thread-turn-settings'
+      `;
+
+      assert.equal(rows.length, 1);
+      assert.deepEqual(JSON.parse(rows[0]!.modelSelectionJson), {
+        provider: "pi",
+        model: "openai/gpt-5.5",
+      });
+      assert.equal(rows[0]!.runtimeMode, "approval-required");
+      assert.equal(rows[0]!.interactionMode, "default");
+      assert.equal(rows[0]!.updatedAt, turnRequestedAt);
+    }),
+  );
 });
 
 it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-base-")))(

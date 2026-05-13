@@ -46,6 +46,14 @@ const MODEL_OPTIONS_BY_PROVIDER = {
       upstreamProviderName: "OpenAI",
     },
   ],
+  pi: [
+    {
+      slug: "anthropic/claude-sonnet-4-5",
+      name: "Claude Sonnet 4.5",
+      upstreamProviderId: "anthropic",
+      upstreamProviderName: "Anthropic",
+    },
+  ],
 } as const satisfies Record<ProviderKind, ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>>;
 
 const MANY_OPENCODE_MODELS = Array.from({ length: 16 }, (_, index) => ({
@@ -87,6 +95,21 @@ const CURSOR_FAVORITE_SORT_MODELS = [
   {
     slug: "cursor-gpt-favorite-sort" as ModelSlug,
     name: "GPT Cursor Favorite Sort",
+    upstreamProviderId: "openai",
+    upstreamProviderName: "OpenAI",
+  },
+] satisfies ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>;
+
+const PI_FAVORITE_SORT_MODELS = [
+  {
+    slug: "anthropic/claude-pi-favorite-sort" as ModelSlug,
+    name: "Claude Pi Favorite Sort",
+    upstreamProviderId: "anthropic",
+    upstreamProviderName: "Anthropic",
+  },
+  {
+    slug: "openai/gpt-pi-favorite-sort" as ModelSlug,
+    name: "GPT Pi Favorite Sort",
     upstreamProviderId: "openai",
     upstreamProviderName: "OpenAI",
   },
@@ -377,6 +400,46 @@ describe("ProviderModelPicker", () => {
       expect(
         Array.from(document.querySelectorAll('[role="menuitemradio"]')).filter((element) =>
           element.textContent?.includes("GPT Cursor Favorite Sort"),
+        ),
+      ).toHaveLength(1);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows favourited Pi models in their own top category", async () => {
+    const mounted = await mountPicker({
+      provider: "pi",
+      model: "anthropic/claude-pi-favorite-sort",
+      lockedProvider: "pi",
+      modelOptionsByProvider: {
+        ...MODEL_OPTIONS_BY_PROVIDER,
+        pi: PI_FAVORITE_SORT_MODELS,
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+
+      await vi.waitFor(() => {
+        const text = document.body.textContent ?? "";
+        expect(text.indexOf("Anthropic")).toBeLessThan(text.indexOf("OpenAI"));
+      });
+
+      await page.getByRole("button", { name: "Add GPT Pi Favorite Sort to favourites" }).click();
+
+      await vi.waitFor(() => {
+        const text = document.body.textContent ?? "";
+        expect(text.indexOf("Favourites")).toBeLessThan(text.indexOf("Anthropic"));
+        expect(text.indexOf("GPT Pi Favorite Sort")).toBeGreaterThan(text.indexOf("Favourites"));
+        expect(text.indexOf("GPT Pi Favorite Sort")).toBeLessThan(text.indexOf("Anthropic"));
+      });
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "GPT Pi Favorite Sort" }))
+        .toBeInTheDocument();
+      expect(
+        Array.from(document.querySelectorAll('[role="menuitemradio"]')).filter((element) =>
+          element.textContent?.includes("GPT Pi Favorite Sort"),
         ),
       ).toHaveLength(1);
     } finally {

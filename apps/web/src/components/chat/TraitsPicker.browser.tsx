@@ -46,6 +46,7 @@ function ClaudeTraitsPickerHarness(props: {
       gemini: [],
       kilo: [],
       opencode: [],
+      pi: [],
     },
   });
   const handlePromptChange = useCallback(
@@ -574,6 +575,7 @@ function OpenCodeTraitsPickerHarness(props: {
       gemini: [],
       kilo: [],
       opencode: [],
+      pi: [],
     },
   });
   const handlePromptChange = useCallback(

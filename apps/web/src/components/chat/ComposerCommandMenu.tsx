@@ -384,7 +384,9 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
             {props.isLoading
               ? props.triggerKind === "mention"
                 ? "Searching mentions..."
-                : "Loading commands..."
+                : props.triggerKind === "skill"
+                  ? "Loading skills..."
+                  : "Loading commands..."
               : (props.emptyStateText ??
                 (props.triggerKind === "mention"
                   ? "No matching plugin or file."

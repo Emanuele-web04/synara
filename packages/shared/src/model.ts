@@ -16,7 +16,10 @@ import {
   type OpenCodeModelOptions,
   type ProviderOptionDescriptor,
   type ProviderOptionSelection,
+  type PiModelOptions,
+  type PiThinkingLevel,
   type ProviderKind,
+  type ProviderWithDefaultModel,
   CodexReasoningEffort,
 } from "@t3tools/contracts";
 
@@ -27,6 +30,7 @@ const MODEL_SLUG_SET_BY_PROVIDER: Record<ProviderKind, ReadonlySet<ModelSlug>> =
   gemini: new Set(MODEL_OPTIONS_BY_PROVIDER.gemini.map((option) => option.slug)),
   kilo: new Set(MODEL_OPTIONS_BY_PROVIDER.kilo.map((option) => option.slug)),
   opencode: new Set(MODEL_OPTIONS_BY_PROVIDER.opencode.map((option) => option.slug)),
+  pi: new Set<ModelSlug>(),
 };
 
 export interface SelectableModelOption {
@@ -39,6 +43,14 @@ export type GeminiThinkingConfigKind = "budget" | "level";
 const GEMINI_3_MODEL_PATTERN = /^(?:auto-)?gemini-3(?:[.-]|$)/i;
 const GEMINI_2_5_MODEL_PATTERN = /^(?:auto-)?gemini-2\.5(?:[.-]|$)/i;
 const GEMINI_THINKING_LEVEL_SET = new Set<GeminiThinkingLevel>(["LOW", "HIGH"]);
+const PI_THINKING_LEVEL_SET = new Set<PiThinkingLevel>([
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+]);
 const GEMINI_THINKING_BUDGET_MAP = new Map<string, GeminiThinkingBudget>([
   ["-1", -1],
   ["0", 0],
@@ -97,8 +109,15 @@ export function getModelOptions(provider: ProviderKind = "codex") {
   return MODEL_OPTIONS_BY_PROVIDER[provider];
 }
 
-export function getDefaultModel(provider: ProviderKind = "codex"): ModelSlug {
-  return DEFAULT_MODEL_BY_PROVIDER[provider];
+function hasDefaultModel(provider: ProviderKind): provider is ProviderWithDefaultModel {
+  return provider !== "pi";
+}
+
+export function getDefaultModel(provider: "pi"): null;
+export function getDefaultModel(provider?: ProviderWithDefaultModel): ModelSlug;
+export function getDefaultModel(provider: ProviderKind): ModelSlug | null;
+export function getDefaultModel(provider: ProviderKind = "codex"): ModelSlug | null {
+  return hasDefaultModel(provider) ? DEFAULT_MODEL_BY_PROVIDER[provider] : null;
 }
 
 export function getGeminiThinkingConfigKind(
@@ -590,8 +609,11 @@ export function resolveSelectableModel(
 export function resolveModelSlug(
   model: string | null | undefined,
   provider: ProviderKind = "codex",
-): ModelSlug {
+): ModelSlug | null {
   const normalized = normalizeModelSlug(model, provider);
+  if (provider === "pi") {
+    return normalized;
+  }
   if (!normalized) {
     return DEFAULT_MODEL_BY_PROVIDER[provider];
   }
@@ -604,7 +626,7 @@ export function resolveModelSlug(
 export function resolveModelSlugForProvider(
   provider: ProviderKind,
   model: string | null | undefined,
-): ModelSlug {
+): ModelSlug | null {
   return resolveModelSlug(model, provider);
 }
 
@@ -702,6 +724,15 @@ export function normalizeGeminiModelOptions(
   }
 
   return nextOptions;
+}
+
+export function normalizePiModelOptions(
+  modelOptions: PiModelOptions | null | undefined,
+): PiModelOptions | undefined {
+  const thinkingLevel = trimOrNull(modelOptions?.thinkingLevel);
+  return thinkingLevel && PI_THINKING_LEVEL_SET.has(thinkingLevel as PiThinkingLevel)
+    ? { thinkingLevel: thinkingLevel as PiThinkingLevel }
+    : undefined;
 }
 
 export function normalizeOpenCodeModelOptions(

@@ -42,6 +42,7 @@ export const PROVIDER_OPTIONS: Array<{
   { value: "gemini", label: "Gemini", available: true },
   { value: "kilo", label: "Kilo", available: true },
   { value: "opencode", label: "OpenCode", available: true },
+  { value: "pi", label: "Pi", available: true },
 ];
 
 export interface WorkLogEntry {

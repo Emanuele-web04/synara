@@ -455,6 +455,8 @@ function getProviderStartOptionsCustomBinaryPath(
       return normalizeCustomBinaryPath(providerOptions?.opencode?.binaryPath);
     case "cursor":
       return normalizeCustomBinaryPath(providerOptions?.cursor?.binaryPath);
+    case "pi":
+      return normalizeCustomBinaryPath(providerOptions?.pi?.binaryPath);
   }
 }
 
@@ -631,13 +633,17 @@ function mergeDynamicModelOptions(input: {
 }
 
 function skillMentionPrefix(provider: string): string {
+  if (provider === "pi") return "/skill:";
   return provider === "claudeAgent" ? "/" : "$";
 }
 
 function promptIncludesSkillMention(prompt: string, skillName: string, provider: string): boolean {
-  const prefix = escapeRegExp(skillMentionPrefix(provider));
-  const pattern = new RegExp(`(^|\\s)${prefix}${escapeRegExp(skillName)}(?=\\s|$)`, "i");
-  return pattern.test(prompt);
+  const escapedSkillName = escapeRegExp(skillName);
+  const prefixes = provider === "pi" ? ["/skill:"] : [skillMentionPrefix(provider)];
+  return prefixes.some((prefix) => {
+    const pattern = new RegExp(`(^|\\s)${escapeRegExp(prefix)}${escapedSkillName}(?=\\s|$)`, "i");
+    return pattern.test(prompt);
+  });
 }
 
 const PROMPT_MENTION_NAME_REGEX = createComposerMentionTokenRegex({
@@ -1406,6 +1412,7 @@ export default function ChatView({
       gemini: resolveHint("gemini"),
       kilo: resolveHint("kilo"),
       opencode: resolveHint("opencode"),
+      pi: resolveHint("pi"),
     };
   }, [
     activeProject?.defaultModelSelection,
@@ -1442,6 +1449,14 @@ export default function ChatView({
       provider: "kilo",
       binaryPath: settings.kiloBinaryPath || null,
       enabled: selectedProvider === "kilo" || lockedProvider === "kilo" || isModelPickerOpen,
+    }),
+  );
+  const piDynamicModelsQuery = useQuery(
+    providerModelsQueryOptions({
+      provider: "pi",
+      binaryPath: settings.piBinaryPath || null,
+      agentDir: settings.piAgentDir || null,
+      enabled: selectedProvider === "pi" || lockedProvider === "pi" || isModelPickerOpen,
     }),
   );
   const claudeDynamicAgentsQuery = useQuery(
@@ -1508,6 +1523,7 @@ export default function ChatView({
         customModelsByProvider.opencode,
         composerModelHintByProvider.opencode,
       ),
+      pi: getAppModelOptions("pi", customModelsByProvider.pi, composerModelHintByProvider.pi),
     };
     const result: Record<
       ProviderKind,
@@ -1524,6 +1540,7 @@ export default function ChatView({
       gemini: geminiModelsQuery.data,
       kilo: kiloDynamicModelsQuery.data,
       opencode: openCodeDynamicModelsQuery.data,
+      pi: piDynamicModelsQuery.data,
     };
 
     for (const provider of [
@@ -1533,6 +1550,7 @@ export default function ChatView({
       "gemini",
       "kilo",
       "opencode",
+      "pi",
     ] as const) {
       const dynamicModels = dynamicSources[provider]?.models;
       if (dynamicModels && dynamicModels.length > 0) {
@@ -1564,6 +1582,7 @@ export default function ChatView({
     geminiModelsQuery.data,
     kiloDynamicModelsQuery.data,
     openCodeDynamicModelsQuery.data,
+    piDynamicModelsQuery.data,
   ]);
   const { modelOptions: composerModelOptions, selectedModel } = useEffectiveComposerModelState({
     threadId,
@@ -1581,6 +1600,7 @@ export default function ChatView({
       gemini: geminiModelsQuery.data?.models ?? [],
       kilo: kiloDynamicModelsQuery.data?.models ?? [],
       opencode: openCodeDynamicModelsQuery.data?.models ?? [],
+      pi: piDynamicModelsQuery.data?.models ?? [],
     }),
     [
       claudeDynamicModelsQuery.data?.models,
@@ -1589,6 +1609,7 @@ export default function ChatView({
       geminiModelsQuery.data?.models,
       kiloDynamicModelsQuery.data?.models,
       openCodeDynamicModelsQuery.data?.models,
+      piDynamicModelsQuery.data?.models,
     ],
   );
   const providerModelsQueryByProvider = {
@@ -1598,6 +1619,7 @@ export default function ChatView({
     gemini: geminiModelsQuery,
     kilo: kiloDynamicModelsQuery,
     opencode: openCodeDynamicModelsQuery,
+    pi: piDynamicModelsQuery,
   } as const;
   const selectedRuntimeModel = useMemo(
     () =>
@@ -1621,12 +1643,28 @@ export default function ChatView({
   );
   const selectedPromptEffort = composerProviderState.promptEffort;
   const selectedModelOptionsForDispatch = composerProviderState.modelOptionsForDispatch;
-  const selectedModelSelection = useMemo<ModelSelection>(
-    () => buildModelSelection(selectedProvider, selectedModel, selectedModelOptionsForDispatch),
-    [selectedModel, selectedModelOptionsForDispatch, selectedProvider],
-  );
+  const draftModelSelectionForSelectedProvider =
+    composerDraft.modelSelectionByProvider[selectedProvider] ?? null;
+  const selectedModelSelection = useMemo<ModelSelection>(() => {
+    if (selectedProvider === "pi" && draftModelSelectionForSelectedProvider?.provider === "pi") {
+      return buildModelSelection(
+        selectedProvider,
+        draftModelSelectionForSelectedProvider.model,
+        selectedModelOptionsForDispatch ?? draftModelSelectionForSelectedProvider.options,
+      );
+    }
+    return buildModelSelection(selectedProvider, selectedModel, selectedModelOptionsForDispatch);
+  }, [
+    draftModelSelectionForSelectedProvider,
+    selectedModel,
+    selectedModelOptionsForDispatch,
+    selectedProvider,
+  ]);
   const providerOptionsForDispatch = useMemo(() => getProviderStartOptions(settings), [settings]);
-  const selectedModelForPicker = selectedModel;
+  const selectedModelForPicker =
+    selectedModelSelection.provider === selectedProvider
+      ? selectedModelSelection.model
+      : selectedModel;
   const selectedModelForPickerWithCustomFallback = useMemo(() => {
     const currentOptions = modelOptionsByProvider[selectedProvider];
     return currentOptions.some((option) => option.slug === selectedModelForPicker)
@@ -1634,9 +1672,11 @@ export default function ChatView({
       : (normalizeModelSlug(selectedModelForPicker, selectedProvider) ?? selectedModelForPicker);
   }, [modelOptionsByProvider, selectedModelForPicker, selectedProvider]);
   const persistedComposerModelSelection =
-    activeThread?.modelSelection ?? activeProject?.defaultModelSelection ?? null;
-  const draftModelSelectionForSelectedProvider =
-    composerDraft.modelSelectionByProvider[selectedProvider] ?? null;
+    sessionProvider && activeThread?.modelSelection.provider !== sessionProvider
+      ? activeProject?.defaultModelSelection?.provider === selectedProvider
+        ? activeProject.defaultModelSelection
+        : null
+      : (activeThread?.modelSelection ?? activeProject?.defaultModelSelection ?? null);
   const selectedProviderModelsQuery = providerModelsQueryByProvider[selectedProvider];
   const providerModelsLoading =
     selectedProvider === "cursor"
@@ -2322,6 +2362,8 @@ export default function ChatView({
         composerSkillCwd !== null,
     }),
   );
+  const canDiscoverProviderSkills =
+    selectedProvider === "pi" || supportsSkillDiscovery(providerComposerCapabilitiesQuery.data);
   const providerSkillsQuery = useQuery(
     providerSkillsQueryOptions({
       provider: selectedProvider,
@@ -2329,8 +2371,8 @@ export default function ChatView({
       threadId,
       query: skillTriggerQuery,
       enabled:
-        isSkillTrigger &&
-        supportsSkillDiscovery(providerComposerCapabilitiesQuery.data) &&
+        (isSkillTrigger || selectedProvider === "pi") &&
+        canDiscoverProviderSkills &&
         composerSkillCwd !== null,
     }),
   );
@@ -5516,9 +5558,11 @@ export default function ChatView({
       const title = buildPromptThreadTitleFallback(titleSeed);
       const threadCreateModelSelection: ModelSelection = buildModelSelection(
         selectedProviderForSend,
-        selectedModelForSend ||
-          targetProjectDefaultModelSelectionForSend?.model ||
-          DEFAULT_MODEL_BY_PROVIDER.codex,
+        selectedModelSelectionForSend.provider === selectedProviderForSend
+          ? selectedModelSelectionForSend.model
+          : selectedModelForSend ||
+              targetProjectDefaultModelSelectionForSend?.model ||
+              DEFAULT_MODEL_BY_PROVIDER.codex,
         selectedModelSelectionForSend.options,
       );
 
@@ -6935,7 +6979,12 @@ export default function ChatView({
         providerPluginsQuery.isLoading ||
         providerPluginsQuery.isFetching)) ||
     (composerTriggerKind === "slash-command" &&
-      (providerCommandsQuery.isLoading || providerCommandsQuery.isFetching));
+      (providerCommandsQuery.isLoading || providerCommandsQuery.isFetching)) ||
+    (composerTriggerKind === "skill" &&
+      (providerComposerCapabilitiesQuery.isLoading ||
+        providerComposerCapabilitiesQuery.isFetching ||
+        providerSkillsQuery.isLoading ||
+        providerSkillsQuery.isFetching));
 
   const onPromptChange = useCallback(
     (
@@ -7792,7 +7841,7 @@ export default function ChatView({
           activeThreadId={activeThread.id}
           activeThreadTitle={activeThreadDisplayTitle}
           activeThreadEntryPoint={terminalState.entryPoint}
-          activeProvider={activeThread.modelSelection.provider}
+          activeProvider={activeThread.session?.provider ?? activeThread.modelSelection.provider}
           activeProjectName={activeProjectDisplayName}
           threadBreadcrumbs={threadBreadcrumbs}
           isSidechat={Boolean(activeThread.sidechatSourceThreadId)}

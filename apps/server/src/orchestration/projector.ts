@@ -26,6 +26,7 @@ import {
   ThreadRevertedPayload,
   ThreadSessionSetPayload,
   ThreadTurnDiffCompletedPayload,
+  ThreadTurnStartRequestedPayload,
 } from "./Schemas.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
@@ -450,6 +451,35 @@ export function projectEvent(
             updatedAt: payload.updatedAt,
           }),
         })),
+      );
+
+    case "thread.turn-start-requested":
+      return decodeForEvent(
+        ThreadTurnStartRequestedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          const modelSelectionPatch =
+            payload.modelSelection !== undefined &&
+            payload.modelSelection.provider === thread.modelSelection.provider
+              ? { modelSelection: payload.modelSelection }
+              : {};
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              ...modelSelectionPatch,
+              runtimeMode: payload.runtimeMode,
+              interactionMode: payload.interactionMode,
+              updatedAt: payload.createdAt,
+            }),
+          };
+        }),
       );
 
     case "thread.message-sent":

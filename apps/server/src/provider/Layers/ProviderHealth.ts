@@ -17,6 +17,7 @@ import type {
 import { parseCodexConfigModelProvider } from "@t3tools/shared/codexConfig";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 import { query as claudeQuery, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import {
   Array,
   Cache,
@@ -60,6 +61,7 @@ const CURSOR_PROVIDER = "cursor" as const;
 const GEMINI_PROVIDER = "gemini" as const;
 const KILO_PROVIDER = "kilo" as const;
 const OPENCODE_PROVIDER = "opencode" as const;
+const PI_PROVIDER = "pi" as const;
 type ProviderStatuses = ReadonlyArray<ServerProviderStatus>;
 
 // ── Pure helpers ────────────────────────────────────────────────────
@@ -1275,6 +1277,25 @@ export const checkKiloProviderStatus: Effect.Effect<
   } satisfies ServerProviderStatus;
 });
 
+// ── Pi health check ─────────────────────────────────────────────
+
+export const checkPiProviderStatus: Effect.Effect<ServerProviderStatus> = Effect.sync(() => {
+  const checkedAt = new Date().toISOString();
+  const registry = ModelRegistry.create(AuthStorage.create());
+  const modelCount = registry.getAvailable().length;
+  return {
+    provider: PI_PROVIDER,
+    status: modelCount > 0 ? "ready" : "warning",
+    available: modelCount > 0,
+    authStatus: modelCount > 0 ? "authenticated" : "unknown",
+    checkedAt,
+    message:
+      modelCount > 0
+        ? `Pi SDK is available with ${modelCount} authenticated model${modelCount === 1 ? "" : "s"}.`
+        : "Pi SDK is available, but no authenticated models were found in ~/.pi/agent/auth.json.",
+  } satisfies ServerProviderStatus;
+});
+
 // ── Cursor health check ─────────────────────────────────────────────
 
 export const checkCursorProviderStatus: Effect.Effect<
@@ -1386,6 +1407,7 @@ export const ProviderHealthLive = Layer.effect(
         GEMINI_PROVIDER,
         KILO_PROVIDER,
         OPENCODE_PROVIDER,
+        PI_PROVIDER,
       ].map(
         (provider) =>
           [
@@ -1406,6 +1428,7 @@ export const ProviderHealthLive = Layer.effect(
         GEMINI_PROVIDER,
         KILO_PROVIDER,
         OPENCODE_PROVIDER,
+        PI_PROVIDER,
       ] as const,
       (provider) =>
         readProviderStatusCache(cachePathByProvider.get(provider)!).pipe(
@@ -1446,6 +1469,7 @@ export const ProviderHealthLive = Layer.effect(
         checkGeminiProviderStatus,
         checkKiloProviderStatus,
         checkOpenCodeProviderStatus,
+        checkPiProviderStatus,
       ],
       {
         concurrency: "unbounded",

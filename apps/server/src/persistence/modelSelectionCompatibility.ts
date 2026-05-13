@@ -3,7 +3,14 @@
 // Layer: Persistence compatibility helper
 // Exports: normalizeLegacyModelSelection, normalizePersistedModelSelection
 
-type ModelProviderKind = "codex" | "claudeAgent" | "cursor" | "gemini" | "kilo" | "opencode";
+type ModelProviderKind =
+  | "codex"
+  | "claudeAgent"
+  | "cursor"
+  | "gemini"
+  | "kilo"
+  | "opencode"
+  | "pi";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -21,6 +28,9 @@ function readTrimmedString(record: Record<string, unknown>, key: string): string
 // Imported instance ids may be runtime names rather than DP Code provider literals.
 function inferProviderFromLabel(label: string): ModelProviderKind | undefined {
   const lowerLabel = label.toLowerCase();
+  if (/(^|[^a-z0-9])pi([^a-z0-9]|$)/u.test(lowerLabel)) {
+    return "pi";
+  }
   if (lowerLabel.includes("opencode")) {
     return "opencode";
   }
@@ -49,7 +59,8 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
     provider === "cursor" ||
     provider === "gemini" ||
     provider === "kilo" ||
-    provider === "opencode"
+    provider === "opencode" ||
+    provider === "pi"
   ) {
     return provider;
   }

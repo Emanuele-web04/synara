@@ -96,7 +96,8 @@ export function getRuntimeAwareModelCapabilities(input: {
     (input.provider !== "codex" &&
       input.provider !== "cursor" &&
       input.provider !== "kilo" &&
-      input.provider !== "opencode") ||
+      input.provider !== "opencode" &&
+      input.provider !== "pi") ||
     !runtimeEfforts ||
     runtimeEfforts.length === 0
   ) {

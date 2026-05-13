@@ -26,6 +26,7 @@ export function applyServerSettingsPatch(
   const model =
     selectionPatch.model ??
     (selectionPatch.provider &&
+    selectionPatch.provider !== "pi" &&
     selectionPatch.provider !== current.textGenerationModelSelection.provider
       ? DEFAULT_MODEL_BY_PROVIDER[selectionPatch.provider]
       : current.textGenerationModelSelection.model);

@@ -58,7 +58,8 @@ type CustomModelSettingsKey =
   | "customCursorModels"
   | "customGeminiModels"
   | "customKiloModels"
-  | "customOpenCodeModels";
+  | "customOpenCodeModels"
+  | "customPiModels";
 export type ProviderCustomModelConfig = {
   provider: ProviderKind;
   settingsKey: CustomModelSettingsKey;
@@ -76,6 +77,7 @@ const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>
   gemini: new Set(getModelOptions("gemini").map((option) => option.slug)),
   kilo: new Set(getModelOptions("kilo").map((option) => option.slug)),
   opencode: new Set(getModelOptions("opencode").map((option) => option.slug)),
+  pi: new Set(getModelOptions("pi").map((option) => option.slug)),
 };
 
 const withDefaults =
@@ -104,6 +106,8 @@ export const AppSettingsSchema = Schema.Struct({
   kiloServerUrl: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   kiloServerPassword: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   openCodeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  piBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  piAgentDir: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   openCodeServerUrl: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   openCodeServerPassword: Schema.String.check(Schema.isMaxLength(4096)).pipe(
     withDefaults(() => ""),
@@ -131,6 +135,7 @@ export const AppSettingsSchema = Schema.Struct({
   customGeminiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customKiloModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customOpenCodeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
+  customPiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   textGenerationProvider: ProviderKind.pipe(withDefaults(() => "codex" as const)),
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
   uiFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
@@ -218,6 +223,15 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     placeholder: "provider/model",
     example: "openai/gpt-5",
   },
+  pi: {
+    provider: "pi",
+    settingsKey: "customPiModels",
+    defaultSettingsKey: "customPiModels",
+    title: "Pi",
+    description: "Save additional Pi model slugs for the picker and provider runtime.",
+    placeholder: "provider/model",
+    example: "anthropic/claude-sonnet-4-5",
+  },
 };
 
 export const MODEL_PROVIDER_SETTINGS = Object.values(PROVIDER_CUSTOM_MODEL_CONFIG);
@@ -269,6 +283,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     customGeminiModels: normalizeCustomModelSlugs(settings.customGeminiModels, "gemini"),
     customKiloModels: normalizeCustomModelSlugs(settings.customKiloModels, "kilo"),
     customOpenCodeModels: normalizeCustomModelSlugs(settings.customOpenCodeModels, "opencode"),
+    customPiModels: normalizeCustomModelSlugs(settings.customPiModels, "pi"),
     hiddenProviders: normalizeHiddenProviders(settings.hiddenProviders),
     providerOrder: normalizeProviderOrder(settings.providerOrder),
     hiddenModels: [],
@@ -291,12 +306,15 @@ function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSetti
     openCodeBinaryPath: settings.providers.opencode.binaryPath,
     openCodeServerPassword: settings.providers.opencode.serverPassword,
     openCodeServerUrl: settings.providers.opencode.serverUrl,
+    piAgentDir: settings.providers.pi.agentDir,
+    piBinaryPath: settings.providers.pi.binaryPath,
     customCodexModels: settings.providers.codex.customModels,
     customClaudeModels: settings.providers.claudeAgent.customModels,
     customCursorModels: settings.providers.cursor.customModels,
     customGeminiModels: settings.providers.gemini.customModels,
     customKiloModels: settings.providers.kilo.customModels,
     customOpenCodeModels: settings.providers.opencode.customModels,
+    customPiModels: settings.providers.pi.customModels,
     textGenerationProvider: settings.textGenerationModelSelection.provider,
     textGenerationModel: settings.textGenerationModelSelection.model,
   };
@@ -416,6 +434,17 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
         : {}),
     };
   }
+  if (
+    hasOwn(patch, "piAgentDir") ||
+    hasOwn(patch, "piBinaryPath") ||
+    hasOwn(patch, "customPiModels")
+  ) {
+    providers.pi = {
+      ...(hasOwn(patch, "piAgentDir") ? { agentDir: patch.piAgentDir ?? "" } : {}),
+      ...(hasOwn(patch, "piBinaryPath") ? { binaryPath: patch.piBinaryPath ?? "" } : {}),
+      ...(hasOwn(patch, "customPiModels") ? { customModels: patch.customPiModels ?? [] } : {}),
+    };
+  }
 
   if (Object.keys(providers).length > 0) {
     serverPatch.providers = providers;
@@ -446,6 +475,8 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "openCodeBinaryPath",
     "openCodeServerPassword",
     "openCodeServerUrl",
+    "piAgentDir",
+    "piBinaryPath",
     "textGenerationModel",
     "textGenerationProvider",
   ] as const) {
@@ -461,6 +492,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "customGeminiModels",
     "customKiloModels",
     "customOpenCodeModels",
+    "customPiModels",
   ] as const) {
     if (settings[key].length > 0) {
       patch[key] = settings[key] as never;
@@ -507,6 +539,7 @@ export function getCustomModelsByProvider(
     gemini: getCustomModelsForProvider(settings, "gemini"),
     kilo: getCustomModelsForProvider(settings, "kilo"),
     opencode: getCustomModelsForProvider(settings, "opencode"),
+    pi: getCustomModelsForProvider(settings, "pi"),
   };
 }
 
@@ -608,7 +641,7 @@ export function resolveAppModelSelection(
 ): string {
   const customModelsForProvider = customModels[provider];
   const options = getAppModelOptions(provider, customModelsForProvider, selectedModel);
-  return resolveSelectableModel(provider, selectedModel, options) ?? getDefaultModel(provider);
+  return resolveSelectableModel(provider, selectedModel, options) ?? getDefaultModel(provider) ?? "";
 }
 
 export function getCustomModelOptionsByProvider(
@@ -622,6 +655,7 @@ export function getCustomModelOptionsByProvider(
     gemini: getAppModelOptions("gemini", customModelsByProvider.gemini),
     kilo: getAppModelOptions("kilo", customModelsByProvider.kilo),
     opencode: getAppModelOptions("opencode", customModelsByProvider.opencode),
+    pi: getAppModelOptions("pi", customModelsByProvider.pi),
   };
 }
 
@@ -640,6 +674,8 @@ export function getProviderStartOptions(
     | "openCodeBinaryPath"
     | "openCodeServerPassword"
     | "openCodeServerUrl"
+    | "piAgentDir"
+    | "piBinaryPath"
   >,
 ): ProviderStartOptions | undefined {
   const providerOptions: ProviderStartOptions = {
@@ -693,6 +729,14 @@ export function getProviderStartOptions(
           },
         }
       : {}),
+    ...(settings.piBinaryPath || settings.piAgentDir
+      ? {
+          pi: {
+            ...(settings.piBinaryPath ? { binaryPath: settings.piBinaryPath } : {}),
+            ...(settings.piAgentDir ? { agentDir: settings.piAgentDir } : {}),
+          },
+        }
+      : {}),
   };
 
   return Object.keys(providerOptions).length > 0 ? providerOptions : undefined;
@@ -707,6 +751,7 @@ export function getCustomBinaryPathForProvider(
     | "geminiBinaryPath"
     | "kiloBinaryPath"
     | "openCodeBinaryPath"
+    | "piBinaryPath"
   >,
   provider: ProviderKind,
 ): string {
@@ -723,6 +768,8 @@ export function getCustomBinaryPathForProvider(
       return settings.kiloBinaryPath;
     case "opencode":
       return settings.openCodeBinaryPath;
+    case "pi":
+      return settings.piBinaryPath;
   }
 }
 

@@ -35,7 +35,7 @@ import { readNativeApi } from "~/nativeApi";
 import { resolveEditorIcon } from "../../editorMetadata";
 import { usePreferredEditor } from "../../editorPreferences";
 import { useIsDisposableThread } from "~/hooks/useIsDisposableThread";
-import { ClaudeAI, CursorIcon, Gemini, KiloIcon, OpenAI, OpenCodeIcon } from "../Icons";
+import { ClaudeAI, CursorIcon, Gemini, KiloIcon, OpenAI, OpenCodeIcon, PiIcon } from "../Icons";
 import { gitWorkingTreeDiffQueryOptions } from "~/lib/gitReactQuery";
 import { summarizePatchStats } from "~/lib/diffRendering";
 
@@ -203,6 +203,9 @@ export const ChatHeader = memo(function ChatHeader({
     }
     if (provider === "opencode") {
       return <OpenCodeIcon className={cn("text-muted-foreground/70", className)} />;
+    }
+    if (provider === "pi") {
+      return <PiIcon className={cn("text-foreground", className)} />;
     }
     if (provider === "codex") {
       return <OpenAI className={cn("text-muted-foreground/75", className)} />;

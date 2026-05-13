@@ -468,15 +468,17 @@ function runtimeEventToActivities(
       if (!message) {
         return [];
       }
+      const errorClass = asString(runtimePayloadRecord(event)?.class);
       return [
         {
           id: event.eventId,
           createdAt: event.createdAt,
           tone: "error",
           kind: "runtime.error",
-          summary: "Runtime error",
+          summary: "Provider runtime error",
           payload: toActivityPayload({
-            message: truncateDetail(message),
+            message: truncateDetail(message, 500),
+            ...(errorClass ? { class: errorClass } : {}),
           }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -779,15 +781,16 @@ function runtimeEventToActivities(
     }
 
     case "turn.completed": {
+      const state = runtimeTurnState(event);
       return [
         {
           id: event.eventId,
           createdAt: event.createdAt,
-          tone: "info" as const,
+          tone: state === "failed" ? "error" : "info",
           kind: "turn.completed",
-          summary: "Turn completed",
+          summary: state === "failed" ? "Turn failed" : "Turn completed",
           payload: toActivityPayload({
-            state: runtimeTurnState(event),
+            state,
             ...(typeof event.payload.totalCostUsd === "number"
               ? { totalCostUsd: event.payload.totalCostUsd }
               : {}),

@@ -9,7 +9,7 @@ import {
   DEFAULT_MODEL_BY_PROVIDER,
   DEFAULT_SERVER_SETTINGS,
   type ModelSelection,
-  type ProviderKind,
+  type ProviderWithDefaultModel,
   ServerSettings,
   ServerSettingsError,
   type ServerSettingsPatch,
@@ -79,7 +79,7 @@ export class ServerSettingsService extends ServiceMap.Service<
     );
 }
 
-const PROVIDER_ORDER: readonly ProviderKind[] = [
+const PROVIDER_ORDER: readonly ProviderWithDefaultModel[] = [
   "codex",
   "claudeAgent",
   "gemini",

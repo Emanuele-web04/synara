@@ -298,6 +298,7 @@ describe("wsNativeApi", () => {
             serverPassword: "",
             customModels: [],
           },
+          pi: { enabled: true, binaryPath: "pi", agentDir: "", customModels: [] },
         },
       },
     } as const;
