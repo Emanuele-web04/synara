@@ -448,6 +448,8 @@ function getProviderStartOptionsCustomBinaryPath(
       return normalizeCustomBinaryPath(providerOptions?.claudeAgent?.binaryPath);
     case "gemini":
       return normalizeCustomBinaryPath(providerOptions?.gemini?.binaryPath);
+    case "kilo":
+      return normalizeCustomBinaryPath(providerOptions?.kilo?.binaryPath);
     case "opencode":
       return normalizeCustomBinaryPath(providerOptions?.opencode?.binaryPath);
     case "cursor":
@@ -614,7 +616,7 @@ function mergeDynamicModelOptions(input: {
     (model) => !("isCustom" in model) || model.isCustom !== true,
   );
   const missingStaticBuiltIns =
-    (input.provider === "opencode" || input.provider === "cursor") &&
+    (input.provider === "kilo" || input.provider === "opencode" || input.provider === "cursor") &&
     normalizedDynamicOptions.length > 0
       ? []
       : staticBuiltInModels.filter((model) => !dynamicNormalizedSlugs.has(model.slug));
@@ -1401,6 +1403,7 @@ export default function ChatView({
       claudeAgent: resolveHint("claudeAgent"),
       cursor: resolveHint("cursor"),
       gemini: resolveHint("gemini"),
+      kilo: resolveHint("kilo"),
       opencode: resolveHint("opencode"),
     };
   }, [
@@ -1433,11 +1436,19 @@ export default function ChatView({
       binaryPath: settings.openCodeBinaryPath || null,
     }),
   );
+  const kiloDynamicModelsQuery = useQuery(
+    providerModelsQueryOptions({
+      provider: "kilo",
+      binaryPath: settings.kiloBinaryPath || null,
+      enabled: selectedProvider === "kilo" || lockedProvider === "kilo" || isModelPickerOpen,
+    }),
+  );
   const claudeDynamicAgentsQuery = useQuery(
     providerAgentsQueryOptions({ provider: "claudeAgent" }),
   );
   const codexDynamicAgentsQuery = useQuery(providerAgentsQueryOptions({ provider: "codex" }));
   const openCodeDynamicAgentsQuery = useQuery(providerAgentsQueryOptions({ provider: "opencode" }));
+  const kiloDynamicAgentsQuery = useQuery(providerAgentsQueryOptions({ provider: "kilo" }));
   const cursorRuntimeModels = useMemo(
     () =>
       showExpandedCursorModelVariants
@@ -1454,6 +1465,16 @@ export default function ChatView({
     cursorModelDiscoveryEnabled &&
     !hasResolvedCursorModelDiscovery &&
     (cursorDynamicModelsQuery.isLoading || cursorDynamicModelsQuery.isFetching);
+  const kiloModelDiscoveryEnabled =
+    selectedProvider === "kilo" || lockedProvider === "kilo" || isModelPickerOpen;
+  const hasResolvedKiloModelDiscovery =
+    (kiloDynamicModelsQuery.data?.source === "kilo-cli" ||
+      kiloDynamicModelsQuery.data?.source === "kilo") &&
+    (kiloDynamicModelsQuery.data.models.length ?? 0) > 0;
+  const kiloModelDiscoveryPending =
+    kiloModelDiscoveryEnabled &&
+    !hasResolvedKiloModelDiscovery &&
+    (kiloDynamicModelsQuery.isLoading || kiloDynamicModelsQuery.isFetching);
   const modelOptionsByProvider = useMemo(() => {
     const staticOptions: Record<ProviderKind, ReturnType<typeof getAppModelOptions>> = {
       codex: getAppModelOptions(
@@ -1476,6 +1497,11 @@ export default function ChatView({
         customModelsByProvider.gemini,
         composerModelHintByProvider.gemini,
       ),
+      kilo: getAppModelOptions(
+        "kilo",
+        customModelsByProvider.kilo,
+        composerModelHintByProvider.kilo,
+      ),
       opencode: getAppModelOptions(
         "opencode",
         customModelsByProvider.opencode,
@@ -1495,10 +1521,11 @@ export default function ChatView({
           ? undefined
           : { ...cursorDynamicModelsQuery.data, models: cursorRuntimeModels },
       gemini: geminiModelsQuery.data,
+      kilo: kiloDynamicModelsQuery.data,
       opencode: openCodeDynamicModelsQuery.data,
     };
 
-    for (const provider of ["claudeAgent", "codex", "cursor", "gemini", "opencode"] as const) {
+    for (const provider of ["claudeAgent", "codex", "cursor", "gemini", "kilo", "opencode"] as const) {
       const dynamicModels = dynamicSources[provider]?.models;
       if (dynamicModels && dynamicModels.length > 0) {
         result[provider] = mergeDynamicModelOptions({
@@ -1527,6 +1554,7 @@ export default function ChatView({
     cursorRuntimeModels,
     customModelsByProvider,
     geminiModelsQuery.data,
+    kiloDynamicModelsQuery.data,
     openCodeDynamicModelsQuery.data,
   ]);
   const { modelOptions: composerModelOptions, selectedModel } = useEffectiveComposerModelState({
@@ -1543,6 +1571,7 @@ export default function ChatView({
       codex: codexDynamicModelsQuery.data?.models ?? [],
       cursor: cursorRuntimeModels,
       gemini: geminiModelsQuery.data?.models ?? [],
+      kilo: kiloDynamicModelsQuery.data?.models ?? [],
       opencode: openCodeDynamicModelsQuery.data?.models ?? [],
     }),
     [
@@ -1550,6 +1579,7 @@ export default function ChatView({
       codexDynamicModelsQuery.data?.models,
       cursorRuntimeModels,
       geminiModelsQuery.data?.models,
+      kiloDynamicModelsQuery.data?.models,
       openCodeDynamicModelsQuery.data?.models,
     ],
   );
@@ -1558,6 +1588,7 @@ export default function ChatView({
     codex: codexDynamicModelsQuery,
     cursor: cursorDynamicModelsQuery,
     gemini: geminiModelsQuery,
+    kilo: kiloDynamicModelsQuery,
     opencode: openCodeDynamicModelsQuery,
   } as const;
   const selectedRuntimeModel = useMemo(
@@ -1602,17 +1633,27 @@ export default function ChatView({
   const providerModelsLoading =
     selectedProvider === "cursor"
       ? cursorModelDiscoveryPending
+      : selectedProvider === "kilo"
+        ? kiloModelDiscoveryPending
       : selectedProviderModelsQuery !== undefined &&
         (selectedProviderModelsQuery.isLoading ||
           (selectedProviderModelsQuery.isFetching &&
             selectedProviderModelsQuery.data === undefined));
+  const selectedProviderRequiresRuntimeModels =
+    selectedProvider === "cursor" || selectedProvider === "kilo";
+  const selectedProviderRuntimeModelDiscoveryPending =
+    selectedProvider === "cursor"
+      ? cursorModelDiscoveryPending
+      : selectedProvider === "kilo"
+        ? kiloModelDiscoveryPending
+        : false;
   const showComposerModelBootstrapSkeleton = shouldShowComposerModelBootstrapSkeleton({
     selectedProvider,
     selectedModel,
     persistedModelSelection: persistedComposerModelSelection,
     draftModelSelection: draftModelSelectionForSelectedProvider,
     providerModelsLoading,
-    requiresDiscoveredModels: selectedProvider === "cursor",
+    requiresDiscoveredModels: selectedProviderRequiresRuntimeModels,
   });
   const searchableModelOptions = useMemo(
     () =>
@@ -2380,6 +2421,8 @@ export default function ChatView({
     const query =
       selectedProvider === "claudeAgent"
         ? claudeDynamicAgentsQuery
+        : selectedProvider === "kilo"
+          ? kiloDynamicAgentsQuery
         : selectedProvider === "opencode"
           ? openCodeDynamicAgentsQuery
           : codexDynamicAgentsQuery;
@@ -2392,6 +2435,7 @@ export default function ChatView({
     selectedProvider,
     claudeDynamicAgentsQuery.data,
     codexDynamicAgentsQuery.data,
+    kiloDynamicAgentsQuery.data,
     openCodeDynamicAgentsQuery.data,
   ]);
   const normalComposerMenuItems = useComposerCommandMenuItems({
@@ -6277,6 +6321,7 @@ export default function ChatView({
     model: selectedModel,
     runtimeModel: selectedRuntimeModel,
     runtimeModels: runtimeModelsByProvider[selectedProvider],
+    runtimeAgents: dynamicAgents,
     modelOptions: selectedProviderModelOptions,
     prompt,
     includeFastMode: selectedProvider === "cursor",
@@ -6287,41 +6332,42 @@ export default function ChatView({
   });
   const composerModelPickerWidthClassName = isComposerFooterCompact ? "w-28" : "w-32 sm:w-36";
   const composerTraitsPickerWidthClassName = isComposerFooterCompact ? "w-16" : "w-20";
-  const composerModelPickerControl = showComposerModelBootstrapSkeleton ? (
-    cursorModelDiscoveryPending ? (
-      <ComposerModelLoadingControl widthClassName={composerModelPickerWidthClassName} />
-    ) : (
+  const composerModelPickerControl =
+    showComposerModelBootstrapSkeleton && !selectedProviderRuntimeModelDiscoveryPending ? (
       <ComposerControlSkeleton widthClassName={composerModelPickerWidthClassName} />
-    )
-  ) : (
-    <ProviderModelPicker
-      compact={isComposerFooterCompact}
-      provider={selectedProvider}
-      model={selectedModelForPickerWithCustomFallback}
-      lockedProvider={lockedProvider}
-      providers={providerStatuses}
-      modelOptionsByProvider={modelOptionsByProvider}
-      loadingModelProviders={{ cursor: cursorModelDiscoveryPending }}
-      open={isModelPickerOpen}
-      onOpenChange={handleModelPickerOpenChange}
-      shortcutLabel={modelPickerShortcutLabel}
-      {...(composerProviderState.modelPickerIconClassName
-        ? {
-            activeProviderIconClassName: composerProviderState.modelPickerIconClassName,
-          }
-        : {})}
-      onProviderModelChange={onProviderModelSelect}
-    />
-  );
-  const composerTraitsPickerControl = showComposerModelBootstrapSkeleton ? (
-    cursorModelDiscoveryPending ? (
-      <ComposerModelLoadingControl widthClassName={composerTraitsPickerWidthClassName} />
     ) : (
-      <ComposerControlSkeleton widthClassName={composerTraitsPickerWidthClassName} />
-    )
-  ) : (
-    providerTraitsPicker
-  );
+      <ProviderModelPicker
+        compact={isComposerFooterCompact}
+        provider={selectedProvider}
+        model={selectedModelForPickerWithCustomFallback}
+        lockedProvider={lockedProvider}
+        providers={providerStatuses}
+        modelOptionsByProvider={modelOptionsByProvider}
+        loadingModelProviders={{
+          cursor: cursorModelDiscoveryPending,
+          kilo: kiloModelDiscoveryPending,
+        }}
+        open={isModelPickerOpen}
+        onOpenChange={handleModelPickerOpenChange}
+        shortcutLabel={modelPickerShortcutLabel}
+        {...(composerProviderState.modelPickerIconClassName
+          ? {
+              activeProviderIconClassName: composerProviderState.modelPickerIconClassName,
+            }
+          : {})}
+        onProviderModelChange={onProviderModelSelect}
+      />
+    );
+  const composerTraitsPickerControl =
+    showComposerModelBootstrapSkeleton ? (
+      selectedProviderRuntimeModelDiscoveryPending ? (
+        <ComposerModelLoadingControl widthClassName={composerTraitsPickerWidthClassName} />
+      ) : (
+        <ComposerControlSkeleton widthClassName={composerTraitsPickerWidthClassName} />
+      )
+    ) : (
+      providerTraitsPicker
+    );
   const toggleFastMode = useCallback(() => {
     if (!composerTraitSelection.caps.supportsFastMode) {
       scheduleComposerFocus();

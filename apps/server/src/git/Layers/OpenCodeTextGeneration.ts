@@ -3,7 +3,9 @@ import * as Semaphore from "effect/Semaphore";
 
 import type {
   ChatAttachment,
+  KiloModelSelection,
   OpenCodeModelSelection,
+  OpenCodeModelOptions,
   ProviderStartOptions,
 } from "@t3tools/contracts";
 import { sanitizeGeneratedThreadTitle } from "@t3tools/shared/chatThreads";
@@ -13,6 +15,9 @@ import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import {
   OpenCodeRuntime,
+  KILO_CLI_SPEC,
+  OPENCODE_CLI_SPEC,
+  type OpenCodeCompatibleCliSpec,
   type OpenCodeServerConnection,
   type OpenCodeServerProcess,
   openCodeRuntimeErrorDetail,
@@ -20,7 +25,11 @@ import {
   toOpenCodeFileParts,
 } from "../../provider/opencodeRuntime.ts";
 import { TextGenerationError } from "../Errors.ts";
-import { type TextGenerationShape, OpenCodeTextGeneration } from "../Services/TextGeneration.ts";
+import {
+  type TextGenerationShape,
+  KiloTextGeneration,
+  OpenCodeTextGeneration,
+} from "../Services/TextGeneration.ts";
 import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
@@ -86,16 +95,29 @@ interface SharedOpenCodeTextGenerationServerState {
   idleCloseFiber: Fiber.Fiber<void, never> | null;
 }
 
-function resolveOpenCodeModelSelection(input: {
-  readonly model?: string;
-  readonly modelSelection?: { provider: string; model: string; options?: unknown };
-}): OpenCodeModelSelection | null {
-  if (input.modelSelection?.provider === "opencode") {
-    return input.modelSelection as OpenCodeModelSelection;
+type OpenCodeCompatibleTextGenerationProvider = "opencode" | "kilo";
+type OpenCodeCompatibleModelSelection = OpenCodeModelSelection | KiloModelSelection;
+
+interface OpenCodeCompatibleTextGenerationConfig {
+  readonly provider: OpenCodeCompatibleTextGenerationProvider;
+  readonly displayName: string;
+  readonly serviceName: string;
+  readonly cliSpec: OpenCodeCompatibleCliSpec;
+}
+
+function resolveOpenCodeCompatibleModelSelection(
+  config: OpenCodeCompatibleTextGenerationConfig,
+  input: {
+    readonly model?: string;
+    readonly modelSelection?: { provider: string; model: string; options?: unknown };
+  },
+): OpenCodeCompatibleModelSelection | null {
+  if (input.modelSelection?.provider === config.provider) {
+    return input.modelSelection as OpenCodeCompatibleModelSelection;
   }
 
   const model = input.model?.trim();
-  if (!model || parseOpenCodeModelSlug(model) === null) {
+  if (config.provider !== "opencode" || !model || parseOpenCodeModelSlug(model) === null) {
     return null;
   }
 
@@ -105,20 +127,21 @@ function resolveOpenCodeModelSelection(input: {
   };
 }
 
-const makeOpenCodeTextGeneration = Effect.gen(function* () {
-  const serverConfig = yield* ServerConfig;
-  const openCodeRuntime = yield* OpenCodeRuntime;
-  const idleFiberScope = yield* Effect.acquireRelease(Scope.make(), (scope) =>
-    Scope.close(scope, Exit.void),
-  );
-  const sharedServerMutex = yield* Semaphore.make(1);
-  const sharedServerState: SharedOpenCodeTextGenerationServerState = {
-    server: null,
-    serverScope: null,
-    binaryPath: null,
-    activeRequests: 0,
-    idleCloseFiber: null,
-  };
+const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGenerationConfig) =>
+  Effect.gen(function* () {
+    const serverConfig = yield* ServerConfig;
+    const openCodeRuntime = yield* OpenCodeRuntime;
+    const idleFiberScope = yield* Effect.acquireRelease(Scope.make(), (scope) =>
+      Scope.close(scope, Exit.void),
+    );
+    const sharedServerMutex = yield* Semaphore.make(1);
+    const sharedServerState: SharedOpenCodeTextGenerationServerState = {
+      server: null,
+      serverScope: null,
+      binaryPath: null,
+      activeRequests: 0,
+      idleCloseFiber: null,
+    };
 
   const closeSharedServer = Effect.fn("closeSharedServer")(function* () {
     const scope = sharedServerState.serverScope;
@@ -182,7 +205,7 @@ const makeOpenCodeTextGeneration = Effect.gen(function* () {
           } else {
             if (sharedServerState.binaryPath !== input.binaryPath) {
               yield* Effect.logWarning(
-                "OpenCode shared server binary path mismatch: requested " +
+                `${config.displayName} shared server binary path mismatch: requested ` +
                   input.binaryPath +
                   " but active server uses " +
                   sharedServerState.binaryPath +
@@ -202,6 +225,7 @@ const makeOpenCodeTextGeneration = Effect.gen(function* () {
                 openCodeRuntime
                   .startOpenCodeServerProcess({
                     binaryPath: input.binaryPath,
+                    cliSpec: config.cliSpec,
                   })
                   .pipe(
                     Effect.provideService(Scope.Scope, serverScope),
@@ -266,7 +290,7 @@ const makeOpenCodeTextGeneration = Effect.gen(function* () {
     readonly cwd: string;
     readonly prompt: string;
     readonly outputSchemaJson: S;
-    readonly modelSelection: OpenCodeModelSelection;
+    readonly modelSelection: OpenCodeCompatibleModelSelection;
     readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;
     readonly providerOptions?: ProviderStartOptions;
   }) {
@@ -274,17 +298,19 @@ const makeOpenCodeTextGeneration = Effect.gen(function* () {
     if (!parsedModel) {
       return yield* new TextGenerationError({
         operation: input.operation,
-        detail: "OpenCode model selection must use the 'provider/model' format.",
+        detail: `${config.displayName} model selection must use the 'provider/model' format.`,
       });
     }
 
-    const binaryPath = input.providerOptions?.opencode?.binaryPath?.trim() || "opencode";
-    const serverUrl = input.providerOptions?.opencode?.serverUrl?.trim() || "";
-    const serverPassword = input.providerOptions?.opencode?.serverPassword?.trim() || "";
+    const providerOptions = input.providerOptions?.[config.provider];
+    const binaryPath = providerOptions?.binaryPath?.trim() || config.cliSpec.defaultBinaryPath;
+    const serverUrl = providerOptions?.serverUrl?.trim() || "";
+    const serverPassword = providerOptions?.serverPassword?.trim() || "";
     const providerId = parsedModel.providerID;
     const modelId = parsedModel.modelID;
-    const agent = input.modelSelection.options?.agent ?? null;
-    const variant = input.modelSelection.options?.variant ?? null;
+    const modelOptions = input.modelSelection.options as OpenCodeModelOptions | undefined;
+    const agent = modelOptions?.agent?.trim();
+    const variant = modelOptions?.variant?.trim();
 
     const fileParts = toOpenCodeFileParts({
       attachments: input.attachments,
@@ -299,6 +325,7 @@ const makeOpenCodeTextGeneration = Effect.gen(function* () {
             baseUrl: server.url,
             directory: input.cwd,
             ...(serverPassword.length > 0 ? { serverPassword } : {}),
+            cliSpec: config.cliSpec,
           });
           const sessionCreateInput = {
             title: `T3 Code ${input.operation}`,
@@ -320,12 +347,8 @@ const makeOpenCodeTextGeneration = Effect.gen(function* () {
           const result = await client.session.prompt({
             sessionID: session.data.id,
             model: parsedModel,
-            ...(input.modelSelection.options?.agent
-              ? { agent: input.modelSelection.options.agent }
-              : {}),
-            ...(input.modelSelection.options?.variant
-              ? { variant: input.modelSelection.options.variant }
-              : {}),
+            ...(agent ? { agent } : {}),
+            ...(variant ? { variant } : {}),
             parts: [{ type: "text", text: input.prompt }, ...fileParts],
           });
           const info = result.data?.info;
@@ -396,13 +419,13 @@ const makeOpenCodeTextGeneration = Effect.gen(function* () {
   });
 
   const generateCommitMessage: TextGenerationShape["generateCommitMessage"] = Effect.fn(
-    "OpenCodeTextGeneration.generateCommitMessage",
+    `${config.serviceName}.generateCommitMessage`,
   )(function* (input) {
-    const modelSelection = resolveOpenCodeModelSelection(input);
+    const modelSelection = resolveOpenCodeCompatibleModelSelection(config, input);
     if (!modelSelection) {
       return yield* new TextGenerationError({
         operation: "generateCommitMessage",
-        detail: "Invalid OpenCode model selection.",
+        detail: `Invalid ${config.displayName} model selection.`,
       });
     }
 
@@ -431,13 +454,13 @@ const makeOpenCodeTextGeneration = Effect.gen(function* () {
   });
 
   const generatePrContent: TextGenerationShape["generatePrContent"] = Effect.fn(
-    "OpenCodeTextGeneration.generatePrContent",
+    `${config.serviceName}.generatePrContent`,
   )(function* (input) {
-    const modelSelection = resolveOpenCodeModelSelection(input);
+    const modelSelection = resolveOpenCodeCompatibleModelSelection(config, input);
     if (!modelSelection) {
       return yield* new TextGenerationError({
         operation: "generatePrContent",
-        detail: "Invalid OpenCode model selection.",
+        detail: `Invalid ${config.displayName} model selection.`,
       });
     }
 
@@ -464,13 +487,13 @@ const makeOpenCodeTextGeneration = Effect.gen(function* () {
   });
 
   const generateDiffSummary: TextGenerationShape["generateDiffSummary"] = Effect.fn(
-    "OpenCodeTextGeneration.generateDiffSummary",
+    `${config.serviceName}.generateDiffSummary`,
   )(function* (input) {
-    const modelSelection = resolveOpenCodeModelSelection(input);
+    const modelSelection = resolveOpenCodeCompatibleModelSelection(config, input);
     if (!modelSelection) {
       return yield* new TextGenerationError({
         operation: "generateDiffSummary",
-        detail: "Invalid OpenCode model selection.",
+        detail: `Invalid ${config.displayName} model selection.`,
       });
     }
 
@@ -492,13 +515,13 @@ const makeOpenCodeTextGeneration = Effect.gen(function* () {
   });
 
   const generateBranchName: TextGenerationShape["generateBranchName"] = Effect.fn(
-    "OpenCodeTextGeneration.generateBranchName",
+    `${config.serviceName}.generateBranchName`,
   )(function* (input) {
-    const modelSelection = resolveOpenCodeModelSelection(input);
+    const modelSelection = resolveOpenCodeCompatibleModelSelection(config, input);
     if (!modelSelection) {
       return yield* new TextGenerationError({
         operation: "generateBranchName",
-        detail: "Invalid OpenCode model selection.",
+        detail: `Invalid ${config.displayName} model selection.`,
       });
     }
 
@@ -522,13 +545,13 @@ const makeOpenCodeTextGeneration = Effect.gen(function* () {
   });
 
   const generateThreadTitle: TextGenerationShape["generateThreadTitle"] = Effect.fn(
-    "OpenCodeTextGeneration.generateThreadTitle",
+    `${config.serviceName}.generateThreadTitle`,
   )(function* (input) {
-    const modelSelection = resolveOpenCodeModelSelection(input);
+    const modelSelection = resolveOpenCodeCompatibleModelSelection(config, input);
     if (!modelSelection) {
       return yield* new TextGenerationError({
         operation: "generateThreadTitle",
-        detail: "Invalid OpenCode model selection.",
+        detail: `Invalid ${config.displayName} model selection.`,
       });
     }
 
@@ -562,5 +585,20 @@ const makeOpenCodeTextGeneration = Effect.gen(function* () {
 
 export const OpenCodeTextGenerationServiceLive = Layer.effect(
   OpenCodeTextGeneration,
-  makeOpenCodeTextGeneration,
+  makeOpenCodeCompatibleTextGeneration({
+    provider: "opencode",
+    displayName: "OpenCode",
+    serviceName: "OpenCodeTextGeneration",
+    cliSpec: OPENCODE_CLI_SPEC,
+  }),
+);
+
+export const KiloTextGenerationServiceLive = Layer.effect(
+  KiloTextGeneration,
+  makeOpenCodeCompatibleTextGeneration({
+    provider: "kilo",
+    displayName: "Kilo",
+    serviceName: "KiloTextGeneration",
+    cliSpec: KILO_CLI_SPEC,
+  }),
 );

@@ -63,6 +63,7 @@ export const ProviderModelOptions = Schema.Struct({
   claudeAgent: Schema.optional(ClaudeModelOptions),
   cursor: Schema.optional(CursorModelOptions),
   gemini: Schema.optional(GeminiModelOptions),
+  kilo: Schema.optional(OpenCodeModelOptions),
   opencode: Schema.optional(OpenCodeModelOptions),
 });
 export type ProviderModelOptions = typeof ProviderModelOptions.Type;
@@ -355,6 +356,19 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       },
     },
   ],
+  kilo: [
+    {
+      slug: "kilo/kilo-auto/free",
+      name: "Kilo Auto Free",
+      capabilities: {
+        reasoningEffortLevels: [],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+  ],
   cursor: [
     {
       slug: "auto",
@@ -422,6 +436,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderKind, ModelSlug> = {
   claudeAgent: "claude-sonnet-4-6",
   cursor: "auto",
   gemini: "auto-gemini-3",
+  kilo: "kilo/kilo-auto/free",
   opencode: "openai/gpt-5",
 };
 
@@ -483,6 +498,7 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "gemini-2.5-flash": "gemini-2.5-flash",
     "gemini-2.5-flash-lite": "gemini-2.5-flash-lite",
   },
+  kilo: {},
   opencode: {},
 };
 
@@ -515,5 +531,6 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   claudeAgent: "Claude",
   cursor: "Cursor",
   gemini: "Gemini",
+  kilo: "Kilo",
   opencode: "OpenCode",
 };

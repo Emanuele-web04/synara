@@ -286,7 +286,12 @@ export function onServerSettingsUpdated(
 }
 
 export function createWsNativeApi(): NativeApi {
-  if (instance) return instance.api;
+  if (instance) {
+    if (instance.transport.getState() !== "disposed") {
+      return instance.api;
+    }
+    instance = null;
+  }
 
   const transport = new WsTransport();
 

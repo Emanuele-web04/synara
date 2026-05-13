@@ -215,6 +215,7 @@ export const AGENT_MENTION_ALIASES_BY_PROVIDER: Record<
   claudeAgent: CLAUDE_AGENT_MENTION_ALIASES,
   cursor: {},
   gemini: {},
+  kilo: OPENCODE_AGENT_MENTION_ALIASES,
   opencode: OPENCODE_AGENT_MENTION_ALIASES,
 } as const satisfies Record<ProviderKind, Record<string, AgentAliasDefinition>>;
 
@@ -229,6 +230,7 @@ const AGENT_MENTION_AUTOCOMPLETE_ALIASES_BY_PROVIDER: Record<ProviderKind, reado
   claudeAgent: ["explore", "review", "build", "plan"],
   cursor: [],
   gemini: [],
+  kilo: [],
   opencode: [],
 };
 

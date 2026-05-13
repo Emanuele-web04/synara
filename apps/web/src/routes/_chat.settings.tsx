@@ -26,7 +26,7 @@ import {
 } from "../appSettings";
 import { APP_VERSION } from "../branding";
 import { SidebarHeaderNavigationControls } from "../components/SidebarHeaderNavigationControls";
-import { ClaudeAI, CursorIcon, Gemini, OpenAI, OpenCodeIcon } from "../components/Icons";
+import { ClaudeAI, CursorIcon, Gemini, KiloIcon, OpenAI, OpenCodeIcon } from "../components/Icons";
 import { Button } from "../components/ui/button";
 import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
 import { Input } from "../components/ui/input";
@@ -121,6 +121,7 @@ type InstallBinarySettingsKey =
   | "codexBinaryPath"
   | "cursorBinaryPath"
   | "geminiBinaryPath"
+  | "kiloBinaryPath"
   | "openCodeBinaryPath";
 type InstallProviderSettings = {
   provider: ProviderKind;
@@ -134,10 +135,10 @@ type InstallProviderSettings = {
   apiEndpointKey?: "cursorApiEndpoint";
   apiEndpointPlaceholder?: string;
   apiEndpointDescription?: ReactNode;
-  serverUrlKey?: "openCodeServerUrl";
+  serverUrlKey?: "kiloServerUrl" | "openCodeServerUrl";
   serverUrlPlaceholder?: string;
   serverUrlDescription?: ReactNode;
-  serverPasswordKey?: "openCodeServerPassword";
+  serverPasswordKey?: "kiloServerPassword" | "openCodeServerPassword";
   serverPasswordPlaceholder?: string;
   serverPasswordDescription?: ReactNode;
 };
@@ -192,6 +193,23 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
         Leave blank to use <code>gemini</code> from your PATH.
       </>
     ),
+  },
+  {
+    provider: "kilo",
+    title: "Kilo",
+    binaryPathKey: "kiloBinaryPath",
+    binaryPlaceholder: "Kilo binary path",
+    binaryDescription: (
+      <>
+        Leave blank to use <code>kilo</code> from your PATH.
+      </>
+    ),
+    serverUrlKey: "kiloServerUrl",
+    serverUrlPlaceholder: "http://127.0.0.1:4096",
+    serverUrlDescription: "Optional existing Kilo server URL. Leave blank to spawn a local server.",
+    serverPasswordKey: "kiloServerPassword",
+    serverPasswordPlaceholder: "Kilo server password",
+    serverPasswordDescription: "Optional password for an externally managed Kilo server.",
   },
   {
     provider: "opencode",
@@ -340,6 +358,7 @@ function SettingsRouteView() {
     claudeAgent: Boolean(settings.claudeBinaryPath),
     cursor: Boolean(settings.cursorBinaryPath || settings.cursorApiEndpoint),
     gemini: Boolean(settings.geminiBinaryPath),
+    kilo: Boolean(settings.kiloBinaryPath || settings.kiloServerUrl || settings.kiloServerPassword),
     opencode: Boolean(
       settings.openCodeBinaryPath || settings.openCodeServerUrl || settings.openCodeServerPassword,
     ),
@@ -353,6 +372,7 @@ function SettingsRouteView() {
     claudeAgent: "",
     cursor: "",
     gemini: "",
+    kilo: "",
     opencode: "",
   });
   const [customModelErrorByProvider, setCustomModelErrorByProvider] = useState<
@@ -372,6 +392,9 @@ function SettingsRouteView() {
   const cursorBinaryPath = settings.cursorBinaryPath;
   const cursorApiEndpoint = settings.cursorApiEndpoint;
   const geminiBinaryPath = settings.geminiBinaryPath;
+  const kiloBinaryPath = settings.kiloBinaryPath;
+  const kiloServerUrl = settings.kiloServerUrl;
+  const kiloServerPassword = settings.kiloServerPassword;
   const openCodeBinaryPath = settings.openCodeBinaryPath;
   const openCodeServerUrl = settings.openCodeServerUrl;
   const openCodeServerPassword = settings.openCodeServerPassword;
@@ -411,15 +434,22 @@ function SettingsRouteView() {
   }, []);
 
   const gitTextGenerationModelOptions = getGitTextGenerationModelOptions(settings);
+  const currentGitTextGenerationProvider = settings.textGenerationProvider ?? "codex";
   const currentGitTextGenerationModel =
     settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
+  const currentGitTextGenerationValue = `${currentGitTextGenerationProvider}:${currentGitTextGenerationModel}`;
+  const defaultGitTextGenerationProvider = defaults.textGenerationProvider ?? "codex";
   const defaultGitTextGenerationModel =
     defaults.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
   const isGitTextGenerationModelDirty =
+    currentGitTextGenerationProvider !== defaultGitTextGenerationProvider ||
     currentGitTextGenerationModel !== defaultGitTextGenerationModel;
   const selectedGitTextGenerationModelLabel =
-    gitTextGenerationModelOptions.find((option) => option.slug === currentGitTextGenerationModel)
-      ?.name ?? currentGitTextGenerationModel;
+    gitTextGenerationModelOptions.find(
+      (option) =>
+        option.provider === currentGitTextGenerationProvider &&
+        option.slug === currentGitTextGenerationModel,
+    )?.name ?? currentGitTextGenerationModel;
   const selectedCustomModelProviderSettings = MODEL_PROVIDER_SETTINGS.find(
     (providerSettings) => providerSettings.provider === selectedCustomModelProvider,
   )!;
@@ -430,6 +460,7 @@ function SettingsRouteView() {
     settings.customClaudeModels.length +
     settings.customCursorModels.length +
     settings.customGeminiModels.length +
+    settings.customKiloModels.length +
     settings.customOpenCodeModels.length;
   const savedCustomModelRows = MODEL_PROVIDER_SETTINGS.flatMap((providerSettings) =>
     getCustomModelsForProvider(settings, providerSettings.provider).map((slug) => ({
@@ -447,6 +478,9 @@ function SettingsRouteView() {
     settings.cursorBinaryPath !== defaults.cursorBinaryPath ||
     settings.cursorApiEndpoint !== defaults.cursorApiEndpoint ||
     settings.geminiBinaryPath !== defaults.geminiBinaryPath ||
+    settings.kiloBinaryPath !== defaults.kiloBinaryPath ||
+    settings.kiloServerUrl !== defaults.kiloServerUrl ||
+    settings.kiloServerPassword !== defaults.kiloServerPassword ||
     settings.codexBinaryPath !== defaults.codexBinaryPath ||
     settings.codexHomePath !== defaults.codexHomePath ||
     settings.openCodeBinaryPath !== defaults.openCodeBinaryPath ||
@@ -498,6 +532,7 @@ function SettingsRouteView() {
     settings.customClaudeModels.length > 0 ||
     settings.customCursorModels.length > 0 ||
     settings.customGeminiModels.length > 0 ||
+    settings.customKiloModels.length > 0 ||
     settings.customOpenCodeModels.length > 0
       ? ["Custom models"]
       : []),
@@ -614,6 +649,7 @@ function SettingsRouteView() {
       claudeAgent: false,
       cursor: false,
       gemini: false,
+      kilo: false,
       opencode: false,
     });
     setSelectedCustomModelProvider("codex");
@@ -622,6 +658,7 @@ function SettingsRouteView() {
       claudeAgent: "",
       cursor: "",
       gemini: "",
+      kilo: "",
       opencode: "",
     });
     setCustomModelErrorByProvider({});
@@ -921,6 +958,7 @@ function SettingsRouteView() {
                     value !== "claudeAgent" &&
                     value !== "cursor" &&
                     value !== "gemini" &&
+                    value !== "kilo" &&
                     value !== "opencode"
                   ) {
                     return;
@@ -937,6 +975,8 @@ function SettingsRouteView() {
                         <CursorIcon className="size-3.5 text-foreground" />
                       ) : settings.defaultProvider === "gemini" ? (
                         <Gemini className="size-3.5 text-foreground" />
+                      ) : settings.defaultProvider === "kilo" ? (
+                        <KiloIcon className="size-3.5 text-muted-foreground/70" />
                       ) : settings.defaultProvider === "opencode" ? (
                         <OpenCodeIcon className="size-3.5 text-muted-foreground/70" />
                       ) : (
@@ -975,6 +1015,12 @@ function SettingsRouteView() {
                     <span className="flex items-center gap-2">
                       <OpenCodeIcon className="size-3.5 text-muted-foreground/70" />
                       OpenCode
+                    </span>
+                  </SelectItem>
+                  <SelectItem hideIndicator value="kilo">
+                    <span className="flex items-center gap-2">
+                      <KiloIcon className="size-3.5 text-muted-foreground/70" />
+                      Kilo
                     </span>
                   </SelectItem>
                 </SelectPopup>
@@ -1808,6 +1854,7 @@ function SettingsRouteView() {
                   label="git writing model"
                   onClick={() =>
                     updateSettings({
+                      textGenerationProvider: defaults.textGenerationProvider,
                       textGenerationModel: defaults.textGenerationModel,
                     })
                   }
@@ -1816,11 +1863,16 @@ function SettingsRouteView() {
             }
             control={
               <Select
-                value={currentGitTextGenerationModel}
+                value={currentGitTextGenerationValue}
                 onValueChange={(value) => {
                   if (!value) return;
+                  const separatorIndex = value.indexOf(":");
+                  const provider = value.slice(0, separatorIndex) as ProviderKind;
+                  const model = value.slice(separatorIndex + 1);
+                  if (!provider || !model) return;
                   updateSettings({
-                    textGenerationModel: value,
+                    textGenerationProvider: provider,
+                    textGenerationModel: model,
                   });
                 }}
               >
@@ -1829,8 +1881,12 @@ function SettingsRouteView() {
                 </SelectTrigger>
                 <SelectPopup align="end" alignItemWithTrigger={false}>
                   {gitTextGenerationModelOptions.map((option) => (
-                    <SelectItem hideIndicator key={option.slug} value={option.slug}>
-                      {option.name}
+                    <SelectItem
+                      hideIndicator
+                      key={`${option.provider}:${option.slug}`}
+                      value={`${option.provider}:${option.slug}`}
+                    >
+                      {PROVIDER_DISPLAY_NAMES[option.provider]} / {option.name}
                     </SelectItem>
                   ))}
                 </SelectPopup>
@@ -1855,6 +1911,7 @@ function SettingsRouteView() {
                       customClaudeModels: defaults.customClaudeModels,
                       customCursorModels: defaults.customCursorModels,
                       customGeminiModels: defaults.customGeminiModels,
+                      customKiloModels: defaults.customKiloModels,
                       customOpenCodeModels: defaults.customOpenCodeModels,
                     });
                     setCustomModelErrorByProvider({});
@@ -1874,6 +1931,7 @@ function SettingsRouteView() {
                       value !== "claudeAgent" &&
                       value !== "cursor" &&
                       value !== "gemini" &&
+                      value !== "kilo" &&
                       value !== "opencode"
                     ) {
                       return;
@@ -2002,6 +2060,9 @@ function SettingsRouteView() {
                       cursorBinaryPath: defaults.cursorBinaryPath,
                       cursorApiEndpoint: defaults.cursorApiEndpoint,
                       geminiBinaryPath: defaults.geminiBinaryPath,
+                      kiloBinaryPath: defaults.kiloBinaryPath,
+                      kiloServerUrl: defaults.kiloServerUrl,
+                      kiloServerPassword: defaults.kiloServerPassword,
                       openCodeBinaryPath: defaults.openCodeBinaryPath,
                       openCodeServerUrl: defaults.openCodeServerUrl,
                       openCodeServerPassword: defaults.openCodeServerPassword,
@@ -2011,6 +2072,7 @@ function SettingsRouteView() {
                       claudeAgent: false,
                       cursor: false,
                       gemini: false,
+                      kilo: false,
                       opencode: false,
                     });
                   }}
@@ -2033,9 +2095,13 @@ function SettingsRouteView() {
                             settings.cursorApiEndpoint !== defaults.cursorApiEndpoint
                           : providerSettings.provider === "gemini"
                             ? settings.geminiBinaryPath !== defaults.geminiBinaryPath
-                            : settings.openCodeBinaryPath !== defaults.openCodeBinaryPath ||
-                              settings.openCodeServerUrl !== defaults.openCodeServerUrl ||
-                              settings.openCodeServerPassword !== defaults.openCodeServerPassword;
+                            : providerSettings.provider === "kilo"
+                              ? settings.kiloBinaryPath !== defaults.kiloBinaryPath ||
+                                settings.kiloServerUrl !== defaults.kiloServerUrl ||
+                                settings.kiloServerPassword !== defaults.kiloServerPassword
+                              : settings.openCodeBinaryPath !== defaults.openCodeBinaryPath ||
+                                settings.openCodeServerUrl !== defaults.openCodeServerUrl ||
+                                settings.openCodeServerPassword !== defaults.openCodeServerPassword;
                   const binaryPathValue =
                     providerSettings.binaryPathKey === "claudeBinaryPath"
                       ? claudeBinaryPath
@@ -2043,6 +2109,8 @@ function SettingsRouteView() {
                         ? cursorBinaryPath
                         : providerSettings.binaryPathKey === "geminiBinaryPath"
                           ? geminiBinaryPath
+                          : providerSettings.binaryPathKey === "kiloBinaryPath"
+                            ? kiloBinaryPath
                           : providerSettings.binaryPathKey === "openCodeBinaryPath"
                             ? openCodeBinaryPath
                             : codexBinaryPath;
@@ -2105,6 +2173,8 @@ function SettingsRouteView() {
                                           ? { cursorBinaryPath: event.target.value }
                                           : providerSettings.binaryPathKey === "geminiBinaryPath"
                                             ? { geminiBinaryPath: event.target.value }
+                                            : providerSettings.binaryPathKey === "kiloBinaryPath"
+                                              ? { kiloBinaryPath: event.target.value }
                                             : providerSettings.binaryPathKey ===
                                                 "openCodeBinaryPath"
                                               ? { openCodeBinaryPath: event.target.value }
@@ -2180,18 +2250,24 @@ function SettingsRouteView() {
                                   htmlFor={`provider-install-${providerSettings.serverUrlKey}`}
                                   className="block"
                                 >
-                                  <span className="block text-xs font-medium text-foreground">
-                                    OpenCode server URL
-                                  </span>
+	                                  <span className="block text-xs font-medium text-foreground">
+	                                    {providerSettings.title} server URL
+	                                  </span>
                                   <Input
                                     id={`provider-install-${providerSettings.serverUrlKey}`}
                                     className="mt-1"
-                                    value={openCodeServerUrl}
-                                    onChange={(event) =>
-                                      updateSettings({
-                                        openCodeServerUrl: event.target.value,
-                                      })
-                                    }
+	                                    value={
+	                                      providerSettings.serverUrlKey === "kiloServerUrl"
+	                                        ? kiloServerUrl
+	                                        : openCodeServerUrl
+	                                    }
+	                                    onChange={(event) =>
+	                                      updateSettings(
+	                                        providerSettings.serverUrlKey === "kiloServerUrl"
+	                                          ? { kiloServerUrl: event.target.value }
+	                                          : { openCodeServerUrl: event.target.value },
+	                                      )
+	                                    }
                                     placeholder={providerSettings.serverUrlPlaceholder}
                                     spellCheck={false}
                                   />
@@ -2208,18 +2284,25 @@ function SettingsRouteView() {
                                   htmlFor={`provider-install-${providerSettings.serverPasswordKey}`}
                                   className="block"
                                 >
-                                  <span className="block text-xs font-medium text-foreground">
-                                    OpenCode server password
-                                  </span>
+	                                  <span className="block text-xs font-medium text-foreground">
+	                                    {providerSettings.title} server password
+	                                  </span>
                                   <Input
                                     id={`provider-install-${providerSettings.serverPasswordKey}`}
                                     className="mt-1"
-                                    value={openCodeServerPassword}
-                                    onChange={(event) =>
-                                      updateSettings({
-                                        openCodeServerPassword: event.target.value,
-                                      })
-                                    }
+	                                    value={
+	                                      providerSettings.serverPasswordKey === "kiloServerPassword"
+	                                        ? kiloServerPassword
+	                                        : openCodeServerPassword
+	                                    }
+	                                    onChange={(event) =>
+	                                      updateSettings(
+	                                        providerSettings.serverPasswordKey ===
+	                                          "kiloServerPassword"
+	                                          ? { kiloServerPassword: event.target.value }
+	                                          : { openCodeServerPassword: event.target.value },
+	                                      )
+	                                    }
                                     placeholder={providerSettings.serverPasswordPlaceholder}
                                     spellCheck={false}
                                   />

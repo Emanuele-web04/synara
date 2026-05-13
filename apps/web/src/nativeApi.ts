@@ -2,19 +2,18 @@ import type { NativeApi } from "@t3tools/contracts";
 
 import { createWsNativeApi } from "./wsNativeApi";
 
-let cachedApi: NativeApi | undefined;
+let cachedDesktopApi: NativeApi | undefined;
 
 export function readNativeApi(): NativeApi | undefined {
   if (typeof window === "undefined") return undefined;
-  if (cachedApi) return cachedApi;
+  if (cachedDesktopApi && window.nativeApi === cachedDesktopApi) return cachedDesktopApi;
 
   if (window.nativeApi) {
-    cachedApi = window.nativeApi;
-    return cachedApi;
+    cachedDesktopApi = window.nativeApi;
+    return cachedDesktopApi;
   }
 
-  cachedApi = createWsNativeApi();
-  return cachedApi;
+  return createWsNativeApi();
 }
 
 export function ensureNativeApi(): NativeApi {
