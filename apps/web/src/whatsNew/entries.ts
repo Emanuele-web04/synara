@@ -22,42 +22,6 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
-    version: "0.0.46",
-    date: "May 13",
-    features: [
-      {
-        id: "attachment-previews-stay-visible",
-        title: "Image attachments stay visible after sending",
-        description:
-          "Persisted image previews now load through the same reliable byte-serving path as local generated images, fixing the brief preview flash followed by broken attachment thumbnails.",
-      },
-      {
-        id: "kilo-code-provider",
-        title: "Kilo Code joins the provider lineup",
-        description:
-          "DP Code can now launch and monitor Kilo Code sessions alongside Codex, Claude, Cursor, OpenCode, and Gemini, with health checks, settings, mentions, handoff, and model compatibility wired through the app.",
-      },
-      {
-        id: "provider-ordering",
-        title: "Provider order is now yours to arrange",
-        description:
-          "The settings screen now lets you drag providers into the order that fits your workflow, and the composer, sidebar, search palette, and plugin surfaces follow the same custom ordering.",
-      },
-      {
-        id: "opencode-snapshot-cleanup",
-        title: "Cleaner OpenCode and Kilo transcript updates",
-        description:
-          "Synthetic snapshot progress is filtered more carefully, so restored or refreshed provider output avoids repeating internal progress text while keeping real assistant activity intact.",
-      },
-      {
-        id: "diff-header-totals",
-        title: "Diff totals are easier to trust at a glance",
-        description:
-          "The chat header now owns unified diff totals, keeping added and removed line counts consistent between the header and diff panel as content refreshes.",
-      },
-    ],
-  },
-  {
     version: "0.0.45",
     date: "May 12",
     features: [
