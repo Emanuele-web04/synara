@@ -690,6 +690,16 @@ function makeAgentDir(agentDir: string | undefined): string {
   return trimToUndefined(agentDir) ?? getAgentDir();
 }
 
+function extensionDisplayName(extension: {
+  readonly path: string;
+  readonly sourceInfo?: { readonly source?: string };
+}): string {
+  const source = trimToUndefined(extension.sourceInfo?.source);
+  if (source) return source;
+  const extensionPath = trimToUndefined(extension.path);
+  return extensionPath ? path.basename(extensionPath).replace(/\.(?:ts|js)$/u, "") : "extension";
+}
+
 const makePiAdapter = (options?: PiAdapterLiveOptions) =>
   Effect.gen(function* () {
     const serverConfig = yield* ServerConfig;
@@ -1208,6 +1218,27 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           handleSessionEvent(context, event),
         );
         sessions.set(input.threadId, context);
+        const loadedExtensions = runtime.session.resourceLoader.getExtensions().extensions;
+        if (loadedExtensions.length > 0) {
+          const extensionNames = loadedExtensions.map(extensionDisplayName);
+          offerRuntimeEvent({
+            ...makeEventBase(context, { includeTurnId: false }),
+            type: "runtime.warning",
+            payload: {
+              message:
+                "Pi extensions are loaded, but DP Code does not yet support Pi extension UI APIs. Non-UI extension behavior should work, but extensions that call ctx.ui.* for prompts, widgets, confirmations, or status updates may not behave correctly.",
+              detail: {
+                extensionCount: loadedExtensions.length,
+                extensions: extensionNames,
+              },
+            },
+            raw: {
+              source: "pi.sdk.event",
+              method: "extension/ui-unsupported-warning",
+              payload: { extensionCount: loadedExtensions.length, extensions: extensionNames },
+            },
+          } satisfies ProviderRuntimeEvent);
+        }
         offerRuntimeEvent({
           ...makeEventBase(context),
           type: "session.started",
