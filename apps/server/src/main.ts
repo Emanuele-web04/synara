@@ -25,6 +25,7 @@ import * as SqlitePersistence from "./persistence/Layers/Sqlite";
 import { makeServerProviderLayer, makeServerRuntimeServicesLayer } from "./serverLayers";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
+import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReaper";
 import { Server } from "./effectServer";
 import { ServerLoggerLive } from "./serverLogger";
 import { formatHostForUrl, isWildcardHost } from "./startupAccess";
@@ -223,16 +224,32 @@ const ServerConfigLive = (input: CliInput) =>
     }),
   );
 
-const LayerLive = (input: CliInput) =>
-  Layer.empty.pipe(
-    Layer.provideMerge(makeServerRuntimeServicesLayer()),
-    Layer.provideMerge(makeServerProviderLayer()),
-    Layer.provideMerge(ProviderHealthLive),
+const LayerLive = (input: CliInput) => {
+  const runtimeServicesLayer = makeServerRuntimeServicesLayer();
+  const providerLayer = makeServerProviderLayer();
+  const providerHealthLayer = ProviderHealthLive.pipe(
+    // Provider health reads persisted provider settings while constructing its
+    // cache, so build it with the same runtime services layer exposed to Server.
+    Layer.provideMerge(runtimeServicesLayer),
+  );
+  const providerSessionReaperLayer = ProviderSessionReaperLive.pipe(
+    // The reaper coordinates orchestration state with live provider sessions,
+    // so it belongs at the top level where both layers are available.
+    Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(providerLayer),
+  );
+
+  return Layer.empty.pipe(
+    Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(providerLayer),
+    Layer.provideMerge(providerHealthLayer),
+    Layer.provideMerge(providerSessionReaperLayer),
     Layer.provideMerge(SqlitePersistence.layerConfig),
     Layer.provideMerge(ServerLoggerLive),
     Layer.provideMerge(AnalyticsServiceLayerLive),
     Layer.provideMerge(ServerConfigLive(input)),
   );
+};
 
 export const recordStartupHeartbeat = Effect.gen(function* () {
   const analytics = yield* AnalyticsService;

@@ -376,7 +376,7 @@ function createGitCommandError(
 const DIRTY_WORKTREE_PATTERN =
   /Your local changes to the following files would be overwritten by (?:checkout|merge):\s*([\s\S]*?)Please commit your changes or stash them/;
 const UNTRACKED_OVERWRITE_PATTERN =
-  /The following untracked working tree files would be overwritten by checkout:\s*([\s\S]*?)Please move or remove them/;
+  /The following untracked working tree files would be overwritten by (?:checkout|merge):\s*([\s\S]*?)Please move or remove them/;
 
 function parseDirtyWorktreeFiles(stderr: string): string[] | null {
   const match = DIRTY_WORKTREE_PATTERN.exec(stderr) ?? UNTRACKED_OVERWRITE_PATTERN.exec(stderr);
@@ -386,6 +386,13 @@ function parseDirtyWorktreeFiles(stderr: string): string[] | null {
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
   return files.length > 0 ? files : null;
+}
+
+function explainPullBlockedByLocalChanges(error: GitCommandError): string | null {
+  const files = parseDirtyWorktreeFiles(error.detail);
+  if (!files) return null;
+  const fileList = files.map((file) => `  - ${file}`).join("\n");
+  return `Local changes block pull. Commit or stash these files first:\n${fileList}`;
 }
 
 function parseNonEmptyLineList(input: string): string[] {
@@ -1709,7 +1716,19 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         yield* executeGit("GitCore.pullCurrentBranch.pull", cwd, ["pull", "--ff-only"], {
           timeoutMs: 30_000,
           fallbackErrorMessage: "git pull failed",
-        });
+        }).pipe(
+          Effect.mapError((error) => {
+            const friendlyDetail = explainPullBlockedByLocalChanges(error);
+            if (!friendlyDetail) return error;
+            return createGitCommandError(
+              "GitCore.pullCurrentBranch.pull",
+              cwd,
+              ["pull", "--ff-only"],
+              friendlyDetail,
+              error,
+            );
+          }),
+        );
         const afterSha = yield* runGitStdout(
           "GitCore.pullCurrentBranch.afterSha",
           cwd,

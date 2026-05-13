@@ -9,25 +9,25 @@ import type {
 } from "@t3tools/contracts";
 import { mergeGitStatusParts } from "@t3tools/shared/git";
 
+import { GitCore } from "../Services/GitCore";
 import { GitManager } from "../Services/GitManager";
 import {
   GitStatusBroadcaster,
   type GitStatusBroadcasterShape,
 } from "../Services/GitStatusBroadcaster";
+import {
+  canReuseCachedRemoteStatus,
+  type CachedGitStatus,
+  makeCachedStatusValue,
+  splitLocalStatus,
+  splitLocalStatusDetails,
+  splitRemoteStatus,
+  splitRemoteStatusDetails,
+} from "../gitStatusCache";
 
 interface GitStatusChange {
   readonly cwd: string;
   readonly event: GitStatusStreamEvent;
-}
-
-interface CachedValue<T> {
-  readonly fingerprint: string;
-  readonly value: T;
-}
-
-interface CachedGitStatus {
-  readonly local: CachedValue<GitStatusLocalResult> | null;
-  readonly remote: CachedValue<GitStatusRemoteResult | null> | null;
 }
 
 function normalizeCwd(cwd: string): string {
@@ -38,30 +38,10 @@ function normalizeCwd(cwd: string): string {
   }
 }
 
-function fingerprintStatusPart(status: unknown): string {
-  return JSON.stringify(status);
-}
-
-function splitLocalStatus(status: GitStatusResult): GitStatusLocalResult {
-  return {
-    branch: status.branch,
-    hasWorkingTreeChanges: status.hasWorkingTreeChanges,
-    workingTree: status.workingTree,
-  };
-}
-
-function splitRemoteStatus(status: GitStatusResult): GitStatusRemoteResult {
-  return {
-    hasUpstream: status.hasUpstream,
-    aheadCount: status.aheadCount,
-    behindCount: status.behindCount,
-    pr: status.pr,
-  };
-}
-
 export const GitStatusBroadcasterLive = Layer.effect(
   GitStatusBroadcaster,
   Effect.gen(function* () {
+    const gitCore = yield* GitCore;
     const gitManager = yield* GitManager;
     const changesPubSub = yield* Effect.acquireRelease(
       PubSub.unbounded<GitStatusChange>(),
@@ -78,10 +58,7 @@ export const GitStatusBroadcasterLive = Layer.effect(
       options?: { readonly publish?: boolean },
     ) =>
       Effect.gen(function* () {
-        const nextLocal = {
-          fingerprint: fingerprintStatusPart(local),
-          value: local,
-        } satisfies CachedValue<GitStatusLocalResult>;
+        const nextLocal = makeCachedStatusValue(local);
         const shouldPublish = yield* Ref.modify(cacheRef, (cache) => {
           const previous = cache.get(cwd) ?? { local: null, remote: null };
           const nextCache = new Map(cache);
@@ -105,10 +82,7 @@ export const GitStatusBroadcasterLive = Layer.effect(
       options?: { readonly publish?: boolean },
     ) =>
       Effect.gen(function* () {
-        const nextRemote = {
-          fingerprint: fingerprintStatusPart(remote),
-          value: remote,
-        } satisfies CachedValue<GitStatusRemoteResult | null>;
+        const nextRemote = makeCachedStatusValue(remote);
         const shouldPublish = yield* Ref.modify(cacheRef, (cache) => {
           const previous = cache.get(cwd) ?? { local: null, remote: null };
           const nextCache = new Map(cache);
@@ -139,7 +113,15 @@ export const GitStatusBroadcasterLive = Layer.effect(
         const normalizedCwd = normalizeCwd(input.cwd);
         const cached = yield* getCachedStatus(normalizedCwd);
         if (cached?.local && cached.remote) {
-          return mergeGitStatusParts(cached.local.value, cached.remote.value) as GitStatusResult;
+          const details = yield* gitCore.statusDetails(normalizedCwd);
+          if (canReuseCachedRemoteStatus({ cached, details })) {
+            const local = yield* updateCachedLocalStatus(
+              normalizedCwd,
+              splitLocalStatusDetails(details),
+            );
+            const remote = splitRemoteStatusDetails(details, cached.remote.value);
+            return mergeGitStatusParts(local, remote) as GitStatusResult;
+          }
         }
         return yield* loadStatus(normalizedCwd);
       });

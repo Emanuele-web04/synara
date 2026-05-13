@@ -1,8 +1,9 @@
 import type { GitStatusResult, GitStatusStreamEvent } from "@t3tools/contracts";
 import { Deferred, Effect, Layer, Scope, Stream } from "effect";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { GitManagerServiceError } from "../Errors";
+import { GitCore, type GitCoreShape, type GitStatusDetails } from "../Services/GitCore";
 import { GitManager, type GitManagerShape } from "../Services/GitManager";
 import { GitStatusBroadcaster } from "../Services/GitStatusBroadcaster";
 import { GitStatusBroadcasterLive } from "./GitStatusBroadcaster";
@@ -17,7 +18,29 @@ const baseStatus: GitStatusResult = {
   pr: null,
 };
 
-function makeTestLayer(state: { currentStatus: GitStatusResult; statusCalls: number }) {
+const baseDetails: GitStatusDetails = {
+  branch: baseStatus.branch,
+  upstreamRef: "origin/feature/status-broadcast",
+  hasWorkingTreeChanges: baseStatus.hasWorkingTreeChanges,
+  workingTree: baseStatus.workingTree,
+  hasUpstream: baseStatus.hasUpstream,
+  aheadCount: baseStatus.aheadCount,
+  behindCount: baseStatus.behindCount,
+};
+
+function makeTestLayer(state: {
+  currentDetails: GitStatusDetails;
+  currentStatus: GitStatusResult;
+  detailsCalls: number;
+  statusCalls: number;
+}) {
+  const gitCore = {
+    statusDetails: () =>
+      Effect.sync(() => {
+        state.detailsCalls += 1;
+        return state.currentDetails;
+      }),
+  } as unknown as GitCoreShape;
   const gitManager: GitManagerShape = {
     status: () =>
       Effect.sync(() => {
@@ -33,17 +56,35 @@ function makeTestLayer(state: { currentStatus: GitStatusResult; statusCalls: num
     runStackedAction: () => Effect.die("runStackedAction should not be called in this test"),
   };
 
-  return GitStatusBroadcasterLive.pipe(Layer.provide(Layer.succeed(GitManager, gitManager)));
+  return GitStatusBroadcasterLive.pipe(
+    Layer.provide(
+      Layer.mergeAll(Layer.succeed(GitCore, gitCore), Layer.succeed(GitManager, gitManager)),
+    ),
+  );
 }
 
 const runBroadcasterTest = (
-  state: { currentStatus: GitStatusResult; statusCalls: number },
+  state: {
+    currentDetails: GitStatusDetails;
+    currentStatus: GitStatusResult;
+    detailsCalls: number;
+    statusCalls: number;
+  },
   effect: Effect.Effect<void, GitManagerServiceError, GitStatusBroadcaster | Scope.Scope>,
 ) => effect.pipe(Effect.provide(makeTestLayer(state)), Effect.scoped, Effect.runPromise);
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("GitStatusBroadcasterLive", () => {
-  it("reuses the cached git status across repeated reads", async () => {
-    const state = { currentStatus: baseStatus, statusCalls: 0 };
+  it("refreshes local git status on repeated reads without repeating PR lookup", async () => {
+    const state = {
+      currentDetails: baseDetails,
+      currentStatus: baseStatus,
+      detailsCalls: 0,
+      statusCalls: 0,
+    };
 
     await runBroadcasterTest(
       state,
@@ -51,17 +92,110 @@ describe("GitStatusBroadcasterLive", () => {
         const broadcaster = yield* GitStatusBroadcaster;
 
         const first = yield* broadcaster.getStatus({ cwd: "/repo" });
+        state.currentDetails = {
+          ...baseDetails,
+          hasWorkingTreeChanges: true,
+          workingTree: {
+            files: [{ path: "src/app.ts", insertions: 5, deletions: 1 }],
+            insertions: 5,
+            deletions: 1,
+          },
+        };
         const second = yield* broadcaster.getStatus({ cwd: "/repo" });
 
         expect(first).toEqual(baseStatus);
-        expect(second).toEqual(baseStatus);
+        expect(second).toEqual({
+          ...baseStatus,
+          hasWorkingTreeChanges: true,
+          workingTree: state.currentDetails.workingTree,
+        });
         expect(state.statusCalls).toBe(1);
+        expect(state.detailsCalls).toBe(1);
+      }),
+    );
+  });
+
+  it("refreshes full status when cached remote metadata expires", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const state = {
+      currentDetails: baseDetails,
+      currentStatus: baseStatus,
+      detailsCalls: 0,
+      statusCalls: 0,
+    };
+
+    await runBroadcasterTest(
+      state,
+      Effect.gen(function* () {
+        const broadcaster = yield* GitStatusBroadcaster;
+
+        const first = yield* broadcaster.getStatus({ cwd: "/repo" });
+        vi.setSystemTime(31_000);
+        state.currentStatus = {
+          ...baseStatus,
+          pr: {
+            number: 42,
+            title: "Open PR",
+            url: "https://github.com/acme/repo/pull/42",
+            state: "open",
+          },
+        };
+        const second = yield* broadcaster.getStatus({ cwd: "/repo" });
+
+        expect(first.pr).toBeNull();
+        expect(second.pr?.number).toBe(42);
+        expect(state.statusCalls).toBe(2);
+        expect(state.detailsCalls).toBe(1);
+      }),
+    );
+  });
+
+  it("does not extend the remote metadata TTL when reusing cached remote status", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const state = {
+      currentDetails: baseDetails,
+      currentStatus: baseStatus,
+      detailsCalls: 0,
+      statusCalls: 0,
+    };
+
+    await runBroadcasterTest(
+      state,
+      Effect.gen(function* () {
+        const broadcaster = yield* GitStatusBroadcaster;
+
+        yield* broadcaster.getStatus({ cwd: "/repo" });
+        vi.setSystemTime(20_000);
+        yield* broadcaster.getStatus({ cwd: "/repo" });
+
+        vi.setSystemTime(31_000);
+        state.currentStatus = {
+          ...baseStatus,
+          pr: {
+            number: 43,
+            title: "Fresh PR",
+            url: "https://github.com/acme/repo/pull/43",
+            state: "open",
+          },
+        };
+        const third = yield* broadcaster.getStatus({ cwd: "/repo" });
+
+        expect(third.pr?.number).toBe(43);
+        expect(state.statusCalls).toBe(2);
+        expect(state.detailsCalls).toBe(2);
       }),
     );
   });
 
   it("refreshes the cached snapshot after explicit invalidation", async () => {
-    const state = { currentStatus: baseStatus, statusCalls: 0 };
+    const state = {
+      currentDetails: baseDetails,
+      currentStatus: baseStatus,
+      detailsCalls: 0,
+      statusCalls: 0,
+    };
 
     await runBroadcasterTest(
       state,
@@ -74,6 +208,11 @@ describe("GitStatusBroadcasterLive", () => {
           branch: "feature/updated-status",
           aheadCount: 2,
         };
+        state.currentDetails = {
+          ...baseDetails,
+          branch: "feature/updated-status",
+          aheadCount: 2,
+        };
         const refreshed = yield* broadcaster.refreshStatus("/repo");
         const cached = yield* broadcaster.getStatus({ cwd: "/repo" });
 
@@ -81,12 +220,18 @@ describe("GitStatusBroadcasterLive", () => {
         expect(refreshed).toEqual(state.currentStatus);
         expect(cached).toEqual(state.currentStatus);
         expect(state.statusCalls).toBe(2);
+        expect(state.detailsCalls).toBe(1);
       }),
     );
   });
 
   it("streams a status snapshot first and later refresh updates", async () => {
-    const state = { currentStatus: baseStatus, statusCalls: 0 };
+    const state = {
+      currentDetails: baseDetails,
+      currentStatus: baseStatus,
+      detailsCalls: 0,
+      statusCalls: 0,
+    };
 
     await runBroadcasterTest(
       state,

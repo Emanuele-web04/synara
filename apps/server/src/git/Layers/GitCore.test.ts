@@ -2043,6 +2043,39 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("explains local changes that block pull", () =>
+      Effect.gen(function* () {
+        const remote = yield* makeTmpDir();
+        const source = yield* makeTmpDir();
+        const clone = yield* makeTmpDir();
+        yield* git(remote, ["init", "--bare"]);
+
+        yield* initRepoWithCommit(source);
+        const initialBranch = (yield* (yield* GitCore).listBranches({ cwd: source })).branches.find(
+          (branch) => branch.current,
+        )!.name;
+        yield* git(source, ["remote", "add", "origin", remote]);
+        yield* git(source, ["push", "-u", "origin", initialBranch]);
+
+        yield* git(clone, ["clone", remote, "."]);
+        yield* git(clone, ["config", "user.email", "test@test.com"]);
+        yield* git(clone, ["config", "user.name", "Test"]);
+        yield* writeTextFile(path.join(clone, "README.md"), "remote change\n");
+        yield* git(clone, ["add", "README.md"]);
+        yield* git(clone, ["commit", "-m", "remote update"]);
+        yield* git(clone, ["push", "origin", initialBranch]);
+
+        yield* writeTextFile(path.join(source, "README.md"), "local change\n");
+
+        const result = yield* Effect.result((yield* GitCore).pullCurrentBranch(source));
+        expect(result._tag).toBe("Failure");
+        if (result._tag === "Failure") {
+          expect(result.failure.detail).toContain("Local changes block pull");
+          expect(result.failure.detail).toContain("README.md");
+        }
+      }),
+    );
+
     it.effect("lists branches when recency lookup fails", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();

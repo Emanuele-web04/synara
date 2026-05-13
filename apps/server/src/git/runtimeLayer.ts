@@ -27,7 +27,7 @@ export const GitManagerLayerLive = GitManagerLive.pipe(
 );
 
 export const GitStatusBroadcasterLayerLive = GitStatusBroadcasterLive.pipe(
-  Layer.provide(GitManagerLayerLive),
+  Layer.provide(Layer.mergeAll(GitCoreLive, GitManagerLayerLive)),
 );
 
 export const GitLayerLive = Layer.mergeAll(

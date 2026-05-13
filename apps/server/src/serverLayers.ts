@@ -15,7 +15,6 @@ import { KeybindingsLive } from "./keybindings";
 import { GitCoreLive } from "./git/Layers/GitCore";
 import { GitLayerLive, TextGenerationLayerLive } from "./git/runtimeLayer";
 import { TerminalLayerLive } from "./terminal/runtimeLayer";
-import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReaper";
 import { AuthControlPlaneLive } from "./auth/Layers/AuthControlPlane";
 import { BootstrapCredentialServiceLive } from "./auth/Layers/BootstrapCredentialService";
 import { ServerAuthLive } from "./auth/Layers/ServerAuth";
@@ -65,9 +64,6 @@ export function makeServerRuntimeServicesLayer() {
     Layer.provideMerge(OrchestrationLayerLive),
     Layer.provideMerge(TerminalLayerLive),
   );
-  const providerSessionReaperLayer = ProviderSessionReaperLive.pipe(
-    Layer.provideMerge(OrchestrationLayerLive),
-  );
   const sessionCredentialLayer = SessionCredentialServiceLive.pipe(
     Layer.provide(ServerSecretStoreLive),
   );
@@ -93,7 +89,6 @@ export function makeServerRuntimeServicesLayer() {
   return Layer.mergeAll(
     orchestrationReactorLayer,
     threadDeletionReactorLayer,
-    providerSessionReaperLayer,
     GitLayerLive,
     TerminalLayerLive,
     KeybindingsLive,

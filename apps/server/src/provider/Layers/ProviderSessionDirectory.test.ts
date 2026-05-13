@@ -236,4 +236,34 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
 
       fs.rmSync(tempDir, { recursive: true, force: true });
     }));
+
+  it("skips legacy bindings with unknown provider names when listing all bindings", () =>
+    Effect.gen(function* () {
+      const directory = yield* ProviderSessionDirectory;
+      const runtimeRepository = yield* ProviderSessionRuntimeRepository;
+
+      const legacyThreadId = ThreadId.makeUnsafe("thread-legacy-provider");
+      const codexThreadId = ThreadId.makeUnsafe("thread-known-provider");
+
+      yield* runtimeRepository.upsert({
+        threadId: legacyThreadId,
+        providerName: "kilo",
+        adapterKey: "kilo",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: new Date().toISOString(),
+        resumeCursor: null,
+        runtimePayload: null,
+      });
+      yield* directory.upsert({
+        provider: "codex",
+        threadId: codexThreadId,
+      });
+
+      const bindings = yield* directory.listBindings();
+      assert.deepEqual(
+        bindings.map((binding) => binding.threadId),
+        [codexThreadId],
+      );
+    }));
 });

@@ -152,19 +152,29 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
       Effect.flatMap(
         Effect.forEach((row) =>
           decodeProviderKind(row.providerName, "ProviderSessionDirectory.listBindings").pipe(
-            Effect.map((provider) => ({
-              threadId: row.threadId,
-              provider,
-              adapterKey: row.adapterKey,
-              runtimeMode: row.runtimeMode,
-              status: row.status,
-              lastSeenAt: row.lastSeenAt,
-              resumeCursor: row.resumeCursor,
-              runtimePayload: row.runtimePayload,
-            })),
+            Effect.map((provider) =>
+              Option.some({
+                threadId: row.threadId,
+                provider,
+                adapterKey: row.adapterKey,
+                runtimeMode: row.runtimeMode,
+                status: row.status,
+                lastSeenAt: row.lastSeenAt,
+                resumeCursor: row.resumeCursor,
+                runtimePayload: row.runtimePayload,
+              }),
+            ),
+            Effect.catchTag("ProviderSessionDirectoryPersistenceError", (error) =>
+              Effect.logDebug("provider session directory skipped unknown persisted provider", {
+                threadId: row.threadId,
+                providerName: row.providerName,
+                detail: error.detail,
+              }).pipe(Effect.as(Option.none<ProviderRuntimeBinding>())),
+            ),
           ),
         ),
       ),
+      Effect.map((bindings) => bindings.filter(Option.isSome).map((binding) => binding.value)),
     );
 
   return {
