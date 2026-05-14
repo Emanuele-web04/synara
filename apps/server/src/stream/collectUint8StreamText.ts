@@ -29,7 +29,8 @@ export function collectUint8StreamText<E>(input: {
     },
   ).pipe(
     Effect.map((state) => ({
-      text: state.chunks.map((chunk) => decoder.decode(chunk, { stream: true })).join("") +
+      text:
+        state.chunks.map((chunk) => decoder.decode(chunk, { stream: true })).join("") +
         decoder.decode(),
       truncated: state.truncated,
     })),

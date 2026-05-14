@@ -1709,37 +1709,40 @@ export default function ChatView({
   );
   const searchableModelOptions = useMemo(
     () =>
-      [...AVAILABLE_PROVIDER_OPTIONS].sort((left, right) =>
-        compareProvidersByOrder(settings.providerOrder, left.value, right.value),
-      ).filter((option) => {
-        if (lockedProvider !== null) {
-          return option.value === lockedProvider;
-        }
-        // Always keep the currently selected provider visible in search even if
-        // it's hidden in the picker, so the user can still see and switch from
-        // its models without first unhiding the provider in settings.
-        if (option.value === selectedProvider) {
-          return true;
-        }
-        return !hiddenProviderSet.has(option.value);
-      }).flatMap((option) =>
-        modelOptionsByProvider[option.value].map(
-          ({ slug, name, upstreamProviderId, upstreamProviderName }) => ({
-            provider: option.value,
-            providerLabel: option.label,
-            slug,
-            name,
-            searchSlug: slug.toLowerCase(),
-            searchName: name.toLowerCase(),
-            searchProvider: option.label.toLowerCase(),
-            searchUpstreamProvider: (
-              upstreamProviderName ??
-              upstreamProviderId ??
-              ""
-            ).toLowerCase(),
-          }),
+      [...AVAILABLE_PROVIDER_OPTIONS]
+        .sort((left, right) =>
+          compareProvidersByOrder(settings.providerOrder, left.value, right.value),
+        )
+        .filter((option) => {
+          if (lockedProvider !== null) {
+            return option.value === lockedProvider;
+          }
+          // Always keep the currently selected provider visible in search even if
+          // it's hidden in the picker, so the user can still see and switch from
+          // its models without first unhiding the provider in settings.
+          if (option.value === selectedProvider) {
+            return true;
+          }
+          return !hiddenProviderSet.has(option.value);
+        })
+        .flatMap((option) =>
+          modelOptionsByProvider[option.value].map(
+            ({ slug, name, upstreamProviderId, upstreamProviderName }) => ({
+              provider: option.value,
+              providerLabel: option.label,
+              slug,
+              name,
+              searchSlug: slug.toLowerCase(),
+              searchName: name.toLowerCase(),
+              searchProvider: option.label.toLowerCase(),
+              searchUpstreamProvider: (
+                upstreamProviderName ??
+                upstreamProviderId ??
+                ""
+              ).toLowerCase(),
+            }),
+          ),
         ),
-      ),
     [
       hiddenProviderSet,
       lockedProvider,

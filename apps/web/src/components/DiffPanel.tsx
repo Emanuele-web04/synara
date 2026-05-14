@@ -507,16 +507,10 @@ export default function DiffPanel({
         ? "Failed to generate diff summary."
         : null;
   const canShowSummary = Boolean(
-    !diffEnvironmentPending &&
-    activeCwd &&
-    (!hasResolvedRepoPatch || !hasNoRepoChanges),
+    !diffEnvironmentPending && activeCwd && (!hasResolvedRepoPatch || !hasNoRepoChanges),
   );
   const canPrefetchSummary = Boolean(
-    diffOpen &&
-    !diffEnvironmentPending &&
-    activeCwd &&
-    normalizedRepoPatch &&
-    !hasNoRepoChanges,
+    diffOpen && !diffEnvironmentPending && activeCwd && normalizedRepoPatch && !hasNoRepoChanges,
   );
   const canShowTotal = Boolean(!diffEnvironmentPending && activeCwd);
 
@@ -943,8 +937,8 @@ export default function DiffPanel({
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-foreground">Repo summary</p>
                   <p className="text-[11px] text-muted-foreground">
-                    Generated from the current{" "}
-                    {REPO_DIFF_SCOPE_LABELS[repoDiffScope].toLowerCase()} diff.
+                    Generated from the current {REPO_DIFF_SCOPE_LABELS[repoDiffScope].toLowerCase()}{" "}
+                    diff.
                   </p>
                 </div>
                 {diffSummaryText ? (

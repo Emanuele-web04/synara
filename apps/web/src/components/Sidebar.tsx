@@ -4411,12 +4411,11 @@ export default function Sidebar() {
               <span
                 className={cn(
                   "min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)]",
-                  // Mirror the constant 89% foreground used by the "New chat" /
-                  // "Search" primary actions so the inactive thread label sits
-                  // at the same emphasis level. Active rows still pop via the
-                  // row background and full-foreground color from
+                  // Inactive thread names sit at 92% foreground so they read
+                  // clearly without competing with the active row, which still
+                  // pops via the row background and full-foreground color from
                   // resolveThreadRowClassName.
-                  isActive ? "text-foreground" : "text-foreground/89",
+                  isActive ? "text-foreground" : "text-foreground/92",
                   isSubagentThread ? "leading-[18px] text-foreground/80" : "leading-5",
                 )}
               >

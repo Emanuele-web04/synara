@@ -141,6 +141,8 @@ describe("GitStatusBroadcasterLive", () => {
             title: "Open PR",
             url: "https://github.com/acme/repo/pull/42",
             state: "open",
+            baseBranch: "main",
+            headBranch: "feature/status-refresh",
           },
         };
         const second = yield* broadcaster.getStatus({ cwd: "/repo" });
@@ -180,6 +182,8 @@ describe("GitStatusBroadcasterLive", () => {
             title: "Fresh PR",
             url: "https://github.com/acme/repo/pull/43",
             state: "open",
+            baseBranch: "main",
+            headBranch: "feature/status-refresh",
           },
         };
         const third = yield* broadcaster.getStatus({ cwd: "/repo" });

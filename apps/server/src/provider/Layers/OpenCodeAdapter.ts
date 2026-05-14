@@ -1999,65 +1999,67 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         });
       });
 
-      const deferPrematureIdleCompletion = Effect.fn("deferPrematureIdleCompletion")(
-        function* (context: OpenCodeSessionContext, turnId: TurnId, raw: unknown) {
-          const idleBeforeAssistantActivity = context.activeTurnCompletionActivitySerial === 0;
-          const idleAfterToolCalls =
-            context.activeTurnSawToolCallFinish && !context.activeTurnSawFinalAssistant;
-          if (!idleBeforeAssistantActivity && !idleAfterToolCalls) {
-            return false;
-          }
-          if (!context.activeTurnToolCallIdleWatchdogStarted) {
-            context.activeTurnToolCallIdleWatchdogStarted = true;
-            yield* Effect.gen(function* () {
-              yield* Effect.sleep(10_000);
-              if (
-                (yield* Ref.get(context.stopped)) ||
-                context.activeTurnId !== turnId ||
-                context.activeTurnSawFinalAssistant
-              ) {
-                return;
-              }
+      const deferPrematureIdleCompletion = Effect.fn("deferPrematureIdleCompletion")(function* (
+        context: OpenCodeSessionContext,
+        turnId: TurnId,
+        raw: unknown,
+      ) {
+        const idleBeforeAssistantActivity = context.activeTurnCompletionActivitySerial === 0;
+        const idleAfterToolCalls =
+          context.activeTurnSawToolCallFinish && !context.activeTurnSawFinalAssistant;
+        if (!idleBeforeAssistantActivity && !idleAfterToolCalls) {
+          return false;
+        }
+        if (!context.activeTurnToolCallIdleWatchdogStarted) {
+          context.activeTurnToolCallIdleWatchdogStarted = true;
+          yield* Effect.gen(function* () {
+            yield* Effect.sleep(10_000);
+            if (
+              (yield* Ref.get(context.stopped)) ||
+              context.activeTurnId !== turnId ||
+              context.activeTurnSawFinalAssistant
+            ) {
+              return;
+            }
 
-              const message = idleAfterToolCalls
-                ? `${adapterConfig.displayName} became idle after tool calls without producing a final assistant response.`
-                : `${adapterConfig.displayName} became idle before producing an assistant response.`;
-              yield* completeOpenCodeTurn(context, {
+            const message = idleAfterToolCalls
+              ? `${adapterConfig.displayName} became idle after tool calls without producing a final assistant response.`
+              : `${adapterConfig.displayName} became idle before producing an assistant response.`;
+            yield* completeOpenCodeTurn(context, {
+              turnId,
+              raw: {
+                source: "dpcode.opencode.idle-after-tool-calls",
+                event: raw,
+              },
+              errorMessage: message,
+            });
+            updateProviderSession(
+              context,
+              {
+                status: "error",
+                lastError: message,
+              },
+              { clearActiveTurnId: true },
+            );
+            yield* emit({
+              ...buildEventBase({
+                threadId: context.session.threadId,
                 turnId,
                 raw: {
                   source: "dpcode.opencode.idle-after-tool-calls",
                   event: raw,
                 },
-                errorMessage: message,
-              });
-              updateProviderSession(
-                context,
-                {
-                  status: "error",
-                  lastError: message,
-                },
-                { clearActiveTurnId: true },
-              );
-              yield* emit({
-                ...buildEventBase({
-                  threadId: context.session.threadId,
-                  turnId,
-                  raw: {
-                    source: "dpcode.opencode.idle-after-tool-calls",
-                    event: raw,
-                  },
-                }),
-                type: "runtime.error",
-                payload: {
-                  message,
-                  class: "provider_error",
-                },
-              });
-            }).pipe(Effect.forkIn(context.sessionScope), Effect.asVoid);
-          }
-          return true;
-        },
-      );
+              }),
+              type: "runtime.error",
+              payload: {
+                message,
+                class: "provider_error",
+              },
+            });
+          }).pipe(Effect.forkIn(context.sessionScope), Effect.asVoid);
+        }
+        return true;
+      });
 
       const recoverOpenCodeTurnFromAssistantMessage = Effect.fn(
         "recoverOpenCodeTurnFromAssistantMessage",
@@ -2356,7 +2358,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           readonly promptInput: Parameters<OpencodeClient["session"]["promptAsync"]>[0];
         },
       ) {
-        const settled = yield* Deferred.make<AdapterRequestError | null>();
+        const settled = yield* Deferred.make<ProviderAdapterRequestError | null, never>();
         yield* runOpenCodeSdk("session.promptAsync", () =>
           context.client.session.promptAsync(input.promptInput),
         ).pipe(

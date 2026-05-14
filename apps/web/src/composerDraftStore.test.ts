@@ -1204,6 +1204,7 @@ describe("composerDraftStore modelSelection", () => {
         claudeAgent: [],
         cursor: [],
         gemini: [],
+        kilo: [],
         opencode: [],
         pi: [],
       },

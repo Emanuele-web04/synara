@@ -40,7 +40,10 @@ function mockHandle(result: { stdout: string; stderr: string; code: number }) {
 }
 
 function mockSpawnerLayer(
-  handler: (args: ReadonlyArray<string>, command: string) => {
+  handler: (
+    args: ReadonlyArray<string>,
+    command: string,
+  ) => {
     stdout: string;
     stderr: string;
     code: number;

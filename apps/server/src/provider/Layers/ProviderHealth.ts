@@ -779,149 +779,150 @@ export const makeCheckCodexProviderStatus = (
   ServerProviderStatus,
   never,
   ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
-> => Effect.gen(function* () {
-  const checkedAt = new Date().toISOString();
-  const executable = nonEmptyTrimmed(binaryPath) ?? "codex";
+> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const executable = nonEmptyTrimmed(binaryPath) ?? "codex";
 
-  // Probe 1: `codex --version` — is the CLI reachable?
-  const versionProbe = yield* runCodexCommand(["--version"], executable).pipe(
-    Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
-    Effect.result,
-  );
+    // Probe 1: `codex --version` — is the CLI reachable?
+    const versionProbe = yield* runCodexCommand(["--version"], executable).pipe(
+      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+      Effect.result,
+    );
 
-  if (Result.isFailure(versionProbe)) {
-    const error = versionProbe.failure;
+    if (Result.isFailure(versionProbe)) {
+      const error = versionProbe.failure;
+      return {
+        provider: CODEX_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: isCommandMissingCause(error)
+          ? "Codex CLI (`codex`) is not installed or not on PATH."
+          : `Failed to execute Codex CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+      };
+    }
+
+    if (Option.isNone(versionProbe.success)) {
+      return {
+        provider: CODEX_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: "Codex CLI is installed but failed to run. Timed out while running command.",
+      };
+    }
+
+    const version = versionProbe.success.value;
+    if (version.code !== 0) {
+      const detail = detailFromResult(version);
+      return {
+        provider: CODEX_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: detail
+          ? `Codex CLI is installed but failed to run. ${detail}`
+          : "Codex CLI is installed but failed to run.",
+      };
+    }
+
+    const parsedVersion = parseCodexCliVersion(`${version.stdout}\n${version.stderr}`);
+    if (parsedVersion && !isCodexCliVersionSupported(parsedVersion)) {
+      return {
+        provider: CODEX_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: formatCodexCliUpgradeMessage(parsedVersion),
+      };
+    }
+
+    // Probe 2: `codex login status` — is the user authenticated?
+    //
+    // Custom model providers (e.g. Portkey, Azure OpenAI proxy) handle
+    // authentication through their own environment variables, so `codex
+    // login status` will report "not logged in" even when the CLI works
+    // fine.  Skip the auth probe entirely for non-OpenAI providers.
+    if (yield* hasCustomModelProvider) {
+      return {
+        provider: CODEX_PROVIDER,
+        status: "ready" as const,
+        available: true,
+        authStatus: "unknown" as const,
+        version: parsedVersion,
+        checkedAt,
+        message: "Using a custom Codex model provider; OpenAI login check skipped.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const authProbe = yield* runCodexCommand(["login", "status"], executable).pipe(
+      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+      Effect.result,
+    );
+
+    if (Result.isFailure(authProbe)) {
+      const error = authProbe.failure;
+      return {
+        provider: CODEX_PROVIDER,
+        status: "warning" as const,
+        available: true,
+        authStatus: "unknown" as const,
+        version: parsedVersion,
+        checkedAt,
+        message:
+          error instanceof Error
+            ? `Could not verify Codex authentication status: ${error.message}.`
+            : "Could not verify Codex authentication status.",
+      };
+    }
+
+    if (Option.isNone(authProbe.success)) {
+      return {
+        provider: CODEX_PROVIDER,
+        status: "warning" as const,
+        available: true,
+        authStatus: "unknown" as const,
+        version: parsedVersion,
+        checkedAt,
+        message: "Could not verify Codex authentication status. Timed out while running command.",
+      };
+    }
+
+    const authOutput = authProbe.success.value;
+    const parsed = parseAuthStatusFromOutput(authOutput);
+    const codexPlanType = extractSubscriptionTypeFromOutput(authOutput);
+    const codexAccountType = extractCodexAccountTypeFromOutput(authOutput);
+    const codexLabel =
+      parsed.authStatus === "authenticated"
+        ? codexAccountAuthLabel({ type: codexAccountType, planType: codexPlanType })
+        : undefined;
+    const codexAuthType =
+      parsed.authStatus === "authenticated"
+        ? codexAccountType === "apiKey"
+          ? "apiKey"
+          : codexPlanType
+        : undefined;
+
     return {
       provider: CODEX_PROVIDER,
-      status: "error" as const,
-      available: false,
-      authStatus: "unknown" as const,
-      checkedAt,
-      message: isCommandMissingCause(error)
-        ? "Codex CLI (`codex`) is not installed or not on PATH."
-        : `Failed to execute Codex CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
-    };
-  }
-
-  if (Option.isNone(versionProbe.success)) {
-    return {
-      provider: CODEX_PROVIDER,
-      status: "error" as const,
-      available: false,
-      authStatus: "unknown" as const,
-      checkedAt,
-      message: "Codex CLI is installed but failed to run. Timed out while running command.",
-    };
-  }
-
-  const version = versionProbe.success.value;
-  if (version.code !== 0) {
-    const detail = detailFromResult(version);
-    return {
-      provider: CODEX_PROVIDER,
-      status: "error" as const,
-      available: false,
-      authStatus: "unknown" as const,
-      checkedAt,
-      message: detail
-        ? `Codex CLI is installed but failed to run. ${detail}`
-        : "Codex CLI is installed but failed to run.",
-    };
-  }
-
-  const parsedVersion = parseCodexCliVersion(`${version.stdout}\n${version.stderr}`);
-  if (parsedVersion && !isCodexCliVersionSupported(parsedVersion)) {
-    return {
-      provider: CODEX_PROVIDER,
-      status: "error" as const,
-      available: false,
-      authStatus: "unknown" as const,
-      checkedAt,
-      message: formatCodexCliUpgradeMessage(parsedVersion),
-    };
-  }
-
-  // Probe 2: `codex login status` — is the user authenticated?
-  //
-  // Custom model providers (e.g. Portkey, Azure OpenAI proxy) handle
-  // authentication through their own environment variables, so `codex
-  // login status` will report "not logged in" even when the CLI works
-  // fine.  Skip the auth probe entirely for non-OpenAI providers.
-  if (yield* hasCustomModelProvider) {
-    return {
-      provider: CODEX_PROVIDER,
-      status: "ready" as const,
+      status: parsed.status,
       available: true,
-      authStatus: "unknown" as const,
+      authStatus: parsed.authStatus,
       version: parsedVersion,
+      ...(codexAuthType ? { authType: codexAuthType } : {}),
+      ...(codexLabel ? { authLabel: codexLabel } : {}),
+      ...(parsed.voiceTranscriptionAvailable !== undefined
+        ? { voiceTranscriptionAvailable: parsed.voiceTranscriptionAvailable }
+        : {}),
       checkedAt,
-      message: "Using a custom Codex model provider; OpenAI login check skipped.",
+      ...(parsed.message ? { message: parsed.message } : {}),
     } satisfies ServerProviderStatus;
-  }
-
-  const authProbe = yield* runCodexCommand(["login", "status"], executable).pipe(
-    Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
-    Effect.result,
-  );
-
-  if (Result.isFailure(authProbe)) {
-    const error = authProbe.failure;
-    return {
-      provider: CODEX_PROVIDER,
-      status: "warning" as const,
-      available: true,
-      authStatus: "unknown" as const,
-      version: parsedVersion,
-      checkedAt,
-      message:
-        error instanceof Error
-          ? `Could not verify Codex authentication status: ${error.message}.`
-          : "Could not verify Codex authentication status.",
-    };
-  }
-
-  if (Option.isNone(authProbe.success)) {
-    return {
-      provider: CODEX_PROVIDER,
-      status: "warning" as const,
-      available: true,
-      authStatus: "unknown" as const,
-      version: parsedVersion,
-      checkedAt,
-      message: "Could not verify Codex authentication status. Timed out while running command.",
-    };
-  }
-
-  const authOutput = authProbe.success.value;
-  const parsed = parseAuthStatusFromOutput(authOutput);
-  const codexPlanType = extractSubscriptionTypeFromOutput(authOutput);
-  const codexAccountType = extractCodexAccountTypeFromOutput(authOutput);
-  const codexLabel =
-    parsed.authStatus === "authenticated"
-      ? codexAccountAuthLabel({ type: codexAccountType, planType: codexPlanType })
-      : undefined;
-  const codexAuthType =
-    parsed.authStatus === "authenticated"
-      ? codexAccountType === "apiKey"
-        ? "apiKey"
-        : codexPlanType
-      : undefined;
-
-  return {
-    provider: CODEX_PROVIDER,
-    status: parsed.status,
-    available: true,
-    authStatus: parsed.authStatus,
-    version: parsedVersion,
-    ...(codexAuthType ? { authType: codexAuthType } : {}),
-    ...(codexLabel ? { authLabel: codexLabel } : {}),
-    ...(parsed.voiceTranscriptionAvailable !== undefined
-      ? { voiceTranscriptionAvailable: parsed.voiceTranscriptionAvailable }
-      : {}),
-    checkedAt,
-    ...(parsed.message ? { message: parsed.message } : {}),
-  } satisfies ServerProviderStatus;
-});
+  });
 
 export const checkCodexProviderStatus = makeCheckCodexProviderStatus();
 
@@ -1130,92 +1131,89 @@ export const checkClaudeProviderStatus = makeCheckClaudeProviderStatus();
 
 export const makeCheckGeminiProviderStatus = (
   binaryPath?: string,
-): Effect.Effect<
-  ServerProviderStatus,
-  never,
-  ChildProcessSpawner.ChildProcessSpawner
-> => Effect.gen(function* () {
-  const checkedAt = new Date().toISOString();
-  const executable = nonEmptyTrimmed(binaryPath) ?? "gemini";
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const executable = nonEmptyTrimmed(binaryPath) ?? "gemini";
 
-  const versionProbe = yield* runGeminiCommand(["--version"], executable).pipe(
-    Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
-    Effect.result,
-  );
+    const versionProbe = yield* runGeminiCommand(["--version"], executable).pipe(
+      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+      Effect.result,
+    );
 
-  if (Result.isFailure(versionProbe)) {
-    const error = versionProbe.failure;
+    if (Result.isFailure(versionProbe)) {
+      const error = versionProbe.failure;
+      return {
+        provider: GEMINI_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: isCommandMissingCause(error)
+          ? "Gemini CLI (`gemini`) is not installed or not on PATH."
+          : `Failed to execute Gemini CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+      };
+    }
+
+    if (Option.isNone(versionProbe.success)) {
+      return {
+        provider: GEMINI_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: "Gemini CLI is installed but failed to run. Timed out while running command.",
+      };
+    }
+
+    const version = versionProbe.success.value;
+    if (version.code !== 0) {
+      const detail = detailFromResult(version);
+      return {
+        provider: GEMINI_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: detail
+          ? `Gemini CLI is installed but failed to run. ${detail}`
+          : "Gemini CLI is installed but failed to run.",
+      };
+    }
+    const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
+
+    const capabilityProbe = yield* probeGeminiCapabilities({
+      binaryPath: executable,
+      cwd: OS.homedir(),
+    }).pipe(Effect.result);
+
+    if (Result.isFailure(capabilityProbe)) {
+      const error = capabilityProbe.failure;
+      return {
+        provider: GEMINI_PROVIDER,
+        status: "warning" as const,
+        available: true,
+        authStatus: "unknown" as const,
+        version: parsedVersion,
+        checkedAt,
+        message:
+          error instanceof Error
+            ? `Could not verify Gemini authentication status: ${error.message}.`
+            : "Could not verify Gemini authentication status.",
+      };
+    }
+
+    const parsed = normalizeGeminiCapabilityProbeResult(capabilityProbe.success);
     return {
       provider: GEMINI_PROVIDER,
-      status: "error" as const,
-      available: false,
-      authStatus: "unknown" as const,
-      checkedAt,
-      message: isCommandMissingCause(error)
-        ? "Gemini CLI (`gemini`) is not installed or not on PATH."
-        : `Failed to execute Gemini CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
-    };
-  }
-
-  if (Option.isNone(versionProbe.success)) {
-    return {
-      provider: GEMINI_PROVIDER,
-      status: "error" as const,
-      available: false,
-      authStatus: "unknown" as const,
-      checkedAt,
-      message: "Gemini CLI is installed but failed to run. Timed out while running command.",
-    };
-  }
-
-  const version = versionProbe.success.value;
-  if (version.code !== 0) {
-    const detail = detailFromResult(version);
-    return {
-      provider: GEMINI_PROVIDER,
-      status: "error" as const,
-      available: false,
-      authStatus: "unknown" as const,
-      checkedAt,
-      message: detail
-        ? `Gemini CLI is installed but failed to run. ${detail}`
-        : "Gemini CLI is installed but failed to run.",
-    };
-  }
-  const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
-
-  const capabilityProbe = yield* probeGeminiCapabilities({
-    binaryPath: executable,
-    cwd: OS.homedir(),
-  }).pipe(Effect.result);
-
-  if (Result.isFailure(capabilityProbe)) {
-    const error = capabilityProbe.failure;
-    return {
-      provider: GEMINI_PROVIDER,
-      status: "warning" as const,
+      status: parsed.status,
       available: true,
-      authStatus: "unknown" as const,
+      authStatus: parsed.auth.status,
       version: parsedVersion,
       checkedAt,
-      message:
-        error instanceof Error
-          ? `Could not verify Gemini authentication status: ${error.message}.`
-          : "Could not verify Gemini authentication status.",
-    };
-  }
-
-  const parsed = normalizeGeminiCapabilityProbeResult(capabilityProbe.success);
-  return {
-    provider: GEMINI_PROVIDER,
-    status: parsed.status,
-    available: true,
-    authStatus: parsed.auth.status,
-    version: parsedVersion,
-    checkedAt,
-    ...(parsed.message ? { message: parsed.message } : {}),
-  } satisfies ServerProviderStatus;
-});
+      ...(parsed.message ? { message: parsed.message } : {}),
+    } satisfies ServerProviderStatus;
+  });
 
 export const checkGeminiProviderStatus = makeCheckGeminiProviderStatus();
 
@@ -1223,70 +1221,68 @@ export const checkGeminiProviderStatus = makeCheckGeminiProviderStatus();
 
 export const makeCheckOpenCodeProviderStatus = (
   binaryPath?: string,
-): Effect.Effect<
-  ServerProviderStatus,
-  never,
-  ChildProcessSpawner.ChildProcessSpawner
-> => Effect.gen(function* () {
-  const checkedAt = new Date().toISOString();
-  const executable = nonEmptyTrimmed(binaryPath) ?? "opencode";
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const executable = nonEmptyTrimmed(binaryPath) ?? "opencode";
 
-  const versionProbe = yield* runOpenCodeCommand(["--version"], executable).pipe(
-    Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
-    Effect.result,
-  );
+    const versionProbe = yield* runOpenCodeCommand(["--version"], executable).pipe(
+      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+      Effect.result,
+    );
 
-  if (Result.isFailure(versionProbe)) {
-    const error = versionProbe.failure;
+    if (Result.isFailure(versionProbe)) {
+      const error = versionProbe.failure;
+      return {
+        provider: OPENCODE_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: isCommandMissingCause(error)
+          ? "OpenCode CLI (`opencode`) is not installed or not on PATH."
+          : `Failed to execute OpenCode CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+      } satisfies ServerProviderStatus;
+    }
+
+    if (Option.isNone(versionProbe.success)) {
+      return {
+        provider: OPENCODE_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: "OpenCode CLI is installed but failed to run. Timed out while running command.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const version = versionProbe.success.value;
+    if (version.code !== 0) {
+      const detail = detailFromResult(version);
+      return {
+        provider: OPENCODE_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: detail
+          ? `OpenCode CLI is installed but failed to run. ${detail}`
+          : "OpenCode CLI is installed but failed to run.",
+      } satisfies ServerProviderStatus;
+    }
+    const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
+
     return {
       provider: OPENCODE_PROVIDER,
-      status: "error" as const,
-      available: false,
+      status: "ready" as const,
+      available: true,
       authStatus: "unknown" as const,
+      version: parsedVersion,
       checkedAt,
-      message: isCommandMissingCause(error)
-        ? "OpenCode CLI (`opencode`) is not installed or not on PATH."
-        : `Failed to execute OpenCode CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+      message:
+        "OpenCode CLI is installed. Configure provider credentials inside OpenCode as needed.",
     } satisfies ServerProviderStatus;
-  }
-
-  if (Option.isNone(versionProbe.success)) {
-    return {
-      provider: OPENCODE_PROVIDER,
-      status: "error" as const,
-      available: false,
-      authStatus: "unknown" as const,
-      checkedAt,
-      message: "OpenCode CLI is installed but failed to run. Timed out while running command.",
-    } satisfies ServerProviderStatus;
-  }
-
-  const version = versionProbe.success.value;
-  if (version.code !== 0) {
-    const detail = detailFromResult(version);
-    return {
-      provider: OPENCODE_PROVIDER,
-      status: "error" as const,
-      available: false,
-      authStatus: "unknown" as const,
-      checkedAt,
-      message: detail
-        ? `OpenCode CLI is installed but failed to run. ${detail}`
-        : "OpenCode CLI is installed but failed to run.",
-    } satisfies ServerProviderStatus;
-  }
-  const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
-
-  return {
-    provider: OPENCODE_PROVIDER,
-    status: "ready" as const,
-    available: true,
-    authStatus: "unknown" as const,
-    version: parsedVersion,
-    checkedAt,
-    message: "OpenCode CLI is installed. Configure provider credentials inside OpenCode as needed.",
-  } satisfies ServerProviderStatus;
-});
+  });
 
 export const checkOpenCodeProviderStatus = makeCheckOpenCodeProviderStatus();
 
@@ -1294,70 +1290,67 @@ export const checkOpenCodeProviderStatus = makeCheckOpenCodeProviderStatus();
 
 export const makeCheckKiloProviderStatus = (
   binaryPath?: string,
-): Effect.Effect<
-  ServerProviderStatus,
-  never,
-  ChildProcessSpawner.ChildProcessSpawner
-> => Effect.gen(function* () {
-  const checkedAt = new Date().toISOString();
-  const executable = nonEmptyTrimmed(binaryPath) ?? "kilo";
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const executable = nonEmptyTrimmed(binaryPath) ?? "kilo";
 
-  const versionProbe = yield* runKiloCommand(["--version"], executable).pipe(
-    Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
-    Effect.result,
-  );
+    const versionProbe = yield* runKiloCommand(["--version"], executable).pipe(
+      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+      Effect.result,
+    );
 
-  if (Result.isFailure(versionProbe)) {
-    const error = versionProbe.failure;
+    if (Result.isFailure(versionProbe)) {
+      const error = versionProbe.failure;
+      return {
+        provider: KILO_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: isCommandMissingCause(error)
+          ? "Kilo CLI (`kilo`) is not installed or not on PATH."
+          : `Failed to execute Kilo CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+      } satisfies ServerProviderStatus;
+    }
+
+    if (Option.isNone(versionProbe.success)) {
+      return {
+        provider: KILO_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: "Kilo CLI is installed but failed to run. Timed out while running command.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const version = versionProbe.success.value;
+    if (version.code !== 0) {
+      const detail = detailFromResult(version);
+      return {
+        provider: KILO_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: detail
+          ? `Kilo CLI is installed but failed to run. ${detail}`
+          : "Kilo CLI is installed but failed to run.",
+      } satisfies ServerProviderStatus;
+    }
+    const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
+
     return {
       provider: KILO_PROVIDER,
-      status: "error" as const,
-      available: false,
+      status: "ready" as const,
+      available: true,
       authStatus: "unknown" as const,
+      version: parsedVersion,
       checkedAt,
-      message: isCommandMissingCause(error)
-        ? "Kilo CLI (`kilo`) is not installed or not on PATH."
-        : `Failed to execute Kilo CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+      message: "Kilo CLI is installed. Configure provider credentials inside Kilo as needed.",
     } satisfies ServerProviderStatus;
-  }
-
-  if (Option.isNone(versionProbe.success)) {
-    return {
-      provider: KILO_PROVIDER,
-      status: "error" as const,
-      available: false,
-      authStatus: "unknown" as const,
-      checkedAt,
-      message: "Kilo CLI is installed but failed to run. Timed out while running command.",
-    } satisfies ServerProviderStatus;
-  }
-
-  const version = versionProbe.success.value;
-  if (version.code !== 0) {
-    const detail = detailFromResult(version);
-    return {
-      provider: KILO_PROVIDER,
-      status: "error" as const,
-      available: false,
-      authStatus: "unknown" as const,
-      checkedAt,
-      message: detail
-        ? `Kilo CLI is installed but failed to run. ${detail}`
-        : "Kilo CLI is installed but failed to run.",
-    } satisfies ServerProviderStatus;
-  }
-  const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
-
-  return {
-    provider: KILO_PROVIDER,
-    status: "ready" as const,
-    available: true,
-    authStatus: "unknown" as const,
-    version: parsedVersion,
-    checkedAt,
-    message: "Kilo CLI is installed. Configure provider credentials inside Kilo as needed.",
-  } satisfies ServerProviderStatus;
-});
+  });
 
 export const checkKiloProviderStatus = makeCheckKiloProviderStatus();
 
@@ -1424,71 +1417,69 @@ export const checkPiProviderStatus = (
 
 export const makeCheckCursorProviderStatus = (
   binaryPath?: string,
-): Effect.Effect<
-  ServerProviderStatus,
-  never,
-  ChildProcessSpawner.ChildProcessSpawner
-> => Effect.gen(function* () {
-  const checkedAt = new Date().toISOString();
-  const executable = nonEmptyTrimmed(binaryPath) ?? "agent";
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const executable = nonEmptyTrimmed(binaryPath) ?? "agent";
 
-  const versionProbe = yield* runCursorCommand(["--version"], executable).pipe(
-    Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
-    Effect.result,
-  );
+    const versionProbe = yield* runCursorCommand(["--version"], executable).pipe(
+      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+      Effect.result,
+    );
 
-  if (Result.isFailure(versionProbe)) {
-    const error = versionProbe.failure;
+    if (Result.isFailure(versionProbe)) {
+      const error = versionProbe.failure;
+      return {
+        provider: CURSOR_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: isCommandMissingCause(error)
+          ? "Cursor Agent CLI (`agent`) is not installed or not on PATH."
+          : `Failed to execute Cursor Agent CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+      } satisfies ServerProviderStatus;
+    }
+
+    if (Option.isNone(versionProbe.success)) {
+      return {
+        provider: CURSOR_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message:
+          "Cursor Agent CLI is installed but failed to run. Timed out while running command.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const version = versionProbe.success.value;
+    if (version.code !== 0) {
+      const detail = detailFromResult(version);
+      return {
+        provider: CURSOR_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: detail
+          ? `Cursor Agent CLI is installed but failed to run. ${detail}`
+          : "Cursor Agent CLI is installed but failed to run.",
+      } satisfies ServerProviderStatus;
+    }
+    const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
+
     return {
       provider: CURSOR_PROVIDER,
-      status: "error" as const,
-      available: false,
+      status: "ready" as const,
+      available: true,
       authStatus: "unknown" as const,
+      version: parsedVersion,
       checkedAt,
-      message: isCommandMissingCause(error)
-        ? "Cursor Agent CLI (`agent`) is not installed or not on PATH."
-        : `Failed to execute Cursor Agent CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+      message:
+        "Cursor Agent CLI is installed. Sign in with Cursor if a session prompts for authentication.",
     } satisfies ServerProviderStatus;
-  }
-
-  if (Option.isNone(versionProbe.success)) {
-    return {
-      provider: CURSOR_PROVIDER,
-      status: "error" as const,
-      available: false,
-      authStatus: "unknown" as const,
-      checkedAt,
-      message: "Cursor Agent CLI is installed but failed to run. Timed out while running command.",
-    } satisfies ServerProviderStatus;
-  }
-
-  const version = versionProbe.success.value;
-  if (version.code !== 0) {
-    const detail = detailFromResult(version);
-    return {
-      provider: CURSOR_PROVIDER,
-      status: "error" as const,
-      available: false,
-      authStatus: "unknown" as const,
-      checkedAt,
-      message: detail
-        ? `Cursor Agent CLI is installed but failed to run. ${detail}`
-        : "Cursor Agent CLI is installed but failed to run.",
-    } satisfies ServerProviderStatus;
-  }
-  const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
-
-  return {
-    provider: CURSOR_PROVIDER,
-    status: "ready" as const,
-    available: true,
-    authStatus: "unknown" as const,
-    version: parsedVersion,
-    checkedAt,
-    message:
-      "Cursor Agent CLI is installed. Sign in with Cursor if a session prompts for authentication.",
-  } satisfies ServerProviderStatus;
-});
+  });
 
 export const checkCursorProviderStatus = makeCheckCursorProviderStatus();
 
@@ -1564,9 +1555,9 @@ export const ProviderHealthLive = Layer.effect(
     );
 
     const statusesRef = yield* Ref.make<ProviderStatuses>(cachedStatuses);
-    const updateStatesRef = yield* Ref.make<
-      ReadonlyMap<ProviderKind, ServerProviderUpdateState>
-    >(new Map());
+    const updateStatesRef = yield* Ref.make<ReadonlyMap<ProviderKind, ServerProviderUpdateState>>(
+      new Map(),
+    );
     const refreshFiberRef = yield* Ref.make<Fiber.Fiber<ProviderStatuses, never> | null>(null);
     const commandCoordinator = yield* makeProviderMaintenanceCommandCoordinator({
       makeAlreadyRunningError: (provider) =>
@@ -1634,9 +1625,7 @@ export const ProviderHealthLive = Layer.effect(
           binaryPath: getProviderBinaryPath(provider, settings),
           env: process.env,
           platform: process.platform,
-        }).pipe(
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-        );
+        }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
       },
     );
 
@@ -1710,33 +1699,38 @@ export const ProviderHealthLive = Layer.effect(
       });
     });
 
-    const loadProviderStatuses = serverSettings.getSettings.pipe(
-      Effect.flatMap((settings) =>
-        Effect.all(
-          [
-            makeCheckCodexProviderStatus(settings.providers.codex.binaryPath),
-            makeCheckClaudeProviderStatus(
-              resolveClaudeSubscription,
-              settings.providers.claudeAgent.binaryPath,
-            ),
-            makeCheckCursorProviderStatus(settings.providers.cursor.binaryPath),
-            makeCheckGeminiProviderStatus(settings.providers.gemini.binaryPath),
-            makeCheckKiloProviderStatus(settings.providers.kilo.binaryPath),
-            makeCheckOpenCodeProviderStatus(settings.providers.opencode.binaryPath),
-            checkPiProviderStatus(settings.providers.pi.agentDir, settings.providers.pi.binaryPath),
-          ],
-          {
-            concurrency: "unbounded",
-          },
+    const loadProviderStatuses = serverSettings.getSettings
+      .pipe(
+        Effect.flatMap((settings) =>
+          Effect.all(
+            [
+              makeCheckCodexProviderStatus(settings.providers.codex.binaryPath),
+              makeCheckClaudeProviderStatus(
+                resolveClaudeSubscription,
+                settings.providers.claudeAgent.binaryPath,
+              ),
+              makeCheckCursorProviderStatus(settings.providers.cursor.binaryPath),
+              makeCheckGeminiProviderStatus(settings.providers.gemini.binaryPath),
+              makeCheckKiloProviderStatus(settings.providers.kilo.binaryPath),
+              makeCheckOpenCodeProviderStatus(settings.providers.opencode.binaryPath),
+              checkPiProviderStatus(
+                settings.providers.pi.agentDir,
+                settings.providers.pi.binaryPath,
+              ),
+            ],
+            {
+              concurrency: "unbounded",
+            },
+          ),
         ),
-      ),
-    ).pipe(
-      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-      Effect.provideService(FileSystem.FileSystem, fileSystem),
-      Effect.provideService(Path.Path, path),
-      Effect.map(orderProviderStatuses),
-      Effect.flatMap(enrichStatuses),
-    );
+      )
+      .pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+        Effect.map(orderProviderStatuses),
+        Effect.flatMap(enrichStatuses),
+      );
 
     const persistStatuses = (statuses: ProviderStatuses) =>
       Effect.forEach(
@@ -1864,7 +1858,14 @@ export const ProviderHealthLive = Layer.effect(
       "ProviderHealth.updateProvider",
     )(function* (input) {
       const provider = input.provider;
-      const capabilities = yield* getProviderMaintenanceCapabilities(provider);
+      const toUpdateError = (reason: unknown) =>
+        new ServerProviderUpdateError({
+          provider,
+          reason: reason instanceof Error ? reason.message : String(reason),
+        });
+      const capabilities = yield* getProviderMaintenanceCapabilities(provider).pipe(
+        Effect.mapError(toUpdateError),
+      );
       const update = capabilities.update;
       if (!update) {
         return yield* new ServerProviderUpdateError({
@@ -1907,12 +1908,10 @@ export const ProviderHealthLive = Layer.effect(
           return { providers };
         }
         const result = commandResult.success;
-        const output =
-          Option.isSome(result)
-            ? [result.value.stderr, result.value.stdout].filter(Boolean).join("\n\n").trim() || null
-            : null;
-        const failed =
-          Option.isNone(result) || result.value.exitCode !== 0;
+        const output = Option.isSome(result)
+          ? [result.value.stderr, result.value.stdout].filter(Boolean).join("\n\n").trim() || null
+          : null;
+        const failed = Option.isNone(result) || result.value.exitCode !== 0;
         if (failed) {
           const message = Option.isNone(result)
             ? "Update timed out."
@@ -1930,7 +1929,7 @@ export const ProviderHealthLive = Layer.effect(
           return { providers };
         }
 
-        const providers = yield* refreshNow;
+        const providers = yield* refreshNow.pipe(Effect.mapError(toUpdateError));
         const refreshed = providers.find((status) => status.provider === provider);
         const stillOutdated = refreshed?.versionAdvisory?.status === "behind_latest";
         const finalProviders = yield* setProviderUpdateState(

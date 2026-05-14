@@ -12,13 +12,7 @@ const LATEST_VERSION_TIMEOUT_MS = 4_000;
 const PROVIDER_UPDATE_ACTION_MESSAGE = "Install the update now or review provider settings.";
 const WINDOWS_EXECUTABLE_EXTENSIONS = ["", ".exe", ".cmd", ".bat"] as const;
 
-type ProviderInstallSource =
-  | "npm"
-  | "bun"
-  | "pnpm"
-  | "homebrew"
-  | "native"
-  | "unknown";
+type ProviderInstallSource = "npm" | "bun" | "pnpm" | "homebrew" | "native" | "unknown";
 
 interface ParsedSemver {
   readonly major: number;
@@ -58,12 +52,10 @@ export interface PackageManagedProviderMaintenanceDefinition {
   readonly provider: ProviderKind;
   readonly binaryName: string;
   readonly npmPackageName: string;
-  readonly homebrew:
-    | {
-        readonly name: string;
-        readonly kind: "formula" | "cask";
-      }
-    | null;
+  readonly homebrew: {
+    readonly name: string;
+    readonly kind: "formula" | "cask";
+  } | null;
   readonly nativeUpdate: {
     readonly executable: string;
     readonly args: (installSource: ProviderInstallSource) => ReadonlyArray<string>;

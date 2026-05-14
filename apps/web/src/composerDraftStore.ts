@@ -1174,7 +1174,8 @@ export function deriveEffectiveComposerModelState(input: {
     unlistedDraftModel ??
     input.availableModelOptionsByProvider?.[input.selectedProvider]?.[0]?.slug ??
     selectedDraftModel ??
-    baseModel;
+    baseModel ??
+    getDefaultModel("codex");
   const modelOptions = deriveEffectiveComposerModelOptions(input);
 
   return {
@@ -1215,7 +1216,7 @@ export function resolvePreferredComposerModelSelection(input: {
       ? input.projectModelSelection
       : null) ?? {
       provider: preferredProvider === "pi" ? "codex" : preferredProvider,
-      model: getDefaultModel(preferredProvider) ?? getDefaultModel("codex"),
+      model: getDefaultModel(preferredProvider === "pi" ? "codex" : preferredProvider),
     }
   );
 }
@@ -2739,11 +2740,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             if (opts) {
               const model = current?.model ?? getDefaultModel(provider);
               if (!model) continue;
-              nextMap[provider] = makeModelSelection(
-                provider,
-                model,
-                opts,
-              );
+              nextMap[provider] = makeModelSelection(provider, model, opts);
             } else if (current?.options) {
               // Remove options but keep the selection
               nextMap[provider] = buildModelSelection(provider, current.model);

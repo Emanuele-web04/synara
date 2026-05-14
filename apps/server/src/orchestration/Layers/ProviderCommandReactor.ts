@@ -854,7 +854,7 @@ const make = Effect.gen(function* () {
         ? `<sidechat_context>\n${sidechatBootstrapText}\n</sidechat_context>\n\n${boundaryMessageText}`
         : priorTranscriptBootstrapText
           ? `<thread_context>\n${priorTranscriptBootstrapText}\n</thread_context>\n\n<latest_user_message>\n${boundaryMessageText}\n</latest_user_message>`
-        : boundaryMessageText;
+          : boundaryMessageText;
     const normalizedInput = toNonEmptyProviderInput(providerInput);
     const normalizedAttachments = input.attachments ?? [];
     const activeSession = yield* providerService

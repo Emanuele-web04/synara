@@ -401,8 +401,7 @@ export default function GitActionsControl({
     return current?.isDefault ?? (branchName === "main" || branchName === "master");
   }, [branchList?.branches, gitStatusForActions?.branch]);
   const defaultBranchName = useMemo(
-    () =>
-      branchList?.branches.find((branch) => !branch.isRemote && branch.isDefault)?.name ?? null,
+    () => branchList?.branches.find((branch) => !branch.isRemote && branch.isDefault)?.name ?? null,
     [branchList?.branches],
   );
   const shouldOfferCreateBranch = useMemo(() => {
@@ -464,13 +463,7 @@ export default function GitActionsControl({
         isDefaultBranch,
         defaultBranchName,
       ),
-    [
-      defaultBranchName,
-      gitStatusForActions,
-      hasOriginRemote,
-      isDefaultBranch,
-      isGitActionRunning,
-    ],
+    [defaultBranchName, gitStatusForActions, hasOriginRemote, isDefaultBranch, isGitActionRunning],
   );
   const quickActionDisabledReason = quickAction.disabled
     ? (quickAction.hint ?? "This action is currently unavailable.")

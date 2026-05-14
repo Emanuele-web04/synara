@@ -3,14 +3,7 @@
 // Layer: Persistence compatibility helper
 // Exports: normalizeLegacyModelSelection, normalizePersistedModelSelection
 
-type ModelProviderKind =
-  | "codex"
-  | "claudeAgent"
-  | "cursor"
-  | "gemini"
-  | "kilo"
-  | "opencode"
-  | "pi";
+type ModelProviderKind = "codex" | "claudeAgent" | "cursor" | "gemini" | "kilo" | "opencode" | "pi";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

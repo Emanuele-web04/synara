@@ -641,7 +641,9 @@ export function resolveAppModelSelection(
 ): string {
   const customModelsForProvider = customModels[provider];
   const options = getAppModelOptions(provider, customModelsForProvider, selectedModel);
-  return resolveSelectableModel(provider, selectedModel, options) ?? getDefaultModel(provider) ?? "";
+  return (
+    resolveSelectableModel(provider, selectedModel, options) ?? getDefaultModel(provider) ?? ""
+  );
 }
 
 export function getCustomModelOptionsByProvider(

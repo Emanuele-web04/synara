@@ -145,11 +145,11 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
           ? "variant"
           : provider === "pi"
             ? "thinkingLevel"
-          : provider === "claudeAgent"
-            ? "effort"
-            : provider === "gemini"
-              ? "thinkingLevel"
-              : "reasoningEffort");
+            : provider === "claudeAgent"
+              ? "effort"
+              : provider === "gemini"
+                ? "thinkingLevel"
+                : "reasoningEffort");
       const nextModelOptionsPatch = buildProviderOptionPatch(provider, optionId, nextOption.value);
       setProviderModelOptions(
         threadId,

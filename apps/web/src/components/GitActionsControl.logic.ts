@@ -114,7 +114,7 @@ function canRunCreatePrAction(input: {
   isBusy: boolean;
   isDefaultBranch: boolean;
   hasOriginRemote: boolean;
-  defaultBranchName?: string | null;
+  defaultBranchName?: string | null | undefined;
 }): boolean {
   const { gitStatus, isBusy, isDefaultBranch, hasOriginRemote, defaultBranchName } = input;
   if (!gitStatus) return false;
@@ -428,7 +428,7 @@ export function resolveCreatePrActionAvailability(input: {
   gitStatus: GitStatusResult | null;
   isDefaultBranch?: boolean;
   hasOriginRemote?: boolean;
-  defaultBranchName?: string | null;
+  defaultBranchName?: string | null | undefined;
 }): { canRun: boolean; hint: string | null } {
   const canRun = canRunCreatePrAction({
     gitStatus: input.gitStatus,

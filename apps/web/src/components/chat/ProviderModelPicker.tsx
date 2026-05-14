@@ -24,7 +24,16 @@ import {
   MenuSubTrigger,
   MenuTrigger,
 } from "../ui/menu";
-import { ClaudeAI, CursorIcon, Gemini, Icon, KiloIcon, OpenAI, OpenCodeIcon, PiIcon } from "../Icons";
+import {
+  ClaudeAI,
+  CursorIcon,
+  Gemini,
+  Icon,
+  KiloIcon,
+  OpenAI,
+  OpenCodeIcon,
+  PiIcon,
+} from "../Icons";
 import { cn } from "~/lib/utils";
 import { PickerPanelShell } from "./PickerPanelShell";
 import { PickerTriggerButton } from "./PickerTriggerButton";
@@ -129,7 +138,9 @@ const FavoriteModelSlugs = Schema.Array(Schema.String);
 type FavoriteModelProvider = keyof typeof FAVORITE_MODEL_STORAGE_KEYS;
 
 function supportsModelFavorites(provider: ProviderKind): provider is FavoriteModelProvider {
-  return provider === "cursor" || provider === "kilo" || provider === "opencode" || provider === "pi";
+  return (
+    provider === "cursor" || provider === "kilo" || provider === "opencode" || provider === "pi"
+  );
 }
 
 // Keeps persisted favorite slugs compact and stable while preserving the user's order.
@@ -321,9 +332,9 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
           ? setCursorFavoriteModelSlugs
           : provider === "kilo"
             ? setKiloFavoriteModelSlugs
-          : provider === "pi"
-            ? setPiFavoriteModelSlugs
-            : setOpenCodeFavoriteModelSlugs;
+            : provider === "pi"
+              ? setPiFavoriteModelSlugs
+              : setOpenCodeFavoriteModelSlugs;
       setFavoriteModelSlugs((current) => toggleFavoriteModelSlug(current, slug));
     },
     [
