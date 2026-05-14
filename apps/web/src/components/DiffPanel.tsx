@@ -196,7 +196,6 @@ export default function DiffPanel({
   const setRepoDiffScope = useRepoDiffScopeStore((store) => store.setScope);
   const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(() => new Set());
   const patchViewportRef = useRef<HTMLDivElement>(null);
-  // Tracks an in-flight "select all then copy" gesture inside the virtualized diff surface.
   const diffSelectAllArmedRef = useRef(false);
   const turnStripRef = useRef<HTMLDivElement>(null);
   const previousDiffOpenRef = useRef(false);
@@ -410,8 +409,7 @@ export default function DiffPanel({
     () => getRenderablePatch(activeReviewPatch, `diff-panel:${resolvedTheme}`),
     [activeReviewPatch, resolvedTheme],
   );
-  // Serialize the full diff straight from the parsed model so copy paths never depend on
-  // which virtualized rows happen to be mounted in the DOM.
+  // Serialize the whole diff from the parsed model so copy never depends on which virtualized rows are mounted.
   const diffCopyText = useMemo(
     () => serializeRenderablePatchText(renderablePatch) ?? resolveDiffCopyText(activeReviewPatch),
     [renderablePatch, activeReviewPatch],
@@ -567,12 +565,7 @@ export default function DiffPanel({
     });
   }, []);
 
-  // The diff surface is virtualized and renders into shadow DOM, so a native
-  // "select all + copy" only captures the handful of mounted rows. We watch the
-  // document: a Cmd/Ctrl+A keydown still passes through the viewport element (so we can
-  // tell the gesture started in the diff), and the matching `copy` event — which does
-  // *not* travel through the viewport — is then hijacked to write the fully serialized
-  // diff so every line reaches the clipboard.
+  // Watch the document for select-all-then-copy: the Cmd/Ctrl+A keydown passes through the viewport but the copy event does not, so the native copy would only grab the mounted rows.
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const viewport = patchViewportRef.current;
@@ -584,14 +577,13 @@ export default function DiffPanel({
       );
     };
     const handlePointerDown = () => {
-      // Any fresh pointer interaction ends the select-all gesture.
       diffSelectAllArmedRef.current = false;
     };
     const handleCopy = (event: ClipboardEvent) => {
       if (!diffSelectAllArmedRef.current) {
         return;
       }
-      // One-shot: the next deliberate select-all must re-arm it.
+      // One-shot: the next select-all must re-arm it.
       diffSelectAllArmedRef.current = false;
       if (!diffCopyText || !event.clipboardData) {
         return;

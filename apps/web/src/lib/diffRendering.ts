@@ -99,8 +99,7 @@ export function getRenderablePatch(
   }
 }
 
-// @pierre/diffs keeps trailing newlines on parsed line entries and hunk headers; drop
-// them so the serializer's own `\n` join does not introduce spurious blank lines.
+// @pierre/diffs leaves trailing newlines on parsed lines; drop them so the `\n` join below doesn't add blank lines.
 function stripLineBreak(line: string): string {
   return line.replace(/\r?\n$/, "");
 }
@@ -114,8 +113,7 @@ function serializeHunkHeader(hunk: Hunk): string {
   return context ? `${specs} ${context}` : specs;
 }
 
-// Reconstruct the full unified-diff text for a single parsed file straight from the
-// @pierre/diffs model so copy paths never depend on which virtualized rows are mounted.
+// Rebuild the unified-diff text for one parsed file from the @pierre/diffs model.
 export function serializeFileDiffMetadata(file: FileDiffMetadata): string {
   const newPath = file.name;
   const oldPath = file.prevName ?? file.name;
