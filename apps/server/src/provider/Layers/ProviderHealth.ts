@@ -686,10 +686,10 @@ const collectStreamAsString = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.
     (acc, chunk) => acc + new TextDecoder().decode(chunk),
   );
 
-const runCodexCommand = (args: ReadonlyArray<string>) =>
+const runProviderCommand = (executable: string, args: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const command = ChildProcess.make("codex", [...args], {
+    const command = ChildProcess.make(executable, [...args], {
       shell: process.platform === "win32",
       env: process.env,
     });
@@ -705,180 +705,86 @@ const runCodexCommand = (args: ReadonlyArray<string>) =>
       { concurrency: "unbounded" },
     );
 
-    if (isWindowsShellCommandMissingResult({ code: exitCode, stderr })) {
-      return yield* Effect.fail(new Error("spawn codex ENOENT"));
-    }
-
     return { stdout, stderr, code: exitCode } satisfies CommandResult;
   }).pipe(Effect.scoped);
 
-const runClaudeCommand = (args: ReadonlyArray<string>) =>
-  Effect.gen(function* () {
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const command = ChildProcess.make("claude", [...args], {
-      shell: process.platform === "win32",
-      env: process.env,
-    });
+const runCodexCommand = (args: ReadonlyArray<string>, executable = "codex") =>
+  runProviderCommand(executable, args).pipe(
+    Effect.flatMap((result) =>
+      isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
+        ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
+        : Effect.succeed(result),
+    ),
+  );
 
-    const child = yield* spawner.spawn(command);
+const runClaudeCommand = (args: ReadonlyArray<string>, executable = "claude") =>
+  runProviderCommand(executable, args).pipe(
+    Effect.flatMap((result) =>
+      isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
+        ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
+        : Effect.succeed(result),
+    ),
+  );
 
-    const [stdout, stderr, exitCode] = yield* Effect.all(
-      [
-        collectStreamAsString(child.stdout),
-        collectStreamAsString(child.stderr),
-        child.exitCode.pipe(Effect.map(Number)),
-      ],
-      { concurrency: "unbounded" },
-    );
+const runGeminiCommand = (args: ReadonlyArray<string>, executable = "gemini") =>
+  runProviderCommand(executable, args).pipe(
+    Effect.flatMap((result) =>
+      isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
+        ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
+        : Effect.succeed(result),
+    ),
+  );
 
-    if (isWindowsShellCommandMissingResult({ code: exitCode, stderr })) {
-      return yield* Effect.fail(new Error("spawn claude ENOENT"));
-    }
+const runOpenCodeCommand = (args: ReadonlyArray<string>, executable = "opencode") =>
+  runProviderCommand(executable, args).pipe(
+    Effect.flatMap((result) =>
+      isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
+        ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
+        : Effect.succeed(result),
+    ),
+  );
 
-    return { stdout, stderr, code: exitCode } satisfies CommandResult;
-  }).pipe(Effect.scoped);
+const runKiloCommand = (args: ReadonlyArray<string>, executable = "kilo") =>
+  runProviderCommand(executable, args).pipe(
+    Effect.flatMap((result) =>
+      isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
+        ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
+        : Effect.succeed(result),
+    ),
+  );
 
-const runGeminiCommand = (args: ReadonlyArray<string>) =>
-  Effect.gen(function* () {
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const command = ChildProcess.make("gemini", [...args], {
-      shell: process.platform === "win32",
-      env: process.env,
-    });
+const runCursorCommand = (args: ReadonlyArray<string>, executable = "agent") =>
+  runProviderCommand(executable, args).pipe(
+    Effect.flatMap((result) =>
+      isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
+        ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
+        : Effect.succeed(result),
+    ),
+  );
 
-    const child = yield* spawner.spawn(command);
-
-    const [stdout, stderr, exitCode] = yield* Effect.all(
-      [
-        collectStreamAsString(child.stdout),
-        collectStreamAsString(child.stderr),
-        child.exitCode.pipe(Effect.map(Number)),
-      ],
-      { concurrency: "unbounded" },
-    );
-
-    if (isWindowsShellCommandMissingResult({ code: exitCode, stderr })) {
-      return yield* Effect.fail(new Error("spawn gemini ENOENT"));
-    }
-
-    return { stdout, stderr, code: exitCode } satisfies CommandResult;
-  }).pipe(Effect.scoped);
-
-const runOpenCodeCommand = (args: ReadonlyArray<string>) =>
-  Effect.gen(function* () {
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const command = ChildProcess.make("opencode", [...args], {
-      shell: process.platform === "win32",
-      env: process.env,
-    });
-
-    const child = yield* spawner.spawn(command);
-
-    const [stdout, stderr, exitCode] = yield* Effect.all(
-      [
-        collectStreamAsString(child.stdout),
-        collectStreamAsString(child.stderr),
-        child.exitCode.pipe(Effect.map(Number)),
-      ],
-      { concurrency: "unbounded" },
-    );
-
-    if (isWindowsShellCommandMissingResult({ code: exitCode, stderr })) {
-      return yield* Effect.fail(new Error("spawn opencode ENOENT"));
-    }
-
-    return { stdout, stderr, code: exitCode } satisfies CommandResult;
-  }).pipe(Effect.scoped);
-
-const runKiloCommand = (args: ReadonlyArray<string>) =>
-  Effect.gen(function* () {
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const command = ChildProcess.make("kilo", [...args], {
-      shell: process.platform === "win32",
-      env: process.env,
-    });
-
-    const child = yield* spawner.spawn(command);
-
-    const [stdout, stderr, exitCode] = yield* Effect.all(
-      [
-        collectStreamAsString(child.stdout),
-        collectStreamAsString(child.stderr),
-        child.exitCode.pipe(Effect.map(Number)),
-      ],
-      { concurrency: "unbounded" },
-    );
-
-    if (isWindowsShellCommandMissingResult({ code: exitCode, stderr })) {
-      return yield* Effect.fail(new Error("spawn kilo ENOENT"));
-    }
-
-    return { stdout, stderr, code: exitCode } satisfies CommandResult;
-  }).pipe(Effect.scoped);
-
-const runCursorCommand = (args: ReadonlyArray<string>) =>
-  Effect.gen(function* () {
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const command = ChildProcess.make("agent", [...args], {
-      shell: process.platform === "win32",
-      env: process.env,
-    });
-
-    const child = yield* spawner.spawn(command);
-
-    const [stdout, stderr, exitCode] = yield* Effect.all(
-      [
-        collectStreamAsString(child.stdout),
-        collectStreamAsString(child.stderr),
-        child.exitCode.pipe(Effect.map(Number)),
-      ],
-      { concurrency: "unbounded" },
-    );
-
-    if (isWindowsShellCommandMissingResult({ code: exitCode, stderr })) {
-      return yield* Effect.fail(new Error("spawn agent ENOENT"));
-    }
-
-    return { stdout, stderr, code: exitCode } satisfies CommandResult;
-  }).pipe(Effect.scoped);
-
-const runPiCommand = (args: ReadonlyArray<string>) =>
-  Effect.gen(function* () {
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const command = ChildProcess.make("pi", [...args], {
-      shell: process.platform === "win32",
-      env: process.env,
-    });
-
-    const child = yield* spawner.spawn(command);
-
-    const [stdout, stderr, exitCode] = yield* Effect.all(
-      [
-        collectStreamAsString(child.stdout),
-        collectStreamAsString(child.stderr),
-        child.exitCode.pipe(Effect.map(Number)),
-      ],
-      { concurrency: "unbounded" },
-    );
-
-    if (isWindowsShellCommandMissingResult({ code: exitCode, stderr })) {
-      return yield* Effect.fail(new Error("spawn pi ENOENT"));
-    }
-
-    return { stdout, stderr, code: exitCode } satisfies CommandResult;
-  }).pipe(Effect.scoped);
+const runPiCommand = (args: ReadonlyArray<string>, executable = "pi") =>
+  runProviderCommand(executable, args).pipe(
+    Effect.flatMap((result) =>
+      isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
+        ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
+        : Effect.succeed(result),
+    ),
+  );
 
 // ── Health check ────────────────────────────────────────────────────
 
-export const checkCodexProviderStatus: Effect.Effect<
+export const makeCheckCodexProviderStatus = (
+  binaryPath?: string,
+): Effect.Effect<
   ServerProviderStatus,
   never,
   ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
-> = Effect.gen(function* () {
+> => Effect.gen(function* () {
   const checkedAt = new Date().toISOString();
+  const executable = nonEmptyTrimmed(binaryPath) ?? "codex";
 
   // Probe 1: `codex --version` — is the CLI reachable?
-  const versionProbe = yield* runCodexCommand(["--version"]).pipe(
+  const versionProbe = yield* runCodexCommand(["--version"], executable).pipe(
     Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
     Effect.result,
   );
@@ -953,7 +859,7 @@ export const checkCodexProviderStatus: Effect.Effect<
     } satisfies ServerProviderStatus;
   }
 
-  const authProbe = yield* runCodexCommand(["login", "status"]).pipe(
+  const authProbe = yield* runCodexCommand(["login", "status"], executable).pipe(
     Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
     Effect.result,
   );
@@ -1016,6 +922,8 @@ export const checkCodexProviderStatus: Effect.Effect<
     ...(parsed.message ? { message: parsed.message } : {}),
   } satisfies ServerProviderStatus;
 });
+
+export const checkCodexProviderStatus = makeCheckCodexProviderStatus();
 
 // ── Claude Agent health check ───────────────────────────────────────
 
@@ -1103,12 +1011,14 @@ export function parseClaudeAuthStatusFromOutput(result: CommandResult): {
 
 export const makeCheckClaudeProviderStatus = (
   resolveSubscriptionType?: Effect.Effect<string | undefined>,
+  binaryPath?: string,
 ): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
+    const executable = nonEmptyTrimmed(binaryPath) ?? "claude";
 
     // Probe 1: `claude --version` — is the CLI reachable?
-    const versionProbe = yield* runClaudeCommand(["--version"]).pipe(
+    const versionProbe = yield* runClaudeCommand(["--version"], executable).pipe(
       Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
       Effect.result,
     );
@@ -1156,7 +1066,7 @@ export const makeCheckClaudeProviderStatus = (
     const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
 
     // Probe 2: `claude auth status` — is the user authenticated?
-    const authProbe = yield* runClaudeCommand(["auth", "status"]).pipe(
+    const authProbe = yield* runClaudeCommand(["auth", "status"], executable).pipe(
       Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
       Effect.result,
     );
@@ -1218,14 +1128,17 @@ export const makeCheckClaudeProviderStatus = (
 
 export const checkClaudeProviderStatus = makeCheckClaudeProviderStatus();
 
-export const checkGeminiProviderStatus: Effect.Effect<
+export const makeCheckGeminiProviderStatus = (
+  binaryPath?: string,
+): Effect.Effect<
   ServerProviderStatus,
   never,
   ChildProcessSpawner.ChildProcessSpawner
-> = Effect.gen(function* () {
+> => Effect.gen(function* () {
   const checkedAt = new Date().toISOString();
+  const executable = nonEmptyTrimmed(binaryPath) ?? "gemini";
 
-  const versionProbe = yield* runGeminiCommand(["--version"]).pipe(
+  const versionProbe = yield* runGeminiCommand(["--version"], executable).pipe(
     Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
     Effect.result,
   );
@@ -1272,7 +1185,7 @@ export const checkGeminiProviderStatus: Effect.Effect<
   const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
 
   const capabilityProbe = yield* probeGeminiCapabilities({
-    binaryPath: "gemini",
+    binaryPath: executable,
     cwd: OS.homedir(),
   }).pipe(Effect.result);
 
@@ -1304,16 +1217,21 @@ export const checkGeminiProviderStatus: Effect.Effect<
   } satisfies ServerProviderStatus;
 });
 
+export const checkGeminiProviderStatus = makeCheckGeminiProviderStatus();
+
 // ── OpenCode health check ───────────────────────────────────────────
 
-export const checkOpenCodeProviderStatus: Effect.Effect<
+export const makeCheckOpenCodeProviderStatus = (
+  binaryPath?: string,
+): Effect.Effect<
   ServerProviderStatus,
   never,
   ChildProcessSpawner.ChildProcessSpawner
-> = Effect.gen(function* () {
+> => Effect.gen(function* () {
   const checkedAt = new Date().toISOString();
+  const executable = nonEmptyTrimmed(binaryPath) ?? "opencode";
 
-  const versionProbe = yield* runOpenCodeCommand(["--version"]).pipe(
+  const versionProbe = yield* runOpenCodeCommand(["--version"], executable).pipe(
     Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
     Effect.result,
   );
@@ -1370,16 +1288,21 @@ export const checkOpenCodeProviderStatus: Effect.Effect<
   } satisfies ServerProviderStatus;
 });
 
+export const checkOpenCodeProviderStatus = makeCheckOpenCodeProviderStatus();
+
 // ── Kilo health check ───────────────────────────────────────────────
 
-export const checkKiloProviderStatus: Effect.Effect<
+export const makeCheckKiloProviderStatus = (
+  binaryPath?: string,
+): Effect.Effect<
   ServerProviderStatus,
   never,
   ChildProcessSpawner.ChildProcessSpawner
-> = Effect.gen(function* () {
+> => Effect.gen(function* () {
   const checkedAt = new Date().toISOString();
+  const executable = nonEmptyTrimmed(binaryPath) ?? "kilo";
 
-  const versionProbe = yield* runKiloCommand(["--version"]).pipe(
+  const versionProbe = yield* runKiloCommand(["--version"], executable).pipe(
     Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
     Effect.result,
   );
@@ -1436,14 +1359,18 @@ export const checkKiloProviderStatus: Effect.Effect<
   } satisfies ServerProviderStatus;
 });
 
+export const checkKiloProviderStatus = makeCheckKiloProviderStatus();
+
 // ── Pi health check ─────────────────────────────────────────────
 
 export const checkPiProviderStatus = (
   agentDir?: string,
+  binaryPath?: string,
 ): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
-    const versionProbe = yield* runPiCommand(["--version"]).pipe(
+    const executable = nonEmptyTrimmed(binaryPath) ?? "pi";
+    const versionProbe = yield* runPiCommand(["--version"], executable).pipe(
       Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
       Effect.result,
     );
@@ -1495,14 +1422,17 @@ export const checkPiProviderStatus = (
 
 // ── Cursor health check ─────────────────────────────────────────────
 
-export const checkCursorProviderStatus: Effect.Effect<
+export const makeCheckCursorProviderStatus = (
+  binaryPath?: string,
+): Effect.Effect<
   ServerProviderStatus,
   never,
   ChildProcessSpawner.ChildProcessSpawner
-> = Effect.gen(function* () {
+> => Effect.gen(function* () {
   const checkedAt = new Date().toISOString();
+  const executable = nonEmptyTrimmed(binaryPath) ?? "agent";
 
-  const versionProbe = yield* runCursorCommand(["--version"]).pipe(
+  const versionProbe = yield* runCursorCommand(["--version"], executable).pipe(
     Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
     Effect.result,
   );
@@ -1559,6 +1489,8 @@ export const checkCursorProviderStatus: Effect.Effect<
       "Cursor Agent CLI is installed. Sign in with Cursor if a session prompts for authentication.",
   } satisfies ServerProviderStatus;
 });
+
+export const checkCursorProviderStatus = makeCheckCursorProviderStatus();
 
 // ── Snapshot helpers ────────────────────────────────────────────────
 
@@ -1656,8 +1588,6 @@ export const ProviderHealthLive = Layer.effect(
     const resolveClaudeSubscription = Cache.get(claudeSubscriptionCache, "claude").pipe(
       Effect.map((probe) => probe?.subscriptionType),
     );
-
-    const checkClaude = makeCheckClaudeProviderStatus(resolveClaudeSubscription);
 
     const getProviderBinaryPath = (provider: ProviderKind, settings: ServerSettings) => {
       switch (provider) {
@@ -1784,13 +1714,16 @@ export const ProviderHealthLive = Layer.effect(
       Effect.flatMap((settings) =>
         Effect.all(
           [
-            checkCodexProviderStatus,
-            checkClaude,
-            checkCursorProviderStatus,
-            checkGeminiProviderStatus,
-            checkKiloProviderStatus,
-            checkOpenCodeProviderStatus,
-            checkPiProviderStatus(settings.providers.pi.agentDir),
+            makeCheckCodexProviderStatus(settings.providers.codex.binaryPath),
+            makeCheckClaudeProviderStatus(
+              resolveClaudeSubscription,
+              settings.providers.claudeAgent.binaryPath,
+            ),
+            makeCheckCursorProviderStatus(settings.providers.cursor.binaryPath),
+            makeCheckGeminiProviderStatus(settings.providers.gemini.binaryPath),
+            makeCheckKiloProviderStatus(settings.providers.kilo.binaryPath),
+            makeCheckOpenCodeProviderStatus(settings.providers.opencode.binaryPath),
+            checkPiProviderStatus(settings.providers.pi.agentDir, settings.providers.pi.binaryPath),
           ],
           {
             concurrency: "unbounded",

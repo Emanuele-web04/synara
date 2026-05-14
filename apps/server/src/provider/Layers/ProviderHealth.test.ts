@@ -10,6 +10,11 @@ import {
   checkCursorProviderStatus,
   checkOpenCodeProviderStatus,
   hasCustomModelProvider,
+  makeCheckClaudeProviderStatus,
+  makeCheckCodexProviderStatus,
+  makeCheckCursorProviderStatus,
+  makeCheckKiloProviderStatus,
+  makeCheckOpenCodeProviderStatus,
   parseAuthStatusFromOutput,
   parseClaudeAuthStatusFromOutput,
   readCodexConfigModelProvider,
@@ -35,13 +40,17 @@ function mockHandle(result: { stdout: string; stderr: string; code: number }) {
 }
 
 function mockSpawnerLayer(
-  handler: (args: ReadonlyArray<string>) => { stdout: string; stderr: string; code: number },
+  handler: (args: ReadonlyArray<string>, command: string) => {
+    stdout: string;
+    stderr: string;
+    code: number;
+  },
 ) {
   return Layer.succeed(
     ChildProcessSpawner.ChildProcessSpawner,
     ChildProcessSpawner.make((command) => {
-      const cmd = command as unknown as { args: ReadonlyArray<string> };
-      return Effect.succeed(mockHandle(handler(cmd.args)));
+      const cmd = command as unknown as { command: string; args: ReadonlyArray<string> };
+      return Effect.succeed(mockHandle(handler(cmd.args, cmd.command)));
     }),
   );
 }
@@ -117,6 +126,24 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       }).pipe(
         Effect.provide(
           mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
+            if (joined === "login status") return { stdout: "Logged in\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("uses configured codex binary for version and auth probes", () =>
+      Effect.gen(function* () {
+        yield* withTempCodexHome();
+        const status = yield* makeCheckCodexProviderStatus("/custom/bin/codex");
+        assert.strictEqual(status.status, "ready");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "/custom/bin/codex");
             const joined = args.join(" ");
             if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
             if (joined === "login status") return { stdout: "Logged in\n", stderr: "", code: 0 };
@@ -496,6 +523,28 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       ),
     );
 
+    it.effect("uses configured claude binary for version and auth probes", () =>
+      Effect.gen(function* () {
+        const status = yield* makeCheckClaudeProviderStatus(undefined, "/custom/bin/claude");
+        assert.strictEqual(status.status, "ready");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "/custom/bin/claude");
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+            if (joined === "auth status")
+              return {
+                stdout: '{"loggedIn":true,"authMethod":"claude.ai"}\n',
+                stderr: "",
+                code: 0,
+              };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
     it.effect("returns unavailable when claude is missing", () =>
       Effect.gen(function* () {
         const status = yield* checkClaudeProviderStatus;
@@ -619,6 +668,22 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       ),
     );
 
+    it.effect("uses configured opencode binary for version probe", () =>
+      Effect.gen(function* () {
+        const status = yield* makeCheckOpenCodeProviderStatus("/custom/bin/opencode");
+        assert.strictEqual(status.status, "ready");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "/custom/bin/opencode");
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "opencode 1.3.17\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
     it.effect("returns unavailable when opencode is missing", () =>
       Effect.gen(function* () {
         const status = yield* checkOpenCodeProviderStatus;
@@ -634,6 +699,24 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
     );
   });
 
+  describe("checkKiloProviderStatus", () => {
+    it.effect("uses configured Kilo binary for version probe", () =>
+      Effect.gen(function* () {
+        const status = yield* makeCheckKiloProviderStatus("/custom/bin/kilo");
+        assert.strictEqual(status.status, "ready");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "/custom/bin/kilo");
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "kilo 7.2.52\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+  });
+
   describe("checkCursorProviderStatus", () => {
     it.effect("returns ready when Cursor Agent is installed", () =>
       Effect.gen(function* () {
@@ -645,6 +728,24 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       }).pipe(
         Effect.provide(
           mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") {
+              return { stdout: "agent 2026.04.27\n", stderr: "", code: 0 };
+            }
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("uses configured Cursor Agent binary for version probe", () =>
+      Effect.gen(function* () {
+        const status = yield* makeCheckCursorProviderStatus("/custom/bin/agent");
+        assert.strictEqual(status.status, "ready");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "/custom/bin/agent");
             const joined = args.join(" ");
             if (joined === "--version") {
               return { stdout: "agent 2026.04.27\n", stderr: "", code: 0 };
