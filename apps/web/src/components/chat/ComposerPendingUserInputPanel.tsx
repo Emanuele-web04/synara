@@ -66,14 +66,17 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
     onAdvanceRef.current = onAdvance;
   }, [onAdvance]);
 
-  // Clear auto-advance timer on unmount
+  // Cancel a pending auto-advance on unmount, and whenever the active question
+  // changes or a response goes in flight — otherwise a manual Next/Submit landing
+  // inside the 200ms window leaves a stale timer that advances or submits again.
   useEffect(() => {
     return () => {
       if (autoAdvanceTimerRef.current !== null) {
         window.clearTimeout(autoAdvanceTimerRef.current);
+        autoAdvanceTimerRef.current = null;
       }
     };
-  }, []);
+  }, [activeQuestion?.id, isResponding]);
 
   const handleOptionSelection = useEffectEvent((questionId: string, optionLabel: string) => {
     onToggleOption(questionId, optionLabel);
