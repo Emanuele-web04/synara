@@ -73,6 +73,24 @@ export function hasNativeAssistantMessagesBefore(
   });
 }
 
+export function listPriorTranscriptMessages(
+  thread: Pick<OrchestrationThread, "messages">,
+  currentMessageId: string,
+): ReadonlyArray<OrchestrationMessage> {
+  const currentIndex = thread.messages.findIndex((message) => message.id === currentMessageId);
+  if (currentIndex <= 0) {
+    return [];
+  }
+
+  return thread.messages.slice(0, currentIndex).filter((message) => {
+    return (
+      (message.role === "user" || message.role === "assistant") &&
+      message.streaming === false &&
+      normalizeMessageText(message.text).length > 0
+    );
+  });
+}
+
 function buildImportedMessagesBootstrapText(input: {
   thread: Pick<OrchestrationThread, "title" | "branch" | "worktreePath">;
   importedMessages: ReadonlyArray<OrchestrationMessage>;
@@ -139,6 +157,25 @@ export function buildHandoffBootstrapText(
     thread,
     importedMessages,
     intro: `This conversation was handed off from ${thread.handoff.sourceProvider}.`,
+    maxChars,
+  });
+}
+
+export function buildPriorTranscriptBootstrapText(
+  thread: Pick<OrchestrationThread, "title" | "branch" | "worktreePath" | "messages">,
+  currentMessageId: string,
+  maxChars = HANDOFF_BOOTSTRAP_CHAR_BUDGET,
+): string | null {
+  const priorMessages = listPriorTranscriptMessages(thread, currentMessageId);
+  if (priorMessages.length === 0) {
+    return null;
+  }
+
+  return buildImportedMessagesBootstrapText({
+    thread,
+    importedMessages: priorMessages,
+    intro:
+      "This provider session may have been restarted without native conversation state. Use this prior DP Code transcript as context for the latest user message.",
     maxChars,
   });
 }

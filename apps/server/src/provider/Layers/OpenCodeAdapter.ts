@@ -1755,9 +1755,18 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         if (text === undefined) {
           return;
         }
-        const previousText = context.emittedTextByPartId.get(part.id);
+        const nextTextItemId =
+          turnId && part.type === "text" ? openCodeNextTextItemId(turnId) : undefined;
+        const itemId =
+          nextTextItemId && context.emittedTextByPartId.has(nextTextItemId)
+            ? nextTextItemId
+            : part.id;
+        const previousText = context.emittedTextByPartId.get(itemId);
         const { latestText, deltaToEmit } = mergeOpenCodeAssistantText(previousText, text);
-        context.emittedTextByPartId.set(part.id, latestText);
+        context.emittedTextByPartId.set(itemId, latestText);
+        if (itemId !== part.id) {
+          context.emittedTextByPartId.set(part.id, latestText);
+        }
         if (latestText !== text) {
           context.partById.set(
             part.id,
@@ -1771,7 +1780,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             ...buildEventBase({
               threadId: context.session.threadId,
               turnId,
-              itemId: part.id,
+              itemId,
               createdAt:
                 part.type === "text" || part.type === "reasoning"
                   ? isoFromEpochMs(part.time?.start)
@@ -1789,9 +1798,12 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         if (
           part.type === "text" &&
           part.time?.end !== undefined &&
-          !context.completedAssistantPartIds.has(part.id)
+          !context.completedAssistantPartIds.has(itemId)
         ) {
-          context.completedAssistantPartIds.add(part.id);
+          context.completedAssistantPartIds.add(itemId);
+          if (itemId !== part.id) {
+            context.completedAssistantPartIds.add(part.id);
+          }
           const proposedPlanMarkdown =
             context.activeInteractionMode === "plan"
               ? extractProposedPlanMarkdown(latestText)
@@ -1801,7 +1813,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               ...buildEventBase({
                 threadId: context.session.threadId,
                 turnId,
-                itemId: part.id,
+                itemId,
                 createdAt: isoFromEpochMs(part.time.end),
                 raw,
               }),
@@ -1815,7 +1827,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             ...buildEventBase({
               threadId: context.session.threadId,
               turnId,
-              itemId: part.id,
+              itemId,
               createdAt: isoFromEpochMs(part.time.end),
               raw,
             }),
