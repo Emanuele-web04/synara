@@ -74,6 +74,7 @@ import { gitRemoveWorktreeMutationOptions } from "../lib/gitReactQuery";
 import {
   ArchiveIcon,
   ChevronDownIcon,
+  ExternalLinkIcon,
   PlusIcon,
   RotateCcwIcon,
   Undo2Icon,
@@ -153,6 +154,10 @@ type InstallBinarySettingsKey =
 type InstallProviderSettings = {
   provider: ProviderKind;
   title: string;
+  docs: ReadonlyArray<{
+    label: string;
+    href: string;
+  }>;
   binaryPathKey: InstallBinarySettingsKey;
   binaryPlaceholder: string;
   binaryDescription: ReactNode;
@@ -246,6 +251,11 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
   {
     provider: "codex",
     title: "Codex",
+    docs: [
+      { label: "Install", href: "https://help.openai.com/en/articles/11096431" },
+      { label: "Update", href: "https://help.openai.com/en/articles/11096431" },
+      { label: "Config", href: "https://github.com/openai/codex/blob/main/docs/config.md" },
+    ],
     binaryPathKey: "codexBinaryPath",
     binaryPlaceholder: "Codex binary path",
     binaryDescription: (
@@ -260,6 +270,11 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
   {
     provider: "claudeAgent",
     title: "Claude",
+    docs: [
+      { label: "Install", href: "https://code.claude.com/docs/en/installation" },
+      { label: "Update", href: "https://code.claude.com/docs/en/installation#update-claude-code" },
+      { label: "Config", href: "https://code.claude.com/docs/en/settings" },
+    ],
     binaryPathKey: "claudeBinaryPath",
     binaryPlaceholder: "Claude binary path",
     binaryDescription: (
@@ -271,6 +286,11 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
   {
     provider: "cursor",
     title: "Cursor",
+    docs: [
+      { label: "Install", href: "https://docs.cursor.com/en/cli/installation" },
+      { label: "Update", href: "https://docs.cursor.com/en/cli/installation#updates" },
+      { label: "Config", href: "https://docs.cursor.com/en/cli/overview" },
+    ],
     binaryPathKey: "cursorBinaryPath",
     binaryPlaceholder: "Cursor Agent binary path",
     binaryDescription: (
@@ -285,6 +305,14 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
   {
     provider: "gemini",
     title: "Gemini",
+    docs: [
+      { label: "Install", href: "https://google-gemini.github.io/gemini-cli/docs/get-started/" },
+      { label: "Update", href: "https://github.com/google-gemini/gemini-cli" },
+      {
+        label: "Config",
+        href: "https://google-gemini.github.io/gemini-cli/docs/get-started/configuration.html",
+      },
+    ],
     binaryPathKey: "geminiBinaryPath",
     binaryPlaceholder: "Gemini binary path",
     binaryDescription: (
@@ -296,6 +324,11 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
   {
     provider: "kilo",
     title: "Kilo",
+    docs: [
+      { label: "Install", href: "https://kilo.ai/docs/cli" },
+      { label: "Update", href: "https://kilo.ai/docs/cli" },
+      { label: "Config", href: "https://kilo.ai/docs/cli#configuration" },
+    ],
     binaryPathKey: "kiloBinaryPath",
     binaryPlaceholder: "Kilo binary path",
     binaryDescription: (
@@ -313,6 +346,11 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
   {
     provider: "opencode",
     title: "OpenCode",
+    docs: [
+      { label: "Install", href: "https://opencode.ai/docs/" },
+      { label: "Update", href: "https://opencode.ai/docs/cli/" },
+      { label: "Config", href: "https://opencode.ai/docs/config/" },
+    ],
     binaryPathKey: "openCodeBinaryPath",
     binaryPlaceholder: "OpenCode binary path",
     binaryDescription: (
@@ -331,6 +369,11 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
   {
     provider: "pi",
     title: "Pi",
+    docs: [
+      { label: "Install", href: "https://pi.dev/docs/latest" },
+      { label: "Update", href: "https://pi.dev/docs/latest/settings" },
+      { label: "Config", href: "https://pi.dev/docs/latest/settings" },
+    ],
     binaryPathKey: "piBinaryPath",
     binaryPlaceholder: "Pi binary path",
     binaryDescription: (
@@ -429,6 +472,30 @@ function SettingResetButton({ label, onClick }: { label: string; onClick: () => 
       />
       <TooltipPopup side="top">Reset to default</TooltipPopup>
     </Tooltip>
+  );
+}
+
+function ProviderDocsLinks({ docs }: { docs: InstallProviderSettings["docs"] }) {
+  return (
+    <div className="rounded-lg border border-border/60 bg-[var(--color-background-elevated-secondary)]/35 px-3 py-2.5">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <span className="text-xs font-medium text-foreground">CLI docs</span>
+        <div className="flex flex-wrap gap-2">
+          {docs.map((doc) => (
+            <a
+              key={`${doc.label}:${doc.href}`}
+              href={doc.href}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border/70 px-2.5 text-xs text-muted-foreground transition-colors hover:border-border hover:bg-[var(--color-background-panel)] hover:text-foreground"
+            >
+              <span>{doc.label}</span>
+              <ExternalLinkIcon className="size-3" />
+            </a>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -2406,6 +2473,8 @@ function SettingsRouteView() {
                         <CollapsibleContent>
                           <div className="border-t border-border/70 px-4 py-4">
                             <div className="space-y-3">
+                              <ProviderDocsLinks docs={providerSettings.docs} />
+
                               <label
                                 htmlFor={`provider-install-${providerSettings.binaryPathKey}`}
                                 className="block"
