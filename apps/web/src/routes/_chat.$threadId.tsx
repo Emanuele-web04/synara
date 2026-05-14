@@ -28,7 +28,15 @@ import { Schema } from "effect";
 
 import ChatView from "../components/ChatView";
 import BrowserPanel from "../components/BrowserPanel";
-import { ClaudeAI, CursorIcon, Gemini, KiloIcon, OpenAI, OpenCodeIcon, PiIcon } from "../components/Icons";
+import {
+  ClaudeAI,
+  CursorIcon,
+  Gemini,
+  KiloIcon,
+  OpenAI,
+  OpenCodeIcon,
+  PiIcon,
+} from "../components/Icons";
 import { ChatPaneDropOverlay } from "../components/chat-drop-overlay/ChatPaneDropOverlay";
 import { DiffWorkerPoolProvider } from "../components/DiffWorkerPoolProvider";
 import {

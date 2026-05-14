@@ -22,6 +22,42 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.0.47",
+    date: "May 15",
+    features: [
+      {
+        id: "pi-provider-headline",
+        title: "Pi gets a much sturdier seat at the table",
+        description:
+          "Pi provider sessions now benefit from tighter lifecycle handling, clearer extension-limit warnings, and provider probes that respect the binaries configured in settings.",
+      },
+      {
+        id: "provider-auto-updates",
+        title: "Providers can keep themselves fresher",
+        description:
+          "Provider auto-update plumbing landed across the app, making it easier to keep agent runtimes current without turning setup and maintenance into a separate chore.",
+      },
+      {
+        id: "create-pr-availability",
+        title: "Create PR only appears when it can actually work",
+        description:
+          "Create-PR actions now check upstream branch and availability state more carefully, so the UI is quieter until the repository is ready for a real pull request.",
+      },
+      {
+        id: "pending-input-recovery",
+        title: "Pending questions stop advancing at the wrong time",
+        description:
+          "Pending user-input auto-advance now cancels on question changes and in-flight responses, reducing stale answers and empty submissions in interrupted provider flows.",
+      },
+      {
+        id: "git-and-transcript-polish",
+        title: "Git status and provider transcripts read cleaner",
+        description:
+          "Git status refreshes, pull-error messaging, Kilo/OpenCode transcript handling, repo diff scopes, and provider install docs links all picked up focused reliability polish.",
+      },
+    ],
+  },
+  {
     version: "0.0.46",
     date: "May 13",
     features: [

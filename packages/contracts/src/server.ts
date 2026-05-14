@@ -77,9 +77,7 @@ export const ServerProviderStatus = Schema.Struct({
 });
 export type ServerProviderStatus = typeof ServerProviderStatus.Type;
 
-export type ServerProviderVersionAdvisory = NonNullable<
-  ServerProviderStatus["versionAdvisory"]
->;
+export type ServerProviderVersionAdvisory = NonNullable<ServerProviderStatus["versionAdvisory"]>;
 export type ServerProviderUpdateState = NonNullable<ServerProviderStatus["updateState"]>;
 
 const ServerProviderStatuses = Schema.Array(ServerProviderStatus);

@@ -536,9 +536,7 @@ function providerUpdateStatusLabel(provider: ServerProviderStatus): string | nul
   if (advisory?.status === "behind_latest" && advisory.latestVersion) {
     const currentVersion = formatProviderVersion(advisory.currentVersion);
     const latestVersion = formatProviderVersion(advisory.latestVersion);
-    return currentVersion
-      ? `${currentVersion} -> ${latestVersion}`
-      : `Latest ${latestVersion}`;
+    return currentVersion ? `${currentVersion} -> ${latestVersion}` : `Latest ${latestVersion}`;
   }
   const currentVersion = formatProviderVersion(provider.version);
   return currentVersion ? `Current ${currentVersion}` : null;
@@ -2626,12 +2624,13 @@ function SettingsRouteView() {
                               ? settings.kiloBinaryPath !== defaults.kiloBinaryPath ||
                                 settings.kiloServerUrl !== defaults.kiloServerUrl ||
                                 settings.kiloServerPassword !== defaults.kiloServerPassword
-                            : providerSettings.provider === "pi"
-                              ? settings.piBinaryPath !== defaults.piBinaryPath ||
-                                settings.piAgentDir !== defaults.piAgentDir
-                              : settings.openCodeBinaryPath !== defaults.openCodeBinaryPath ||
-                                settings.openCodeServerUrl !== defaults.openCodeServerUrl ||
-                                settings.openCodeServerPassword !== defaults.openCodeServerPassword;
+                              : providerSettings.provider === "pi"
+                                ? settings.piBinaryPath !== defaults.piBinaryPath ||
+                                  settings.piAgentDir !== defaults.piAgentDir
+                                : settings.openCodeBinaryPath !== defaults.openCodeBinaryPath ||
+                                  settings.openCodeServerUrl !== defaults.openCodeServerUrl ||
+                                  settings.openCodeServerPassword !==
+                                    defaults.openCodeServerPassword;
                   const binaryPathValue =
                     providerSettings.binaryPathKey === "claudeBinaryPath"
                       ? claudeBinaryPath
@@ -2774,16 +2773,16 @@ function SettingsRouteView() {
                                         ? { claudeBinaryPath: event.target.value }
                                         : providerSettings.binaryPathKey === "cursorBinaryPath"
                                           ? { cursorBinaryPath: event.target.value }
-                                        : providerSettings.binaryPathKey === "geminiBinaryPath"
-                                          ? { geminiBinaryPath: event.target.value }
-                                          : providerSettings.binaryPathKey === "kiloBinaryPath"
-                                            ? { kiloBinaryPath: event.target.value }
-                                            : providerSettings.binaryPathKey ===
-                                                "openCodeBinaryPath"
-                                              ? { openCodeBinaryPath: event.target.value }
-                                              : providerSettings.binaryPathKey === "piBinaryPath"
-                                                ? { piBinaryPath: event.target.value }
-                                                : { codexBinaryPath: event.target.value },
+                                          : providerSettings.binaryPathKey === "geminiBinaryPath"
+                                            ? { geminiBinaryPath: event.target.value }
+                                            : providerSettings.binaryPathKey === "kiloBinaryPath"
+                                              ? { kiloBinaryPath: event.target.value }
+                                              : providerSettings.binaryPathKey ===
+                                                  "openCodeBinaryPath"
+                                                ? { openCodeBinaryPath: event.target.value }
+                                                : providerSettings.binaryPathKey === "piBinaryPath"
+                                                  ? { piBinaryPath: event.target.value }
+                                                  : { codexBinaryPath: event.target.value },
                                     )
                                   }
                                   placeholder={providerSettings.binaryPlaceholder}
