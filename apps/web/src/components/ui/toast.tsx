@@ -29,6 +29,7 @@ import {
 type ThreadToastData = {
   allowCrossThreadVisibility?: boolean;
   copyText?: string;
+  secondaryActionProps?: React.ComponentProps<typeof Button>;
   threadId?: ThreadId | null;
   tooltipStyle?: boolean;
   dismissAfterVisibleMs?: number;
@@ -168,13 +169,15 @@ function ThreadToastVisibleAutoDismiss({
 function ToastActions({
   actionProps,
   copyText,
+  secondaryActionProps,
 }: {
   actionProps: ToastObject<ThreadToastData>["actionProps"];
   copyText: string | undefined;
+  secondaryActionProps: ThreadToastData["secondaryActionProps"];
 }) {
   const { copyToClipboard, isCopied } = useCopyToClipboard();
 
-  if (!actionProps && !copyText) return null;
+  if (!actionProps && !copyText && !secondaryActionProps) return null;
 
   return (
     <div className="mt-2 flex flex-wrap items-center gap-1.5">
@@ -201,6 +204,14 @@ function ToastActions({
         >
           {actionProps.children}
         </Toast.Action>
+      )}
+      {secondaryActionProps && (
+        <Button
+          {...secondaryActionProps}
+          className={cn("self-start", secondaryActionProps.className)}
+          size={secondaryActionProps.size ?? "xs"}
+          variant={secondaryActionProps.variant ?? "outline"}
+        />
       )}
     </div>
   );
@@ -368,7 +379,11 @@ function Toasts({ position = "top-right" }: { position: ToastPosition }) {
                     className="min-w-0 break-words text-muted-foreground"
                     data-slot="toast-description"
                   />
-                  <ToastActions actionProps={toast.actionProps} copyText={toast.data?.copyText} />
+                  <ToastActions
+                    actionProps={toast.actionProps}
+                    copyText={toast.data?.copyText}
+                    secondaryActionProps={toast.data?.secondaryActionProps}
+                  />
                 </div>
                 <ToastCloseButton />
               </Toast.Content>
@@ -452,6 +467,7 @@ function AnchoredToasts() {
                         <ToastActions
                           actionProps={toast.actionProps}
                           copyText={toast.data?.copyText}
+                          secondaryActionProps={toast.data?.secondaryActionProps}
                         />
                       </div>
                       <ToastCloseButton />

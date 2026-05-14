@@ -84,6 +84,9 @@ import {
   ServerLifecycleStreamEvent,
   ServerGetSettingsResult,
   ServerListWorktreesResult,
+  ServerProviderUpdateError,
+  ServerProviderUpdateInput,
+  ServerProviderUpdateResult,
   ServerRefreshProvidersResult,
   ServerUpdateSettingsInput,
   ServerUpdateSettingsResult,
@@ -434,6 +437,12 @@ export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProv
   error: WsRpcError,
 });
 
+export const WsServerUpdateProviderRpc = Rpc.make(WS_METHODS.serverUpdateProvider, {
+  payload: ServerProviderUpdateInput,
+  success: ServerProviderUpdateResult,
+  error: ServerProviderUpdateError,
+});
+
 export const WsServerListWorktreesRpc = Rpc.make(WS_METHODS.serverListWorktrees, {
   payload: Schema.Struct({}),
   success: ServerListWorktreesResult,
@@ -594,6 +603,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
   WsServerRefreshProvidersRpc,
+  WsServerUpdateProviderRpc,
   WsServerListWorktreesRpc,
   WsServerGetProviderUsageSnapshotRpc,
   WsServerTranscribeVoiceRpc,

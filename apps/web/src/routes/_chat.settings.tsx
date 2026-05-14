@@ -6,13 +6,14 @@
 import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderKind,
+  type ServerProviderStatus,
   type ThreadId,
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
 } from "@t3tools/contracts";
 import { createFileRoute, useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   closestCenter,
   DndContext,
@@ -74,6 +75,8 @@ import { gitRemoveWorktreeMutationOptions } from "../lib/gitReactQuery";
 import {
   ArchiveIcon,
   ChevronDownIcon,
+  DownloadIcon,
+  Loader2Icon,
   PlusIcon,
   RotateCcwIcon,
   Undo2Icon,
@@ -437,11 +440,57 @@ function normalizeManagedWorktreePath(value: string | null | undefined): string 
   return trimmed && trimmed.length > 0 ? trimmed : null;
 }
 
+function formatProviderVersion(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return trimmed.startsWith("v") ? trimmed : `v${trimmed}`;
+}
+
+function providerUpdateStatusLabel(provider: ServerProviderStatus): string | null {
+  const state = provider.updateState?.status;
+  if (state === "queued") {
+    return "Update queued";
+  }
+  if (state === "running") {
+    return "Updating";
+  }
+  if (state === "succeeded") {
+    return "Updated";
+  }
+  if (state === "failed") {
+    return "Update failed";
+  }
+  if (state === "unchanged") {
+    return "Still outdated";
+  }
+  const advisory = provider.versionAdvisory;
+  if (advisory?.status === "behind_latest" && advisory.latestVersion) {
+    const currentVersion = formatProviderVersion(advisory.currentVersion);
+    const latestVersion = formatProviderVersion(advisory.latestVersion);
+    return currentVersion
+      ? `${currentVersion} -> ${latestVersion}`
+      : `Latest ${latestVersion}`;
+  }
+  const currentVersion = formatProviderVersion(provider.version);
+  return currentVersion ? `Current ${currentVersion}` : null;
+}
+
+function providerUpdateFailureMessage(provider: ServerProviderStatus | undefined): string | null {
+  const state = provider?.updateState;
+  if (!state || (state.status !== "failed" && state.status !== "unchanged")) {
+    return null;
+  }
+  return state.output?.trim() || state.message || "The provider update did not complete.";
+}
+
 // ── Route screen ───────────────────────────────────────────────────────────
 
 function SettingsRouteView() {
   const routeSearch = useSearch({ strict: false }) as Record<string, unknown>;
   const activeSection = normalizeSettingsSection(routeSearch.section);
+  const settingsTarget = typeof routeSearch.target === "string" ? routeSearch.target : null;
   const activeSectionItem = SETTINGS_NAV_ITEMS.find((item) => item.id === activeSection)!;
 
   const { isDefaultActiveTheme, resetAllThemes, resolvedTheme, theme, setTheme } = useTheme();
@@ -467,6 +516,8 @@ function SettingsRouteView() {
   const [showRecoveryTools, setShowRecoveryTools] = useState(false);
   const [releaseHistoryOpen, setReleaseHistoryOpen] = useState(false);
   const [openKeybindingsError, setOpenKeybindingsError] = useState<string | null>(null);
+  const providerUpdatesRef = useRef<HTMLDivElement | null>(null);
+  const providerInstallsRef = useRef<HTMLDivElement | null>(null);
   const [openInstallProviders, setOpenInstallProviders] = useState<Record<ProviderKind, boolean>>({
     codex: Boolean(settings.codexBinaryPath || settings.codexHomePath),
     claudeAgent: Boolean(settings.claudeBinaryPath),
@@ -478,6 +529,9 @@ function SettingsRouteView() {
     ),
     pi: Boolean(settings.piBinaryPath || settings.piAgentDir),
   });
+  const [updatingProviders, setUpdatingProviders] = useState<ReadonlySet<ProviderKind>>(
+    () => new Set(),
+  );
   const [selectedCustomModelProvider, setSelectedCustomModelProvider] =
     useState<ProviderKind>("codex");
   const [customModelInputByProvider, setCustomModelInputByProvider] = useState<
@@ -543,6 +597,38 @@ function SettingsRouteView() {
   const piAgentDir = settings.piAgentDir;
   const keybindingsConfigPath = serverConfigQuery.data?.keybindingsConfigPath ?? null;
   const availableEditors = serverConfigQuery.data?.availableEditors;
+  const providerStatusByProvider = useMemo(
+    () =>
+      new Map((serverConfigQuery.data?.providers ?? []).map((status) => [status.provider, status])),
+    [serverConfigQuery.data?.providers],
+  );
+  const outdatedProviderCount = useMemo(
+    () =>
+      (serverConfigQuery.data?.providers ?? []).filter(
+        (status) => status.versionAdvisory?.status === "behind_latest",
+      ).length,
+    [serverConfigQuery.data?.providers],
+  );
+  const outdatedProviderStatuses = useMemo(
+    () =>
+      (serverConfigQuery.data?.providers ?? []).filter(
+        (status) => status.versionAdvisory?.status === "behind_latest",
+      ),
+    [serverConfigQuery.data?.providers],
+  );
+  const shouldFocusProviderUpdates =
+    activeSection === "providers" && settingsTarget === "provider-updates";
+
+  useEffect(() => {
+    if (!shouldFocusProviderUpdates) {
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      providerUpdatesRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [serverConfigQuery.data?.providers, shouldFocusProviderUpdates]);
   const managedWorktrees = serverWorktreesQuery.data?.worktrees ?? [];
   const worktreesByWorkspaceRoot = managedWorktrees.reduce<
     Array<{
@@ -795,6 +881,49 @@ function SettingsRouteView() {
       });
     },
     [settings.providerOrder, updateSettings],
+  );
+
+  const runProviderUpdate = useCallback(
+    async (provider: ProviderKind) => {
+      if (updatingProviders.has(provider)) {
+        return;
+      }
+      setUpdatingProviders((current) => new Set(current).add(provider));
+      try {
+        const result = await ensureNativeApi().server.updateProvider({ provider });
+        const refreshedProvider = result.providers.find((status) => status.provider === provider);
+        const failureMessage = providerUpdateFailureMessage(refreshedProvider);
+        if (failureMessage) {
+          toastManager.add({
+            type: "error",
+            title: `Could not update ${PROVIDER_DISPLAY_NAMES[provider]}`,
+            description: failureMessage,
+          });
+          return;
+        }
+        toastManager.add({
+          type: "success",
+          title: `${PROVIDER_DISPLAY_NAMES[provider]} update finished`,
+          description: "New sessions will use the refreshed provider.",
+        });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: `Could not update ${PROVIDER_DISPLAY_NAMES[provider]}`,
+          description: error instanceof Error ? error.message : "The provider update failed.",
+        });
+      } finally {
+        await queryClient
+          .invalidateQueries({ queryKey: serverQueryKeys.config() })
+          .catch(() => undefined);
+        setUpdatingProviders((current) => {
+          const next = new Set(current);
+          next.delete(provider);
+          return next;
+        });
+      }
+    },
+    [queryClient, updatingProviders],
   );
 
   async function restoreDefaults() {
@@ -2223,6 +2352,7 @@ function SettingsRouteView() {
 
   const renderProvidersPanel = () => (
     <div className="space-y-6">
+      {renderProviderUpdatesSection()}
       <SettingsSection title="Provider picker">
         <div className="space-y-2">
           <SettingsRow
@@ -2282,20 +2412,103 @@ function SettingsRouteView() {
           </SettingsRow>
         </div>
       </SettingsSection>
+      {renderProviderInstallsSection()}
     </div>
   );
 
-  const renderAdvancedPanel = () => (
-    <div className="space-y-6">
-      <SettingsSection title="Provider installs">
+  const renderProviderUpdatesSection = () => (
+    <div ref={providerUpdatesRef} id="provider-updates">
+      <SettingsSection title="Updates">
         <div className="space-y-2">
           <SettingsRow
-            title="CLI overrides"
-            description="Override the CLI used for new sessions."
+            title="Provider updates"
+            description="Update installed provider tools that DP Code can safely update."
+            status={
+              outdatedProviderCount > 0
+                ? `${outdatedProviderCount} update${outdatedProviderCount === 1 ? "" : "s"} available`
+                : "No provider updates detected"
+            }
+          >
+            {outdatedProviderStatuses.length > 0 ? (
+              <div className="mt-4 overflow-hidden rounded-lg border border-border/70">
+                {outdatedProviderStatuses.map((providerStatus) => {
+                  const updateAdvisory = providerStatus.versionAdvisory;
+                  const updateState = providerStatus.updateState?.status;
+                  const isProviderUpdateActive =
+                    updateState === "queued" ||
+                    updateState === "running" ||
+                    updatingProviders.has(providerStatus.provider);
+                  const canUpdateProvider =
+                    updateAdvisory?.canUpdate === true && !isProviderUpdateActive;
+                  const updateLabel = providerUpdateStatusLabel(providerStatus);
+
+                  return (
+                    <div
+                      key={providerStatus.provider}
+                      className="flex min-h-11 items-center gap-3 border-t border-border/70 px-3 py-2 first:border-t-0"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium text-foreground">
+                          {PROVIDER_DISPLAY_NAMES[providerStatus.provider]}
+                        </div>
+                        {updateLabel ? (
+                          <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                            {updateLabel}
+                          </div>
+                        ) : null}
+                      </div>
+                      {updateAdvisory?.canUpdate ? (
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant="outline"
+                          disabled={!canUpdateProvider}
+                          title={
+                            updateAdvisory.updateCommand
+                              ? `Run ${updateAdvisory.updateCommand}`
+                              : undefined
+                          }
+                          onClick={() => void runProviderUpdate(providerStatus.provider)}
+                        >
+                          {isProviderUpdateActive ? (
+                            <Loader2Icon className="size-3.5 animate-spin" />
+                          ) : (
+                            <DownloadIcon className="size-3.5" />
+                          )}
+                          {isProviderUpdateActive ? "Updating" : "Update"}
+                        </Button>
+                      ) : (
+                        <span className="shrink-0 text-[11px] text-muted-foreground">
+                          Manual update
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+          </SettingsRow>
+        </div>
+      </SettingsSection>
+    </div>
+  );
+
+  const renderProviderInstallsSection = () => (
+    <div ref={providerInstallsRef} id="provider-installs">
+      <SettingsSection title="Provider tools">
+        <div className="space-y-2">
+          <SettingsRow
+            title="Installed CLIs"
+            description="Review provider versions and update tools. Open a row only when you need binary overrides."
+            status={
+              outdatedProviderCount > 0
+                ? `${outdatedProviderCount} update${outdatedProviderCount === 1 ? "" : "s"} available`
+                : "No provider updates detected"
+            }
             resetAction={
               isInstallSettingsDirty ? (
                 <SettingResetButton
-                  label="provider installs"
+                  label="provider tools"
                   onClick={() => {
                     updateSettings({
                       claudeBinaryPath: defaults.claudeBinaryPath,
@@ -2328,7 +2541,7 @@ function SettingsRouteView() {
             }
           >
             <div className="mt-4">
-              <div className="space-y-2">
+              <div className="overflow-hidden rounded-lg border border-border/70">
                 {INSTALL_PROVIDER_SETTINGS.map((providerSettings) => {
                   const isOpen = openInstallProviders[providerSettings.provider];
                   const isDirty =
@@ -2366,6 +2579,20 @@ function SettingsRouteView() {
                               : providerSettings.binaryPathKey === "piBinaryPath"
                                 ? piBinaryPath
                                 : codexBinaryPath;
+                  const providerStatus = providerStatusByProvider.get(providerSettings.provider);
+                  const providerUpdateLabel = providerStatus
+                    ? providerUpdateStatusLabel(providerStatus)
+                    : null;
+                  const updateAdvisory = providerStatus?.versionAdvisory;
+                  const providerUpdateState = providerStatus?.updateState?.status;
+                  const isProviderUpdateActive =
+                    providerUpdateState === "queued" ||
+                    providerUpdateState === "running" ||
+                    updatingProviders.has(providerSettings.provider);
+                  const canUpdateProvider =
+                    updateAdvisory?.status === "behind_latest" &&
+                    updateAdvisory.canUpdate &&
+                    !isProviderUpdateActive;
 
                   return (
                     <Collapsible
@@ -2378,34 +2605,90 @@ function SettingsRouteView() {
                         }))
                       }
                     >
-                      <div className="overflow-hidden rounded-xl border border-border/70">
-                        <button
-                          type="button"
-                          className="flex w-full items-center gap-3 px-4 py-3 text-left"
-                          onClick={() =>
-                            setOpenInstallProviders((existing) => ({
-                              ...existing,
-                              [providerSettings.provider]: !existing[providerSettings.provider],
-                            }))
-                          }
-                        >
-                          <span className="min-w-0 flex-1 text-sm font-medium text-foreground">
-                            {providerSettings.title}
-                          </span>
-                          {isDirty ? (
-                            <span className="text-[11px] text-muted-foreground">Custom</span>
+                      <div className="border-t border-border/70 first:border-t-0">
+                        <div className="flex min-h-11 items-center gap-2 px-3 py-2">
+                          <button
+                            type="button"
+                            className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                            onClick={() =>
+                              setOpenInstallProviders((existing) => ({
+                                ...existing,
+                                [providerSettings.provider]: !existing[providerSettings.provider],
+                              }))
+                            }
+                          >
+                            <span className="min-w-0 flex-1 text-sm font-medium text-foreground">
+                              {providerSettings.title}
+                            </span>
+                            {isDirty ? (
+                              <span className="shrink-0 text-[11px] text-muted-foreground">
+                                Custom
+                              </span>
+                            ) : null}
+                            {providerUpdateLabel ? (
+                              <span
+                                className={cn(
+                                  "shrink-0 text-[11px]",
+                                  updateAdvisory?.status === "behind_latest"
+                                    ? "text-foreground"
+                                    : "text-muted-foreground",
+                                )}
+                              >
+                                {providerUpdateLabel}
+                              </span>
+                            ) : null}
+                            <ChevronDownIcon
+                              className={cn(
+                                "size-4 shrink-0 text-muted-foreground transition-transform",
+                                isOpen && "rotate-180",
+                              )}
+                            />
+                          </button>
+                          {updateAdvisory?.status === "behind_latest" &&
+                          updateAdvisory.canUpdate ? (
+                            <Button
+                              type="button"
+                              size="xs"
+                              variant="outline"
+                              disabled={!canUpdateProvider}
+                              title={
+                                updateAdvisory.updateCommand
+                                  ? `Run ${updateAdvisory.updateCommand}`
+                                  : undefined
+                              }
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void runProviderUpdate(providerSettings.provider);
+                              }}
+                            >
+                              {isProviderUpdateActive ? (
+                                <Loader2Icon className="size-3.5 animate-spin" />
+                              ) : (
+                                <DownloadIcon className="size-3.5" />
+                              )}
+                              {isProviderUpdateActive ? "Updating" : "Update"}
+                            </Button>
                           ) : null}
-                          <ChevronDownIcon
-                            className={cn(
-                              "size-4 shrink-0 text-muted-foreground transition-transform",
-                              isOpen && "rotate-180",
-                            )}
-                          />
-                        </button>
+                        </div>
 
                         <CollapsibleContent>
-                          <div className="border-t border-border/70 px-4 py-4">
+                          <div className="border-t border-border/70 bg-muted/20 px-3 py-3">
                             <div className="space-y-3">
+                              {updateAdvisory?.status === "behind_latest" ? (
+                                <div className="text-xs text-muted-foreground">
+                                  {updateAdvisory.canUpdate && updateAdvisory.updateCommand ? (
+                                    <>
+                                      <span>Command: </span>
+                                      <code className="font-mono">
+                                        {updateAdvisory.updateCommand}
+                                      </code>
+                                    </>
+                                  ) : (
+                                    "A newer version is available, but DP Code could not identify a safe one-click update command for this installation."
+                                  )}
+                                </div>
+                              ) : null}
+
                               <label
                                 htmlFor={`provider-install-${providerSettings.binaryPathKey}`}
                                 className="block"
@@ -2606,7 +2889,11 @@ function SettingsRouteView() {
           </SettingsRow>
         </div>
       </SettingsSection>
+    </div>
+  );
 
+  const renderAdvancedPanel = () => (
+    <div className="space-y-6">
       <SettingsSection title="Developer tools">
         <div className="space-y-2">
           <SettingsRow

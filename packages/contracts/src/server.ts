@@ -51,10 +51,36 @@ export const ServerProviderStatus = Schema.Struct({
   authType: Schema.optional(TrimmedNonEmptyString),
   authLabel: Schema.optional(TrimmedNonEmptyString),
   voiceTranscriptionAvailable: Schema.optional(Schema.Boolean),
+  version: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   checkedAt: IsoDateTime,
   message: Schema.optional(TrimmedNonEmptyString),
+  versionAdvisory: Schema.optionalKey(
+    Schema.Struct({
+      status: Schema.Literals(["unknown", "current", "behind_latest"]),
+      currentVersion: Schema.NullOr(TrimmedNonEmptyString),
+      latestVersion: Schema.NullOr(TrimmedNonEmptyString),
+      updateCommand: Schema.NullOr(TrimmedNonEmptyString),
+      canUpdate: Schema.Boolean,
+      checkedAt: Schema.NullOr(IsoDateTime),
+      message: Schema.NullOr(TrimmedNonEmptyString),
+    }),
+  ),
+  updateState: Schema.optionalKey(
+    Schema.Struct({
+      status: Schema.Literals(["idle", "queued", "running", "succeeded", "failed", "unchanged"]),
+      startedAt: Schema.NullOr(IsoDateTime),
+      finishedAt: Schema.NullOr(IsoDateTime),
+      message: Schema.NullOr(TrimmedNonEmptyString),
+      output: Schema.NullOr(Schema.String.check(Schema.isMaxLength(10_000))),
+    }),
+  ),
 });
 export type ServerProviderStatus = typeof ServerProviderStatus.Type;
+
+export type ServerProviderVersionAdvisory = NonNullable<
+  ServerProviderStatus["versionAdvisory"]
+>;
+export type ServerProviderUpdateState = NonNullable<ServerProviderStatus["updateState"]>;
 
 const ServerProviderStatuses = Schema.Array(ServerProviderStatus);
 
@@ -217,6 +243,26 @@ export type ServerConfigStreamEvent = typeof ServerConfigStreamEvent.Type;
 
 export const ServerRefreshProvidersResult = ServerProviderStatusesUpdatedPayload;
 export type ServerRefreshProvidersResult = typeof ServerRefreshProvidersResult.Type;
+
+export const ServerProviderUpdateInput = Schema.Struct({
+  provider: ProviderKind,
+});
+export type ServerProviderUpdateInput = typeof ServerProviderUpdateInput.Type;
+
+export class ServerProviderUpdateError extends Schema.TaggedErrorClass<ServerProviderUpdateError>()(
+  "ServerProviderUpdateError",
+  {
+    provider: ProviderKind,
+    reason: TrimmedNonEmptyString,
+  },
+) {
+  override get message(): string {
+    return `Provider update failed for ${this.provider}: ${this.reason}`;
+  }
+}
+
+export const ServerProviderUpdateResult = ServerProviderStatusesUpdatedPayload;
+export type ServerProviderUpdateResult = typeof ServerProviderUpdateResult.Type;
 
 export const ServerGetSettingsResult = ServerSettings;
 export type ServerGetSettingsResult = typeof ServerGetSettingsResult.Type;
