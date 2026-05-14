@@ -256,16 +256,15 @@ describe("when: branch is clean, ahead, and has no open PR", () => {
 });
 
 describe("when: branch is clean, up to date, and has no open PR", () => {
-  it("resolveQuickAction offers creating a PR on a published feature branch", () => {
+  it("resolveQuickAction returns disabled commit on a published feature branch", () => {
     const quick = resolveQuickAction(
       status({ aheadCount: 0, behindCount: 0, hasWorkingTreeChanges: false, pr: null }),
       false,
     );
     assert.deepInclude(quick, {
-      kind: "run_action",
-      action: "create_pr",
-      label: "Create PR",
-      disabled: false,
+      kind: "show_hint",
+      label: "Commit",
+      disabled: true,
     });
   });
 
@@ -299,7 +298,7 @@ describe("when: branch is clean, up to date, and has no open PR", () => {
     ]);
   });
 
-  it("resolveQuickAction blocks PR when the branch tracks the default branch", () => {
+  it("resolveQuickAction keeps disabled commit when the branch tracks the default branch", () => {
     const quick = resolveQuickAction(
       status({
         branch: "dpcode/pi-cleanup",
@@ -317,8 +316,8 @@ describe("when: branch is clean, up to date, and has no open PR", () => {
 
     assert.deepEqual(quick, {
       kind: "show_hint",
-      label: "Create PR",
-      hint: "No branch changes to include in a PR.",
+      label: "Commit",
+      hint: "Branch is up to date. No action needed.",
       disabled: true,
     });
   });
@@ -402,7 +401,7 @@ describe("when: branch is clean, up to date, and has no open PR", () => {
     ]);
   });
 
-  it("resolveQuickAction blocks PR when the upstream branch name is unknown", () => {
+  it("resolveQuickAction keeps disabled commit when the upstream branch name is unknown", () => {
     const quick = resolveQuickAction(
       status({
         upstreamBranch: null,
@@ -415,8 +414,8 @@ describe("when: branch is clean, up to date, and has no open PR", () => {
 
     assert.deepEqual(quick, {
       kind: "show_hint",
-      label: "Create PR",
-      hint: "No branch changes to include in a PR.",
+      label: "Commit",
+      hint: "Branch is up to date. No action needed.",
       disabled: true,
     });
   });

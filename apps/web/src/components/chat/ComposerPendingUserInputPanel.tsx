@@ -1,5 +1,5 @@
 import { type ApprovalRequestId } from "@t3tools/contracts";
-import { memo, useCallback, useEffect, useRef } from "react";
+import { memo, useEffect, useEffectEvent, useRef } from "react";
 import { type PendingUserInput } from "../../session-logic";
 import {
   derivePendingUserInputProgress,
@@ -61,32 +61,36 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   const progress = derivePendingUserInputProgress(prompt.questions, answers, questionIndex);
   const activeQuestion = progress.activeQuestion;
   const autoAdvanceTimerRef = useRef<number | null>(null);
+  const onAdvanceRef = useRef(onAdvance);
+  useEffect(() => {
+    onAdvanceRef.current = onAdvance;
+  }, [onAdvance]);
 
-  // Clear auto-advance timer on unmount
+  // Cancel a pending auto-advance on unmount, and whenever the active question
+  // changes or a response goes in flight — otherwise a manual Next/Submit landing
+  // inside the 200ms window leaves a stale timer that advances or submits again.
   useEffect(() => {
     return () => {
       if (autoAdvanceTimerRef.current !== null) {
         window.clearTimeout(autoAdvanceTimerRef.current);
+        autoAdvanceTimerRef.current = null;
       }
     };
-  }, []);
+  }, [activeQuestion?.id, isResponding]);
 
-  const handleOptionSelection = useCallback(
-    (questionId: string, optionLabel: string) => {
-      onToggleOption(questionId, optionLabel);
-      if (activeQuestion?.multiSelect) {
-        return;
-      }
-      if (autoAdvanceTimerRef.current !== null) {
-        window.clearTimeout(autoAdvanceTimerRef.current);
-      }
-      autoAdvanceTimerRef.current = window.setTimeout(() => {
-        autoAdvanceTimerRef.current = null;
-        onAdvance();
-      }, 200);
-    },
-    [activeQuestion?.multiSelect, onAdvance, onToggleOption],
-  );
+  const handleOptionSelection = useEffectEvent((questionId: string, optionLabel: string) => {
+    onToggleOption(questionId, optionLabel);
+    if (activeQuestion?.multiSelect) {
+      return;
+    }
+    if (autoAdvanceTimerRef.current !== null) {
+      window.clearTimeout(autoAdvanceTimerRef.current);
+    }
+    autoAdvanceTimerRef.current = window.setTimeout(() => {
+      autoAdvanceTimerRef.current = null;
+      onAdvanceRef.current();
+    }, 200);
+  });
 
   // Keyboard shortcut: digits toggle options for multi-select prompts and preserve
   // the current auto-advance behavior for single-select questions.
@@ -117,7 +121,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [activeQuestion, handleOptionSelection, isResponding]);
+  }, [activeQuestion, isResponding]);
 
   if (!activeQuestion) {
     return null;

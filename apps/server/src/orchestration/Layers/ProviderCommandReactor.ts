@@ -44,6 +44,7 @@ import { TextGeneration } from "../../git/Services/TextGeneration.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { clearWorkspaceIndexCache } from "../../workspaceEntries.ts";
 import {
+  buildPriorTranscriptBootstrapText,
   buildForkBootstrapText,
   buildHandoffBootstrapText,
   hasNativeAssistantMessagesBefore,
@@ -793,6 +794,11 @@ const make = Effect.gen(function* () {
     if (!thread) {
       return;
     }
+    const activeSessionBeforeEnsure = yield* providerService
+      .listSessions()
+      .pipe(
+        Effect.map((sessions) => sessions.find((session) => session.threadId === input.threadId)),
+      );
     yield* ensureSessionForThread(input.threadId, input.createdAt, {
       ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
       ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
@@ -825,6 +831,20 @@ const make = Effect.gen(function* () {
       shouldBootstrapSidechatContext && availableBootstrapChars > 0
         ? buildForkBootstrapText(thread, availableBootstrapChars)
         : null;
+    const selectedProvider =
+      input.modelSelection?.provider ??
+      threadModelSelections.get(input.threadId)?.provider ??
+      thread.session?.providerName ??
+      thread.modelSelection.provider;
+    const shouldBootstrapPriorTranscriptContext =
+      (selectedProvider === "kilo" || selectedProvider === "opencode") &&
+      activeSessionBeforeEnsure === undefined &&
+      !handoffBootstrapText &&
+      !sidechatBootstrapText;
+    const priorTranscriptBootstrapText =
+      shouldBootstrapPriorTranscriptContext && availableBootstrapChars > 0
+        ? buildPriorTranscriptBootstrapText(thread, input.messageId, availableBootstrapChars)
+        : null;
     const boundaryMessageText = thread.sidechatSourceThreadId
       ? wrapSidechatInput(input.messageText)
       : input.messageText;
@@ -832,6 +852,8 @@ const make = Effect.gen(function* () {
       ? `<handoff_context>\n${handoffBootstrapText}\n</handoff_context>\n\n<latest_user_message>\n${boundaryMessageText}\n</latest_user_message>`
       : sidechatBootstrapText
         ? `<sidechat_context>\n${sidechatBootstrapText}\n</sidechat_context>\n\n${boundaryMessageText}`
+        : priorTranscriptBootstrapText
+          ? `<thread_context>\n${priorTranscriptBootstrapText}\n</thread_context>\n\n<latest_user_message>\n${boundaryMessageText}\n</latest_user_message>`
         : boundaryMessageText;
     const normalizedInput = toNonEmptyProviderInput(providerInput);
     const normalizedAttachments = input.attachments ?? [];
