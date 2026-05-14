@@ -63,6 +63,7 @@ import { OpenInEditorInput } from "./editor";
 import {
   ServerConfigUpdatedPayload,
   ServerLifecycleStreamEvent,
+  ServerProviderUpdateInput,
   ServerUpdateSettingsInput,
   ServerGetProviderUsageSnapshotInput,
   ServerProviderStatusesUpdatedPayload,
@@ -133,6 +134,7 @@ export const WS_METHODS = {
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
   serverRefreshProviders: "server.refreshProviders",
+  serverUpdateProvider: "server.updateProvider",
   serverListWorktrees: "server.listWorktrees",
   serverGetProviderUsageSnapshot: "server.getProviderUsageSnapshot",
   serverTranscribeVoice: "server.transcribeVoice",
@@ -247,6 +249,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.serverGetSettings, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverUpdateSettings, ServerUpdateSettingsInput),
   tagRequestBody(WS_METHODS.serverRefreshProviders, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.serverUpdateProvider, ServerProviderUpdateInput),
   tagRequestBody(WS_METHODS.serverListWorktrees, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverGetProviderUsageSnapshot, ServerGetProviderUsageSnapshotInput),
   tagRequestBody(WS_METHODS.serverTranscribeVoice, ServerVoiceTranscriptionInput),

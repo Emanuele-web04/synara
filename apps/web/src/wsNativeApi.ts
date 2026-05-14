@@ -555,6 +555,7 @@ export function createWsNativeApi(): NativeApi {
           method: "POST",
         }),
       refreshProviders: () => transport.request(WS_METHODS.serverRefreshProviders),
+      updateProvider: (input) => transport.request(WS_METHODS.serverUpdateProvider, input),
       listWorktrees: () => transport.request(WS_METHODS.serverListWorktrees),
       getProviderUsageSnapshot: (input) =>
         transport.request(WS_METHODS.serverGetProviderUsageSnapshot, input),
