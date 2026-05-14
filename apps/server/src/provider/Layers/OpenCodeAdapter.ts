@@ -145,6 +145,10 @@ interface OpenCodeSessionContext {
   activeTurnId: TurnId | undefined;
   activeTurnEventSerial: number;
   activeTurnProviderActivitySerial: number;
+  activeTurnCompletionActivitySerial: number;
+  activeTurnSawToolCallFinish: boolean;
+  activeTurnSawFinalAssistant: boolean;
+  activeTurnToolCallIdleWatchdogStarted: boolean;
   activeInteractionMode: "default" | "plan" | undefined;
   activeAgent: string | undefined;
   activeVariant: string | undefined;
@@ -674,6 +678,10 @@ function clearActiveTurnState(context: OpenCodeSessionContext): void {
   context.activeTurnId = undefined;
   context.activeTurnEventSerial = 0;
   context.activeTurnProviderActivitySerial = 0;
+  context.activeTurnCompletionActivitySerial = 0;
+  context.activeTurnSawToolCallFinish = false;
+  context.activeTurnSawFinalAssistant = false;
+  context.activeTurnToolCallIdleWatchdogStarted = false;
   context.activeInteractionMode = undefined;
   context.activeAgent = undefined;
   context.activeVariant = undefined;
@@ -688,6 +696,16 @@ function markOpenCodeTurnProviderActivity(
     return;
   }
   context.activeTurnProviderActivitySerial += 1;
+}
+
+function markOpenCodeTurnCompletionActivity(
+  context: OpenCodeSessionContext,
+  turnId: TurnId | undefined,
+): void {
+  if (!turnId || context.activeTurnId !== turnId) {
+    return;
+  }
+  context.activeTurnCompletionActivitySerial += 1;
 }
 
 function openCodeNextTextItemId(turnId: TurnId): string {
@@ -723,10 +741,19 @@ function isOpenCodeTerminalStepFinish(value: unknown): boolean {
   return !["tool-call", "tool-calls", "function-call", "continue", "unknown"].includes(finish);
 }
 
+function isOpenCodeToolCallFinish(value: unknown): boolean {
+  const finish = trimNonEmptyString(value)?.toLowerCase().replace(/_/gu, "-");
+  return finish === "tool-call" || finish === "tool-calls" || finish === "function-call";
+}
+
 function isOpenCodeCompletedAssistantMessage(
   entry: OpenCodeMessageSnapshot & { readonly info: Record<string, unknown> },
 ): boolean {
   if (entry.info.role !== "assistant") {
+    return false;
+  }
+  const finish = trimNonEmptyString(entry.info.finish);
+  if (finish !== undefined && !isOpenCodeTerminalStepFinish(finish)) {
     return false;
   }
   const time = entry.info.time;
@@ -738,7 +765,24 @@ function isOpenCodeCompletedAssistantMessage(
   ) {
     return true;
   }
-  return trimNonEmptyString(entry.info.finish) !== undefined;
+  return finish !== undefined;
+}
+
+function trackActiveTurnAssistantFinish(
+  context: OpenCodeSessionContext,
+  turnId: TurnId | undefined,
+  entry: OpenCodeMessageSnapshot & { readonly info: Record<string, unknown> },
+): void {
+  if (!turnId || context.activeTurnId !== turnId || entry.info.role !== "assistant") {
+    return;
+  }
+  if (isOpenCodeToolCallFinish(entry.info.finish)) {
+    context.activeTurnSawToolCallFinish = true;
+  }
+  if (isOpenCodeCompletedAssistantMessage(entry)) {
+    context.activeTurnSawFinalAssistant = true;
+    markOpenCodeTurnCompletionActivity(context, turnId);
+  }
 }
 
 function extractResumeSessionId(resumeCursor: unknown): string | undefined {
@@ -1755,9 +1799,18 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         if (text === undefined) {
           return;
         }
-        const previousText = context.emittedTextByPartId.get(part.id);
+        const nextTextItemId =
+          turnId && part.type === "text" ? openCodeNextTextItemId(turnId) : undefined;
+        const itemId =
+          nextTextItemId && context.emittedTextByPartId.has(nextTextItemId)
+            ? nextTextItemId
+            : part.id;
+        const previousText = context.emittedTextByPartId.get(itemId);
         const { latestText, deltaToEmit } = mergeOpenCodeAssistantText(previousText, text);
-        context.emittedTextByPartId.set(part.id, latestText);
+        context.emittedTextByPartId.set(itemId, latestText);
+        if (itemId !== part.id) {
+          context.emittedTextByPartId.set(part.id, latestText);
+        }
         if (latestText !== text) {
           context.partById.set(
             part.id,
@@ -1767,11 +1820,12 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           );
         }
         if (deltaToEmit.length > 0) {
+          markOpenCodeTurnCompletionActivity(context, turnId);
           yield* emit({
             ...buildEventBase({
               threadId: context.session.threadId,
               turnId,
-              itemId: part.id,
+              itemId,
               createdAt:
                 part.type === "text" || part.type === "reasoning"
                   ? isoFromEpochMs(part.time?.start)
@@ -1789,9 +1843,12 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         if (
           part.type === "text" &&
           part.time?.end !== undefined &&
-          !context.completedAssistantPartIds.has(part.id)
+          !context.completedAssistantPartIds.has(itemId)
         ) {
-          context.completedAssistantPartIds.add(part.id);
+          context.completedAssistantPartIds.add(itemId);
+          if (itemId !== part.id) {
+            context.completedAssistantPartIds.add(part.id);
+          }
           const proposedPlanMarkdown =
             context.activeInteractionMode === "plan"
               ? extractProposedPlanMarkdown(latestText)
@@ -1801,7 +1858,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               ...buildEventBase({
                 threadId: context.session.threadId,
                 turnId,
-                itemId: part.id,
+                itemId,
                 createdAt: isoFromEpochMs(part.time.end),
                 raw,
               }),
@@ -1815,7 +1872,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             ...buildEventBase({
               threadId: context.session.threadId,
               turnId,
-              itemId: part.id,
+              itemId,
               createdAt: isoFromEpochMs(part.time.end),
               raw,
             }),
@@ -1849,6 +1906,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           context.emittedTextByPartId.set(part.id, latestText);
           context.partById.set(part.id, { ...part, text: latestText });
           if (deltaToEmit.length > 0) {
+            markOpenCodeTurnCompletionActivity(context, turnId);
             yield* emit({
               ...buildEventBase({
                 threadId: context.session.threadId,
@@ -1941,6 +1999,66 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         });
       });
 
+      const deferPrematureIdleCompletion = Effect.fn("deferPrematureIdleCompletion")(
+        function* (context: OpenCodeSessionContext, turnId: TurnId, raw: unknown) {
+          const idleBeforeAssistantActivity = context.activeTurnCompletionActivitySerial === 0;
+          const idleAfterToolCalls =
+            context.activeTurnSawToolCallFinish && !context.activeTurnSawFinalAssistant;
+          if (!idleBeforeAssistantActivity && !idleAfterToolCalls) {
+            return false;
+          }
+          if (!context.activeTurnToolCallIdleWatchdogStarted) {
+            context.activeTurnToolCallIdleWatchdogStarted = true;
+            yield* Effect.gen(function* () {
+              yield* Effect.sleep(10_000);
+              if (
+                (yield* Ref.get(context.stopped)) ||
+                context.activeTurnId !== turnId ||
+                context.activeTurnSawFinalAssistant
+              ) {
+                return;
+              }
+
+              const message = idleAfterToolCalls
+                ? `${adapterConfig.displayName} became idle after tool calls without producing a final assistant response.`
+                : `${adapterConfig.displayName} became idle before producing an assistant response.`;
+              yield* completeOpenCodeTurn(context, {
+                turnId,
+                raw: {
+                  source: "dpcode.opencode.idle-after-tool-calls",
+                  event: raw,
+                },
+                errorMessage: message,
+              });
+              updateProviderSession(
+                context,
+                {
+                  status: "error",
+                  lastError: message,
+                },
+                { clearActiveTurnId: true },
+              );
+              yield* emit({
+                ...buildEventBase({
+                  threadId: context.session.threadId,
+                  turnId,
+                  raw: {
+                    source: "dpcode.opencode.idle-after-tool-calls",
+                    event: raw,
+                  },
+                }),
+                type: "runtime.error",
+                payload: {
+                  message,
+                  class: "provider_error",
+                },
+              });
+            }).pipe(Effect.forkIn(context.sessionScope), Effect.asVoid);
+          }
+          return true;
+        },
+      );
+
       const recoverOpenCodeTurnFromAssistantMessage = Effect.fn(
         "recoverOpenCodeTurnFromAssistantMessage",
       )(function* (
@@ -1954,6 +2072,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         },
       ) {
         context.messageRoleById.set(input.assistantEntry.info.id, "assistant");
+        trackActiveTurnAssistantFinish(context, input.turnId, input.assistantEntry);
         for (const part of input.assistantEntry.parts) {
           context.partById.set(part.id, part);
           yield* emitRecoveredAssistantTextDelta(context, part, input.turnId, input.raw);
@@ -2230,6 +2349,59 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         }
       });
 
+      const submitOpenCodePromptAsync = Effect.fn("submitOpenCodePromptAsync")(function* (
+        context: OpenCodeSessionContext,
+        input: {
+          readonly turnId: TurnId;
+          readonly promptInput: Parameters<OpencodeClient["session"]["promptAsync"]>[0];
+        },
+      ) {
+        const settled = yield* Deferred.make<AdapterRequestError | null>();
+        yield* runOpenCodeSdk("session.promptAsync", () =>
+          context.client.session.promptAsync(input.promptInput),
+        ).pipe(
+          Effect.mapError(toAdapterRequestError),
+          Effect.as(null),
+          Effect.catch((requestError) =>
+            Effect.gen(function* () {
+              if (yield* Ref.get(context.stopped)) {
+                return requestError;
+              }
+              if (context.activeTurnId !== input.turnId) {
+                return requestError;
+              }
+              clearActiveTurnState(context);
+              updateProviderSession(
+                context,
+                {
+                  status: "ready",
+                  model: context.session.model,
+                  lastError: requestError.detail,
+                },
+                { clearActiveTurnId: true },
+              );
+              yield* emit({
+                ...buildEventBase({ threadId: context.session.threadId, turnId: input.turnId }),
+                type: "turn.aborted",
+                payload: {
+                  reason: requestError.detail,
+                },
+              });
+              return requestError;
+            }),
+          ),
+          Effect.flatMap((result) => Deferred.succeed(settled, result)),
+          Effect.forkIn(context.sessionScope),
+        );
+
+        const quickResult = yield* Deferred.await(settled).pipe(
+          Effect.timeoutOption(promptSubmissionInlineWaitMs),
+        );
+        if (quickResult._tag === "Some" && quickResult.value) {
+          return yield* quickResult.value;
+        }
+      });
+
       const handleSubscribedEvent = Effect.fn("handleSubscribedEvent")(function* (
         context: OpenCodeSessionContext,
         event: OpenCodeSubscribedEvent,
@@ -2268,6 +2440,13 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             );
             if (event.properties.info.role === "assistant") {
               const assistantMessage = event.properties.info;
+              trackActiveTurnAssistantFinish(context, turnId, {
+                info: {
+                  ...assistantMessage,
+                  role: "assistant",
+                },
+                parts: [],
+              });
               const selectedModel = context.session.model;
               const maxTokens =
                 selectedModel !== undefined
@@ -2360,6 +2539,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             if (deltaToEmit.length === 0) {
               break;
             }
+            markOpenCodeTurnCompletionActivity(context, turnId);
             context.emittedTextByPartId.set(event.properties.partID, nextText);
             if (resolvedPart.type === "text" || resolvedPart.type === "reasoning") {
               const nextPart = {
@@ -2594,6 +2774,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             }
 
             if (event.properties.status.type === "idle" && turnId) {
+              if (yield* deferPrematureIdleCompletion(context, turnId, event)) {
+                break;
+              }
               yield* completeOpenCodeTurn(context, {
                 turnId,
                 raw: event,
@@ -2605,6 +2788,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
           case "session.idle": {
             if (turnId) {
+              if (yield* deferPrematureIdleCompletion(context, turnId, event)) {
+                break;
+              }
               yield* completeOpenCodeTurn(context, {
                 turnId,
                 raw: event,
@@ -2630,6 +2816,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               break;
             }
             context.emittedTextByPartId.set(itemId, nextText);
+            markOpenCodeTurnCompletionActivity(context, turnId);
             yield* emit({
               ...buildEventBase({
                 threadId: context.session.threadId,
@@ -2657,6 +2844,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             const { latestText, deltaToEmit } = mergeOpenCodeAssistantText(previousText, text);
             context.emittedTextByPartId.set(itemId, latestText);
             if (deltaToEmit.length > 0) {
+              markOpenCodeTurnCompletionActivity(context, turnId);
               yield* emit({
                 ...buildEventBase({
                   threadId: context.session.threadId,
@@ -2855,6 +3043,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               });
             }
             context.latestTurnCostUsd = asFiniteNonNegativeNumber(event.properties.cost);
+            if (isOpenCodeToolCallFinish(event.properties.finish)) {
+              context.activeTurnSawToolCallFinish = true;
+            }
             if (isOpenCodeTerminalStepFinish(event.properties.finish)) {
               yield* completeOpenCodeTurn(context, {
                 turnId,
@@ -2916,6 +3107,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
           case "session.idle": {
             if (turnId) {
+              if (yield* deferPrematureIdleCompletion(context, turnId, event)) {
+                break;
+              }
               const totalCostUsd = context.latestTurnCostUsd;
               clearActiveTurnState(context);
               updateProviderSession(context, { status: "ready" }, { clearActiveTurnId: true });
@@ -3337,6 +3531,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             activeTurnId: undefined,
             activeTurnEventSerial: 0,
             activeTurnProviderActivitySerial: 0,
+            activeTurnCompletionActivitySerial: 0,
+            activeTurnSawToolCallFinish: false,
+            activeTurnSawFinalAssistant: false,
+            activeTurnToolCallIdleWatchdogStarted: false,
             activeInteractionMode: undefined,
             activeAgent: undefined,
             activeVariant: undefined,
@@ -3415,6 +3613,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         context.activeTurnId = turnId;
         context.activeTurnEventSerial = 0;
         context.activeTurnProviderActivitySerial = 0;
+        context.activeTurnCompletionActivitySerial = 0;
+        context.activeTurnSawToolCallFinish = false;
+        context.activeTurnSawFinalAssistant = false;
+        context.activeTurnToolCallIdleWatchdogStarted = false;
         context.activeInteractionMode = input.interactionMode === "plan" ? "plan" : "default";
         // Always pin DP Code's interaction mode to OpenCode's primary agent.
         // Otherwise a user config with default agent=plan can trap default turns in plan mode.
@@ -3441,35 +3643,41 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           },
         });
 
-        const baselineMessageIds =
-          provider === "kilo"
-            ? yield* rememberCurrentMessageSnapshots(context).pipe(
-                Effect.catchCause(() => Effect.succeed(new Set<string>())),
-              )
-            : new Set<string>();
-        const recoveryBaselineMessageIds = yield* captureOpenCodeRecoveryBaseline(context);
-
-        const providerActivitySerial = context.activeTurnProviderActivitySerial;
-        yield* schedulePromptAcceptedWatchdog(context, {
-          turnId,
-          providerActivitySerial,
-          excludedMessageIds: recoveryBaselineMessageIds,
-        });
-        yield* submitOpenCodePrompt(context, {
-          turnId,
-          promptInput: {
-            sessionID: context.openCodeSessionId,
-            messageID: `msg_${randomUUID()}`,
-            model: parsedModel,
-            ...(context.activeAgent ? { agent: context.activeAgent } : {}),
-            ...(context.activeVariant ? { variant: context.activeVariant } : {}),
-            noReply: false,
-            parts: [...(text ? [{ type: "text" as const, text }] : []), ...fileParts],
-          },
-        });
-
         if (provider === "kilo") {
+          const baselineMessageIds = yield* rememberCurrentMessageSnapshots(context).pipe(
+            Effect.catchCause(() => Effect.succeed(new Set<string>())),
+          );
+          const recoveryBaselineMessageIds = yield* captureOpenCodeRecoveryBaseline(context);
+          const providerActivitySerial = context.activeTurnProviderActivitySerial;
+          yield* schedulePromptAcceptedWatchdog(context, {
+            turnId,
+            providerActivitySerial,
+            excludedMessageIds: recoveryBaselineMessageIds,
+          });
+          yield* submitOpenCodePrompt(context, {
+            turnId,
+            promptInput: {
+              sessionID: context.openCodeSessionId,
+              messageID: `msg_${randomUUID()}`,
+              model: parsedModel,
+              ...(context.activeAgent ? { agent: context.activeAgent } : {}),
+              ...(context.activeVariant ? { variant: context.activeVariant } : {}),
+              noReply: false,
+              parts: [...(text ? [{ type: "text" as const, text }] : []), ...fileParts],
+            },
+          });
           yield* startKiloTurnSnapshotWatchdog(context, turnId, baselineMessageIds);
+        } else {
+          yield* submitOpenCodePromptAsync(context, {
+            turnId,
+            promptInput: {
+              sessionID: context.openCodeSessionId,
+              model: parsedModel,
+              ...(context.activeAgent ? { agent: context.activeAgent } : {}),
+              ...(context.activeVariant ? { variant: context.activeVariant } : {}),
+              parts: [...(text ? [{ type: "text" as const, text }] : []), ...fileParts],
+            },
+          });
         }
 
         return {
