@@ -29,10 +29,8 @@ const EMPTY_MODELS_RESULT: ProviderListModelsResult = {
   cached: false,
 };
 
-// Returned when a single provider's model discovery fails (e.g. the Cursor CLI
-// is not installed or not authenticated). Resolving to this instead of
-// rejecting keeps the failure isolated to that provider so the shared model
-// picker — and every other provider's models — stays usable.
+// Resolved (not rejected) when a provider's model discovery fails, so the
+// failure stays isolated to that provider and the shared picker stays usable.
 const MODEL_DISCOVERY_ERROR_RESULT: ProviderListModelsResult = {
   models: [],
   source: "error",
@@ -176,23 +174,30 @@ export function providerModelsQueryOptions(input: {
           ...(input.agentDir ? { agentDir: input.agentDir } : {}),
         });
       } catch (error) {
-        // Fault isolation: model discovery runs per provider, so one failing
-        // CLI must degrade only that provider. Rejecting here would put the
-        // query in an error state and blank the shared model picker; instead
-        // we resolve to an empty "error" result and let the UI fall back to
-        // that provider's static models while every other provider is
-        // unaffected.
+        // Resolve instead of rejecting so one provider's failure can't blank
+        // the shared picker; the UI falls back to that provider's static models.
         console.warn(`Model discovery failed for provider "${input.provider}".`, error);
         return MODEL_DISCOVERY_ERROR_RESULT;
       }
     },
     enabled: input.enabled ?? true,
-    // Discovery failures are caught inside queryFn and surfaced as a resolved
-    // "error" result, so the query itself never rejects and never retries.
+    // queryFn already catches failures into a resolved result, so a retry would
+    // only re-run a query that never rejects.
     retry: false,
     staleTime: 60_000,
     placeholderData: (previous) => previous ?? EMPTY_MODELS_RESULT,
   });
+}
+
+// True only on a query's first fetch. placeholderData keeps the query in
+// "success" status during that fetch (isLoading never flips true), so
+// isFetching && isPlaceholderData is what separates it from later refetches.
+export function isInitialModelDiscoveryPending(query: {
+  isLoading: boolean;
+  isFetching: boolean;
+  isPlaceholderData: boolean;
+}): boolean {
+  return query.isLoading || (query.isFetching && query.isPlaceholderData);
 }
 
 export function providerAgentsQueryOptions(input: { provider: ProviderKind; enabled?: boolean }) {

@@ -1,12 +1,10 @@
-// FILE: providerDiscoveryReactQuery.test.ts
-// Purpose: Verifies per-provider model discovery stays fault-isolated.
-// Layer: Web data fetching tests
-// Depends on: Vitest, React Query, and the native API bridge mock.
-
 import type { NativeApi, ProviderKind, ProviderListModelsInput } from "@t3tools/contracts";
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { providerModelsQueryOptions } from "./providerDiscoveryReactQuery";
+import {
+  isInitialModelDiscoveryPending,
+  providerModelsQueryOptions,
+} from "./providerDiscoveryReactQuery";
 import * as nativeApi from "../nativeApi";
 
 function mockListModels(impl: (input: ProviderListModelsInput) => Promise<unknown>) {
@@ -101,5 +99,53 @@ describe("providerModelsQueryOptions", () => {
     const cursorKey = providerModelsQueryOptions({ provider: "cursor" as ProviderKind }).queryKey;
     const codexKey = providerModelsQueryOptions({ provider: "codex" as ProviderKind }).queryKey;
     expect(cursorKey).not.toEqual(codexKey);
+  });
+});
+
+describe("isInitialModelDiscoveryPending", () => {
+  it("gates the picker during the initial fetch but not on background refetches", async () => {
+    let resolveListModels: (value: unknown) => void = () => {};
+    mockListModels(
+      () =>
+        new Promise((resolve) => {
+          resolveListModels = resolve;
+        }),
+    );
+    const discovered = {
+      models: [{ slug: "auto", name: "Auto" }],
+      source: "cursor.cli",
+      cached: false,
+    };
+
+    const queryClient = new QueryClient();
+    const observer = new QueryObserver(
+      queryClient,
+      providerModelsQueryOptions({ provider: "cursor" }),
+    );
+    const unsubscribe = observer.subscribe(() => {});
+
+    // placeholderData keeps the query in "success" status during the first
+    // fetch, so isLoading stays false — only isFetching && isPlaceholderData
+    // marks the initial discovery as pending.
+    expect(observer.getCurrentResult().isLoading).toBe(false);
+    expect(isInitialModelDiscoveryPending(observer.getCurrentResult())).toBe(true);
+
+    resolveListModels(discovered);
+    await vi.waitFor(() => {
+      expect(observer.getCurrentResult().isFetching).toBe(false);
+    });
+    expect(isInitialModelDiscoveryPending(observer.getCurrentResult())).toBe(false);
+
+    // A background refetch over already-settled data must not re-gate the picker.
+    const refetch = observer.refetch();
+    await vi.waitFor(() => {
+      expect(observer.getCurrentResult().isFetching).toBe(true);
+    });
+    expect(observer.getCurrentResult().isPlaceholderData).toBe(false);
+    expect(isInitialModelDiscoveryPending(observer.getCurrentResult())).toBe(false);
+
+    resolveListModels(discovered);
+    await refetch;
+    unsubscribe();
   });
 });
