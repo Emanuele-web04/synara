@@ -2301,9 +2301,10 @@ function commitThreadProjection(
     : state.threads;
 
   const previousSummary = state.sidebarThreadSummaryById[threadId];
-  const nextSummary = shouldUpdateSidebarSummary
-    ? buildSidebarThreadSummary(nextThread, previousSummary)
-    : previousSummary;
+  const nextSummary =
+    shouldUpdateSidebarSummary || previousSummary === undefined
+      ? buildSidebarThreadSummary(nextThread, previousSummary)
+      : previousSummary;
 
   if (threads === state.threads && nextSummary === previousSummary) {
     return state;

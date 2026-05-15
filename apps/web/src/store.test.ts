@@ -2037,6 +2037,42 @@ describe("store read model sync", () => {
     });
   });
 
+  it("creates an initial sidebar summary when hot-path detail sync sees a new thread first", () => {
+    const threadId = ThreadId.makeUnsafe("thread-detail-before-shell");
+    const initialState: AppState = {
+      ...makeState(makeThread()),
+      threadIds: [],
+      threads: [],
+      sidebarThreadSummaryById: {},
+    };
+
+    const next = syncServerThreadDetailHotPath(
+      initialState,
+      makeReadModelThread({
+        id: threadId,
+        title: "Visible while running",
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("turn-detail-before-shell"),
+          state: "running",
+          requestedAt: "2026-02-27T00:00:00.000Z",
+          startedAt: "2026-02-27T00:00:01.000Z",
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        updatedAt: "2026-02-27T00:00:01.000Z",
+      }),
+    );
+
+    expect(next.threadIds).toContain(threadId);
+    expect(next.sidebarThreadSummaryById[threadId]).toMatchObject({
+      id: threadId,
+      title: "Visible while running",
+      latestTurn: {
+        state: "running",
+      },
+    });
+  });
+
   it("keeps createBranchFlowCompleted sticky during stale hot-path detail syncs", () => {
     const threadId = ThreadId.makeUnsafe("thread-hot-path-branch-flow");
     const liveState = makeState(

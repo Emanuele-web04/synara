@@ -288,6 +288,30 @@ describe("provider option descriptor helpers", () => {
     });
   });
 
+  it("maps Pi reasoning controls onto the thinkingLevel option", () => {
+    const descriptors = getProviderOptionDescriptors({
+      provider: "pi",
+      caps: {
+        reasoningEffortLevels: [
+          { value: "off", label: "Off" },
+          { value: "medium", label: "Medium", isDefault: true },
+          { value: "xhigh", label: "Extra High" },
+        ],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+      selections: { thinkingLevel: "xhigh" },
+    });
+
+    expect(descriptors.find((descriptor) => descriptor.id === "thinkingLevel")).toMatchObject({
+      type: "select",
+      currentValue: "xhigh",
+    });
+    expect(descriptors.some((descriptor) => descriptor.id === "reasoningEffort")).toBe(false);
+  });
+
   it("honors explicit descriptors and serializes their current values", () => {
     const descriptors = getProviderOptionDescriptors({
       provider: "codex",
