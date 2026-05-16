@@ -42,6 +42,7 @@ import {
 } from "../Errors.ts";
 import { PiAdapter, type PiAdapterShape } from "../Services/PiAdapter.ts";
 import type { ProviderThreadSnapshot } from "../Services/ProviderAdapter.ts";
+import { classifyPiTurnFailure } from "../piTurnFailure.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const PROVIDER = "pi" as const;
@@ -771,6 +772,38 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       } satisfies ProviderRuntimeEvent);
     };
 
+    const completePromptRejection = (
+      context: PiSessionContext,
+      turnId: TurnId,
+      cause: unknown,
+    ) => {
+      if (context.activeTurnId !== turnId) {
+        return;
+      }
+
+      const message = toMessage(cause, "Pi turn failed.");
+      const failure = classifyPiTurnFailure(message);
+      const completionBase = makeEventBase(context);
+      if (failure.state === "failed") {
+        offerRuntimeError(context, { message, method: "prompt", cause });
+      }
+      context.activeTurnId = undefined;
+      context.activeAssistantItemId = undefined;
+      context.activeReasoningItemId = undefined;
+      context.activeToolItems.clear();
+      context.session = makeSessionSnapshot(context);
+      offerRuntimeEvent({
+        ...completionBase,
+        type: "turn.completed",
+        payload: {
+          state: failure.state,
+          stopReason: failure.stopReason,
+          errorMessage: message,
+        },
+        raw: { source: "pi.sdk.event", method: "prompt", payload: cause },
+      } satisfies ProviderRuntimeEvent);
+    };
+
     const recordItem = (context: PiSessionContext, item: unknown) => {
       const turn = context.activeTurnId
         ? context.turns.find((candidate) => candidate.id === context.activeTurnId)
@@ -1028,6 +1061,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           context.lastKnownTokenUsage = usage;
           const turnId = context.activeTurnId;
           const errorMessage = context.runtime.session.agent.state.errorMessage;
+          const failure = errorMessage ? classifyPiTurnFailure(errorMessage) : undefined;
           const leafId = context.runtime.session.sessionManager.getLeafId();
           const turn = turnId
             ? context.turns.find((candidate) => candidate.id === turnId)
@@ -1067,15 +1101,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
             } satisfies ProviderRuntimeEvent);
           }
-          offerRuntimeEvent({
-            ...makeEventBase(context),
-            type: "turn.completed",
-            payload: errorMessage
-              ? { state: "failed", stopReason: "error", errorMessage, usage: stats }
-              : { state: "completed", stopReason: null, usage: stats },
-            raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
-          } satisfies ProviderRuntimeEvent);
-          if (errorMessage) {
+          if (errorMessage && failure?.state === "failed") {
             offerRuntimeError(context, {
               message: errorMessage,
               method: "prompt",
@@ -1083,10 +1109,26 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               cause: event,
             });
           }
+          const completionBase = makeEventBase(context);
           context.activeTurnId = undefined;
           context.activeAssistantItemId = undefined;
           context.activeReasoningItemId = undefined;
+          context.activeToolItems.clear();
           context.session = makeSessionSnapshot(context);
+          offerRuntimeEvent({
+            ...completionBase,
+            type: "turn.completed",
+            payload:
+              errorMessage && failure
+                ? {
+                    state: failure.state,
+                    stopReason: failure.stopReason,
+                    errorMessage,
+                    usage: stats,
+                  }
+                : { state: "completed", stopReason: null, usage: stats },
+            raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
+          } satisfies ProviderRuntimeEvent);
           return;
         }
         default:
@@ -1413,16 +1455,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         void context.runtime.session
           .prompt(payload.text, payload.images.length > 0 ? { images: payload.images } : undefined)
           .catch((cause) => {
-            const message = toMessage(cause, "Pi turn failed.");
-            offerRuntimeEvent({
-              ...makeEventBase(context),
-              type: "turn.completed",
-              payload: { state: "failed", stopReason: "error", errorMessage: message },
-              raw: { source: "pi.sdk.event", method: "prompt", payload: cause },
-            } satisfies ProviderRuntimeEvent);
-            offerRuntimeError(context, { message, method: "prompt", cause });
-            context.activeTurnId = undefined;
-            context.session = makeSessionSnapshot(context);
+            completePromptRejection(context, turnId, cause);
           });
         return {
           threadId: input.threadId,
@@ -1458,16 +1491,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               payload.images.length > 0 ? { images: payload.images } : undefined,
             )
             .catch((cause) => {
-              const message = toMessage(cause, "Pi turn failed.");
-              offerRuntimeEvent({
-                ...makeEventBase(context),
-                type: "turn.completed",
-                payload: { state: "failed", stopReason: "error", errorMessage: message },
-                raw: { source: "pi.sdk.event", method: "prompt", payload: cause },
-              } satisfies ProviderRuntimeEvent);
-              offerRuntimeError(context, { message, method: "prompt", cause });
-              context.activeTurnId = undefined;
-              context.session = makeSessionSnapshot(context);
+              completePromptRejection(context, turnId, cause);
             });
         }
         return {
