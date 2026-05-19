@@ -2316,10 +2316,7 @@ describe("store read model sync", () => {
         threadId: ThreadId.makeUnsafe("thread-1"),
         requestId: ApprovalRequestId.makeUnsafe("request-1"),
         answers: {
-          q1: {
-            type: "option",
-            optionId: "yes",
-          },
+          q1: "yes",
         },
         createdAt: "2026-02-27T00:01:00.000Z",
       }),

@@ -734,10 +734,7 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-pipe
               threadId,
               requestId,
               answers: {
-                q1: {
-                  type: "option",
-                  optionId: "yes",
-                },
+                q1: "yes",
               },
               createdAt: respondedAt,
             },

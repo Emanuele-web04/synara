@@ -772,11 +772,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       } satisfies ProviderRuntimeEvent);
     };
 
-    const completePromptRejection = (
-      context: PiSessionContext,
-      turnId: TurnId,
-      cause: unknown,
-    ) => {
+    const completePromptRejection = (context: PiSessionContext, turnId: TurnId, cause: unknown) => {
       if (context.activeTurnId !== turnId) {
         return;
       }

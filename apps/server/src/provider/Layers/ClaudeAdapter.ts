@@ -149,12 +149,23 @@ interface PendingUserInput {
   readonly answers: Deferred.Deferred<ProviderUserInputAnswers>;
 }
 
+function coerceClaudeAnswerValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    return value.filter((entry): entry is string => typeof entry === "string").join(", ");
+  }
+  return "";
+}
+
 // Claude's AskUserQuestion SDK expects answers keyed by question text; the web UI submits stable ids.
 function remapAnswersToClaudeQuestionText(
   questions: ReadonlyArray<UserInputQuestion>,
   answers: ProviderUserInputAnswers,
-): ProviderUserInputAnswers {
-  const remapped: Record<string, unknown> = { ...answers };
+): Record<string, string> {
+  const remapped: Record<string, string> = {};
+  for (const [key, value] of Object.entries(answers)) {
+    remapped[key] = coerceClaudeAnswerValue(value);
+  }
 
   for (const question of questions) {
     if (Object.hasOwn(remapped, question.question)) {
@@ -162,7 +173,7 @@ function remapAnswersToClaudeQuestionText(
     }
 
     if (Object.hasOwn(remapped, question.id)) {
-      remapped[question.question] = remapped[question.id];
+      remapped[question.question] = remapped[question.id]!;
       delete remapped[question.id];
     }
   }

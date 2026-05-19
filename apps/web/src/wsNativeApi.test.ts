@@ -1,4 +1,5 @@
 import {
+  ApprovalRequestId,
   CommandId,
   type ContextMenuItem,
   EventId,
@@ -403,6 +404,35 @@ describe("wsNativeApi", () => {
 
     expect(requestMock).toHaveBeenCalledWith(ORCHESTRATION_WS_METHODS.dispatchCommand, {
       command,
+    });
+  });
+
+  it("omits null user-input answers before dispatching to orchestration", async () => {
+    requestMock.mockResolvedValue(undefined);
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+
+    const command = {
+      type: "thread.user-input.respond",
+      commandId: CommandId.makeUnsafe("cmd-user-input-null"),
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      requestId: ApprovalRequestId.makeUnsafe("request-1"),
+      answers: {
+        Language: null,
+        Runtime: "Bun",
+      },
+      createdAt: "2026-02-24T00:00:00.000Z",
+    } as const;
+    await api.orchestration.dispatchCommand(command);
+
+    expect(requestMock).toHaveBeenCalledWith(ORCHESTRATION_WS_METHODS.dispatchCommand, {
+      command: {
+        ...command,
+        answers: {
+          Runtime: "Bun",
+        },
+      },
     });
   });
 

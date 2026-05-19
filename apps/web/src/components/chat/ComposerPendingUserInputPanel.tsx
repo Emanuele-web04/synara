@@ -13,8 +13,8 @@ interface PendingUserInputPanelProps {
   respondingRequestIds: ApprovalRequestId[];
   answers: Record<string, PendingUserInputDraftAnswer>;
   questionIndex: number;
-  onToggleOption: (questionId: string, optionLabel: string) => void;
-  onAdvance: () => void;
+  onToggleOption: (questionId: string, optionLabel: string) => PendingUserInputDraftAnswer | null;
+  onAdvance: (answerOverrides?: Record<string, PendingUserInputDraftAnswer>) => void;
 }
 
 // Keep pending-input choices neutral so they read like Codex list controls instead of accent buttons.
@@ -55,8 +55,8 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   isResponding: boolean;
   answers: Record<string, PendingUserInputDraftAnswer>;
   questionIndex: number;
-  onToggleOption: (questionId: string, optionLabel: string) => void;
-  onAdvance: () => void;
+  onToggleOption: (questionId: string, optionLabel: string) => PendingUserInputDraftAnswer | null;
+  onAdvance: (answerOverrides?: Record<string, PendingUserInputDraftAnswer>) => void;
 }) {
   const progress = derivePendingUserInputProgress(prompt.questions, answers, questionIndex);
   const activeQuestion = progress.activeQuestion;
@@ -79,7 +79,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   }, [activeQuestion?.id, isResponding]);
 
   const handleOptionSelection = useEffectEvent((questionId: string, optionLabel: string) => {
-    onToggleOption(questionId, optionLabel);
+    const nextDraftAnswer = onToggleOption(questionId, optionLabel);
     if (activeQuestion?.multiSelect) {
       return;
     }
@@ -88,7 +88,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
     }
     autoAdvanceTimerRef.current = window.setTimeout(() => {
       autoAdvanceTimerRef.current = null;
-      onAdvanceRef.current();
+      onAdvanceRef.current(nextDraftAnswer ? { [questionId]: nextDraftAnswer } : undefined);
     }, 200);
   });
 
