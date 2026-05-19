@@ -14,7 +14,13 @@ import {
   type CreateAgentSessionRuntimeFactory,
 } from "@earendil-works/pi-coding-agent";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { Api, ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
+import {
+  getSupportedThinkingLevels,
+  type Api,
+  type ImageContent,
+  type Model,
+  type TextContent,
+} from "@earendil-works/pi-ai";
 import {
   type ChatAttachment,
   EventId,
@@ -121,6 +127,17 @@ function isPiThinkingLevel(value: string | null | undefined): value is ThinkingL
 
 function normalizePiThinkingLevel(value: string | null | undefined): ThinkingLevel | undefined {
   return isPiThinkingLevel(value) ? value : undefined;
+}
+
+// Mirrors Pi SDK clamping so model discovery does not advertise levels that will be ignored.
+export function getPiSupportedThinkingOptions(
+  model: Pick<Model<Api>, "reasoning" | "thinkingLevelMap">,
+): ReadonlyArray<(typeof PI_THINKING_OPTIONS)[number]> {
+  if (!model.reasoning) {
+    return [];
+  }
+  const supportedLevels = new Set(getSupportedThinkingLevels(model as Model<Api>));
+  return PI_THINKING_OPTIONS.filter((option) => supportedLevels.has(option.value));
 }
 
 function parseModelReference(
@@ -1639,22 +1656,29 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           const agentDir = makeAgentDir(input.agentDir);
           const registry = getModelRegistry(agentDir);
           registry.refresh();
-          const models = registry.getAvailable().map((model) => ({
-            slug: `${model.provider}/${model.id}`,
-            name: model.name,
-            upstreamProviderId: model.provider,
-            upstreamProviderName: registry.getProviderDisplayName(model.provider),
-            ...(model.reasoning
-              ? {
-                  supportedReasoningEfforts: PI_THINKING_OPTIONS.map((option) => ({
-                    value: option.value,
-                    label: option.label,
-                    description: option.description,
-                  })),
-                  defaultReasoningEffort: DEFAULT_PI_THINKING_LEVEL,
-                }
-              : {}),
-          }));
+          const models = registry.getAvailable().map((model) => {
+            const supportedThinkingOptions = getPiSupportedThinkingOptions(model);
+            return {
+              slug: `${model.provider}/${model.id}`,
+              name: model.name,
+              upstreamProviderId: model.provider,
+              upstreamProviderName: registry.getProviderDisplayName(model.provider),
+              ...(supportedThinkingOptions.length > 0
+                ? {
+                    supportedReasoningEfforts: supportedThinkingOptions.map((option) => ({
+                      value: option.value,
+                      label: option.label,
+                      description: option.description,
+                    })),
+                    ...(supportedThinkingOptions.some(
+                      (option) => option.value === DEFAULT_PI_THINKING_LEVEL,
+                    )
+                      ? { defaultReasoningEffort: DEFAULT_PI_THINKING_LEVEL }
+                      : {}),
+                  }
+                : {}),
+            };
+          });
           return { models, source: "pi.sdk", cached: false } satisfies ProviderListModelsResult;
         },
         catch: (cause) =>
