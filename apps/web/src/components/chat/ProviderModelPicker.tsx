@@ -33,6 +33,7 @@ import {
   OpenAI,
   OpenCodeIcon,
   PiIcon,
+  DotGrid2x3Icon,
 } from "../Icons";
 import { cn } from "~/lib/utils";
 import { PickerPanelShell } from "./PickerPanelShell";
@@ -61,6 +62,7 @@ const PROVIDER_ICON_BY_PROVIDER: Record<ProviderPickerKind, Icon> = {
   claudeAgent: ClaudeAI,
   cursor: CursorIcon,
   gemini: Gemini,
+  hermes: DotGrid2x3Icon,
   kilo: KiloIcon,
   opencode: OpenCodeIcon,
   pi: PiIcon,

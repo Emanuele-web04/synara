@@ -452,6 +452,8 @@ function getProviderStartOptionsCustomBinaryPath(
       return normalizeCustomBinaryPath(providerOptions?.claudeAgent?.binaryPath);
     case "gemini":
       return normalizeCustomBinaryPath(providerOptions?.gemini?.binaryPath);
+    case "hermes":
+      return normalizeCustomBinaryPath(providerOptions?.hermes?.binaryPath);
     case "kilo":
       return normalizeCustomBinaryPath(providerOptions?.kilo?.binaryPath);
     case "opencode":
@@ -1414,6 +1416,7 @@ export default function ChatView({
       claudeAgent: resolveHint("claudeAgent"),
       cursor: resolveHint("cursor"),
       gemini: resolveHint("gemini"),
+      hermes: resolveHint("hermes"),
       kilo: resolveHint("kilo"),
       opencode: resolveHint("opencode"),
       pi: resolveHint("pi"),
@@ -1517,6 +1520,11 @@ export default function ChatView({
         customModelsByProvider.gemini,
         composerModelHintByProvider.gemini,
       ),
+      hermes: getAppModelOptions(
+        "hermes",
+        customModelsByProvider.hermes,
+        composerModelHintByProvider.hermes,
+      ),
       kilo: getAppModelOptions(
         "kilo",
         customModelsByProvider.kilo,
@@ -1542,6 +1550,7 @@ export default function ChatView({
           ? undefined
           : { ...cursorDynamicModelsQuery.data, models: cursorRuntimeModels },
       gemini: geminiModelsQuery.data,
+      hermes: undefined,
       kilo: kiloDynamicModelsQuery.data,
       opencode: openCodeDynamicModelsQuery.data,
       pi: piDynamicModelsQuery.data,
@@ -1552,6 +1561,7 @@ export default function ChatView({
       "codex",
       "cursor",
       "gemini",
+      "hermes",
       "kilo",
       "opencode",
       "pi",
@@ -1602,6 +1612,7 @@ export default function ChatView({
       codex: codexDynamicModelsQuery.data?.models ?? [],
       cursor: cursorRuntimeModels,
       gemini: geminiModelsQuery.data?.models ?? [],
+      hermes: [],
       kilo: kiloDynamicModelsQuery.data?.models ?? [],
       opencode: openCodeDynamicModelsQuery.data?.models ?? [],
       pi: piDynamicModelsQuery.data?.models ?? [],
@@ -1621,6 +1632,7 @@ export default function ChatView({
     codex: codexDynamicModelsQuery,
     cursor: cursorDynamicModelsQuery,
     gemini: geminiModelsQuery,
+    hermes: undefined,
     kilo: kiloDynamicModelsQuery,
     opencode: openCodeDynamicModelsQuery,
     pi: piDynamicModelsQuery,
@@ -2498,15 +2510,17 @@ export default function ChatView({
       isSidechat: Boolean(activeThread.sidechatSourceThreadId),
     });
   const dynamicAgents = useMemo(() => {
-    const query =
+    const agents =
       selectedProvider === "claudeAgent"
-        ? claudeDynamicAgentsQuery
+        ? claudeDynamicAgentsQuery.data?.agents
         : selectedProvider === "kilo"
-          ? kiloDynamicAgentsQuery
+          ? kiloDynamicAgentsQuery.data?.agents
           : selectedProvider === "opencode"
-            ? openCodeDynamicAgentsQuery
-            : codexDynamicAgentsQuery;
-    return (query.data?.agents ?? []).map((a) => ({
+            ? openCodeDynamicAgentsQuery.data?.agents
+            : selectedProvider === "codex"
+              ? codexDynamicAgentsQuery.data?.agents
+              : undefined;
+    return (agents ?? []).map((a) => ({
       name: a.name,
       displayName: a.displayName,
       ...(a.description ? { description: a.description } : {}),

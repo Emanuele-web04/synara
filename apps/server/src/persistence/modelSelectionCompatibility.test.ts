@@ -21,3 +21,23 @@ it("infers Pi from persisted instance labels", () => {
     },
   );
 });
+
+it("preserves canonical Hermes model selections", () => {
+  assert.deepEqual(normalizePersistedModelSelection({ provider: "hermes", model: "minimax/m2" }), {
+    provider: "hermes",
+    model: "minimax/m2",
+  });
+});
+
+it("infers Hermes from persisted instance labels", () => {
+  assert.deepEqual(
+    normalizePersistedModelSelection({
+      instanceId: "local-hermes-runtime",
+      model: "minimax/m2",
+    }),
+    {
+      provider: "hermes",
+      model: "minimax/m2",
+    },
+  );
+});

@@ -6,6 +6,7 @@ import {
   ClientOrchestrationCommand,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
+  ProviderKind,
   ModelSelection,
   OrchestrationCommand,
   OrchestrationEvent,
@@ -42,6 +43,22 @@ const decodeModelSelection = Schema.decodeUnknownEffect(ModelSelection);
 const decodeClientOrchestrationCommand = Schema.decodeUnknownEffect(ClientOrchestrationCommand);
 const decodeOrchestrationCommand = Schema.decodeUnknownEffect(OrchestrationCommand);
 const decodeOrchestrationEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
+
+it.effect("accepts Hermes provider model selections", () =>
+  Effect.gen(function* () {
+    const provider = yield* Schema.decodeUnknownEffect(ProviderKind)("hermes");
+    assert.equal(provider, "hermes");
+
+    const selection = yield* decodeModelSelection({
+      provider: "hermes",
+      model: "hermes-agent",
+    });
+    assert.deepEqual(selection, {
+      provider: "hermes",
+      model: "hermes-agent",
+    });
+  }),
+);
 
 it.effect("preserves thread activity payloads through the RPC JSON codec", () =>
   Effect.gen(function* () {

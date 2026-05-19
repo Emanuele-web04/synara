@@ -53,6 +53,7 @@ import { ServerConfig } from "../../config";
 import { ServerSettingsService } from "../../serverSettings";
 import { isWindowsShellCommandMissingResult } from "../../shell-command-detection";
 import { normalizeGeminiCapabilityProbeResult, probeGeminiCapabilities } from "../geminiAcpProbe";
+import { resolveHermesAcpSpawn } from "../hermesAcp";
 import { ProviderHealth, type ProviderHealthShape } from "../Services/ProviderHealth";
 import {
   orderProviderStatuses,
@@ -68,15 +69,16 @@ import {
   parseGenericCliVersion,
   resolveProviderMaintenanceCapabilitiesEffect,
   type PackageManagedProviderMaintenanceDefinition,
-  type ProviderMaintenanceCapabilities,
 } from "../providerMaintenance";
 import { collectUint8StreamText } from "../../stream/collectUint8StreamText";
 
 const DEFAULT_TIMEOUT_MS = 4_000;
+const HERMES_TIMEOUT_MS = 15_000;
 const CODEX_PROVIDER = "codex" as const;
 const CLAUDE_AGENT_PROVIDER = "claudeAgent" as const;
 const CURSOR_PROVIDER = "cursor" as const;
 const GEMINI_PROVIDER = "gemini" as const;
+const HERMES_PROVIDER = "hermes" as const;
 const KILO_PROVIDER = "kilo" as const;
 const OPENCODE_PROVIDER = "opencode" as const;
 const PI_PROVIDER = "pi" as const;
@@ -87,6 +89,7 @@ const PROVIDERS = [
   CLAUDE_AGENT_PROVIDER,
   CURSOR_PROVIDER,
   GEMINI_PROVIDER,
+  HERMES_PROVIDER,
   KILO_PROVIDER,
   OPENCODE_PROVIDER,
   PI_PROVIDER,
@@ -737,6 +740,17 @@ const runGeminiCommand = (args: ReadonlyArray<string>, executable = "gemini") =>
     ),
   );
 
+const runHermesCommand = (args: ReadonlyArray<string>, binaryPath?: string) => {
+  const spawn = resolveHermesAcpSpawn(binaryPath);
+  return runProviderCommand(spawn.command, [...spawn.args, ...args]).pipe(
+    Effect.flatMap((result) =>
+      isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
+        ? Effect.fail(new Error(`spawn ${spawn.command} ENOENT`))
+        : Effect.succeed(result),
+    ),
+  );
+};
+
 const runOpenCodeCommand = (args: ReadonlyArray<string>, executable = "opencode") =>
   runProviderCommand(executable, args).pipe(
     Effect.flatMap((result) =>
@@ -1219,6 +1233,114 @@ export const makeCheckGeminiProviderStatus = (
 
 export const checkGeminiProviderStatus = makeCheckGeminiProviderStatus();
 
+// ── Hermes health check ─────────────────────────────────────────────
+
+export const checkHermesProviderStatus = (
+  binaryPath?: string,
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const executable = nonEmptyTrimmed(binaryPath);
+
+    const versionProbe = yield* runHermesCommand(["--version"], executable).pipe(
+      Effect.timeoutOption(HERMES_TIMEOUT_MS),
+      Effect.result,
+    );
+
+    if (Result.isFailure(versionProbe)) {
+      const error = versionProbe.failure;
+      return {
+        provider: HERMES_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: isCommandMissingCause(error)
+          ? "Hermes ACP (`hermes acp`) is not installed or not on PATH."
+          : `Failed to execute Hermes ACP health check: ${error instanceof Error ? error.message : String(error)}.`,
+      } satisfies ServerProviderStatus;
+    }
+
+    if (Option.isNone(versionProbe.success)) {
+      return {
+        provider: HERMES_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: "Hermes ACP is installed but failed to run. Timed out while running command.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const version = versionProbe.success.value;
+    if (version.code !== 0) {
+      const detail = detailFromResult(version);
+      return {
+        provider: HERMES_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: detail
+          ? `Hermes ACP is installed but failed to run. ${detail}`
+          : "Hermes ACP is installed but failed to run.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const checkProbe = yield* runHermesCommand(["--check"], executable).pipe(
+      Effect.timeoutOption(HERMES_TIMEOUT_MS),
+      Effect.result,
+    );
+
+    if (Result.isFailure(checkProbe)) {
+      const error = checkProbe.failure;
+      return {
+        provider: HERMES_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: `Failed to execute Hermes ACP self-check: ${error instanceof Error ? error.message : String(error)}.`,
+      } satisfies ServerProviderStatus;
+    }
+
+    if (Option.isNone(checkProbe.success)) {
+      return {
+        provider: HERMES_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: "Hermes ACP is installed but failed to run. Timed out while running self-check.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const check = checkProbe.success.value;
+    if (check.code !== 0) {
+      const detail = detailFromResult(check);
+      return {
+        provider: HERMES_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: detail
+          ? `Hermes ACP is installed but failed its self-check. ${detail}`
+          : "Hermes ACP is installed but failed its self-check.",
+      } satisfies ServerProviderStatus;
+    }
+
+    return {
+      provider: HERMES_PROVIDER,
+      status: "ready" as const,
+      available: true,
+      authStatus: "unknown" as const,
+      version: parseGenericCliVersion(`${version.stdout}\n${version.stderr}`),
+      checkedAt,
+      message: "Hermes ACP is available.",
+    } satisfies ServerProviderStatus;
+  });
+
 // ── OpenCode health check ───────────────────────────────────────────
 
 export const makeCheckOpenCodeProviderStatus = (
@@ -1592,6 +1714,8 @@ export const ProviderHealthLive = Layer.effect(
           return settings.providers.cursor.binaryPath;
         case "gemini":
           return settings.providers.gemini.binaryPath;
+        case "hermes":
+          return settings.providers.hermes.binaryPath;
         case "kilo":
           return settings.providers.kilo.binaryPath;
         case "opencode":
@@ -1611,6 +1735,15 @@ export const ProviderHealthLive = Layer.effect(
             updateExecutable: getProviderBinaryPath(provider, settings) || "agent",
             updateArgs: ["update"],
             updateLockKey: "cursor-agent",
+          });
+        }
+        if (provider === "hermes") {
+          return makeProviderMaintenanceCapabilities({
+            provider,
+            packageName: null,
+            updateExecutable: null,
+            updateArgs: [],
+            updateLockKey: null,
           });
         }
         const definition = PACKAGE_MANAGED_PROVIDER_UPDATES[provider];
@@ -1713,6 +1846,7 @@ export const ProviderHealthLive = Layer.effect(
               ),
               makeCheckCursorProviderStatus(settings.providers.cursor.binaryPath),
               makeCheckGeminiProviderStatus(settings.providers.gemini.binaryPath),
+              checkHermesProviderStatus(settings.providers.hermes.binaryPath),
               makeCheckKiloProviderStatus(settings.providers.kilo.binaryPath),
               makeCheckOpenCodeProviderStatus(settings.providers.opencode.binaryPath),
               checkPiProviderStatus(

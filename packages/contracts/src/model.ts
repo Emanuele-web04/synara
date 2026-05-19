@@ -99,6 +99,9 @@ export const GeminiModelOptions = Schema.Struct({
 });
 export type GeminiModelOptions = typeof GeminiModelOptions.Type;
 
+export const HermesModelOptions = Schema.Struct({});
+export type HermesModelOptions = typeof HermesModelOptions.Type;
+
 export const OpenCodeModelOptions = Schema.Struct({
   variant: Schema.optional(TrimmedNonEmptyString),
   agent: Schema.optional(TrimmedNonEmptyString),
@@ -123,6 +126,7 @@ export const ProviderModelOptions = Schema.Struct({
   claudeAgent: Schema.optional(ClaudeModelOptions),
   cursor: Schema.optional(CursorModelOptions),
   gemini: Schema.optional(GeminiModelOptions),
+  hermes: Schema.optional(HermesModelOptions),
   kilo: Schema.optional(OpenCodeModelOptions),
   opencode: Schema.optional(OpenCodeModelOptions),
   pi: Schema.optional(PiModelOptions),
@@ -488,6 +492,19 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       },
     },
   ],
+  hermes: [
+    {
+      slug: "hermes-agent",
+      name: "Hermes Agent",
+      capabilities: {
+        reasoningEffortLevels: [],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+  ],
 } as const satisfies Record<ProviderKind, readonly ModelDefinition[]>;
 export type ModelOptionsByProvider = typeof MODEL_OPTIONS_BY_PROVIDER;
 
@@ -501,6 +518,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
   claudeAgent: "claude-sonnet-4-6",
   cursor: "auto",
   gemini: "auto-gemini-3",
+  hermes: "hermes-agent",
   kilo: "kilo/kilo-auto/free",
   opencode: "openai/gpt-5",
 };
@@ -563,6 +581,7 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "gemini-2.5-flash": "gemini-2.5-flash",
     "gemini-2.5-flash-lite": "gemini-2.5-flash-lite",
   },
+  hermes: {},
   kilo: {},
   opencode: {},
   pi: {},
@@ -597,6 +616,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   claudeAgent: "Claude",
   cursor: "Cursor",
   gemini: "Gemini",
+  hermes: "Hermes",
   kilo: "Kilo",
   opencode: "OpenCode",
   pi: "Pi",

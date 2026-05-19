@@ -152,6 +152,7 @@ describe("resolveAppModelSelection", () => {
           claudeAgent: [],
           cursor: [],
           gemini: [],
+          hermes: [],
           kilo: [],
           opencode: [],
           pi: [],
@@ -165,7 +166,16 @@ describe("resolveAppModelSelection", () => {
     expect(
       resolveAppModelSelection(
         "codex",
-        { codex: [], claudeAgent: [], cursor: [], gemini: [], kilo: [], opencode: [], pi: [] },
+        {
+          codex: [],
+          claudeAgent: [],
+          cursor: [],
+          gemini: [],
+          hermes: [],
+          kilo: [],
+          opencode: [],
+          pi: [],
+        },
         "",
       ),
     ).toBe("gpt-5.5");
@@ -175,7 +185,16 @@ describe("resolveAppModelSelection", () => {
     expect(
       resolveAppModelSelection(
         "codex",
-        { codex: [], claudeAgent: [], cursor: [], gemini: [], kilo: [], opencode: [], pi: [] },
+        {
+          codex: [],
+          claudeAgent: [],
+          cursor: [],
+          gemini: [],
+          hermes: [],
+          kilo: [],
+          opencode: [],
+          pi: [],
+        },
         "GPT-5.3 Codex",
       ),
     ).toBe("gpt-5.3-codex");
@@ -185,7 +204,16 @@ describe("resolveAppModelSelection", () => {
     expect(
       resolveAppModelSelection(
         "claudeAgent",
-        { codex: [], claudeAgent: [], cursor: [], gemini: [], kilo: [], opencode: [], pi: [] },
+        {
+          codex: [],
+          claudeAgent: [],
+          cursor: [],
+          gemini: [],
+          hermes: [],
+          kilo: [],
+          opencode: [],
+          pi: [],
+        },
         "sonnet",
       ),
     ).toBe("claude-sonnet-4-6");
@@ -195,7 +223,16 @@ describe("resolveAppModelSelection", () => {
     expect(
       resolveAppModelSelection(
         "codex",
-        { codex: [], claudeAgent: [], cursor: [], gemini: [], kilo: [], opencode: [], pi: [] },
+        {
+          codex: [],
+          claudeAgent: [],
+          cursor: [],
+          gemini: [],
+          hermes: [],
+          kilo: [],
+          opencode: [],
+          pi: [],
+        },
         "custom/selected-model",
       ),
     ).toBe("custom/selected-model");
@@ -278,6 +315,7 @@ describe("getProviderStartOptions", () => {
         cursorApiEndpoint: "http://localhost:3000",
         cursorBinaryPath: "/usr/local/bin/agent",
         geminiBinaryPath: "/usr/local/bin/gemini",
+        hermesBinaryPath: "/usr/local/bin/hermes-acp",
         kiloBinaryPath: "",
         kiloServerPassword: "",
         kiloServerUrl: "",
@@ -301,6 +339,9 @@ describe("getProviderStartOptions", () => {
       gemini: {
         binaryPath: "/usr/local/bin/gemini",
       },
+      hermes: {
+        binaryPath: "/usr/local/bin/hermes-acp",
+      },
     });
   });
 
@@ -313,6 +354,7 @@ describe("getProviderStartOptions", () => {
         cursorApiEndpoint: "",
         cursorBinaryPath: "",
         geminiBinaryPath: "",
+        hermesBinaryPath: "",
         kiloBinaryPath: "",
         kiloServerPassword: "",
         kiloServerUrl: "",
@@ -332,6 +374,7 @@ describe("provider-indexed custom model settings", () => {
     customClaudeModels: ["claude/custom-opus"],
     customCursorModels: ["cursor/custom-model"],
     customGeminiModels: ["gemini/custom-flash"],
+    customHermesModels: ["hermes/custom-agent"],
     customKiloModels: ["kilo/kilo-auto/free"],
     customOpenCodeModels: ["openrouter/gpt-oss-120b"],
     customPiModels: ["anthropic/custom-pi"],
@@ -343,6 +386,7 @@ describe("provider-indexed custom model settings", () => {
       "claudeAgent",
       "cursor",
       "gemini",
+      "hermes",
       "kilo",
       "opencode",
       "pi",
@@ -354,6 +398,7 @@ describe("provider-indexed custom model settings", () => {
     expect(getCustomModelsForProvider(settings, "claudeAgent")).toEqual(["claude/custom-opus"]);
     expect(getCustomModelsForProvider(settings, "cursor")).toEqual(["cursor/custom-model"]);
     expect(getCustomModelsForProvider(settings, "gemini")).toEqual(["gemini/custom-flash"]);
+    expect(getCustomModelsForProvider(settings, "hermes")).toEqual(["hermes/custom-agent"]);
     expect(getCustomModelsForProvider(settings, "kilo")).toEqual(["kilo/kilo-auto/free"]);
     expect(getCustomModelsForProvider(settings, "opencode")).toEqual(["openrouter/gpt-oss-120b"]);
     expect(getCustomModelsForProvider(settings, "pi")).toEqual(["anthropic/custom-pi"]);
@@ -365,6 +410,7 @@ describe("provider-indexed custom model settings", () => {
       customClaudeModels: ["claude/default-opus"],
       customCursorModels: ["cursor/default-model"],
       customGeminiModels: ["gemini/default-flash"],
+      customHermesModels: ["hermes/default-agent"],
       customKiloModels: ["kilo/default-auto"],
       customOpenCodeModels: ["openai/gpt-5"],
       customPiModels: ["anthropic/default-pi"],
@@ -376,6 +422,7 @@ describe("provider-indexed custom model settings", () => {
     ]);
     expect(getDefaultCustomModelsForProvider(defaults, "cursor")).toEqual(["cursor/default-model"]);
     expect(getDefaultCustomModelsForProvider(defaults, "gemini")).toEqual(["gemini/default-flash"]);
+    expect(getDefaultCustomModelsForProvider(defaults, "hermes")).toEqual(["hermes/default-agent"]);
     expect(getDefaultCustomModelsForProvider(defaults, "kilo")).toEqual(["kilo/default-auto"]);
     expect(getDefaultCustomModelsForProvider(defaults, "opencode")).toEqual(["openai/gpt-5"]);
     expect(getDefaultCustomModelsForProvider(defaults, "pi")).toEqual(["anthropic/default-pi"]);
@@ -396,6 +443,12 @@ describe("provider-indexed custom model settings", () => {
   it("patches custom models for gemini", () => {
     expect(patchCustomModels("gemini", ["gemini/custom-flash"])).toEqual({
       customGeminiModels: ["gemini/custom-flash"],
+    });
+  });
+
+  it("patches custom models for hermes", () => {
+    expect(patchCustomModels("hermes", ["hermes/custom-agent"])).toEqual({
+      customHermesModels: ["hermes/custom-agent"],
     });
   });
 
@@ -429,6 +482,7 @@ describe("provider-indexed custom model settings", () => {
       claudeAgent: ["claude/custom-opus"],
       cursor: ["cursor/custom-model"],
       gemini: ["gemini/custom-flash"],
+      hermes: ["hermes/custom-agent"],
       kilo: ["kilo/kilo-auto/free"],
       opencode: ["openrouter/gpt-oss-120b"],
       pi: ["anthropic/custom-pi"],
@@ -451,6 +505,9 @@ describe("provider-indexed custom model settings", () => {
       modelOptionsByProvider.gemini.some((option) => option.slug === "gemini/custom-flash"),
     ).toBe(true);
     expect(
+      modelOptionsByProvider.hermes.some((option) => option.slug === "hermes/custom-agent"),
+    ).toBe(true);
+    expect(
       modelOptionsByProvider.kilo.some((option) => option.slug === "kilo/kilo-auto/free"),
     ).toBe(true);
     expect(
@@ -467,6 +524,7 @@ describe("provider-indexed custom model settings", () => {
       customClaudeModels: [" sonnet ", "claude/custom-opus", "claude/custom-opus"],
       customCursorModels: [" composer-2 ", "cursor/custom-model", "cursor/custom-model"],
       customGeminiModels: [" auto-gemini-3 ", "gemini/custom-flash", "gemini/custom-flash"],
+      customHermesModels: [" hermes-agent ", "hermes/custom-agent", "hermes/custom-agent"],
       customKiloModels: [" kilo/kilo-auto/free ", "kilo/kilo-auto/free"],
       customOpenCodeModels: [
         " openai/gpt-5 ",
@@ -500,6 +558,12 @@ describe("provider-indexed custom model settings", () => {
       true,
     );
     expect(
+      modelOptionsByProvider.hermes.filter((option) => option.slug === "hermes/custom-agent"),
+    ).toHaveLength(1);
+    expect(modelOptionsByProvider.hermes.some((option) => option.slug === "hermes-agent")).toBe(
+      true,
+    );
+    expect(
       modelOptionsByProvider.kilo.filter((option) => option.slug === "kilo/kilo-auto/free"),
     ).toHaveLength(1);
     expect(
@@ -528,6 +592,7 @@ describe("AppSettingsSchema", () => {
       codexBinaryPath: "/usr/local/bin/codex",
       codexHomePath: "",
       geminiBinaryPath: "",
+      hermesBinaryPath: "",
       defaultThreadEnvMode: "local",
       confirmThreadDelete: false,
       confirmTerminalTabClose: true,
@@ -539,6 +604,7 @@ describe("AppSettingsSchema", () => {
       customClaudeModels: [],
       customCursorModels: [],
       customGeminiModels: [],
+      customHermesModels: [],
       customKiloModels: [],
       customOpenCodeModels: [],
       customPiModels: [],

@@ -81,6 +81,7 @@ const PROVIDER_ICON: Record<ProviderKind, React.FC<React.SVGProps<SVGSVGElement>
   claudeAgent: ClaudeAI,
   cursor: CursorIcon,
   gemini: Gemini,
+  hermes: HammerIcon,
   kilo: KiloIcon,
   opencode: OpenCodeIcon,
   pi: PiIcon,
@@ -90,6 +91,7 @@ const PROVIDER_DISCOVERY_ORDER: ReadonlyArray<ProviderKind> = [
   "claudeAgent",
   "cursor",
   "gemini",
+  "hermes",
   "kilo",
   "opencode",
   "pi",
@@ -393,6 +395,7 @@ export function PluginLibrary() {
   const claudeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("claudeAgent"));
   const cursorCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("cursor"));
   const geminiCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("gemini"));
+  const hermesCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("hermes"));
   const kiloCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("kilo"));
   const openCodeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("opencode"));
   const piCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("pi"));
@@ -415,6 +418,10 @@ export function PluginLibrary() {
         plugins: supportsPluginDiscovery(geminiCapabilitiesQuery.data),
         skills: supportsSkillDiscovery(geminiCapabilitiesQuery.data),
       },
+      hermes: {
+        plugins: supportsPluginDiscovery(hermesCapabilitiesQuery.data),
+        skills: supportsSkillDiscovery(hermesCapabilitiesQuery.data),
+      },
       kilo: {
         plugins: supportsPluginDiscovery(kiloCapabilitiesQuery.data),
         skills: supportsSkillDiscovery(kiloCapabilitiesQuery.data),
@@ -433,6 +440,7 @@ export function PluginLibrary() {
       codexCapabilitiesQuery.data,
       cursorCapabilitiesQuery.data,
       geminiCapabilitiesQuery.data,
+      hermesCapabilitiesQuery.data,
       kiloCapabilitiesQuery.data,
       openCodeCapabilitiesQuery.data,
       piCapabilitiesQuery.data,

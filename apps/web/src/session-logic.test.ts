@@ -2478,6 +2478,7 @@ describe("PROVIDER_OPTIONS", () => {
     const claude = PROVIDER_OPTIONS.find((option) => option.value === "claudeAgent");
     const cursor = PROVIDER_OPTIONS.find((option) => option.value === "cursor");
     const gemini = PROVIDER_OPTIONS.find((option) => option.value === "gemini");
+    const hermes = PROVIDER_OPTIONS.find((option) => option.value === "hermes");
     const kilo = PROVIDER_OPTIONS.find((option) => option.value === "kilo");
     const opencode = PROVIDER_OPTIONS.find((option) => option.value === "opencode");
     const pi = PROVIDER_OPTIONS.find((option) => option.value === "pi");
@@ -2486,6 +2487,7 @@ describe("PROVIDER_OPTIONS", () => {
       { value: "claudeAgent", label: "Claude", available: true },
       { value: "cursor", label: "Cursor", available: true },
       { value: "gemini", label: "Gemini", available: true },
+      { value: "hermes", label: "Hermes", available: true },
       { value: "kilo", label: "Kilo", available: true },
       { value: "opencode", label: "OpenCode", available: true },
       { value: "pi", label: "Pi", available: true },
@@ -2503,6 +2505,11 @@ describe("PROVIDER_OPTIONS", () => {
     expect(gemini).toEqual({
       value: "gemini",
       label: "Gemini",
+      available: true,
+    });
+    expect(hermes).toEqual({
+      value: "hermes",
+      label: "Hermes",
       available: true,
     });
     expect(kilo).toEqual({

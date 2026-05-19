@@ -8,6 +8,8 @@ import type {
   CursorModelSelection,
   GeminiModelOptions,
   GeminiModelSelection,
+  HermesModelOptions,
+  HermesModelSelection,
   KiloModelSelection,
   ModelSelection,
   OpenCodeModelOptions,
@@ -168,6 +170,15 @@ export function buildNextProviderOptions(
       ...patch,
     } as GeminiModelOptions;
   }
+  if (provider === "hermes") {
+    return { ...(modelOptions as HermesModelOptions | undefined), ...patch } as HermesModelOptions;
+  }
+  if (provider === "kilo") {
+    return {
+      ...(modelOptions as OpenCodeModelOptions | undefined),
+      ...patch,
+    } as OpenCodeModelOptions;
+  }
   if (provider === "opencode") {
     return {
       ...(modelOptions as OpenCodeModelOptions | undefined),
@@ -215,6 +226,11 @@ export function buildModelSelection(
   model: string,
   options?: GeminiModelOptions | null | undefined,
 ): GeminiModelSelection;
+export function buildModelSelection(
+  provider: "hermes",
+  model: string,
+  options?: HermesModelOptions | null | undefined,
+): HermesModelSelection;
 export function buildModelSelection(
   provider: "opencode",
   model: string,
@@ -271,6 +287,14 @@ export function buildModelSelection(
             provider,
             model,
             options: options as GeminiModelOptions,
+          }
+        : { provider, model };
+    case "hermes":
+      return options
+        ? {
+            provider,
+            model,
+            options: options as HermesModelOptions,
           }
         : { provider, model };
     case "kilo":

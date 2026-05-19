@@ -57,6 +57,7 @@ type CustomModelSettingsKey =
   | "customClaudeModels"
   | "customCursorModels"
   | "customGeminiModels"
+  | "customHermesModels"
   | "customKiloModels"
   | "customOpenCodeModels"
   | "customPiModels";
@@ -75,6 +76,7 @@ const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>
   claudeAgent: new Set(getModelOptions("claudeAgent").map((option) => option.slug)),
   cursor: new Set(getModelOptions("cursor").map((option) => option.slug)),
   gemini: new Set(getModelOptions("gemini").map((option) => option.slug)),
+  hermes: new Set(getModelOptions("hermes").map((option) => option.slug)),
   kilo: new Set(getModelOptions("kilo").map((option) => option.slug)),
   opencode: new Set(getModelOptions("opencode").map((option) => option.slug)),
   pi: new Set(getModelOptions("pi").map((option) => option.slug)),
@@ -102,6 +104,7 @@ export const AppSettingsSchema = Schema.Struct({
   cursorBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   cursorApiEndpoint: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   geminiBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  hermesBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   kiloBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   kiloServerUrl: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   kiloServerPassword: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
@@ -133,6 +136,7 @@ export const AppSettingsSchema = Schema.Struct({
   customClaudeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customCursorModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customGeminiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
+  customHermesModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customKiloModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customOpenCodeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customPiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
@@ -204,6 +208,15 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     description: "Save additional Gemini model slugs for the picker and `/model` command.",
     placeholder: "your-gemini-model-slug",
     example: "gemini-3.5-pro-preview",
+  },
+  hermes: {
+    provider: "hermes",
+    settingsKey: "customHermesModels",
+    defaultSettingsKey: "customHermesModels",
+    title: "Hermes",
+    description: "Save additional Hermes model slugs for the picker and provider runtime.",
+    placeholder: "hermes-model-slug",
+    example: "hermes-agent",
   },
   kilo: {
     provider: "kilo",
@@ -281,6 +294,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     customClaudeModels: normalizeCustomModelSlugs(settings.customClaudeModels, "claudeAgent"),
     customCursorModels: normalizeCustomModelSlugs(settings.customCursorModels, "cursor"),
     customGeminiModels: normalizeCustomModelSlugs(settings.customGeminiModels, "gemini"),
+    customHermesModels: normalizeCustomModelSlugs(settings.customHermesModels, "hermes"),
     customKiloModels: normalizeCustomModelSlugs(settings.customKiloModels, "kilo"),
     customOpenCodeModels: normalizeCustomModelSlugs(settings.customOpenCodeModels, "opencode"),
     customPiModels: normalizeCustomModelSlugs(settings.customPiModels, "pi"),
@@ -300,6 +314,7 @@ function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSetti
     defaultThreadEnvMode: settings.defaultThreadEnvMode,
     enableAssistantStreaming: settings.enableAssistantStreaming,
     geminiBinaryPath: settings.providers.gemini.binaryPath,
+    hermesBinaryPath: settings.providers.hermes.binaryPath,
     kiloBinaryPath: settings.providers.kilo.binaryPath,
     kiloServerPassword: settings.providers.kilo.serverPassword,
     kiloServerUrl: settings.providers.kilo.serverUrl,
@@ -312,6 +327,7 @@ function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSetti
     customClaudeModels: settings.providers.claudeAgent.customModels,
     customCursorModels: settings.providers.cursor.customModels,
     customGeminiModels: settings.providers.gemini.customModels,
+    customHermesModels: settings.providers.hermes.customModels,
     customKiloModels: settings.providers.kilo.customModels,
     customOpenCodeModels: settings.providers.opencode.customModels,
     customPiModels: settings.providers.pi.customModels,
@@ -400,6 +416,14 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
         : {}),
     };
   }
+  if (hasOwn(patch, "hermesBinaryPath") || hasOwn(patch, "customHermesModels")) {
+    providers.hermes = {
+      ...(hasOwn(patch, "hermesBinaryPath") ? { binaryPath: patch.hermesBinaryPath ?? "" } : {}),
+      ...(hasOwn(patch, "customHermesModels")
+        ? { customModels: patch.customHermesModels ?? [] }
+        : {}),
+    };
+  }
   if (
     hasOwn(patch, "kiloBinaryPath") ||
     hasOwn(patch, "kiloServerUrl") ||
@@ -469,6 +493,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "defaultThreadEnvMode",
     "enableAssistantStreaming",
     "geminiBinaryPath",
+    "hermesBinaryPath",
     "kiloBinaryPath",
     "kiloServerPassword",
     "kiloServerUrl",
@@ -490,6 +515,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "customClaudeModels",
     "customCursorModels",
     "customGeminiModels",
+    "customHermesModels",
     "customKiloModels",
     "customOpenCodeModels",
     "customPiModels",
@@ -537,6 +563,7 @@ export function getCustomModelsByProvider(
     claudeAgent: getCustomModelsForProvider(settings, "claudeAgent"),
     cursor: getCustomModelsForProvider(settings, "cursor"),
     gemini: getCustomModelsForProvider(settings, "gemini"),
+    hermes: getCustomModelsForProvider(settings, "hermes"),
     kilo: getCustomModelsForProvider(settings, "kilo"),
     opencode: getCustomModelsForProvider(settings, "opencode"),
     pi: getCustomModelsForProvider(settings, "pi"),
@@ -655,6 +682,7 @@ export function getCustomModelOptionsByProvider(
     claudeAgent: getAppModelOptions("claudeAgent", customModelsByProvider.claudeAgent),
     cursor: getAppModelOptions("cursor", customModelsByProvider.cursor),
     gemini: getAppModelOptions("gemini", customModelsByProvider.gemini),
+    hermes: getAppModelOptions("hermes", customModelsByProvider.hermes),
     kilo: getAppModelOptions("kilo", customModelsByProvider.kilo),
     opencode: getAppModelOptions("opencode", customModelsByProvider.opencode),
     pi: getAppModelOptions("pi", customModelsByProvider.pi),
@@ -670,6 +698,7 @@ export function getProviderStartOptions(
     | "cursorApiEndpoint"
     | "cursorBinaryPath"
     | "geminiBinaryPath"
+    | "hermesBinaryPath"
     | "kiloBinaryPath"
     | "kiloServerPassword"
     | "kiloServerUrl"
@@ -708,6 +737,13 @@ export function getProviderStartOptions(
       ? {
           gemini: {
             binaryPath: settings.geminiBinaryPath,
+          },
+        }
+      : {}),
+    ...(settings.hermesBinaryPath
+      ? {
+          hermes: {
+            binaryPath: settings.hermesBinaryPath,
           },
         }
       : {}),
@@ -751,6 +787,7 @@ export function getCustomBinaryPathForProvider(
     | "codexBinaryPath"
     | "cursorBinaryPath"
     | "geminiBinaryPath"
+    | "hermesBinaryPath"
     | "kiloBinaryPath"
     | "openCodeBinaryPath"
     | "piBinaryPath"
@@ -766,6 +803,8 @@ export function getCustomBinaryPathForProvider(
       return settings.cursorBinaryPath;
     case "gemini":
       return settings.geminiBinaryPath;
+    case "hermes":
+      return settings.hermesBinaryPath;
     case "kilo":
       return settings.kiloBinaryPath;
     case "opencode":

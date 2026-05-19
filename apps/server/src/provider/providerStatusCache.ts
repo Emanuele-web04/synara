@@ -14,6 +14,7 @@ const PROVIDER_STATUS_CACHE_IDS = [
   "claudeAgent",
   "cursor",
   "gemini",
+  "hermes",
   "kilo",
   "opencode",
   "pi",
