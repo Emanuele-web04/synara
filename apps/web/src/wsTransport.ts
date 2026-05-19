@@ -70,6 +70,27 @@ function causeToError(cause: Cause.Cause<unknown>): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
+function omitNullUserInputAnswers(input: unknown): unknown {
+  if (!input || typeof input !== "object") {
+    return input;
+  }
+  const command = input as { type?: unknown; answers?: unknown };
+  if (command.type !== "thread.user-input.respond" || !command.answers) {
+    return input;
+  }
+  if (typeof command.answers !== "object") {
+    return input;
+  }
+  return {
+    ...command,
+    answers: Object.fromEntries(
+      Object.entries(command.answers).filter(
+        ([, answer]) => answer !== null && answer !== undefined,
+      ),
+    ),
+  };
+}
+
 export function isServerLifecyclePushChannel(channel: string): boolean {
   return channel === WS_CHANNELS.serverWelcome || channel === WS_CHANNELS.serverMaintenanceUpdated;
 }
@@ -145,6 +166,7 @@ export class WsTransport {
       method === ORCHESTRATION_WS_METHODS.dispatchCommand
         ? (params as { command: unknown }).command
         : (params ?? {});
+    const normalizedRpcInput = omitNullUserInputAnswers(rpcInput);
     const call = (
       client as unknown as Record<
         string,
@@ -152,7 +174,7 @@ export class WsTransport {
       >
     )[method];
     if (!call) throw new WsTransportRpcError({ message: `Unknown RPC method: ${method}` });
-    return (await this.runtime.runPromise(call(rpcInput))) as T;
+    return (await this.runtime.runPromise(call(normalizedRpcInput))) as T;
   }
 
   subscribe<C extends WsPushChannel>(

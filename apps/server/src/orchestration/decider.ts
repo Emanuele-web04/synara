@@ -62,6 +62,14 @@ function withEventBase(
   };
 }
 
+function omitNullUserInputAnswers(
+  command: Extract<OrchestrationCommand, { type: "thread.user-input.respond" }>,
+) {
+  return Object.fromEntries(
+    Object.entries(command.answers).filter(([, answer]) => answer !== null && answer !== undefined),
+  );
+}
+
 function deriveCommandAssociatedWorktreeMetadata(input: {
   readonly branch: string | null;
   readonly worktreePath: string | null;
@@ -905,6 +913,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      const answers = omitNullUserInputAnswers(command);
       return {
         ...withEventBase({
           aggregateKind: "thread",
@@ -919,7 +928,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           requestId: command.requestId,
-          answers: command.answers,
+          answers,
           createdAt: command.createdAt,
         },
       };

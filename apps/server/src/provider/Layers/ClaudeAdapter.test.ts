@@ -3785,6 +3785,100 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("coerces multi-select array answers into comma-separated strings", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "approval-required",
+      });
+
+      yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
+
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "multi-select turn",
+        attachments: [],
+      });
+      yield* Stream.take(adapter.streamEvents, 1).pipe(Stream.runDrain);
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-user-input-multi",
+        uuid: "stream-user-input-multi",
+        parent_tool_use_id: null,
+        event: {
+          type: "message_start",
+          message: {
+            id: "msg-user-input-multi",
+          },
+        },
+      } as unknown as SDKMessage);
+
+      const threadStarted = yield* Stream.runHead(adapter.streamEvents);
+      assert.equal(threadStarted._tag, "Some");
+      if (threadStarted._tag !== "Some" || threadStarted.value.type !== "thread.started") {
+        return;
+      }
+
+      const createInput = harness.getLastCreateQueryInput();
+      const canUseTool = createInput?.options.canUseTool;
+      if (!canUseTool) {
+        assert.fail("Expected canUseTool to be defined");
+        return;
+      }
+
+      const askInput = {
+        questions: [
+          {
+            question: "Which features do you use most?",
+            header: "Features",
+            options: [
+              { label: "CLI scaffolding", description: "Generate boilerplate" },
+              { label: "Type checking", description: "Static analysis" },
+              { label: "Hot reload", description: "Live updates" },
+            ],
+            multiSelect: true,
+          },
+        ],
+      };
+
+      const permissionPromise = canUseTool("AskUserQuestion", askInput, {
+        signal: new AbortController().signal,
+        toolUseID: "tool-ask-multi",
+      });
+
+      const requestedEvent = yield* Stream.runHead(adapter.streamEvents);
+      if (requestedEvent._tag !== "Some" || requestedEvent.value.type !== "user-input.requested") {
+        assert.fail("Expected user-input.requested event");
+        return;
+      }
+      const requestId = requestedEvent.value.requestId;
+
+      yield* adapter.respondToUserInput(
+        session.threadId,
+        ApprovalRequestId.makeUnsafe(requestId!),
+        { Features: ["CLI scaffolding", "Type checking"] },
+      );
+
+      yield* Stream.runHead(adapter.streamEvents);
+
+      const permissionResult = yield* Effect.promise(() => permissionPromise);
+      assert.equal((permissionResult as PermissionResult).behavior, "allow");
+      const updatedInput = (permissionResult as { updatedInput: Record<string, unknown> })
+        .updatedInput;
+      assert.deepEqual(updatedInput.answers, {
+        "Which features do you use most?": "CLI scaffolding, Type checking",
+      });
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("routes AskUserQuestion through user-input flow even in full-access mode", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

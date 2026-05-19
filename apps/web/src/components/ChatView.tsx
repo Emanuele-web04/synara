@@ -16,6 +16,7 @@ import {
   type ProviderSkillDescriptor,
   type ProviderSkillReference,
   type ProviderStartOptions,
+  type ProviderUserInputAnswers,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   type ResolvedKeybindingsConfig,
@@ -153,6 +154,8 @@ import {
 import {
   buildPendingUserInputAnswers,
   derivePendingUserInputProgress,
+  hasCompletePendingUserInputAnswers,
+  omitNullPendingUserInputAnswers,
   setPendingUserInputCustomAnswer,
   togglePendingUserInputOptionSelection,
   type PendingUserInputDraftAnswer,
@@ -949,6 +952,7 @@ export default function ChatView({
   const [pendingUserInputAnswersByRequestId, setPendingUserInputAnswersByRequestId] = useState<
     Record<string, Record<string, PendingUserInputDraftAnswer>>
   >({});
+  const pendingUserInputAnswersByRequestIdRef = useRef(pendingUserInputAnswersByRequestId);
   const [pendingUserInputQuestionIndexByRequestId, setPendingUserInputQuestionIndexByRequestId] =
     useState<Record<string, number>>({});
   const [planSidebarOpen, setPlanSidebarOpen] = useState(false);
@@ -5123,8 +5127,39 @@ export default function ChatView({
       return false;
     }
     if (activePendingProgress) {
-      onAdvanceActivePendingUserInput();
-      return true;
+      const activeQuestion = activePendingProgress.activeQuestion;
+      const liveComposerSnapshot = composerEditorRef.current?.readSnapshot() ?? null;
+      const livePendingAnswerText = liveComposerSnapshot?.value ?? promptRef.current;
+      const currentDraftAnswer =
+        activePendingUserInput && activeQuestion
+          ? pendingUserInputAnswersByRequestIdRef.current[activePendingUserInput.requestId]?.[
+              activeQuestion.id
+            ]
+          : undefined;
+      const answerOverrides =
+        activeQuestion && livePendingAnswerText.trim().length > 0
+          ? {
+              [activeQuestion.id]: setPendingUserInputCustomAnswer(
+                currentDraftAnswer,
+                livePendingAnswerText,
+              ),
+            }
+          : undefined;
+      if (activePendingUserInput && answerOverrides) {
+        const nextRequestAnswers = {
+          ...pendingUserInputAnswersByRequestIdRef.current[activePendingUserInput.requestId],
+          ...answerOverrides,
+        };
+        pendingUserInputAnswersByRequestIdRef.current = {
+          ...pendingUserInputAnswersByRequestIdRef.current,
+          [activePendingUserInput.requestId]: nextRequestAnswers,
+        };
+        setPendingUserInputAnswersByRequestId((existing) => ({
+          ...existing,
+          [activePendingUserInput.requestId]: nextRequestAnswers,
+        }));
+      }
+      return onAdvanceActivePendingUserInput(answerOverrides);
     }
     const queuedChatTurn = queuedTurn ?? null;
     const liveComposerSnapshot =
@@ -5747,9 +5782,12 @@ export default function ChatView({
   );
 
   const onRespondToUserInput = useCallback(
-    async (requestId: ApprovalRequestId, answers: Record<string, unknown>) => {
+    async (requestId: ApprovalRequestId, answers: ProviderUserInputAnswers) => {
       const api = readNativeApi();
       if (!api || !activeThreadId) return;
+      const dispatchAnswers = hasCompletePendingUserInputAnswers(answers)
+        ? answers
+        : omitNullPendingUserInputAnswers(answers);
 
       setRespondingUserInputRequestIds((existing) =>
         existing.includes(requestId) ? existing : [...existing, requestId],
@@ -5760,7 +5798,7 @@ export default function ChatView({
           commandId: newCommandId(),
           threadId: activeThreadId,
           requestId,
-          answers,
+          answers: dispatchAnswers,
           createdAt: new Date().toISOString(),
         })
         .catch((err: unknown) => {
@@ -5790,26 +5828,35 @@ export default function ChatView({
   const onToggleActivePendingUserInputOption = useCallback(
     (questionId: string, optionLabel: string) => {
       if (!activePendingUserInput) {
-        return;
+        return null;
       }
       const question = activePendingUserInput.questions.find((entry) => entry.id === questionId);
       if (!question) {
-        return;
+        return null;
       }
+      const nextDraftAnswer = togglePendingUserInputOptionSelection(
+        question,
+        pendingUserInputAnswersByRequestIdRef.current[activePendingUserInput.requestId]?.[
+          questionId
+        ],
+        optionLabel,
+      );
+      const nextRequestAnswers = {
+        ...pendingUserInputAnswersByRequestIdRef.current[activePendingUserInput.requestId],
+        [questionId]: nextDraftAnswer,
+      };
+      pendingUserInputAnswersByRequestIdRef.current = {
+        ...pendingUserInputAnswersByRequestIdRef.current,
+        [activePendingUserInput.requestId]: nextRequestAnswers,
+      };
       setPendingUserInputAnswersByRequestId((existing) => ({
         ...existing,
-        [activePendingUserInput.requestId]: {
-          ...existing[activePendingUserInput.requestId],
-          [questionId]: togglePendingUserInputOptionSelection(
-            question,
-            existing[activePendingUserInput.requestId]?.[questionId],
-            optionLabel,
-          ),
-        },
+        [activePendingUserInput.requestId]: nextRequestAnswers,
       }));
       promptRef.current = "";
       setComposerCursor(0);
       setComposerTrigger(null);
+      return nextDraftAnswer;
     },
     [activePendingUserInput],
   );
@@ -5826,15 +5873,23 @@ export default function ChatView({
         return;
       }
       promptRef.current = value;
+      const nextDraftAnswer = setPendingUserInputCustomAnswer(
+        pendingUserInputAnswersByRequestIdRef.current[activePendingUserInput.requestId]?.[
+          questionId
+        ],
+        value,
+      );
+      const nextRequestAnswers = {
+        ...pendingUserInputAnswersByRequestIdRef.current[activePendingUserInput.requestId],
+        [questionId]: nextDraftAnswer,
+      };
+      pendingUserInputAnswersByRequestIdRef.current = {
+        ...pendingUserInputAnswersByRequestIdRef.current,
+        [activePendingUserInput.requestId]: nextRequestAnswers,
+      };
       setPendingUserInputAnswersByRequestId((existing) => ({
         ...existing,
-        [activePendingUserInput.requestId]: {
-          ...existing[activePendingUserInput.requestId],
-          [questionId]: setPendingUserInputCustomAnswer(
-            existing[activePendingUserInput.requestId]?.[questionId],
-            value,
-          ),
-        },
+        [activePendingUserInput.requestId]: nextRequestAnswers,
       }));
       setComposerCursor(nextCursor);
       setComposerTrigger(
@@ -5844,24 +5899,58 @@ export default function ChatView({
     [activePendingUserInput],
   );
 
-  const onAdvanceActivePendingUserInput = useCallback(() => {
-    if (!activePendingUserInput || !activePendingProgress) {
-      return;
-    }
-    if (activePendingProgress.isLastQuestion) {
-      if (activePendingResolvedAnswers) {
-        void onRespondToUserInput(activePendingUserInput.requestId, activePendingResolvedAnswers);
+  const onAdvanceActivePendingUserInput = useCallback(
+    (answerOverrides?: Record<string, PendingUserInputDraftAnswer>): boolean => {
+      if (!activePendingUserInput || !activePendingProgress) {
+        return false;
       }
-      return;
-    }
-    setActivePendingUserInputQuestionIndex(activePendingProgress.questionIndex + 1);
-  }, [
-    activePendingProgress,
-    activePendingResolvedAnswers,
-    activePendingUserInput,
-    onRespondToUserInput,
-    setActivePendingUserInputQuestionIndex,
-  ]);
+      const pendingDraftAnswers =
+        answerOverrides && Object.keys(answerOverrides).length > 0
+          ? {
+              ...pendingUserInputAnswersByRequestIdRef.current[activePendingUserInput.requestId],
+              ...answerOverrides,
+            }
+          : (pendingUserInputAnswersByRequestIdRef.current[activePendingUserInput.requestId] ??
+            activePendingDraftAnswers);
+      if (answerOverrides && Object.keys(answerOverrides).length > 0) {
+        pendingUserInputAnswersByRequestIdRef.current = {
+          ...pendingUserInputAnswersByRequestIdRef.current,
+          [activePendingUserInput.requestId]: pendingDraftAnswers,
+        };
+        setPendingUserInputAnswersByRequestId((existing) => ({
+          ...existing,
+          [activePendingUserInput.requestId]: pendingDraftAnswers,
+        }));
+      }
+      const resolvedAnswers = buildPendingUserInputAnswers(
+        activePendingUserInput.questions,
+        pendingDraftAnswers,
+      );
+      if (activePendingProgress.isLastQuestion) {
+        if (resolvedAnswers) {
+          void onRespondToUserInput(activePendingUserInput.requestId, resolvedAnswers);
+          return true;
+        }
+        return false;
+      }
+      const activeQuestionId = activePendingProgress.activeQuestion?.id ?? null;
+      const hasActiveOverride = activeQuestionId
+        ? answerOverrides?.[activeQuestionId] !== undefined
+        : false;
+      if (!activePendingProgress.canAdvance && !hasActiveOverride) {
+        return false;
+      }
+      setActivePendingUserInputQuestionIndex(activePendingProgress.questionIndex + 1);
+      return true;
+    },
+    [
+      activePendingDraftAnswers,
+      activePendingProgress,
+      activePendingUserInput,
+      onRespondToUserInput,
+      setActivePendingUserInputQuestionIndex,
+    ],
+  );
 
   const onPreviousActivePendingUserInputQuestion = useCallback(() => {
     if (!activePendingProgress) {
@@ -6601,15 +6690,23 @@ export default function ChatView({
       promptRef.current = next.text;
       const activePendingQuestion = activePendingProgress?.activeQuestion;
       if (activePendingQuestion && activePendingUserInput) {
+        const nextDraftAnswer = setPendingUserInputCustomAnswer(
+          pendingUserInputAnswersByRequestIdRef.current[activePendingUserInput.requestId]?.[
+            activePendingQuestion.id
+          ],
+          next.text,
+        );
+        const nextRequestAnswers = {
+          ...pendingUserInputAnswersByRequestIdRef.current[activePendingUserInput.requestId],
+          [activePendingQuestion.id]: nextDraftAnswer,
+        };
+        pendingUserInputAnswersByRequestIdRef.current = {
+          ...pendingUserInputAnswersByRequestIdRef.current,
+          [activePendingUserInput.requestId]: nextRequestAnswers,
+        };
         setPendingUserInputAnswersByRequestId((existing) => ({
           ...existing,
-          [activePendingUserInput.requestId]: {
-            ...existing[activePendingUserInput.requestId],
-            [activePendingQuestion.id]: setPendingUserInputCustomAnswer(
-              existing[activePendingUserInput.requestId]?.[activePendingQuestion.id],
-              next.text,
-            ),
-          },
+          [activePendingUserInput.requestId]: nextRequestAnswers,
         }));
       } else {
         setPrompt(next.text);

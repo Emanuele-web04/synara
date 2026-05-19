@@ -213,7 +213,11 @@ export const ProviderApprovalDecision = Schema.Literals([
   "cancel",
 ]);
 export type ProviderApprovalDecision = typeof ProviderApprovalDecision.Type;
-export const ProviderUserInputAnswers = Schema.Record(Schema.String, Schema.Unknown);
+export const ProviderUserInputAnswer = Schema.NullOr(
+  Schema.Union([Schema.String, Schema.Array(Schema.String)]),
+);
+export type ProviderUserInputAnswer = typeof ProviderUserInputAnswer.Type;
+export const ProviderUserInputAnswers = Schema.Record(Schema.String, ProviderUserInputAnswer);
 export type ProviderUserInputAnswers = typeof ProviderUserInputAnswers.Type;
 export const ThreadHandoffBootstrapStatus = Schema.Literals(["pending", "completed"]);
 export type ThreadHandoffBootstrapStatus = typeof ThreadHandoffBootstrapStatus.Type;
