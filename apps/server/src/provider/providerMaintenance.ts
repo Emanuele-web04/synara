@@ -21,7 +21,7 @@ interface ParsedSemver {
   readonly prerelease: ReadonlyArray<string>;
 }
 
-interface ProviderLatestVersionSource {
+export interface ProviderLatestVersionSource {
   readonly kind: "npm" | "homebrew";
   readonly name: string;
   readonly homebrewKind?: "formula" | "cask";
@@ -56,11 +56,13 @@ export interface PackageManagedProviderMaintenanceDefinition {
     readonly name: string;
     readonly kind: "formula" | "cask";
   } | null;
+  readonly latestVersionSource?: ProviderLatestVersionSource | null;
   readonly nativeUpdate: {
     readonly executable: string;
     readonly args: (installSource: ProviderInstallSource) => ReadonlyArray<string>;
     readonly lockKey: string;
     readonly strategy: "always" | "matching-path";
+    readonly excludedInstallSources?: ReadonlyArray<ProviderInstallSource>;
     readonly isCommandPath?: (commandPath: string) => boolean;
   } | null;
 }
@@ -282,7 +284,7 @@ function makeHomebrewProviderMaintenanceCapabilities(
   return makeProviderMaintenanceCapabilities({
     provider: definition.provider,
     packageName: null,
-    latestVersionSource: {
+    latestVersionSource: definition.latestVersionSource ?? {
       kind: "homebrew",
       name: definition.homebrew.name,
       homebrewKind: definition.homebrew.kind,
@@ -309,13 +311,14 @@ function makeNativeProviderMaintenanceCapabilities(
     provider: definition.provider,
     packageName: installSource === "homebrew" ? null : definition.npmPackageName,
     latestVersionSource:
-      installSource === "homebrew" && definition.homebrew
+      definition.latestVersionSource ??
+      (installSource === "homebrew" && definition.homebrew
         ? {
             kind: "homebrew",
             name: definition.homebrew.name,
             homebrewKind: definition.homebrew.kind,
           }
-        : { kind: "npm", name: definition.npmPackageName },
+        : { kind: "npm", name: definition.npmPackageName }),
     updateExecutable: executable ?? definition.nativeUpdate.executable,
     updateArgs: definition.nativeUpdate.args(installSource),
     updateLockKey: definition.nativeUpdate.lockKey,
@@ -350,7 +353,10 @@ function makeProviderMaintenanceForInstallSource(input: {
   readonly executable?: string | null;
 }): ProviderMaintenanceCapabilities {
   const { definition, installSource, executable } = input;
-  if (definition.nativeUpdate?.strategy === "always") {
+  if (
+    definition.nativeUpdate?.strategy === "always" &&
+    !definition.nativeUpdate.excludedInstallSources?.includes(installSource)
+  ) {
     return (
       makeNativeProviderMaintenanceCapabilities(definition, installSource, executable) ??
       makeManualOnlyProviderMaintenanceCapabilities({

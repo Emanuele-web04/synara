@@ -156,15 +156,17 @@ const PACKAGE_MANAGED_PROVIDER_UPDATES = {
     provider: OPENCODE_PROVIDER,
     binaryName: "opencode",
     npmPackageName: "opencode-ai",
-    homebrew: { name: "opencode", kind: "formula" },
+    homebrew: { name: "anomalyco/tap/opencode", kind: "formula" },
+    latestVersionSource: { kind: "npm", name: "opencode-ai" },
     nativeUpdate: {
       executable: "opencode",
       args: (installSource) =>
         installSource === "unknown" || installSource === "native"
           ? ["upgrade"]
-          : ["upgrade", "--method", installSource === "homebrew" ? "brew" : installSource],
+          : ["upgrade", "--method", installSource],
       lockKey: "opencode-native",
       strategy: "always",
+      excludedInstallSources: ["homebrew"],
       isCommandPath: isOpenCodeNativeCommandPath,
     },
   },
