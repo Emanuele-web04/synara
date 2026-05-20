@@ -10,6 +10,7 @@ export const DEFAULT_PROVIDER_ORDER: readonly ProviderKind[] = [
   "claudeAgent",
   "cursor",
   "gemini",
+  "hermes",
   "kilo",
   "opencode",
 ];

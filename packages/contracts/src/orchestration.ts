@@ -4,6 +4,7 @@ import {
   CodexModelOptions,
   CursorModelOptions,
   GeminiModelOptions,
+  HermesModelOptions,
   OpenCodeModelOptions,
   PiModelOptions,
 } from "./model";
@@ -51,6 +52,7 @@ export const ProviderKind = Schema.Literals([
   "claudeAgent",
   "cursor",
   "gemini",
+  "hermes",
   "kilo",
   "opencode",
   "pi",
@@ -113,6 +115,13 @@ export const KiloModelSelection = Schema.Struct({
 });
 export type KiloModelSelection = typeof KiloModelSelection.Type;
 
+export const HermesModelSelection = Schema.Struct({
+  provider: Schema.Literal("hermes"),
+  model: TrimmedNonEmptyString,
+  options: Schema.optional(HermesModelOptions),
+});
+export type HermesModelSelection = typeof HermesModelSelection.Type;
+
 export const PiModelSelection = Schema.Struct({
   provider: Schema.Literal("pi"),
   model: TrimmedNonEmptyString,
@@ -125,6 +134,7 @@ export const ModelSelection = Schema.Union([
   ClaudeModelSelection,
   CursorModelSelection,
   GeminiModelSelection,
+  HermesModelSelection,
   KiloModelSelection,
   OpenCodeModelSelection,
   PiModelSelection,
@@ -163,6 +173,10 @@ export const KiloProviderStartOptions = Schema.Struct({
   serverPassword: Schema.optional(TrimmedNonEmptyString),
 });
 
+export const HermesProviderStartOptions = Schema.Struct({
+  binaryPath: Schema.optional(TrimmedNonEmptyString),
+});
+
 export const PiProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   agentDir: Schema.optional(TrimmedNonEmptyString),
@@ -173,6 +187,7 @@ export const ProviderStartOptions = Schema.Struct({
   claudeAgent: Schema.optional(ClaudeProviderStartOptions),
   cursor: Schema.optional(CursorProviderStartOptions),
   gemini: Schema.optional(GeminiProviderStartOptions),
+  hermes: Schema.optional(HermesProviderStartOptions),
   kilo: Schema.optional(KiloProviderStartOptions),
   opencode: Schema.optional(OpenCodeProviderStartOptions),
   pi: Schema.optional(PiProviderStartOptions),

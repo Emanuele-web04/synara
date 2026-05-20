@@ -1751,6 +1751,32 @@ describe("store read model sync", () => {
     expect(next.threads[0]?.session?.provider).toBe("pi");
   });
 
+  it("preserves Hermes as the active session provider", () => {
+    const initialState = makeState(makeThread());
+    const readModel = makeReadModel(
+      makeReadModelThread({
+        modelSelection: {
+          provider: "hermes",
+          model: "hermes-agent",
+        },
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "ready",
+          providerName: "hermes",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: "2026-02-27T00:00:00.000Z",
+        },
+      }),
+    );
+
+    const next = syncServerReadModel(initialState, readModel);
+
+    expect(next.threads[0]?.modelSelection.provider).toBe("hermes");
+    expect(next.threads[0]?.session?.provider).toBe("hermes");
+  });
+
   it("preserves exact OpenCode thread model slugs from the read model", () => {
     const initialState = makeState(makeThread());
     const readModel = makeReadModel(

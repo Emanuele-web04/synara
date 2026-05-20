@@ -20,6 +20,7 @@ import {
   isClaudeUltrathinkPrompt,
   normalizeClaudeModelOptions,
   normalizeGeminiModelOptions,
+  normalizeHermesModelOptions,
   normalizeOpenCodeModelOptions,
   normalizePiModelOptions,
   resolveLabeledOptionValue,
@@ -209,6 +210,12 @@ function getProviderStateFromCapabilities(
       normalizedOptions = normalizePiModelOptions(providerOptions);
       break;
     }
+    case "hermes": {
+      const providerOptions = modelOptions?.hermes;
+      rawEffort = trimOrNull(providerOptions?.reasoningEffort);
+      normalizedOptions = normalizeHermesModelOptions(providerOptions);
+      break;
+    }
   }
 
   const draftEffort = trimOrNull(rawEffort);
@@ -261,6 +268,11 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
     renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("gemini", input),
     renderTraitsPicker: (input) => renderTraitsPickerForProvider("gemini", input),
   },
+  hermes: {
+    getState: (input) => getProviderStateFromCapabilities(input),
+    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("hermes", input),
+    renderTraitsPicker: (input) => renderTraitsPickerForProvider("hermes", input),
+  },
   kilo: {
     getState: (input) => getProviderStateFromCapabilities(input),
     renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("kilo", input),
@@ -306,7 +318,9 @@ export function renderProviderTraitsMenuContent(input: {
       selection,
       input.includeFastMode === undefined ? undefined : { includeFastMode: input.includeFastMode },
     ) &&
-    ((input.provider !== "kilo" && input.provider !== "opencode") ||
+    ((input.provider !== "kilo" &&
+      input.provider !== "opencode" &&
+      input.provider !== "hermes") ||
       (input.runtimeAgents?.length ?? 0) === 0)
   ) {
     return null;

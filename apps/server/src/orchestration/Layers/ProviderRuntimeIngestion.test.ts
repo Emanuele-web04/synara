@@ -946,7 +946,7 @@ describe("ProviderRuntimeIngestion", () => {
     expect(message?.streaming).toBe(false);
   });
 
-  it("does not project reasoning content deltas into transcript work rows", async () => {
+  it("projects reasoning content deltas into work log activities", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
@@ -984,9 +984,10 @@ describe("ProviderRuntimeIngestion", () => {
 
     expect(
       thread.activities.some(
-        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-reasoning-delta",
+        (activity: ProviderRuntimeTestActivity) =>
+          activity.id === "evt-reasoning-delta" && activity.kind === "agent.reasoning.delta",
       ),
-    ).toBe(false);
+    ).toBe(true);
     expect(thread.messages).toHaveLength(0);
   });
 

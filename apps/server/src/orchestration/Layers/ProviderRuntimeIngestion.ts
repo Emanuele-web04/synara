@@ -1793,8 +1793,34 @@ const make = Effect.gen(function* () {
         event.type === "content.delta" && event.payload.streamKind === "assistant_text"
           ? event.payload.delta
           : undefined;
+      const reasoningDelta =
+        event.type === "content.delta" && event.payload.streamKind === "reasoning_text"
+          ? event.payload.delta
+          : undefined;
       const proposedPlanDelta =
         event.type === "turn.proposed.delta" ? event.payload.delta : undefined;
+
+      if (reasoningDelta && reasoningDelta.length > 0) {
+        const turnId = toTurnId(event.turnId);
+        yield* orchestrationEngine.dispatch({
+          type: "thread.activity.append",
+          commandId: providerCommandId(event, "agent-reasoning-delta"),
+          threadId: thread.id,
+          activity: {
+            id: event.eventId,
+            createdAt: now,
+            tone: "info",
+            kind: "agent.reasoning.delta",
+            summary: "Thinking",
+            payload: toActivityPayload({
+              delta: reasoningDelta,
+              ...(event.itemId ? { itemId: event.itemId } : {}),
+            }),
+            turnId: turnId ?? null,
+          },
+          createdAt: now,
+        });
+      }
 
       if (assistantDelta && assistantDelta.length > 0) {
         const assistantMessageId = MessageId.makeUnsafe(
@@ -2070,10 +2096,15 @@ const make = Effect.gen(function* () {
         return;
       }
 
+      const flushProvider =
+        thread?.session?.providerName === "claudeAgent" ||
+        thread?.session?.providerName === "hermes"
+          ? thread.session.providerName
+          : "codex";
       const flushEvent: ProviderRuntimeEvent = {
         type: "turn.started",
         eventId: event.eventId,
-        provider: thread?.session?.providerName === "claudeAgent" ? "claudeAgent" : "codex",
+        provider: flushProvider,
         createdAt: event.payload.createdAt,
         threadId: event.payload.threadId,
         turnId: activeTurnId,

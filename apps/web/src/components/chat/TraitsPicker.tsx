@@ -4,6 +4,7 @@
 // Depends on: shared trait resolution helpers, provider model option updates, and shared menu primitives.
 
 import {
+  type HermesModelOptions,
   type OpenCodeModelOptions,
   type ProviderAgentDescriptor,
   type ProviderKind,
@@ -47,7 +48,7 @@ function getAgentOptions(
   provider: ProviderKind,
   runtimeAgents: ReadonlyArray<ProviderAgentDescriptor> | null | undefined,
 ): ReadonlyArray<ProviderAgentDescriptor> {
-  if (provider !== "kilo" && provider !== "opencode") return [];
+  if (provider !== "kilo" && provider !== "opencode" && provider !== "hermes") return [];
   return runtimeAgents ?? [];
 }
 
@@ -55,6 +56,10 @@ function getSelectedAgentValue(
   provider: ProviderKind,
   modelOptions: ProviderOptions | null | undefined,
 ): string | null {
+  if (provider === "hermes") {
+    const profile = (modelOptions as HermesModelOptions | undefined)?.profile?.trim();
+    return profile && profile.length > 0 ? profile : null;
+  }
   const defaultAgent = defaultAgentForProvider(provider);
   if (!defaultAgent) return null;
   const selectedAgent = (modelOptions as OpenCodeModelOptions | undefined)?.agent?.trim();
@@ -120,7 +125,8 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   const agentOptions = getAgentOptions(provider, runtimeAgents);
   const defaultAgent = defaultAgentForProvider(provider);
   const selectedAgent = getSelectedAgentValue(provider, modelOptions);
-  const hasAgentControls = agentOptions.length > 0 && defaultAgent !== null;
+  const hasAgentControls =
+    agentOptions.length > 0 && (provider === "hermes" || defaultAgent !== null);
   const hasPriorFastModeSection =
     effortLevels.length > 0 || thinkingEnabled !== null || contextWindowOptions.length > 1;
 
@@ -185,8 +191,17 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
         <>
           <MenuGroup>
             <div className="px-2 pt-1.5 pb-1 font-medium text-muted-foreground text-xs">
-              {provider === "kilo" || provider === "opencode" ? "Variant" : "Effort"}
+              {provider === "hermes"
+                ? "Profile reasoning level"
+                : provider === "kilo" || provider === "opencode"
+                  ? "Variant"
+                  : "Effort"}
             </div>
+            {provider === "hermes" ? (
+              <div className="px-2 pb-1.5 text-muted-foreground/80 text-xs">
+                Applies to all models in this profile. Changing it restarts the idle session.
+              </div>
+            ) : null}
             {ultrathinkPromptControlled ? (
               <div className="px-2 pb-1.5 text-muted-foreground/80 text-xs">
                 Remove Ultrathink from the prompt to change effort.
@@ -308,12 +323,23 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
           {hasVisibleControls ? <MenuDivider /> : null}
           <MenuGroup>
             <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">
-              {provider === "kilo" ? "Mode" : "Agent"}
+              {provider === "hermes" ? "Profile" : provider === "kilo" ? "Mode" : "Agent"}
             </div>
             <MenuRadioGroup
               value={selectedAgent ?? defaultAgent ?? ""}
               onValueChange={(value) => {
-                if (!value || !defaultAgent) return;
+                if (!value) return;
+                if (provider === "hermes") {
+                  setProviderModelOptions(
+                    threadId,
+                    provider,
+                    buildNextProviderOptions(provider, modelOptions, { profile: value }),
+                    { ...(model !== undefined ? { model } : {}), persistSticky: true },
+                  );
+                  onSelectionComplete?.();
+                  return;
+                }
+                if (!defaultAgent) return;
                 setProviderModelOptions(
                   threadId,
                   provider,
@@ -404,7 +430,8 @@ export const TraitsPicker = memo(function TraitsPicker({
   const agentOptions = getAgentOptions(provider, runtimeAgents);
   const defaultAgent = defaultAgentForProvider(provider);
   const selectedAgent = getSelectedAgentValue(provider, modelOptions);
-  const hasAgentControls = agentOptions.length > 0 && defaultAgent !== null;
+  const hasAgentControls =
+    agentOptions.length > 0 && (provider === "hermes" || defaultAgent !== null);
 
   if (!hasVisibleControls && !hasAgentControls) {
     return null;

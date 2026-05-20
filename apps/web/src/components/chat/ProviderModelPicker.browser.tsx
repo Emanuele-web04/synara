@@ -24,6 +24,7 @@ const MODEL_OPTIONS_BY_PROVIDER = {
     { slug: "auto-gemini-3", name: "Auto Gemini 3" },
     { slug: "gemini-2.5-pro", name: "Gemini 2.5 Pro" },
   ],
+  hermes: [{ slug: "hermes-agent", name: "Hermes Agent" }],
   kilo: [
     {
       slug: "kilo/kilo-auto/free",

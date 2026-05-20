@@ -17,6 +17,7 @@ const HANDOFF_PROVIDER_ORDER: ReadonlyArray<ProviderKind> = [
   "claudeAgent",
   "cursor",
   "gemini",
+  "hermes",
   "kilo",
   "opencode",
   "pi",

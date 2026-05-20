@@ -151,6 +151,7 @@ type InstallBinarySettingsKey =
   | "codexBinaryPath"
   | "cursorBinaryPath"
   | "geminiBinaryPath"
+  | "hermesBinaryPath"
   | "kiloBinaryPath"
   | "openCodeBinaryPath"
   | "piBinaryPath";
@@ -186,6 +187,7 @@ const PROVIDER_VISIBILITY_OPTIONS: ReadonlyArray<{ provider: ProviderKind; title
   { provider: "claudeAgent", title: PROVIDER_DISPLAY_NAMES.claudeAgent },
   { provider: "cursor", title: PROVIDER_DISPLAY_NAMES.cursor },
   { provider: "gemini", title: PROVIDER_DISPLAY_NAMES.gemini },
+  { provider: "hermes", title: PROVIDER_DISPLAY_NAMES.hermes },
   { provider: "kilo", title: PROVIDER_DISPLAY_NAMES.kilo },
   { provider: "opencode", title: PROVIDER_DISPLAY_NAMES.opencode },
 ];
@@ -321,6 +323,27 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     binaryDescription: (
       <>
         Leave blank to use <code>gemini</code> from your PATH.
+      </>
+    ),
+  },
+  {
+    provider: "hermes",
+    title: "Hermes",
+    docs: [
+      { label: "Install", href: "https://github.com/NousResearch/hermes-agent" },
+      { label: "Update", href: "https://github.com/NousResearch/hermes-agent/releases" },
+      {
+        label: "ACP",
+        href: "https://hermes-agent.nousresearch.com/docs/user-guide/features/acp",
+      },
+    ],
+    binaryPathKey: "hermesBinaryPath",
+    binaryPlaceholder: "Hermes binary path",
+    binaryDescription: (
+      <>
+        Leave blank to launch <code>hermes acp</code> from your PATH. Direct <code>hermes-acp</code>{" "}
+        binaries are also supported. Configure credentials with <code>hermes model</code> or edit{" "}
+        <code>~/.hermes/.env</code>.
       </>
     ),
   },
@@ -588,6 +611,7 @@ function SettingsRouteView() {
     claudeAgent: Boolean(settings.claudeBinaryPath),
     cursor: Boolean(settings.cursorBinaryPath || settings.cursorApiEndpoint),
     gemini: Boolean(settings.geminiBinaryPath),
+    hermes: Boolean(settings.hermesBinaryPath),
     kilo: Boolean(settings.kiloBinaryPath || settings.kiloServerUrl || settings.kiloServerPassword),
     opencode: Boolean(
       settings.openCodeBinaryPath || settings.openCodeServerUrl || settings.openCodeServerPassword,
@@ -606,6 +630,7 @@ function SettingsRouteView() {
     claudeAgent: "",
     cursor: "",
     gemini: "",
+    hermes: "",
     kilo: "",
     opencode: "",
     pi: "",
@@ -652,6 +677,7 @@ function SettingsRouteView() {
   const cursorBinaryPath = settings.cursorBinaryPath;
   const cursorApiEndpoint = settings.cursorApiEndpoint;
   const geminiBinaryPath = settings.geminiBinaryPath;
+  const hermesBinaryPath = settings.hermesBinaryPath;
   const kiloBinaryPath = settings.kiloBinaryPath;
   const kiloServerUrl = settings.kiloServerUrl;
   const kiloServerPassword = settings.kiloServerPassword;
@@ -754,6 +780,7 @@ function SettingsRouteView() {
     settings.customClaudeModels.length +
     settings.customCursorModels.length +
     settings.customGeminiModels.length +
+    settings.customHermesModels.length +
     settings.customKiloModels.length +
     settings.customOpenCodeModels.length +
     settings.customPiModels.length;
@@ -773,6 +800,7 @@ function SettingsRouteView() {
     settings.cursorBinaryPath !== defaults.cursorBinaryPath ||
     settings.cursorApiEndpoint !== defaults.cursorApiEndpoint ||
     settings.geminiBinaryPath !== defaults.geminiBinaryPath ||
+    settings.hermesBinaryPath !== defaults.hermesBinaryPath ||
     settings.kiloBinaryPath !== defaults.kiloBinaryPath ||
     settings.kiloServerUrl !== defaults.kiloServerUrl ||
     settings.kiloServerPassword !== defaults.kiloServerPassword ||
@@ -829,6 +857,7 @@ function SettingsRouteView() {
     settings.customClaudeModels.length > 0 ||
     settings.customCursorModels.length > 0 ||
     settings.customGeminiModels.length > 0 ||
+    settings.customHermesModels.length > 0 ||
     settings.customKiloModels.length > 0 ||
     settings.customOpenCodeModels.length > 0 ||
     settings.customPiModels.length > 0
@@ -1010,6 +1039,7 @@ function SettingsRouteView() {
       claudeAgent: false,
       cursor: false,
       gemini: false,
+      hermes: false,
       kilo: false,
       opencode: false,
       pi: false,
@@ -1020,6 +1050,7 @@ function SettingsRouteView() {
       claudeAgent: "",
       cursor: "",
       gemini: "",
+      hermes: "",
       kilo: "",
       opencode: "",
       pi: "",
@@ -1321,6 +1352,7 @@ function SettingsRouteView() {
                     value !== "claudeAgent" &&
                     value !== "cursor" &&
                     value !== "gemini" &&
+                    value !== "hermes" &&
                     value !== "kilo" &&
                     value !== "opencode" &&
                     value !== "pi"
@@ -1339,6 +1371,8 @@ function SettingsRouteView() {
                         <CursorIcon className="size-3.5 text-foreground" />
                       ) : settings.defaultProvider === "gemini" ? (
                         <Gemini className="size-3.5 text-foreground" />
+                      ) : settings.defaultProvider === "hermes" ? (
+                        <DotGrid2x3Icon className="size-3.5 text-foreground" />
                       ) : settings.defaultProvider === "kilo" ? (
                         <KiloIcon className="size-3.5 text-muted-foreground/70" />
                       ) : settings.defaultProvider === "opencode" ? (
@@ -1375,6 +1409,12 @@ function SettingsRouteView() {
                     <span className="flex items-center gap-2">
                       <Gemini className="size-3.5 text-foreground" />
                       Gemini
+                    </span>
+                  </SelectItem>
+                  <SelectItem hideIndicator value="hermes">
+                    <span className="flex items-center gap-2">
+                      <DotGrid2x3Icon className="size-3.5 text-foreground" />
+                      Hermes
                     </span>
                   </SelectItem>
                   <SelectItem hideIndicator value="opencode">
@@ -2283,6 +2323,7 @@ function SettingsRouteView() {
                       customClaudeModels: defaults.customClaudeModels,
                       customCursorModels: defaults.customCursorModels,
                       customGeminiModels: defaults.customGeminiModels,
+                      customHermesModels: defaults.customHermesModels,
                       customKiloModels: defaults.customKiloModels,
                       customOpenCodeModels: defaults.customOpenCodeModels,
                       customPiModels: defaults.customPiModels,
@@ -2304,6 +2345,7 @@ function SettingsRouteView() {
                       value !== "claudeAgent" &&
                       value !== "cursor" &&
                       value !== "gemini" &&
+                      value !== "hermes" &&
                       value !== "kilo" &&
                       value !== "opencode" &&
                       value !== "pi"
@@ -2582,6 +2624,7 @@ function SettingsRouteView() {
                       cursorBinaryPath: defaults.cursorBinaryPath,
                       cursorApiEndpoint: defaults.cursorApiEndpoint,
                       geminiBinaryPath: defaults.geminiBinaryPath,
+                      hermesBinaryPath: defaults.hermesBinaryPath,
                       kiloBinaryPath: defaults.kiloBinaryPath,
                       kiloServerUrl: defaults.kiloServerUrl,
                       kiloServerPassword: defaults.kiloServerPassword,
@@ -2596,6 +2639,7 @@ function SettingsRouteView() {
                       claudeAgent: false,
                       cursor: false,
                       gemini: false,
+                      hermes: false,
                       kilo: false,
                       opencode: false,
                       pi: false,
@@ -2620,17 +2664,19 @@ function SettingsRouteView() {
                             settings.cursorApiEndpoint !== defaults.cursorApiEndpoint
                           : providerSettings.provider === "gemini"
                             ? settings.geminiBinaryPath !== defaults.geminiBinaryPath
-                            : providerSettings.provider === "kilo"
-                              ? settings.kiloBinaryPath !== defaults.kiloBinaryPath ||
-                                settings.kiloServerUrl !== defaults.kiloServerUrl ||
-                                settings.kiloServerPassword !== defaults.kiloServerPassword
-                              : providerSettings.provider === "pi"
-                                ? settings.piBinaryPath !== defaults.piBinaryPath ||
-                                  settings.piAgentDir !== defaults.piAgentDir
-                                : settings.openCodeBinaryPath !== defaults.openCodeBinaryPath ||
-                                  settings.openCodeServerUrl !== defaults.openCodeServerUrl ||
-                                  settings.openCodeServerPassword !==
-                                    defaults.openCodeServerPassword;
+                            : providerSettings.provider === "hermes"
+                              ? settings.hermesBinaryPath !== defaults.hermesBinaryPath
+                              : providerSettings.provider === "kilo"
+                                ? settings.kiloBinaryPath !== defaults.kiloBinaryPath ||
+                                  settings.kiloServerUrl !== defaults.kiloServerUrl ||
+                                  settings.kiloServerPassword !== defaults.kiloServerPassword
+                                : providerSettings.provider === "pi"
+                                  ? settings.piBinaryPath !== defaults.piBinaryPath ||
+                                    settings.piAgentDir !== defaults.piAgentDir
+                                  : settings.openCodeBinaryPath !== defaults.openCodeBinaryPath ||
+                                    settings.openCodeServerUrl !== defaults.openCodeServerUrl ||
+                                    settings.openCodeServerPassword !==
+                                      defaults.openCodeServerPassword;
                   const binaryPathValue =
                     providerSettings.binaryPathKey === "claudeBinaryPath"
                       ? claudeBinaryPath
@@ -2638,13 +2684,15 @@ function SettingsRouteView() {
                         ? cursorBinaryPath
                         : providerSettings.binaryPathKey === "geminiBinaryPath"
                           ? geminiBinaryPath
-                          : providerSettings.binaryPathKey === "kiloBinaryPath"
-                            ? kiloBinaryPath
-                            : providerSettings.binaryPathKey === "openCodeBinaryPath"
-                              ? openCodeBinaryPath
-                              : providerSettings.binaryPathKey === "piBinaryPath"
-                                ? piBinaryPath
-                                : codexBinaryPath;
+                          : providerSettings.binaryPathKey === "hermesBinaryPath"
+                            ? hermesBinaryPath
+                            : providerSettings.binaryPathKey === "kiloBinaryPath"
+                              ? kiloBinaryPath
+                              : providerSettings.binaryPathKey === "openCodeBinaryPath"
+                                ? openCodeBinaryPath
+                                : providerSettings.binaryPathKey === "piBinaryPath"
+                                  ? piBinaryPath
+                                  : codexBinaryPath;
                   const providerStatus = providerStatusByProvider.get(providerSettings.provider);
                   const providerUpdateLabel = providerStatus
                     ? providerUpdateStatusLabel(providerStatus)
@@ -2775,14 +2823,17 @@ function SettingsRouteView() {
                                           ? { cursorBinaryPath: event.target.value }
                                           : providerSettings.binaryPathKey === "geminiBinaryPath"
                                             ? { geminiBinaryPath: event.target.value }
-                                            : providerSettings.binaryPathKey === "kiloBinaryPath"
-                                              ? { kiloBinaryPath: event.target.value }
-                                              : providerSettings.binaryPathKey ===
-                                                  "openCodeBinaryPath"
-                                                ? { openCodeBinaryPath: event.target.value }
-                                                : providerSettings.binaryPathKey === "piBinaryPath"
-                                                  ? { piBinaryPath: event.target.value }
-                                                  : { codexBinaryPath: event.target.value },
+                                            : providerSettings.binaryPathKey === "hermesBinaryPath"
+                                              ? { hermesBinaryPath: event.target.value }
+                                              : providerSettings.binaryPathKey === "kiloBinaryPath"
+                                                ? { kiloBinaryPath: event.target.value }
+                                                : providerSettings.binaryPathKey ===
+                                                    "openCodeBinaryPath"
+                                                  ? { openCodeBinaryPath: event.target.value }
+                                                  : providerSettings.binaryPathKey ===
+                                                      "piBinaryPath"
+                                                    ? { piBinaryPath: event.target.value }
+                                                    : { codexBinaryPath: event.target.value },
                                     )
                                   }
                                   placeholder={providerSettings.binaryPlaceholder}

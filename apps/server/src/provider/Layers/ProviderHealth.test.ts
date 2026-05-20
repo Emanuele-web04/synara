@@ -8,6 +8,7 @@ import {
   checkClaudeProviderStatus,
   checkCodexProviderStatus,
   checkCursorProviderStatus,
+  checkHermesProviderStatus,
   checkOpenCodeProviderStatus,
   hasCustomModelProvider,
   makeCheckClaudeProviderStatus,
@@ -717,6 +718,79 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           }),
         ),
       ),
+    );
+  });
+
+  describe("checkHermesProviderStatus", () => {
+    it.effect("launches hermes acp by default and runs the ACP self-check", () => {
+      const calls: Array<{ command: string; args: ReadonlyArray<string> }> = [];
+      return Effect.gen(function* () {
+        const status = yield* checkHermesProviderStatus();
+
+        assert.strictEqual(status.provider, "hermes");
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
+        assert.deepEqual(calls, [
+          { command: "hermes", args: ["acp", "--version"] },
+          { command: "hermes", args: ["acp", "--check"] },
+        ]);
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            calls.push({ command, args });
+            const joined = args.join(" ");
+            if (joined === "acp --version") {
+              return { stdout: "Hermes Agent v0.13.0 (2026.5.7)\n", stderr: "", code: 0 };
+            }
+            if (joined === "acp --check") {
+              return { stdout: "Hermes ACP check OK\n", stderr: "", code: 0 };
+            }
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      );
+    });
+
+    it.effect("supports configured direct hermes-acp binaries", () => {
+      const calls: Array<{ command: string; args: ReadonlyArray<string> }> = [];
+      return Effect.gen(function* () {
+        const status = yield* checkHermesProviderStatus("/custom/bin/hermes-acp");
+
+        assert.strictEqual(status.available, true);
+        assert.ok(status.status === "ready" || status.status === "warning");
+        assert.deepEqual(calls.slice(0, 2), [
+          { command: "/custom/bin/hermes-acp", args: ["--version"] },
+          { command: "/custom/bin/hermes-acp", args: ["--check"] },
+        ]);
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            calls.push({ command, args });
+            const joined = args.join(" ");
+            if (joined === "--version") {
+              return { stdout: "Hermes ACP 0.13.0\n", stderr: "", code: 0 };
+            }
+            if (joined === "--check") {
+              return { stdout: "Hermes ACP check OK\n", stderr: "", code: 0 };
+            }
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      );
+    });
+
+    it.effect("returns unavailable when hermes acp is missing", () =>
+      Effect.gen(function* () {
+        const status = yield* checkHermesProviderStatus();
+        assert.strictEqual(status.provider, "hermes");
+        assert.strictEqual(status.status, "error");
+        assert.strictEqual(status.available, false);
+        assert.strictEqual(status.authStatus, "unknown");
+        assert.strictEqual(
+          status.message,
+          "Hermes ACP (`hermes acp`) is not installed or not on PATH.",
+        );
+      }).pipe(Effect.provide(failingSpawnerLayer("spawn hermes ENOENT"))),
     );
   });
 

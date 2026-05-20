@@ -10,6 +10,7 @@ import {
   type GeminiModelOptions,
   type GeminiThinkingBudget,
   type GeminiThinkingLevel,
+  type HermesModelOptions,
   type ModelCapabilities,
   type ModelSelection,
   type ModelSlug,
@@ -28,6 +29,7 @@ const MODEL_SLUG_SET_BY_PROVIDER: Record<ProviderKind, ReadonlySet<ModelSlug>> =
   codex: new Set(MODEL_OPTIONS_BY_PROVIDER.codex.map((option) => option.slug)),
   cursor: new Set(MODEL_OPTIONS_BY_PROVIDER.cursor.map((option) => option.slug)),
   gemini: new Set(MODEL_OPTIONS_BY_PROVIDER.gemini.map((option) => option.slug)),
+  hermes: new Set(MODEL_OPTIONS_BY_PROVIDER.hermes.map((option) => option.slug)),
   kilo: new Set(MODEL_OPTIONS_BY_PROVIDER.kilo.map((option) => option.slug)),
   opencode: new Set(MODEL_OPTIONS_BY_PROVIDER.opencode.map((option) => option.slug)),
   pi: new Set<ModelSlug>(),
@@ -758,6 +760,18 @@ export function normalizeCursorModelOptions(
     ...(modelOptions?.fastMode !== undefined ? { fastMode: modelOptions.fastMode } : {}),
     ...(modelOptions?.thinking !== undefined ? { thinking: modelOptions.thinking } : {}),
     ...(modelOptions?.contextWindow ? { contextWindow: modelOptions.contextWindow } : {}),
+  };
+  return Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
+}
+
+export function normalizeHermesModelOptions(
+  modelOptions: HermesModelOptions | null | undefined,
+): HermesModelOptions | undefined {
+  const profile = trimOrNull(modelOptions?.profile);
+  const reasoningEffort = trimOrNull(modelOptions?.reasoningEffort);
+  const nextOptions = {
+    ...(profile ? { profile } : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
   };
   return Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
 }
