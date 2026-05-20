@@ -370,10 +370,18 @@ function toCanonicalUserInputAnswers(
 
     if (Array.isArray(value)) {
       const normalized = value.filter((entry): entry is string => typeof entry === "string");
-      if (normalized.length === 0) continue;
       result[questionId] = normalized.length === 1 ? normalized[0]! : normalized;
       continue;
     }
+
+    const answerObject = asObject(value);
+    const answerList = asArray(answerObject?.answers)?.filter(
+      (entry): entry is string => typeof entry === "string",
+    );
+    if (!answerList) {
+      continue;
+    }
+    result[questionId] = answerList.length === 1 ? answerList[0]! : answerList;
   }
   return result;
 }
