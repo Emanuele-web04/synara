@@ -2621,6 +2621,103 @@ describe("ProviderRuntimeIngestion", () => {
     expect(resolvedPayload?.requestType).toBe("command_execution_approval");
   });
 
+  it("bounds large tool activity data while keeping command metadata", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const largeOutput = "line\n".repeat(20_000);
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-large-tool-data"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-large-tool-data"),
+      payload: {
+        itemType: "command_execution",
+        status: "completed",
+        title: "Ran command",
+        detail: "bun run something",
+        data: {
+          rawInput: { command: "bun run something" },
+          rawOutput: {
+            stdout: largeOutput,
+            stderr: largeOutput,
+          },
+          item: {
+            command: "bun run something",
+          },
+        },
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some((activity) => activity.id === "evt-large-tool-data"),
+    );
+    const activity = thread.activities.find((entry) => entry.id === "evt-large-tool-data");
+    const payload =
+      activity?.payload && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>)
+        : {};
+    const data =
+      payload.data && typeof payload.data === "object"
+        ? (payload.data as Record<string, unknown>)
+        : {};
+    const rawInput =
+      data.rawInput && typeof data.rawInput === "object"
+        ? (data.rawInput as Record<string, unknown>)
+        : {};
+    const rawOutput =
+      data.rawOutput && typeof data.rawOutput === "object"
+        ? (data.rawOutput as Record<string, unknown>)
+        : {};
+
+    expect(data.__dpcodeTruncated).toBe(true);
+    expect(JSON.stringify(data).length).toBeLessThan(17_000);
+    expect(rawInput.command).toBe("bun run something");
+    expect(String(rawOutput.stdout ?? "").length).toBeLessThan(3_000);
+  });
+
+  it("hard-caps pathological tool activity data", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const wideData = Object.fromEntries(
+      Array.from({ length: 50 }, (_, index) => [`wideField${index}`, "x".repeat(5_000)]),
+    );
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-pathological-tool-data"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-pathological-tool-data"),
+      payload: {
+        itemType: "command_execution",
+        status: "completed",
+        title: "Ran noisy command",
+        data: wideData,
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some((activity) => activity.id === "evt-pathological-tool-data"),
+    );
+    const activity = thread.activities.find((entry) => entry.id === "evt-pathological-tool-data");
+    const payload =
+      activity?.payload && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>)
+        : {};
+    const data =
+      payload.data && typeof payload.data === "object"
+        ? (payload.data as Record<string, unknown>)
+        : {};
+
+    expect(data.__dpcodeTruncated).toBe(true);
+    expect(typeof data.preview).toBe("string");
+    expect(JSON.stringify(data).length).toBeLessThanOrEqual(16_000);
+  });
+
   it("maps runtime.error into errored session state", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

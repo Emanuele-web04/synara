@@ -818,7 +818,7 @@ export default function ChatView({
   onCloseThreadPane,
 }: ChatViewProps) {
   const markThreadVisited = useStore((store) => store.markThreadVisited);
-  const syncServerReadModel = useStore((store) => store.syncServerReadModel);
+  const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const setStoreThreadError = useStore((store) => store.setError);
   const setStoreThreadWorkspace = useStore((store) => store.setThreadWorkspace);
   const { settings } = useAppSettings();
@@ -3253,8 +3253,8 @@ export default function ChatView({
             commandId: newCommandId(),
             threadId: activeThreadId,
           });
-          const snapshot = await api.orchestration.getSnapshot();
-          syncServerReadModel(snapshot);
+          const snapshot = await api.orchestration.getShellSnapshot();
+          syncServerShellSnapshot(snapshot);
           useComposerDraftStore.getState().clearDraftThread(activeThreadId);
           storeClearTerminalState(activeThreadId);
           removeThreadFromSplitViews(activeThreadId);
@@ -3292,7 +3292,7 @@ export default function ChatView({
       removeThreadFromSplitViews,
       storeClearTerminalState,
       storeCloseTerminal,
-      syncServerReadModel,
+      syncServerShellSnapshot,
       settings.confirmTerminalTabClose,
       terminalState.entryPoint,
       terminalState.terminalIds.length,
@@ -3547,7 +3547,7 @@ export default function ChatView({
     stopActiveThreadSession,
     runProjectScript,
     setStoreThreadWorkspace,
-    syncServerReadModel,
+    syncServerShellSnapshot,
   });
   const persistProjectScripts = useCallback(
     async (input: {
@@ -5362,14 +5362,13 @@ export default function ChatView({
             await waitForRecoverableProjectForDuplicateCreate({
               message: description,
               workspaceRoot: firstSendTarget.creation.workspaceRoot,
-              loadSnapshot: () => api.orchestration.getSnapshot().catch(() => null),
-              repairSnapshot: () => api.orchestration.repairState().catch(() => null),
+              loadSnapshot: () => api.orchestration.getShellSnapshot().catch(() => null),
             });
           if (!snapshot || !recoveredProject) {
             throw error;
           }
 
-          syncServerReadModel(snapshot);
+          syncServerShellSnapshot(snapshot);
           targetProjectIdForSend = recoveredProject.id;
           targetProjectKindForSend = "project";
           targetProjectCwdForSend = recoveredProject.workspaceRoot;
@@ -6265,9 +6264,9 @@ export default function ChatView({
           createdAt,
         });
       })
-      .then(() => api.orchestration.getSnapshot())
+      .then(() => api.orchestration.getShellSnapshot())
       .then((snapshot) => {
-        syncServerReadModel(snapshot);
+        syncServerShellSnapshot(snapshot);
         // Signal that the plan sidebar should open on the new thread.
         planSidebarOpenOnNextThreadRef.current = true;
         return navigate({
@@ -6284,9 +6283,9 @@ export default function ChatView({
           })
           .catch(() => undefined);
         await api.orchestration
-          .getSnapshot()
+          .getShellSnapshot()
           .then((snapshot) => {
-            syncServerReadModel(snapshot);
+            syncServerShellSnapshot(snapshot);
           })
           .catch(() => undefined);
         toastManager.add({
@@ -6315,7 +6314,7 @@ export default function ChatView({
     rememberCustomBinaryPathForDispatch,
     selectedProvider,
     settings.enableAssistantStreaming,
-    syncServerReadModel,
+    syncServerShellSnapshot,
     selectedModel,
   ]);
 
@@ -6804,7 +6803,7 @@ export default function ChatView({
     runtimeMode,
     interactionMode,
     threadId,
-    syncServerReadModel,
+    syncServerShellSnapshot,
     navigateToThread: (nextThreadId, options) =>
       navigate({
         to: "/$threadId",
