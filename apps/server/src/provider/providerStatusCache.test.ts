@@ -93,6 +93,13 @@ describe("providerStatusCache", () => {
           authStatus: "unknown",
           checkedAt: "2026-04-15T10:03:00.000Z",
         },
+        {
+          provider: "grok",
+          status: "ready",
+          available: true,
+          authStatus: "unknown",
+          checkedAt: "2026-04-15T10:04:00.000Z",
+        },
         readyCodexStatus,
       ]),
     ).toEqual([
@@ -117,6 +124,13 @@ describe("providerStatusCache", () => {
         available: true,
         authStatus: "authenticated",
         checkedAt: "2026-04-15T10:02:00.000Z",
+      },
+      {
+        provider: "grok",
+        status: "ready",
+        available: true,
+        authStatus: "unknown",
+        checkedAt: "2026-04-15T10:04:00.000Z",
       },
     ]);
   });

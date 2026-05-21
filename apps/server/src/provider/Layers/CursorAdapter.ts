@@ -1,5 +1,5 @@
 /**
- * CursorAdapterLive — Cursor CLI (`agent acp`) via ACP.
+ * CursorAdapterLive — Cursor CLI (`cursor-agent acp`) via ACP.
  *
  * @module CursorAdapterLive
  */
@@ -48,7 +48,13 @@ import {
   ProviderAdapterSessionNotFoundError,
   ProviderAdapterValidationError,
 } from "../Errors.ts";
-import { acpPermissionOutcome, mapAcpToAdapterError } from "../acp/AcpAdapterSupport.ts";
+import {
+  classifyAcpPromptTurnCompletion,
+  mapAcpToAdapterError,
+  readAcpFailedToolDetail,
+  selectAcpFullAccessPermissionOptionId,
+  selectAcpPermissionOptionId,
+} from "../acp/AcpAdapterSupport.ts";
 import { type AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
 import {
   makeAcpAssistantItemEvent,
@@ -72,6 +78,7 @@ import {
   resolveCursorAcpBaseModelId,
   type CursorAcpRuntimeCursorSettings,
 } from "../acp/CursorAcpSupport.ts";
+import { resolveCursorAgentBinaryPath } from "../acp/CursorAcpCommand.ts";
 import {
   CursorAskQuestionRequest,
   CursorCreatePlanRequest,
@@ -131,6 +138,7 @@ interface CursorSessionContext {
   completedPlanFingerprint: string | undefined;
   activeInteractionMode: ProviderInteractionMode | undefined;
   activeTurnId: TurnId | undefined;
+  activeTurnFailedToolDetail: string | undefined;
   activePromptFiber: Fiber.Fiber<void, never> | undefined;
   latestSessionCostUsd: number | undefined;
   stopped: boolean;
@@ -142,6 +150,7 @@ function clearCursorActiveTurn(ctx: CursorSessionContext, turnId: TurnId): boole
   }
 
   ctx.activeTurnId = undefined;
+  ctx.activeTurnFailedToolDetail = undefined;
   ctx.activePromptFiber = undefined;
   ctx.activeInteractionMode = undefined;
   const { activeTurnId: _activeTurnId, ...session } = ctx.session;
@@ -342,22 +351,6 @@ function applyRequestedSessionConfiguration<E>(input: {
       ),
     );
   });
-}
-
-function selectAutoApprovedPermissionOption(
-  request: EffectAcpSchema.RequestPermissionRequest,
-): string | undefined {
-  const allowAlwaysOption = request.options.find((option) => option.kind === "allow_always");
-  if (typeof allowAlwaysOption?.optionId === "string" && allowAlwaysOption.optionId.trim()) {
-    return allowAlwaysOption.optionId.trim();
-  }
-
-  const allowOnceOption = request.options.find((option) => option.kind === "allow_once");
-  if (typeof allowOnceOption?.optionId === "string" && allowOnceOption.optionId.trim()) {
-    return allowOnceOption.optionId.trim();
-  }
-
-  return undefined;
 }
 
 function resolveCursorSessionCwd(
@@ -607,7 +600,7 @@ export function makeCursorAdapter(
             childProcessSpawner,
             cwd,
             ...(resumeSessionId ? { resumeSessionId } : {}),
-            clientInfo: { name: "t3-code", version: "0.0.0" },
+            clientInfo: { name: "DP Code", version: "0.0.0" },
             ...acpNativeLoggers,
           }).pipe(
             Effect.provideService(Scope.Scope, sessionScope),
@@ -735,7 +728,9 @@ export function makeCursorAdapter(
                   "acp.jsonrpc",
                 );
                 if (input.runtimeMode === "full-access") {
-                  const autoApprovedOptionId = selectAutoApprovedPermissionOption(params);
+                  const autoApprovedOptionId = selectAcpFullAccessPermissionOptionId(
+                    params.options,
+                  );
                   if (autoApprovedOptionId !== undefined) {
                     return {
                       outcome: {
@@ -785,10 +780,18 @@ export function makeCursorAdapter(
                   outcome:
                     resolved === "cancel"
                       ? ({ outcome: "cancelled" } as const)
-                      : {
-                          outcome: "selected" as const,
-                          optionId: acpPermissionOutcome(resolved),
-                        },
+                      : (() => {
+                          const selectedOptionId = selectAcpPermissionOptionId(
+                            resolved,
+                            params.options,
+                          );
+                          return selectedOptionId === undefined
+                            ? ({ outcome: "cancelled" } as const)
+                            : ({
+                                outcome: "selected" as const,
+                                optionId: selectedOptionId,
+                              } as const);
+                        })(),
                 };
               }),
             );
@@ -837,6 +840,7 @@ export function makeCursorAdapter(
             completedPlanFingerprint: undefined,
             activeInteractionMode: undefined,
             activeTurnId: undefined,
+            activeTurnFailedToolDetail: undefined,
             activePromptFiber: undefined,
             latestSessionCostUsd: undefined,
             stopped: false,
@@ -894,6 +898,10 @@ export function makeCursorAdapter(
                       event.rawPayload,
                       "acp.jsonrpc",
                     );
+                    const failedToolDetail = readAcpFailedToolDetail(event.toolCall);
+                    if (failedToolDetail !== undefined && ctx.activeTurnId !== undefined) {
+                      ctx.activeTurnFailedToolDetail = failedToolDetail;
+                    }
                     yield* offerRuntimeEvent(
                       makeAcpToolCallEvent({
                         stamp: yield* makeEventStamp(),
@@ -1061,6 +1069,7 @@ export function makeCursorAdapter(
         }
 
         ctx.activeTurnId = turnId;
+        ctx.activeTurnFailedToolDetail = undefined;
         ctx.activeInteractionMode = input.interactionMode;
         ctx.lastPlanFingerprint = undefined;
         ctx.completedPlanFingerprint = undefined;
@@ -1117,6 +1126,7 @@ export function makeCursorAdapter(
               }),
             onSuccess: (result) =>
               Effect.gen(function* () {
+                const failedToolDetail = ctx.activeTurnFailedToolDetail;
                 if (!clearCursorActiveTurn(ctx, turnId)) {
                   return;
                 }
@@ -1129,6 +1139,10 @@ export function makeCursorAdapter(
                   updatedAt: yield* nowIso,
                   model: resolvedModel,
                 };
+                const completion = classifyAcpPromptTurnCompletion({
+                  stopReason: result.stopReason,
+                  ...(failedToolDetail !== undefined ? { failedToolDetail } : {}),
+                });
                 yield* offerRuntimeEvent({
                   type: "turn.completed",
                   ...(yield* makeEventStamp()),
@@ -1136,8 +1150,11 @@ export function makeCursorAdapter(
                   threadId: input.threadId,
                   turnId,
                   payload: {
-                    state: result.stopReason === "cancelled" ? "cancelled" : "completed",
+                    state: completion.state,
                     stopReason: result.stopReason ?? null,
+                    ...(completion.errorMessage !== undefined
+                      ? { errorMessage: completion.errorMessage }
+                      : {}),
                     ...(result.usage ? { usage: result.usage } : {}),
                     ...completedCost,
                   },
@@ -1295,7 +1312,9 @@ export function makeCursorAdapter(
     const listModels: NonNullable<CursorAdapterShape["listModels"]> = (input) => {
       const binaryPath = input.binaryPath?.trim();
       const apiEndpoint = input.apiEndpoint?.trim();
-      const effectiveBinaryPath = binaryPath || cursorSettings.binaryPath || "agent";
+      const effectiveBinaryPath = resolveCursorAgentBinaryPath(
+        binaryPath || cursorSettings.binaryPath,
+      );
       const effectiveApiEndpoint = apiEndpoint || cursorSettings.apiEndpoint;
       const runCursorModelListCommand = Effect.gen(function* () {
         const child = yield* childProcessSpawner.spawn(

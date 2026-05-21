@@ -152,6 +152,7 @@ describe("resolveAppModelSelection", () => {
           claudeAgent: [],
           cursor: [],
           gemini: [],
+          grok: [],
           kilo: [],
           opencode: [],
           pi: [],
@@ -165,7 +166,16 @@ describe("resolveAppModelSelection", () => {
     expect(
       resolveAppModelSelection(
         "codex",
-        { codex: [], claudeAgent: [], cursor: [], gemini: [], kilo: [], opencode: [], pi: [] },
+        {
+          codex: [],
+          claudeAgent: [],
+          cursor: [],
+          gemini: [],
+          grok: [],
+          kilo: [],
+          opencode: [],
+          pi: [],
+        },
         "",
       ),
     ).toBe("gpt-5.5");
@@ -175,7 +185,16 @@ describe("resolveAppModelSelection", () => {
     expect(
       resolveAppModelSelection(
         "codex",
-        { codex: [], claudeAgent: [], cursor: [], gemini: [], kilo: [], opencode: [], pi: [] },
+        {
+          codex: [],
+          claudeAgent: [],
+          cursor: [],
+          gemini: [],
+          grok: [],
+          kilo: [],
+          opencode: [],
+          pi: [],
+        },
         "GPT-5.3 Codex",
       ),
     ).toBe("gpt-5.3-codex");
@@ -185,7 +204,16 @@ describe("resolveAppModelSelection", () => {
     expect(
       resolveAppModelSelection(
         "claudeAgent",
-        { codex: [], claudeAgent: [], cursor: [], gemini: [], kilo: [], opencode: [], pi: [] },
+        {
+          codex: [],
+          claudeAgent: [],
+          cursor: [],
+          gemini: [],
+          grok: [],
+          kilo: [],
+          opencode: [],
+          pi: [],
+        },
         "sonnet",
       ),
     ).toBe("claude-sonnet-4-6");
@@ -195,7 +223,16 @@ describe("resolveAppModelSelection", () => {
     expect(
       resolveAppModelSelection(
         "codex",
-        { codex: [], claudeAgent: [], cursor: [], gemini: [], kilo: [], opencode: [], pi: [] },
+        {
+          codex: [],
+          claudeAgent: [],
+          cursor: [],
+          gemini: [],
+          grok: [],
+          kilo: [],
+          opencode: [],
+          pi: [],
+        },
         "custom/selected-model",
       ),
     ).toBe("custom/selected-model");
@@ -278,6 +315,7 @@ describe("getProviderStartOptions", () => {
         cursorApiEndpoint: "http://localhost:3000",
         cursorBinaryPath: "/usr/local/bin/agent",
         geminiBinaryPath: "/usr/local/bin/gemini",
+        grokBinaryPath: "/usr/local/bin/grok",
         kiloBinaryPath: "",
         kiloServerPassword: "",
         kiloServerUrl: "",
@@ -301,6 +339,9 @@ describe("getProviderStartOptions", () => {
       gemini: {
         binaryPath: "/usr/local/bin/gemini",
       },
+      grok: {
+        binaryPath: "/usr/local/bin/grok",
+      },
     });
   });
 
@@ -313,6 +354,7 @@ describe("getProviderStartOptions", () => {
         cursorApiEndpoint: "",
         cursorBinaryPath: "",
         geminiBinaryPath: "",
+        grokBinaryPath: "",
         kiloBinaryPath: "",
         kiloServerPassword: "",
         kiloServerUrl: "",
@@ -332,6 +374,7 @@ describe("provider-indexed custom model settings", () => {
     customClaudeModels: ["claude/custom-opus"],
     customCursorModels: ["cursor/custom-model"],
     customGeminiModels: ["gemini/custom-flash"],
+    customGrokModels: ["grok/custom-fast"],
     customKiloModels: ["kilo/kilo-auto/free"],
     customOpenCodeModels: ["openrouter/gpt-oss-120b"],
     customPiModels: ["anthropic/custom-pi"],
@@ -343,6 +386,7 @@ describe("provider-indexed custom model settings", () => {
       "claudeAgent",
       "cursor",
       "gemini",
+      "grok",
       "kilo",
       "opencode",
       "pi",
@@ -354,6 +398,7 @@ describe("provider-indexed custom model settings", () => {
     expect(getCustomModelsForProvider(settings, "claudeAgent")).toEqual(["claude/custom-opus"]);
     expect(getCustomModelsForProvider(settings, "cursor")).toEqual(["cursor/custom-model"]);
     expect(getCustomModelsForProvider(settings, "gemini")).toEqual(["gemini/custom-flash"]);
+    expect(getCustomModelsForProvider(settings, "grok")).toEqual(["grok/custom-fast"]);
     expect(getCustomModelsForProvider(settings, "kilo")).toEqual(["kilo/kilo-auto/free"]);
     expect(getCustomModelsForProvider(settings, "opencode")).toEqual(["openrouter/gpt-oss-120b"]);
     expect(getCustomModelsForProvider(settings, "pi")).toEqual(["anthropic/custom-pi"]);
@@ -365,6 +410,7 @@ describe("provider-indexed custom model settings", () => {
       customClaudeModels: ["claude/default-opus"],
       customCursorModels: ["cursor/default-model"],
       customGeminiModels: ["gemini/default-flash"],
+      customGrokModels: ["grok/default-fast"],
       customKiloModels: ["kilo/default-auto"],
       customOpenCodeModels: ["openai/gpt-5"],
       customPiModels: ["anthropic/default-pi"],
@@ -376,6 +422,7 @@ describe("provider-indexed custom model settings", () => {
     ]);
     expect(getDefaultCustomModelsForProvider(defaults, "cursor")).toEqual(["cursor/default-model"]);
     expect(getDefaultCustomModelsForProvider(defaults, "gemini")).toEqual(["gemini/default-flash"]);
+    expect(getDefaultCustomModelsForProvider(defaults, "grok")).toEqual(["grok/default-fast"]);
     expect(getDefaultCustomModelsForProvider(defaults, "kilo")).toEqual(["kilo/default-auto"]);
     expect(getDefaultCustomModelsForProvider(defaults, "opencode")).toEqual(["openai/gpt-5"]);
     expect(getDefaultCustomModelsForProvider(defaults, "pi")).toEqual(["anthropic/default-pi"]);
@@ -396,6 +443,12 @@ describe("provider-indexed custom model settings", () => {
   it("patches custom models for gemini", () => {
     expect(patchCustomModels("gemini", ["gemini/custom-flash"])).toEqual({
       customGeminiModels: ["gemini/custom-flash"],
+    });
+  });
+
+  it("patches custom models for grok", () => {
+    expect(patchCustomModels("grok", ["grok/custom-fast"])).toEqual({
+      customGrokModels: ["grok/custom-fast"],
     });
   });
 
@@ -429,6 +482,7 @@ describe("provider-indexed custom model settings", () => {
       claudeAgent: ["claude/custom-opus"],
       cursor: ["cursor/custom-model"],
       gemini: ["gemini/custom-flash"],
+      grok: ["grok/custom-fast"],
       kilo: ["kilo/kilo-auto/free"],
       opencode: ["openrouter/gpt-oss-120b"],
       pi: ["anthropic/custom-pi"],
@@ -450,6 +504,9 @@ describe("provider-indexed custom model settings", () => {
     expect(
       modelOptionsByProvider.gemini.some((option) => option.slug === "gemini/custom-flash"),
     ).toBe(true);
+    expect(modelOptionsByProvider.grok.some((option) => option.slug === "grok/custom-fast")).toBe(
+      true,
+    );
     expect(
       modelOptionsByProvider.kilo.some((option) => option.slug === "kilo/kilo-auto/free"),
     ).toBe(true);
@@ -467,6 +524,7 @@ describe("provider-indexed custom model settings", () => {
       customClaudeModels: [" sonnet ", "claude/custom-opus", "claude/custom-opus"],
       customCursorModels: [" composer-2 ", "cursor/custom-model", "cursor/custom-model"],
       customGeminiModels: [" auto-gemini-3 ", "gemini/custom-flash", "gemini/custom-flash"],
+      customGrokModels: [" grok-build ", "grok/custom-fast", "grok/custom-fast"],
       customKiloModels: [" kilo/kilo-auto/free ", "kilo/kilo-auto/free"],
       customOpenCodeModels: [
         " openai/gpt-5 ",
@@ -500,6 +558,10 @@ describe("provider-indexed custom model settings", () => {
       true,
     );
     expect(
+      modelOptionsByProvider.grok.filter((option) => option.slug === "grok/custom-fast"),
+    ).toHaveLength(1);
+    expect(modelOptionsByProvider.grok.some((option) => option.slug === "grok-build")).toBe(true);
+    expect(
       modelOptionsByProvider.kilo.filter((option) => option.slug === "kilo/kilo-auto/free"),
     ).toHaveLength(1);
     expect(
@@ -528,6 +590,7 @@ describe("AppSettingsSchema", () => {
       codexBinaryPath: "/usr/local/bin/codex",
       codexHomePath: "",
       geminiBinaryPath: "",
+      grokBinaryPath: "",
       defaultThreadEnvMode: "local",
       confirmThreadDelete: false,
       confirmTerminalTabClose: true,
@@ -539,6 +602,7 @@ describe("AppSettingsSchema", () => {
       customClaudeModels: [],
       customCursorModels: [],
       customGeminiModels: [],
+      customGrokModels: [],
       customKiloModels: [],
       customOpenCodeModels: [],
       customPiModels: [],

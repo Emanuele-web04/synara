@@ -558,18 +558,33 @@ const make = Effect.gen(function* () {
         onNone: () => undefined,
         onSome: (pending) => pending.messageId,
       });
+    const turnStartCheckpointRef = checkpointRefForThreadTurnStart(thread.id, turnId);
+    let hasTurnStartBaseline = false;
     if (messageId !== undefined) {
       const copied = yield* checkpointStore.copyCheckpointRef({
         cwd: checkpointCwd,
         fromCheckpointRef: checkpointRefForThreadMessageStart(thread.id, messageId),
-        toCheckpointRef: checkpointRefForThreadTurnStart(thread.id, turnId),
+        toCheckpointRef: turnStartCheckpointRef,
       });
+      hasTurnStartBaseline = copied;
       pendingMessageStartByThread.delete(thread.id);
       if (!copied) {
         yield* Effect.logWarning("checkpoint turn start baseline alias missing message baseline", {
           threadId: thread.id,
           turnId,
           messageId,
+        });
+      }
+    }
+    if (!hasTurnStartBaseline) {
+      const existingTurnStartBaseline = yield* checkpointStore.hasCheckpointRef({
+        cwd: checkpointCwd,
+        checkpointRef: turnStartCheckpointRef,
+      });
+      if (!existingTurnStartBaseline) {
+        yield* checkpointStore.captureCheckpoint({
+          cwd: checkpointCwd,
+          checkpointRef: turnStartCheckpointRef,
         });
       }
     }

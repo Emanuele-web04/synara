@@ -28,15 +28,7 @@ import { Schema } from "effect";
 
 import ChatView from "../components/ChatView";
 import BrowserPanel from "../components/BrowserPanel";
-import {
-  ClaudeAI,
-  CursorIcon,
-  Gemini,
-  KiloIcon,
-  OpenAI,
-  OpenCodeIcon,
-  PiIcon,
-} from "../components/Icons";
+import { ProviderIcon } from "../components/ProviderIcon";
 import { ChatPaneDropOverlay } from "../components/chat-drop-overlay/ChatPaneDropOverlay";
 import { DiffWorkerPoolProvider } from "../components/DiffWorkerPoolProvider";
 import {
@@ -628,7 +620,7 @@ function SplitPaneEmptyState(props: {
                   if (!isUsed) props.onSelectThread(thread.id);
                 }}
               >
-                <PickerProviderGlyph
+                <ProviderIcon
                   provider={thread.modelSelection.provider}
                   className="size-4 shrink-0"
                 />
@@ -645,36 +637,6 @@ function SplitPaneEmptyState(props: {
       </div>
     </div>
   );
-}
-
-function PickerProviderGlyph(props: { provider: ProviderKind; className?: string }) {
-  if (props.provider === "claudeAgent") {
-    return <ClaudeAI aria-hidden="true" className={cn("text-foreground", props.className)} />;
-  }
-  if (props.provider === "cursor") {
-    return <CursorIcon aria-hidden="true" className={cn("text-foreground", props.className)} />;
-  }
-  if (props.provider === "gemini") {
-    return <Gemini aria-hidden="true" className={cn("text-foreground", props.className)} />;
-  }
-  if (props.provider === "kilo") {
-    return (
-      <KiloIcon aria-hidden="true" className={cn("text-muted-foreground/70", props.className)} />
-    );
-  }
-  if (props.provider === "opencode") {
-    return (
-      <OpenCodeIcon
-        aria-hidden="true"
-        className={cn("text-muted-foreground/70", props.className)}
-      />
-    );
-  }
-  if (props.provider === "pi") {
-    return <PiIcon aria-hidden="true" className={cn("text-foreground", props.className)} />;
-  }
-
-  return <OpenAI aria-hidden="true" className={cn("text-muted-foreground/60", props.className)} />;
 }
 
 function SplitDivider(props: {
@@ -1542,7 +1504,7 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
                     )}
                     onClick={() => chooseThreadForPane(thread.id)}
                   >
-                    <PickerProviderGlyph
+                    <ProviderIcon
                       provider={thread.modelSelection.provider}
                       className="size-4 shrink-0"
                     />

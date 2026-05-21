@@ -162,6 +162,21 @@ describe("resolvePreferredComposerModelSelection", () => {
       }),
     );
   });
+
+  it("can prefer Grok draft selections", () => {
+    expect(
+      resolvePreferredComposerModelSelection({
+        draft: {
+          modelSelectionByProvider: {
+            grok: modelSelection("grok", "grok-build"),
+          },
+          activeProvider: "grok",
+        },
+        threadModelSelection: modelSelection("codex", "gpt-5"),
+        projectModelSelection: modelSelection("codex", "gpt-5.4"),
+      }),
+    ).toEqual(modelSelection("grok", "grok-build"));
+  });
 });
 
 describe("composerDraftStore addImages", () => {
@@ -579,6 +594,39 @@ describe("composerDraftStore terminal contexts", () => {
     expect(mergedState.draftThreadsByThreadId).toEqual({});
     expect(mergedState.projectDraftThreadIdByProjectId).toEqual({});
   });
+
+  it("drops unsupported restored Grok reasoning efforts from legacy draft storage", () => {
+    const persistApi = useComposerDraftStore.persist as unknown as {
+      getOptions: () => {
+        merge: (
+          persistedState: unknown,
+          currentState: ReturnType<typeof useComposerDraftStore.getState>,
+        ) => ReturnType<typeof useComposerDraftStore.getState>;
+      };
+    };
+    const mergedState = persistApi.getOptions().merge(
+      {
+        draftsByThreadId: {
+          [threadId]: {
+            provider: "grok",
+            model: "grok-build",
+            modelOptions: {
+              grok: {
+                reasoningEffort: "xhigh",
+              },
+            },
+          },
+        },
+        draftThreadsByThreadId: {},
+        projectDraftThreadIdByProjectId: {},
+      },
+      useComposerDraftStore.getInitialState(),
+    );
+
+    expect(mergedState.draftsByThreadId[threadId]?.modelSelectionByProvider.grok).toEqual(
+      modelSelection("grok", "grok-build"),
+    );
+  });
 });
 
 describe("composerDraftStore project draft thread mapping", () => {
@@ -924,6 +972,21 @@ describe("composerDraftStore modelSelection", () => {
     ).toEqual(modelSelection("codex", "gpt-5.4"));
   });
 
+  it("stores Grok selections instead of dropping them during normalization", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.setModelSelection(threadId, modelSelection("grok", "grok-build"));
+    store.setStickyModelSelection(modelSelection("grok", "grok-build"));
+
+    const state = useComposerDraftStore.getState();
+    expect(state.draftsByThreadId[threadId]?.modelSelectionByProvider.grok).toEqual(
+      modelSelection("grok", "grok-build"),
+    );
+    expect(state.draftsByThreadId[threadId]?.activeProvider).toBe("grok");
+    expect(state.stickyModelSelectionByProvider.grok).toEqual(modelSelection("grok", "grok-build"));
+    expect(state.stickyActiveProvider).toBe("grok");
+  });
+
   it("replaces only the targeted provider options on the current model selection", () => {
     const store = useComposerDraftStore.getState();
 
@@ -1116,6 +1179,7 @@ describe("composerDraftStore modelSelection", () => {
         claudeAgent: [],
         cursor: [],
         gemini: [],
+        grok: [],
         kilo: [],
         opencode: [],
         pi: [],
@@ -1142,6 +1206,7 @@ describe("composerDraftStore modelSelection", () => {
         claudeAgent: [],
         cursor: [],
         gemini: [],
+        grok: [],
         kilo: [],
         opencode: [],
         pi: [],
@@ -1173,6 +1238,7 @@ describe("composerDraftStore modelSelection", () => {
         claudeAgent: [],
         cursor: [],
         gemini: [],
+        grok: [],
         kilo: [],
         opencode: [],
         pi: [],
@@ -1204,6 +1270,7 @@ describe("composerDraftStore modelSelection", () => {
         claudeAgent: [],
         cursor: [],
         gemini: [],
+        grok: [],
         kilo: [],
         opencode: [],
         pi: [],
@@ -1475,6 +1542,24 @@ describe("composerDraftStore provider-scoped option updates", () => {
     expect(draft?.modelSelectionByProvider.claudeAgent).toEqual(
       modelSelection("claudeAgent", "claude-opus-4-7", {
         effort: "xhigh",
+      }),
+    );
+  });
+
+  it("retains Grok reasoning effort in provider-scoped options", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.setProviderModelOptions(
+      threadId,
+      "grok",
+      { reasoningEffort: "high" },
+      { model: "grok-build" },
+    );
+
+    const draft = useComposerDraftStore.getState().draftsByThreadId[threadId];
+    expect(draft?.modelSelectionByProvider.grok).toEqual(
+      modelSelection("grok", "grok-build", {
+        reasoningEffort: "high",
       }),
     );
   });

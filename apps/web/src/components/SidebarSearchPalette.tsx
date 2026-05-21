@@ -21,7 +21,7 @@ import { LuArrowDownToLine, LuArrowLeft, LuCornerLeftUp, LuFolderPlus } from "re
 import { type ComponentType, useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { FolderClosed } from "./FolderClosed";
-import { ClaudeAI, CursorIcon, Gemini, KiloIcon, OpenAI, OpenCodeIcon, PiIcon } from "./Icons";
+import { ProviderIcon as SharedProviderIcon } from "./ProviderIcon";
 import { formatRelativeTime } from "./Sidebar";
 import { readNativeApi } from "~/nativeApi";
 import { isMacPlatform } from "~/lib/utils";
@@ -256,21 +256,7 @@ const THEME_MODE_ICONS: Record<"system" | "light" | "dark", IconComponent> = {
 function ProviderIcon(props: { provider: ProviderKind }) {
   return (
     <div className="flex size-5 shrink-0 items-center justify-center">
-      {props.provider === "claudeAgent" ? (
-        <ClaudeAI aria-hidden="true" className="size-[15px] text-foreground" />
-      ) : props.provider === "cursor" ? (
-        <CursorIcon aria-hidden="true" className="size-[15px] text-foreground" />
-      ) : props.provider === "gemini" ? (
-        <Gemini aria-hidden="true" className="size-[15px] text-foreground" />
-      ) : props.provider === "kilo" ? (
-        <KiloIcon aria-hidden="true" className="size-[15px] text-muted-foreground/70" />
-      ) : props.provider === "opencode" ? (
-        <OpenCodeIcon aria-hidden="true" className="size-[15px] text-muted-foreground/70" />
-      ) : props.provider === "pi" ? (
-        <PiIcon aria-hidden="true" className="size-[15px] text-foreground" />
-      ) : (
-        <OpenAI aria-hidden="true" className="size-[15px] text-muted-foreground/60" />
-      )}
+      <SharedProviderIcon provider={props.provider} className="size-[15px]" />
     </div>
   );
 }

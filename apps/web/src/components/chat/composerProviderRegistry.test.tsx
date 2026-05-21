@@ -391,6 +391,46 @@ describe("getComposerProviderState", () => {
     });
   });
 
+  it("normalizes Grok reasoning effort options for dispatch", () => {
+    const state = getComposerProviderState({
+      provider: "grok",
+      model: "grok-build",
+      prompt: "",
+      modelOptions: {
+        grok: {
+          reasoningEffort: "high",
+        },
+      },
+    });
+
+    expect(state).toEqual({
+      provider: "grok",
+      promptEffort: "high",
+      modelOptionsForDispatch: {
+        reasoningEffort: "high",
+      },
+    });
+  });
+
+  it("drops explicit Grok default reasoning effort from dispatch", () => {
+    const state = getComposerProviderState({
+      provider: "grok",
+      model: "grok-build",
+      prompt: "",
+      modelOptions: {
+        grok: {
+          reasoningEffort: "low",
+        },
+      },
+    });
+
+    expect(state).toEqual({
+      provider: "grok",
+      promptEffort: "low",
+      modelOptionsForDispatch: undefined,
+    });
+  });
+
   it("drops stale Cursor context options once runtime metadata is authoritative", () => {
     const state = getComposerProviderState({
       provider: "cursor",

@@ -3,7 +3,15 @@
 // Layer: Persistence compatibility helper
 // Exports: normalizeLegacyModelSelection, normalizePersistedModelSelection
 
-type ModelProviderKind = "codex" | "claudeAgent" | "cursor" | "gemini" | "kilo" | "opencode" | "pi";
+type ModelProviderKind =
+  | "codex"
+  | "claudeAgent"
+  | "cursor"
+  | "gemini"
+  | "grok"
+  | "kilo"
+  | "opencode"
+  | "pi";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -39,6 +47,9 @@ function inferProviderFromLabel(label: string): ModelProviderKind | undefined {
   if (lowerLabel.includes("gemini") || lowerLabel.includes("google")) {
     return "gemini";
   }
+  if (lowerLabel.includes("grok") || lowerLabel.includes("xai") || lowerLabel.includes("x.ai")) {
+    return "grok";
+  }
   if (lowerLabel.includes("codex")) {
     return "codex";
   }
@@ -51,6 +62,7 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
     provider === "claudeAgent" ||
     provider === "cursor" ||
     provider === "gemini" ||
+    provider === "grok" ||
     provider === "kilo" ||
     provider === "opencode" ||
     provider === "pi"
@@ -69,6 +81,9 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
   }
   if (lowerModel.includes("gemini")) {
     return "gemini";
+  }
+  if (lowerModel.includes("grok")) {
+    return "grok";
   }
   return "codex";
 }

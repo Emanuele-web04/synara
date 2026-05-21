@@ -26,7 +26,7 @@ import {
   SiStripe,
   SiVercel,
 } from "react-icons/si";
-import { ClaudeAI, CursorIcon, Gemini, KiloIcon, OpenCodeIcon, PiIcon } from "./Icons";
+import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "./ProviderIcon";
 import { useStore } from "~/store";
 import {
   buildPluginSearchBlob,
@@ -77,19 +77,15 @@ type PluginBrandArtwork = {
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const PROVIDER_ICON: Record<ProviderKind, React.FC<React.SVGProps<SVGSVGElement>>> = {
+  ...PROVIDER_ICON_COMPONENT_BY_PROVIDER,
   codex: HammerIcon,
-  claudeAgent: ClaudeAI,
-  cursor: CursorIcon,
-  gemini: Gemini,
-  kilo: KiloIcon,
-  opencode: OpenCodeIcon,
-  pi: PiIcon,
 };
 const PROVIDER_DISCOVERY_ORDER: ReadonlyArray<ProviderKind> = [
   "codex",
   "claudeAgent",
   "cursor",
   "gemini",
+  "grok",
   "kilo",
   "opencode",
   "pi",
@@ -393,6 +389,7 @@ export function PluginLibrary() {
   const claudeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("claudeAgent"));
   const cursorCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("cursor"));
   const geminiCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("gemini"));
+  const grokCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("grok"));
   const kiloCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("kilo"));
   const openCodeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("opencode"));
   const piCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("pi"));
@@ -415,6 +412,10 @@ export function PluginLibrary() {
         plugins: supportsPluginDiscovery(geminiCapabilitiesQuery.data),
         skills: supportsSkillDiscovery(geminiCapabilitiesQuery.data),
       },
+      grok: {
+        plugins: supportsPluginDiscovery(grokCapabilitiesQuery.data),
+        skills: supportsSkillDiscovery(grokCapabilitiesQuery.data),
+      },
       kilo: {
         plugins: supportsPluginDiscovery(kiloCapabilitiesQuery.data),
         skills: supportsSkillDiscovery(kiloCapabilitiesQuery.data),
@@ -433,6 +434,7 @@ export function PluginLibrary() {
       codexCapabilitiesQuery.data,
       cursorCapabilitiesQuery.data,
       geminiCapabilitiesQuery.data,
+      grokCapabilitiesQuery.data,
       kiloCapabilitiesQuery.data,
       openCodeCapabilitiesQuery.data,
       piCapabilitiesQuery.data,

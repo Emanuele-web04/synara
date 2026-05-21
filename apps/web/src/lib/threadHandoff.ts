@@ -1,3 +1,8 @@
+// FILE: threadHandoff.ts
+// Purpose: Builds client-side handoff commands and imported transcript payloads.
+// Layer: Web handoff utilities
+// Exports: target-provider, title, transcript, and model-selection helpers.
+
 import {
   EventId,
   MessageId,
@@ -17,6 +22,7 @@ const HANDOFF_PROVIDER_ORDER: ReadonlyArray<ProviderKind> = [
   "claudeAgent",
   "cursor",
   "gemini",
+  "grok",
   "kilo",
   "opencode",
   "pi",
@@ -53,6 +59,12 @@ export function resolveThreadHandoffBadgeLabel(thread: Pick<Thread, "handoff">):
     return null;
   }
   return `Handoff from ${PROVIDER_DISPLAY_NAMES[thread.handoff.sourceProvider]}`;
+}
+
+// Preserve the visible source thread name when creating the destination thread.
+export function resolveThreadHandoffTitle(thread: Pick<Thread, "title">): string {
+  const title = thread.title.trim().replace(/\s+/g, " ");
+  return title.length > 0 ? title : "Handoff";
 }
 
 export function buildThreadHandoffImportedMessages(

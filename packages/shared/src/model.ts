@@ -10,6 +10,8 @@ import {
   type GeminiModelOptions,
   type GeminiThinkingBudget,
   type GeminiThinkingLevel,
+  type GrokModelOptions,
+  type GrokReasoningEffort,
   type ModelCapabilities,
   type ModelSelection,
   type ModelSlug,
@@ -28,6 +30,7 @@ const MODEL_SLUG_SET_BY_PROVIDER: Record<ProviderKind, ReadonlySet<ModelSlug>> =
   codex: new Set(MODEL_OPTIONS_BY_PROVIDER.codex.map((option) => option.slug)),
   cursor: new Set(MODEL_OPTIONS_BY_PROVIDER.cursor.map((option) => option.slug)),
   gemini: new Set(MODEL_OPTIONS_BY_PROVIDER.gemini.map((option) => option.slug)),
+  grok: new Set(MODEL_OPTIONS_BY_PROVIDER.grok.map((option) => option.slug)),
   kilo: new Set(MODEL_OPTIONS_BY_PROVIDER.kilo.map((option) => option.slug)),
   opencode: new Set(MODEL_OPTIONS_BY_PROVIDER.opencode.map((option) => option.slug)),
   pi: new Set<ModelSlug>(),
@@ -724,6 +727,21 @@ export function normalizeGeminiModelOptions(
   }
 
   return nextOptions;
+}
+
+export function normalizeGrokModelOptions(
+  model: string | null | undefined,
+  modelOptions: GrokModelOptions | null | undefined,
+): GrokModelOptions | undefined {
+  const caps = getModelCapabilities("grok", model);
+  const reasoningEffort = trimOrNull(modelOptions?.reasoningEffort);
+  if (!reasoningEffort || !hasEffortLevel(caps, reasoningEffort)) {
+    return undefined;
+  }
+  if (reasoningEffort === getDefaultEffort(caps)) {
+    return undefined;
+  }
+  return { reasoningEffort: reasoningEffort as GrokReasoningEffort };
 }
 
 export function normalizePiModelOptions(

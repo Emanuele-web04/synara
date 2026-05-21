@@ -56,6 +56,9 @@ describe("buildProviderOptionPatch", () => {
     expect(buildProviderOptionPatch("codex", "reasoningEffort", "xhigh")).toEqual({
       reasoningEffort: "xhigh",
     });
+    expect(buildProviderOptionPatch("grok", "reasoningEffort", "high")).toEqual({
+      reasoningEffort: "high",
+    });
     expect(buildProviderOptionPatch("cursor", "fastMode", true)).toEqual({ fastMode: true });
   });
 });

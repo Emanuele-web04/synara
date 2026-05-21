@@ -53,6 +53,8 @@ import { ServerConfig } from "../../config";
 import { ServerSettingsService } from "../../serverSettings";
 import { isWindowsShellCommandMissingResult } from "../../shell-command-detection";
 import { normalizeGeminiCapabilityProbeResult, probeGeminiCapabilities } from "../geminiAcpProbe";
+import { DEFAULT_CURSOR_AGENT_BINARY, resolveCursorAgentBinaryPath } from "../acp/CursorAcpCommand";
+import { hasGrokApiKeyEnv } from "../acp/GrokAcpSupport";
 import { ProviderHealth, type ProviderHealthShape } from "../Services/ProviderHealth";
 import {
   orderProviderStatuses,
@@ -77,6 +79,7 @@ const CODEX_PROVIDER = "codex" as const;
 const CLAUDE_AGENT_PROVIDER = "claudeAgent" as const;
 const CURSOR_PROVIDER = "cursor" as const;
 const GEMINI_PROVIDER = "gemini" as const;
+const GROK_PROVIDER = "grok" as const;
 const KILO_PROVIDER = "kilo" as const;
 const OPENCODE_PROVIDER = "opencode" as const;
 const PI_PROVIDER = "pi" as const;
@@ -87,6 +90,7 @@ const PROVIDERS = [
   CLAUDE_AGENT_PROVIDER,
   CURSOR_PROVIDER,
   GEMINI_PROVIDER,
+  GROK_PROVIDER,
   KILO_PROVIDER,
   OPENCODE_PROVIDER,
   PI_PROVIDER,
@@ -112,7 +116,9 @@ function isOpenCodeNativeCommandPath(commandPath: string): boolean {
   );
 }
 
-const PACKAGE_MANAGED_PROVIDER_UPDATES = {
+const PACKAGE_MANAGED_PROVIDER_UPDATES: Partial<
+  Record<ProviderKind, PackageManagedProviderMaintenanceDefinition>
+> = {
   codex: {
     provider: CODEX_PROVIDER,
     binaryName: "codex",
@@ -180,7 +186,7 @@ const PACKAGE_MANAGED_PROVIDER_UPDATES = {
       strategy: "always",
     },
   },
-} as const satisfies Partial<Record<ProviderKind, PackageManagedProviderMaintenanceDefinition>>;
+};
 
 // ── Pure helpers ────────────────────────────────────────────────────
 
@@ -735,6 +741,15 @@ const runGeminiCommand = (args: ReadonlyArray<string>, executable = "gemini") =>
     ),
   );
 
+const runGrokCommand = (args: ReadonlyArray<string>, executable = "grok") =>
+  runProviderCommand(executable, args).pipe(
+    Effect.flatMap((result) =>
+      isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
+        ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
+        : Effect.succeed(result),
+    ),
+  );
+
 const runOpenCodeCommand = (args: ReadonlyArray<string>, executable = "opencode") =>
   runProviderCommand(executable, args).pipe(
     Effect.flatMap((result) =>
@@ -753,7 +768,7 @@ const runKiloCommand = (args: ReadonlyArray<string>, executable = "kilo") =>
     ),
   );
 
-const runCursorCommand = (args: ReadonlyArray<string>, executable = "agent") =>
+const runCursorCommand = (args: ReadonlyArray<string>, executable = DEFAULT_CURSOR_AGENT_BINARY) =>
   runProviderCommand(executable, args).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
@@ -1217,6 +1232,80 @@ export const makeCheckGeminiProviderStatus = (
 
 export const checkGeminiProviderStatus = makeCheckGeminiProviderStatus();
 
+// ── Grok health check ───────────────────────────────────────────────
+
+export const makeCheckGrokProviderStatus = (
+  binaryPath?: string,
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const executable = nonEmptyTrimmed(binaryPath) ?? "grok";
+
+    const versionProbe = yield* runGrokCommand(["--version"], executable).pipe(
+      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+      Effect.result,
+    );
+
+    if (Result.isFailure(versionProbe)) {
+      const error = versionProbe.failure;
+      return {
+        provider: GROK_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: isCommandMissingCause(error)
+          ? "Grok CLI (`grok`) is not installed or not on PATH."
+          : `Failed to execute Grok CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+      } satisfies ServerProviderStatus;
+    }
+
+    if (Option.isNone(versionProbe.success)) {
+      return {
+        provider: GROK_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: "Grok CLI is installed but failed to run. Timed out while running command.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const version = versionProbe.success.value;
+    if (version.code !== 0) {
+      const detail = detailFromResult(version);
+      return {
+        provider: GROK_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: detail
+          ? `Grok CLI is installed but failed to run. ${detail}`
+          : "Grok CLI is installed but failed to run.",
+      } satisfies ServerProviderStatus;
+    }
+    const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
+    const hasApiKey = hasGrokApiKeyEnv();
+
+    return {
+      provider: GROK_PROVIDER,
+      status: "ready" as const,
+      available: true,
+      authStatus: hasApiKey ? ("authenticated" as const) : ("unknown" as const),
+      version: parsedVersion,
+      checkedAt,
+      ...(hasApiKey
+        ? { authType: "apiKey", authLabel: "xAI API Key" }
+        : {
+            message:
+              "Grok CLI is installed. Run `grok` to authenticate locally, or set XAI_API_KEY before starting a session.",
+          }),
+    } satisfies ServerProviderStatus;
+  });
+
+export const checkGrokProviderStatus = makeCheckGrokProviderStatus();
+
 // ── OpenCode health check ───────────────────────────────────────────
 
 export const makeCheckOpenCodeProviderStatus = (
@@ -1420,7 +1509,7 @@ export const makeCheckCursorProviderStatus = (
 ): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
-    const executable = nonEmptyTrimmed(binaryPath) ?? "agent";
+    const executable = resolveCursorAgentBinaryPath(nonEmptyTrimmed(binaryPath));
 
     const versionProbe = yield* runCursorCommand(["--version"], executable).pipe(
       Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
@@ -1436,7 +1525,7 @@ export const makeCheckCursorProviderStatus = (
         authStatus: "unknown" as const,
         checkedAt,
         message: isCommandMissingCause(error)
-          ? "Cursor Agent CLI (`agent`) is not installed or not on PATH."
+          ? "Cursor Agent CLI (`cursor-agent`) is not installed or not on PATH."
           : `Failed to execute Cursor Agent CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
       } satisfies ServerProviderStatus;
     }
@@ -1590,6 +1679,8 @@ export const ProviderHealthLive = Layer.effect(
           return settings.providers.cursor.binaryPath;
         case "gemini":
           return settings.providers.gemini.binaryPath;
+        case "grok":
+          return settings.providers.grok.binaryPath;
         case "kilo":
           return settings.providers.kilo.binaryPath;
         case "opencode":
@@ -1606,7 +1697,9 @@ export const ProviderHealthLive = Layer.effect(
           return makeProviderMaintenanceCapabilities({
             provider,
             packageName: null,
-            updateExecutable: getProviderBinaryPath(provider, settings) || "agent",
+            updateExecutable: resolveCursorAgentBinaryPath(
+              getProviderBinaryPath(provider, settings),
+            ),
             updateArgs: ["update"],
             updateLockKey: "cursor-agent",
           });
@@ -1711,6 +1804,7 @@ export const ProviderHealthLive = Layer.effect(
               ),
               makeCheckCursorProviderStatus(settings.providers.cursor.binaryPath),
               makeCheckGeminiProviderStatus(settings.providers.gemini.binaryPath),
+              makeCheckGrokProviderStatus(settings.providers.grok.binaryPath),
               makeCheckKiloProviderStatus(settings.providers.kilo.binaryPath),
               makeCheckOpenCodeProviderStatus(settings.providers.opencode.binaryPath),
               checkPiProviderStatus(

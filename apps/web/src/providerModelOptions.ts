@@ -8,6 +8,8 @@ import type {
   CursorModelSelection,
   GeminiModelOptions,
   GeminiModelSelection,
+  GrokModelOptions,
+  GrokModelSelection,
   KiloModelSelection,
   ModelSelection,
   OpenCodeModelOptions,
@@ -168,6 +170,12 @@ export function buildNextProviderOptions(
       ...patch,
     } as GeminiModelOptions;
   }
+  if (provider === "grok") {
+    return {
+      ...(modelOptions as GrokModelOptions | undefined),
+      ...patch,
+    } as GrokModelOptions;
+  }
   if (provider === "opencode") {
     return {
       ...(modelOptions as OpenCodeModelOptions | undefined),
@@ -215,6 +223,11 @@ export function buildModelSelection(
   model: string,
   options?: GeminiModelOptions | null | undefined,
 ): GeminiModelSelection;
+export function buildModelSelection(
+  provider: "grok",
+  model: string,
+  options?: GrokModelOptions | null | undefined,
+): GrokModelSelection;
 export function buildModelSelection(
   provider: "opencode",
   model: string,
@@ -271,6 +284,14 @@ export function buildModelSelection(
             provider,
             model,
             options: options as GeminiModelOptions,
+          }
+        : { provider, model };
+    case "grok":
+      return options
+        ? {
+            provider,
+            model,
+            options: options as GrokModelOptions,
           }
         : { provider, model };
     case "kilo":

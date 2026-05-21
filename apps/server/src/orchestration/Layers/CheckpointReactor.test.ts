@@ -393,6 +393,10 @@ describe("CheckpointReactor", () => {
       harness.cwd,
       checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 0),
     );
+    await waitForGitRefExists(
+      harness.cwd,
+      checkpointRefForThreadTurnStart(ThreadId.makeUnsafe("thread-1"), asTurnId("turn-1")),
+    );
 
     fs.writeFileSync(path.join(harness.cwd, "README.md"), "v2\n", "utf8");
     harness.provider.emit({
@@ -409,7 +413,10 @@ describe("CheckpointReactor", () => {
     await waitForEvent(harness.engine, (event) => event.type === "thread.turn-diff-completed");
     const thread = await waitForThread(
       harness.engine,
-      (entry) => entry.latestTurn?.turnId === "turn-1" && entry.checkpoints.length === 1,
+      (entry) =>
+        entry.latestTurn?.turnId === "turn-1" &&
+        entry.checkpoints.length === 1 &&
+        entry.checkpoints[0]?.files?.map((file) => file.path).includes("README.md") === true,
     );
     expect(thread.checkpoints[0]?.checkpointTurnCount).toBe(1);
     expect(

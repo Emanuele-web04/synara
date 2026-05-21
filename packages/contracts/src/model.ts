@@ -26,12 +26,15 @@ export const PI_THINKING_LEVEL_OPTIONS = [
   "xhigh",
 ] as const;
 export type PiThinkingLevel = (typeof PI_THINKING_LEVEL_OPTIONS)[number];
+export const GROK_REASONING_EFFORT_OPTIONS = ["none", "low", "medium", "high"] as const;
+export type GrokReasoningEffort = (typeof GROK_REASONING_EFFORT_OPTIONS)[number];
 export type ProviderReasoningEffort =
   | CodexReasoningEffort
   | ClaudeCodeEffort
   | GeminiThinkingLevel
   | `${GeminiThinkingBudget}`
-  | PiThinkingLevel;
+  | PiThinkingLevel
+  | GrokReasoningEffort;
 
 export const ProviderOptionChoice = Schema.Struct({
   id: TrimmedNonEmptyString,
@@ -118,11 +121,17 @@ export const CursorModelOptions = Schema.Struct({
 });
 export type CursorModelOptions = typeof CursorModelOptions.Type;
 
+export const GrokModelOptions = Schema.Struct({
+  reasoningEffort: Schema.optional(Schema.Literals(GROK_REASONING_EFFORT_OPTIONS)),
+});
+export type GrokModelOptions = typeof GrokModelOptions.Type;
+
 export const ProviderModelOptions = Schema.Struct({
   codex: Schema.optional(CodexModelOptions),
   claudeAgent: Schema.optional(ClaudeModelOptions),
   cursor: Schema.optional(CursorModelOptions),
   gemini: Schema.optional(GeminiModelOptions),
+  grok: Schema.optional(GrokModelOptions),
   kilo: Schema.optional(OpenCodeModelOptions),
   opencode: Schema.optional(OpenCodeModelOptions),
   pi: Schema.optional(PiModelOptions),
@@ -185,6 +194,19 @@ const CODEX_GPT_5_5_CAPABILITIES: ModelCapabilities = {
     { value: "high", label: "High" },
     { value: "xhigh", label: "Extra High" },
   ],
+};
+
+const GROK_BUILD_CAPABILITIES: ModelCapabilities = {
+  reasoningEffortLevels: [
+    { value: "none", label: "None" },
+    { value: "low", label: "Low", isDefault: true },
+    { value: "medium", label: "Medium" },
+    { value: "high", label: "High" },
+  ],
+  supportsFastMode: false,
+  supportsThinkingToggle: false,
+  promptInjectedEffortLevels: [],
+  contextWindowOptions: [],
 };
 
 type ModelDefinition = {
@@ -405,6 +427,13 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       capabilities: GEMINI_2_5_CAPABILITIES,
     },
   ],
+  grok: [
+    {
+      slug: "grok-build",
+      name: "Grok 4.3",
+      capabilities: GROK_BUILD_CAPABILITIES,
+    },
+  ],
   opencode: [
     {
       slug: "openai/gpt-5",
@@ -501,6 +530,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
   claudeAgent: "claude-sonnet-4-6",
   cursor: "auto",
   gemini: "auto-gemini-3",
+  grok: "grok-build",
   kilo: "kilo/kilo-auto/free",
   opencode: "openai/gpt-5",
 };
@@ -563,6 +593,18 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "gemini-2.5-flash": "gemini-2.5-flash",
     "gemini-2.5-flash-lite": "gemini-2.5-flash-lite",
   },
+  grok: {
+    grok: "grok-build",
+    build: "grok-build",
+    "grok-build": "grok-build",
+    "4.3": "grok-build",
+    "grok-4": "grok-build",
+    "grok-4.3": "grok-build",
+    "grok-latest": "grok-build",
+    "grok-code-fast": "grok-build",
+    "grok-code-fast-1": "grok-build",
+    "code-fast": "grok-build",
+  },
   kilo: {},
   opencode: {},
   pi: {},
@@ -597,6 +639,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   claudeAgent: "Claude",
   cursor: "Cursor",
   gemini: "Gemini",
+  grok: "Grok",
   kilo: "Kilo",
   opencode: "OpenCode",
   pi: "Pi",
