@@ -1137,7 +1137,7 @@ function SettingsRouteView() {
     async (input: { workspaceRoot: string; worktreePath: string }) => {
       const api = readNativeApi() ?? ensureNativeApi();
       const displayName = formatWorktreePathForDisplay(input.worktreePath);
-      const snapshot = await api.orchestration.getSnapshot().catch(() => null);
+      const snapshot = await api.orchestration.getShellSnapshot().catch(() => null);
       if (snapshot === null) {
         toastManager.add({
           type: "error",
@@ -1148,9 +1148,6 @@ function SettingsRouteView() {
       }
 
       const linkedThreadsFromSnapshot = snapshot.threads.filter((thread) => {
-        if (thread.deletedAt !== null) {
-          return false;
-        }
         const candidatePaths = [
           normalizeManagedWorktreePath(thread.worktreePath),
           normalizeManagedWorktreePath(thread.associatedWorktreePath ?? null),

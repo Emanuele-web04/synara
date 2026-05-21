@@ -90,6 +90,7 @@ const LEGACY_PERSISTED_STATE_KEYS = [
   "codething:renderer-state:v1",
 ] as const;
 const MAX_THREAD_MESSAGES = 2_000;
+const MAX_THREAD_ACTIVITIES = 500;
 const EMPTY_THREAD_IDS: ThreadId[] = [];
 const EMPTY_THREAD_SHELL_BY_ID: Record<ThreadId, ThreadShell> = {};
 const EMPTY_THREAD_SESSION_BY_ID: Record<ThreadId, ThreadSession | null> = {};
@@ -116,6 +117,7 @@ const THREAD_SUMMARY_ACTIVITY_KINDS = new Set([
   "user-input.resolved",
   "provider.user-input.respond.failed",
 ]);
+const PENDING_INTERACTION_REQUEST_KINDS = new Set(["approval.requested", "user-input.requested"]);
 
 const initialState: AppState = {
   projects: [],
@@ -460,7 +462,7 @@ function buildActivitySlice(thread: Thread): {
   ids: string[];
   byId: Record<string, Thread["activities"][number]>;
 } {
-  const activities = dedupeActivitiesById(thread.activities);
+  const activities = capThreadActivities(dedupeActivitiesById(thread.activities));
   return {
     ids: activities.map((activity) => activity.id),
     byId: Object.fromEntries(
@@ -1265,7 +1267,80 @@ function normalizeActivities(
     }
     return activity;
   });
-  return arraysShallowEqual(previous, nextActivities) ? previous : nextActivities;
+  const cappedActivities = capThreadActivities(nextActivities);
+  return arraysShallowEqual(previous, cappedActivities) ? previous : cappedActivities;
+}
+
+function capThreadActivities<TActivity extends Thread["activities"][number]>(
+  activities: readonly TActivity[],
+): TActivity[] {
+  if (activities.length <= MAX_THREAD_ACTIVITIES) {
+    return activities as TActivity[];
+  }
+  const retainedIds = new Set(
+    activities.slice(-MAX_THREAD_ACTIVITIES).map((activity) => activity.id),
+  );
+  const pendingRequestIds = pendingInteractionRequestIds(activities);
+  for (const activity of activities) {
+    const requestId = activityRequestId(activity);
+    if (
+      requestId !== null &&
+      pendingRequestIds.has(requestId) &&
+      PENDING_INTERACTION_REQUEST_KINDS.has(activity.kind)
+    ) {
+      retainedIds.add(activity.id);
+    }
+  }
+  return activities.filter((activity) => retainedIds.has(activity.id));
+}
+
+function activityRequestId(activity: Thread["activities"][number]): string | null {
+  const payload = asActivityRecord(activity.payload);
+  const requestId = payload?.requestId;
+  return typeof requestId === "string" && requestId.trim().length > 0 ? requestId : null;
+}
+
+function isStalePendingRequestFailureDetail(detail: unknown): boolean {
+  if (typeof detail !== "string") {
+    return false;
+  }
+  const normalized = detail.toLowerCase();
+  return (
+    normalized.includes("stale pending approval request") ||
+    normalized.includes("stale pending user-input request") ||
+    normalized.includes("unknown pending approval request") ||
+    normalized.includes("unknown pending permission request") ||
+    normalized.includes("unknown pending user-input request")
+  );
+}
+
+// Keep old actionable prompts even when their timeline rows fall outside the cap.
+function pendingInteractionRequestIds(
+  activities: readonly Thread["activities"][number][],
+): Set<string> {
+  const pendingRequestIds = new Set<string>();
+  for (const activity of activities) {
+    const requestId = activityRequestId(activity);
+    if (requestId === null) {
+      continue;
+    }
+    if (activity.kind === "approval.requested" || activity.kind === "user-input.requested") {
+      pendingRequestIds.add(requestId);
+      continue;
+    }
+    if (activity.kind === "approval.resolved" || activity.kind === "user-input.resolved") {
+      pendingRequestIds.delete(requestId);
+      continue;
+    }
+    if (
+      (activity.kind === "provider.approval.respond.failed" ||
+        activity.kind === "provider.user-input.respond.failed") &&
+      isStalePendingRequestFailureDetail(asActivityRecord(activity.payload)?.detail)
+    ) {
+      pendingRequestIds.delete(requestId);
+    }
+  }
+  return pendingRequestIds;
 }
 
 function dedupeActivitiesById<TActivity extends Thread["activities"][number]>(

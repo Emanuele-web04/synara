@@ -31,6 +31,7 @@ import {
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
 const MAX_THREAD_MESSAGES = 2_000;
+const MAX_THREAD_ACTIVITIES = 500;
 const MAX_THREAD_CHECKPOINTS = 500;
 
 function checkpointStatusToLatestTurnState(status: "ready" | "missing" | "error") {
@@ -844,7 +845,7 @@ export function projectEvent(
             payload.activity,
           ]
             .toSorted(compareThreadActivities)
-            .slice(-500);
+            .slice(-MAX_THREAD_ACTIVITIES);
 
           return {
             ...nextBase,

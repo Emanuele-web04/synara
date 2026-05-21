@@ -140,6 +140,42 @@ export type ServerGetProviderUsageSnapshotInput = typeof ServerGetProviderUsageS
 export const ServerGetProviderUsageSnapshotResult = Schema.NullOr(ServerProviderUsageSnapshot);
 export type ServerGetProviderUsageSnapshotResult = typeof ServerGetProviderUsageSnapshotResult.Type;
 
+export const ServerDiagnosticsMemory = Schema.Struct({
+  rssBytes: NonNegativeInt,
+  heapTotalBytes: NonNegativeInt,
+  heapUsedBytes: NonNegativeInt,
+  externalBytes: NonNegativeInt,
+  arrayBuffersBytes: NonNegativeInt,
+});
+export type ServerDiagnosticsMemory = typeof ServerDiagnosticsMemory.Type;
+
+export const ServerDiagnosticsChildProcess = Schema.Struct({
+  pid: NonNegativeInt,
+  ppid: NonNegativeInt,
+  rssBytes: NonNegativeInt,
+  virtualSizeBytes: NonNegativeInt,
+  command: Schema.String,
+  args: Schema.String,
+});
+export type ServerDiagnosticsChildProcess = typeof ServerDiagnosticsChildProcess.Type;
+
+export const ServerDiagnosticsResult = Schema.Struct({
+  generatedAt: IsoDateTime,
+  process: Schema.Struct({
+    pid: NonNegativeInt,
+    uptimeSeconds: NonNegativeInt,
+    memory: ServerDiagnosticsMemory,
+  }),
+  childProcesses: Schema.Array(ServerDiagnosticsChildProcess),
+  childProcessTotalCount: NonNegativeInt,
+  childProcessTotalRssBytes: NonNegativeInt,
+  projection: Schema.Struct({
+    projectCount: NonNegativeInt,
+    threadCount: NonNegativeInt,
+  }),
+});
+export type ServerDiagnosticsResult = typeof ServerDiagnosticsResult.Type;
+
 export const ServerVoiceTranscriptionInput = Schema.Struct({
   provider: ProviderKind,
   cwd: TrimmedNonEmptyString,

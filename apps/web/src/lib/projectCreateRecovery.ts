@@ -14,7 +14,7 @@ export interface DuplicateProjectCreateRecoveryCandidate {
   readonly id: string;
   readonly kind?: string | undefined;
   readonly workspaceRoot: string;
-  readonly deletedAt: string | null;
+  readonly deletedAt?: string | null | undefined;
 }
 
 interface SnapshotWithProjects<T extends DuplicateProjectCreateRecoveryCandidate> {
@@ -28,6 +28,10 @@ interface ProjectLookupInput {
 
 function isRecoverableProjectKind(kind: string | undefined): boolean {
   return (kind ?? "project") === "project";
+}
+
+function isRecoverableActiveProject(project: DuplicateProjectCreateRecoveryCandidate): boolean {
+  return (project.deletedAt ?? null) === null && isRecoverableProjectKind(project.kind);
 }
 
 function wait(ms: number): Promise<void> {
@@ -62,10 +66,7 @@ export function findRecoverableProject<T extends DuplicateProjectCreateRecoveryC
 ): T | null {
   if (input.projectId) {
     const projectById = input.projects.find(
-      (project) =>
-        project.deletedAt === null &&
-        isRecoverableProjectKind(project.kind) &&
-        project.id === input.projectId,
+      (project) => isRecoverableActiveProject(project) && project.id === input.projectId,
     );
     if (projectById) {
       return projectById;
@@ -80,8 +81,7 @@ export function findRecoverableProject<T extends DuplicateProjectCreateRecoveryC
   return (
     input.projects.find(
       (project) =>
-        project.deletedAt === null &&
-        isRecoverableProjectKind(project.kind) &&
+        isRecoverableActiveProject(project) &&
         workspaceRootsEqual(project.workspaceRoot, workspaceRoot),
     ) ?? null
   );
@@ -106,18 +106,20 @@ export function findRecoverableProjectForDuplicateCreate<
   });
 }
 
-export async function waitForRecoverableProjectInReadModel(
+export async function waitForRecoverableProjectInReadModel<
+  TSnapshot extends SnapshotWithProjects<DuplicateProjectCreateRecoveryCandidate> = OrchestrationReadModel,
+>(
   input: ProjectLookupInput & {
-    readonly loadSnapshot: () => Promise<OrchestrationReadModel | null>;
-    readonly repairSnapshot?: (() => Promise<OrchestrationReadModel | null>) | undefined;
+    readonly loadSnapshot: () => Promise<TSnapshot | null>;
+    readonly repairSnapshot?: (() => Promise<TSnapshot | null>) | undefined;
     readonly maxAttempts?: number;
     readonly delayMs?: number;
   },
 ): Promise<{
-  project: OrchestrationReadModel["projects"][number] | null;
-  snapshot: OrchestrationReadModel | null;
+  project: TSnapshot["projects"][number] | null;
+  snapshot: TSnapshot | null;
 }> {
-  let latestSnapshot: OrchestrationReadModel | null = null;
+  let latestSnapshot: TSnapshot | null = null;
   const maxAttempts = input.maxAttempts ?? DEFAULT_RECOVERY_MAX_ATTEMPTS;
   const delayMs = input.delayMs ?? DEFAULT_RECOVERY_DELAY_MS;
 
@@ -129,7 +131,7 @@ export async function waitForRecoverableProjectInReadModel(
         projects: snapshot.projects,
         projectId: input.projectId,
         workspaceRoot: input.workspaceRoot,
-      });
+      }) as TSnapshot["projects"][number] | null;
       if (project) {
         return { project, snapshot };
       }
@@ -148,7 +150,7 @@ export async function waitForRecoverableProjectInReadModel(
         projects: repairedSnapshot.projects,
         projectId: input.projectId,
         workspaceRoot: input.workspaceRoot,
-      });
+      }) as TSnapshot["projects"][number] | null;
       if (repairedProject) {
         return {
           project: repairedProject,
