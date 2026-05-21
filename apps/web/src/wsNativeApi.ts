@@ -43,6 +43,23 @@ const serverProviderStatusesUpdatedListeners = new Set<
 const serverMaintenanceUpdatedListeners = new Set<(payload: ServerLifecycleStreamEvent) => void>();
 const serverSettingsUpdatedListeners = new Set<(payload: ServerSettingsUpdatedPayload) => void>();
 const gitActionProgressListeners = new Set<(payload: GitActionProgressEvent) => void>();
+
+function omitNullUserInputAnswers(
+  command: Parameters<NativeApi["orchestration"]["dispatchCommand"]>[0],
+) {
+  if (command.type !== "thread.user-input.respond") {
+    return command;
+  }
+
+  return {
+    ...command,
+    answers: Object.fromEntries(
+      Object.entries(command.answers).filter(
+        ([, answer]) => answer !== null && answer !== undefined,
+      ),
+    ),
+  };
+}
 const terminalEventListeners = new Set<(payload: TerminalEvent) => void>();
 const orchestrationDomainEventListeners = new Set<(payload: OrchestrationEvent) => void>();
 const orchestrationShellEventListeners = new Set<(payload: OrchestrationShellStreamItem) => void>();
@@ -559,6 +576,7 @@ export function createWsNativeApi(): NativeApi {
       listWorktrees: () => transport.request(WS_METHODS.serverListWorktrees),
       getProviderUsageSnapshot: (input) =>
         transport.request(WS_METHODS.serverGetProviderUsageSnapshot, input),
+      getDiagnostics: () => transport.request(WS_METHODS.serverGetDiagnostics),
       transcribeVoice: (input) => {
         if (window.desktopBridge?.server?.transcribeVoice) {
           return window.desktopBridge.server.transcribeVoice(input);
@@ -581,10 +599,11 @@ export function createWsNativeApi(): NativeApi {
     orchestration: {
       getSnapshot: () => transport.request(ORCHESTRATION_WS_METHODS.getSnapshot),
       getShellSnapshot: () => transport.request(ORCHESTRATION_WS_METHODS.getShellSnapshot),
-      dispatchCommand: (command) =>
-        transport.request(ORCHESTRATION_WS_METHODS.dispatchCommand, {
-          command,
-        }),
+      dispatchCommand: (command) => {
+        return transport.request(ORCHESTRATION_WS_METHODS.dispatchCommand, {
+          command: omitNullUserInputAnswers(command),
+        });
+      },
       importThread: (input) => transport.request(ORCHESTRATION_WS_METHODS.importThread, input),
       repairState: () => transport.request(ORCHESTRATION_WS_METHODS.repairState),
       getTurnDiff: (input) => transport.request(ORCHESTRATION_WS_METHODS.getTurnDiff, input),

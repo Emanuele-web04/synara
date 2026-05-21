@@ -1,6 +1,6 @@
 import {
   type ModelSelection,
-  type OrchestrationReadModel,
+  type OrchestrationShellSnapshot,
   type ProviderInteractionMode,
   type ProviderKind,
   type ProviderNativeCommandDescriptor,
@@ -63,7 +63,7 @@ export function useComposerSlashCommands(input: {
   runtimeMode: RuntimeMode;
   interactionMode: ProviderInteractionMode;
   threadId: ThreadId;
-  syncServerReadModel: (snapshot: OrchestrationReadModel) => void;
+  syncServerShellSnapshot: (snapshot: OrchestrationShellSnapshot) => void;
   navigateToThread: (threadId: ThreadId, options?: { splitViewId?: SplitViewId }) => Promise<void>;
   handleClearConversation: () => Promise<void> | void;
   handleInteractionModeChange: (mode: "default" | "plan") => Promise<void> | void;
@@ -111,7 +111,7 @@ export function useComposerSlashCommands(input: {
     runtimeMode,
     interactionMode,
     threadId,
-    syncServerReadModel,
+    syncServerShellSnapshot,
     navigateToThread,
     handleClearConversation,
     handleInteractionModeChange,
@@ -274,8 +274,8 @@ export function useComposerSlashCommands(input: {
         importedMessages: [...importedMessages],
         createdAt,
       });
-      const snapshot = await api.orchestration.getSnapshot();
-      syncServerReadModel(snapshot);
+      const snapshot = await api.orchestration.getShellSnapshot();
+      syncServerShellSnapshot(snapshot);
       await navigateToThread(nextThreadId);
       return true;
     },
@@ -288,7 +288,7 @@ export function useComposerSlashCommands(input: {
       navigateToThread,
       runtimeMode,
       selectedModelSelection,
-      syncServerReadModel,
+      syncServerShellSnapshot,
     ],
   );
 
@@ -352,8 +352,8 @@ export function useComposerSlashCommands(input: {
         });
       }
 
-      const snapshot = await api.orchestration.getSnapshot();
-      syncServerReadModel(snapshot);
+      const snapshot = await api.orchestration.getShellSnapshot();
+      syncServerShellSnapshot(snapshot);
       const splitViewId = createSplitViewFromDrop({
         sourceThreadId: activeThread.id,
         ownerProjectId: activeProject.id,
@@ -372,7 +372,7 @@ export function useComposerSlashCommands(input: {
       isServerThread,
       navigateToThread,
       selectedModelSelection,
-      syncServerReadModel,
+      syncServerShellSnapshot,
     ],
   );
 
@@ -456,8 +456,8 @@ export function useComposerSlashCommands(input: {
           interactionMode: "default",
           createdAt,
         });
-        const snapshot = await api.orchestration.getSnapshot();
-        syncServerReadModel(snapshot);
+        const snapshot = await api.orchestration.getShellSnapshot();
+        syncServerShellSnapshot(snapshot);
         await navigateToThread(nextThreadId);
         return true;
       } catch (error) {
@@ -477,7 +477,7 @@ export function useComposerSlashCommands(input: {
       navigateToThread,
       runtimeMode,
       selectedModelSelection,
-      syncServerReadModel,
+      syncServerShellSnapshot,
     ],
   );
 

@@ -31,7 +31,7 @@ export function useThreadHandoff() {
   const navigate = useNavigate();
   const { settings } = useAppSettings();
   const projects = useStore((store) => store.projects);
-  const syncServerReadModel = useStore((store) => store.syncServerReadModel);
+  const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
 
   const createThreadHandoff = useCallback(
@@ -113,8 +113,8 @@ export function useThreadHandoff() {
 
       copyTransferableComposerState(thread.id, nextThreadId);
 
-      const snapshot = await api.orchestration.getSnapshot();
-      syncServerReadModel(snapshot);
+      const snapshot = await api.orchestration.getShellSnapshot();
+      syncServerShellSnapshot(snapshot);
       await navigate({
         to: "/$threadId",
         params: { threadId: nextThreadId },
@@ -122,7 +122,7 @@ export function useThreadHandoff() {
 
       return nextThreadId;
     },
-    [navigate, projects, serverConfigQuery.data?.providers, settings, syncServerReadModel],
+    [navigate, projects, serverConfigQuery.data?.providers, settings, syncServerShellSnapshot],
   );
 
   return {

@@ -19,15 +19,17 @@ const OPENCODE_DEFINITION = {
   provider: "opencode",
   binaryName: "opencode",
   npmPackageName: "opencode-ai",
-  homebrew: { name: "opencode", kind: "formula" },
+  homebrew: { name: "anomalyco/tap/opencode", kind: "formula" },
+  latestVersionSource: { kind: "npm", name: "opencode-ai" },
   nativeUpdate: {
     executable: "opencode",
     args: (installSource) =>
       installSource === "unknown" || installSource === "native"
         ? ["upgrade"]
-        : ["upgrade", "--method", installSource === "homebrew" ? "brew" : installSource],
+        : ["upgrade", "--method", installSource],
     lockKey: "opencode-native",
     strategy: "always",
+    excludedInstallSources: ["homebrew"],
   },
 } as const satisfies PackageManagedProviderMaintenanceDefinition;
 
@@ -87,6 +89,24 @@ describe("providerMaintenance", () => {
       executable: "opencode",
       args: ["upgrade", "--method", "pnpm"],
       lockKey: "opencode-native",
+    });
+  });
+
+  it("uses Homebrew directly for tapped OpenCode installs", () => {
+    const capabilities = resolvePackageManagedProviderMaintenance(OPENCODE_DEFINITION, {
+      binaryPath: "opencode",
+      realCommandPath: "/opt/homebrew/Cellar/opencode/1.14.46/bin/opencode",
+    });
+
+    assert.deepStrictEqual(capabilities.update, {
+      command: "brew upgrade anomalyco/tap/opencode",
+      executable: "brew",
+      args: ["upgrade", "anomalyco/tap/opencode"],
+      lockKey: "homebrew",
+    });
+    assert.deepStrictEqual(capabilities.latestVersionSource, {
+      kind: "npm",
+      name: "opencode-ai",
     });
   });
 

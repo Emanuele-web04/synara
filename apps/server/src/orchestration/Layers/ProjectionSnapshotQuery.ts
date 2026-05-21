@@ -64,6 +64,8 @@ const decodeThreadDetail = Schema.decodeUnknownEffect(OrchestrationThread);
 const decodeThreadDetailSnapshot = Schema.decodeUnknownEffect(OrchestrationThreadDetailSnapshot);
 const decodeModelSelection = Schema.decodeUnknownEffect(ModelSelection);
 const ModelSelectionJsonUnknown = Schema.fromJsonString(Schema.Unknown);
+const MAX_THREAD_MESSAGES = 2_000;
+const MAX_THREAD_ACTIVITIES = 500;
 const ProjectionProjectDbRowSchema = ProjectionProject.mapFields(
   Struct.assign({
     defaultModelSelection: Schema.NullOr(ModelSelectionJsonUnknown),
@@ -599,7 +601,16 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           source,
           created_at AS "createdAt",
           updated_at AS "updatedAt"
-        FROM projection_thread_messages
+        FROM (
+          SELECT
+            *,
+            ROW_NUMBER() OVER (
+              PARTITION BY thread_id
+              ORDER BY created_at DESC, message_id DESC
+            ) AS message_rank
+          FROM projection_thread_messages
+        )
+        WHERE message_rank <= ${MAX_THREAD_MESSAGES}
         ORDER BY thread_id ASC, created_at ASC, message_id ASC
       `,
   });
@@ -638,7 +649,79 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           payload_json AS "payload",
           sequence,
           created_at AS "createdAt"
-        FROM projection_thread_activities
+        FROM (
+          SELECT
+            *,
+            ROW_NUMBER() OVER (
+              PARTITION BY thread_id
+              ORDER BY
+                CASE WHEN sequence IS NULL THEN 0 ELSE 1 END DESC,
+                sequence DESC,
+                created_at DESC,
+                activity_id DESC
+            ) AS activity_rank
+          FROM projection_thread_activities
+        ) AS ranked
+        WHERE activity_rank <= ${MAX_THREAD_ACTIVITIES}
+          OR (
+            kind IN ('approval.requested', 'user-input.requested')
+            AND json_extract(payload_json, '$.requestId') IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1
+              FROM projection_thread_activities AS later
+              WHERE later.thread_id = ranked.thread_id
+                AND json_extract(later.payload_json, '$.requestId') =
+                  json_extract(ranked.payload_json, '$.requestId')
+                AND (
+                  (ranked.kind = 'approval.requested' AND later.kind = 'approval.resolved')
+                  OR (
+                    ranked.kind = 'approval.requested'
+                    AND later.kind = 'provider.approval.respond.failed'
+                    AND (
+                      lower(COALESCE(json_extract(later.payload_json, '$.detail'), '')) LIKE
+                        '%stale pending approval request%'
+                      OR lower(COALESCE(json_extract(later.payload_json, '$.detail'), '')) LIKE
+                        '%unknown pending approval request%'
+                      OR lower(COALESCE(json_extract(later.payload_json, '$.detail'), '')) LIKE
+                        '%unknown pending permission request%'
+                    )
+                  )
+                  OR (ranked.kind = 'user-input.requested' AND later.kind = 'user-input.resolved')
+                  OR (
+                    ranked.kind = 'user-input.requested'
+                    AND later.kind = 'provider.user-input.respond.failed'
+                    AND (
+                      lower(COALESCE(json_extract(later.payload_json, '$.detail'), '')) LIKE
+                        '%stale pending user-input request%'
+                      OR lower(COALESCE(json_extract(later.payload_json, '$.detail'), '')) LIKE
+                        '%unknown pending user-input request%'
+                    )
+                  )
+                )
+                AND (
+                  CASE WHEN later.sequence IS NULL THEN 0 ELSE 1 END >
+                    CASE WHEN ranked.sequence IS NULL THEN 0 ELSE 1 END
+                  OR (
+                    CASE WHEN later.sequence IS NULL THEN 0 ELSE 1 END =
+                      CASE WHEN ranked.sequence IS NULL THEN 0 ELSE 1 END
+                    AND COALESCE(later.sequence, -1) > COALESCE(ranked.sequence, -1)
+                  )
+                  OR (
+                    CASE WHEN later.sequence IS NULL THEN 0 ELSE 1 END =
+                      CASE WHEN ranked.sequence IS NULL THEN 0 ELSE 1 END
+                    AND COALESCE(later.sequence, -1) = COALESCE(ranked.sequence, -1)
+                    AND later.created_at > ranked.created_at
+                  )
+                  OR (
+                    CASE WHEN later.sequence IS NULL THEN 0 ELSE 1 END =
+                      CASE WHEN ranked.sequence IS NULL THEN 0 ELSE 1 END
+                    AND COALESCE(later.sequence, -1) = COALESCE(ranked.sequence, -1)
+                    AND later.created_at = ranked.created_at
+                    AND later.activity_id > ranked.activity_id
+                  )
+                )
+            )
+          )
         ORDER BY
           thread_id ASC,
           CASE WHEN sequence IS NULL THEN 0 ELSE 1 END ASC,
@@ -860,8 +943,18 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           source,
           created_at AS "createdAt",
           updated_at AS "updatedAt"
-        FROM projection_thread_messages
+        FROM (
+          SELECT
+            *,
+            ROW_NUMBER() OVER (
+              PARTITION BY thread_id
+              ORDER BY created_at DESC, message_id DESC
+            ) AS message_rank
+          FROM projection_thread_messages
+          WHERE thread_id = ${threadId}
+        )
         WHERE thread_id = ${threadId}
+          AND message_rank <= ${MAX_THREAD_MESSAGES}
         ORDER BY created_at ASC, message_id ASC
       `,
   });
@@ -901,8 +994,83 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           payload_json AS "payload",
           sequence,
           created_at AS "createdAt"
-        FROM projection_thread_activities
+        FROM (
+          SELECT
+            *,
+            ROW_NUMBER() OVER (
+              PARTITION BY thread_id
+              ORDER BY
+                CASE WHEN sequence IS NULL THEN 0 ELSE 1 END DESC,
+                sequence DESC,
+                created_at DESC,
+                activity_id DESC
+            ) AS activity_rank
+          FROM projection_thread_activities
+          WHERE thread_id = ${threadId}
+        ) AS ranked
         WHERE thread_id = ${threadId}
+          AND (
+            activity_rank <= ${MAX_THREAD_ACTIVITIES}
+            OR (
+              kind IN ('approval.requested', 'user-input.requested')
+              AND json_extract(payload_json, '$.requestId') IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1
+                FROM projection_thread_activities AS later
+                WHERE later.thread_id = ranked.thread_id
+                  AND json_extract(later.payload_json, '$.requestId') =
+                    json_extract(ranked.payload_json, '$.requestId')
+                  AND (
+                    (ranked.kind = 'approval.requested' AND later.kind = 'approval.resolved')
+                    OR (
+                      ranked.kind = 'approval.requested'
+                      AND later.kind = 'provider.approval.respond.failed'
+                      AND (
+                        lower(COALESCE(json_extract(later.payload_json, '$.detail'), '')) LIKE
+                          '%stale pending approval request%'
+                        OR lower(COALESCE(json_extract(later.payload_json, '$.detail'), '')) LIKE
+                          '%unknown pending approval request%'
+                        OR lower(COALESCE(json_extract(later.payload_json, '$.detail'), '')) LIKE
+                          '%unknown pending permission request%'
+                      )
+                    )
+                    OR (ranked.kind = 'user-input.requested' AND later.kind = 'user-input.resolved')
+                    OR (
+                      ranked.kind = 'user-input.requested'
+                      AND later.kind = 'provider.user-input.respond.failed'
+                      AND (
+                        lower(COALESCE(json_extract(later.payload_json, '$.detail'), '')) LIKE
+                          '%stale pending user-input request%'
+                        OR lower(COALESCE(json_extract(later.payload_json, '$.detail'), '')) LIKE
+                          '%unknown pending user-input request%'
+                      )
+                    )
+                  )
+                  AND (
+                    CASE WHEN later.sequence IS NULL THEN 0 ELSE 1 END >
+                      CASE WHEN ranked.sequence IS NULL THEN 0 ELSE 1 END
+                    OR (
+                      CASE WHEN later.sequence IS NULL THEN 0 ELSE 1 END =
+                        CASE WHEN ranked.sequence IS NULL THEN 0 ELSE 1 END
+                      AND COALESCE(later.sequence, -1) > COALESCE(ranked.sequence, -1)
+                    )
+                    OR (
+                      CASE WHEN later.sequence IS NULL THEN 0 ELSE 1 END =
+                        CASE WHEN ranked.sequence IS NULL THEN 0 ELSE 1 END
+                      AND COALESCE(later.sequence, -1) = COALESCE(ranked.sequence, -1)
+                      AND later.created_at > ranked.created_at
+                    )
+                    OR (
+                      CASE WHEN later.sequence IS NULL THEN 0 ELSE 1 END =
+                        CASE WHEN ranked.sequence IS NULL THEN 0 ELSE 1 END
+                      AND COALESCE(later.sequence, -1) = COALESCE(ranked.sequence, -1)
+                      AND later.created_at = ranked.created_at
+                      AND later.activity_id > ranked.activity_id
+                    )
+                  )
+              )
+            )
+          )
         ORDER BY
           CASE WHEN sequence IS NULL THEN 0 ELSE 1 END ASC,
           sequence ASC,

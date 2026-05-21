@@ -361,27 +361,21 @@ function toCanonicalUserInputAnswers(
     return {};
   }
 
-  return Object.fromEntries(
-    Object.entries(answers).flatMap(([questionId, value]) => {
-      if (typeof value === "string") {
-        return [[questionId, value] as const];
-      }
+  const result: Record<string, string | ReadonlyArray<string> | null> = {};
+  for (const [questionId, value] of Object.entries(answers)) {
+    if (typeof value === "string") {
+      result[questionId] = value;
+      continue;
+    }
 
-      if (Array.isArray(value)) {
-        const normalized = value.filter((entry): entry is string => typeof entry === "string");
-        return [[questionId, normalized.length === 1 ? normalized[0] : normalized] as const];
-      }
-
-      const answerObject = asObject(value);
-      const answerList = asArray(answerObject?.answers)?.filter(
-        (entry): entry is string => typeof entry === "string",
-      );
-      if (!answerList) {
-        return [];
-      }
-      return [[questionId, answerList.length === 1 ? answerList[0] : answerList] as const];
-    }),
-  );
+    if (Array.isArray(value)) {
+      const normalized = value.filter((entry): entry is string => typeof entry === "string");
+      if (normalized.length === 0) continue;
+      result[questionId] = normalized.length === 1 ? normalized[0]! : normalized;
+      continue;
+    }
+  }
+  return result;
 }
 
 function toUserInputQuestions(payload: Record<string, unknown> | undefined) {

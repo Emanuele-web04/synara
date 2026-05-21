@@ -11,7 +11,7 @@ import { useTerminalStateStore } from "../terminalStateStore";
 import { getThreadFromState } from "../threadDerivation";
 
 export function useDisposableThreadLifecycle(activeThreadId: ThreadId | null): void {
-  const syncServerReadModel = useStore((store) => store.syncServerReadModel);
+  const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const clearDraftThread = useComposerDraftStore((store) => store.clearDraftThread);
   const clearTerminalState = useTerminalStateStore((store) => store.clearTerminalState);
   const removeThreadFromSplitViews = useSplitViewStore((store) => store.removeThreadFromSplitViews);
@@ -84,9 +84,9 @@ export function useDisposableThreadLifecycle(activeThreadId: ThreadId | null): v
                 threadId: disposableThreadId,
               })
               .catch(() => undefined);
-            const snapshot = await api.orchestration.getSnapshot().catch(() => null);
+            const snapshot = await api.orchestration.getShellSnapshot().catch(() => null);
             if (snapshot) {
-              syncServerReadModel(snapshot);
+              syncServerShellSnapshot(snapshot);
             }
           }
         }
@@ -105,7 +105,7 @@ export function useDisposableThreadLifecycle(activeThreadId: ThreadId | null): v
     clearTerminalState,
     clearTemporaryThread,
     removeThreadFromSplitViews,
-    syncServerReadModel,
+    syncServerShellSnapshot,
     temporaryThreadIds,
   ]);
 }

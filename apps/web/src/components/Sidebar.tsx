@@ -53,7 +53,7 @@ import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-
 import { CSS } from "@dnd-kit/utilities";
 import {
   type DesktopUpdateState,
-  type OrchestrationReadModel,
+  type OrchestrationShellSnapshot,
   PROVIDER_DISPLAY_NAMES,
   ProjectId,
   type ProviderKind,
@@ -1075,7 +1075,6 @@ export default function Sidebar() {
   const threadsHydrated = useStore((store) => store.threadsHydrated);
   const sidebarThreadSummaryById = useStore((store) => store.sidebarThreadSummaryById);
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
-  const syncServerReadModel = useStore((store) => store.syncServerReadModel);
   const markThreadVisited = useStore((store) => store.markThreadVisited);
   const markThreadUnread = useStore((store) => store.markThreadUnread);
   const toggleProject = useStore((store) => store.toggleProject);
@@ -1486,20 +1485,19 @@ export default function Sidebar() {
   );
 
   const openOrCreateProjectThreadFromSnapshot = useCallback(
-    async (projectId: ProjectId, snapshot: OrchestrationReadModel) => {
+    async (projectId: ProjectId, snapshot: OrchestrationShellSnapshot) => {
       const latestThread = sortThreadsForSidebar(
         snapshot.threads
           .filter(
             (thread) =>
               thread.projectId === projectId &&
-              thread.deletedAt === null &&
               (thread.archivedAt ?? null) === null,
           )
           .map((thread) => ({
             id: thread.id,
             createdAt: thread.createdAt,
             updatedAt: thread.updatedAt,
-            messages: thread.messages,
+            latestUserMessageAt: thread.latestUserMessageAt,
           })),
         appSettings.sidebarThreadSortOrder,
       )[0];
@@ -1524,11 +1522,9 @@ export default function Sidebar() {
   );
 
   const openExistingProjectFromSnapshot = useCallback(
-    async (projectId: ProjectId, snapshot: OrchestrationReadModel): Promise<boolean> => {
+    async (projectId: ProjectId, snapshot: OrchestrationShellSnapshot): Promise<boolean> => {
       const existingProject =
-        snapshot.projects.find(
-          (candidate) => candidate.id === projectId && candidate.deletedAt === null,
-        ) ?? null;
+        snapshot.projects.find((candidate) => candidate.id === projectId) ?? null;
       if (!existingProject) {
         return false;
       }
@@ -1538,14 +1534,13 @@ export default function Sidebar() {
           .filter(
             (thread) =>
               thread.projectId === projectId &&
-              thread.deletedAt === null &&
               (thread.archivedAt ?? null) === null,
           )
           .map((thread) => ({
             id: thread.id,
             createdAt: thread.createdAt,
             updatedAt: thread.updatedAt,
-            messages: thread.messages,
+            latestUserMessageAt: thread.latestUserMessageAt,
           })),
         appSettings.sidebarThreadSortOrder,
       )[0];
@@ -1578,13 +1573,12 @@ export default function Sidebar() {
       api: NonNullable<ReturnType<typeof readNativeApi>>,
       projectId: ProjectId,
     ): Promise<{
-      project: OrchestrationReadModel["projects"][number] | null;
-      snapshot: OrchestrationReadModel | null;
+      project: OrchestrationShellSnapshot["projects"][number] | null;
+      snapshot: OrchestrationShellSnapshot | null;
     }> =>
       waitForRecoverableProjectInReadModel({
         projectId,
-        loadSnapshot: () => api.orchestration.getSnapshot().catch(() => null),
-        repairSnapshot: () => api.orchestration.repairState().catch(() => null),
+        loadSnapshot: () => api.orchestration.getShellSnapshot().catch(() => null),
         maxAttempts: ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS,
         delayMs: ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS,
       }),
@@ -1596,13 +1590,12 @@ export default function Sidebar() {
       api: NonNullable<ReturnType<typeof readNativeApi>>,
       workspaceRoot: string,
     ): Promise<{
-      project: OrchestrationReadModel["projects"][number] | null;
-      snapshot: OrchestrationReadModel | null;
+      project: OrchestrationShellSnapshot["projects"][number] | null;
+      snapshot: OrchestrationShellSnapshot | null;
     }> =>
       waitForRecoverableProjectInReadModel({
         workspaceRoot,
-        loadSnapshot: () => api.orchestration.getSnapshot().catch(() => null),
-        repairSnapshot: () => api.orchestration.repairState().catch(() => null),
+        loadSnapshot: () => api.orchestration.getShellSnapshot().catch(() => null),
         maxAttempts: ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS,
         delayMs: ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS,
       }),
@@ -1617,7 +1610,7 @@ export default function Sidebar() {
     ): Promise<boolean> => {
       const { project, snapshot } = await waitForProjectInSnapshot(api, projectId);
       if (snapshot) {
-        syncServerReadModel(snapshot);
+        syncServerShellSnapshot(snapshot);
       }
       if (!project || !snapshot) {
         return false;
@@ -1626,7 +1619,7 @@ export default function Sidebar() {
       await openOrCreateProjectThreadFromSnapshot(project.id, snapshot);
       return true;
     },
-    [openOrCreateProjectThreadFromSnapshot, syncServerReadModel, waitForProjectInSnapshot],
+    [openOrCreateProjectThreadFromSnapshot, syncServerShellSnapshot, waitForProjectInSnapshot],
   );
 
   const recoverExistingProjectFromServer = useCallback(
@@ -1636,7 +1629,7 @@ export default function Sidebar() {
     ): Promise<boolean> => {
       const { project, snapshot } = await waitForProjectInSnapshot(api, projectId);
       if (snapshot) {
-        syncServerReadModel(snapshot);
+        syncServerShellSnapshot(snapshot);
       }
       if (!project || !snapshot) {
         return false;
@@ -1644,7 +1637,7 @@ export default function Sidebar() {
 
       return openExistingProjectFromSnapshot(project.id, snapshot);
     },
-    [openExistingProjectFromSnapshot, syncServerReadModel, waitForProjectInSnapshot],
+    [openExistingProjectFromSnapshot, syncServerShellSnapshot, waitForProjectInSnapshot],
   );
 
   const recoverExistingProjectByWorkspaceRootFromServer = useCallback(
@@ -1654,7 +1647,7 @@ export default function Sidebar() {
     ): Promise<boolean> => {
       const { project, snapshot } = await waitForProjectWorkspaceRootInSnapshot(api, workspaceRoot);
       if (snapshot) {
-        syncServerReadModel(snapshot);
+        syncServerShellSnapshot(snapshot);
       }
       if (!project || !snapshot) {
         return false;
@@ -1662,7 +1655,7 @@ export default function Sidebar() {
 
       return openExistingProjectFromSnapshot(project.id, snapshot);
     },
-    [openExistingProjectFromSnapshot, syncServerReadModel, waitForProjectWorkspaceRootInSnapshot],
+    [openExistingProjectFromSnapshot, syncServerShellSnapshot, waitForProjectWorkspaceRootInSnapshot],
   );
 
   const handleOpenProjectFromSearch = useCallback(
@@ -1890,13 +1883,12 @@ export default function Sidebar() {
             const { project, snapshot } = await waitForRecoverableProjectForDuplicateCreate({
               message: description,
               workspaceRoot: cwd,
-              loadSnapshot: () => api.orchestration.getSnapshot().catch(() => null),
-              repairSnapshot: () => api.orchestration.repairState().catch(() => null),
+              loadSnapshot: () => api.orchestration.getShellSnapshot().catch(() => null),
               maxAttempts: ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS,
               delayMs: ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS,
             });
             if (snapshot) {
-              syncServerReadModel(snapshot);
+              syncServerShellSnapshot(snapshot);
             }
             if (project && snapshot) {
               const recovered = await openExistingProjectFromSnapshot(project.id, snapshot);
@@ -1937,7 +1929,6 @@ export default function Sidebar() {
       recoverExistingProjectFromServer,
       recoverExistingProjectByWorkspaceRootFromServer,
       recoverProjectThreadFromServer,
-      syncServerReadModel,
       openExistingProjectFromSnapshot,
       setProjectExpanded,
     ],

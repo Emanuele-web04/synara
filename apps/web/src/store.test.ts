@@ -2037,6 +2037,42 @@ describe("store read model sync", () => {
     });
   });
 
+  it("creates an initial sidebar summary when hot-path detail sync sees a new thread first", () => {
+    const threadId = ThreadId.makeUnsafe("thread-detail-before-shell");
+    const initialState: AppState = {
+      ...makeState(makeThread()),
+      threadIds: [],
+      threads: [],
+      sidebarThreadSummaryById: {},
+    };
+
+    const next = syncServerThreadDetailHotPath(
+      initialState,
+      makeReadModelThread({
+        id: threadId,
+        title: "Visible while running",
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("turn-detail-before-shell"),
+          state: "running",
+          requestedAt: "2026-02-27T00:00:00.000Z",
+          startedAt: "2026-02-27T00:00:01.000Z",
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        updatedAt: "2026-02-27T00:00:01.000Z",
+      }),
+    );
+
+    expect(next.threadIds).toContain(threadId);
+    expect(next.sidebarThreadSummaryById[threadId]).toMatchObject({
+      id: threadId,
+      title: "Visible while running",
+      latestTurn: {
+        state: "running",
+      },
+    });
+  });
+
   it("keeps createBranchFlowCompleted sticky during stale hot-path detail syncs", () => {
     const threadId = ThreadId.makeUnsafe("thread-hot-path-branch-flow");
     const liveState = makeState(
@@ -2222,6 +2258,91 @@ describe("store read model sync", () => {
     expect(next.activityByThreadId?.[threadId]?.["activity-command"]).toBe(richActivity);
   });
 
+  it("caps stored activity detail to the latest activity window", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const activities = Array.from({ length: 505 }, (_, index) =>
+      makeActivity({
+        id: `activity-${index}`,
+        sequence: index,
+        createdAt: "2026-02-27T00:00:00.000Z",
+      }),
+    );
+
+    const next = syncServerReadModel(
+      makeState(makeThread()),
+      makeReadModel(makeReadModelThread({ activities })),
+    );
+
+    expect(next.threads[0]?.activities).toHaveLength(500);
+    expect(next.threads[0]?.activities[0]?.id).toBe(EventId.makeUnsafe("activity-5"));
+    expect(next.threads[0]?.activities.at(-1)?.id).toBe(EventId.makeUnsafe("activity-504"));
+    expect(next.activityIdsByThreadId?.[threadId]).toHaveLength(500);
+    expect(next.activityIdsByThreadId?.[threadId]?.[0]).toBe("activity-5");
+  });
+
+  it("keeps pending interaction activities outside the latest activity window", () => {
+    const activities = [
+      makeActivity({
+        id: "approval-old",
+        kind: "approval.requested",
+        tone: "approval",
+        payload: { requestId: "approval-1", requestKind: "command" },
+        sequence: 0,
+      }),
+      ...Array.from({ length: 505 }, (_, index) =>
+        makeActivity({
+          id: `activity-${index}`,
+          sequence: index + 1,
+          createdAt: "2026-02-27T00:00:00.000Z",
+        }),
+      ),
+    ];
+
+    const next = syncServerReadModel(
+      makeState(makeThread()),
+      makeReadModel(makeReadModelThread({ activities })),
+    );
+
+    expect(next.threads[0]?.activities).toHaveLength(501);
+    expect(next.threads[0]?.activities[0]?.id).toBe(EventId.makeUnsafe("approval-old"));
+    expect(next.threads[0]?.activities[1]?.id).toBe(EventId.makeUnsafe("activity-5"));
+  });
+
+  it("does not keep resolved interaction activities outside the latest activity window", () => {
+    const activities = [
+      makeActivity({
+        id: "approval-old",
+        kind: "approval.requested",
+        tone: "approval",
+        payload: { requestId: "approval-1", requestKind: "command" },
+        sequence: 0,
+      }),
+      makeActivity({
+        id: "approval-resolved-old",
+        kind: "approval.resolved",
+        tone: "approval",
+        payload: { requestId: "approval-1", decision: "accept" },
+        sequence: 1,
+      }),
+      ...Array.from({ length: 505 }, (_, index) =>
+        makeActivity({
+          id: `activity-${index}`,
+          sequence: index + 2,
+          createdAt: "2026-02-27T00:00:00.000Z",
+        }),
+      ),
+    ];
+
+    const next = syncServerReadModel(
+      makeState(makeThread()),
+      makeReadModel(makeReadModelThread({ activities })),
+    );
+
+    expect(next.threads[0]?.activities).toHaveLength(500);
+    expect(next.threads[0]?.activities[0]?.id).toBe(EventId.makeUnsafe("activity-5"));
+    expect(next.threads[0]?.activities.at(-1)?.id).toBe(EventId.makeUnsafe("activity-504"));
+  });
+
   it("preserves the existing sidebar pending-user-input state during detail-only response events", () => {
     const initialState = syncServerReadModel(
       makeState(
@@ -2280,10 +2401,7 @@ describe("store read model sync", () => {
         threadId: ThreadId.makeUnsafe("thread-1"),
         requestId: ApprovalRequestId.makeUnsafe("request-1"),
         answers: {
-          q1: {
-            type: "option",
-            optionId: "yes",
-          },
+          q1: "yes",
         },
         createdAt: "2026-02-27T00:01:00.000Z",
       }),

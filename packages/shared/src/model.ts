@@ -423,6 +423,9 @@ function reasoningDescriptorId(provider: ProviderKind, caps: ModelCapabilities):
       ? "thinkingBudget"
       : "thinkingLevel";
   }
+  if (provider === "pi") {
+    return "thinkingLevel";
+  }
   return "reasoningEffort";
 }
 
