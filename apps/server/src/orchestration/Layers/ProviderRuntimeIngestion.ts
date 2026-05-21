@@ -252,7 +252,10 @@ function truncateJsonValue(
   }
 
   const entries = Object.entries(value)
-    .filter(([, entry]) => entry !== undefined && typeof entry !== "function" && typeof entry !== "symbol")
+    .filter(
+      ([, entry]) =>
+        entry !== undefined && typeof entry !== "function" && typeof entry !== "symbol",
+    )
     .toSorted((left, right) => {
       const byRank = activityPayloadKeyRank(left[0]) - activityPayloadKeyRank(right[0]);
       return byRank !== 0 ? byRank : left[0].localeCompare(right[0]);

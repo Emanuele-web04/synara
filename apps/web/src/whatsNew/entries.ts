@@ -22,6 +22,42 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.0.48",
+    date: "May 21",
+    features: [
+      {
+        id: "grok-provider-headline",
+        title: "Grok joins DP Code",
+        description:
+          "Pick Grok as a first-class coding provider with ACP-backed sessions, model selection, approval handling, resume support, provider health checks, settings, icons, and handoff wired through the same app surfaces as the rest of your agents.",
+      },
+      {
+        id: "provider-fallbacks-and-menus",
+        title: "Provider fallbacks and desktop menus behave better",
+        description:
+          "Provider startup and recovery paths are more forgiving when preferred runtimes are unavailable, and desktop menu shortcuts now line up more reliably with the active workspace.",
+      },
+      {
+        id: "snapshot-memory-caps",
+        title: "Large histories stay lighter",
+        description:
+          "Snapshot hydration, diagnostics, and capped history paths now do less unnecessary work, reducing memory pressure when busy sessions or large workspaces reconnect.",
+      },
+      {
+        id: "pi-and-opencode-polish",
+        title: "Pi and OpenCode edge cases are smoother",
+        description:
+          "Pi aborts now read as interruptions, thinking levels are clamped more safely, live sidebar updates are steadier, and OpenCode/provider update handling picked up targeted reliability fixes.",
+      },
+      {
+        id: "rpc-input-answer-preservation",
+        title: "Answers survive the RPC hop",
+        description:
+          "User-input answers are preserved through the JSON-RPC codec, which keeps pending provider questions from losing their payload as they move between the app and server.",
+      },
+    ],
+  },
+  {
     version: "0.0.47",
     date: "May 15",
     features: [

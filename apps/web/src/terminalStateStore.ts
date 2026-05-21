@@ -1401,8 +1401,7 @@ export const useTerminalStateStore = create<TerminalStateStoreState>()(
       merge: (persistedState, currentState) => ({
         ...currentState,
         terminalStateByThreadId: sanitizePersistedTerminalStateByThreadId(
-          (persistedState as Partial<TerminalStateStoreState> | undefined)
-            ?.terminalStateByThreadId,
+          (persistedState as Partial<TerminalStateStoreState> | undefined)?.terminalStateByThreadId,
         ),
       }),
     },

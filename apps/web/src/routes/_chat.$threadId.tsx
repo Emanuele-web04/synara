@@ -158,6 +158,7 @@ const LazyDiffPanel = (props: {
     patch: Partial<Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">>,
   ) => void;
   onClosePanel?: () => void;
+  liveRefreshEnabled?: boolean;
 }) => {
   return (
     <DiffWorkerPoolProvider>
@@ -168,6 +169,9 @@ const LazyDiffPanel = (props: {
           {...(props.panelState ? { panelState: props.panelState } : {})}
           {...(props.onUpdatePanelState ? { onUpdatePanelState: props.onUpdatePanelState } : {})}
           {...(props.onClosePanel ? { onClosePanel: props.onClosePanel } : {})}
+          {...(props.liveRefreshEnabled !== undefined
+            ? { liveRefreshEnabled: props.liveRefreshEnabled }
+            : {})}
         />
       </Suspense>
     </DiffWorkerPoolProvider>

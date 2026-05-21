@@ -370,7 +370,15 @@ function toCanonicalUserInputAnswers(
 
     if (Array.isArray(value)) {
       const normalized = value.filter((entry): entry is string => typeof entry === "string");
-      if (normalized.length === 0) continue;
+      result[questionId] = normalized.length === 1 ? normalized[0]! : normalized;
+      continue;
+    }
+
+    const nestedAnswers = asArray(asObject(value)?.answers);
+    if (nestedAnswers) {
+      const normalized = nestedAnswers.filter(
+        (entry): entry is string => typeof entry === "string",
+      );
       result[questionId] = normalized.length === 1 ? normalized[0]! : normalized;
       continue;
     }

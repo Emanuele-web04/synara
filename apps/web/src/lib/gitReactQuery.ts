@@ -132,6 +132,7 @@ export function gitWorkingTreeDiffQueryOptions(input: {
   refetchInterval?: number | false;
 }) {
   const scope = input.scope ?? "workingTree";
+  const refetchInterval = input.refetchInterval;
   return queryOptions({
     queryKey: gitQueryKeys.workingTreeDiff(input.cwd, scope),
     queryFn: async () => {
@@ -143,7 +144,7 @@ export function gitWorkingTreeDiffQueryOptions(input: {
     },
     enabled: (input.enabled ?? true) && input.cwd !== null,
     staleTime: GIT_WORKING_TREE_DIFF_STALE_TIME_MS,
-    refetchInterval: input.refetchInterval,
+    ...(refetchInterval !== undefined ? { refetchInterval } : {}),
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
   });

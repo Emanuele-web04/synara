@@ -57,8 +57,7 @@ export function shouldReserveDesktopTopBarTrafficLightGutter(input: {
 export function useDesktopTopBarTrafficLightGutterClassName(): string | null {
   const { settings } = useAppSettings();
   const { isMobile, open } = useSidebar();
-  const isMacDesktop =
-    typeof navigator !== "undefined" ? isMacPlatform(navigator.platform) : false;
+  const isMacDesktop = typeof navigator !== "undefined" ? isMacPlatform(navigator.platform) : false;
   return shouldReserveDesktopTopBarTrafficLightGutter({
     isElectron,
     isMacDesktop,

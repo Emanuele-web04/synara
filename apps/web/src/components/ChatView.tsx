@@ -5281,8 +5281,9 @@ export default function ChatView({
     }
     if (!activeProject) return false;
     const sendProviderStatus =
-      providerStatuses.find((status) => status.provider === selectedModelSelectionForSend.provider) ??
-      null;
+      providerStatuses.find(
+        (status) => status.provider === selectedModelSelectionForSend.provider,
+      ) ?? null;
     if (!isProviderUsable(sendProviderStatus)) {
       toastManager.add({
         type: "error",

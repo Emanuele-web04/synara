@@ -1,4 +1,5 @@
 # Recap: Provider Routing And Startup Notifications
+
 > Generated: 2026-05-21 | Scope: 11 files
 
 ---
@@ -11,19 +12,19 @@ The goal was to investigate noisy Linux startup notifications and provider routi
 
 ## Files Affected
 
-| File | Status | Role |
-|---|---|---|
-| `apps/desktop/src/main.ts` | Modified | Applies platform-aware menu accelerator props. |
-| `apps/desktop/src/menuShortcuts.ts` | Modified | Centralizes Linux accelerator suppression. |
-| `apps/desktop/src/menuShortcuts.test.ts` | Modified | Covers Linux and non-Linux accelerator behavior. |
-| `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts` | Modified | Routes title/branch text generation only to supported providers. |
-| `apps/server/src/orchestration/Layers/ProviderCommandReactor.test.ts` | Modified | Covers Gemini fallback titles and first-turn provider adoption. |
-| `apps/server/src/orchestration/projector.ts` | Modified | Allows an empty thread to adopt the requested provider on first turn. |
-| `apps/server/src/orchestration/projector.test.ts` | Modified | Covers first-turn provider adoption in projection. |
-| `apps/web/src/components/ChatView.tsx` | Modified | Blocks send attempts when the selected provider is known unavailable. |
-| `apps/web/src/terminalStateStore.ts` | Modified | Removes volatile terminal runtime flags from persisted state. |
-| `apps/web/src/terminalStateStore.test.ts` | Modified | Covers persisted terminal state sanitization. |
-| `docs/RECAP-provider-notifications.md` | Created | Captures the implementation recap. |
+| File                                                                  | Status   | Role                                                                  |
+| --------------------------------------------------------------------- | -------- | --------------------------------------------------------------------- |
+| `apps/desktop/src/main.ts`                                            | Modified | Applies platform-aware menu accelerator props.                        |
+| `apps/desktop/src/menuShortcuts.ts`                                   | Modified | Centralizes Linux accelerator suppression.                            |
+| `apps/desktop/src/menuShortcuts.test.ts`                              | Modified | Covers Linux and non-Linux accelerator behavior.                      |
+| `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts`      | Modified | Routes title/branch text generation only to supported providers.      |
+| `apps/server/src/orchestration/Layers/ProviderCommandReactor.test.ts` | Modified | Covers Gemini fallback titles and first-turn provider adoption.       |
+| `apps/server/src/orchestration/projector.ts`                          | Modified | Allows an empty thread to adopt the requested provider on first turn. |
+| `apps/server/src/orchestration/projector.test.ts`                     | Modified | Covers first-turn provider adoption in projection.                    |
+| `apps/web/src/components/ChatView.tsx`                                | Modified | Blocks send attempts when the selected provider is known unavailable. |
+| `apps/web/src/terminalStateStore.ts`                                  | Modified | Removes volatile terminal runtime flags from persisted state.         |
+| `apps/web/src/terminalStateStore.test.ts`                             | Modified | Covers persisted terminal state sanitization.                         |
+| `docs/RECAP-provider-notifications.md`                                | Created  | Captures the implementation recap.                                    |
 
 ---
 

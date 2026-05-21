@@ -78,9 +78,7 @@ function redactProcessArgs(args: string): string {
 function parseProcessTable(output: string): ProcessTableRow[] {
   const rows: ProcessTableRow[] = [];
   for (const line of output.split(/\r?\n/)) {
-    const match = line
-      .trim()
-      .match(/^(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\S+)(?:\s+(.*))?$/);
+    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\S+)(?:\s+(.*))?$/);
     if (!match) {
       continue;
     }

@@ -107,7 +107,8 @@ export function findRecoverableProjectForDuplicateCreate<
 }
 
 export async function waitForRecoverableProjectInReadModel<
-  TSnapshot extends SnapshotWithProjects<DuplicateProjectCreateRecoveryCandidate> = OrchestrationReadModel,
+  TSnapshot extends SnapshotWithProjects<DuplicateProjectCreateRecoveryCandidate> =
+    OrchestrationReadModel,
 >(
   input: ProjectLookupInput & {
     readonly loadSnapshot: () => Promise<TSnapshot | null>;
