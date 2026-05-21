@@ -3,6 +3,7 @@ import * as AcpError from "./errors.ts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -235,6 +236,131 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
     }),
   );
 
+  it.effect("replies to extension requests with string ids without losing the id", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      yield* AcpProtocol.makeAcpPatchedProtocol({
+        stdio,
+        serverRequestMethods: new Set(),
+        onExtRequest: (method, params) =>
+          Effect.succeed({
+            method,
+            params,
+            reloaded: true,
+          }),
+      });
+
+      yield* Queue.offer(
+        input,
+        textEncoder.encode(
+          '{"jsonrpc":"2.0","id":"skills-reload","method":"x.ai/skills_reload","params":{"source":"grok"}}\n',
+        ),
+      );
+
+      const outbound = yield* Queue.take(output);
+      const decoded = JSON.parse(
+        typeof outbound === "string" ? outbound : new TextDecoder().decode(outbound),
+      );
+      assert.deepEqual(decoded, {
+        jsonrpc: "2.0",
+        id: "skills-reload",
+        result: {
+          method: "x.ai/skills_reload",
+          params: { source: "grok" },
+          reloaded: true,
+        },
+      });
+    }),
+  );
+
+  it.effect("drops untracked string-id responses before Effect RPC coerces ids to BigInt", () =>
+    Effect.gen(function* () {
+      const { stdio, input } = yield* makeInMemoryStdio();
+      const dropped = yield* Deferred.make<AcpProtocol.AcpProtocolLogEvent>();
+      yield* AcpProtocol.makeAcpPatchedProtocol({
+        stdio,
+        serverRequestMethods: new Set(),
+        logIncoming: true,
+        logger: (event) =>
+          event.stage === "dropped"
+            ? Deferred.succeed(dropped, event).pipe(Effect.asVoid)
+            : Effect.void,
+      });
+
+      yield* Queue.offer(
+        input,
+        textEncoder.encode('{"jsonrpc":"2.0","id":"skills-reload","result":{"ok":true}}\n'),
+      );
+
+      const maybeEvent = yield* Deferred.await(dropped).pipe(Effect.timeoutOption(1000));
+      assert.equal(Option.isSome(maybeEvent), true);
+      if (Option.isSome(maybeEvent)) {
+        assert.deepEqual(maybeEvent.value.payload, {
+          reason: "untracked-string-response-id",
+          requestId: "skills-reload",
+          message: {
+            _tag: "Exit",
+            requestId: "skills-reload",
+            exit: {
+              _tag: "Success",
+              value: { ok: true },
+            },
+          },
+        });
+      }
+    }),
+  );
+
+  it.effect("accepts agent response metadata with primitive extension values", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const transport = yield* AcpProtocol.makeAcpPatchedProtocol({
+        stdio,
+        serverRequestMethods: new Set(),
+      });
+
+      const response = yield* transport
+        .request("x/test", { hello: "world" })
+        .pipe(Effect.forkScoped);
+      yield* Queue.take(output);
+
+      yield* Queue.offer(
+        input,
+        textEncoder.encode(
+          '{"jsonrpc":"2.0","id":1,"result":{"ok":true,"_meta":{"grokShell":true},"agentCapabilities":{"_meta":{"x.ai/fs_notify":true}}}}\n',
+        ),
+      );
+
+      const resolved = yield* Fiber.join(response);
+      assert.deepEqual(resolved, { ok: true, agentCapabilities: {} });
+    }),
+  );
+
+  it.effect("accepts agent response metadata nested inside array results", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const transport = yield* AcpProtocol.makeAcpPatchedProtocol({
+        stdio,
+        serverRequestMethods: new Set(),
+      });
+
+      const response = yield* transport
+        .request("x/test", { hello: "world" })
+        .pipe(Effect.forkScoped);
+      yield* Queue.take(output);
+
+      yield* Queue.offer(
+        input,
+        textEncoder.encode(
+          '{"jsonrpc":"2.0","id":1,"result":[{"ok":true,"_meta":{"grokShell":true}}]}\n',
+        ),
+      );
+
+      const resolved = yield* Fiber.join(response);
+      assert.deepEqual(resolved, [{ ok: true }]);
+    }),
+  );
+
   it.effect("preserves zero-valued ids for inbound core client requests", () =>
     Effect.gen(function* () {
       const { stdio, input, output } = yield* makeInMemoryStdio();
@@ -302,6 +428,86 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
         {
           jsonrpc: "2.0",
           id: 0,
+          result: {
+            outcome: {
+              outcome: "selected",
+              optionId: "allow",
+            },
+          },
+        },
+      );
+    }),
+  );
+
+  it.effect("replies to core client requests with string ids without losing the id", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const transport = yield* AcpProtocol.makeAcpPatchedProtocol({
+        stdio,
+        serverRequestMethods: new Set(["session/request_permission"]),
+      });
+      const inboundRequest = yield* Deferred.make<unknown>();
+
+      yield* transport.serverProtocol
+        .run((_clientId, message) => Deferred.succeed(inboundRequest, message).pipe(Effect.asVoid))
+        .pipe(Effect.forkScoped);
+
+      yield* Queue.offer(
+        input,
+        textEncoder.encode(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: "perm-1",
+            method: "session/request_permission",
+            params: {
+              sessionId: "session-1",
+              toolCall: {
+                toolCallId: "tool-1",
+                title: "Allow mock action",
+              },
+              options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
+            },
+            headers: [],
+          }) + "\n",
+        ),
+      );
+
+      const message = yield* Deferred.await(inboundRequest);
+      assert.deepEqual(message, {
+        _tag: "Request",
+        id: "perm-1",
+        tag: "session/request_permission",
+        payload: {
+          sessionId: "session-1",
+          toolCall: {
+            toolCallId: "tool-1",
+            title: "Allow mock action",
+          },
+          options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
+        },
+        headers: [],
+      });
+
+      yield* transport.serverProtocol.send(0, {
+        _tag: "Exit",
+        requestId: "perm-1",
+        exit: {
+          _tag: "Success",
+          value: {
+            outcome: {
+              outcome: "selected",
+              optionId: "allow",
+            },
+          },
+        },
+      });
+
+      const outbound = yield* Queue.take(output);
+      assert.deepEqual(
+        JSON.parse(typeof outbound === "string" ? outbound : new TextDecoder().decode(outbound)),
+        {
+          jsonrpc: "2.0",
+          id: "perm-1",
           result: {
             outcome: {
               outcome: "selected",

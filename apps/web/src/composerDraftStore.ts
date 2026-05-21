@@ -1,9 +1,16 @@
+// FILE: composerDraftStore.ts
+// Purpose: Stores composer drafts, model selections, queued turns, and sticky provider choices.
+// Layer: Web state store
+// Depends on: contracts schemas, app model resolution helpers, and zustand persistence.
+
 import {
   type ClaudeCodeEffort,
   type CodexReasoningEffort,
   type CursorModelOptions,
   type GeminiThinkingBudget,
   type GeminiThinkingLevel,
+  GROK_REASONING_EFFORT_OPTIONS,
+  type GrokReasoningEffort,
   type ModelSlug,
   type PiThinkingLevel,
   ModelSelection,
@@ -53,6 +60,18 @@ const COMPOSER_DRAFT_STORAGE_VERSION = 4;
 const DraftThreadEnvModeSchema = Schema.Literals(["local", "worktree"]);
 export type DraftThreadEnvMode = typeof DraftThreadEnvModeSchema.Type;
 const DraftThreadEntryPointSchema = Schema.Literals(["chat", "terminal"]);
+const COMPOSER_PROVIDER_KINDS = [
+  "codex",
+  "claudeAgent",
+  "cursor",
+  "gemini",
+  "grok",
+  "kilo",
+  "opencode",
+  "pi",
+] as const satisfies readonly ProviderKind[];
+const isProviderKind = Schema.is(ProviderKind);
+const GROK_REASONING_EFFORT_SET = new Set<string>(GROK_REASONING_EFFORT_OPTIONS);
 
 const COMPOSER_PERSIST_DEBOUNCE_MS = 300;
 const TERMINAL_DRAFT_THREAD_MAPPING_SUFFIX = "::terminal";
@@ -690,15 +709,7 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
 }
 
 function normalizeProviderKind(value: unknown): ProviderKind | null {
-  return value === "codex" ||
-    value === "claudeAgent" ||
-    value === "cursor" ||
-    value === "gemini" ||
-    value === "kilo" ||
-    value === "opencode" ||
-    value === "pi"
-    ? value
-    : null;
+  return isProviderKind(value) ? value : null;
 }
 
 function trimStringOrUndefined(value: unknown): string | undefined {
@@ -707,6 +718,10 @@ function trimStringOrUndefined(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function isGrokReasoningEffort(value: unknown): value is GrokReasoningEffort {
+  return typeof value === "string" && GROK_REASONING_EFFORT_SET.has(value);
 }
 
 function makeModelSelection(
@@ -747,6 +762,14 @@ function makeModelSelection(
         model,
         ...(options
           ? { options: options as Extract<ModelSelection, { provider: "gemini" }>["options"] }
+          : {}),
+      };
+    case "grok":
+      return {
+        provider,
+        model,
+        ...(options
+          ? { options: options as Extract<ModelSelection, { provider: "grok" }>["options"] }
           : {}),
       };
     case "kilo":
@@ -797,6 +820,10 @@ function normalizeProviderModelOptions(
   const geminiCandidate =
     candidate?.gemini && typeof candidate.gemini === "object"
       ? (candidate.gemini as Record<string, unknown>)
+      : null;
+  const grokCandidate =
+    candidate?.grok && typeof candidate.grok === "object"
+      ? (candidate.grok as Record<string, unknown>)
       : null;
   const openCodeCandidate =
     candidate?.opencode && typeof candidate.opencode === "object"
@@ -931,6 +958,13 @@ function normalizeProviderModelOptions(
           ...(geminiThinkingBudget !== undefined ? { thinkingBudget: geminiThinkingBudget } : {}),
         }
       : undefined;
+  const grokReasoningEffort: GrokReasoningEffort | undefined = isGrokReasoningEffort(
+    grokCandidate?.reasoningEffort,
+  )
+    ? grokCandidate.reasoningEffort
+    : undefined;
+  const grok =
+    grokReasoningEffort !== undefined ? { reasoningEffort: grokReasoningEffort } : undefined;
   const openCodeVariant = trimStringOrUndefined(openCodeCandidate?.variant);
   const openCodeAgent = trimStringOrUndefined(openCodeCandidate?.agent);
   const opencode =
@@ -959,7 +993,7 @@ function normalizeProviderModelOptions(
       ? piCandidate.thinkingLevel
       : undefined;
   const pi = piThinkingLevel !== undefined ? { thinkingLevel: piThinkingLevel } : undefined;
-  if (!codex && !claude && !cursor && !gemini && !kilo && !opencode && !pi) {
+  if (!codex && !claude && !cursor && !gemini && !grok && !kilo && !opencode && !pi) {
     return null;
   }
   return {
@@ -967,6 +1001,7 @@ function normalizeProviderModelOptions(
     ...(claude ? { claudeAgent: claude } : {}),
     ...(cursor ? { cursor } : {}),
     ...(gemini ? { gemini } : {}),
+    ...(grok ? { grok } : {}),
     ...(kilo ? { kilo } : {}),
     ...(opencode ? { opencode } : {}),
     ...(pi ? { pi } : {}),
@@ -1015,15 +1050,17 @@ function normalizeModelSelection(
           : modelOptions?.claudeAgent
         : provider === "gemini"
           ? modelOptions?.gemini
-          : provider === "kilo"
-            ? modelOptions?.kilo
-            : provider === "cursor"
-              ? modelOptions?.cursor
-              : provider === "opencode"
-                ? modelOptions?.opencode
-                : provider === "pi"
-                  ? modelOptions?.pi
-                  : undefined;
+          : provider === "grok"
+            ? modelOptions?.grok
+            : provider === "kilo"
+              ? modelOptions?.kilo
+              : provider === "cursor"
+                ? modelOptions?.cursor
+                : provider === "opencode"
+                  ? modelOptions?.opencode
+                  : provider === "pi"
+                    ? modelOptions?.pi
+                    : undefined;
   return makeModelSelection(provider, model, options);
 }
 
@@ -1081,15 +1118,7 @@ function legacyToModelSelectionByProvider(
   const result: Partial<Record<ProviderKind, ModelSelection>> = {};
   // Add entries from the options bag (for non-active providers)
   if (modelOptions) {
-    for (const provider of [
-      "codex",
-      "claudeAgent",
-      "cursor",
-      "gemini",
-      "kilo",
-      "opencode",
-      "pi",
-    ] as const) {
+    for (const provider of COMPOSER_PROVIDER_KINDS) {
       const options = modelOptions[provider];
       if (options && Object.keys(options).length > 0) {
         const model =
@@ -1196,7 +1225,7 @@ export function resolvePreferredComposerModelSelection(input: {
   defaultProvider?: ProviderKind | null | undefined;
 }): ModelSelection {
   const draftProviderWithSelection =
-    (["codex", "claudeAgent", "cursor", "gemini", "kilo", "opencode", "pi"] as const).find(
+    COMPOSER_PROVIDER_KINDS.find(
       (provider) => input.draft?.modelSelectionByProvider?.[provider] !== undefined,
     ) ?? null;
   const preferredProvider =
@@ -2724,15 +2753,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           }
           const base = existing ?? createEmptyThreadDraft();
           const nextMap = { ...base.modelSelectionByProvider };
-          for (const provider of [
-            "codex",
-            "claudeAgent",
-            "cursor",
-            "gemini",
-            "kilo",
-            "opencode",
-            "pi",
-          ] as const) {
+          for (const provider of COMPOSER_PROVIDER_KINDS) {
             // Only touch providers explicitly present in the input
             if (!normalizedOpts || !(provider in normalizedOpts)) continue;
             const opts = normalizedOpts[provider];

@@ -112,7 +112,15 @@ const parameterizedCursorVariantConfigOptions: ReadonlyArray<EffectAcpSchema.Ses
 describe("buildCursorAcpSpawnInput", () => {
   it("builds the default Cursor ACP command", () => {
     expect(buildCursorAcpSpawnInput(undefined, "/tmp/project")).toEqual({
-      command: "agent",
+      command: "cursor-agent",
+      args: ["acp"],
+      cwd: "/tmp/project",
+    });
+  });
+
+  it("maps the old ambiguous agent default to cursor-agent", () => {
+    expect(buildCursorAcpSpawnInput({ binaryPath: "agent" }, "/tmp/project")).toEqual({
+      command: "cursor-agent",
       args: ["acp"],
       cwd: "/tmp/project",
     });

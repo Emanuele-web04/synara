@@ -1,3 +1,8 @@
+// FILE: useThreadHandoff.ts
+// Purpose: Creates provider-to-provider handoff threads from the active web state.
+// Layer: Web hook
+// Exports: useThreadHandoff
+
 import { useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback } from "react";
@@ -11,6 +16,7 @@ import {
   canCreateThreadHandoff,
   resolveAvailableHandoffTargetProviders,
   resolveThreadHandoffModelSelection,
+  resolveThreadHandoffTitle,
 } from "../lib/threadHandoff";
 import {
   isProviderUsable,
@@ -74,7 +80,7 @@ export function useThreadHandoff() {
         threadId: nextThreadId,
         sourceThreadId: thread.id,
         projectId: thread.projectId,
-        title: thread.title,
+        title: resolveThreadHandoffTitle(thread),
         modelSelection: resolveThreadHandoffModelSelection({
           sourceThread: thread,
           targetProvider,

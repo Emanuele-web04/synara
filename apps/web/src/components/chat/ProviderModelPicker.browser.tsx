@@ -24,6 +24,7 @@ const MODEL_OPTIONS_BY_PROVIDER = {
     { slug: "auto-gemini-3", name: "Auto Gemini 3" },
     { slug: "gemini-2.5-pro", name: "Gemini 2.5 Pro" },
   ],
+  grok: [{ slug: "grok-build", name: "Grok 4.3" }],
   kilo: [
     {
       slug: "kilo/kilo-auto/free",
@@ -121,6 +122,7 @@ async function mountPicker(props: {
   lockedProvider: ProviderKind | null;
   providers?: ReadonlyArray<ServerProviderStatus>;
   loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
+  onSelectionCommitted?: () => void;
   modelOptionsByProvider?: Record<
     ProviderKind,
     ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>
@@ -139,6 +141,7 @@ async function mountPicker(props: {
         ? { loadingModelProviders: props.loadingModelProviders }
         : {})}
       {...(props.providers ? { providers: props.providers } : {})}
+      {...(props.onSelectionCommitted ? { onSelectionCommitted: props.onSelectionCommitted } : {})}
       onProviderModelChange={onProviderModelChange}
     />,
     { container: host },
@@ -216,6 +219,27 @@ describe("ProviderModelPicker", () => {
         "claudeAgent",
         "claude-sonnet-4-6",
       );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("notifies after a model selection commits so the composer can refocus", async () => {
+    const onSelectionCommitted = vi.fn();
+    const mounted = await mountPicker({
+      provider: "grok",
+      model: "grok-build",
+      lockedProvider: "grok",
+      onSelectionCommitted,
+    });
+
+    try {
+      await page.getByRole("button").click();
+      await page.getByRole("menuitemradio", { name: "Grok 4.3" }).click();
+
+      await vi.waitFor(() => {
+        expect(onSelectionCommitted).toHaveBeenCalledTimes(1);
+      });
     } finally {
       await mounted.cleanup();
     }

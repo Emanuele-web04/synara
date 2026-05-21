@@ -112,7 +112,7 @@ import { dispatchThreadRename } from "../lib/threadRename";
 import { quotePosixShellArgument } from "../lib/shellQuote";
 import { DEFAULT_THREAD_TERMINAL_ID, type SidebarThreadSummary, type Thread } from "../types";
 import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
-import { ClaudeAI, CursorIcon, Gemini, KiloIcon, OpenAI, OpenCodeIcon, PiIcon } from "./Icons";
+import { ProviderIcon } from "./ProviderIcon";
 import { AppNavigationButtons } from "./AppNavigationButtons";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
@@ -355,29 +355,6 @@ function buildThreadJumpLabelMap(input: {
   }
   return mapping.size > 0 ? mapping : EMPTY_THREAD_JUMP_LABELS;
 }
-function ProviderGlyph({ provider, className }: { provider: ProviderKind; className?: string }) {
-  if (provider === "claudeAgent") {
-    return <ClaudeAI aria-hidden="true" className={cn("text-foreground", className)} />;
-  }
-  if (provider === "gemini") {
-    return <Gemini aria-hidden="true" className={cn("text-foreground", className)} />;
-  }
-  if (provider === "cursor") {
-    return <CursorIcon aria-hidden="true" className={cn("text-foreground", className)} />;
-  }
-  if (provider === "kilo") {
-    return <KiloIcon aria-hidden="true" className={cn("text-muted-foreground/70", className)} />;
-  }
-  if (provider === "opencode") {
-    return (
-      <OpenCodeIcon aria-hidden="true" className={cn("text-muted-foreground/70", className)} />
-    );
-  }
-  if (provider === "pi") {
-    return <PiIcon aria-hidden="true" className={cn("text-foreground", className)} />;
-  }
-  return <OpenAI aria-hidden="true" className={cn("text-muted-foreground/60", className)} />;
-}
 function WorktreeBadgeGlyph({ className }: { className?: string }) {
   return <LuSplit aria-hidden="true" className={cn("rotate-90", className)} />;
 }
@@ -524,15 +501,15 @@ function ProviderAvatarWithTerminal({
   const avatarNode = hasHandoff ? (
     <span className={containerClass}>
       <span className="absolute left-0 top-1/2 inline-flex size-3.5 -translate-y-1/2 items-center justify-center rounded-full bg-background shadow-xs">
-        <ProviderGlyph provider={handoffSourceProvider!} className="size-2.5" />
+        <ProviderIcon provider={handoffSourceProvider!} className="size-2.5" />
       </span>
       <span className="absolute right-0 top-1/2 z-10 inline-flex size-3.5 -translate-y-1/2 items-center justify-center rounded-full bg-background shadow-xs">
-        <ProviderGlyph provider={provider} className="size-2.5" />
+        <ProviderIcon provider={provider} className="size-2.5" />
       </span>
     </span>
   ) : (
     <span className={containerClass}>
-      <ProviderGlyph provider={provider} className="size-3.5 opacity-80" />
+      <ProviderIcon provider={provider} className="size-3.5 opacity-80" />
     </span>
   );
 

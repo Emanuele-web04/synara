@@ -8,11 +8,13 @@ import {
   checkClaudeProviderStatus,
   checkCodexProviderStatus,
   checkCursorProviderStatus,
+  checkGrokProviderStatus,
   checkOpenCodeProviderStatus,
   hasCustomModelProvider,
   makeCheckClaudeProviderStatus,
   makeCheckCodexProviderStatus,
   makeCheckCursorProviderStatus,
+  makeCheckGrokProviderStatus,
   makeCheckKiloProviderStatus,
   makeCheckOpenCodeProviderStatus,
   parseAuthStatusFromOutput,
@@ -720,6 +722,107 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
     );
   });
 
+  describe("checkGrokProviderStatus", () => {
+    it.effect("returns ready when Grok CLI is installed", () => {
+      const previousXaiApiKey = process.env.XAI_API_KEY;
+      const previousApiKey = process.env.GROK_CODE_XAI_API_KEY;
+      delete process.env.XAI_API_KEY;
+      delete process.env.GROK_CODE_XAI_API_KEY;
+      return Effect.gen(function* () {
+        const status = yield* checkGrokProviderStatus;
+        assert.strictEqual(status.provider, "grok");
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authStatus, "unknown");
+        assert.strictEqual(status.version, "0.1.0");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "grok 0.1.0\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (previousXaiApiKey === undefined) {
+              delete process.env.XAI_API_KEY;
+            } else {
+              process.env.XAI_API_KEY = previousXaiApiKey;
+            }
+            if (previousApiKey === undefined) {
+              delete process.env.GROK_CODE_XAI_API_KEY;
+            } else {
+              process.env.GROK_CODE_XAI_API_KEY = previousApiKey;
+            }
+          }),
+        ),
+      );
+    });
+
+    it.effect("marks Grok authenticated when XAI_API_KEY is present", () => {
+      const previousXaiApiKey = process.env.XAI_API_KEY;
+      const previousApiKey = process.env.GROK_CODE_XAI_API_KEY;
+      process.env.XAI_API_KEY = "xai-test-key";
+      delete process.env.GROK_CODE_XAI_API_KEY;
+      return Effect.gen(function* () {
+        const status = yield* checkGrokProviderStatus;
+        assert.strictEqual(status.authStatus, "authenticated");
+        assert.strictEqual(status.authType, "apiKey");
+        assert.strictEqual(status.authLabel, "xAI API Key");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "grok 0.1.0\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (previousXaiApiKey === undefined) {
+              delete process.env.XAI_API_KEY;
+            } else {
+              process.env.XAI_API_KEY = previousXaiApiKey;
+            }
+            if (previousApiKey === undefined) {
+              delete process.env.GROK_CODE_XAI_API_KEY;
+            } else {
+              process.env.GROK_CODE_XAI_API_KEY = previousApiKey;
+            }
+          }),
+        ),
+      );
+    });
+
+    it.effect("uses configured Grok binary for version probe", () =>
+      Effect.gen(function* () {
+        const status = yield* makeCheckGrokProviderStatus("/custom/bin/grok");
+        assert.strictEqual(status.status, "ready");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "/custom/bin/grok");
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "grok 0.1.0\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("returns unavailable when Grok CLI is missing", () =>
+      Effect.gen(function* () {
+        const status = yield* checkGrokProviderStatus;
+        assert.strictEqual(status.provider, "grok");
+        assert.strictEqual(status.status, "error");
+        assert.strictEqual(status.available, false);
+        assert.strictEqual(status.authStatus, "unknown");
+        assert.strictEqual(status.message, "Grok CLI (`grok`) is not installed or not on PATH.");
+      }).pipe(Effect.provide(failingSpawnerLayer("spawn grok ENOENT"))),
+    );
+  });
+
   describe("checkCursorProviderStatus", () => {
     it.effect("returns ready when Cursor Agent is installed", () =>
       Effect.gen(function* () {
@@ -730,7 +833,26 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(status.authStatus, "unknown");
       }).pipe(
         Effect.provide(
-          mockSpawnerLayer((args) => {
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "cursor-agent");
+            const joined = args.join(" ");
+            if (joined === "--version") {
+              return { stdout: "agent 2026.04.27\n", stderr: "", code: 0 };
+            }
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("maps the old ambiguous agent default to cursor-agent", () =>
+      Effect.gen(function* () {
+        const status = yield* makeCheckCursorProviderStatus("agent");
+        assert.strictEqual(status.status, "ready");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "cursor-agent");
             const joined = args.join(" ");
             if (joined === "--version") {
               return { stdout: "agent 2026.04.27\n", stderr: "", code: 0 };
@@ -768,9 +890,9 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(status.authStatus, "unknown");
         assert.strictEqual(
           status.message,
-          "Cursor Agent CLI (`agent`) is not installed or not on PATH.",
+          "Cursor Agent CLI (`cursor-agent`) is not installed or not on PATH.",
         );
-      }).pipe(Effect.provide(failingSpawnerLayer("spawn agent ENOENT"))),
+      }).pipe(Effect.provide(failingSpawnerLayer("spawn cursor-agent ENOENT"))),
     );
 
     it.effect("returns unavailable when Cursor Agent exits with an error", () =>
@@ -786,7 +908,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         );
       }).pipe(
         Effect.provide(
-          mockSpawnerLayer((args) => {
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "cursor-agent");
             const joined = args.join(" ");
             if (joined === "--version") {
               return { stdout: "", stderr: "version failed\n", code: 1 };

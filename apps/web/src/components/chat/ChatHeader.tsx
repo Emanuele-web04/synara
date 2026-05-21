@@ -35,7 +35,7 @@ import { readNativeApi } from "~/nativeApi";
 import { resolveEditorIcon } from "../../editorMetadata";
 import { usePreferredEditor } from "../../editorPreferences";
 import { useIsDisposableThread } from "~/hooks/useIsDisposableThread";
-import { ClaudeAI, CursorIcon, Gemini, KiloIcon, OpenAI, OpenCodeIcon, PiIcon } from "../Icons";
+import { ProviderIcon } from "../ProviderIcon";
 import { gitWorkingTreeDiffQueryOptions } from "~/lib/gitReactQuery";
 import { summarizePatchStats } from "~/lib/diffRendering";
 import { useRepoDiffScopeStore } from "~/repoDiffScopeStore";
@@ -191,28 +191,14 @@ export const ChatHeader = memo(function ChatHeader({
   }, [isSplitPane]);
 
   const renderProviderIcon = (provider: ProviderKind | null, className: string) => {
-    if (provider === "claudeAgent") {
-      return <ClaudeAI className={cn("text-foreground", className)} />;
-    }
-    if (provider === "cursor") {
-      return <CursorIcon className={cn("text-foreground", className)} />;
-    }
-    if (provider === "gemini") {
-      return <Gemini className={cn("text-foreground", className)} />;
-    }
-    if (provider === "kilo") {
-      return <KiloIcon className={cn("text-muted-foreground/70", className)} />;
-    }
-    if (provider === "opencode") {
-      return <OpenCodeIcon className={cn("text-muted-foreground/70", className)} />;
-    }
-    if (provider === "pi") {
-      return <PiIcon className={cn("text-foreground", className)} />;
-    }
-    if (provider === "codex") {
-      return <OpenAI className={cn("text-muted-foreground/75", className)} />;
-    }
-    return <FiGitBranch className={className} />;
+    return (
+      <ProviderIcon
+        provider={provider}
+        tone="header"
+        className={className}
+        fallback={<FiGitBranch className={className} />}
+      />
+    );
   };
 
   return (

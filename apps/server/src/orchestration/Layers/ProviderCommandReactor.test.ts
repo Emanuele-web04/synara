@@ -101,7 +101,7 @@ describe("ProviderCommandReactor", () => {
   async function createHarness(input?: {
     readonly baseDir?: string;
     readonly threadModelSelection?: ModelSelection;
-    readonly sessionModelSwitch?: "unsupported" | "in-session";
+    readonly sessionModelSwitch?: "unsupported" | "in-session" | "restart-session";
   }) {
     const now = new Date().toISOString();
     const baseDir = input?.baseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "t3code-reactor-"));

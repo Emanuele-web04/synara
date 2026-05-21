@@ -6,7 +6,16 @@
 import { type ModelSlug, type ProviderKind, type ServerProviderStatus } from "@t3tools/contracts";
 import { resolveSelectableModel } from "@t3tools/shared/model";
 import * as Schema from "effect/Schema";
-import { Fragment, memo, useCallback, useDeferredValue, useMemo, useState } from "react";
+import {
+  Fragment,
+  memo,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { type ProviderPickerKind, PROVIDER_OPTIONS } from "../../session-logic";
 import { formatProviderModelOptionName } from "../../providerModelOptions";
 import { compareProvidersByOrder } from "../../providerOrdering";
@@ -24,16 +33,7 @@ import {
   MenuSubTrigger,
   MenuTrigger,
 } from "../ui/menu";
-import {
-  ClaudeAI,
-  CursorIcon,
-  Gemini,
-  Icon,
-  KiloIcon,
-  OpenAI,
-  OpenCodeIcon,
-  PiIcon,
-} from "../Icons";
+import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "../ProviderIcon";
 import { cn } from "~/lib/utils";
 import { PickerPanelShell } from "./PickerPanelShell";
 import { PickerTriggerButton } from "./PickerTriggerButton";
@@ -55,16 +55,6 @@ function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): o
 } {
   return option.available;
 }
-
-const PROVIDER_ICON_BY_PROVIDER: Record<ProviderPickerKind, Icon> = {
-  codex: OpenAI,
-  claudeAgent: ClaudeAI,
-  cursor: CursorIcon,
-  gemini: Gemini,
-  kilo: KiloIcon,
-  opencode: OpenCodeIcon,
-  pi: PiIcon,
-};
 
 function resolveLiveProviderAvailability(provider: ServerProviderStatus | undefined): {
   disabled: boolean;
@@ -200,11 +190,13 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   disabled?: boolean;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  onSelectionCommitted?: () => void;
   shortcutLabel?: string | null;
   onProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
 }) {
-  const { onOpenChange, open } = props;
+  const { onOpenChange, onSelectionCommitted, open } = props;
   const [uncontrolledMenuOpen, setUncontrolledMenuOpen] = useState(false);
+  const selectionCommitTimerRef = useRef<number | null>(null);
   const [modelSearchQuery, setModelSearchQuery] = useState("");
   const [kiloFavoriteModelSlugs, setKiloFavoriteModelSlugs] = useLocalStorage(
     FAVORITE_MODEL_STORAGE_KEYS.kilo,
@@ -300,7 +292,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     model: props.model,
     options: selectedProviderOptions,
   });
-  const ProviderIcon = PROVIDER_ICON_BY_PROVIDER[activeProvider];
+  const ProviderIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[activeProvider];
   const setMenuOpen = useCallback(
     (nextOpen: boolean) => {
       if (open === undefined) {
@@ -313,6 +305,24 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     },
     [onOpenChange, open],
   );
+  const scheduleSelectionCommitted = useCallback(() => {
+    if (selectionCommitTimerRef.current !== null) {
+      window.clearTimeout(selectionCommitTimerRef.current);
+    }
+    // Base UI restores focus to the trigger while closing; refocus callers after that tick.
+    selectionCommitTimerRef.current = window.setTimeout(() => {
+      selectionCommitTimerRef.current = null;
+      onSelectionCommitted?.();
+    }, 0);
+  }, [onSelectionCommitted]);
+  useEffect(
+    () => () => {
+      if (selectionCommitTimerRef.current !== null) {
+        window.clearTimeout(selectionCommitTimerRef.current);
+      }
+    },
+    [],
+  );
   const handleModelChange = (provider: ProviderKind, value: string) => {
     if (props.disabled) return;
     if (!value) return;
@@ -324,6 +334,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     if (!resolvedModel) return;
     props.onProviderModelChange(provider, resolvedModel);
     setMenuOpen(false);
+    scheduleSelectionCommitted();
   };
   const toggleFavoriteModel = useCallback(
     (provider: FavoriteModelProvider, slug: string) => {
@@ -400,7 +411,10 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                     <MenuRadioItem
                       key={`${provider}:${modelOption.slug}`}
                       value={modelOption.slug}
-                      onClick={() => setMenuOpen(false)}
+                      onClick={() => {
+                        setMenuOpen(false);
+                        scheduleSelectionCommitted();
+                      }}
                     >
                       {favoriteModelSlugSet !== undefined ? (
                         <span className="flex w-full min-w-0 items-center gap-2">
@@ -547,7 +561,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         ) : (
           <>
             {visibleAvailableProviderOptions.map((option) => {
-              const OptionIcon = PROVIDER_ICON_BY_PROVIDER[option.value];
+              const OptionIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[option.value];
               const liveProvider = props.providers?.find(
                 (entry) => entry.provider === option.value,
               );
@@ -589,7 +603,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
             })}
             {visibleUnavailableProviderOptions.length > 0 && <MenuSeparator />}
             {visibleUnavailableProviderOptions.map((option) => {
-              const OptionIcon = PROVIDER_ICON_BY_PROVIDER[option.value];
+              const OptionIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[option.value];
               return (
                 <MenuItem key={option.value} disabled>
                   <OptionIcon

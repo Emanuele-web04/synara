@@ -1,0 +1,75 @@
+/**
+ * ProviderIcon - shared provider glyphs for chat, sidebar, and picker surfaces.
+ *
+ * Centralizes provider-to-icon mapping so new providers do not need repeated
+ * branching across every UI surface.
+ */
+import { type ProviderKind } from "@t3tools/contracts";
+import type { ReactNode, SVGProps } from "react";
+
+import { cn } from "~/lib/utils";
+import {
+  ClaudeAI,
+  CursorIcon,
+  Gemini,
+  GrokIcon,
+  type Icon,
+  KiloIcon,
+  OpenAI,
+  OpenCodeIcon,
+  PiIcon,
+} from "./Icons";
+
+export type ProviderIconTone = "default" | "header";
+
+export const PROVIDER_ICON_COMPONENT_BY_PROVIDER: Record<ProviderKind, Icon> = {
+  codex: OpenAI,
+  claudeAgent: ClaudeAI,
+  cursor: CursorIcon,
+  gemini: Gemini,
+  grok: GrokIcon,
+  kilo: KiloIcon,
+  opencode: OpenCodeIcon,
+  pi: PiIcon,
+};
+
+export function providerIconToneClassName(
+  provider: ProviderKind | null | undefined,
+  tone: ProviderIconTone = "default",
+): string {
+  if (provider === "kilo" || provider === "opencode") {
+    return "text-muted-foreground/70";
+  }
+  if (provider === "codex") {
+    return tone === "header" ? "text-muted-foreground/75" : "text-muted-foreground/60";
+  }
+  return "text-foreground";
+}
+
+export type ProviderIconProps = Omit<SVGProps<SVGSVGElement>, "ref"> & {
+  readonly provider: ProviderKind | null | undefined;
+  readonly fallback?: ReactNode;
+  readonly tone?: ProviderIconTone;
+};
+
+export function ProviderIcon({
+  provider,
+  fallback = null,
+  tone = "default",
+  className,
+  "aria-hidden": ariaHidden = true,
+  ...svgProps
+}: ProviderIconProps) {
+  if (provider === null || provider === undefined) {
+    return fallback;
+  }
+
+  const Icon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[provider];
+  return (
+    <Icon
+      aria-hidden={ariaHidden}
+      {...svgProps}
+      className={cn(providerIconToneClassName(provider, tone), className)}
+    />
+  );
+}

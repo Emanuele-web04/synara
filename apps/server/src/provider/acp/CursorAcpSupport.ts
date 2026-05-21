@@ -1,3 +1,11 @@
+/**
+ * CursorAcpSupport - helpers for Cursor ACP sessions and model selection.
+ *
+ * Owns spawn input construction, model picker flattening, and ACP config
+ * mutations used by the Cursor provider adapter.
+ *
+ * @module CursorAcpSupport
+ */
 import { type CursorModelOptions, type ProviderModelDescriptor } from "@t3tools/contracts";
 import { formatModelDisplayName } from "@t3tools/shared/model";
 import { Effect, Layer, Scope, ServiceMap } from "effect";
@@ -11,6 +19,7 @@ import {
   type AcpSessionRuntimeShape,
   type AcpSpawnInput,
 } from "./AcpSessionRuntime.ts";
+import { resolveCursorAgentBinaryPath } from "./CursorAcpCommand.ts";
 
 export interface CursorAcpRuntimeCursorSettings {
   readonly apiEndpoint?: string;
@@ -56,7 +65,7 @@ export function buildCursorAcpSpawnInput(
   cwd: string,
 ): AcpSpawnInput {
   return {
-    command: cursorSettings?.binaryPath || "agent",
+    command: resolveCursorAgentBinaryPath(cursorSettings?.binaryPath),
     args: [
       ...(cursorSettings?.apiEndpoint ? (["-e", cursorSettings.apiEndpoint] as const) : []),
       "acp",
