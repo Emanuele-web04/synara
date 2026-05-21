@@ -1,0 +1,104 @@
+// FILE: -rootEventInvalidation.test.ts
+// Purpose: Covers root event cache invalidation decisions for streamed orchestration updates.
+// Layer: Route utility unit tests
+// Depends on: rootEventInvalidation predicates and Vitest assertions.
+
+import { ProjectId, ThreadId, type OrchestrationEvent } from "@t3tools/contracts";
+import { describe, expect, it } from "vitest";
+
+import {
+  getGitInvalidationThreadIdForEvent,
+  resolveGitInvalidationCwdForThreadId,
+  shouldInvalidateGitQueriesForEvent,
+  shouldInvalidateProviderQueriesForEvent,
+} from "./-rootEventInvalidation";
+import type { AppState } from "../store";
+import type { Thread } from "../types";
+
+function event(type: OrchestrationEvent["type"], payload: object = {}): OrchestrationEvent {
+  return {
+    type,
+    payload,
+  } as OrchestrationEvent;
+}
+
+describe("root event invalidation", () => {
+  it("invalidates git queries when a turn diff is finalized", () => {
+    const turnDiffEvent = event("thread.turn-diff-completed");
+
+    expect(shouldInvalidateGitQueriesForEvent(turnDiffEvent)).toBe(true);
+    expect(shouldInvalidateProviderQueriesForEvent(turnDiffEvent)).toBe(true);
+  });
+
+  it("invalidates git queries when checkpoint changes can rewrite files", () => {
+    expect(shouldInvalidateGitQueriesForEvent(event("thread.reverted"))).toBe(true);
+    expect(shouldInvalidateGitQueriesForEvent(event("thread.conversation-rolled-back"))).toBe(true);
+  });
+
+  it("invalidates git queries when thread workspace metadata changes", () => {
+    expect(
+      shouldInvalidateGitQueriesForEvent(event("thread.meta-updated", { branch: "feature/diff" })),
+    ).toBe(true);
+  });
+
+  it("leaves unrelated events alone", () => {
+    expect(shouldInvalidateGitQueriesForEvent(event("thread.message-sent"))).toBe(false);
+    expect(shouldInvalidateProviderQueriesForEvent(event("thread.message-sent"))).toBe(false);
+  });
+
+  it("extracts affected thread ids for scoped git invalidation", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+
+    expect(
+      getGitInvalidationThreadIdForEvent(event("thread.turn-diff-completed", { threadId })),
+    ).toBe(threadId);
+    expect(getGitInvalidationThreadIdForEvent(event("thread.message-sent", { threadId }))).toBe(
+      null,
+    );
+  });
+
+  it("resolves local and worktree cwd from the current thread projection", () => {
+    const projectId = ProjectId.makeUnsafe("project-1");
+    const localThreadId = ThreadId.makeUnsafe("thread-local");
+    const worktreeThreadId = ThreadId.makeUnsafe("thread-worktree");
+    const state = {
+      projects: [{ id: projectId, cwd: "/repo/main" }],
+      threads: [
+        makeThread({ id: localThreadId, projectId, envMode: "local", worktreePath: null }),
+        makeThread({
+          id: worktreeThreadId,
+          projectId,
+          envMode: "worktree",
+          worktreePath: "/repo/worktree",
+        }),
+      ],
+    } as AppState;
+
+    expect(resolveGitInvalidationCwdForThreadId(state, localThreadId)).toBe("/repo/main");
+    expect(resolveGitInvalidationCwdForThreadId(state, worktreeThreadId)).toBe("/repo/worktree");
+  });
+});
+
+function makeThread(overrides: Partial<Thread>): Thread {
+  return {
+    id: ThreadId.makeUnsafe("thread"),
+    codexThreadId: null,
+    projectId: ProjectId.makeUnsafe("project"),
+    title: "Thread",
+    modelSelection: { provider: "codex", model: "gpt-5.4-mini" },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    session: null,
+    messages: [],
+    proposedPlans: [],
+    error: null,
+    createdAt: "2026-05-21T00:00:00.000Z",
+    updatedAt: "2026-05-21T00:00:00.000Z",
+    latestTurn: null,
+    branch: null,
+    worktreePath: null,
+    turnDiffSummaries: [],
+    activities: [],
+    ...overrides,
+  };
+}

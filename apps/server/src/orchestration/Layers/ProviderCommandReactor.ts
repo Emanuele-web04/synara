@@ -1,7 +1,6 @@
 import {
   type ChatAttachment,
   CommandId,
-  DEFAULT_GIT_TEXT_GENERATION_MODEL,
   EventId,
   type ModelSelection,
   MessageId,
@@ -247,7 +246,11 @@ const make = Effect.gen(function* () {
       input.modelSelection ?? threadModelSelections.get(input.threadId) ?? thread?.modelSelection;
     const providerOptions = input.providerOptions ?? threadProviderOptions.get(input.threadId);
 
-    if (modelSelection?.provider === "kilo" || modelSelection?.provider === "opencode") {
+    if (
+      modelSelection?.provider === "cursor" ||
+      modelSelection?.provider === "kilo" ||
+      modelSelection?.provider === "opencode"
+    ) {
       return {
         modelSelection,
         ...(providerOptions ? { providerOptions } : {}),
@@ -264,9 +267,7 @@ const make = Effect.gen(function* () {
       } as const;
     }
 
-    return {
-      model: DEFAULT_GIT_TEXT_GENERATION_MODEL,
-    } as const;
+    return null;
   });
 
   const appendProviderFailureActivity = (input: {
@@ -959,6 +960,43 @@ const make = Effect.gen(function* () {
     }
   });
 
+  const renameTemporaryWorktreeBranch = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly cwd: string;
+    readonly oldBranch: string;
+    readonly targetBranch: string;
+  }) {
+    if (input.targetBranch === input.oldBranch) {
+      return;
+    }
+
+    const renamed = yield* git.renameBranch({
+      cwd: input.cwd,
+      oldBranch: input.oldBranch,
+      newBranch: input.targetBranch,
+    });
+    yield* git.publishBranch({ cwd: input.cwd, branch: renamed.branch }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("provider command reactor failed to publish renamed branch", {
+          threadId: input.threadId,
+          cwd: input.cwd,
+          branch: renamed.branch,
+          cause: Cause.pretty(cause),
+        }),
+      ),
+    );
+    yield* orchestrationEngine.dispatch({
+      type: "thread.meta.update",
+      commandId: serverCommandId("worktree-branch-rename"),
+      threadId: input.threadId,
+      branch: renamed.branch,
+      worktreePath: input.cwd,
+      associatedWorktreePath: input.cwd,
+      associatedWorktreeBranch: renamed.branch,
+      associatedWorktreeRef: renamed.branch,
+    });
+  });
+
   const maybeGenerateAndRenameWorktreeBranchForFirstTurn = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly branch: string | null;
@@ -996,6 +1034,25 @@ const make = Effect.gen(function* () {
       ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
       ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
     });
+    if (!textGenerationInput) {
+      const targetBranch = buildGeneratedWorktreeBranchName(
+        input.messageText.trim() || attachmentTitleSeed(attachments[0]) || "",
+      );
+      yield* renameTemporaryWorktreeBranch({
+        threadId: input.threadId,
+        cwd,
+        oldBranch,
+        targetBranch,
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning(
+            "provider command reactor failed to apply fallback worktree branch name",
+            { threadId: input.threadId, cwd, oldBranch, targetBranch, cause: Cause.pretty(cause) },
+          ),
+        ),
+      );
+      return;
+    }
     yield* textGeneration
       .generateBranchName({
         cwd,
@@ -1014,34 +1071,12 @@ const make = Effect.gen(function* () {
           if (!generated) return Effect.void;
 
           const targetBranch = buildGeneratedWorktreeBranchName(generated.branch);
-          if (targetBranch === oldBranch) return Effect.void;
-
-          return Effect.flatMap(
-            git.renameBranch({ cwd, oldBranch, newBranch: targetBranch }),
-            (renamed) =>
-              git.publishBranch({ cwd, branch: renamed.branch }).pipe(
-                Effect.catchCause((cause) =>
-                  Effect.logWarning("provider command reactor failed to publish renamed branch", {
-                    threadId: input.threadId,
-                    cwd,
-                    branch: renamed.branch,
-                    cause: Cause.pretty(cause),
-                  }),
-                ),
-                Effect.flatMap(() =>
-                  orchestrationEngine.dispatch({
-                    type: "thread.meta.update",
-                    commandId: serverCommandId("worktree-branch-rename"),
-                    threadId: input.threadId,
-                    branch: renamed.branch,
-                    worktreePath: cwd,
-                    associatedWorktreePath: cwd,
-                    associatedWorktreeBranch: renamed.branch,
-                    associatedWorktreeRef: renamed.branch,
-                  }),
-                ),
-              ),
-          );
+          return renameTemporaryWorktreeBranch({
+            threadId: input.threadId,
+            cwd,
+            oldBranch,
+            targetBranch,
+          });
         }),
         Effect.catchCause((cause) =>
           Effect.logWarning(
@@ -1090,6 +1125,17 @@ const make = Effect.gen(function* () {
       ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
       ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
     });
+    if (!textGenerationInput) {
+      if (fallbackTitle !== currentTitle) {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.meta.update",
+          commandId: serverCommandId("thread-title-fallback-rename"),
+          threadId: input.threadId,
+          title: fallbackTitle,
+        });
+      }
+      return;
+    }
     const textGenerationSelection =
       "modelSelection" in textGenerationInput ? textGenerationInput.modelSelection : null;
     const textGenerationModel =

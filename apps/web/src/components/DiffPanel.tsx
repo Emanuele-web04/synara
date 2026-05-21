@@ -25,6 +25,7 @@ import {
   useState,
 } from "react";
 import {
+  GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS,
   gitBranchesQueryOptions,
   gitQueryKeys,
   gitStatusQueryOptions,
@@ -64,6 +65,7 @@ import { ToggleGroup, Toggle } from "./ui/toggle-group";
 import { FileEntryIcon } from "./chat/FileEntryIcon";
 import { DiffStatLabel, hasNonZeroStat } from "./chat/DiffStatLabel";
 import { type SplitViewPanePanelState } from "../splitViewStore";
+import { hasLiveTurnTailWork, isLatestTurnSettled } from "../session-logic";
 
 type DiffRenderMode = "stacked" | "split";
 type DiffSurfaceMode = "review" | "summary" | "total";
@@ -172,6 +174,7 @@ interface DiffPanelProps {
     patch: Partial<Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">>,
   ) => void;
   onClosePanel?: () => void;
+  liveRefreshEnabled?: boolean;
 }
 
 export { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
@@ -182,6 +185,7 @@ export default function DiffPanel({
   panelState,
   onUpdatePanelState,
   onClosePanel,
+  liveRefreshEnabled = true,
 }: DiffPanelProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -247,6 +251,19 @@ export default function DiffPanel({
   const isGitRepo = gitBranchesQuery.data?.isRepo ?? true;
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
     useTurnDiffSummaries(activeThread);
+  const repoDiffLiveRefreshIntervalMs = useMemo(() => {
+    if (!liveRefreshEnabled) return false;
+    if (!activeThread) return false;
+    const hasLiveTail = hasLiveTurnTailWork({
+      latestTurn: activeThread.latestTurn,
+      messages: activeThread.messages,
+      activities: activeThread.activities,
+      session: activeThread.session,
+    });
+    return !isLatestTurnSettled(activeThread.latestTurn, activeThread.session) || hasLiveTail
+      ? GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS
+      : false;
+  }, [activeThread, liveRefreshEnabled]);
   const orderedTurnDiffSummaries = useMemo(
     () =>
       [...turnDiffSummaries].toSorted((left, right) => {
@@ -353,6 +370,7 @@ export default function DiffPanel({
       cwd: activeCwd ?? null,
       scope: repoDiffScope,
       enabled: diffOpen && !diffEnvironmentPending,
+      refetchInterval: repoDiffLiveRefreshIntervalMs,
     }),
   );
   const repoPatch = repoDiffQuery.data?.patch;

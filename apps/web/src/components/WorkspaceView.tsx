@@ -12,6 +12,8 @@ import { useAppSettings } from "~/appSettings";
 import { Button } from "~/components/ui/button";
 import { SidebarInset } from "~/components/ui/sidebar";
 import { SidebarHeaderNavigationControls } from "~/components/SidebarHeaderNavigationControls";
+import { useDesktopTopBarTrafficLightGutterClassName } from "~/hooks/useDesktopTopBarGutter";
+import { cn } from "~/lib/utils";
 import {
   confirmTerminalTabClose,
   resolveTerminalCloseTitle,
@@ -39,6 +41,7 @@ function randomTerminalId(): string {
 
 export default function WorkspaceView({ workspaceId }: { workspaceId: string }) {
   const { settings } = useAppSettings();
+  const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const workspace = useWorkspaceStore((state) =>
     state.workspacePages.find((entry) => entry.id === workspaceId),
   );
@@ -394,7 +397,12 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
-        <header className="border-b border-border px-3 sm:px-5">
+        <header
+          className={cn(
+            "border-b border-border px-3 sm:px-5",
+            desktopTopBarTrafficLightGutterClassName,
+          )}
+        >
           <div className="flex h-[52px] items-center gap-2 sm:gap-3">
             <SidebarHeaderNavigationControls />
             <div className="flex min-w-0 flex-1 items-center gap-2">

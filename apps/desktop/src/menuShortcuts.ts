@@ -1,9 +1,24 @@
 // FILE: menuShortcuts.ts
 // Purpose: Keeps native desktop menu accelerators consistent across operating systems.
 // Layer: Desktop main-process helper
-// Exports: keyboard-shortcuts menu accelerator resolver
+// Exports: menu accelerator resolvers
 
 import type { MenuItemConstructorOptions } from "electron";
+
+export function resolveDesktopMenuAccelerator(
+  platform: NodeJS.Platform,
+  accelerator: MenuItemConstructorOptions["accelerator"],
+): MenuItemConstructorOptions["accelerator"] | undefined {
+  // Several Linux desktops surface Electron menu accelerators as noisy native
+  // keybinding notifications; the web app handles these shortcuts itself.
+  return platform === "linux" ? undefined : accelerator;
+}
+
+export function shouldUseNativeZoomMenuRoles(platform: NodeJS.Platform): boolean {
+  // Zoom roles provide their own accelerators when Electron builds the menu.
+  // Linux uses custom click handlers so no hidden native keybindings are registered.
+  return platform !== "linux";
+}
 
 export function resolveKeyboardShortcutsMenuAccelerator(
   platform: NodeJS.Platform,

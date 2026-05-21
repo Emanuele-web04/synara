@@ -13,6 +13,7 @@ const GIT_BRANCHES_STALE_TIME_MS = 15_000;
 const GIT_BRANCHES_REFETCH_INTERVAL_MS = 60_000;
 const GIT_DIFF_SUMMARY_GC_TIME_MS = 30 * 60_000;
 const GIT_WORKING_TREE_DIFF_STALE_TIME_MS = 5_000;
+export const GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS = 4_000;
 
 export const gitQueryKeys = {
   all: ["git"] as const,
@@ -57,6 +58,19 @@ export function invalidateGitQueries(queryClient: QueryClient) {
     queryClient.invalidateQueries({ queryKey: ["git", "working-tree-diff"] as const }),
     queryClient.invalidateQueries({ queryKey: ["git", "pull-request"] as const }),
   ]);
+}
+
+// Scope live file-change invalidations so unrelated project/worktree git caches stay warm.
+export function invalidateGitQueriesForCwds(queryClient: QueryClient, cwds: Iterable<string>) {
+  const uniqueCwds = [...new Set([...cwds].filter((cwd) => cwd.length > 0))];
+  return Promise.all(
+    uniqueCwds.flatMap((cwd) => [
+      queryClient.invalidateQueries({ queryKey: gitQueryKeys.status(cwd) }),
+      queryClient.invalidateQueries({ queryKey: gitQueryKeys.branches(cwd) }),
+      queryClient.invalidateQueries({ queryKey: ["git", "working-tree-diff", cwd] as const }),
+      queryClient.invalidateQueries({ queryKey: ["git", "pull-request", cwd] as const }),
+    ]),
+  );
 }
 
 export function gitStatusQueryOptions(cwd: string | null) {
@@ -115,6 +129,7 @@ export function gitWorkingTreeDiffQueryOptions(input: {
   cwd: string | null;
   scope?: GitReadWorkingTreeDiffInput["scope"];
   enabled?: boolean;
+  refetchInterval?: number | false;
 }) {
   const scope = input.scope ?? "workingTree";
   return queryOptions({
@@ -128,6 +143,7 @@ export function gitWorkingTreeDiffQueryOptions(input: {
     },
     enabled: (input.enabled ?? true) && input.cwd !== null,
     staleTime: GIT_WORKING_TREE_DIFF_STALE_TIME_MS,
+    refetchInterval: input.refetchInterval,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
   });

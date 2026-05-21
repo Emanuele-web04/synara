@@ -434,6 +434,7 @@ function SplitPaneEmbeddedPanel(props: {
   threadId: ThreadIdType | null;
   onClosePanel: () => void;
   panelState: Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">;
+  isFocused: boolean;
   onUpdatePanelState: (
     patch: Partial<Pick<SplitViewPanePanelState, "panel" | "diffTurnId" | "diffFilePath">>,
   ) => void;
@@ -544,6 +545,7 @@ function SplitPaneEmbeddedPanel(props: {
           threadId={props.threadId}
           onClosePanel={props.onClosePanel}
           panelState={props.panelState}
+          liveRefreshEnabled={props.isFocused}
           onUpdatePanelState={props.onUpdatePanelState}
         />
       )}
@@ -1020,6 +1022,7 @@ function SplitPaneSurface(props: {
         threadId={props.threadId}
         onClosePanel={props.onClosePanel}
         panelState={props.panelState}
+        isFocused={props.isFocused}
         onUpdatePanelState={props.onUpdatePanelState}
       />
       {props.isFocused ? (

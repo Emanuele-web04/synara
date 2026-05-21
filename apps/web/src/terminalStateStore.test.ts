@@ -2,7 +2,11 @@ import { ThreadId } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { collectTerminalIdsFromLayout } from "./terminalPaneLayout";
-import { selectThreadTerminalState, useTerminalStateStore } from "./terminalStateStore";
+import {
+  sanitizePersistedTerminalStateByThreadId,
+  selectThreadTerminalState,
+  useTerminalStateStore,
+} from "./terminalStateStore";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-1");
 
@@ -313,6 +317,26 @@ describe("terminalStateStore actions", () => {
       selectThreadTerminalState(useTerminalStateStore.getState().terminalStateByThreadId, THREAD_ID)
         .runningTerminalIds,
     ).toEqual([]);
+  });
+
+  it("strips volatile runtime flags from persisted terminal state", () => {
+    const store = useTerminalStateStore.getState();
+    store.splitTerminal(THREAD_ID, "terminal-2");
+    store.setTerminalTitleOverride(THREAD_ID, "terminal-2", "New keybinds set");
+    store.setTerminalActivity(THREAD_ID, "terminal-2", {
+      hasRunningSubprocess: false,
+      agentState: "attention",
+    });
+
+    const sanitized = sanitizePersistedTerminalStateByThreadId(
+      useTerminalStateStore.getState().terminalStateByThreadId,
+    );
+
+    expect(sanitized[THREAD_ID]?.terminalTitleOverridesById).toEqual({
+      "terminal-2": "New keybinds set",
+    });
+    expect(sanitized[THREAD_ID]?.terminalAttentionStatesById).toEqual({});
+    expect(sanitized[THREAD_ID]?.runningTerminalIds).toEqual([]);
   });
 
   it("resets to default and clears persisted entry when closing the last terminal", () => {

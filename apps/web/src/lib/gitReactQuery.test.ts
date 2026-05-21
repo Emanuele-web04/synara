@@ -1,6 +1,10 @@
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 import {
+  GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS,
+  gitQueryKeys,
+  gitWorkingTreeDiffQueryOptions,
+  invalidateGitQueriesForCwds,
   gitMutationKeys,
   gitPreparePullRequestThreadMutationOptions,
   gitPullMutationOptions,
@@ -44,5 +48,51 @@ describe("git mutation options", () => {
       queryClient,
     });
     expect(options.mutationKey).toEqual(gitMutationKeys.preparePullRequestThread("/repo/a"));
+  });
+});
+
+describe("git query invalidation", () => {
+  it("invalidates only queries for the affected cwd", async () => {
+    const queryClient = new QueryClient();
+    const cwdA = "/repo/a";
+    const cwdB = "/repo/b";
+    const cwdAKeys = [
+      gitQueryKeys.status(cwdA),
+      gitQueryKeys.branches(cwdA),
+      gitQueryKeys.workingTreeDiff(cwdA, "workingTree"),
+      gitQueryKeys.workingTreeDiff(cwdA, "staged"),
+      ["git", "pull-request", cwdA, "https://example.test/pr/1"] as const,
+    ];
+    const cwdBKeys = [
+      gitQueryKeys.status(cwdB),
+      gitQueryKeys.branches(cwdB),
+      gitQueryKeys.workingTreeDiff(cwdB, "workingTree"),
+      ["git", "pull-request", cwdB, "https://example.test/pr/2"] as const,
+    ];
+
+    for (const key of [...cwdAKeys, ...cwdBKeys]) {
+      queryClient.setQueryData(key, {});
+    }
+
+    await invalidateGitQueriesForCwds(queryClient, [cwdA]);
+
+    for (const key of cwdAKeys) {
+      expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
+    }
+    for (const key of cwdBKeys) {
+      expect(queryClient.getQueryState(key)?.isInvalidated).toBe(false);
+    }
+  });
+});
+
+describe("git working tree diff query options", () => {
+  it("accepts a live refetch interval for active diff badges", () => {
+    const options = gitWorkingTreeDiffQueryOptions({
+      cwd: "/repo/a",
+      refetchInterval: GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS,
+    });
+
+    expect(GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS).toBe(4_000);
+    expect(options.refetchInterval).toBe(GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS);
   });
 });

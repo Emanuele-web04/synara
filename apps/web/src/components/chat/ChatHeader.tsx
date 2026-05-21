@@ -73,6 +73,7 @@ interface ChatHeaderProps {
   handoffBadgeTargetProvider: ProviderKind | null;
   browserOpen: boolean;
   gitCwd: string | null;
+  diffBadgeRefreshIntervalMs?: number | false;
   showGitActions?: boolean;
   diffOpen: boolean;
   diffDisabledReason?: string | null;
@@ -140,6 +141,7 @@ export const ChatHeader = memo(function ChatHeader({
   handoffBadgeTargetProvider,
   browserOpen,
   gitCwd,
+  diffBadgeRefreshIntervalMs = false,
   showGitActions = true,
   diffOpen,
   diffDisabledReason = null,
@@ -168,7 +170,12 @@ export const ChatHeader = memo(function ChatHeader({
   const repoDiffScope = useRepoDiffScopeStore((store) => store.scope);
   // Match the Diff panel source selector so the sidebar badge shows the selected scope.
   const { data: selectedRepoDiff = null } = useQuery(
-    gitWorkingTreeDiffQueryOptions({ cwd: gitCwd, scope: repoDiffScope, enabled: isGitRepo }),
+    gitWorkingTreeDiffQueryOptions({
+      cwd: gitCwd,
+      scope: repoDiffScope,
+      enabled: isGitRepo,
+      refetchInterval: diffBadgeRefreshIntervalMs,
+    }),
   );
   const diffTotals = summarizePatchStats(selectedRepoDiff?.patch);
   const showDiffTotals = (diffTotals?.additions ?? 0) > 0 || (diffTotals?.deletions ?? 0) > 0;

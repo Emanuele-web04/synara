@@ -62,7 +62,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Debouncer, useDebouncedValue } from "@tanstack/react-pacer";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { type LegendListRef } from "@legendapp/list/react";
-import { gitCreateWorktreeMutationOptions, gitBranchesQueryOptions } from "~/lib/gitReactQuery";
+import {
+  GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS,
+  gitCreateWorktreeMutationOptions,
+  gitBranchesQueryOptions,
+} from "~/lib/gitReactQuery";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import {
   providerAgentsQueryOptions,
@@ -286,6 +290,7 @@ import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { ChatHeader } from "./chat/ChatHeader";
 import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationControls";
 import { SidebarHeaderTrigger } from "./ui/sidebar";
+import { useDesktopTopBarTrafficLightGutterClassName } from "~/hooks/useDesktopTopBarGutter";
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
 import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimeline.logic";
 import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
@@ -827,6 +832,7 @@ export default function ChatView({
   const setStoreThreadError = useStore((store) => store.setError);
   const setStoreThreadWorkspace = useStore((store) => store.setThreadWorkspace);
   const { settings } = useAppSettings();
+  const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const setStickyComposerModelSelection = useComposerDraftStore(
     (store) => store.setStickyModelSelection,
   );
@@ -1240,6 +1246,10 @@ export default function ChatView({
   });
   const diffEnvironmentPending = diffEnvironmentState.pending;
   const diffDisabledReason = diffEnvironmentState.disabledReason;
+  const repoDiffBadgeRefreshIntervalMs =
+    isFocusedPane && !latestTurnSettled && !diffEnvironmentPending && !resolvedDiffOpen
+      ? GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS
+      : false;
   const activeThreadAssociatedWorktree = useMemo(
     () =>
       deriveAssociatedWorktreeMetadata({
@@ -5270,6 +5280,16 @@ export default function ChatView({
       return false;
     }
     if (!activeProject) return false;
+    const sendProviderStatus =
+      providerStatuses.find((status) => status.provider === selectedModelSelectionForSend.provider) ??
+      null;
+    if (!isProviderUsable(sendProviderStatus)) {
+      toastManager.add({
+        type: "error",
+        title: providerUnavailableReason(sendProviderStatus),
+      });
+      return false;
+    }
 
     const browserPromptAttachment: BrowserPromptAttachmentResolution =
       await maybeResolveBrowserPromptAttachment({
@@ -7325,7 +7345,7 @@ export default function ChatView({
           <div
             className={cn(
               "drag-region flex h-[52px] shrink-0 items-center border-b border-[color:var(--color-border-light)] px-5",
-              settings.sidebarSide === "right" && "pl-[90px]",
+              desktopTopBarTrafficLightGutterClassName,
             )}
           >
             <SidebarHeaderNavigationControls />
@@ -7957,7 +7977,7 @@ export default function ChatView({
         className={cn(
           "border-b border-[color:var(--color-border-light)] px-3 sm:px-5",
           isElectron ? "drag-region flex h-[52px] items-center" : "py-2 sm:py-3",
-          isElectron && settings.sidebarSide === "right" && "pl-[90px] sm:pl-[90px]",
+          desktopTopBarTrafficLightGutterClassName,
         )}
       >
         <ChatHeader
@@ -7990,6 +8010,7 @@ export default function ChatView({
           handoffBadgeTargetProvider={handoffBadgeTargetProvider}
           browserOpen={resolvedBrowserOpen}
           gitCwd={threadWorkspaceCwd}
+          diffBadgeRefreshIntervalMs={repoDiffBadgeRefreshIntervalMs}
           showGitActions={showGitActions}
           diffOpen={resolvedDiffOpen}
           diffDisabledReason={diffDisabledReason}

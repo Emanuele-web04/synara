@@ -466,9 +466,12 @@ export function projectEvent(
           if (!thread) {
             return nextBase;
           }
+          const canAdoptFirstTurnProvider =
+            thread.latestTurn === null && thread.session === null && thread.messages.length <= 1;
           const modelSelectionPatch =
             payload.modelSelection !== undefined &&
-            payload.modelSelection.provider === thread.modelSelection.provider
+            (payload.modelSelection.provider === thread.modelSelection.provider ||
+              canAdoptFirstTurnProvider)
               ? { modelSelection: payload.modelSelection }
               : {};
           return {

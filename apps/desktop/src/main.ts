@@ -48,7 +48,11 @@ import {
   shouldCheckForUpdatesOnForeground,
 } from "./updateState";
 import { registerDesktopVoiceTranscriptionHandler } from "./voiceTranscription";
-import { resolveKeyboardShortcutsMenuAccelerator } from "./menuShortcuts";
+import {
+  resolveDesktopMenuAccelerator,
+  resolveKeyboardShortcutsMenuAccelerator,
+  shouldUseNativeZoomMenuRoles,
+} from "./menuShortcuts";
 import {
   createInitialDesktopUpdateState,
   reduceDesktopUpdateStateOnCheckFailure,
@@ -129,6 +133,9 @@ const AUTO_UPDATE_CHECK_TIMEOUT_MS = 45 * 1000;
 const DESKTOP_UPDATE_CHANNEL = "latest";
 const DESKTOP_UPDATE_ALLOW_PRERELEASE = false;
 const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
+const DESKTOP_MENU_ZOOM_FACTOR_STEP = 1.1;
+const DESKTOP_MENU_MIN_ZOOM_FACTOR = 0.25;
+const DESKTOP_MENU_MAX_ZOOM_FACTOR = 5;
 const DPCODE_BROWSER_LABEL = "DPCODE browser";
 const browserPerfLoggingEnabled =
   process.env.DPCODE_BROWSER_PERF === "1" || process.env.T3CODE_BROWSER_PERF === "1";
@@ -746,6 +753,24 @@ function dispatchMenuAction(action: string): void {
   send();
 }
 
+function resolveMenuTargetWindow(): BrowserWindow | null {
+  return BrowserWindow.getFocusedWindow() ?? mainWindow ?? BrowserWindow.getAllWindows()[0] ?? null;
+}
+
+function resetWindowZoomFromMenu(): void {
+  resolveMenuTargetWindow()?.webContents.setZoomFactor(1);
+}
+
+function adjustWindowZoomFromMenu(multiplier: number): void {
+  const webContents = resolveMenuTargetWindow()?.webContents;
+  if (!webContents) return;
+  const nextZoomFactor = Math.min(
+    DESKTOP_MENU_MAX_ZOOM_FACTOR,
+    Math.max(DESKTOP_MENU_MIN_ZOOM_FACTOR, webContents.getZoomFactor() * multiplier),
+  );
+  webContents.setZoomFactor(nextZoomFactor);
+}
+
 function handleCheckForUpdatesMenuClick(): void {
   const hasUpdateFeedConfig =
     readAppUpdateYml() !== null || Boolean(process.env.T3CODE_DESKTOP_MOCK_UPDATES);
@@ -799,6 +824,30 @@ async function checkForUpdatesFromMenu(): Promise<void> {
 function configureApplicationMenu(): void {
   const template: MenuItemConstructorOptions[] = [];
   const keyboardShortcutsAccelerator = resolveKeyboardShortcutsMenuAccelerator(process.platform);
+  const acceleratorProps = (
+    accelerator: MenuItemConstructorOptions["accelerator"],
+  ): Pick<MenuItemConstructorOptions, "accelerator"> => {
+    const resolved = resolveDesktopMenuAccelerator(process.platform, accelerator);
+    return resolved ? { accelerator: resolved } : {};
+  };
+  const zoomMenuItems: MenuItemConstructorOptions[] = shouldUseNativeZoomMenuRoles(process.platform)
+    ? [
+        { role: "resetZoom" },
+        { role: "zoomIn", ...acceleratorProps("CmdOrCtrl+=") },
+        { role: "zoomIn", ...acceleratorProps("CmdOrCtrl+Plus"), visible: false },
+        { role: "zoomOut" },
+      ]
+    : [
+        { label: "Reset Zoom", click: () => resetWindowZoomFromMenu() },
+        {
+          label: "Zoom In",
+          click: () => adjustWindowZoomFromMenu(DESKTOP_MENU_ZOOM_FACTOR_STEP),
+        },
+        {
+          label: "Zoom Out",
+          click: () => adjustWindowZoomFromMenu(1 / DESKTOP_MENU_ZOOM_FACTOR_STEP),
+        },
+      ];
 
   if (process.platform === "darwin") {
     template.push({
@@ -836,7 +885,7 @@ function configureApplicationMenu(): void {
           : [
               {
                 label: "Settings...",
-                accelerator: "CmdOrCtrl+,",
+                ...acceleratorProps("CmdOrCtrl+,"),
                 click: () => dispatchMenuAction("open-settings"),
               },
               { type: "separator" as const },
@@ -850,18 +899,18 @@ function configureApplicationMenu(): void {
       submenu: [
         {
           label: "New Terminal Tab",
-          accelerator: "CmdOrCtrl+T",
+          ...acceleratorProps("CmdOrCtrl+T"),
           click: () => dispatchMenuAction("new-terminal-tab"),
         },
         { type: "separator" },
         {
           label: "Toggle Sidebar",
-          accelerator: "CmdOrCtrl+B",
+          ...acceleratorProps("CmdOrCtrl+B"),
           click: () => dispatchMenuAction("toggle-sidebar"),
         },
         {
           label: "Toggle Browser",
-          accelerator: "CmdOrCtrl+Shift+B",
+          ...acceleratorProps("CmdOrCtrl+Shift+B"),
           click: () => dispatchMenuAction("toggle-browser"),
         },
         { type: "separator" },
@@ -869,10 +918,7 @@ function configureApplicationMenu(): void {
         { role: "forceReload" },
         { role: "toggleDevTools" },
         { type: "separator" },
-        { role: "resetZoom" },
-        { role: "zoomIn", accelerator: "CmdOrCtrl+=" },
-        { role: "zoomIn", accelerator: "CmdOrCtrl+Plus", visible: false },
-        { role: "zoomOut" },
+        ...zoomMenuItems,
         { type: "separator" },
         { role: "togglefullscreen" },
       ],

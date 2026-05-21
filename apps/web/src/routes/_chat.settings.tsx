@@ -43,6 +43,7 @@ import {
 } from "../appSettings";
 import { APP_VERSION } from "../branding";
 import { SidebarHeaderNavigationControls } from "../components/SidebarHeaderNavigationControls";
+import { useDesktopTopBarTrafficLightGutterClassName } from "../hooks/useDesktopTopBarGutter";
 import {
   ClaudeAI,
   CursorIcon,
@@ -580,6 +581,7 @@ function SettingsRouteView() {
 
   const { isDefaultActiveTheme, resetAllThemes, resolvedTheme, theme, setTheme } = useTheme();
   const { settings, defaults, updateSettings, resetSettings } = useAppSettings();
+  const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const queryClient = useQueryClient();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const serverWorktreesQuery = useQuery(serverWorktreesQueryOptions());
@@ -3137,7 +3139,7 @@ function SettingsRouteView() {
           <div
             className={cn(
               "drag-region flex h-[52px] shrink-0 items-center border-b border-border/70 px-5",
-              settings.sidebarSide === "right" && "pl-[90px]",
+              desktopTopBarTrafficLightGutterClassName,
             )}
           >
             <SidebarHeaderNavigationControls />

@@ -117,6 +117,10 @@ describe("ProviderCommandReactor", () => {
     };
     const startSession = vi.fn((_: unknown, input: unknown) => {
       const sessionIndex = nextSessionIndex++;
+      const sessionModelSelection =
+        typeof input === "object" && input !== null && "modelSelection" in input
+          ? ((input as { modelSelection?: ModelSelection }).modelSelection ?? modelSelection)
+          : modelSelection;
       const resumeCursor =
         typeof input === "object" && input !== null && "resumeCursor" in input
           ? input.resumeCursor
@@ -129,7 +133,7 @@ describe("ProviderCommandReactor", () => {
           ? ThreadId.makeUnsafe(input.threadId)
           : ThreadId.makeUnsafe(`thread-${sessionIndex}`);
       const session: ProviderSession = {
-        provider: modelSelection.provider,
+        provider: sessionModelSelection.provider,
         status: "ready" as const,
         runtimeMode:
           typeof input === "object" &&
@@ -138,7 +142,9 @@ describe("ProviderCommandReactor", () => {
           (input.runtimeMode === "approval-required" || input.runtimeMode === "full-access")
             ? input.runtimeMode
             : "full-access",
-        ...(modelSelection.model !== undefined ? { model: modelSelection.model } : {}),
+        ...(sessionModelSelection.model !== undefined
+          ? { model: sessionModelSelection.model }
+          : {}),
         threadId,
         resumeCursor: resumeCursor ?? { opaque: `resume-${sessionIndex}` },
         createdAt: now,
@@ -1234,6 +1240,55 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  it("uses a local fallback title for providers without git text generation", async () => {
+    const harness = await createHarness({
+      threadModelSelection: {
+        provider: "gemini",
+        model: "auto-gemini-3",
+      },
+    });
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-thread-title-gemini"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        title: "New thread",
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-gemini-title"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-gemini-title-1"),
+          role: "user",
+          text: "Summarize provider startup failures without Codex",
+          attachments: [],
+        },
+        modelSelection: {
+          provider: "gemini",
+          model: "auto-gemini-3",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      return (
+        readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"))?.title ===
+        "Summarize provider startup failures"
+      );
+    });
+    expect(harness.generateThreadTitle).not.toHaveBeenCalled();
+  });
+
   it("renames temporary worktree branches and keeps associated worktree metadata in sync", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
@@ -1298,6 +1353,61 @@ describe("ProviderCommandReactor", () => {
       associatedWorktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
       associatedWorktreeBranch: "dpcode/app-startup-crash",
       associatedWorktreeRef: "dpcode/app-startup-crash",
+    });
+  });
+
+  it("falls back to prompt-based worktree branch names when the provider cannot generate one", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-thread-worktree-bootstrap-gemini"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        envMode: "worktree",
+        branch: "dpcode/cb661f0d",
+        worktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
+        associatedWorktreePath: "/tmp/provider-project/.worktrees/cb661f0d",
+        associatedWorktreeBranch: "dpcode/cb661f0d",
+        associatedWorktreeRef: "dpcode/cb661f0d",
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-worktree-fallback-rename"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-worktree-fallback-rename"),
+          role: "user",
+          text: "Fix provider startup timeouts",
+          attachments: [],
+        },
+        modelSelection: {
+          provider: "gemini",
+          model: "auto-gemini-3",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.renameBranch.mock.calls.length === 1);
+    expect(harness.generateBranchName).not.toHaveBeenCalled();
+    expect(harness.renameBranch.mock.calls[0]?.[0]).toMatchObject({
+      oldBranch: "dpcode/cb661f0d",
+      newBranch: "dpcode/fix-provider-startup-timeouts",
+    });
+
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      const thread = readModel.threads.find(
+        (entry) => entry.id === ThreadId.makeUnsafe("thread-1"),
+      );
+      return thread?.branch === "dpcode/fix-provider-startup-timeouts";
     });
   });
 
@@ -1886,7 +1996,7 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  it("rejects a first turn when requested provider conflicts with the thread model", async () => {
+  it("adopts the requested provider on a first turn before binding a session", async () => {
     const harness = await createHarness({
       threadModelSelection: { provider: "codex", model: "gpt-5-codex" },
     });
@@ -1913,39 +2023,31 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    await waitFor(async () => {
-      const readModel = await Effect.runPromise(harness.engine.getReadModel());
-      const thread = readModel.threads.find(
-        (entry) => entry.id === ThreadId.makeUnsafe("thread-1"),
-      );
-      return (
-        thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed") ??
-        false
-      );
-    });
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
 
-    expect(harness.startSession).not.toHaveBeenCalled();
-    expect(harness.sendTurn).not.toHaveBeenCalled();
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      modelSelection: {
+        provider: "claudeAgent",
+        model: "claude-opus-4-6",
+      },
+    });
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      modelSelection: {
+        provider: "claudeAgent",
+        model: "claude-opus-4-6",
+      },
+    });
 
     const readModel = await Effect.runPromise(harness.engine.getReadModel());
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
-    if (thread?.session !== null) {
-      expect(thread?.session).toMatchObject({
-        activeTurnId: null,
-        lastError: expect.stringContaining("cannot switch to 'claudeAgent'"),
-        providerName: "codex",
-        runtimeMode: "approval-required",
-        status: "error",
-      });
-    }
+    expect(thread?.modelSelection).toEqual({
+      provider: "claudeAgent",
+      model: "claude-opus-4-6",
+    });
+    expect(thread?.session?.providerName).toBe("claudeAgent");
     expect(
       thread?.activities.find((activity) => activity.kind === "provider.turn.start.failed"),
-    ).toMatchObject({
-      summary: "Provider turn start failed",
-      payload: {
-        detail: expect.stringContaining("cannot switch to 'claudeAgent'"),
-      },
-    });
+    ).toBeUndefined();
   });
 
   it("preserves the active session model when in-session model switching is unsupported", async () => {

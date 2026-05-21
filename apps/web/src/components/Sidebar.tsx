@@ -5308,7 +5308,7 @@ export default function Sidebar() {
     </div>
   );
 
-  const sidebarBrand = <div className="flex min-w-0 px-4 pt-3 pb-2">{brandWordmark}</div>;
+  const sidebarBrand = <div className="flex min-w-0 px-4 pt-0 pb-2">{brandWordmark}</div>;
 
   return (
     <>

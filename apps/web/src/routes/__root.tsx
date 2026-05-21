@@ -69,11 +69,17 @@ import { useChatCodeFont } from "../hooks/useChatCodeFont";
 import { useTheme } from "../hooks/useTheme";
 import { useUIFont } from "../hooks/useUIFont";
 import { useNativeFontSmoothing } from "../hooks/useNativeFontSmoothing";
-import { invalidateGitQueries } from "../lib/gitReactQuery";
+import { invalidateGitQueries, invalidateGitQueriesForCwds } from "../lib/gitReactQuery";
 import { hasLiveThreadsWithMissingProjects } from "../lib/desktopProjectRecovery";
 import { parseDiffRouteSearch } from "../diffRouteSearch";
 import { resolveSplitViewThreadIds, selectSplitView, useSplitViewStore } from "../splitViewStore";
 import { providerDiscoveryQueryKeys } from "../lib/providerDiscoveryReactQuery";
+import {
+  getGitInvalidationThreadIdForEvent,
+  resolveGitInvalidationCwdForThreadId,
+  shouldInvalidateGitQueriesForEvent,
+  shouldInvalidateProviderQueriesForEvent,
+} from "./-rootEventInvalidation";
 
 const SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS = 1_500;
 const THREAD_DETAIL_CATCHUP_INTERVAL_MS = 1_500;
@@ -634,7 +640,8 @@ function EventRouter() {
     if (!api) return;
     let disposed = false;
     let needsProviderInvalidation = false;
-    let needsGitInvalidation = false;
+    let needsBroadGitInvalidation = false;
+    let pendingGitInvalidationThreadIds = new Set<ThreadId>();
     let pendingDomainEvents: OrchestrationEvent[] = [];
     const immediatelyFlushedAssistantMessageIds = new Set<string>();
     let shellSnapshotSequence = -1;
@@ -810,31 +817,43 @@ function EventRouter() {
         // reflects files created, deleted, or restored during this turn.
         void queryClient.invalidateQueries({ queryKey: projectQueryKeys.all });
       }
-      if (needsGitInvalidation) {
-        needsGitInvalidation = false;
+      if (needsBroadGitInvalidation) {
+        needsBroadGitInvalidation = false;
+        pendingGitInvalidationThreadIds = new Set();
         void invalidateGitQueries(queryClient);
+      } else if (pendingGitInvalidationThreadIds.size > 0) {
+        const currentState = useStore.getState();
+        const scopedCwds = new Set<string>();
+        let hasUnresolvedThread = false;
+        for (const threadId of pendingGitInvalidationThreadIds) {
+          const cwd = resolveGitInvalidationCwdForThreadId(currentState, threadId);
+          if (cwd) {
+            scopedCwds.add(cwd);
+          } else {
+            hasUnresolvedThread = true;
+          }
+        }
+        pendingGitInvalidationThreadIds = new Set();
+        if (hasUnresolvedThread || scopedCwds.size === 0) {
+          void invalidateGitQueries(queryClient);
+        } else {
+          void invalidateGitQueriesForCwds(queryClient, scopedCwds);
+        }
       }
     };
 
     const queueDomainEvent = (event: OrchestrationEvent) => {
       pendingDomainEvents.push(event);
-      if (
-        event.type === "thread.turn-diff-completed" ||
-        event.type === "thread.reverted" ||
-        event.type === "thread.conversation-rolled-back"
-      ) {
+      if (shouldInvalidateProviderQueriesForEvent(event)) {
         needsProviderInvalidation = true;
       }
-      if (
-        event.type === "thread.meta-updated" &&
-        (event.payload.branch !== undefined ||
-          event.payload.envMode !== undefined ||
-          event.payload.worktreePath !== undefined ||
-          event.payload.associatedWorktreePath !== undefined ||
-          event.payload.associatedWorktreeBranch !== undefined ||
-          event.payload.associatedWorktreeRef !== undefined)
-      ) {
-        needsGitInvalidation = true;
+      if (shouldInvalidateGitQueriesForEvent(event)) {
+        const threadId = getGitInvalidationThreadIdForEvent(event);
+        if (threadId) {
+          pendingGitInvalidationThreadIds.add(threadId);
+        } else {
+          needsBroadGitInvalidation = true;
+        }
       }
       if (shouldFlushDomainEventImmediately(event, immediatelyFlushedAssistantMessageIds)) {
         domainEventFlushThrottler.cancel();
@@ -1099,6 +1118,8 @@ function EventRouter() {
       window.clearTimeout(shellBootstrapFallbackTimer);
       window.clearInterval(threadDetailCatchupInterval);
       needsProviderInvalidation = false;
+      needsBroadGitInvalidation = false;
+      pendingGitInvalidationThreadIds = new Set();
       domainEventFlushThrottler.cancel();
       reconcileThreadSubscriptionsRef.current = null;
       void api.orchestration.unsubscribeShell().catch(() => undefined);
