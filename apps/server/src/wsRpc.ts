@@ -398,19 +398,12 @@ export const makeWsRpcLayer = () =>
         [ORCHESTRATION_WS_METHODS.subscribeThread]: (input) =>
           Stream.merge(
             Stream.fromEffect(
-              Effect.all([
-                projectionReadModelQuery.getThreadDetailById(input.threadId),
-                orchestrationEngine
-                  .getReadModel()
-                  .pipe(Effect.map((model) => model.snapshotSequence)),
-              ]).pipe(
-                Effect.map(([thread, snapshotSequence]) =>
-                  Option.isSome(thread)
-                    ? Option.some({
-                        kind: "snapshot" as const,
-                        snapshot: { snapshotSequence, thread: thread.value },
-                      })
-                    : Option.none(),
+              projectionReadModelQuery.getThreadDetailSnapshotById(input.threadId).pipe(
+                Effect.map((snapshot) =>
+                  Option.map(snapshot, (value) => ({
+                    kind: "snapshot" as const,
+                    snapshot: value,
+                  })),
                 ),
                 Effect.mapError((cause) => toWsRpcError(cause, "Failed to load thread snapshot")),
               ),
