@@ -15,6 +15,7 @@ import type {
   OrchestrationThreadDetailSnapshot,
   OrchestrationThread,
   OrchestrationThreadShell,
+  CheckpointRef,
   ProjectId,
   ThreadId,
   ThreadEnvironmentMode,
@@ -36,6 +37,16 @@ export interface ProjectionThreadCheckpointContext {
   readonly envMode: ThreadEnvironmentMode;
   readonly worktreePath: string | null;
   readonly checkpoints: ReadonlyArray<OrchestrationCheckpointSummary>;
+}
+
+export interface ProjectionFullThreadDiffContext {
+  readonly threadId: ThreadId;
+  readonly projectId: ProjectId;
+  readonly workspaceRoot: string;
+  readonly envMode: ThreadEnvironmentMode;
+  readonly worktreePath: string | null;
+  readonly latestCheckpointTurnCount: number;
+  readonly toCheckpointRef: CheckpointRef | null;
 }
 
 /**
@@ -93,6 +104,14 @@ export interface ProjectionSnapshotQueryShape {
   readonly getThreadCheckpointContext: (
     threadId: ThreadId,
   ) => Effect.Effect<Option.Option<ProjectionThreadCheckpointContext>, ProjectionRepositoryError>;
+
+  /**
+   * Read the narrow context needed to diff a whole thread through one checkpoint.
+   */
+  readonly getFullThreadDiffContext: (
+    threadId: ThreadId,
+    toTurnCount: number,
+  ) => Effect.Effect<Option.Option<ProjectionFullThreadDiffContext>, ProjectionRepositoryError>;
 
   /**
    * Read a single active thread shell row by id.

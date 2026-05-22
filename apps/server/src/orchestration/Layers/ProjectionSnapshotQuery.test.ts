@@ -1476,6 +1476,23 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           ],
         });
       }
+
+      const fullThreadDiffContext = yield* snapshotQuery.getFullThreadDiffContext(
+        ThreadId.makeUnsafe("thread-context"),
+        2,
+      );
+      assert.equal(fullThreadDiffContext._tag, "Some");
+      if (fullThreadDiffContext._tag === "Some") {
+        assert.deepEqual(fullThreadDiffContext.value, {
+          threadId: ThreadId.makeUnsafe("thread-context"),
+          projectId: asProjectId("project-context"),
+          workspaceRoot: "/tmp/context-workspace",
+          envMode: "local",
+          worktreePath: "/tmp/context-worktree",
+          latestCheckpointTurnCount: 2,
+          toCheckpointRef: asCheckpointRef("checkpoint-b"),
+        });
+      }
     }),
   );
 });

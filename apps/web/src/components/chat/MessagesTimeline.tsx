@@ -313,7 +313,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       deriveMessagesTimelineRows({
         timelineEntries,
         completionDividerBeforeEntryId,
+        completionSummary,
         isWorking,
+        activeTurnInProgress,
+        activeTurnId,
         activeTurnStartedAt,
         turnDiffSummaryByAssistantMessageId,
         revertTurnCountByUserMessageId,
@@ -321,7 +324,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     [
       timelineEntries,
       completionDividerBeforeEntryId,
+      completionSummary,
       isWorking,
+      activeTurnInProgress,
+      activeTurnId,
       activeTurnStartedAt,
       turnDiffSummaryByAssistantMessageId,
       revertTurnCountByUserMessageId,
@@ -665,7 +671,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const assistantCopyState = resolveAssistantMessageCopyState({
             text: row.message.text ?? null,
             showCopyButton: row.showAssistantCopyButton,
-            streaming: row.message.streaming,
+            streaming: row.assistantCopyStreaming,
           });
           const turnSummary = row.assistantTurnDiffSummary;
           const fileDiffStatByPath = new Map(
@@ -736,7 +742,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     className="text-muted-foreground/80"
                     style={{ fontSize: chatTypographyStyle.fontSize }}
                   >
-                    {completionSummary ? `Response • ${completionSummary}` : "Response"}
+                    {row.completionSummary ? `Response • ${row.completionSummary}` : "Response"}
                   </span>
                   <span className="h-px flex-1 bg-border" />
                 </div>
@@ -1059,16 +1065,23 @@ function useStableRows(rows: MessagesTimelineRow[]): MessagesTimelineRow[] {
 // Keep the live clock scoped to tiny leaf components so active Claude turns do
 // not force the full transcript tree to re-render every second.
 function WorkingTimer({ createdAt }: { createdAt: string }) {
-  const [nowMs, setNowMs] = useState(() => Date.now());
+  const textRef = useRef<HTMLSpanElement>(null);
+  const initialText = formatWorkingTimerNow(createdAt);
+
   useEffect(() => {
-    const id = window.setInterval(() => {
-      setNowMs(Date.now());
-    }, 1000);
+    const updateText = () => {
+      if (textRef.current) {
+        textRef.current.textContent = formatWorkingTimerNow(createdAt);
+      }
+    };
+    updateText();
+    const id = window.setInterval(updateText, 1000);
     return () => {
       window.clearInterval(id);
     };
   }, [createdAt]);
-  return <>{formatWorkingTimer(createdAt, new Date(nowMs).toISOString()) ?? "0s"}</>;
+
+  return <span ref={textRef}>{initialText}</span>;
 }
 
 function LiveMessageMeta({
@@ -1080,25 +1093,27 @@ function LiveMessageMeta({
   durationStart: string;
   timestampFormat: TimestampFormat;
 }) {
-  const [nowMs, setNowMs] = useState(() => Date.now());
+  const textRef = useRef<HTMLSpanElement>(null);
+  const initialText = formatLiveMessageMetaNow(createdAt, durationStart, timestampFormat);
+
   useEffect(() => {
-    const id = window.setInterval(() => {
-      setNowMs(Date.now());
-    }, 1000);
+    const updateText = () => {
+      if (textRef.current) {
+        textRef.current.textContent = formatLiveMessageMetaNow(
+          createdAt,
+          durationStart,
+          timestampFormat,
+        );
+      }
+    };
+    updateText();
+    const id = window.setInterval(updateText, 1000);
     return () => {
       window.clearInterval(id);
     };
-  }, [durationStart]);
+  }, [createdAt, durationStart, timestampFormat]);
 
-  return (
-    <>
-      {formatMessageMeta(
-        createdAt,
-        formatElapsed(durationStart, new Date(nowMs).toISOString()),
-        timestampFormat,
-      )}
-    </>
-  );
+  return <span ref={textRef}>{initialText}</span>;
 }
 
 function formatWorkingTimer(startIso: string, endIso: string): string | null {
@@ -1122,6 +1137,22 @@ function formatWorkingTimer(startIso: string, endIso: string): string | null {
   }
 
   return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+}
+
+function formatWorkingTimerNow(startIso: string): string {
+  return formatWorkingTimer(startIso, new Date().toISOString()) ?? "0s";
+}
+
+function formatLiveMessageMetaNow(
+  createdAt: string,
+  durationStart: string,
+  timestampFormat: TimestampFormat,
+): string {
+  return formatMessageMeta(
+    createdAt,
+    formatElapsed(durationStart, new Date().toISOString()),
+    timestampFormat,
+  );
 }
 
 function formatMessageMeta(
