@@ -4,13 +4,14 @@ import {
   CommandId,
   MessageId,
   type OrchestrationEvent,
+  type OrchestrationProjectShell,
   type OrchestrationProposedPlanId,
   CheckpointRef,
   isToolLifecycleItemType,
   ThreadId,
   TurnId,
   type OrchestrationThreadActivity,
-  type OrchestrationReadModel,
+  type OrchestrationThread,
   type ProviderRuntimeEvent,
   type RuntimeMode,
 } from "@t3tools/contracts";
@@ -34,6 +35,7 @@ import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/Projectio
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { isGitRepository } from "../../git/isRepo.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
+import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import {
   ProviderRuntimeIngestionService,
   type ProviderRuntimeIngestionShape,
@@ -1096,6 +1098,7 @@ function runtimeEventToActivities(
 
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
+  const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
 
@@ -1121,15 +1124,30 @@ const make = Effect.gen(function* () {
     lookup: () => Effect.succeed({ text: "", createdAt: "" }),
   });
 
+  const getThreadDetail = Effect.fnUntraced(function* (
+    threadId: ThreadId,
+  ): Effect.fn.Return<OrchestrationThread | undefined> {
+    return Option.getOrUndefined(yield* projectionSnapshotQuery.getThreadDetailById(threadId));
+  });
+
+  const getProjectShell = Effect.fnUntraced(function* (
+    thread: Pick<OrchestrationThread, "projectId">,
+  ): Effect.fn.Return<OrchestrationProjectShell | undefined> {
+    return Option.getOrUndefined(yield* projectionSnapshotQuery.getProjectShellById(thread.projectId));
+  });
+
   const isGitRepoForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
-    const readModel = yield* orchestrationEngine.getReadModel();
-    const thread = readModel.threads.find((entry) => entry.id === threadId);
+    const thread = yield* getThreadDetail(threadId);
     if (!thread) {
+      return false;
+    }
+    const project = yield* getProjectShell(thread);
+    if (!project) {
       return false;
     }
     const workspaceCwd = resolveThreadWorkspaceCwd({
       thread,
-      projects: readModel.projects,
+      projects: [project],
     });
     if (!workspaceCwd) {
       return false;
@@ -1243,7 +1261,7 @@ const make = Effect.gen(function* () {
 
   const resolveAssistantCompletionMessageId = (input: {
     event: ProviderRuntimeEvent;
-    thread: OrchestrationReadModel["threads"][number];
+    thread: OrchestrationThread;
     turnId?: TurnId;
   }) =>
     Effect.gen(function* () {
@@ -1267,15 +1285,15 @@ const make = Effect.gen(function* () {
         if (knownAssistantMessageIds.size > 1) {
           const preferredKnownMessage = input.thread.messages
             .filter(
-              (message: OrchestrationReadModel["threads"][number]["messages"][number]) =>
+              (message: OrchestrationThread["messages"][number]) =>
                 message.role === "assistant" &&
                 message.turnId === input.turnId &&
                 knownAssistantMessageIds.has(message.id),
             )
             .toSorted(
               (
-                left: OrchestrationReadModel["threads"][number]["messages"][number],
-                right: OrchestrationReadModel["threads"][number]["messages"][number],
+                left: OrchestrationThread["messages"][number],
+                right: OrchestrationThread["messages"][number],
               ) => {
                 if (left.streaming !== right.streaming) {
                   return left.streaming ? -1 : 1;
@@ -1425,7 +1443,7 @@ const make = Effect.gen(function* () {
 
   const appendGeneratedImageReference = (input: {
     event: ProviderRuntimeEvent;
-    thread: OrchestrationReadModel["threads"][number];
+    thread: OrchestrationThread;
     imagePath: string;
     turnId?: TurnId;
     createdAt: string;
@@ -1664,8 +1682,7 @@ const make = Effect.gen(function* () {
     implementationThreadId: ThreadId,
     implementedAt: string,
   ) {
-    const readModel = yield* orchestrationEngine.getReadModel();
-    const sourceThread = readModel.threads.find((entry) => entry.id === sourceThreadId);
+    const sourceThread = yield* getThreadDetail(sourceThreadId);
     const sourcePlan = sourceThread?.proposedPlans.find((entry) => entry.id === sourcePlanId);
     if (!sourceThread || !sourcePlan || sourcePlan.implementedAt !== null) {
       return;
@@ -1689,9 +1706,8 @@ const make = Effect.gen(function* () {
 
   const processRuntimeEvent = (event: ProviderRuntimeEvent) =>
     Effect.gen(function* () {
-      const readModel = yield* orchestrationEngine.getReadModel();
       const now = event.createdAt;
-      const parentThread = readModel.threads.find((entry) => entry.id === event.threadId);
+      const parentThread = yield* getThreadDetail(event.threadId);
       if (!parentThread) return;
 
       const ensureSubagentThread = (
@@ -1705,10 +1721,7 @@ const make = Effect.gen(function* () {
           const childThreadId = subagentThreadId(parentThread.id, providerThreadId);
           // A single provider event can describe the child both as a collab receiver and
           // as the event's provider thread, so re-read after any earlier dispatch in this handler.
-          const latestReadModel = yield* orchestrationEngine.getReadModel();
-          const existingThread = latestReadModel.threads.find(
-            (entry) => entry.id === childThreadId,
-          );
+          const existingThread = yield* projectionSnapshotQuery.getThreadShellById(childThreadId);
           const resolvedModelSelection =
             identity?.model && identity.modelIsRequestedHint !== true
               ? {
@@ -1717,7 +1730,7 @@ const make = Effect.gen(function* () {
                 }
               : undefined;
 
-          if (!existingThread) {
+          if (Option.isNone(existingThread)) {
             yield* orchestrationEngine.dispatch({
               type: "thread.create",
               commandId: providerCommandId(event, "subagent-thread-create"),
@@ -1775,28 +1788,31 @@ const make = Effect.gen(function* () {
 
           return {
             threadId: childThreadId,
-            thread: existingThread ?? {
-              ...parentThread,
-              id: childThreadId,
-              title: subagentThreadTitle({
-                nickname: identity?.nickname,
-                role: identity?.role,
-                providerThreadId,
+            thread: Option.match(existingThread, {
+              onSome: (thread) => thread,
+              onNone: () => ({
+                ...parentThread,
+                id: childThreadId,
+                title: subagentThreadTitle({
+                  nickname: identity?.nickname,
+                  role: identity?.role,
+                  providerThreadId,
+                }),
+                parentThreadId: parentThread.id,
+                subagentAgentId: identity?.agentId ?? null,
+                subagentNickname: identity?.nickname ?? null,
+                subagentRole: identity?.role ?? null,
+                modelSelection: resolvedModelSelection ?? parentThread.modelSelection,
+                latestTurn: null,
+                messages: [],
+                proposedPlans: [],
+                activities: [],
+                checkpoints: [],
+                session: null,
+                createdAt: now,
+                updatedAt: now,
               }),
-              parentThreadId: parentThread.id,
-              subagentAgentId: identity?.agentId ?? null,
-              subagentNickname: identity?.nickname ?? null,
-              subagentRole: identity?.role ?? null,
-              modelSelection: resolvedModelSelection ?? parentThread.modelSelection,
-              latestTurn: null,
-              messages: [],
-              proposedPlans: [],
-              activities: [],
-              checkpoints: [],
-              session: null,
-              createdAt: now,
-              updatedAt: now,
-            },
+            }),
           };
         });
 
@@ -2253,8 +2269,9 @@ const make = Effect.gen(function* () {
         return;
       }
 
-      const readModel = yield* orchestrationEngine.getReadModel();
-      const thread = readModel.threads.find((entry) => entry.id === event.payload.threadId);
+      const thread = Option.getOrUndefined(
+        yield* projectionSnapshotQuery.getThreadShellById(event.payload.threadId),
+      );
       const activeTurnId = thread?.session?.activeTurnId ?? undefined;
       if (!activeTurnId) {
         return;

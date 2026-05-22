@@ -13,6 +13,8 @@ import {
   type ProviderStartOptions,
   type ProviderSkillReference,
   type OrchestrationSession,
+  type OrchestrationProjectShell,
+  type OrchestrationThread,
   ThreadId,
   type ProviderSession,
   type RuntimeMode,
@@ -49,6 +51,7 @@ import {
   hasNativeAssistantMessagesBefore,
 } from "../handoff.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
+import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import {
   ProviderCommandReactor,
   type ProviderCommandReactorShape,
@@ -209,6 +212,7 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
 
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
+  const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
   const checkpointStore = yield* CheckpointStore;
   const git = yield* GitCore;
@@ -228,6 +232,25 @@ const make = Effect.gen(function* () {
 
   const threadProviderOptions = new Map<string, ProviderStartOptions>();
   const threadModelSelections = new Map<string, ModelSelection>();
+
+  const resolveThreadWorkspaceProject = Effect.fnUntraced(function* (
+    thread: Pick<OrchestrationThread, "projectId">,
+  ): Effect.fn.Return<OrchestrationProjectShell | undefined> {
+    return Option.getOrUndefined(yield* projectionSnapshotQuery.getProjectShellById(thread.projectId));
+  });
+
+  const resolveProjectedThreadWorkspaceCwd = Effect.fnUntraced(function* (
+    thread: Pick<OrchestrationThread, "projectId" | "envMode" | "worktreePath">,
+  ): Effect.fn.Return<string | undefined> {
+    const project = yield* resolveThreadWorkspaceProject(thread);
+    if (!project) {
+      return undefined;
+    }
+    return resolveThreadWorkspaceCwd({
+      thread,
+      projects: [project],
+    });
+  });
   const queuedTurnStartsByThread = new Map<
     string,
     Array<Extract<ProviderIntentEvent, { type: "thread.turn-queued" }>["payload"]>
@@ -342,8 +365,7 @@ const make = Effect.gen(function* () {
   });
 
   const resolveThread = Effect.fnUntraced(function* (threadId: ThreadId) {
-    const readModel = yield* orchestrationEngine.getReadModel();
-    return readModel.threads.find((entry) => entry.id === threadId);
+    return Option.getOrUndefined(yield* projectionSnapshotQuery.getThreadDetailById(threadId));
   });
 
   // Recovers the parent thread when older/local-only subagent rows are missing parentThreadId metadata.
@@ -355,11 +377,9 @@ const make = Effect.gen(function* () {
       return null;
     }
 
-    const readModel = yield* orchestrationEngine.getReadModel();
-    const matchingParents = readModel.threads.filter((entry) =>
-      rawThreadId.startsWith(`subagent:${entry.id}:`),
+    return Option.getOrNull(
+      yield* projectionSnapshotQuery.findSyntheticSubagentParentThread(threadId),
     );
-    return matchingParents.toSorted((left, right) => right.id.length - left.id.length)[0] ?? null;
   });
 
   const resolveProviderSessionThread = Effect.fnUntraced(function* (threadId: ThreadId) {
@@ -527,8 +547,7 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const readModel = yield* orchestrationEngine.getReadModel();
-    const thread = readModel.threads.find((entry) => entry.id === input.threadId);
+    const thread = yield* resolveThread(input.threadId);
     if (!thread) {
       return;
     }
@@ -546,10 +565,7 @@ const make = Effect.gen(function* () {
       Number.POSITIVE_INFINITY,
     );
     const targetTurnCount = Math.max(0, firstRemovedTurnCount - 1);
-    const cwd = resolveThreadWorkspaceCwd({
-      thread,
-      projects: readModel.projects,
-    });
+    const cwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
     if (!cwd) {
       return;
     }
@@ -594,10 +610,9 @@ const make = Effect.gen(function* () {
       readonly runtimeMode?: RuntimeMode;
     },
   ) {
-    const readModel = yield* orchestrationEngine.getReadModel();
-    const thread = readModel.threads.find((entry) => entry.id === threadId);
+    const thread = yield* resolveThread(threadId);
     if (!thread) {
-      return yield* Effect.die(new Error(`Thread '${threadId}' was not found in read model.`));
+      return yield* Effect.die(new Error(`Thread '${threadId}' was not found in projection state.`));
     }
 
     const desiredRuntimeMode = options?.runtimeMode ?? thread.runtimeMode;
@@ -620,10 +635,7 @@ const make = Effect.gen(function* () {
     }
     const preferredProvider: ProviderKind = currentProvider ?? threadProvider;
     const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
-    const effectiveCwd = resolveThreadWorkspaceCwd({
-      thread,
-      projects: readModel.projects,
-    });
+    const effectiveCwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
     const workspaceState = resolveThreadWorkspaceState({
       envMode: thread.envMode,
       worktreePath: thread.worktreePath,
@@ -884,16 +896,12 @@ const make = Effect.gen(function* () {
         return;
       }
 
-      const readModel = yield* orchestrationEngine.getReadModel();
-      const currentThread = readModel.threads.find((entry) => entry.id === input.threadId);
+      const currentThread = yield* resolveThread(input.threadId);
       if (!currentThread) {
         return;
       }
 
-      const cwd = resolveThreadWorkspaceCwd({
-        thread: currentThread,
-        projects: readModel.projects,
-      });
+      const cwd = yield* resolveProjectedThreadWorkspaceCwd(currentThread);
       if (!cwd || !(yield* checkpointStore.isGitRepository(cwd))) {
         return;
       }
@@ -1096,8 +1104,7 @@ const make = Effect.gen(function* () {
     readonly modelSelection?: ModelSelection;
     readonly providerOptions?: ProviderStartOptions;
   }) {
-    const readModel = yield* orchestrationEngine.getReadModel();
-    const thread = readModel.threads.find((entry) => entry.id === input.threadId);
+    const thread = yield* resolveThread(input.threadId);
     if (!thread) {
       return;
     }
@@ -1116,10 +1123,7 @@ const make = Effect.gen(function* () {
     if (!isGenericChatThreadTitle(currentTitle) && currentTitle !== fallbackTitle) {
       return;
     }
-    const cwd = resolveThreadWorkspaceCwd({
-      thread,
-      projects: readModel.projects,
-    });
+    const cwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
     const textGenerationInput = yield* resolveThreadTextGenerationInput({
       threadId: input.threadId,
       ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
@@ -1550,15 +1554,27 @@ const make = Effect.gen(function* () {
         new Error(`Cannot edit missing user message '${payload.messageId}'.`),
       );
     }
-    const editTarget = resolveTailUserMessageEditTarget({
-      messages: originalThread.messages,
-      messageId: payload.messageId,
-      activeTurnId:
-        options?.activeTurnId ??
-        (originalThread.session?.status === "running"
-          ? (originalThread.session.activeTurnId ?? null)
-          : null),
-    });
+    const editTarget =
+      payload.removedTurnIds !== undefined && payload.rollbackTurnCount !== undefined
+        ? {
+            editable: true as const,
+            messageId: payload.messageId,
+            messageIndex: originalThread.messages.findIndex(
+              (message) => message.id === payload.messageId,
+            ),
+            mode: payload.rollbackTurnCount > 0 ? ("rollback" as const) : ("active" as const),
+            rollbackTurnCount: payload.rollbackTurnCount,
+            removedTurnIds: payload.removedTurnIds,
+          }
+        : resolveTailUserMessageEditTarget({
+            messages: originalThread.messages,
+            messageId: payload.messageId,
+            activeTurnId:
+              options?.activeTurnId ??
+              (originalThread.session?.status === "running"
+                ? (originalThread.session.activeTurnId ?? null)
+                : null),
+          });
     if (!editTarget.editable) {
       return yield* Effect.fail(
         new Error(

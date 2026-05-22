@@ -1022,6 +1022,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           messageId: command.messageId,
           text: command.text,
+          rollbackTurnCount: editTarget.rollbackTurnCount,
+          removedTurnIds: editTarget.removedTurnIds,
           ...(command.modelSelection !== undefined
             ? { modelSelection: command.modelSelection }
             : {}),

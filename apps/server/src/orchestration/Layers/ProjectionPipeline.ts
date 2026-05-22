@@ -725,9 +725,22 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           if (Option.isNone(existingRow)) {
             return;
           }
+          const [messages, session] = yield* Effect.all([
+            projectionThreadMessageRepository.listByThreadId({
+              threadId: event.payload.threadId,
+            }),
+            projectionThreadSessionRepository.getByThreadId({
+              threadId: event.payload.threadId,
+            }),
+          ]);
+          const canAdoptFirstTurnProvider =
+            existingRow.value.latestTurnId === null &&
+            Option.isNone(session) &&
+            messages.length <= 1;
           const modelSelectionPatch =
             event.payload.modelSelection !== undefined &&
-            event.payload.modelSelection.provider === existingRow.value.modelSelection.provider
+            (event.payload.modelSelection.provider === existingRow.value.modelSelection.provider ||
+              canAdoptFirstTurnProvider)
               ? { modelSelection: event.payload.modelSelection }
               : {};
           yield* projectionThreadRepository.upsert({

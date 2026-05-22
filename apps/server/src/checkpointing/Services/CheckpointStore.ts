@@ -38,6 +38,8 @@ export interface DiffCheckpointsInput {
   readonly fromCheckpointRef: CheckpointRef;
   readonly toCheckpointRef: CheckpointRef;
   readonly fallbackFromToHead?: boolean;
+  readonly ignoreWhitespace: boolean;
+  readonly maxOutputBytes?: number;
 }
 
 export interface DeleteCheckpointRefsInput {

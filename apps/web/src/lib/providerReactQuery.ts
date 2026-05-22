@@ -16,6 +16,7 @@ interface CheckpointDiffQueryInput {
   threadId: ThreadId | null;
   fromTurnCount: number | null;
   toTurnCount: number | null;
+  ignoreWhitespace: boolean;
   cacheScope?: string | null;
   enabled?: boolean;
 }
@@ -29,6 +30,7 @@ export const providerQueryKeys = {
       input.threadId,
       input.fromTurnCount,
       input.toTurnCount,
+      input.ignoreWhitespace,
       input.cacheScope ?? null,
     ] as const,
 };
@@ -38,6 +40,7 @@ function decodeCheckpointDiffRequest(input: CheckpointDiffQueryInput) {
     return Schema.decodeUnknownOption(OrchestrationGetFullThreadDiffInput)({
       threadId: input.threadId,
       toTurnCount: input.toTurnCount,
+      ignoreWhitespace: input.ignoreWhitespace,
     }).pipe(Option.map((fields) => ({ kind: "fullThreadDiff" as const, input: fields })));
   }
 
@@ -45,6 +48,7 @@ function decodeCheckpointDiffRequest(input: CheckpointDiffQueryInput) {
     threadId: input.threadId,
     fromTurnCount: input.fromTurnCount,
     toTurnCount: input.toTurnCount,
+    ignoreWhitespace: input.ignoreWhitespace,
   }).pipe(Option.map((fields) => ({ kind: "turnDiff" as const, input: fields })));
 }
 

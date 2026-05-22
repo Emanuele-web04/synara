@@ -56,6 +56,7 @@ import {
   ProjectionSnapshotQuery,
   type ProjectionFullThreadDiffContext,
   type ProjectionSnapshotCounts,
+  type ProjectionSnapshotSequence,
   type ProjectionThreadCheckpointContext,
   type ProjectionSnapshotQueryShape,
 } from "../Services/ProjectionSnapshotQuery.ts";
@@ -128,6 +129,9 @@ const ProjectIdLookupInput = Schema.Struct({
   projectId: ProjectId,
 });
 const ThreadIdLookupInput = Schema.Struct({
+  threadId: ThreadId,
+});
+const SyntheticSubagentParentLookupInput = Schema.Struct({
   threadId: ThreadId,
 });
 const FullThreadDiffContextLookupInput = Schema.Struct({
@@ -939,6 +943,51 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  const getSyntheticSubagentParentThreadRow = SqlSchema.findOneOption({
+    Request: SyntheticSubagentParentLookupInput,
+    Result: ProjectionThreadDbRowSchema,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT
+          thread_id AS "threadId",
+          project_id AS "projectId",
+          title,
+          model_selection_json AS "modelSelection",
+          runtime_mode AS "runtimeMode",
+          interaction_mode AS "interactionMode",
+          env_mode AS "envMode",
+          branch,
+          worktree_path AS "worktreePath",
+          associated_worktree_path AS "associatedWorktreePath",
+          associated_worktree_branch AS "associatedWorktreeBranch",
+          associated_worktree_ref AS "associatedWorktreeRef",
+          create_branch_flow_completed AS "createBranchFlowCompleted",
+          is_pinned AS "isPinned",
+          parent_thread_id AS "parentThreadId",
+          subagent_agent_id AS "subagentAgentId",
+          subagent_nickname AS "subagentNickname",
+          subagent_role AS "subagentRole",
+          fork_source_thread_id AS "forkSourceThreadId",
+          sidechat_source_thread_id AS "sidechatSourceThreadId",
+          last_known_pr_json AS "lastKnownPr",
+          latest_turn_id AS "latestTurnId",
+          handoff_json AS "handoff",
+          latest_user_message_at AS "latestUserMessageAt",
+          pending_approval_count AS "pendingApprovalCount",
+          pending_user_input_count AS "pendingUserInputCount",
+          has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt",
+          archived_at AS "archivedAt",
+          deleted_at AS "deletedAt"
+        FROM projection_threads
+        WHERE ${threadId} LIKE ('subagent:' || thread_id || ':%')
+          AND deleted_at IS NULL
+        ORDER BY length(thread_id) DESC, created_at ASC, thread_id ASC
+        LIMIT 1
+      `,
+  });
+
   const listThreadMessageRowsByThread = SqlSchema.findAll({
     Request: ThreadIdLookupInput,
     Result: ProjectionThreadMessageDbRowSchema,
@@ -1431,6 +1480,160 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         }),
       );
 
+  const getCommandReadModel: ProjectionSnapshotQueryShape["getCommandReadModel"] = () =>
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const [projectRows, threadRows, proposedPlanRows, sessionRows, latestTurnRows, stateRows] =
+            yield* Effect.all([
+              listProjectRows(undefined).pipe(
+                Effect.mapError(
+                  toPersistenceSqlOrDecodeError(
+                    "ProjectionSnapshotQuery.getCommandReadModel:listProjects:query",
+                    "ProjectionSnapshotQuery.getCommandReadModel:listProjects:decodeRows",
+                  ),
+                ),
+                Effect.flatMap((rows) =>
+                  decodeProjectionProjectRows(
+                    rows,
+                    "ProjectionSnapshotQuery.getCommandReadModel:listProjects:decodeModelSelections",
+                  ),
+                ),
+              ),
+              listThreadRows(undefined).pipe(
+                Effect.mapError(
+                  toPersistenceSqlOrDecodeError(
+                    "ProjectionSnapshotQuery.getCommandReadModel:listThreads:query",
+                    "ProjectionSnapshotQuery.getCommandReadModel:listThreads:decodeRows",
+                  ),
+                ),
+                Effect.flatMap((rows) =>
+                  decodeProjectionThreadRows(
+                    rows,
+                    "ProjectionSnapshotQuery.getCommandReadModel:listThreads:decodeModelSelections",
+                  ),
+                ),
+              ),
+              listThreadProposedPlanRows(undefined).pipe(
+                Effect.mapError(
+                  toPersistenceSqlOrDecodeError(
+                    "ProjectionSnapshotQuery.getCommandReadModel:listThreadProposedPlans:query",
+                    "ProjectionSnapshotQuery.getCommandReadModel:listThreadProposedPlans:decodeRows",
+                  ),
+                ),
+              ),
+              listThreadSessionRows(undefined).pipe(
+                Effect.mapError(
+                  toPersistenceSqlOrDecodeError(
+                    "ProjectionSnapshotQuery.getCommandReadModel:listThreadSessions:query",
+                    "ProjectionSnapshotQuery.getCommandReadModel:listThreadSessions:decodeRows",
+                  ),
+                ),
+              ),
+              listLatestTurnRows(undefined).pipe(
+                Effect.mapError(
+                  toPersistenceSqlOrDecodeError(
+                    "ProjectionSnapshotQuery.getCommandReadModel:listLatestTurns:query",
+                    "ProjectionSnapshotQuery.getCommandReadModel:listLatestTurns:decodeRows",
+                  ),
+                ),
+              ),
+              listProjectionStateRows(undefined).pipe(
+                Effect.mapError(
+                  toPersistenceSqlOrDecodeError(
+                    "ProjectionSnapshotQuery.getCommandReadModel:listProjectionState:query",
+                    "ProjectionSnapshotQuery.getCommandReadModel:listProjectionState:decodeRows",
+                  ),
+                ),
+              ),
+            ]);
+
+          const proposedPlansByThread = new Map<string, Array<OrchestrationProposedPlan>>();
+          const sessionsByThread = new Map<string, OrchestrationSession>();
+          const latestTurnByThread = new Map<string, OrchestrationLatestTurn>();
+
+          let updatedAt: string | null = null;
+
+          for (const row of projectRows) {
+            updatedAt = maxIso(updatedAt, row.updatedAt);
+          }
+          for (const row of threadRows) {
+            updatedAt = maxIso(updatedAt, row.updatedAt);
+          }
+          for (const row of proposedPlanRows) {
+            updatedAt = maxIso(updatedAt, row.updatedAt);
+            const threadProposedPlans = proposedPlansByThread.get(row.threadId) ?? [];
+            threadProposedPlans.push(toProjectedProposedPlan(row));
+            proposedPlansByThread.set(row.threadId, threadProposedPlans);
+          }
+          for (const row of sessionRows) {
+            updatedAt = maxIso(updatedAt, row.updatedAt);
+            sessionsByThread.set(row.threadId, toProjectedSession(row));
+          }
+          for (const row of latestTurnRows) {
+            updatedAt = maxIso(updatedAt, row.requestedAt);
+            if (row.startedAt !== null) {
+              updatedAt = maxIso(updatedAt, row.startedAt);
+            }
+            if (row.completedAt !== null) {
+              updatedAt = maxIso(updatedAt, row.completedAt);
+            }
+            if (latestTurnByThread.has(row.threadId)) {
+              continue;
+            }
+            latestTurnByThread.set(row.threadId, toProjectedLatestTurn(row));
+          }
+          for (const row of stateRows) {
+            updatedAt = maxIso(updatedAt, row.updatedAt);
+          }
+
+          const projects: ReadonlyArray<OrchestrationProject> = projectRows.map((row) => ({
+            id: row.projectId,
+            kind: row.kind,
+            title: row.title,
+            workspaceRoot: row.workspaceRoot,
+            defaultModelSelection: row.defaultModelSelection,
+            scripts: row.scripts,
+            createdAt: row.createdAt,
+            updatedAt: row.updatedAt,
+            deletedAt: row.deletedAt,
+          }));
+
+          const threads: ReadonlyArray<OrchestrationThread> = threadRows.map((row) =>
+            toProjectedThread({
+              threadRow: row,
+              latestTurn: latestTurnByThread.get(row.threadId) ?? null,
+              messages: [],
+              proposedPlans: proposedPlansByThread.get(row.threadId) ?? [],
+              activities: [],
+              checkpoints: [],
+              session: sessionsByThread.get(row.threadId) ?? null,
+            }),
+          );
+
+          return yield* decodeReadModel({
+            snapshotSequence: computeSnapshotSequence(stateRows),
+            projects,
+            threads,
+            updatedAt: updatedAt ?? new Date(0).toISOString(),
+          }).pipe(
+            Effect.mapError(
+              toPersistenceDecodeError(
+                "ProjectionSnapshotQuery.getCommandReadModel:decodeReadModel",
+              ),
+            ),
+          );
+        }),
+      )
+      .pipe(
+        Effect.mapError((error) => {
+          if (isPersistenceError(error)) {
+            return error;
+          }
+          return toPersistenceSqlError("ProjectionSnapshotQuery.getCommandReadModel:query")(error);
+        }),
+      );
+
   const getShellSnapshot: ProjectionSnapshotQueryShape["getShellSnapshot"] = () =>
     sql
       .withTransaction(
@@ -1570,6 +1773,21 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         (row): ProjectionSnapshotCounts => ({
           projectCount: row.projectCount,
           threadCount: row.threadCount,
+        }),
+      ),
+    );
+
+  const getSnapshotSequence: ProjectionSnapshotQueryShape["getSnapshotSequence"] = () =>
+    listProjectionStateRows(undefined).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.getSnapshotSequence:query",
+          "ProjectionSnapshotQuery.getSnapshotSequence:decodeRows",
+        ),
+      ),
+      Effect.map(
+        (stateRows): ProjectionSnapshotSequence => ({
+          snapshotSequence: computeSnapshotSequence(stateRows),
         }),
       ),
     );
@@ -1777,6 +1995,42 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         }),
       );
 
+  const findSyntheticSubagentParentThread: ProjectionSnapshotQueryShape["findSyntheticSubagentParentThread"] =
+    (threadId) =>
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            const parentRow = yield* getSyntheticSubagentParentThreadRow({ threadId }).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.findSyntheticSubagentParentThread:getThread:query",
+                  "ProjectionSnapshotQuery.findSyntheticSubagentParentThread:getThread:decodeRow",
+                ),
+              ),
+              Effect.flatMap((option) =>
+                decodeProjectionThreadOption(
+                  option,
+                  "ProjectionSnapshotQuery.findSyntheticSubagentParentThread:getThread:decodeModelSelection",
+                ),
+              ),
+            );
+            if (Option.isNone(parentRow)) {
+              return Option.none<OrchestrationThread>();
+            }
+            return yield* loadThreadDetail(parentRow.value.threadId);
+          }),
+        )
+        .pipe(
+          Effect.mapError((error) => {
+            if (isPersistenceError(error)) {
+              return error;
+            }
+            return toPersistenceSqlError(
+              "ProjectionSnapshotQuery.findSyntheticSubagentParentThread:query",
+            )(error);
+          }),
+        );
+
   // Hydrate a full thread detail projection without opening its own transaction.
   const loadThreadDetail = (threadId: ThreadId) =>
     Effect.gen(function* () {
@@ -1938,15 +2192,18 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       );
 
   return {
+    getCommandReadModel,
     getSnapshot,
     getShellSnapshot,
     getCounts,
+    getSnapshotSequence,
     getActiveProjectByWorkspaceRoot,
     getProjectShellById,
     getFirstActiveThreadIdByProjectId,
     getThreadCheckpointContext,
     getFullThreadDiffContext,
     getThreadShellById,
+    findSyntheticSubagentParentThread,
     getThreadDetailById,
     getThreadDetailSnapshotById,
   } satisfies ProjectionSnapshotQueryShape;

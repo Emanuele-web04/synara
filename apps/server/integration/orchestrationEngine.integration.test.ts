@@ -501,6 +501,7 @@ it.live("runs multi-turn file edits and persists checkpoint diffs", () =>
         fromCheckpointRef: checkpointRefForThreadTurn(THREAD_ID, 1),
         toCheckpointRef: checkpointRefForThreadTurn(THREAD_ID, 2),
         fallbackFromToHead: false,
+        ignoreWhitespace: false,
       });
       assert.equal(incrementalDiff.includes("README.md"), true);
 
@@ -509,6 +510,7 @@ it.live("runs multi-turn file edits and persists checkpoint diffs", () =>
         fromCheckpointRef: checkpointRefForThreadTurn(THREAD_ID, 0),
         toCheckpointRef: checkpointRefForThreadTurn(THREAD_ID, 2),
         fallbackFromToHead: false,
+        ignoreWhitespace: false,
       });
       assert.equal(fullDiff.includes("README.md"), true);
 

@@ -194,6 +194,7 @@ export default function DiffPanel({
   const providerOptions = useMemo(() => getProviderStartOptions(settings), [settings]);
   const [diffRenderMode, setDiffRenderMode] = useState<DiffRenderMode>("stacked");
   const [diffWordWrap, setDiffWordWrap] = useState(settings.diffWordWrap);
+  const [diffIgnoreWhitespace, setDiffIgnoreWhitespace] = useState(true);
   const [surfaceMode, setSurfaceMode] = useState<DiffSurfaceMode>("review");
   const repoDiffScope = useRepoDiffScopeStore((store) => store.scope);
   const setRepoDiffScope = useRepoDiffScopeStore((store) => store.setScope);
@@ -343,6 +344,7 @@ export default function DiffPanel({
       threadId: activeThreadId,
       fromTurnCount: activeCheckpointRange?.fromTurnCount ?? null,
       toTurnCount: activeCheckpointRange?.toTurnCount ?? null,
+      ignoreWhitespace: diffIgnoreWhitespace,
       cacheScope: selectedTurn ? `turn:${selectedTurn.turnId}` : conversationCacheScope,
       enabled: isGitRepo && !diffEnvironmentPending,
     }),
@@ -801,6 +803,20 @@ export default function DiffPanel({
               }}
             >
               <TextWrapIcon className="size-3" />
+            </Toggle>
+            <Toggle
+              aria-label={
+                diffIgnoreWhitespace ? "Show whitespace changes" : "Hide whitespace changes"
+              }
+              title={diffIgnoreWhitespace ? "Show whitespace changes" : "Hide whitespace changes"}
+              variant="outline"
+              size="xs"
+              pressed={diffIgnoreWhitespace}
+              onPressedChange={(pressed) => {
+                setDiffIgnoreWhitespace(Boolean(pressed));
+              }}
+            >
+              <FaPlusMinus className="size-3" />
             </Toggle>
           </>
         ) : null}

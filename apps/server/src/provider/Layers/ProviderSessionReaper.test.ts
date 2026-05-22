@@ -49,7 +49,9 @@ function makeLayer(input: {
     Layer.provide(
       Layer.succeed(ProjectionSnapshotQuery, {
         getSnapshot: () => unsupported(),
+        getCommandReadModel: () => unsupported(),
         getCounts: () => unsupported(),
+        getSnapshotSequence: () => unsupported(),
         getShellSnapshot: () => unsupported(),
         getActiveProjectByWorkspaceRoot: () => unsupported(),
         getProjectShellById: () => unsupported(),
@@ -57,6 +59,7 @@ function makeLayer(input: {
         getThreadCheckpointContext: () => unsupported(),
         getFullThreadDiffContext: () => unsupported(),
         getThreadShellById: () => Effect.succeed(Option.some(input.threadShell)),
+        findSyntheticSubagentParentThread: () => unsupported(),
         getThreadDetailById: () => unsupported(),
         getThreadDetailSnapshotById: () => unsupported(),
       }),
