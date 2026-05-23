@@ -42,6 +42,7 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig, type ServerConfigShape } from "../../config.ts";
+import { filterProviderPromptImageAttachments } from "../promptAttachments.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -1022,14 +1023,7 @@ export function makeCursorAdapter(
           });
         }
         if (input.attachments && input.attachments.length > 0) {
-          for (const attachment of input.attachments) {
-            if (attachment.type !== "image") {
-              return yield* new ProviderAdapterValidationError({
-                provider: PROVIDER,
-                operation: "sendTurn",
-                issue: "Cursor only supports image attachments for provider prompts.",
-              });
-            }
+          for (const attachment of filterProviderPromptImageAttachments(input.attachments)) {
             const attachmentPath = resolveAttachmentPath({
               attachmentsDir: serverConfig.attachmentsDir,
               attachment,

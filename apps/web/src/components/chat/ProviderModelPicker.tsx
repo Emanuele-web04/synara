@@ -62,8 +62,8 @@ function resolveLiveProviderAvailability(provider: ServerProviderStatus | undefi
 } {
   if (!provider) {
     return {
-      disabled: false,
-      label: null,
+      disabled: true,
+      label: "Checking",
     };
   }
 

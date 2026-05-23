@@ -35,6 +35,7 @@ import { ProviderCommandReactorLive } from "./ProviderCommandReactor.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { attachmentRelativePath } from "../../attachmentStore.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import { checkpointRefForThreadTurn } from "../../checkpointing/Utils.ts";
 import {
   CheckpointStore,
@@ -311,6 +312,7 @@ describe("ProviderCommandReactor", () => {
           generateThreadTitle,
         } as unknown as TextGenerationShape),
       ),
+      Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
       Layer.provideMerge(SqlitePersistenceMemory),
@@ -1243,7 +1245,67 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  it("uses a local fallback title for providers without git text generation", async () => {
+  it("uses the configured text generation model for providers without native title generation", async () => {
+    const harness = await createHarness({
+      threadModelSelection: {
+        provider: "gemini",
+        model: "auto-gemini-3",
+      },
+    });
+    const now = new Date().toISOString();
+    harness.generateThreadTitle.mockImplementation(() =>
+      Effect.succeed({
+        title: "Provider startup failures",
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-thread-title-gemini-generated"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        title: "Summarize provider startup failures",
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-gemini-generated-title"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-gemini-generated-title-1"),
+          role: "user",
+          text: "Summarize provider startup failures without Codex",
+          attachments: [],
+        },
+        modelSelection: {
+          provider: "gemini",
+          model: "auto-gemini-3",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.generateThreadTitle.mock.calls.length === 1);
+    expect(harness.generateThreadTitle.mock.calls[0]?.[0]).toMatchObject({
+      message: "Summarize provider startup failures without Codex",
+      modelSelection: {
+        provider: "codex",
+      },
+    });
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      return (
+        readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"))?.title ===
+        "Provider startup failures"
+      );
+    });
+  });
+
+  it("uses a local fallback title when configured text generation fails", async () => {
     const harness = await createHarness({
       threadModelSelection: {
         provider: "gemini",
@@ -1289,7 +1351,7 @@ describe("ProviderCommandReactor", () => {
         "Summarize provider startup failures"
       );
     });
-    expect(harness.generateThreadTitle).not.toHaveBeenCalled();
+    expect(harness.generateThreadTitle).toHaveBeenCalledTimes(1);
   });
 
   it("renames temporary worktree branches and keeps associated worktree metadata in sync", async () => {

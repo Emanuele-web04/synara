@@ -41,8 +41,18 @@ const GROK_API_KEY_AUTH_METHOD_ID = "xai.api_key";
 const GROK_CACHED_TOKEN_AUTH_METHOD_ID = "cached_token";
 const GROK_API_KEY_ENV_KEYS = ["XAI_API_KEY", "GROK_CODE_XAI_API_KEY"] as const;
 
+export function getGrokApiKeyEnv(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  for (const key of GROK_API_KEY_ENV_KEYS) {
+    const value = env[key]?.trim();
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
 export function hasGrokApiKeyEnv(env: NodeJS.ProcessEnv = process.env): boolean {
-  return GROK_API_KEY_ENV_KEYS.some((key) => Boolean(env[key]?.trim()));
+  return getGrokApiKeyEnv(env) !== undefined;
 }
 
 export function buildGrokAcpSpawnInput(

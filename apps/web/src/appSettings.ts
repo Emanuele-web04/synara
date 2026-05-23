@@ -216,7 +216,7 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     title: "Grok",
     description: "Save additional Grok model slugs for the picker and `/model` command.",
     placeholder: "your-grok-model-slug",
-    example: "grok-build",
+    example: "grok-build-0.1",
   },
   kilo: {
     provider: "kilo",

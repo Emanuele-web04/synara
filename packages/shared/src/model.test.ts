@@ -65,7 +65,8 @@ describe("normalizeModelSlug", () => {
     expect(normalizeModelSlug("claude-haiku-4-5-20251001", "claudeAgent")).toBe("claude-haiku-4-5");
     expect(normalizeModelSlug("4.3", "grok")).toBe("grok-build");
     expect(normalizeModelSlug("grok-latest", "grok")).toBe("grok-build");
-    expect(normalizeModelSlug("grok-code-fast-1", "grok")).toBe("grok-build");
+    expect(normalizeModelSlug("grok-code-fast-1", "grok")).toBe("grok-build-0.1");
+    expect(normalizeModelSlug("grok-code-fast-1-0825", "grok")).toBe("grok-build-0.1");
   });
 });
 
@@ -221,7 +222,8 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
     expect(values("gemini", "gemini-2.5-flash-lite")).toEqual(["-1", "512"]);
   });
 
-  it("returns Grok effort options for Grok 4.3", () => {
+  it("returns Grok effort options for Grok Build models", () => {
+    expect(values("grok", "grok-build-0.1")).toEqual([...GROK_REASONING_EFFORT_OPTIONS]);
     expect(values("grok", "grok-build")).toEqual([...GROK_REASONING_EFFORT_OPTIONS]);
   });
 
@@ -244,6 +246,7 @@ describe("getDefaultEffort", () => {
     expect(getDefaultEffort(getModelCapabilities("claudeAgent", "claude-opus-4-6"))).toBe("high");
     expect(getDefaultEffort(getModelCapabilities("claudeAgent", "claude-haiku-4-5"))).toBeNull();
     expect(getDefaultEffort(getModelCapabilities("gemini", "gemini-2.5-flash-lite"))).toBe("-1");
+    expect(getDefaultEffort(getModelCapabilities("grok", "grok-build-0.1"))).toBe("low");
     expect(getDefaultEffort(getModelCapabilities("grok", "grok-build"))).toBe("low");
   });
 });
@@ -261,7 +264,7 @@ describe("hasEffortLevel", () => {
     expect(hasEffortLevel(codexCaps, "xhigh")).toBe(true);
     expect(hasEffortLevel(codexCaps, "max")).toBe(false);
 
-    const grokCaps = getModelCapabilities("grok", "grok-build");
+    const grokCaps = getModelCapabilities("grok", "grok-build-0.1");
     expect(hasEffortLevel(grokCaps, "high")).toBe(true);
     expect(hasEffortLevel(grokCaps, "xhigh")).toBe(false);
   });
@@ -524,12 +527,15 @@ describe("normalizeGrokModelOptions", () => {
   it("drops default Grok reasoning effort options and preserves supported overrides", () => {
     expect(normalizeGrokModelOptions("grok-build", { reasoningEffort: "low" })).toBeUndefined();
     expect(
+      normalizeGrokModelOptions("grok-build-0.1", { reasoningEffort: "low" }),
+    ).toBeUndefined();
+    expect(
       normalizeGrokModelOptions("grok-build", { reasoningEffort: "max" as never }),
     ).toBeUndefined();
     expect(
       normalizeGrokModelOptions("grok-build", { reasoningEffort: "xhigh" as never }),
     ).toBeUndefined();
-    expect(normalizeGrokModelOptions("grok-build", { reasoningEffort: "high" })).toEqual({
+    expect(normalizeGrokModelOptions("grok-build-0.1", { reasoningEffort: "high" })).toEqual({
       reasoningEffort: "high",
     });
   });

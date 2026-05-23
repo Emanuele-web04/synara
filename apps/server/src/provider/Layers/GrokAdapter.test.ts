@@ -8,6 +8,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   isRenderableGrokAssistantDelta,
+  mergeGrokModelDescriptors,
+  parseXaiLanguageModelDescriptors,
   scopeGrokRuntimeItemIdForTurn,
   scopeGrokToolCallStateForTurn,
 } from "./GrokAdapter.ts";
@@ -61,5 +63,41 @@ describe("GrokAdapter runtime event scoping", () => {
         text: "thinking",
       }),
     ).toBe(false);
+  });
+
+  it("parses xAI language model API responses for picker discovery", () => {
+    expect(
+      parseXaiLanguageModelDescriptors({
+        models: [
+          { id: "grok-build-0.1", object: "model" },
+          { id: "grok-code-fast-1-0825", object: "model" },
+          { id: "grok-4.3", object: "model" },
+          { id: "   " },
+          null,
+        ],
+      }),
+    ).toEqual([
+      { slug: "grok-build-0.1", name: "Grok Build 0.1" },
+      { slug: "grok-code-fast-1-0825", name: "Grok Code Fast 1 0825" },
+    ]);
+  });
+
+  it("merges Grok CLI and xAI API model lists without duplicates", () => {
+    expect(
+      mergeGrokModelDescriptors([
+        [
+          { slug: "grok-build", name: "Grok 4.3" },
+          { slug: "grok-build-0.1", name: "Grok Build 0.1" },
+        ],
+        [
+          { slug: "grok-build-0.1", name: "Grok Build 0.1" },
+          { slug: "grok-4.20-multi-agent", name: "Grok 4.20 Multi Agent" },
+        ],
+      ]),
+    ).toEqual([
+      { slug: "grok-build", name: "Grok 4.3" },
+      { slug: "grok-build-0.1", name: "Grok Build 0.1" },
+      { slug: "grok-4.20-multi-agent", name: "Grok 4.20 Multi Agent" },
+    ]);
   });
 });

@@ -43,6 +43,7 @@ import { GitCore } from "../../git/Services/GitCore.ts";
 import { ProviderAdapterRequestError, ProviderServiceError } from "../../provider/Errors.ts";
 import { TextGeneration } from "../../git/Services/TextGeneration.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import { clearWorkspaceIndexCache } from "../../workspaceEntries.ts";
 import {
   buildPriorTranscriptBootstrapText,
@@ -210,6 +211,15 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
   return `${WORKTREE_BRANCH_PREFIX}/${safeFragment}`;
 }
 
+function hasDedicatedTextGenerationProvider(provider: ProviderKind | undefined): boolean {
+  return (
+    provider === "codex" ||
+    provider === "cursor" ||
+    provider === "kilo" ||
+    provider === "opencode"
+  );
+}
+
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
@@ -217,6 +227,7 @@ const make = Effect.gen(function* () {
   const checkpointStore = yield* CheckpointStore;
   const git = yield* GitCore;
   const textGeneration = yield* TextGeneration;
+  const serverSettings = yield* ServerSettingsService;
   const handledTurnStartKeys = yield* Cache.make<string, true>({
     capacity: HANDLED_TURN_START_KEY_MAX,
     timeToLive: HANDLED_TURN_START_KEY_TTL,
@@ -259,25 +270,12 @@ const make = Effect.gen(function* () {
   const drainingQueuedTurns = new Set<string>();
   const sidechatContextBootstrapThreadIds = new Set<string>();
 
-  const resolveThreadTextGenerationInput = Effect.fnUntraced(function* (input: {
-    readonly threadId: ThreadId;
-    readonly modelSelection?: ModelSelection;
-    readonly providerOptions?: ProviderStartOptions;
-  }) {
-    const thread = yield* resolveThread(input.threadId);
-    const modelSelection =
-      input.modelSelection ?? threadModelSelections.get(input.threadId) ?? thread?.modelSelection;
-    const providerOptions = input.providerOptions ?? threadProviderOptions.get(input.threadId);
-
-    if (
-      modelSelection?.provider === "cursor" ||
-      modelSelection?.provider === "kilo" ||
-      modelSelection?.provider === "opencode"
-    ) {
-      return {
-        modelSelection,
-        ...(providerOptions ? { providerOptions } : {}),
-      } as const;
+  const resolveTextGenerationInputForSelection = (
+    modelSelection: ModelSelection | undefined,
+    providerOptions: ProviderStartOptions | undefined,
+  ) => {
+    if (!hasDedicatedTextGenerationProvider(modelSelection?.provider)) {
+      return null;
     }
 
     if (modelSelection?.provider === "codex") {
@@ -290,7 +288,37 @@ const make = Effect.gen(function* () {
       } as const;
     }
 
-    return null;
+    return {
+      modelSelection,
+      ...(providerOptions ? { providerOptions } : {}),
+    } as const;
+  };
+
+  const resolveThreadTextGenerationInput = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly modelSelection?: ModelSelection;
+    readonly providerOptions?: ProviderStartOptions;
+    readonly useConfiguredFallback?: boolean;
+  }) {
+    const thread = yield* resolveThread(input.threadId);
+    const modelSelection =
+      input.modelSelection ?? threadModelSelections.get(input.threadId) ?? thread?.modelSelection;
+    const providerOptions = input.providerOptions ?? threadProviderOptions.get(input.threadId);
+    const threadTextGenerationInput = resolveTextGenerationInputForSelection(
+      modelSelection,
+      providerOptions,
+    );
+
+    if (threadTextGenerationInput || !input.useConfiguredFallback) {
+      return threadTextGenerationInput;
+    }
+
+    // Non-generating chat providers still get AI titles via the configured git-writing model.
+    const settings = yield* serverSettings.getSettings;
+    return resolveTextGenerationInputForSelection(
+      settings.textGenerationModelSelection,
+      providerOptions,
+    );
   });
 
   const appendProviderFailureActivity = (input: {
@@ -1128,6 +1156,7 @@ const make = Effect.gen(function* () {
       threadId: input.threadId,
       ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
       ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+      useConfiguredFallback: true,
     });
     if (!textGenerationInput) {
       if (fallbackTitle !== currentTitle) {

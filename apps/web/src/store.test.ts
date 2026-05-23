@@ -2574,6 +2574,7 @@ describe("store read model sync", () => {
       updatedAt: "2026-02-27T00:03:00.000Z",
     });
     expect(next.threadShellById?.[threadId]?.title).toBe("Renamed title");
+    expect(next.threads.find((thread) => thread.id === threadId)?.title).toBe("Renamed title");
   });
 
   it("updates sidebar summaries when a hot-path session starts running", () => {

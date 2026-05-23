@@ -3112,6 +3112,8 @@ function applyOrchestrationEvent(
         },
         {
           ...options,
+          updateThreadArray:
+            options?.updateThreadArray !== false || event.payload.title !== undefined,
           updateSidebarSummary: true,
         },
       );

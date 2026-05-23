@@ -118,6 +118,8 @@ describe("normalizeProviderStatusForLocalConfig", () => {
 
 describe("isProviderUsable", () => {
   it("blocks unavailable or unauthenticated providers", () => {
+    expect(isProviderUsable(null)).toBe(false);
+    expect(isProviderUsable(undefined)).toBe(false);
     expect(isProviderUsable(BASE_STATUS)).toBe(false);
     expect(
       isProviderUsable({ ...BASE_STATUS, available: true, authStatus: "unauthenticated" }),

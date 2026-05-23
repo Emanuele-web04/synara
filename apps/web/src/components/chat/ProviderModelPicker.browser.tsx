@@ -24,7 +24,10 @@ const MODEL_OPTIONS_BY_PROVIDER = {
     { slug: "auto-gemini-3", name: "Auto Gemini 3" },
     { slug: "gemini-2.5-pro", name: "Gemini 2.5 Pro" },
   ],
-  grok: [{ slug: "grok-build", name: "Grok 4.3" }],
+  grok: [
+    { slug: "grok-build-0.1", name: "Grok Build 0.1" },
+    { slug: "grok-build", name: "Grok 4.3" },
+  ],
   kilo: [
     {
       slug: "kilo/kilo-auto/free",
@@ -525,6 +528,35 @@ describe("ProviderModelPicker", () => {
         expect(text).toContain("Codex");
         expect(text).toContain("Claude");
         expect(text).toContain("Sign in");
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("does not make providers selectable before live status is known", async () => {
+    const mounted = await mountPicker({
+      provider: "codex",
+      model: "gpt-5-codex",
+      lockedProvider: null,
+      providers: [
+        {
+          provider: "codex",
+          status: "ready",
+          available: true,
+          authStatus: "authenticated",
+          checkedAt: "2026-04-10T10:00:00.000Z",
+        },
+      ],
+    });
+
+    try {
+      await page.getByRole("button").click();
+
+      await vi.waitFor(() => {
+        const text = document.body.textContent ?? "";
+        expect(text).toContain("Claude");
+        expect(text).toContain("Checking");
       });
     } finally {
       await mounted.cleanup();

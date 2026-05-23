@@ -1,4 +1,4 @@
-import { ThreadId } from "@t3tools/contracts";
+import { ThreadId, type ModelSlug } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -11,6 +11,7 @@ import {
   hasServerAcknowledgedLocalDispatch,
   isVoiceAuthExpiredMessage,
   resolveActiveThreadTitle,
+  resolveCommittedProviderModel,
   sanitizeVoiceErrorMessage,
   buildExpiredTerminalContextToastCopy,
   shouldAutoDeleteTerminalThreadOnLastClose,
@@ -242,6 +243,33 @@ describe("shouldShowComposerModelBootstrapSkeleton", () => {
         providerModelsLoading: false,
       }),
     ).toBe(true);
+  });
+});
+
+describe("resolveCommittedProviderModel", () => {
+  it("preserves the exact runtime-discovered slug when the picker selected it", () => {
+    expect(
+      resolveCommittedProviderModel({
+        selectedModel: "grok-code-fast-1-0825" as ModelSlug,
+        availableOptions: [
+          {
+            slug: "grok-code-fast-1-0825" as ModelSlug,
+            name: "Grok Code Fast 1 0825",
+          },
+        ],
+        fallback: () => "grok-build-0.1",
+      }),
+    ).toBe("grok-code-fast-1-0825");
+  });
+
+  it("falls back to static alias resolution when the selected slug is not in the options", () => {
+    expect(
+      resolveCommittedProviderModel({
+        selectedModel: "code-fast" as ModelSlug,
+        availableOptions: [],
+        fallback: () => "grok-build-0.1",
+      }),
+    ).toBe("grok-build-0.1");
   });
 });
 

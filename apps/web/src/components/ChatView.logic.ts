@@ -2,6 +2,7 @@ import {
   ProjectId,
   ThreadId,
   type ModelSelection,
+  type ModelSlug,
   type ProviderKind,
   type ServerProviderAuthStatus,
   type ThreadId as ThreadIdType,
@@ -30,6 +31,7 @@ import {
 } from "../lib/subagentPresentation";
 import { hasLiveTurnTailWork, type WorkLogEntry } from "../session-logic";
 import { localSubagentThreadId } from "./ChatView.selectors";
+import type { ProviderModelOption } from "../providerModelOptions";
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "dpcode:last-invoked-script-by-project";
 export const DISMISSED_PROVIDER_HEALTH_BANNERS_KEY = "dpcode:dismissed-provider-health-banners";
@@ -247,6 +249,17 @@ export function shouldShowComposerModelBootstrapSkeleton(input: {
     persistedSelection.model;
 
   return normalizedSelectedModel !== normalizedPersistedModel;
+}
+
+export function resolveCommittedProviderModel(input: {
+  selectedModel: ModelSlug;
+  availableOptions: ReadonlyArray<ProviderModelOption>;
+  fallback: () => string;
+}): string {
+  const directRuntimeOption = input.availableOptions.find(
+    (option) => option.slug === input.selectedModel,
+  );
+  return directRuntimeOption?.slug ?? input.fallback();
 }
 
 // Lets a pending custom binary path re-check a session that was already observed ready.

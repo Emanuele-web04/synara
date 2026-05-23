@@ -12,6 +12,7 @@ import {
   type ProviderComposerCapabilities,
   type ProviderApprovalDecision,
   type ProviderInteractionMode,
+  type ProviderListModelsResult,
   type ProviderRuntimeEvent,
   type ProviderSession,
   type ProviderUserInputAnswers,
@@ -42,6 +43,7 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig, type ServerConfigShape } from "../../config.ts";
+import { filterProviderPromptImageAttachments } from "../promptAttachments.ts";
 import {
   ProviderAdapterRequestError,
   ProviderAdapterSessionNotFoundError,
@@ -74,6 +76,7 @@ import {
 import { makeAcpNativeLoggers } from "../acp/AcpNativeLogging.ts";
 import {
   applyGrokAcpModelSelection,
+  getGrokApiKeyEnv,
   makeGrokAcpRuntime,
   type GrokAcpRuntimeSettings,
 } from "../acp/GrokAcpSupport.ts";
@@ -89,6 +92,7 @@ const GROK_ACP_DEBUG_ENV = "DPCODE_GROK_ACP_DEBUG";
 const LEGACY_GROK_ACP_DEBUG_ENV = "DP_GROK_ACP_DEBUG";
 const GROK_RESUME_REPLAY_QUIET_MS = 350;
 const GROK_RESUME_REPLAY_MAX_WAIT_MS = 3_000;
+const XAI_API_BASE_URL = "https://api.x.ai/v1";
 const ACP_PLAN_MODE_ALIASES = ["plan"];
 const ACP_IMPLEMENT_MODE_ALIASES = ["code", "agent", "default", "chat", "implement"];
 const ACP_APPROVAL_MODE_ALIASES = ["ask"];
@@ -300,10 +304,17 @@ function parseGrokResume(raw: unknown): { sessionId: string } | undefined {
 }
 
 function formatGrokModelName(slug: string): string {
+  if (slug === "grok-build-0.1") {
+    return "Grok Build 0.1";
+  }
   if (slug === "grok-build") {
     return "Grok 4.3";
   }
   return slug.replace(/[-_/]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function isGrokBuildApiModelSlug(slug: string): boolean {
+  return slug === "grok-build-0.1" || /^grok-code-fast(?:-\d+(?:-\d+)?)?$/u.test(slug);
 }
 
 function parseGrokCliModelList(stdout: string): Array<{ slug: string; name: string }> {
@@ -358,6 +369,87 @@ function parseGrokCliModelList(stdout: string): Array<{ slug: string; name: stri
   return models
     .toSorted((left, right) => Number(right.isDefault) - Number(left.isDefault))
     .map(({ slug, name }) => ({ slug, name }));
+}
+
+export function parseXaiLanguageModelDescriptors(
+  input: unknown,
+): Array<{ slug: string; name: string }> {
+  if (!isRecord(input)) return [];
+  const rawModels = Array.isArray(input.models)
+    ? input.models
+    : Array.isArray(input.data)
+      ? input.data
+      : [];
+  const models: Array<{ slug: string; name: string }> = [];
+
+  for (const rawModel of rawModels) {
+    if (!isRecord(rawModel) || typeof rawModel.id !== "string") {
+      continue;
+    }
+    const slug = rawModel.id.trim();
+    if (!slug) {
+      continue;
+    }
+    if (isGrokBuildApiModelSlug(slug)) {
+      models.push({ slug, name: formatGrokModelName(slug) });
+    }
+  }
+
+  return models;
+}
+
+export function mergeGrokModelDescriptors(
+  groups: ReadonlyArray<ReadonlyArray<{ slug: string; name: string }>>,
+): Array<{ slug: string; name: string }> {
+  const models: Array<{ slug: string; name: string }> = [];
+  const seen = new Set<string>();
+  for (const group of groups) {
+    for (const model of group) {
+      const slug = model.slug.trim();
+      const key = slug.toLowerCase();
+      if (!slug || seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      models.push({ slug, name: model.name.trim() || formatGrokModelName(slug) });
+    }
+  }
+  return models;
+}
+
+function xaiApiBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+  return (env.XAI_API_BASE_URL?.trim() || XAI_API_BASE_URL).replace(/\/+$/u, "");
+}
+
+function fetchXaiLanguageModels(input: {
+  readonly apiKey: string;
+  readonly baseUrl?: string;
+}): Effect.Effect<Array<{ slug: string; name: string }>, ProviderAdapterRequestError> {
+  return Effect.tryPromise({
+    try: async () => {
+      const response = await fetch(`${input.baseUrl ?? XAI_API_BASE_URL}/language-models`, {
+        headers: {
+          Authorization: `Bearer ${input.apiKey}`,
+          "Content-Type": "application/json",
+        },
+      });
+      if (!response.ok) {
+        const detail = await response.text().catch(() => "");
+        throw new Error(
+          detail.trim() ||
+            `xAI language model discovery failed with HTTP ${response.status}.`,
+        );
+      }
+      return parseXaiLanguageModelDescriptors(await response.json());
+    },
+    catch: (cause) =>
+      new ProviderAdapterRequestError({
+        provider: PROVIDER,
+        method: "model/list",
+        detail: cause instanceof Error ? cause.message : String(cause),
+        cause,
+      }),
+  });
 }
 
 function readAcpUsdCost(cost: EffectAcpSchema.Cost | null | undefined): number | undefined {
@@ -1184,14 +1276,7 @@ export function makeGrokAdapter(
           });
         }
         if (input.attachments && input.attachments.length > 0) {
-          for (const attachment of input.attachments) {
-            if (attachment.type !== "image") {
-              return yield* new ProviderAdapterValidationError({
-                provider: PROVIDER,
-                operation: "sendTurn",
-                issue: "Grok only supports image attachments for provider prompts.",
-              });
-            }
+          for (const attachment of filterProviderPromptImageAttachments(input.attachments)) {
             const attachmentPath = resolveAttachmentPath({
               attachmentsDir: serverConfig.attachmentsDir,
               attachment,
@@ -1474,42 +1559,71 @@ export function makeGrokAdapter(
     const listModels: NonNullable<GrokAdapterShape["listModels"]> = (input) => {
       const binaryPath = input.binaryPath?.trim() || grokSettings.binaryPath || "grok";
       return Effect.gen(function* () {
-        const child = yield* childProcessSpawner.spawn(
-          ChildProcess.make(binaryPath, ["models"], {
-            shell: process.platform === "win32",
-            env: process.env,
-          }),
+        let cliError: unknown;
+        let apiError: ProviderAdapterRequestError | undefined;
+        const cliModels = yield* Effect.gen(function* () {
+          const child = yield* childProcessSpawner.spawn(
+            ChildProcess.make(binaryPath, ["models"], {
+              shell: process.platform === "win32",
+              env: process.env,
+            }),
+          );
+          const [stdout, stderr, exitCode] = yield* Effect.all(
+            [
+              collectStreamAsString(child.stdout),
+              collectStreamAsString(child.stderr),
+              child.exitCode.pipe(Effect.map(Number)),
+            ],
+            { concurrency: "unbounded" },
+          );
+          if (exitCode !== 0) {
+            return yield* new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "model/list",
+              detail:
+                stderr.trim() ||
+                `Grok model discovery failed because '${binaryPath} models' exited with code ${exitCode}.`,
+            });
+          }
+          return parseGrokCliModelList(stdout);
+        }).pipe(
+          Effect.catchAll((error) =>
+            Effect.sync(() => {
+              cliError = error;
+              return [];
+            }),
+          ),
         );
-        const [stdout, stderr, exitCode] = yield* Effect.all(
-          [
-            collectStreamAsString(child.stdout),
-            collectStreamAsString(child.stderr),
-            child.exitCode.pipe(Effect.map(Number)),
-          ],
-          { concurrency: "unbounded" },
-        );
-        if (exitCode !== 0) {
-          return yield* new ProviderAdapterRequestError({
-            provider: PROVIDER,
-            method: "model/list",
-            detail:
-              stderr.trim() ||
-              `Grok model discovery failed because '${binaryPath} models' exited with code ${exitCode}.`,
-          });
-        }
-        const models = parseGrokCliModelList(stdout);
+        const apiKey = getGrokApiKeyEnv();
+        const apiModels = apiKey
+          ? yield* fetchXaiLanguageModels({ apiKey, baseUrl: xaiApiBaseUrl() }).pipe(
+              Effect.catchAll((error) =>
+                Effect.sync(() => {
+                  apiError = error;
+                  return [];
+                }),
+              ),
+            )
+          : [];
+        const models = mergeGrokModelDescriptors([cliModels, apiModels]);
         if (models.length === 0) {
+          if (cliError) {
+            return yield* mapGrokModelDiscoveryError(cliError);
+          }
+          if (apiError) {
+            return yield* apiError;
+          }
           return yield* new ProviderAdapterRequestError({
             provider: PROVIDER,
             method: "model/list",
-            detail: "Grok model discovery returned no CLI models.",
+            detail: "Grok model discovery returned no models.",
           });
         }
         return {
           models,
-          source: "grok-cli",
+          source: apiModels.length > 0 ? "grok-cli+xai-api" : "grok-cli",
           cached: false,
-        };
+        } satisfies ProviderListModelsResult;
       }).pipe(
         Effect.scoped,
         Effect.mapError(mapGrokModelDiscoveryError),

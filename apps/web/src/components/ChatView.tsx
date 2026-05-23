@@ -108,6 +108,7 @@ import {
   buildThreadBreadcrumbs,
   enrichSubagentWorkEntries,
   resolveActiveThreadTitle,
+  resolveCommittedProviderModel,
   shouldConsumePendingCustomBinaryConfirmation,
   shouldShowComposerModelBootstrapSkeleton,
 } from "./ChatView.logic";
@@ -565,6 +566,9 @@ function normalizeDynamicModelSlug(provider: ProviderKind, slug: string): string
   if (provider === "claudeAgent") {
     const withoutContextSuffix = slug.replace(/\[[^\]]+\]$/u, "");
     return normalizeModelSlug(withoutContextSuffix, provider) ?? withoutContextSuffix;
+  }
+  if (provider === "grok") {
+    return slug.trim();
   }
   return normalizeModelSlug(slug, provider) ?? slug;
 }
@@ -6456,7 +6460,11 @@ export default function ChatView({
         scheduleComposerFocus();
         return;
       }
-      const resolvedModel = resolveAppModelSelection(provider, customModelsByProvider, model);
+      const resolvedModel = resolveCommittedProviderModel({
+        selectedModel: model,
+        availableOptions: modelOptionsByProvider[provider],
+        fallback: () => resolveAppModelSelection(provider, customModelsByProvider, model),
+      });
       const nextModelSelection: ModelSelection = {
         provider,
         model: resolvedModel,
@@ -6480,6 +6488,7 @@ export default function ChatView({
       setStickyComposerModelSelection,
       showExpandedCursorModelVariants,
       customModelsByProvider,
+      modelOptionsByProvider,
     ],
   );
   const setPromptFromTraits = useCallback(
