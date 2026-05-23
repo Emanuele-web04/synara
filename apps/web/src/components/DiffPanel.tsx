@@ -12,6 +12,7 @@ import {
   Columns2Icon,
   CopyIcon,
   DiffIcon,
+  AdjustmentsIcon,
   Rows3Icon,
   TextWrapIcon,
   XIcon,
@@ -60,7 +61,14 @@ import ChatMarkdown from "./ChatMarkdown";
 import { resolveDiffPanelThread } from "./DiffPanel.logic";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { Button } from "./ui/button";
-import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
+import {
+  Menu,
+  MenuCheckboxItem,
+  MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuTrigger,
+} from "./ui/menu";
 import { ToggleGroup, Toggle } from "./ui/toggle-group";
 import { FileEntryIcon } from "./chat/FileEntryIcon";
 import { DiffStatLabel, hasNonZeroStat } from "./chat/DiffStatLabel";
@@ -929,31 +937,42 @@ export default function DiffPanel({
                   </MenuRadioGroup>
                 </MenuPopup>
               </Menu>
-              {surfaceMode !== "summary" ? (
-                <Toggle
-                  aria-label={
-                    diffIgnoreWhitespace ? "Show whitespace changes" : "Hide whitespace changes"
-                  }
-                  title={
-                    diffIgnoreWhitespace ? "Show whitespace changes" : "Hide whitespace changes"
-                  }
-                  className="ml-auto shrink-0 px-2.5 self-center"
-                  variant="outline"
-                  size="xs"
-                  pressed={diffIgnoreWhitespace}
-                  onPressedChange={(pressed) => {
-                    setDiffIgnoreWhitespace(Boolean(pressed));
-                  }}
-                >
-                  <FaPlusMinus className="size-3" />
-                  <span className="text-[11px] leading-none font-medium">Hide whitespace</span>
-                </Toggle>
+              {surfaceMode === "review" ? (
+                <Menu>
+                  <MenuTrigger
+                    render={
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        className="ml-auto shrink-0 self-center"
+                        aria-label="Diff view options"
+                        title="Diff view options"
+                      />
+                    }
+                  >
+                    <AdjustmentsIcon className="size-3.5" />
+                  </MenuTrigger>
+                  <MenuPopup align="end">
+                    <MenuCheckboxItem
+                      checked={diffIgnoreWhitespace}
+                      variant="switch"
+                      onCheckedChange={(checked) => {
+                        setDiffIgnoreWhitespace(checked === true);
+                      }}
+                    >
+                      Ignore whitespace-only changes
+                    </MenuCheckboxItem>
+                  </MenuPopup>
+                </Menu>
               ) : null}
               {surfaceMode !== "summary" && diffCopyText ? (
                 <Button
                   variant="ghost"
                   size="xs"
-                  className="shrink-0 gap-1.5 self-center"
+                  className={cn(
+                    "shrink-0 gap-1.5 self-center",
+                    surfaceMode !== "review" && "ml-auto",
+                  )}
                   onClick={() => {
                     copyDiffToClipboard(diffCopyText, undefined);
                   }}
