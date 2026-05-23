@@ -1617,10 +1617,7 @@ async function stopBackendAndWaitForExit(timeoutMs = BACKEND_SHUTDOWN_TIMEOUT_MS
     backendChild.once("exit", onExit);
     backendChild.kill("SIGTERM");
 
-    const forceKillDelayMs = Math.min(
-      BACKEND_FORCE_KILL_DELAY_MS,
-      Math.max(1, timeoutMs - 500),
-    );
+    const forceKillDelayMs = Math.min(BACKEND_FORCE_KILL_DELAY_MS, Math.max(1, timeoutMs - 500));
     forceKillTimer = setTimeout(() => {
       if (backendChild.exitCode === null && backendChild.signalCode === null) {
         backendChild.kill("SIGKILL");

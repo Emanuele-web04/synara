@@ -2495,9 +2495,7 @@ describe("store read model sync", () => {
       { updateThreadArray: false },
     );
 
-    expect(next.sidebarThreadSummaryById["thread-1"]?.archivedAt).toBe(
-      "2026-02-27T00:07:00.000Z",
-    );
+    expect(next.sidebarThreadSummaryById["thread-1"]?.archivedAt).toBe("2026-02-27T00:07:00.000Z");
   });
 
   it("retains archived threads in the synced store for the archived settings panel", () => {
@@ -2650,9 +2648,7 @@ describe("store read model sync", () => {
       { updateThreadArray: false },
     );
 
-    expect(next.sidebarThreadSummaryById["thread-1"]?.archivedAt).toBe(
-      "2026-02-27T00:07:00.000Z",
-    );
+    expect(next.sidebarThreadSummaryById["thread-1"]?.archivedAt).toBe("2026-02-27T00:07:00.000Z");
   });
 
   it("preserves the current project order when syncing incoming read model updates", () => {

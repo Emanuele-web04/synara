@@ -317,6 +317,17 @@ function isGrokBuildApiModelSlug(slug: string): boolean {
   return slug === "grok-build-0.1" || /^grok-code-fast(?:-\d+(?:-\d+)?)?$/u.test(slug);
 }
 
+function readXaiModelAliases(rawModel: Record<string, unknown>): string[] {
+  const aliases = rawModel.aliases;
+  if (!Array.isArray(aliases)) {
+    return [];
+  }
+  return aliases
+    .filter((alias): alias is string => typeof alias === "string")
+    .map((alias) => alias.trim())
+    .filter((alias) => alias.length > 0);
+}
+
 function parseGrokCliModelList(stdout: string): Array<{ slug: string; name: string }> {
   const models: Array<{ slug: string; name: string; isDefault: boolean }> = [];
   let inAvailableModels = false;
@@ -381,6 +392,7 @@ export function parseXaiLanguageModelDescriptors(
       ? input.data
       : [];
   const models: Array<{ slug: string; name: string }> = [];
+  const seen = new Set<string>();
 
   for (const rawModel of rawModels) {
     if (!isRecord(rawModel) || typeof rawModel.id !== "string") {
@@ -390,8 +402,15 @@ export function parseXaiLanguageModelDescriptors(
     if (!slug) {
       continue;
     }
-    if (isGrokBuildApiModelSlug(slug)) {
-      models.push({ slug, name: formatGrokModelName(slug) });
+    const aliases = readXaiModelAliases(rawModel);
+    const supportedSlugs = [slug, ...aliases].filter(isGrokBuildApiModelSlug);
+    for (const supportedSlug of supportedSlugs) {
+      const key = supportedSlug.toLowerCase();
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      models.push({ slug: supportedSlug, name: formatGrokModelName(supportedSlug) });
     }
   }
 
@@ -436,8 +455,7 @@ function fetchXaiLanguageModels(input: {
       if (!response.ok) {
         const detail = await response.text().catch(() => "");
         throw new Error(
-          detail.trim() ||
-            `xAI language model discovery failed with HTTP ${response.status}.`,
+          detail.trim() || `xAI language model discovery failed with HTTP ${response.status}.`,
         );
       }
       return parseXaiLanguageModelDescriptors(await response.json());
@@ -1587,7 +1605,7 @@ export function makeGrokAdapter(
           }
           return parseGrokCliModelList(stdout);
         }).pipe(
-          Effect.catchAll((error) =>
+          Effect.catch((error) =>
             Effect.sync(() => {
               cliError = error;
               return [];
@@ -1597,7 +1615,7 @@ export function makeGrokAdapter(
         const apiKey = getGrokApiKeyEnv();
         const apiModels = apiKey
           ? yield* fetchXaiLanguageModels({ apiKey, baseUrl: xaiApiBaseUrl() }).pipe(
-              Effect.catchAll((error) =>
+              Effect.catch((error) =>
                 Effect.sync(() => {
                   apiError = error;
                   return [];

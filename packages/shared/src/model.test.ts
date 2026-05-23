@@ -526,9 +526,7 @@ describe("normalizeGeminiModelOptions", () => {
 describe("normalizeGrokModelOptions", () => {
   it("drops default Grok reasoning effort options and preserves supported overrides", () => {
     expect(normalizeGrokModelOptions("grok-build", { reasoningEffort: "low" })).toBeUndefined();
-    expect(
-      normalizeGrokModelOptions("grok-build-0.1", { reasoningEffort: "low" }),
-    ).toBeUndefined();
+    expect(normalizeGrokModelOptions("grok-build-0.1", { reasoningEffort: "low" })).toBeUndefined();
     expect(
       normalizeGrokModelOptions("grok-build", { reasoningEffort: "max" as never }),
     ).toBeUndefined();

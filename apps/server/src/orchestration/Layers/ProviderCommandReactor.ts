@@ -213,10 +213,7 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
 
 function hasDedicatedTextGenerationProvider(provider: ProviderKind | undefined): boolean {
   return (
-    provider === "codex" ||
-    provider === "cursor" ||
-    provider === "kilo" ||
-    provider === "opencode"
+    provider === "codex" || provider === "cursor" || provider === "kilo" || provider === "opencode"
   );
 }
 
@@ -247,7 +244,9 @@ const make = Effect.gen(function* () {
   const resolveThreadWorkspaceProject = Effect.fnUntraced(function* (
     thread: Pick<OrchestrationThread, "projectId">,
   ): Effect.fn.Return<OrchestrationProjectShell | undefined> {
-    return Option.getOrUndefined(yield* projectionSnapshotQuery.getProjectShellById(thread.projectId));
+    return Option.getOrUndefined(
+      yield* projectionSnapshotQuery.getProjectShellById(thread.projectId),
+    );
   });
 
   const resolveProjectedThreadWorkspaceCwd = Effect.fnUntraced(function* (
@@ -640,7 +639,9 @@ const make = Effect.gen(function* () {
   ) {
     const thread = yield* resolveThread(threadId);
     if (!thread) {
-      return yield* Effect.die(new Error(`Thread '${threadId}' was not found in projection state.`));
+      return yield* Effect.die(
+        new Error(`Thread '${threadId}' was not found in projection state.`),
+      );
     }
 
     const desiredRuntimeMode = options?.runtimeMode ?? thread.runtimeMode;

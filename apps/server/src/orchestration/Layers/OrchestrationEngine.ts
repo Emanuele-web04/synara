@@ -270,7 +270,11 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         return loadThreadDetailForDecider(command, commandReadModel, command.sourceThreadId);
       case "thread.turn.start":
         return command.sourceProposedPlan
-          ? loadThreadDetailForDecider(command, commandReadModel, command.sourceProposedPlan.threadId)
+          ? loadThreadDetailForDecider(
+              command,
+              commandReadModel,
+              command.sourceProposedPlan.threadId,
+            )
           : Effect.succeed(commandReadModel);
       case "thread.conversation.rollback":
       case "thread.message.edit-and-resend":

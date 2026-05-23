@@ -12,10 +12,10 @@ The goal was to investigate why DP Code could appear to consume many gigabytes o
 
 ## Files Affected
 
-| File | Status | Role |
-| --- | --- | --- |
-| `apps/desktop/src/main.ts` | Modified | Waits for backend cleanup during app quit and signal shutdown. |
-| `docs/RECAP-desktop-backend-shutdown.md` | Created | Captures the implementation recap. |
+| File                                     | Status   | Role                                                           |
+| ---------------------------------------- | -------- | -------------------------------------------------------------- |
+| `apps/desktop/src/main.ts`               | Modified | Waits for backend cleanup during app quit and signal shutdown. |
+| `docs/RECAP-desktop-backend-shutdown.md` | Created  | Captures the implementation recap.                             |
 
 ---
 

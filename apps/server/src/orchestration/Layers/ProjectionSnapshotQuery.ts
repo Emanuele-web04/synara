@@ -1484,69 +1484,75 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     sql
       .withTransaction(
         Effect.gen(function* () {
-          const [projectRows, threadRows, proposedPlanRows, sessionRows, latestTurnRows, stateRows] =
-            yield* Effect.all([
-              listProjectRows(undefined).pipe(
-                Effect.mapError(
-                  toPersistenceSqlOrDecodeError(
-                    "ProjectionSnapshotQuery.getCommandReadModel:listProjects:query",
-                    "ProjectionSnapshotQuery.getCommandReadModel:listProjects:decodeRows",
-                  ),
-                ),
-                Effect.flatMap((rows) =>
-                  decodeProjectionProjectRows(
-                    rows,
-                    "ProjectionSnapshotQuery.getCommandReadModel:listProjects:decodeModelSelections",
-                  ),
-                ),
-              ),
-              listThreadRows(undefined).pipe(
-                Effect.mapError(
-                  toPersistenceSqlOrDecodeError(
-                    "ProjectionSnapshotQuery.getCommandReadModel:listThreads:query",
-                    "ProjectionSnapshotQuery.getCommandReadModel:listThreads:decodeRows",
-                  ),
-                ),
-                Effect.flatMap((rows) =>
-                  decodeProjectionThreadRows(
-                    rows,
-                    "ProjectionSnapshotQuery.getCommandReadModel:listThreads:decodeModelSelections",
-                  ),
+          const [
+            projectRows,
+            threadRows,
+            proposedPlanRows,
+            sessionRows,
+            latestTurnRows,
+            stateRows,
+          ] = yield* Effect.all([
+            listProjectRows(undefined).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getCommandReadModel:listProjects:query",
+                  "ProjectionSnapshotQuery.getCommandReadModel:listProjects:decodeRows",
                 ),
               ),
-              listThreadProposedPlanRows(undefined).pipe(
-                Effect.mapError(
-                  toPersistenceSqlOrDecodeError(
-                    "ProjectionSnapshotQuery.getCommandReadModel:listThreadProposedPlans:query",
-                    "ProjectionSnapshotQuery.getCommandReadModel:listThreadProposedPlans:decodeRows",
-                  ),
+              Effect.flatMap((rows) =>
+                decodeProjectionProjectRows(
+                  rows,
+                  "ProjectionSnapshotQuery.getCommandReadModel:listProjects:decodeModelSelections",
                 ),
               ),
-              listThreadSessionRows(undefined).pipe(
-                Effect.mapError(
-                  toPersistenceSqlOrDecodeError(
-                    "ProjectionSnapshotQuery.getCommandReadModel:listThreadSessions:query",
-                    "ProjectionSnapshotQuery.getCommandReadModel:listThreadSessions:decodeRows",
-                  ),
+            ),
+            listThreadRows(undefined).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getCommandReadModel:listThreads:query",
+                  "ProjectionSnapshotQuery.getCommandReadModel:listThreads:decodeRows",
                 ),
               ),
-              listLatestTurnRows(undefined).pipe(
-                Effect.mapError(
-                  toPersistenceSqlOrDecodeError(
-                    "ProjectionSnapshotQuery.getCommandReadModel:listLatestTurns:query",
-                    "ProjectionSnapshotQuery.getCommandReadModel:listLatestTurns:decodeRows",
-                  ),
+              Effect.flatMap((rows) =>
+                decodeProjectionThreadRows(
+                  rows,
+                  "ProjectionSnapshotQuery.getCommandReadModel:listThreads:decodeModelSelections",
                 ),
               ),
-              listProjectionStateRows(undefined).pipe(
-                Effect.mapError(
-                  toPersistenceSqlOrDecodeError(
-                    "ProjectionSnapshotQuery.getCommandReadModel:listProjectionState:query",
-                    "ProjectionSnapshotQuery.getCommandReadModel:listProjectionState:decodeRows",
-                  ),
+            ),
+            listThreadProposedPlanRows(undefined).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getCommandReadModel:listThreadProposedPlans:query",
+                  "ProjectionSnapshotQuery.getCommandReadModel:listThreadProposedPlans:decodeRows",
                 ),
               ),
-            ]);
+            ),
+            listThreadSessionRows(undefined).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getCommandReadModel:listThreadSessions:query",
+                  "ProjectionSnapshotQuery.getCommandReadModel:listThreadSessions:decodeRows",
+                ),
+              ),
+            ),
+            listLatestTurnRows(undefined).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getCommandReadModel:listLatestTurns:query",
+                  "ProjectionSnapshotQuery.getCommandReadModel:listLatestTurns:decodeRows",
+                ),
+              ),
+            ),
+            listProjectionStateRows(undefined).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getCommandReadModel:listProjectionState:query",
+                  "ProjectionSnapshotQuery.getCommandReadModel:listProjectionState:decodeRows",
+                ),
+              ),
+            ),
+          ]);
 
           const proposedPlansByThread = new Map<string, Array<OrchestrationProposedPlan>>();
           const sessionsByThread = new Map<string, OrchestrationSession>();

@@ -1136,7 +1136,9 @@ const make = Effect.gen(function* () {
   const getProjectShell = Effect.fnUntraced(function* (
     thread: Pick<OrchestrationThread, "projectId">,
   ): Effect.fn.Return<OrchestrationProjectShell | undefined> {
-    return Option.getOrUndefined(yield* projectionSnapshotQuery.getProjectShellById(thread.projectId));
+    return Option.getOrUndefined(
+      yield* projectionSnapshotQuery.getProjectShellById(thread.projectId),
+    );
   });
 
   const isGitRepoForThread = Effect.fnUntraced(function* (threadId: ThreadId) {

@@ -69,7 +69,11 @@ describe("GrokAdapter runtime event scoping", () => {
     expect(
       parseXaiLanguageModelDescriptors({
         models: [
-          { id: "grok-build-0.1", object: "model" },
+          {
+            id: "grok-build-0.1",
+            object: "model",
+            aliases: ["grok-code-fast", "grok-code-fast-1", "grok-build-0.1", "ignored-alias"],
+          },
           { id: "grok-code-fast-1-0825", object: "model" },
           { id: "grok-4.3", object: "model" },
           { id: "   " },
@@ -78,6 +82,8 @@ describe("GrokAdapter runtime event scoping", () => {
       }),
     ).toEqual([
       { slug: "grok-build-0.1", name: "Grok Build 0.1" },
+      { slug: "grok-code-fast", name: "Grok Code Fast" },
+      { slug: "grok-code-fast-1", name: "Grok Code Fast 1" },
       { slug: "grok-code-fast-1-0825", name: "Grok Code Fast 1 0825" },
     ]);
   });

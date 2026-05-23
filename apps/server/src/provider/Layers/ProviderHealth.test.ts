@@ -209,8 +209,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           mockSpawnerLayer((args, _command, env) => {
             assert.strictEqual(env?.CODEX_HOME, expectedCodexHome);
             const joined = args.join(" ");
-            if (joined === "--version")
-              return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
+            if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
             if (joined === "login status") {
               sawLoginStatusProbe = true;
               return { stdout: "Logged in\n", stderr: "", code: 0 };

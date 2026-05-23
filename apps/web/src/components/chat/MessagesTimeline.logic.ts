@@ -155,7 +155,7 @@ export function deriveMessagesTimelineRows(input: {
   completionSummary?: string | null;
   isWorking: boolean;
   activeTurnInProgress?: boolean;
-  activeTurnId?: TurnId | null;
+  activeTurnId?: TurnId | null | undefined;
   activeTurnStartedAt: string | null;
   turnDiffSummaryByAssistantMessageId: ReadonlyMap<MessageId, TurnDiffSummary>;
   revertTurnCountByUserMessageId: ReadonlyMap<MessageId, number>;
