@@ -804,22 +804,6 @@ export default function DiffPanel({
             >
               <TextWrapIcon className="size-3" />
             </Toggle>
-            <Toggle
-              aria-label={
-                diffIgnoreWhitespace ? "Show whitespace changes" : "Hide whitespace changes"
-              }
-              title={diffIgnoreWhitespace ? "Show whitespace changes" : "Hide whitespace changes"}
-              className="px-2.5"
-              variant="outline"
-              size="xs"
-              pressed={diffIgnoreWhitespace}
-              onPressedChange={(pressed) => {
-                setDiffIgnoreWhitespace(Boolean(pressed));
-              }}
-            >
-              <FaPlusMinus className="size-3" />
-              <span className="text-[11px] leading-none font-medium">Hide whitespace</span>
-            </Toggle>
           </>
         ) : null}
         {onClosePanel ? (
@@ -945,11 +929,31 @@ export default function DiffPanel({
                   </MenuRadioGroup>
                 </MenuPopup>
               </Menu>
+              {surfaceMode !== "summary" ? (
+                <Toggle
+                  aria-label={
+                    diffIgnoreWhitespace ? "Show whitespace changes" : "Hide whitespace changes"
+                  }
+                  title={
+                    diffIgnoreWhitespace ? "Show whitespace changes" : "Hide whitespace changes"
+                  }
+                  className="ml-auto shrink-0 px-2.5 self-center"
+                  variant="outline"
+                  size="xs"
+                  pressed={diffIgnoreWhitespace}
+                  onPressedChange={(pressed) => {
+                    setDiffIgnoreWhitespace(Boolean(pressed));
+                  }}
+                >
+                  <FaPlusMinus className="size-3" />
+                  <span className="text-[11px] leading-none font-medium">Hide whitespace</span>
+                </Toggle>
+              ) : null}
               {surfaceMode !== "summary" && diffCopyText ? (
                 <Button
                   variant="ghost"
                   size="xs"
-                  className="ml-auto shrink-0 gap-1.5 self-center"
+                  className="shrink-0 gap-1.5 self-center"
                   onClick={() => {
                     copyDiffToClipboard(diffCopyText, undefined);
                   }}
