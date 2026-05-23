@@ -1504,9 +1504,7 @@ function SettingsRouteView() {
                   updateSettings({ sidebarProjectSortOrder: value });
                 }}
                 ariaLabel="Project sort order"
-                valueContent={
-                  SIDEBAR_PROJECT_SORT_ORDER_LABELS[settings.sidebarProjectSortOrder]
-                }
+                valueContent={SIDEBAR_PROJECT_SORT_ORDER_LABELS[settings.sidebarProjectSortOrder]}
               >
                 <SelectItem hideIndicator value="updated_at">
                   {SIDEBAR_PROJECT_SORT_ORDER_LABELS.updated_at}

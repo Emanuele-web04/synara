@@ -864,15 +864,16 @@ diffs-container {
   background: color-mix(in srgb, var(--card) 92%, var(--background));
 }
 
-/* In light mode the composer should stay close to the chat canvas, just slightly shaded.
-   Dark mode keeps the user-bubble surface treatment we aligned elsewhere. The same
-   tone is reused for popover/menu/chip surfaces so they line up with the composer. */
+/* Composer surface follows Codex's renderer token path; dark Electron composer uses
+   the opaque control/dropdown token derived from the active chrome theme. */
 :root {
   --composer-surface: color-mix(in srgb, var(--color-background-surface-under) 97%, white 3%);
+  --runtime-full-access-accent: #e25505;
 }
 
 .dark {
-  --composer-surface: color-mix(in srgb, var(--background) 96%, var(--color-white));
+  --composer-surface: var(--color-token-dropdown-background);
+  --runtime-full-access-accent: #fe8549;
 }
 
 .chat-composer-surface {

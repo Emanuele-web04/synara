@@ -665,6 +665,10 @@ export function buildThemeCssVariables(
   const warningColor = variant === "dark" ? "#f5b44a" : "#d97706";
   const sidebarSurfaceUnder = readCodexVariable("--color-background-surface-under");
   const sidebarRaisedSurface = readCodexVariable("--color-background-elevated-primary");
+  const composerSurface =
+    variant === "dark"
+      ? readCodexVariable("--color-background-control-opaque")
+      : "color-mix(in srgb, var(--color-background-surface-under) 97%, white 3%)";
   const composerFocusBorder = buildComposerFocusBorder(
     pack,
     variant,
@@ -698,6 +702,7 @@ export function buildThemeCssVariables(
     "--border": readCodexVariable("--color-border"),
     "--card": readCodexVariable("--color-background-panel"),
     "--card-foreground": readCodexVariable("--color-text-foreground"),
+    "--composer-surface": composerSurface,
     "--destructive": pack.theme.semanticColors.diffRemoved,
     "--destructive-foreground": pack.theme.surface,
     "--foreground": readCodexVariable("--color-text-foreground"),
@@ -716,8 +721,8 @@ export function buildThemeCssVariables(
     "--secondary": readCodexVariable("--color-background-button-secondary"),
     "--secondary-foreground": readCodexVariable("--color-text-button-secondary"),
     "--sidebar": readCodexVariable("--color-background-surface-under"),
-    "--sidebar-accent": readCodexVariable("--color-background-button-secondary"),
-    "--sidebar-accent-active": readCodexVariable("--color-background-button-secondary"),
+    "--sidebar-accent": readCodexVariable("--color-background-button-secondary-hover"),
+    "--sidebar-accent-active": readCodexVariable("--color-background-button-secondary-hover"),
     "--sidebar-accent-foreground": readCodexVariable("--color-text-foreground"),
     "--sidebar-border": readCodexVariable("--color-border"),
     "--sidebar-foreground": readCodexVariable("--color-text-foreground"),
@@ -871,9 +876,7 @@ function buildThemeTokenAliases(codexVariables: Record<string, string>): Record<
     "--color-token-checkbox-active-foreground": readCodexVariable("--color-text-foreground"),
     "--color-token-description-foreground": readCodexVariable("--color-text-foreground-secondary"),
     "--color-token-disabled-foreground": readCodexVariable("--color-text-foreground-tertiary"),
-    "--color-token-dropdown-background": readCodexVariable(
-      "--color-background-elevated-primary-opaque",
-    ),
+    "--color-token-dropdown-background": readCodexVariable("--color-background-control-opaque"),
     "--color-token-focus-border": readCodexVariable("--color-border-focus"),
     "--color-token-foreground": readCodexVariable("--color-text-foreground"),
     "--color-token-input-background": readCodexVariable("--color-background-control"),
@@ -889,8 +892,10 @@ function buildThemeTokenAliases(codexVariables: Record<string, string>): Record<
     "--color-token-list-active-selection-foreground": readCodexVariable("--color-text-foreground"),
     "--color-token-list-active-selection-icon-foreground":
       readCodexVariable("--color-icon-primary"),
-    "--color-token-list-hover-background": readCodexVariable("--color-background-button-secondary"),
-    "--color-token-main-surface-primary": readCodexVariable("--color-background-surface-under"),
+    "--color-token-list-hover-background": readCodexVariable(
+      "--color-background-button-secondary-hover",
+    ),
+    "--color-token-main-surface-primary": readCodexVariable("--color-background-surface"),
     "--color-token-menu-background": readCodexVariable("--color-background-elevated-primary"),
     "--color-token-menu-border": readCodexVariable("--color-border"),
     "--color-token-progress-bar-background": readCodexVariable("--color-background-accent"),
@@ -924,57 +929,7 @@ function getRequiredVariable(variables: Record<string, string>, name: string): s
 }
 
 function buildLightDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
-  const controlBase = mixRgb(theme.surface, theme.ink, 0.06 + theme.contrast * 0.05);
-  const focusBase = mixRgb(theme.accent, WHITE, 0.3 + theme.contrast * 0.15);
-  const elevatedPrimaryBase = mixRgb(theme.surface, theme.ink, 0.08 + theme.contrast * 0.08);
-
-  return {
-    accentBackground: mixHex("#000000", theme.theme.accent, 0.2 + theme.contrast * 0.08),
-    accentBackgroundActive: mixHex("#000000", theme.theme.accent, 0.22 + theme.contrast * 0.12),
-    accentBackgroundHover: mixHex("#000000", theme.theme.accent, 0.21 + theme.contrast * 0.1),
-    border: formatRgba(theme.ink, 0.06 + theme.contrast * 0.04),
-    borderFocus: formatRgba(focusBase, 0.7 + theme.contrast * 0.1),
-    borderHeavy: formatRgba(theme.ink, 0.12 + theme.contrast * 0.06),
-    borderLight: formatRgba(theme.ink, 0.03 + theme.contrast * 0.02),
-    buttonPrimaryBackground: theme.theme.ink,
-    buttonPrimaryBackgroundActive: formatRgba(theme.ink, 0.07 + theme.contrast * 0.05),
-    buttonPrimaryBackgroundHover: formatRgba(theme.ink, 0.04 + theme.contrast * 0.03),
-    buttonPrimaryBackgroundInactive: formatRgba(theme.ink, 0.02 + theme.contrast * 0.02),
-    buttonSecondaryBackground: formatRgba(theme.ink, 0.04 + theme.contrast * 0.02),
-    buttonSecondaryBackgroundActive: formatRgba(theme.ink, 0.14 + theme.contrast * 0.06),
-    buttonSecondaryBackgroundHover: formatRgba(theme.ink, 0.1 + theme.contrast * 0.05),
-    buttonSecondaryBackgroundInactive: formatRgba(theme.ink, 0.02 + theme.contrast * 0.03),
-    buttonTertiaryBackground: formatRgba(theme.ink, 0.02 + theme.contrast * 0.015),
-    buttonTertiaryBackgroundActive: formatRgba(theme.ink, 0.07 + theme.contrast * 0.05),
-    buttonTertiaryBackgroundHover: formatRgba(theme.ink, 0.05 + theme.contrast * 0.03),
-    controlBackground: formatRgba(controlBase, 0.96),
-    controlBackgroundOpaque: formatOpaqueRgb(controlBase),
-    elevatedPrimary: formatRgba(elevatedPrimaryBase, 0.96),
-    elevatedPrimaryOpaque: formatOpaqueRgb(elevatedPrimaryBase),
-    elevatedSecondary: formatRgba(theme.ink, 0.02 + theme.contrast * 0.02),
-    elevatedSecondaryOpaque: mixHex(
-      theme.theme.surface,
-      theme.theme.ink,
-      0.04 + theme.contrast * 0.05,
-    ),
-    iconAccent: theme.theme.accent,
-    iconPrimary: formatRgba(theme.ink, 0.82 + theme.contrast * 0.14),
-    iconSecondary: formatRgba(theme.ink, 0.65 + theme.contrast * 0.1),
-    iconTertiary: formatRgba(theme.ink, 0.45 + theme.contrast * 0.1),
-    simpleScrim: formatRgba(theme.ink, 0.08 + theme.contrast * 0.04),
-    // Keep light-mode affordances on the real accent so links and file labels
-    // match the active theme color instead of a softened focus-only variant.
-    textAccent: theme.theme.accent,
-    textButtonPrimary: theme.theme.surface,
-    textButtonSecondary: mixHex(theme.theme.ink, theme.theme.surface, 0.7 + theme.contrast * 0.1),
-    textButtonTertiary: formatRgba(theme.ink, 0.45 + theme.contrast * 0.1),
-    textForeground: theme.theme.ink,
-    textForegroundSecondary: formatRgba(theme.ink, 0.65 + theme.contrast * 0.1),
-    textForegroundTertiary: formatRgba(theme.ink, 0.42 + theme.contrast * 0.13),
-  };
-}
-
-function buildDarkDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
+  // Mirrors Codex Electron's light chrome derivation from chrome-theme-C3NmvE0H.js.
   const controlBase = mixRgb(theme.surface, WHITE, 0.09 + theme.contrast * 0.04);
   const elevatedSecondaryBase = mixRgb(theme.surface, WHITE, 0.08 + theme.contrast * 0.08);
   const elevatedPrimaryBase = mixRgb(theme.surface, WHITE, 0.16 + theme.contrast * 0.12);
@@ -1000,8 +955,8 @@ function buildDarkDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
     buttonPrimaryBackgroundHover: formatRgba(theme.ink, 0.05 + theme.contrast * 0.06),
     buttonPrimaryBackgroundInactive: formatRgba(theme.ink, 0.18 + theme.contrast * 0.14),
     buttonSecondaryBackground: formatRgba(theme.ink, 0.04 + theme.contrast * 0.02),
-    buttonSecondaryBackgroundActive: formatRgba(theme.ink, 0.1 + theme.contrast * 0.06),
-    buttonSecondaryBackgroundHover: formatRgba(theme.ink, 0.08 + theme.contrast * 0.05),
+    buttonSecondaryBackgroundActive: formatRgba(theme.ink, 0.03 + theme.contrast * 0.02),
+    buttonSecondaryBackgroundHover: formatRgba(theme.ink, 0.04 + theme.contrast * 0.03),
     buttonSecondaryBackgroundInactive: formatRgba(theme.ink, 0.01 + theme.contrast * 0.02),
     buttonTertiaryBackground: formatRgba(theme.ink, 0),
     buttonTertiaryBackgroundActive: formatRgba(theme.ink, 0.16 + theme.contrast * 0.08),
@@ -1024,6 +979,59 @@ function buildDarkDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
     textForeground: theme.theme.ink,
     textForegroundSecondary: formatRgba(theme.ink, 0.65 + theme.contrast * 0.1),
     textForegroundTertiary: formatRgba(theme.ink, 0.45 + theme.contrast * 0.1),
+  };
+}
+
+function buildDarkDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
+  // Mirrors Codex Electron's dark chrome derivation from chrome-theme-C3NmvE0H.js.
+  const controlBase = mixRgb(theme.surface, theme.ink, 0.06 + theme.contrast * 0.05);
+  const focusBase = mixRgb(theme.accent, WHITE, 0.3 + theme.contrast * 0.15);
+  const primaryButtonBase = mixRgb(theme.surface, BLACK, 0.38 + theme.contrast * 0.12);
+  const elevatedPrimaryBase = mixRgb(theme.surface, theme.ink, 0.08 + theme.contrast * 0.08);
+
+  return {
+    accentBackground: mixHex("#000000", theme.theme.accent, 0.2 + theme.contrast * 0.08),
+    accentBackgroundActive: mixHex("#000000", theme.theme.accent, 0.22 + theme.contrast * 0.12),
+    accentBackgroundHover: mixHex("#000000", theme.theme.accent, 0.21 + theme.contrast * 0.1),
+    border: formatRgba(theme.ink, 0.06 + theme.contrast * 0.04),
+    borderFocus: formatRgba(focusBase, 0.7 + theme.contrast * 0.1),
+    borderHeavy: formatRgba(theme.ink, 0.12 + theme.contrast * 0.06),
+    borderLight: formatRgba(theme.ink, 0.03 + theme.contrast * 0.02),
+    buttonPrimaryBackground: formatOpaqueRgb(primaryButtonBase),
+    buttonPrimaryBackgroundActive: formatRgba(theme.ink, 0.07 + theme.contrast * 0.05),
+    buttonPrimaryBackgroundHover: formatRgba(theme.ink, 0.04 + theme.contrast * 0.03),
+    buttonPrimaryBackgroundInactive: formatRgba(theme.ink, 0.02 + theme.contrast * 0.02),
+    buttonSecondaryBackground: formatRgba(theme.ink, 0.04 + theme.contrast * 0.02),
+    buttonSecondaryBackgroundActive: formatRgba(theme.ink, 0.09 + theme.contrast * 0.05),
+    buttonSecondaryBackgroundHover: formatRgba(theme.ink, 0.06 + theme.contrast * 0.03),
+    buttonSecondaryBackgroundInactive: formatRgba(theme.ink, 0.02 + theme.contrast * 0.03),
+    buttonTertiaryBackground: formatRgba(theme.ink, 0.02 + theme.contrast * 0.015),
+    buttonTertiaryBackgroundActive: formatRgba(theme.ink, 0.07 + theme.contrast * 0.05),
+    buttonTertiaryBackgroundHover: formatRgba(theme.ink, 0.05 + theme.contrast * 0.03),
+    controlBackground: formatRgba(controlBase, 0.96),
+    controlBackgroundOpaque: formatOpaqueRgb(controlBase),
+    elevatedPrimary: formatRgba(elevatedPrimaryBase, 0.96),
+    elevatedPrimaryOpaque: formatOpaqueRgb(elevatedPrimaryBase),
+    elevatedSecondary: formatRgba(theme.ink, 0.02 + theme.contrast * 0.02),
+    elevatedSecondaryOpaque: mixHex(
+      theme.theme.surface,
+      theme.theme.ink,
+      0.04 + theme.contrast * 0.05,
+    ),
+    iconAccent: formatOpaqueRgb(focusBase),
+    iconPrimary: formatRgba(theme.ink, 0.82 + theme.contrast * 0.14),
+    iconSecondary: formatRgba(theme.ink, 0.65 + theme.contrast * 0.1),
+    iconTertiary: formatRgba(theme.ink, 0.45 + theme.contrast * 0.1),
+    simpleScrim: formatRgba(theme.ink, 0.08 + theme.contrast * 0.04),
+    // Codex brightens dark accent affordances through the same focus mix used
+    // for the border, rather than using the raw accent directly.
+    textAccent: formatOpaqueRgb(focusBase),
+    textButtonPrimary: formatOpaqueRgb(primaryButtonBase),
+    textButtonSecondary: mixHex(theme.theme.ink, theme.theme.surface, 0.7 + theme.contrast * 0.1),
+    textButtonTertiary: formatRgba(theme.ink, 0.45 + theme.contrast * 0.1),
+    textForeground: theme.theme.ink,
+    textForegroundSecondary: formatRgba(theme.ink, 0.65 + theme.contrast * 0.1),
+    textForegroundTertiary: formatRgba(theme.ink, 0.42 + theme.contrast * 0.13),
   };
 }
 

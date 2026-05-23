@@ -78,7 +78,7 @@ function MenuItem({
   return (
     <MenuPrimitive.Item
       className={cn(
-        "[&>svg]:-mx-0.5 flex min-h-8 cursor-default select-none items-center gap-2 rounded-sm px-2 py-1 text-[length:var(--app-font-size-ui,12px)] text-foreground outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-elevated-secondary)] data-inset:ps-8 data-[variant=destructive]:text-destructive-foreground data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 sm:min-h-7 [&>svg:not([class*='opacity-'])]:opacity-80 [&>svg:not([class*='size-'])]:size-4.5 sm:[&>svg:not([class*='size-'])]:size-4 [&>svg]:pointer-events-none [&>svg]:shrink-0",
+        "[&>svg]:-mx-0.5 flex min-h-8 cursor-default select-none items-center gap-2 rounded-sm px-2 py-1 text-[length:var(--app-font-size-ui,12px)] text-foreground outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-inset:ps-8 data-[variant=destructive]:text-destructive-foreground data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 sm:min-h-7 [&>svg:not([class*='opacity-'])]:opacity-80 [&>svg:not([class*='size-'])]:size-4.5 sm:[&>svg:not([class*='size-'])]:size-4 [&>svg]:pointer-events-none [&>svg]:shrink-0",
         className,
       )}
       data-inset={inset}
@@ -102,7 +102,7 @@ function MenuCheckboxItem({
     <MenuPrimitive.CheckboxItem
       checked={checked}
       className={cn(
-        "grid min-h-8 in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)] cursor-default items-center gap-2 rounded-sm py-1 ps-2 text-[length:var(--app-font-size-ui,12px)] text-foreground outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-elevated-secondary)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 sm:min-h-7 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
+        "grid min-h-8 in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)] cursor-default items-center gap-2 rounded-sm py-1 ps-2 text-[length:var(--app-font-size-ui,12px)] text-foreground outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 sm:min-h-7 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
         variant === "switch" ? "grid-cols-[1fr_auto] gap-4 pe-1.5" : "grid-cols-[1rem_1fr] pe-4",
         className,
       )}
@@ -151,7 +151,7 @@ function MenuRadioItem({ className, children, ...props }: MenuPrimitive.RadioIte
   return (
     <MenuPrimitive.RadioItem
       className={cn(
-        "grid min-h-8 in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)] cursor-default grid-cols-[1rem_1fr] items-center gap-2 rounded-sm py-1 ps-2 pe-4 text-[length:var(--app-font-size-ui,12px)] text-foreground outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-elevated-secondary)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 sm:min-h-7 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
+        "grid min-h-8 in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)] cursor-default grid-cols-[1rem_1fr] items-center gap-2 rounded-sm py-1 ps-2 pe-4 text-[length:var(--app-font-size-ui,12px)] text-foreground outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 sm:min-h-7 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
         className,
       )}
       data-slot="menu-radio-item"
@@ -235,7 +235,7 @@ function MenuSubTrigger({
   return (
     <MenuPrimitive.SubmenuTrigger
       className={cn(
-        "flex min-h-8 items-center gap-2 rounded-sm px-2 py-1 text-[length:var(--app-font-size-ui,12px)] text-foreground outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-elevated-secondary)] data-popup-open:bg-[var(--color-background-elevated-secondary)] data-inset:ps-8 data-highlighted:text-[var(--color-text-foreground)] data-popup-open:text-[var(--color-text-foreground)] data-disabled:opacity-64 sm:min-h-7 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none",
+        "flex min-h-8 items-center gap-2 rounded-sm px-2 py-1 text-[length:var(--app-font-size-ui,12px)] text-foreground outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-popup-open:bg-[var(--color-background-button-secondary-hover)] data-inset:ps-8 data-highlighted:text-[var(--color-text-foreground)] data-popup-open:text-[var(--color-text-foreground)] data-disabled:opacity-64 sm:min-h-7 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none",
         className,
       )}
       data-inset={inset}

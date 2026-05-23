@@ -7,6 +7,11 @@ import { memo } from "react";
 import { Alert, AlertAction, AlertDescription } from "../ui/alert";
 import { IconButton } from "../ui/icon-button";
 import { CircleAlertIcon, XIcon } from "~/lib/icons";
+import { cn } from "~/lib/utils";
+import {
+  CHAT_COLUMN_FRAME_CLASS_NAME,
+  CHAT_COLUMN_GUTTER_CLASS_NAME,
+} from "./composerPickerStyles";
 
 export const ThreadErrorBanner = memo(function ThreadErrorBanner({
   error,
@@ -17,7 +22,8 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
 }) {
   if (!error) return null;
   return (
-    <div className="pt-3 mx-auto max-w-3xl">
+    <div className={cn("pt-3", CHAT_COLUMN_GUTTER_CLASS_NAME)}>
+      <div className={CHAT_COLUMN_FRAME_CLASS_NAME}>
       <Alert variant="error">
         <CircleAlertIcon />
         <AlertDescription className="line-clamp-3" title={error}>
@@ -35,6 +41,7 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
           </AlertAction>
         )}
       </Alert>
+      </div>
     </div>
   );
 });

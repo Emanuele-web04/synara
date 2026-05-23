@@ -11,7 +11,7 @@ import { memo, useEffect, useMemo, useRef } from "react";
 import { RiRobot3Line } from "react-icons/ri";
 import { type ComposerTriggerKind } from "../../composer-logic";
 import { type ComposerSlashCommand } from "../../composerSlashCommands";
-import { ListTodoIcon, PlugIcon } from "~/lib/icons";
+import { ListTodoIcon, PlugIcon, SkillCubeIcon } from "~/lib/icons";
 import {
   TbEraser,
   TbBrain,
@@ -37,34 +37,6 @@ import {
   CommandSeparator,
 } from "../ui/command";
 import { FileEntryIcon } from "./FileEntryIcon";
-
-function SkillCubeIcon(props: { className?: string }) {
-  return (
-    <svg className={props.className} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path
-        d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path
-        d="m3.3 7 8.7 5 8.7-5"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M12 22V12"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
 
 function humanizeProviderCommandName(command: string): string {
   return command
@@ -423,9 +395,9 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
       ref={props.itemRef}
       value={props.item.id}
       className={cn(
-        "cursor-pointer select-none gap-2 rounded-lg px-2 py-1 transition-colors hover:bg-[var(--color-background-elevated-secondary)] data-highlighted:bg-[var(--color-background-elevated-secondary)]",
+        "cursor-pointer select-none gap-2 rounded-lg px-2 py-1 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] data-highlighted:bg-[var(--color-background-button-secondary-hover)]",
         props.isActive &&
-          "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]",
+          "bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)]",
       )}
       onMouseMove={() => {
         if (!props.isActive) props.onHighlight(props.item.id);

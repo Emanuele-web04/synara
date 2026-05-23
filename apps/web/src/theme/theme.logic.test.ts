@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_CHROME_THEME_BY_VARIANT,
   DEFAULT_THEME_STATE,
   buildResolvedThemeTokens,
   buildThemeCssVariables,
@@ -292,8 +293,13 @@ describe("buildThemeCssVariables", () => {
     expect(cssVariables.variables["--codex-base-accent"]).toBe("#606acc");
     expect(cssVariables.variables["--background"]).toBe("#0d0d0f");
     expect(cssVariables.variables["--card"]).toBe("#151517");
+    expect(cssVariables.variables["--composer-surface"]).toBe("rgb(27, 27, 29)");
+    expect(cssVariables.variables["--composer-surface"]).not.toBe(cssVariables.variables["--card"]);
     expect(cssVariables.variables["--sidebar-accent"]).toBe(
-      cssVariables.variables["--sidebar-accent-active"],
+      "rgba(227, 228, 230, 0.058)",
+    );
+    expect(cssVariables.variables["--sidebar-accent-active"]).toBe(
+      "rgba(227, 228, 230, 0.058)",
     );
     expect(cssVariables.variables["--theme-font-ui-family"]).toBe("Inter");
     expect(cssVariables.variables["--theme-font-code-family"]).toBe('"Jetbrains Mono"');
@@ -313,11 +319,30 @@ describe("buildThemeCssVariables", () => {
     expect(tokens.computed.panel).toBe("#151517");
     expect(tokens.derived.textForegroundSecondary).toBe("rgba(227, 228, 230, 0.645)");
     expect(tokens.derived.buttonSecondaryBackground).toBe("rgba(227, 228, 230, 0.039)");
+    expect(tokens.derived.iconAccent).toBe("rgb(143, 150, 219)");
+    expect(tokens.derived.textButtonPrimary).toBe("rgb(9, 9, 11)");
     expect(tokens.aliases["--color-token-side-bar-background"]).toBe("#0d0d0f");
     expect(tokens.aliases["--color-token-list-hover-background"]).toBe(
-      tokens.derived.buttonSecondaryBackground,
+      tokens.derived.buttonSecondaryBackgroundHover,
     );
-    expect(tokens.aliases["--color-token-input-background"]).toBe("rgba(36, 36, 38, 0.96)");
+    expect(tokens.aliases["--color-token-dropdown-background"]).toBe(
+      tokens.derived.controlBackgroundOpaque,
+    );
+    expect(tokens.aliases["--color-token-main-surface-primary"]).toBe("#0f0f11");
+    expect(tokens.aliases["--color-token-input-background"]).toBe("rgba(27, 27, 29, 0.96)");
+  });
+
+  it("matches Codex's default dark chrome composer/dropdown control color", () => {
+    const tokens = buildResolvedThemeTokens(
+      {
+        codeThemeId: "codex",
+        theme: DEFAULT_CHROME_THEME_BY_VARIANT.dark,
+      },
+      "dark",
+    );
+
+    expect(tokens.derived.controlBackgroundOpaque).toBe("rgb(45, 45, 45)");
+    expect(tokens.aliases["--color-token-dropdown-background"]).toBe("rgb(45, 45, 45)");
   });
 
   it("uses the light-theme foreground color for the primary button background", () => {

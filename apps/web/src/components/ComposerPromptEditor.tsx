@@ -57,6 +57,7 @@ import {
 } from "~/lib/terminalContext";
 import type { ProviderMentionReference } from "@t3tools/contracts";
 import { cn } from "~/lib/utils";
+import { COMPOSER_EDITOR_MIN_HEIGHT_CLASS_NAME } from "./chat/composerPickerStyles";
 import {
   ComposerMentionNode,
   ComposerSkillNode,
@@ -952,12 +953,13 @@ function ComposerPromptEditorInner({
 
   return (
     <ComposerTerminalContextActionsContext.Provider value={terminalContextActions}>
-      <div className="relative">
+      <div className={cn("relative", COMPOSER_EDITOR_MIN_HEIGHT_CLASS_NAME)}>
         <PlainTextPlugin
           contentEditable={
             <ContentEditable
               className={cn(
-                "font-system-ui block max-h-[200px] min-h-[3rem] w-full overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-[length:var(--app-font-size-chat,12px)] leading-relaxed text-foreground focus:outline-none",
+                "font-system-ui block max-h-[200px] w-full overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-[length:var(--app-font-size-chat,12px)] leading-relaxed text-foreground focus:outline-none",
+                COMPOSER_EDITOR_MIN_HEIGHT_CLASS_NAME,
                 className,
               )}
               data-testid="composer-editor"

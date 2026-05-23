@@ -78,11 +78,7 @@ description: Help globally
 
       const skills = await discoverCursorSkills({ cwd, homeDir });
 
-      expect(skills.map((skill) => skill.name)).toEqual([
-        "reviewer",
-        "writer",
-        "global-helper",
-      ]);
+      expect(skills.map((skill) => skill.name)).toEqual(["reviewer", "writer", "global-helper"]);
       expect(skills[0]).toMatchObject({
         name: "reviewer",
         description: "Review code",

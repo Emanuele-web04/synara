@@ -520,30 +520,30 @@ describe("resolveThreadStatusPill", () => {
 describe("resolveThreadRowClassName", () => {
   it("keeps selected active rows on the selected sidebar background", () => {
     const className = resolveThreadRowClassName({ isActive: true, isSelected: true });
-    expect(className).toContain("bg-[var(--color-background-button-secondary)]");
-    expect(className).toContain("hover:bg-[var(--color-background-button-secondary)]");
+    expect(className).toContain("bg-[var(--color-background-button-secondary-hover)]");
+    expect(className).toContain("hover:bg-[var(--color-background-button-secondary-hover)]");
     expect(className).toContain("text-[var(--color-text-foreground)]");
-    expect(className).not.toContain("hover:bg-[var(--color-background-button-secondary-hover)]");
+    expect(className).not.toContain("bg-[var(--color-background-elevated-secondary)]");
   });
 
-  it("keeps selected rows visually stable on hover", () => {
+  it("keeps selected rows visually aligned with hover", () => {
     const className = resolveThreadRowClassName({ isActive: false, isSelected: true });
-    expect(className).toContain("bg-[var(--color-background-elevated-secondary)]");
-    expect(className).toContain("hover:bg-[var(--color-background-elevated-secondary)]");
+    expect(className).toContain("bg-[var(--color-background-button-secondary-hover)]");
+    expect(className).toContain("hover:bg-[var(--color-background-button-secondary-hover)]");
     expect(className).toContain("text-[var(--color-text-foreground)]");
-    expect(className).not.toContain("hover:bg-[var(--color-background-button-secondary-hover)]");
+    expect(className).not.toContain("bg-[var(--color-background-elevated-secondary)]");
   });
 
-  it("uses the selected sidebar background for active-only threads", () => {
+  it("uses the hover sidebar background for active-only threads", () => {
     const className = resolveThreadRowClassName({ isActive: true, isSelected: false });
-    expect(className).toContain("bg-[var(--color-background-button-secondary)]");
-    expect(className).toContain("hover:bg-[var(--color-background-button-secondary)]");
+    expect(className).toContain("bg-[var(--color-background-button-secondary-hover)]");
+    expect(className).toContain("hover:bg-[var(--color-background-button-secondary-hover)]");
   });
 
-  it("matches hover-only rows to the selected active background", () => {
+  it("uses the Codex list hover token for hover-only rows", () => {
     const className = resolveThreadRowClassName({ isActive: false, isSelected: false });
-    expect(className).toContain("hover:bg-[var(--color-background-button-secondary)]");
-    expect(className).not.toContain("hover:bg-[var(--color-background-button-secondary-hover)]");
+    expect(className).toContain("hover:bg-[var(--color-background-button-secondary-hover)]");
+    expect(className).not.toContain("hover:bg-[var(--color-background-button-secondary)]");
   });
 });
 

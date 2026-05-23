@@ -8,6 +8,11 @@ import { memo } from "react";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "../ui/alert";
 import { IconButton } from "../ui/icon-button";
 import { CircleAlertIcon, XIcon } from "~/lib/icons";
+import { cn } from "~/lib/utils";
+import {
+  CHAT_COLUMN_FRAME_CLASS_NAME,
+  CHAT_COLUMN_GUTTER_CLASS_NAME,
+} from "./composerPickerStyles";
 
 export const ProviderHealthBanner = memo(function ProviderHealthBanner({
   onDismiss,
@@ -28,7 +33,8 @@ export const ProviderHealthBanner = memo(function ProviderHealthBanner({
   const title = `${providerLabel} provider status`;
 
   return (
-    <div className="pt-3 mx-auto max-w-3xl">
+    <div className={cn("pt-3", CHAT_COLUMN_GUTTER_CLASS_NAME)}>
+      <div className={CHAT_COLUMN_FRAME_CLASS_NAME}>
       <Alert variant={status.status === "error" ? "error" : "warning"}>
         <CircleAlertIcon />
         <AlertTitle>{title}</AlertTitle>
@@ -47,6 +53,7 @@ export const ProviderHealthBanner = memo(function ProviderHealthBanner({
           </AlertAction>
         ) : null}
       </Alert>
+      </div>
     </div>
   );
 });

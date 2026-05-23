@@ -33,6 +33,7 @@ import {
   type LucideIcon,
   McpIcon,
   QueueArrow,
+  SkillCubeIcon,
   SquarePenIcon,
   TerminalIcon,
   Undo2Icon,
@@ -100,32 +101,6 @@ import { deriveUserMessagePreviewState } from "./userMessagePreview";
 
 const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
 const MAX_VISIBLE_INLINE_TOOL_ENTRIES = 4;
-
-const SkillCubeIcon: LucideIcon = (props) => (
-  <svg {...props} viewBox="0 0 24 24" fill="none">
-    <path
-      d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-    <path
-      d="m3.3 7 8.7 5 8.7-5"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-    <path
-      d="M12 22V12"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-  </svg>
-);
 
 const AgentTaskIcon: LucideIcon = (props) => (
   <RiRobot3Line className={props.className} style={props.style} />
@@ -747,7 +722,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   <span className="h-px flex-1 bg-border" />
                 </div>
               )}
-              <div className="min-w-0 px-1 py-0.5">
+              <div className="min-w-0 py-0.5">
                 <div data-assistant-message-id={row.message.id}>
                   <ChatMarkdown
                     text={messageText}
@@ -954,7 +929,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         })()}
 
       {row.kind === "proposed-plan" && (
-        <div className="min-w-0 px-1 py-0.5">
+        <div className="min-w-0 py-0.5">
           <ProposedPlanCard
             planMarkdown={row.proposedPlan.planMarkdown}
             cwd={markdownCwd}
@@ -966,7 +941,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
       {row.kind === "working" && (
         <div
-          className="flex items-center gap-1 pt-1 pl-1 text-muted-foreground/70 font-system-ui"
+          className="flex items-center gap-1 pt-1 text-muted-foreground/70 font-system-ui"
           style={{ fontSize: `${appTypographyScale.uiSmPx}px` }}
         >
           <span>
@@ -1011,14 +986,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       ref={resolvedListRef}
       data={rows}
       keyExtractor={(row) => row.id}
-      renderItem={({ item }) => (
-        <div
-          data-timeline-root="true"
-          className="mx-auto w-full min-w-0 max-w-3xl overflow-x-hidden"
-        >
-          {renderRowContent(item)}
-        </div>
-      )}
+      renderItem={({ item }) => renderRowContent(item)}
       estimatedItemSize={90}
       // LegendList caches rendered rows, so every local expansion map that changes row content
       // has to be surfaced through extraData.
@@ -1038,7 +1006,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onTouchStart={onMessagesTouchStart}
       onWheel={onMessagesWheel}
       data-chat-scroll-container="true"
-      className="h-full overflow-x-hidden overscroll-y-contain px-3 py-3 sm:px-5 sm:py-4"
+      className="h-full overflow-x-hidden overscroll-y-contain py-3 [scrollbar-gutter:stable] sm:py-4"
       {...(bottomContentInsetPx ? { style: { paddingBottom: bottomContentInsetPx } } : {})}
     />
   );

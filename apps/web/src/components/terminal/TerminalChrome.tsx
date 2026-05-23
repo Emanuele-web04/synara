@@ -234,7 +234,7 @@ export function TerminalSidebar(props: {
                   type="button"
                   className={`flex w-full items-center px-1 py-0.5 text-[10px] uppercase tracking-[0.08em] ${
                     isGroupActive
-                      ? "bg-[var(--sidebar-accent)] text-foreground"
+                      ? "bg-[var(--sidebar-accent-active)] text-foreground"
                       : "text-muted-foreground hover:bg-[var(--sidebar-accent)] hover:text-foreground"
                   }`}
                   onClick={() => props.onActiveTerminalChange(groupActiveTerminalId)}
@@ -260,7 +260,7 @@ export function TerminalSidebar(props: {
                       key={terminalId}
                       className={`group flex items-center gap-1 px-1 py-0.5 text-[11px] ${
                         isActive
-                          ? "bg-[var(--sidebar-accent)] text-foreground"
+                          ? "bg-[var(--sidebar-accent-active)] text-foreground"
                           : "text-muted-foreground hover:bg-[var(--sidebar-accent)] hover:text-foreground"
                       }`}
                     >

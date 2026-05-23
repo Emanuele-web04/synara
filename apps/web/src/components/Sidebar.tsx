@@ -9,9 +9,9 @@ import {
   FolderIcon,
   GitPullRequestIcon,
   type LucideIcon,
+  NewThreadIcon,
   SearchIcon,
   SettingsIcon,
-  SquarePenIcon,
   TerminalIcon,
   Trash2,
   TriangleAlertIcon,
@@ -4678,7 +4678,7 @@ export default function Sidebar() {
                     });
                   }}
                 >
-                  <SquarePenIcon className="size-3.5" />
+                  <NewThreadIcon className="size-3.5" />
                 </SidebarMenuAction>
               }
             />
@@ -5449,7 +5449,7 @@ export default function Sidebar() {
                 ) : (
                   <>
                     <SidebarPrimaryAction
-                      icon={SquarePenIcon}
+                      icon={NewThreadIcon}
                       label="New thread"
                       onClick={handlePrimaryNewThread}
                     />
@@ -5859,7 +5859,7 @@ export default function Sidebar() {
                       />
                     }
                   >
-                    <SquarePenIcon className="size-3.5" />
+                    <NewThreadIcon className="size-3.5" />
                   </TooltipTrigger>
                   <TooltipPopup side="top">New chat</TooltipPopup>
                 </Tooltip>

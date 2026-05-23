@@ -161,9 +161,9 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
           emptyStateContent={<ChatEmptyStateHero projectName={emptyStateProjectName} />}
           {...(expandedWorkGroups ? { expandedWorkGroups } : {})}
           {...(onToggleWorkGroup ? { onToggleWorkGroup } : {})}
-        />
+          />
 
-        {scrollButtonVisible ? (
+          {scrollButtonVisible ? (
           <div className="pointer-events-none absolute bottom-1 left-1/2 z-30 flex -translate-x-1/2 justify-center py-1">
             <button
               type="button"

@@ -169,7 +169,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
                     "flex size-5 shrink-0 items-center justify-center rounded text-[11px] font-medium tabular-nums transition-colors duration-150",
                     isSelected
                       ? "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]"
-                      : "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground-secondary)] group-hover:bg-[var(--color-background-button-secondary)] group-hover:text-[var(--color-text-foreground)]",
+                      : "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground-secondary)] group-hover:bg-[var(--color-background-button-secondary-hover)] group-hover:text-[var(--color-text-foreground)]",
                   )}
                 >
                   {shortcutKey}

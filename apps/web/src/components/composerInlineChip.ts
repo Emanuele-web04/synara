@@ -4,7 +4,7 @@
 // Exports: Chip class names plus shared skill icon/label helpers
 
 export const COMPOSER_INLINE_CHIP_CLASS_NAME =
-  "inline-flex max-w-full select-none items-center gap-0.5 rounded border border-[color:var(--color-border-light)] bg-[var(--sidebar-accent)] p-0.5 font-medium text-[11px] leading-[1.1] text-[var(--color-text-foreground)] align-middle";
+  "inline-flex max-w-full select-none items-center gap-0.5 rounded border border-[color:var(--color-border-light)] bg-[var(--sidebar-accent-active)] p-0.5 font-medium text-[11px] leading-[1.1] text-[var(--color-text-foreground)] align-middle";
 
 // Shared shell for composer attachment pills like image previews and text selections.
 export const COMPOSER_ATTACHMENT_CHIP_CLASS_NAME =

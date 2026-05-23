@@ -203,6 +203,7 @@ import {
   ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  ComposerSendArrowIcon,
   EllipsisIcon,
   QueueArrow,
   RefreshCwIcon,
@@ -210,7 +211,6 @@ import {
   XIcon,
 } from "~/lib/icons";
 import { Button } from "./ui/button";
-import { Separator } from "./ui/separator";
 import { Skeleton } from "./ui/skeleton";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
 import { terminalRuntimeRegistry } from "./terminal/terminalRuntimeRegistry";
@@ -296,7 +296,8 @@ import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
 import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimeline.logic";
 import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
 import { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
-import { AVAILABLE_PROVIDER_OPTIONS, ProviderModelPicker } from "./chat/ProviderModelPicker";
+import { AVAILABLE_PROVIDER_OPTIONS } from "./chat/ProviderModelPicker";
+import { ComposerModelEffortPicker } from "./chat/ComposerModelEffortPicker";
 import { ComposerCommandItem, ComposerCommandMenu } from "./chat/ComposerCommandMenu";
 import {
   ComposerLocalDirectoryMenu,
@@ -313,10 +314,14 @@ import { ComposerReferenceAttachments } from "./chat/ComposerReferenceAttachment
 import { TranscriptSelectionActionLayer } from "./chat/TranscriptSelectionActionLayer";
 import { ActiveTaskListCard } from "./chat/ActiveTaskListCard";
 import { useTranscriptAssistantSelectionAction } from "./chat/useTranscriptAssistantSelectionAction";
+import { getComposerProviderState } from "./chat/composerProviderRegistry";
 import {
-  getComposerProviderState,
-  renderProviderTraitsPicker,
-} from "./chat/composerProviderRegistry";
+  COMPOSER_INPUT_SHELL_CLASS_NAME,
+  COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME,
+  COMPOSER_INPUT_SURFACE_CLASS_NAME,
+  CHAT_COLUMN_FRAME_CLASS_NAME,
+  CHAT_COLUMN_GUTTER_CLASS_NAME,
+} from "./chat/composerPickerStyles";
 import { getComposerTraitSelection } from "./chat/composerTraits";
 import { resolveRuntimeModelDescriptor } from "./chat/runtimeModelCapabilities";
 import { ProjectPicker } from "./chat/ProjectPicker";
@@ -2849,18 +2854,6 @@ export default function ChatView({
     () =>
       formatShortcutLabel({
         key: "m",
-        metaKey: false,
-        ctrlKey: false,
-        shiftKey: true,
-        altKey: false,
-        modKey: true,
-      }),
-    [],
-  );
-  const traitsPickerShortcutLabel = useMemo(
-    () =>
-      formatShortcutLabel({
-        key: "e",
         metaKey: false,
         ctrlKey: false,
         shiftKey: true,
@@ -6535,60 +6528,55 @@ export default function ChatView({
       }),
     [runtimeUsageContextWindow, composerTraitSelection.contextWindow, selectedProvider],
   );
-  const providerTraitsPicker = renderProviderTraitsPicker({
-    provider: selectedProvider,
-    threadId,
-    model: selectedModel,
-    runtimeModel: selectedRuntimeModel,
-    runtimeModels: runtimeModelsByProvider[selectedProvider],
-    runtimeAgents: dynamicAgents,
-    modelOptions: selectedProviderModelOptions,
-    prompt,
-    includeFastMode: selectedProvider === "cursor",
-    open: isTraitsPickerOpen,
-    onOpenChange: handleTraitsPickerOpenChange,
-    shortcutLabel: traitsPickerShortcutLabel,
-    onPromptChange: setPromptFromTraits,
-  });
-  const composerModelPickerWidthClassName = isComposerFooterCompact ? "w-28" : "w-32 sm:w-36";
-  const composerTraitsPickerWidthClassName = isComposerFooterCompact ? "w-16" : "w-20";
-  const composerModelPickerControl =
-    showComposerModelBootstrapSkeleton && !selectedProviderRuntimeModelDiscoveryPending ? (
-      <ComposerControlSkeleton widthClassName={composerModelPickerWidthClassName} />
-    ) : (
-      <ProviderModelPicker
-        compact={isComposerFooterCompact}
-        provider={selectedProvider}
-        model={selectedModelForPickerWithCustomFallback}
-        lockedProvider={lockedProvider}
-        providers={providerStatuses}
-        modelOptionsByProvider={modelOptionsByProvider}
-        loadingModelProviders={{
-          cursor: cursorModelDiscoveryPending,
-          kilo: kiloModelDiscoveryPending,
-        }}
-        hiddenProviders={settings.hiddenProviders}
-        providerOrder={settings.providerOrder}
-        open={isModelPickerOpen}
-        onOpenChange={handleModelPickerOpenChange}
-        shortcutLabel={modelPickerShortcutLabel}
-        {...(composerProviderState.modelPickerIconClassName
-          ? {
-              activeProviderIconClassName: composerProviderState.modelPickerIconClassName,
-            }
-          : {})}
-        onSelectionCommitted={scheduleComposerFocus}
-        onProviderModelChange={onProviderModelSelect}
-      />
-    );
-  const composerTraitsPickerControl = showComposerModelBootstrapSkeleton ? (
+  const composerModelEffortPickerWidthClassName = isComposerFooterCompact ? "w-40" : "w-44 sm:w-52";
+  const isComposerModelEffortPickerOpen = isModelPickerOpen || isTraitsPickerOpen;
+  // Both shortcuts (Mod+Shift+M and Mod+Shift+E) now drop into the same combined
+  // surface; clear both mirrors on close so the existing keyboard handler stays
+  // in sync without needing to know about the new picker.
+  const handleComposerModelEffortPickerOpenChange = useCallback(
+    (open: boolean) => {
+      if (open) {
+        handleModelPickerOpenChange(true);
+      } else {
+        setIsModelPickerOpen(false);
+        setIsTraitsPickerOpen(false);
+      }
+    },
+    [handleModelPickerOpenChange],
+  );
+  const composerModelEffortPickerControl = showComposerModelBootstrapSkeleton ? (
     selectedProviderRuntimeModelDiscoveryPending ? (
-      <ComposerModelLoadingControl widthClassName={composerTraitsPickerWidthClassName} />
+      <ComposerModelLoadingControl widthClassName={composerModelEffortPickerWidthClassName} />
     ) : (
-      <ComposerControlSkeleton widthClassName={composerTraitsPickerWidthClassName} />
+      <ComposerControlSkeleton widthClassName={composerModelEffortPickerWidthClassName} />
     )
   ) : (
-    providerTraitsPicker
+    <ComposerModelEffortPicker
+      compact={isComposerFooterCompact}
+      provider={selectedProvider}
+      model={selectedModelForPickerWithCustomFallback}
+      lockedProvider={lockedProvider}
+      providers={providerStatuses}
+      modelOptionsByProvider={modelOptionsByProvider}
+      loadingModelProviders={{
+        cursor: cursorModelDiscoveryPending,
+        kilo: kiloModelDiscoveryPending,
+      }}
+      hiddenProviders={settings.hiddenProviders}
+      providerOrder={settings.providerOrder}
+      threadId={threadId}
+      runtimeModel={selectedRuntimeModel}
+      runtimeModels={runtimeModelsByProvider[selectedProvider]}
+      runtimeAgents={dynamicAgents}
+      modelOptions={selectedProviderModelOptions}
+      prompt={prompt}
+      onPromptChange={setPromptFromTraits}
+      onProviderModelChange={onProviderModelSelect}
+      onSelectionCommitted={scheduleComposerFocus}
+      open={isComposerModelEffortPickerOpen}
+      onOpenChange={handleComposerModelEffortPickerOpenChange}
+      shortcutLabel={modelPickerShortcutLabel}
+    />
   );
   const toggleFastMode = useCallback(() => {
     if (!composerTraitSelection.caps.supportsFastMode) {
@@ -7442,7 +7430,6 @@ export default function ChatView({
     threadId: activeThread.id,
     onEnvModeChange,
     envLocked,
-    ...runtimeUsageControlsProps,
     onHandoffToWorktree,
     onHandoffToLocal,
     handoffBusy,
@@ -7457,7 +7444,7 @@ export default function ChatView({
   const taskListAboveComposer = Boolean(activeTaskList && !planSidebarOpen);
   const renderActiveTaskListCard = () =>
     activeTaskList && !planSidebarOpen ? (
-      <div className="pointer-events-none mx-auto w-full max-w-3xl">
+      <div className="pointer-events-none w-full">
         <div ref={activeTaskListCardRef} className="pointer-events-auto mx-auto w-11/12">
           <ActiveTaskListCard
             activeTaskList={activeTaskList}
@@ -7476,7 +7463,7 @@ export default function ChatView({
       <form
         ref={composerFormRef}
         onSubmit={onSend}
-        className="relative z-10 mx-auto w-full min-w-0 max-w-3xl"
+        className={cn("relative z-10", CHAT_COLUMN_FRAME_CLASS_NAME)}
         data-chat-composer-form="true"
         data-chat-pane-scope={paneScopeId}
       >
@@ -7544,7 +7531,7 @@ export default function ChatView({
         ) : null}
         <div
           className={cn(
-            "group rounded-3xl p-px transition-colors duration-200",
+            COMPOSER_INPUT_SHELL_CLASS_NAME,
             composerProviderState.composerFrameClassName,
           )}
           onDragEnter={onComposerDragEnter}
@@ -7554,20 +7541,20 @@ export default function ChatView({
         >
           <div
             className={cn(
-              "chat-composer-surface rounded-2xl border border-[color:var(--color-border-light)] transition-colors duration-200",
+              COMPOSER_INPUT_SURFACE_CLASS_NAME,
               isDragOverComposer ? "!bg-[var(--color-background-control)]" : "",
               composerProviderState.composerSurfaceClassName,
             )}
           >
             {activePendingApproval ? (
-              <div className="rounded-t-[23px] border-b border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)]">
+              <div className={COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME}>
                 <ComposerPendingApprovalPanel
                   approval={activePendingApproval}
                   pendingCount={pendingApprovals.length}
                 />
               </div>
             ) : pendingUserInputs.length > 0 ? (
-              <div className="rounded-t-[23px] border-b border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)]">
+              <div className={COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME}>
                 <ComposerPendingUserInputPanel
                   pendingUserInputs={pendingUserInputs}
                   respondingRequestIds={respondingUserInputRequestIds}
@@ -7578,14 +7565,14 @@ export default function ChatView({
                 />
               </div>
             ) : showPlanFollowUpPrompt && activeProposedPlan ? (
-              <div className="rounded-t-[23px] border-b border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)]">
+              <div className={COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME}>
                 <ComposerPlanFollowUpBanner
                   key={activeProposedPlan.id}
                   planTitle={proposedPlanTitle(activeProposedPlan.planMarkdown) ?? null}
                 />
               </div>
             ) : null}
-            <div className={cn("relative px-3.5 pb-1 pt-3")}>
+            <div className={cn("relative px-3.5 pb-0.5 pt-3")}>
               {composerMenuOpen && !isComposerApprovalState && (
                 <div className="absolute inset-x-0 bottom-full z-20 mb-2 px-1">
                   {isLocalFolderBrowserOpen ? (
@@ -7668,7 +7655,7 @@ export default function ChatView({
 
             {/* Bottom toolbar */}
             {activePendingApproval ? (
-              <div className="flex items-center justify-end gap-2 px-3 pb-2">
+              <div className="flex items-center justify-end gap-2 px-3 pb-1.5">
                 <ComposerPendingApprovalActions
                   requestId={activePendingApproval.requestId}
                   isResponding={respondingRequestIds.includes(activePendingApproval.requestId)}
@@ -7679,7 +7666,7 @@ export default function ChatView({
               <div
                 data-chat-composer-footer="true"
                 className={cn(
-                  "flex items-end justify-between px-2.5 pb-2",
+                  "flex items-end justify-between px-2.5 pb-1.5",
                   isComposerFooterCompact ? "gap-1.5" : "flex-wrap gap-1.5 sm:flex-nowrap sm:gap-0",
                 )}
               >
@@ -7704,62 +7691,43 @@ export default function ChatView({
 
                   {!isVoiceRecording && !isVoiceTranscribing ? (
                     <>
-                      {composerModelPickerControl}
-
-                      {composerTraitsPickerControl ? (
-                        <>
-                          <Separator
-                            orientation="vertical"
-                            className="mx-0.5 hidden h-4 sm:block"
-                          />
-                          {composerTraitsPickerControl}
-                        </>
-                      ) : null}
+                      <RuntimeUsageControls
+                        {...runtimeUsageControlsProps}
+                        className="shrink-0"
+                      />
 
                       {interactionMode === "plan" ? (
-                        <>
-                          <Separator
-                            orientation="vertical"
-                            className="mx-0.5 hidden h-4 sm:block"
-                          />
-                          <Button
-                            variant="ghost"
-                            className="shrink-0 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] sm:px-3"
-                            size="sm"
-                            type="button"
-                            onClick={toggleInteractionMode}
-                            title="Plan mode — click to return to normal build mode"
-                          >
-                            <GoTasklist className="size-3.5" />
-                            <span className="sr-only sm:not-sr-only">Plan</span>
-                          </Button>
-                        </>
+                        <Button
+                          variant="ghost"
+                          className="shrink-0 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] sm:px-3"
+                          size="sm"
+                          type="button"
+                          onClick={toggleInteractionMode}
+                          title="Plan mode — click to return to normal build mode"
+                        >
+                          <GoTasklist className="size-3.5" />
+                          <span className="sr-only sm:not-sr-only">Plan</span>
+                        </Button>
                       ) : null}
 
                       {activeTaskList || sidebarProposedPlan || planSidebarOpen ? (
-                        <>
-                          <Separator
-                            orientation="vertical"
-                            className="mx-0.5 hidden h-4 sm:block"
-                          />
-                          <Button
-                            variant="ghost"
-                            className="shrink-0 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal sm:px-3"
-                            size="sm"
-                            type="button"
-                            onClick={togglePlanSidebar}
-                            title={
-                              planSidebarOpen
-                                ? `Hide ${planSidebarLabel.toLowerCase()} sidebar`
-                                : `Show ${planSidebarLabel.toLowerCase()} sidebar`
-                            }
-                          >
-                            <GoTasklist className="size-3.5" />
-                            <span className="sr-only sm:not-sr-only">
-                              {planSidebarOpen ? `Hide ${planSidebarLabel}` : planSidebarLabel}
-                            </span>
-                          </Button>
-                        </>
+                        <Button
+                          variant="ghost"
+                          className="shrink-0 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal sm:px-3"
+                          size="sm"
+                          type="button"
+                          onClick={togglePlanSidebar}
+                          title={
+                            planSidebarOpen
+                              ? `Hide ${planSidebarLabel.toLowerCase()} sidebar`
+                              : `Show ${planSidebarLabel.toLowerCase()} sidebar`
+                          }
+                        >
+                          <GoTasklist className="size-3.5" />
+                          <span className="sr-only sm:not-sr-only">
+                            {planSidebarOpen ? `Hide ${planSidebarLabel}` : planSidebarLabel}
+                          </span>
+                        </Button>
                       ) : null}
                     </>
                   ) : null}
@@ -7777,6 +7745,9 @@ export default function ChatView({
                       Preparing worktree...
                     </span>
                   ) : null}
+                  {!isVoiceRecording && !isVoiceTranscribing
+                    ? composerModelEffortPickerControl
+                    : null}
                   {showVoiceNotesControl && (isVoiceRecording || isVoiceTranscribing) ? (
                     <ComposerVoiceRecorderBar
                       disabled={isComposerApprovalState || isConnecting || isSendBusy}
@@ -7937,21 +7908,10 @@ export default function ChatView({
                               />
                             </svg>
                           ) : (
-                            <svg
-                              width="14"
-                              height="14"
-                              viewBox="0 0 14 14"
-                              fill="none"
+                            <ComposerSendArrowIcon
                               aria-hidden="true"
-                            >
-                              <path
-                                d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5"
-                                stroke="currentColor"
-                                strokeWidth="1.8"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                              />
-                            </svg>
+                              className="size-3.5 shrink-0"
+                            />
                           )}
                         </button>
                       </>
@@ -7964,7 +7924,7 @@ export default function ChatView({
         </div>
       </form>
       {isEmptyChatLanding ? (
-        <div className="mt-2 flex w-full items-center justify-between gap-3 px-3">
+        <div className="mt-2 flex w-full items-center justify-start gap-3 px-3">
           <ProjectPicker
             align="start"
             side="top"
@@ -7973,14 +7933,17 @@ export default function ChatView({
             onSelectWorkspaceRoot={handleSelectWorkspaceRoot}
             onResetToHome={handleResetWorkspaceToHome}
           />
-          <RuntimeUsageControls {...runtimeUsageControlsProps} className="shrink-0" />
         </div>
       ) : null}
     </>
   ) : (
     <div
       aria-hidden="true"
-      className="chat-composer-surface mx-auto w-full max-w-3xl rounded-2xl border border-[color:var(--color-border-light)] bg-background/65"
+      className={cn(
+        COMPOSER_INPUT_SURFACE_CLASS_NAME,
+        "mx-auto w-full bg-background/65",
+        CHAT_COLUMN_FRAME_CLASS_NAME,
+      )}
       data-chat-composer-form="deferred"
       style={{ height: secondaryChromePlaceholderHeight }}
     />
@@ -8109,8 +8072,8 @@ export default function ChatView({
             )}
           >
             {isCenteredEmptyLanding ? (
-              <div className="chat-pane-enter flex flex-1 items-center justify-center px-3 sm:px-5">
-                <div className="flex w-full max-w-3xl flex-col justify-center">
+              <div className={cn("chat-pane-enter flex flex-1 items-center justify-center", CHAT_COLUMN_GUTTER_CLASS_NAME)}>
+                <div className={cn("flex w-full flex-col justify-center", CHAT_COLUMN_FRAME_CLASS_NAME)}>
                   <div className="flex flex-col items-center gap-4 px-6 pb-5 text-center select-none">
                     <img
                       alt="DP Code logo"
@@ -8135,17 +8098,23 @@ export default function ChatView({
                     </h2>
                   </div>
                   {composerSection}
-                  {isGitRepo ? (
-                    <BranchToolbar {...branchToolbarProps} />
-                  ) : !isEmptyChatLanding ? (
-                    <div className="mx-auto flex w-full max-w-3xl items-center justify-end px-3 pb-3 pt-1">
-                      <RuntimeUsageControls {...runtimeUsageControlsProps} />
-                    </div>
-                  ) : null}
+                  {isGitRepo ? <BranchToolbar {...branchToolbarProps} /> : null}
                 </div>
               </div>
             ) : (
-              <ChatTranscriptPane
+              <div
+                className={cn(
+                  "flex min-h-0 flex-1 flex-col overflow-hidden",
+                  CHAT_COLUMN_GUTTER_CLASS_NAME,
+                )}
+              >
+                <div
+                  className={cn(
+                    "flex min-h-0 flex-1 flex-col overflow-hidden",
+                    CHAT_COLUMN_FRAME_CLASS_NAME,
+                  )}
+                >
+                  <ChatTranscriptPane
                 activeThreadId={activeThread.id}
                 activeTurnId={activeThread.session?.activeTurnId ?? null}
                 hasMessages={timelineEntries.length > 0}
@@ -8190,25 +8159,21 @@ export default function ChatView({
                     ? activeTaskListCardHeight + 8
                     : undefined
                 }
-              />
-            )}
+                  />
 
-            {/* Input bar */}
-            {!isCenteredEmptyLanding ? (
-              <>
-                <div
-                  className={cn(
-                    "chat-pane-enter px-3 pt-0 sm:px-5 sm:pt-0",
-                    isGitRepo ? "pb-1" : "pb-2.5 sm:pb-3",
-                  )}
-                >
-                  <form
-                    ref={composerFormRef}
-                    onSubmit={onSend}
-                    className="relative z-10 mx-auto w-full min-w-0 max-w-3xl"
-                    data-chat-composer-form="true"
-                    data-chat-pane-scope={paneScopeId}
+                  <div
+                    className={cn(
+                      "chat-pane-enter shrink-0 pt-0 sm:pt-0",
+                      isGitRepo ? "pb-0.5" : "pb-2 sm:pb-2.5",
+                    )}
                   >
+                    <form
+                      ref={composerFormRef}
+                      onSubmit={onSend}
+                      className="relative z-10 w-full"
+                      data-chat-composer-form="true"
+                      data-chat-pane-scope={paneScopeId}
+                    >
                     {activeTaskList && !planSidebarOpen ? (
                       <div className="pointer-events-none absolute inset-x-0 bottom-full z-20">
                         {renderActiveTaskListCard()}
@@ -8278,7 +8243,7 @@ export default function ChatView({
                     ) : null}
                     <div
                       className={cn(
-                        "group rounded-3xl p-px transition-colors duration-200",
+                        COMPOSER_INPUT_SHELL_CLASS_NAME,
                         composerProviderState.composerFrameClassName,
                       )}
                       onDragEnter={onComposerDragEnter}
@@ -8288,20 +8253,20 @@ export default function ChatView({
                     >
                       <div
                         className={cn(
-                          "chat-composer-surface rounded-2xl border border-[color:var(--color-border-light)] transition-colors duration-200",
+                          COMPOSER_INPUT_SURFACE_CLASS_NAME,
                           isDragOverComposer ? "!bg-[var(--color-background-control)]" : "",
                           composerProviderState.composerSurfaceClassName,
                         )}
                       >
                         {activePendingApproval ? (
-                          <div className="rounded-t-[23px] border-b border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)]">
+                          <div className={COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME}>
                             <ComposerPendingApprovalPanel
                               approval={activePendingApproval}
                               pendingCount={pendingApprovals.length}
                             />
                           </div>
                         ) : pendingUserInputs.length > 0 ? (
-                          <div className="rounded-t-[23px] border-b border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)]">
+                          <div className={COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME}>
                             <ComposerPendingUserInputPanel
                               pendingUserInputs={pendingUserInputs}
                               respondingRequestIds={respondingUserInputRequestIds}
@@ -8312,14 +8277,14 @@ export default function ChatView({
                             />
                           </div>
                         ) : showPlanFollowUpPrompt && activeProposedPlan ? (
-                          <div className="rounded-t-[23px] border-b border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)]">
+                          <div className={COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME}>
                             <ComposerPlanFollowUpBanner
                               key={activeProposedPlan.id}
                               planTitle={proposedPlanTitle(activeProposedPlan.planMarkdown) ?? null}
                             />
                           </div>
                         ) : null}
-                        <div className={cn("relative px-3.5 pb-1 pt-3")}>
+                        <div className={cn("relative px-3.5 pb-0.5 pt-3")}>
                           {composerMenuOpen && !isComposerApprovalState && (
                             <div className="absolute inset-x-0 bottom-full z-20 mb-2 px-1">
                               {isLocalFolderBrowserOpen ? (
@@ -8407,7 +8372,7 @@ export default function ChatView({
 
                         {/* Bottom toolbar */}
                         {activePendingApproval ? (
-                          <div className="flex items-center justify-end gap-2 px-3 pb-2">
+                          <div className="flex items-center justify-end gap-2 px-3 pb-1.5">
                             <ComposerPendingApprovalActions
                               requestId={activePendingApproval.requestId}
                               isResponding={respondingRequestIds.includes(
@@ -8420,7 +8385,7 @@ export default function ChatView({
                           <div
                             data-chat-composer-footer="true"
                             className={cn(
-                              "flex items-end justify-between px-2.5 pb-2",
+                              "flex items-end justify-between px-2.5 pb-1.5",
                               isComposerFooterCompact
                                 ? "gap-1.5"
                                 : "flex-wrap gap-1.5 sm:flex-nowrap sm:gap-0",
@@ -8447,65 +8412,45 @@ export default function ChatView({
 
                               {!isVoiceRecording && !isVoiceTranscribing ? (
                                 <>
-                                  {/* Provider/model picker */}
-                                  {composerModelPickerControl}
-
-                                  {composerTraitsPickerControl ? (
-                                    <>
-                                      <Separator
-                                        orientation="vertical"
-                                        className="mx-0.5 hidden h-4 sm:block"
-                                      />
-                                      {composerTraitsPickerControl}
-                                    </>
-                                  ) : null}
+                                  <RuntimeUsageControls
+                                    {...runtimeUsageControlsProps}
+                                    className="shrink-0"
+                                  />
 
                                   {interactionMode === "plan" ? (
-                                    <>
-                                      <Separator
-                                        orientation="vertical"
-                                        className="mx-0.5 hidden h-4 sm:block"
-                                      />
-                                      <Button
-                                        variant="ghost"
-                                        className="shrink-0 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] sm:px-3"
-                                        size="sm"
-                                        type="button"
-                                        onClick={toggleInteractionMode}
-                                        title="Plan mode — click to return to normal build mode"
-                                      >
-                                        <GoTasklist className="size-3.5" />
-                                        <span className="sr-only sm:not-sr-only">Plan</span>
-                                      </Button>
-                                    </>
+                                    <Button
+                                      variant="ghost"
+                                      className="shrink-0 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] sm:px-3"
+                                      size="sm"
+                                      type="button"
+                                      onClick={toggleInteractionMode}
+                                      title="Plan mode — click to return to normal build mode"
+                                    >
+                                      <GoTasklist className="size-3.5" />
+                                      <span className="sr-only sm:not-sr-only">Plan</span>
+                                    </Button>
                                   ) : null}
 
                                   {activeTaskList || sidebarProposedPlan || planSidebarOpen ? (
-                                    <>
-                                      <Separator
-                                        orientation="vertical"
-                                        className="mx-0.5 hidden h-4 sm:block"
-                                      />
-                                      <Button
-                                        variant="ghost"
-                                        className="shrink-0 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal sm:px-3"
-                                        size="sm"
-                                        type="button"
-                                        onClick={togglePlanSidebar}
-                                        title={
-                                          planSidebarOpen
-                                            ? `Hide ${planSidebarLabel.toLowerCase()} sidebar`
-                                            : `Show ${planSidebarLabel.toLowerCase()} sidebar`
-                                        }
-                                      >
-                                        <GoTasklist className="size-3.5" />
-                                        <span className="sr-only sm:not-sr-only">
-                                          {planSidebarOpen
-                                            ? `Hide ${planSidebarLabel}`
-                                            : planSidebarLabel}
-                                        </span>
-                                      </Button>
-                                    </>
+                                    <Button
+                                      variant="ghost"
+                                      className="shrink-0 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal sm:px-3"
+                                      size="sm"
+                                      type="button"
+                                      onClick={togglePlanSidebar}
+                                      title={
+                                        planSidebarOpen
+                                          ? `Hide ${planSidebarLabel.toLowerCase()} sidebar`
+                                          : `Show ${planSidebarLabel.toLowerCase()} sidebar`
+                                      }
+                                    >
+                                      <GoTasklist className="size-3.5" />
+                                      <span className="sr-only sm:not-sr-only">
+                                        {planSidebarOpen
+                                          ? `Hide ${planSidebarLabel}`
+                                          : planSidebarLabel}
+                                      </span>
+                                    </Button>
                                   ) : null}
                                 </>
                               ) : null}
@@ -8529,6 +8474,9 @@ export default function ChatView({
                                   Preparing worktree...
                                 </span>
                               ) : null}
+                              {!isVoiceRecording && !isVoiceTranscribing
+                                ? composerModelEffortPickerControl
+                                : null}
                               {showVoiceNotesControl &&
                               (isVoiceRecording || isVoiceTranscribing) ? (
                                 <ComposerVoiceRecorderBar
@@ -8695,21 +8643,10 @@ export default function ChatView({
                                           />
                                         </svg>
                                       ) : (
-                                        <svg
-                                          width="14"
-                                          height="14"
-                                          viewBox="0 0 14 14"
-                                          fill="none"
+                                        <ComposerSendArrowIcon
                                           aria-hidden="true"
-                                        >
-                                          <path
-                                            d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5"
-                                            stroke="currentColor"
-                                            strokeWidth="1.8"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                          />
-                                        </svg>
+                                          className="size-3.5 shrink-0"
+                                        />
                                       )}
                                     </button>
                                   </>
@@ -8721,18 +8658,13 @@ export default function ChatView({
                       </div>
                     </div>
                   </form>
-                </div>
-                {secondaryChromeReady ? (
-                  isGitRepo ? (
+                  </div>
+                  {secondaryChromeReady && isGitRepo ? (
                     <BranchToolbar {...branchToolbarProps} />
-                  ) : (
-                    <div className="mx-auto flex w-full max-w-3xl items-center justify-end px-3 pb-3 pt-1">
-                      <RuntimeUsageControls {...runtimeUsageControlsProps} />
-                    </div>
-                  )
-                ) : null}
-              </>
-            ) : null}
+                  ) : null}
+                </div>
+              </div>
+            )}
 
             {secondaryChromeReady && pullRequestDialogState ? (
               <PullRequestThreadDialog
