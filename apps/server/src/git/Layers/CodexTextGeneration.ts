@@ -9,7 +9,7 @@ import { resolveCodexHome } from "@t3tools/shared/codexConfig";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
-import { buildCodexProcessEnv } from "../../codexAppServerManager.ts";
+import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
 import { ServerConfig } from "../../config.ts";
 import { TextGenerationError } from "../Errors.ts";
 import {

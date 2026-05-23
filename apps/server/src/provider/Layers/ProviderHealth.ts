@@ -73,6 +73,7 @@ import {
   type ProviderMaintenanceCapabilities,
 } from "../providerMaintenance";
 import { collectUint8StreamText } from "../../stream/collectUint8StreamText";
+import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
 
 const DEFAULT_TIMEOUT_MS = 4_000;
 const CODEX_PROVIDER = "codex" as const;
@@ -694,12 +695,16 @@ const collectStreamAsString = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.
     (acc, chunk) => acc + new TextDecoder().decode(chunk),
   );
 
-const runProviderCommand = (executable: string, args: ReadonlyArray<string>) =>
+const runProviderCommand = (
+  executable: string,
+  args: ReadonlyArray<string>,
+  env: NodeJS.ProcessEnv = process.env,
+) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const command = ChildProcess.make(executable, [...args], {
       shell: process.platform === "win32",
-      env: process.env,
+      env,
     });
 
     const child = yield* spawner.spawn(command);
@@ -716,8 +721,12 @@ const runProviderCommand = (executable: string, args: ReadonlyArray<string>) =>
     return { stdout, stderr, code: exitCode } satisfies CommandResult;
   }).pipe(Effect.scoped);
 
-const runCodexCommand = (args: ReadonlyArray<string>, executable = "codex") =>
-  runProviderCommand(executable, args).pipe(
+const runCodexCommand = (
+  args: ReadonlyArray<string>,
+  executable = "codex",
+  env: NodeJS.ProcessEnv = process.env,
+) =>
+  runProviderCommand(executable, args, env).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -790,8 +799,39 @@ const runPiCommand = (args: ReadonlyArray<string>, executable = "pi") =>
 
 // ── Health check ────────────────────────────────────────────────────
 
+function makeCodexProbeEnv(homePath?: string): NodeJS.ProcessEnv {
+  const normalizedHomePath = nonEmptyTrimmed(homePath);
+  return buildCodexProcessEnv({
+    ...(normalizedHomePath ? { homePath: normalizedHomePath } : {}),
+  });
+}
+
+const readCodexConfigModelProviderForEnv = (env: NodeJS.ProcessEnv) =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const codexHome = env.CODEX_HOME?.trim() || path.join(OS.homedir(), ".codex");
+    const configPath = path.join(codexHome, "config.toml");
+
+    const content = yield* fileSystem
+      .readFileString(configPath)
+      .pipe(Effect.orElseSucceed(() => undefined));
+    if (content === undefined) {
+      return undefined;
+    }
+
+    return parseCodexConfigModelProvider(content);
+  });
+
+const hasCustomModelProviderForEnv = (env: NodeJS.ProcessEnv) =>
+  Effect.map(
+    readCodexConfigModelProviderForEnv(env),
+    (provider) => provider !== undefined && !OPENAI_AUTH_PROVIDERS.has(provider),
+  );
+
 export const makeCheckCodexProviderStatus = (
   binaryPath?: string,
+  homePath?: string,
 ): Effect.Effect<
   ServerProviderStatus,
   never,
@@ -800,9 +840,10 @@ export const makeCheckCodexProviderStatus = (
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
     const executable = nonEmptyTrimmed(binaryPath) ?? "codex";
+    const probeEnv = makeCodexProbeEnv(homePath);
 
     // Probe 1: `codex --version` — is the CLI reachable?
-    const versionProbe = yield* runCodexCommand(["--version"], executable).pipe(
+    const versionProbe = yield* runCodexCommand(["--version"], executable, probeEnv).pipe(
       Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
       Effect.result,
     );
@@ -865,7 +906,7 @@ export const makeCheckCodexProviderStatus = (
     // authentication through their own environment variables, so `codex
     // login status` will report "not logged in" even when the CLI works
     // fine.  Skip the auth probe entirely for non-OpenAI providers.
-    if (yield* hasCustomModelProvider) {
+    if (yield* hasCustomModelProviderForEnv(probeEnv)) {
       return {
         provider: CODEX_PROVIDER,
         status: "ready" as const,
@@ -877,7 +918,7 @@ export const makeCheckCodexProviderStatus = (
       } satisfies ServerProviderStatus;
     }
 
-    const authProbe = yield* runCodexCommand(["login", "status"], executable).pipe(
+    const authProbe = yield* runCodexCommand(["login", "status"], executable, probeEnv).pipe(
       Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
       Effect.result,
     );
@@ -1799,7 +1840,10 @@ export const ProviderHealthLive = Layer.effect(
         Effect.flatMap((settings) =>
           Effect.all(
             [
-              makeCheckCodexProviderStatus(settings.providers.codex.binaryPath),
+              makeCheckCodexProviderStatus(
+                settings.providers.codex.binaryPath,
+                settings.providers.codex.homePath,
+              ),
               makeCheckClaudeProviderStatus(
                 resolveClaudeSubscription,
                 settings.providers.claudeAgent.binaryPath,

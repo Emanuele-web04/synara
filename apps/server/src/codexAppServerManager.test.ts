@@ -7,17 +7,19 @@ import { ApprovalRequestId, ThreadId } from "@t3tools/contracts";
 
 import {
   buildCodexProcessEnv,
+  disableDpCodeBrowserPluginInCodexConfig,
+  resolveCodexBrowserUsePipePath,
+} from "./codexProcessEnv";
+import {
   buildCodexInitializeParams,
   CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
   CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
   CodexAppServerManager,
   classifyCodexStderrLine,
-  disableDpCodeBrowserPluginInCodexConfig,
   ensureIsolatedScratchWorkspace,
   isRecoverableThreadResumeError,
   normalizeCodexModelSlug,
   readCodexAccountSnapshot,
-  resolveCodexBrowserUsePipePath,
   resolveCodexModelForAccount,
 } from "./codexAppServerManager";
 

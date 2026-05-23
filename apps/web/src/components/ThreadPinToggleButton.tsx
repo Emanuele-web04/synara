@@ -34,7 +34,7 @@ export function ThreadPinToggleButton({
               "absolute left-1.5 top-1/2 z-30 -translate-y-1/2",
               pinned
                 ? "opacity-100"
-                : "opacity-0 group-hover/thread-row:opacity-100 group-focus-within/thread-row:opacity-100",
+                : "opacity-0 group-hover/thread-row:opacity-100 focus-visible:opacity-100",
             )
           : "relative z-10 shrink-0",
       )}

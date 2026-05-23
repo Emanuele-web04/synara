@@ -130,6 +130,8 @@ const AUTO_UPDATE_POLL_INTERVAL_MS = 4 * 60 * 60 * 1000;
 const AUTO_UPDATE_FOREGROUND_RECHECK_MIN_INTERVAL_MS = 5 * 60 * 1000;
 const AUTO_UPDATE_FOREGROUND_RECHECK_MIN_BACKGROUND_MS = 30 * 1000;
 const AUTO_UPDATE_CHECK_TIMEOUT_MS = 45 * 1000;
+const BACKEND_FORCE_KILL_DELAY_MS = 8_000;
+const BACKEND_SHUTDOWN_TIMEOUT_MS = 10_000;
 const DESKTOP_UPDATE_CHANNEL = "latest";
 const DESKTOP_UPDATE_ALLOW_PRERELEASE = false;
 const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
@@ -154,6 +156,10 @@ let backendListeningDetector: ServerListeningDetector | null = null;
 let restartAttempt = 0;
 let restartTimer: ReturnType<typeof setTimeout> | null = null;
 let isQuitting = false;
+let isUpdaterInstallPreparing = false;
+let isUpdaterQuitAndInstallInFlight = false;
+let desktopShutdownPromise: Promise<void> | null = null;
+let desktopShutdownComplete = false;
 let desktopProtocolRegistered = false;
 let aboutCommitHashCache: string | null | undefined;
 let desktopLogSink: RotatingFileSink | null = null;
@@ -1306,13 +1312,17 @@ async function installDownloadedUpdate(): Promise<{
   }
 
   isQuitting = true;
+  isUpdaterInstallPreparing = true;
   clearUpdatePollTimer();
   try {
     await stopBackendAndWaitForExit();
+    isUpdaterQuitAndInstallInFlight = true;
     autoUpdater.quitAndInstall();
     return { accepted: true, completed: true };
   } catch (error: unknown) {
     const message = formatErrorMessage(error);
+    isUpdaterInstallPreparing = false;
+    isUpdaterQuitAndInstallInFlight = false;
     isQuitting = false;
     setUpdateState(reduceDesktopUpdateStateOnInstallFailure(updateState, message));
     console.error(`[desktop-updater] Failed to install update: ${message}`);
@@ -1564,11 +1574,11 @@ function stopBackend(): void {
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGKILL");
       }
-    }, 2_000).unref();
+    }, BACKEND_FORCE_KILL_DELAY_MS).unref();
   }
 }
 
-async function stopBackendAndWaitForExit(timeoutMs = 5_000): Promise<void> {
+async function stopBackendAndWaitForExit(timeoutMs = BACKEND_SHUTDOWN_TIMEOUT_MS): Promise<void> {
   cancelBackendReadinessWait();
   backendListeningDetector = null;
   if (restartTimer) {
@@ -1607,11 +1617,15 @@ async function stopBackendAndWaitForExit(timeoutMs = 5_000): Promise<void> {
     backendChild.once("exit", onExit);
     backendChild.kill("SIGTERM");
 
+    const forceKillDelayMs = Math.min(
+      BACKEND_FORCE_KILL_DELAY_MS,
+      Math.max(1, timeoutMs - 500),
+    );
     forceKillTimer = setTimeout(() => {
       if (backendChild.exitCode === null && backendChild.signalCode === null) {
         backendChild.kill("SIGKILL");
       }
-    }, 2_000);
+    }, forceKillDelayMs);
     forceKillTimer.unref();
 
     exitTimeoutTimer = setTimeout(() => {
@@ -1619,6 +1633,64 @@ async function stopBackendAndWaitForExit(timeoutMs = 5_000): Promise<void> {
     }, timeoutMs);
     exitTimeoutTimer.unref();
   });
+}
+
+async function disposeBrowserUsePipeServerForShutdown(reason: string): Promise<void> {
+  const pipeServer = browserUsePipeServer;
+  browserUsePipeServer = null;
+  if (!pipeServer) return;
+
+  try {
+    await pipeServer.dispose();
+  } catch (error: unknown) {
+    const message = formatErrorMessage(error);
+    writeDesktopLogHeader(`${reason} browser-use pipe dispose failed message=${message}`);
+    console.warn(`[desktop] Failed to dispose browser-use pipe during ${reason}: ${message}`);
+  }
+}
+
+// Keeps Electron alive long enough for backend finalizers to reap provider child processes.
+async function shutdownDesktopRuntime(reason: string): Promise<void> {
+  if (desktopShutdownPromise) {
+    return desktopShutdownPromise;
+  }
+
+  isQuitting = true;
+  desktopShutdownPromise = (async () => {
+    writeDesktopLogHeader(`${reason} shutdown start`);
+    try {
+      clearUpdateBackgroundBlurTimer();
+      clearUpdateCheckTimeoutTimer();
+      clearUpdatePollTimer();
+      cancelBackendReadinessWait();
+      await disposeBrowserUsePipeServerForShutdown(reason);
+      await stopBackendAndWaitForExit();
+      browserManager.dispose();
+      restoreStdIoCapture?.();
+      writeDesktopLogHeader(`${reason} shutdown complete`);
+    } finally {
+      desktopShutdownComplete = true;
+    }
+  })();
+
+  return desktopShutdownPromise;
+}
+
+function requestGracefulAppQuit(reason: string): void {
+  if (isUpdaterInstallPreparing) {
+    writeDesktopLogHeader(`${reason} waiting for updater quit-and-install`);
+    return;
+  }
+
+  void shutdownDesktopRuntime(reason)
+    .catch((error: unknown) => {
+      const message = formatErrorMessage(error);
+      writeDesktopLogHeader(`${reason} shutdown failed message=${message}`);
+      console.warn(`[desktop] Shutdown failed during ${reason}: ${message}`);
+    })
+    .finally(() => {
+      app.quit();
+    });
 }
 
 function registerIpcHandlers(): void {
@@ -2065,19 +2137,27 @@ async function bootstrap(): Promise<void> {
   ensureInitialBackendWindowOpen(backendHttpUrl);
 }
 
-app.on("before-quit", () => {
-  isQuitting = true;
+app.on("before-quit", (event) => {
   writeDesktopLogHeader("before-quit received");
-  clearUpdateBackgroundBlurTimer();
-  clearUpdateCheckTimeoutTimer();
-  clearUpdatePollTimer();
-  void browserUsePipeServer?.dispose().finally(() => {
-    browserUsePipeServer = null;
-  });
-  cancelBackendReadinessWait();
-  stopBackend();
-  browserManager.dispose();
-  restoreStdIoCapture?.();
+  if (desktopShutdownComplete) {
+    return;
+  }
+
+  if (isUpdaterQuitAndInstallInFlight) {
+    // Electron's updater owns this quit; canceling it would turn install into a plain app quit.
+    writeDesktopLogHeader("before-quit allowing updater quit-and-install");
+    return;
+  }
+
+  if (isUpdaterInstallPreparing) {
+    // Keep user/system quits from preempting the pending updater install with a plain app.quit().
+    writeDesktopLogHeader("before-quit waiting for updater quit-and-install");
+    event.preventDefault();
+    return;
+  }
+
+  event.preventDefault();
+  requestGracefulAppQuit("before-quit");
 });
 
 if (hasSingleInstanceLock) {
@@ -2142,27 +2222,14 @@ app.on("window-all-closed", () => {
 
 if (process.platform !== "win32") {
   process.on("SIGINT", () => {
-    if (isQuitting) return;
-    isQuitting = true;
+    if (desktopShutdownPromise) return;
     writeDesktopLogHeader("SIGINT received");
-    clearUpdateBackgroundBlurTimer();
-    clearUpdateCheckTimeoutTimer();
-    clearUpdatePollTimer();
-    cancelBackendReadinessWait();
-    stopBackend();
-    restoreStdIoCapture?.();
-    app.quit();
+    requestGracefulAppQuit("SIGINT");
   });
 
   process.on("SIGTERM", () => {
-    if (isQuitting) return;
-    isQuitting = true;
+    if (desktopShutdownPromise) return;
     writeDesktopLogHeader("SIGTERM received");
-    clearUpdateCheckTimeoutTimer();
-    clearUpdatePollTimer();
-    cancelBackendReadinessWait();
-    stopBackend();
-    restoreStdIoCapture?.();
-    app.quit();
+    requestGracefulAppQuit("SIGTERM");
   });
 }

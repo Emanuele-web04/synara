@@ -1946,6 +1946,11 @@ function threadActivityUpdatesSummary(event: ThreadActivityAppendedEvent): boole
   return THREAD_SUMMARY_ACTIVITY_KINDS.has(event.payload.activity.kind);
 }
 
+// Sidebar summaries can follow turn boundaries, but not every streaming assistant delta.
+function threadMessageUpdatesSidebarSummary(event: ThreadMessageSentEvent): boolean {
+  return event.payload.role === "user" || !event.payload.streaming;
+}
+
 function resolveThreadSummaryAfterUserInputResponseRequested(
   thread: Thread,
   event: ThreadUserInputResponseRequestedEvent,
@@ -3105,7 +3110,10 @@ function applyOrchestrationEvent(
             ...(cwdChanged ? { session: null } : {}),
           };
         },
-        options,
+        {
+          ...options,
+          updateSidebarSummary: true,
+        },
       );
 
     case "thread.message-sent":
@@ -3116,7 +3124,8 @@ function applyOrchestrationEvent(
         {
           ...options,
           recomputeSummarySignals: threadMessageUpdatesSummary(event),
-          updateSidebarSummary: options?.updateSidebarSummary ?? false,
+          updateSidebarSummary:
+            options?.updateSidebarSummary === true || threadMessageUpdatesSidebarSummary(event),
         },
       );
 
@@ -3146,7 +3155,10 @@ function applyOrchestrationEvent(
                 : event.occurredAt,
           };
         },
-        options,
+        {
+          ...options,
+          updateSidebarSummary: true,
+        },
       );
 
     case "thread.turn-interrupt-requested": {
@@ -3193,7 +3205,10 @@ function applyOrchestrationEvent(
                 : event.occurredAt,
           };
         },
-        options,
+        {
+          ...options,
+          updateSidebarSummary: true,
+        },
       );
 
     case "thread.turn-start-requested":
@@ -3226,7 +3241,10 @@ function applyOrchestrationEvent(
                 : event.payload.createdAt,
           };
         },
-        options,
+        {
+          ...options,
+          updateSidebarSummary: true,
+        },
       );
 
     case "thread.user-input-response-requested":
@@ -3320,7 +3338,8 @@ function applyOrchestrationEvent(
         {
           ...options,
           recomputeSummarySignals: threadActivityUpdatesSummary(event),
-          updateSidebarSummary: options?.updateSidebarSummary ?? false,
+          updateSidebarSummary:
+            options?.updateSidebarSummary === true || threadActivityUpdatesSummary(event),
         },
       );
 
@@ -3357,7 +3376,10 @@ function applyOrchestrationEvent(
                 : event.payload.proposedPlan.updatedAt,
           };
         },
-        options,
+        {
+          ...options,
+          updateSidebarSummary: true,
+        },
       );
 
     case "thread.turn-diff-completed":
@@ -3379,7 +3401,10 @@ function applyOrchestrationEvent(
             assistantMessageId: event.payload.assistantMessageId ?? undefined,
             checkpointTurnCount: event.payload.checkpointTurnCount,
           }),
-        options,
+        {
+          ...options,
+          updateSidebarSummary: true,
+        },
       );
 
     case "thread.reverted":
@@ -3435,7 +3460,10 @@ function applyOrchestrationEvent(
                 : event.occurredAt,
           };
         },
-        options,
+        {
+          ...options,
+          updateSidebarSummary: true,
+        },
       );
 
     case "thread.conversation-rolled-back":
@@ -3497,7 +3525,10 @@ function applyOrchestrationEvent(
                 : event.occurredAt,
           };
         },
-        options,
+        {
+          ...options,
+          updateSidebarSummary: true,
+        },
       );
 
     case "thread.archived":
@@ -3509,7 +3540,10 @@ function applyOrchestrationEvent(
           archivedAt: event.payload.archivedAt ?? event.occurredAt,
           updatedAt: event.payload.updatedAt ?? event.occurredAt,
         }),
-        options,
+        {
+          ...options,
+          updateSidebarSummary: true,
+        },
       );
 
     case "thread.unarchived":
@@ -3521,7 +3555,10 @@ function applyOrchestrationEvent(
           archivedAt: null,
           updatedAt: event.payload.updatedAt ?? event.occurredAt,
         }),
-        options,
+        {
+          ...options,
+          updateSidebarSummary: true,
+        },
       );
 
     default:

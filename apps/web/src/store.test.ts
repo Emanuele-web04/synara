@@ -2472,7 +2472,7 @@ describe("store read model sync", () => {
     expect(next.sidebarThreadSummaryById["thread-1"]?.hasPendingApprovals).toBe(false);
   });
 
-  it("keeps sidebar summaries shell-owned during hot-path archive events", () => {
+  it("updates sidebar summaries during hot-path archive events", () => {
     const initialState = syncServerReadModel(
       makeState(makeThread({ title: "Archivable thread" })),
       makeReadModel(
@@ -2495,7 +2495,9 @@ describe("store read model sync", () => {
       { updateThreadArray: false },
     );
 
-    expect(next.sidebarThreadSummaryById["thread-1"]?.archivedAt).toBeNull();
+    expect(next.sidebarThreadSummaryById["thread-1"]?.archivedAt).toBe(
+      "2026-02-27T00:07:00.000Z",
+    );
   });
 
   it("retains archived threads in the synced store for the archived settings panel", () => {
@@ -2543,8 +2545,82 @@ describe("store read model sync", () => {
     });
   });
 
-  it("keeps sidebar summaries shell-owned during hot-path archive events", () => {
+  it("updates sidebar summaries during hot-path thread renames", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
     const initialState = syncServerReadModel(
+      makeState(makeThread({ title: "Original title" })),
+      makeReadModel(
+        makeReadModelThread({
+          title: "Original title",
+          updatedAt: "2026-02-27T00:00:00.000Z",
+        }),
+      ),
+    );
+
+    const next = applyOrchestrationEventsHotPath(
+      initialState,
+      [
+        makeDomainEvent("thread.meta-updated", {
+          threadId,
+          title: "Renamed title",
+          updatedAt: "2026-02-27T00:03:00.000Z",
+        }),
+      ],
+      { updateThreadArray: false },
+    );
+
+    expect(next.sidebarThreadSummaryById[threadId]).toMatchObject({
+      title: "Renamed title",
+      updatedAt: "2026-02-27T00:03:00.000Z",
+    });
+    expect(next.threadShellById?.[threadId]?.title).toBe("Renamed title");
+  });
+
+  it("updates sidebar summaries when a hot-path session starts running", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const turnId = TurnId.makeUnsafe("turn-running");
+    const initialState = syncServerReadModel(
+      makeState(makeThread()),
+      makeReadModel(
+        makeReadModelThread({
+          updatedAt: "2026-02-27T00:00:00.000Z",
+        }),
+      ),
+    );
+
+    const next = applyOrchestrationEventsHotPath(
+      initialState,
+      [
+        makeDomainEvent("thread.session-set", {
+          threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: "2026-02-27T00:04:00.000Z",
+          },
+        }),
+      ],
+      { updateThreadArray: false },
+    );
+
+    expect(next.sidebarThreadSummaryById[threadId]?.session).toMatchObject({
+      status: "running",
+      orchestrationStatus: "running",
+      activeTurnId: turnId,
+    });
+    expect(next.sidebarThreadSummaryById[threadId]?.latestTurn).toMatchObject({
+      turnId,
+      state: "running",
+      completedAt: null,
+    });
+  });
+
+  it("updates sidebar summaries during hot-path archive events after thread detail sync", () => {
+    const shellState = syncServerReadModel(
       makeState(makeThread({ title: "Archivable thread" })),
       makeReadModel(
         makeReadModelThread({
@@ -2552,6 +2628,13 @@ describe("store read model sync", () => {
           updatedAt: "2026-02-27T00:00:00.000Z",
         }),
       ),
+    );
+    const initialState = syncServerThreadDetailHotPath(
+      shellState,
+      makeReadModelThread({
+        title: "Detail-only title",
+        updatedAt: "2026-02-27T00:05:00.000Z",
+      }),
     );
 
     const next = applyOrchestrationEventsHotPath(
@@ -2566,7 +2649,9 @@ describe("store read model sync", () => {
       { updateThreadArray: false },
     );
 
-    expect(next.sidebarThreadSummaryById["thread-1"]?.archivedAt).toBeNull();
+    expect(next.sidebarThreadSummaryById["thread-1"]?.archivedAt).toBe(
+      "2026-02-27T00:07:00.000Z",
+    );
   });
 
   it("preserves the current project order when syncing incoming read model updates", () => {

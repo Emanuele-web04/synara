@@ -558,7 +558,10 @@ function isThreadDetailEventForThread(event: OrchestrationEvent, threadId: Threa
     event.type === "thread.turn-diff-completed" ||
     event.type === "thread.reverted" ||
     event.type === "thread.conversation-rolled-back" ||
-    event.type === "thread.session-set"
+    event.type === "thread.session-set" ||
+    event.type === "thread.meta-updated" ||
+    event.type === "thread.archived" ||
+    event.type === "thread.unarchived"
   );
 }
 

@@ -4,6 +4,7 @@ import { Effect, FileSystem, Layer, Path, Sink, Stream } from "effect";
 import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
+import { DPCODE_CODEX_HOME_OVERLAY_DIR } from "../../codexHomePaths";
 import {
   checkClaudeProviderStatus,
   checkCodexProviderStatus,
@@ -45,6 +46,7 @@ function mockSpawnerLayer(
   handler: (
     args: ReadonlyArray<string>,
     command: string,
+    env: NodeJS.ProcessEnv | undefined,
   ) => {
     stdout: string;
     stderr: string;
@@ -54,8 +56,12 @@ function mockSpawnerLayer(
   return Layer.succeed(
     ChildProcessSpawner.ChildProcessSpawner,
     ChildProcessSpawner.make((command) => {
-      const cmd = command as unknown as { command: string; args: ReadonlyArray<string> };
-      return Effect.succeed(mockHandle(handler(cmd.args, cmd.command)));
+      const cmd = command as unknown as {
+        command: string;
+        args: ReadonlyArray<string>;
+        options?: { env?: NodeJS.ProcessEnv };
+      };
+      return Effect.succeed(mockHandle(handler(cmd.args, cmd.command, cmd.options?.env)));
     }),
   );
 }
@@ -85,19 +91,34 @@ function withTempCodexHome(configContent?: string) {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const tmpDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-test-codex-" });
+    const runtimeDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-test-runtime-" });
 
     yield* Effect.acquireRelease(
       Effect.sync(() => {
         const originalCodexHome = process.env.CODEX_HOME;
+        const originalDpCodeHome = process.env.DPCODE_HOME;
+        const originalPortkeyApiKey = process.env.PORTKEY_API_KEY;
         process.env.CODEX_HOME = tmpDir;
-        return originalCodexHome;
+        process.env.DPCODE_HOME = runtimeDir;
+        process.env.PORTKEY_API_KEY ??= "test-portkey-key";
+        return { originalCodexHome, originalDpCodeHome, originalPortkeyApiKey };
       }),
-      (originalCodexHome) =>
+      ({ originalCodexHome, originalDpCodeHome, originalPortkeyApiKey }) =>
         Effect.sync(() => {
           if (originalCodexHome !== undefined) {
             process.env.CODEX_HOME = originalCodexHome;
           } else {
             delete process.env.CODEX_HOME;
+          }
+          if (originalDpCodeHome !== undefined) {
+            process.env.DPCODE_HOME = originalDpCodeHome;
+          } else {
+            delete process.env.DPCODE_HOME;
+          }
+          if (originalPortkeyApiKey !== undefined) {
+            process.env.PORTKEY_API_KEY = originalPortkeyApiKey;
+          } else {
+            delete process.env.PORTKEY_API_KEY;
           }
         }),
     );
@@ -106,7 +127,7 @@ function withTempCodexHome(configContent?: string) {
       yield* fileSystem.writeFileString(path.join(tmpDir, "config.toml"), configContent);
     }
 
-    return { tmpDir } as const;
+    return { tmpDir, runtimeDir } as const;
   });
 }
 
@@ -157,6 +178,48 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         ),
       ),
     );
+
+    it.effect("uses configured codex home for version, config, and auth probes", () => {
+      let sawLoginStatusProbe = false;
+      let expectedCodexHome: string | undefined;
+      return Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const { tmpDir, runtimeDir } = yield* withTempCodexHome();
+        yield* fileSystem.writeFileString(
+          path.join(tmpDir, "config.toml"),
+          'model_provider = "portkey"\n',
+        );
+        const configuredHome = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-configured-codex-",
+        });
+        yield* fileSystem.writeFileString(
+          path.join(configuredHome, "config.toml"),
+          'model_provider = "openai"\n',
+        );
+        expectedCodexHome = path.join(runtimeDir, DPCODE_CODEX_HOME_OVERLAY_DIR);
+
+        const status = yield* makeCheckCodexProviderStatus("codex", configuredHome);
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.message, undefined);
+        assert.strictEqual(sawLoginStatusProbe, true);
+        assert.notStrictEqual(configuredHome, tmpDir);
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, _command, env) => {
+            assert.strictEqual(env?.CODEX_HOME, expectedCodexHome);
+            const joined = args.join(" ");
+            if (joined === "--version")
+              return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
+            if (joined === "login status") {
+              sawLoginStatusProbe = true;
+              return { stdout: "Logged in\n", stderr: "", code: 0 };
+            }
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      );
+    });
 
     it.effect("returns unavailable when codex is missing", () =>
       Effect.gen(function* () {
