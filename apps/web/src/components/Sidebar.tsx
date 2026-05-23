@@ -5035,7 +5035,7 @@ export default function Sidebar() {
   const desktopUpdateButtonHasSecondaryLabel =
     desktopUpdateButtonPresentation.secondaryLabel !== null;
   const desktopUpdateRowButtonClasses = cn(
-    "inline-flex shrink-0 items-center justify-between gap-2 rounded-full px-2.5 text-left text-white transition-colors",
+    "inline-flex shrink-0 items-center justify-between gap-2 rounded-full px-2.5 text-center text-white transition-colors",
     desktopUpdateButtonHasSecondaryLabel ? "min-h-6 py-1" : "h-6",
     desktopUpdateButtonInteractivityClasses,
     desktopUpdateButtonClasses,
@@ -5944,12 +5944,12 @@ export default function Sidebar() {
                           className={desktopUpdateRowButtonClasses}
                           onClick={handleDesktopUpdateButtonClick}
                         >
-                          <span className="flex min-w-0 flex-1 flex-col leading-tight">
-                            <span className="truncate text-[10px] font-semibold">
+                          <span className="flex min-w-0 flex-1 items-center justify-between gap-1.5 leading-tight">
+                            <span className="min-w-0 truncate text-center text-[10px] font-semibold">
                               {desktopUpdateButtonPresentation.label}
                             </span>
                             {desktopUpdateButtonPresentation.secondaryLabel ? (
-                              <span className="truncate text-[9px] text-white/80">
+                              <span className="min-w-0 truncate text-center text-[9px] text-white/80">
                                 {desktopUpdateButtonPresentation.secondaryLabel}
                               </span>
                             ) : null}
