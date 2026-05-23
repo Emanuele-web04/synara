@@ -260,6 +260,7 @@ export const makeWsRpcLayer = () =>
         orchestrationEngine,
         path,
         platform: process.platform,
+        projectionSnapshotQuery: projectionReadModelQuery,
         providerAdapterRegistry,
         providerService,
       });

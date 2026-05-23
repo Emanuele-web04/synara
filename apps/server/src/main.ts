@@ -292,9 +292,10 @@ const makeServerProgram = (input: CliInput) =>
 
     yield* start;
     const orchestrationEngine = yield* OrchestrationEngineService;
+    const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     // Start the retention loop after the server is live so startup can serve
     // existing history first, then prune inactive threads in the background.
-    yield* startThreadRetentionJob(orchestrationEngine);
+    yield* startThreadRetentionJob(orchestrationEngine, projectionSnapshotQuery);
     yield* Effect.forkChild(recordStartupHeartbeat);
 
     const localUrl = `http://localhost:${config.port}`;
