@@ -71,7 +71,7 @@ import {
   gitStatusQueryOptions,
   invalidateGitQueries,
 } from "~/lib/gitReactQuery";
-import { cn, newCommandId, randomUUID } from "~/lib/utils";
+import { newCommandId, randomUUID } from "~/lib/utils";
 import { resolvePathLinkTarget } from "~/terminal-links";
 import { readNativeApi } from "~/nativeApi";
 import { createThreadSelector } from "~/storeSelectors";
@@ -1204,16 +1204,12 @@ export default function GitActionsControl({
 
   if (!gitCwd) return null;
 
-  const headerGhostClass =
-    "bg-transparent not-disabled:before:shadow-none dark:not-disabled:before:shadow-none [:hover,[data-pressed]]:bg-[var(--sidebar-accent)] dark:[:hover,[data-pressed]]:bg-[var(--sidebar-accent)]";
-
   return (
     <>
       {!isRepo ? (
         <Button
-          variant="outline"
+          variant="chrome-outline"
           size="xs"
-          className={headerGhostClass}
           disabled={initMutation.isPending}
           onClick={() => initMutation.mutate()}
         >
@@ -1229,12 +1225,9 @@ export default function GitActionsControl({
                   <Button
                     aria-label={quickAction.label}
                     aria-disabled="true"
-                    className={cn(
-                      "cursor-not-allowed rounded-e-none border-e-0 opacity-64 before:rounded-e-none",
-                      headerGhostClass,
-                    )}
+                    className="cursor-not-allowed rounded-e-none border-e-0 opacity-64 before:rounded-e-none"
                     size={hideQuickActionLabel ? "icon-xs" : "xs"}
-                    variant="outline"
+                    variant="chrome-outline"
                     title={quickAction.label}
                   />
                 }
@@ -1250,9 +1243,8 @@ export default function GitActionsControl({
             </Popover>
           ) : (
             <Button
-              variant="outline"
+              variant="chrome-outline"
               size={hideQuickActionLabel ? "icon-xs" : "xs"}
-              className={headerGhostClass}
               disabled={isGitActionRunning || quickAction.disabled}
               aria-label={quickAction.label}
               title={quickAction.label}
@@ -1275,8 +1267,7 @@ export default function GitActionsControl({
                 <Button
                   aria-label="Git action options"
                   size="icon-xs"
-                  variant="outline"
-                  className={headerGhostClass}
+                  variant="chrome-outline"
                 />
               }
               disabled={isGitActionRunning}

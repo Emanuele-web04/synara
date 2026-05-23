@@ -326,11 +326,8 @@ export const ChatHeader = memo(function ChatHeader({
                       <Button
                         type="button"
                         size="xs"
-                        variant="outline"
-                        className={cn(
-                          "shrink-0 bg-transparent not-disabled:before:shadow-none dark:not-disabled:before:shadow-none [:hover,[data-pressed]]:bg-[var(--sidebar-accent)] dark:[:hover,[data-pressed]]:bg-[var(--sidebar-accent)]",
-                          compact ? "gap-1" : "gap-1.5",
-                        )}
+                        variant="chrome-outline"
+                        className={cn("shrink-0", compact ? "gap-1" : "gap-1.5")}
                         aria-label={handoffActionLabel}
                         disabled={handoffDisabled || handoffActionTargetProviders.length === 0}
                       />
@@ -376,8 +373,8 @@ export const ChatHeader = memo(function ChatHeader({
                 <Button
                   type="button"
                   size="icon-xs"
-                  variant="outline"
-                  className="shrink-0 bg-transparent not-disabled:before:shadow-none dark:not-disabled:before:shadow-none [:hover,[data-pressed]]:bg-[var(--sidebar-accent)] dark:[:hover,[data-pressed]]:bg-[var(--sidebar-accent)]"
+                  variant="chrome-outline"
+                  className="shrink-0"
                   aria-label={inlineChatLayoutAction.label}
                   onClick={inlineChatLayoutAction.onClick}
                 >
@@ -401,8 +398,8 @@ export const ChatHeader = memo(function ChatHeader({
               render={
                 <Button
                   size="icon-xs"
-                  variant="outline"
-                  className="shrink-0 bg-transparent not-disabled:before:shadow-none dark:not-disabled:before:shadow-none [:hover,[data-pressed]]:bg-[var(--sidebar-accent)] dark:[:hover,[data-pressed]]:bg-[var(--sidebar-accent)]"
+                  variant="chrome-outline"
+                  className="shrink-0"
                   aria-label="Panel toggles"
                 />
               }
