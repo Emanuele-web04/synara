@@ -809,6 +809,7 @@ export default function DiffPanel({
                 diffIgnoreWhitespace ? "Show whitespace changes" : "Hide whitespace changes"
               }
               title={diffIgnoreWhitespace ? "Show whitespace changes" : "Hide whitespace changes"}
+              className="px-2.5"
               variant="outline"
               size="xs"
               pressed={diffIgnoreWhitespace}
@@ -817,6 +818,7 @@ export default function DiffPanel({
               }}
             >
               <FaPlusMinus className="size-3" />
+              <span className="text-[11px] leading-none font-medium">Hide whitespace</span>
             </Toggle>
           </>
         ) : null}
