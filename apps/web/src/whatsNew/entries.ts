@@ -22,6 +22,42 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.0.49",
+    date: "May 23",
+    features: [
+      {
+        id: "grok-build-discovery",
+        title: "Grok Build models stay current",
+        description:
+          "Grok model discovery now combines the CLI with xAI language-model metadata, including API aliases, so Grok Build and code-fast variants appear in the picker without waiting for another manual app update.",
+      },
+      {
+        id: "provider-picker-readiness",
+        title: "Provider choices wait for real readiness",
+        description:
+          "The provider picker no longer treats unknown provider status as usable. Providers stay in a checking state until DP Code has confirmed that the local runtime is available and authenticated.",
+      },
+      {
+        id: "desktop-shutdown-recovery",
+        title: "Desktop shutdown is calmer",
+        description:
+          "The desktop backend now shuts down more deliberately on quit, reducing noisy restarts and preserving a cleaner thread sync path when the app is closing.",
+      },
+      {
+        id: "faster-large-history-sync",
+        title: "Large histories sync with less work",
+        description:
+          "Snapshot queries, checkpoint reads, and transcript updates picked up more focused data paths, keeping busy workspaces lighter when sessions reconnect or histories grow.",
+      },
+      {
+        id: "diff-and-transcript-polish",
+        title: "Diffs and transcripts feel steadier",
+        description:
+          "Whitespace diff controls, thread title updates, copy metadata, and live transcript rows received targeted fixes so common review and resume flows update more predictably.",
+      },
+    ],
+  },
+  {
     version: "0.0.48",
     date: "May 21",
     features: [
