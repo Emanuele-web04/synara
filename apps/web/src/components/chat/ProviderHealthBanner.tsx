@@ -1,7 +1,12 @@
+// FILE: ProviderHealthBanner.tsx
+// Purpose: Surfaces provider availability warnings above the active chat.
+// Layer: Chat status presentation
+// Exports: ProviderHealthBanner
+
 import { PROVIDER_DISPLAY_NAMES, type ServerProviderStatus } from "@t3tools/contracts";
 import { memo } from "react";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "../ui/alert";
-import { Button } from "../ui/button";
+import { IconButton } from "../ui/icon-button";
 import { CircleAlertIcon, XIcon } from "~/lib/icons";
 
 export const ProviderHealthBanner = memo(function ProviderHealthBanner({
@@ -32,15 +37,13 @@ export const ProviderHealthBanner = memo(function ProviderHealthBanner({
         </AlertDescription>
         {onDismiss ? (
           <AlertAction>
-            <Button
-              aria-label="Dismiss provider status"
-              size="icon-xs"
+            <IconButton
+              label="Dismiss provider status"
               title="Dismiss provider status"
-              variant="ghost"
               onClick={onDismiss}
             >
               <XIcon className="size-3.5" />
-            </Button>
+            </IconButton>
           </AlertAction>
         ) : null}
       </Alert>

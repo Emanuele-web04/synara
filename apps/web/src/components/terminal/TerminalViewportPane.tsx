@@ -7,6 +7,7 @@ import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 
 import type { ResolvedTerminalVisualIdentity } from "@t3tools/shared/terminalThreads";
 
+import { IconButton } from "~/components/ui/icon-button";
 import {
   Maximize2,
   Minimize2,
@@ -79,21 +80,22 @@ function PaneActionButton(props: {
   className?: string | undefined;
 }) {
   return (
-    <button
-      type="button"
+    <IconButton
       className={cn(
-        "inline-flex h-7 w-7 items-center justify-center bg-background text-foreground/80 transition-colors hover:bg-[var(--sidebar-accent)] hover:text-foreground",
+        "size-7 rounded-none border-transparent bg-background text-foreground/80 shadow-none before:rounded-none hover:bg-[var(--sidebar-accent)] hover:text-foreground sm:size-7",
         props.className,
       )}
       onClick={(event) => {
         event.stopPropagation();
         props.onClick();
       }}
-      aria-label={props.label}
+      label={props.label}
       title={props.label}
+      size="icon-xs"
+      variant="ghost"
     >
       {props.children}
-    </button>
+    </IconButton>
   );
 }
 

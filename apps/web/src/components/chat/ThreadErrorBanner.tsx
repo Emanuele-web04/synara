@@ -1,5 +1,11 @@
+// FILE: ThreadErrorBanner.tsx
+// Purpose: Shows dismissible thread-level runtime errors above the transcript.
+// Layer: Chat status presentation
+// Exports: ThreadErrorBanner
+
 import { memo } from "react";
 import { Alert, AlertAction, AlertDescription } from "../ui/alert";
+import { IconButton } from "../ui/icon-button";
 import { CircleAlertIcon, XIcon } from "~/lib/icons";
 
 export const ThreadErrorBanner = memo(function ThreadErrorBanner({
@@ -19,14 +25,13 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
         </AlertDescription>
         {onDismiss && (
           <AlertAction>
-            <button
-              type="button"
-              aria-label="Dismiss error"
-              className="inline-flex size-6 items-center justify-center rounded-md text-destructive/60 transition-colors hover:text-destructive"
+            <IconButton
+              label="Dismiss error"
+              className="size-6 text-destructive/60 hover:text-destructive sm:size-6"
               onClick={onDismiss}
             >
               <XIcon className="size-3.5" />
-            </button>
+            </IconButton>
           </AlertAction>
         )}
       </Alert>

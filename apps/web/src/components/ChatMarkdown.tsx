@@ -36,6 +36,7 @@ import { resolveMarkdownFileLinkTarget, rewriteMarkdownFileUriHref } from "../ma
 import { readNativeApi } from "../nativeApi";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { GeneratedMarkdownImage } from "./chat/GeneratedMarkdownImage";
+import { IconButton } from "./ui/icon-button";
 
 class CodeHighlightErrorBoundary extends React.Component<
   { fallback: ReactNode; children: ReactNode },
@@ -539,15 +540,16 @@ function MarkdownCodeBlock({ code, children }: { code: string; children: ReactNo
 
   return (
     <div className="chat-markdown-codeblock">
-      <button
-        type="button"
+      <IconButton
         className="chat-markdown-copy-button"
         onClick={handleCopy}
         title={copied ? "Copied" : "Copy code"}
-        aria-label={copied ? "Copied" : "Copy code"}
+        label={copied ? "Copied" : "Copy code"}
+        size="icon-xs"
+        variant="ghost"
       >
         {copied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
-      </button>
+      </IconButton>
       {children}
     </div>
   );

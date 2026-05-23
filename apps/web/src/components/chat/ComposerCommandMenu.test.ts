@@ -73,4 +73,56 @@ describe("groupCommandItems", () => {
       },
     ]);
   });
+
+  it("groups slash-menu skills separately from app and provider commands", () => {
+    const items: ComposerCommandItem[] = [
+      {
+        id: "slash:review",
+        type: "slash-command",
+        command: "review",
+        label: "/review",
+        description: "Review changes",
+        source: "app",
+      },
+      {
+        id: "provider-command:codex:help",
+        type: "provider-native-command",
+        provider: "codex",
+        command: "help",
+        label: "/help",
+        description: "Show help",
+      },
+      {
+        id: "skill:/workspace/.codex/skills/check-code/SKILL.md",
+        type: "skill",
+        skill: {
+          name: "check-code",
+          description: "Review recent code changes",
+          path: "/workspace/.codex/skills/check-code/SKILL.md",
+          enabled: true,
+          scope: "project",
+        },
+        label: "check-code",
+        description: "Review recent code changes",
+      },
+    ];
+
+    expect(groupCommandItems(items, "slash-command", true)).toEqual([
+      {
+        id: "built-in",
+        label: "Built-in",
+        items: [items[0]],
+      },
+      {
+        id: "provider",
+        label: "Provider",
+        items: [items[1]],
+      },
+      {
+        id: "skills",
+        label: "Skills",
+        items: [items[2]],
+      },
+    ]);
+  });
 });

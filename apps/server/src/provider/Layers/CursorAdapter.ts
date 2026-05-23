@@ -13,6 +13,7 @@ import {
   type ProviderApprovalDecision,
   type ProviderInteractionMode,
   type ProviderListModelsResult,
+  type ProviderListSkillsResult,
   type ProviderRuntimeEvent,
   type ProviderSession,
   type ProviderUserInputAnswers,
@@ -91,6 +92,7 @@ import {
 } from "../acp/CursorAcpExtension.ts";
 import { CursorAdapter, type CursorAdapterShape } from "../Services/CursorAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import { discoverCursorSkills } from "../cursorSkillsDiscovery.ts";
 
 const PROVIDER = "cursor" as const;
 const CURSOR_RESUME_VERSION = 1 as const;
@@ -1293,8 +1295,8 @@ export function makeCursorAdapter(
     > = () =>
       Effect.succeed({
         provider: PROVIDER,
-        supportsSkillMentions: false,
-        supportsSkillDiscovery: false,
+        supportsSkillMentions: true,
+        supportsSkillDiscovery: true,
         supportsNativeSlashCommandDiscovery: false,
         supportsPluginMentions: false,
         supportsPluginDiscovery: false,
@@ -1302,6 +1304,26 @@ export function makeCursorAdapter(
         supportsThreadCompaction: false,
         supportsThreadImport: true,
       } satisfies ProviderComposerCapabilities);
+
+    const listSkills: NonNullable<CursorAdapterShape["listSkills"]> = (input) =>
+      Effect.tryPromise({
+        try: async () =>
+          ({
+            skills: await discoverCursorSkills({
+              cwd: input.cwd,
+              homeDir: serverConfig.homeDir,
+            }),
+            source: "cursor.filesystem",
+            cached: false,
+          }) satisfies ProviderListSkillsResult,
+        catch: (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "skill/list",
+            detail: "Failed to discover Cursor skills.",
+            cause,
+          }),
+      });
 
     const listModels: NonNullable<CursorAdapterShape["listModels"]> = (input) => {
       const binaryPath = input.binaryPath?.trim();
@@ -1415,6 +1437,7 @@ export function makeCursorAdapter(
       stopSession,
       listSessions,
       getComposerCapabilities,
+      listSkills,
       listModels,
       hasSession,
       stopAll,

@@ -1,5 +1,11 @@
+// FILE: TerminalSearch.tsx
+// Purpose: Provides the in-terminal find bar and navigation controls.
+// Layer: Terminal presentation component
+// Exports: TerminalSearch
+
 import type { SearchAddon, ISearchOptions } from "@xterm/addon-search";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { IconButton } from "~/components/ui/icon-button";
 import { ChevronDownIcon, ChevronUpIcon, XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
@@ -120,43 +126,39 @@ export function TerminalSearch({ searchAddon, isOpen, onClose }: TerminalSearchP
         <span className="whitespace-nowrap px-1 text-xs text-muted-foreground">No results</span>
       )}
       <div className="flex shrink-0 items-center">
-        <button
-          type="button"
+        <IconButton
           onClick={() => setCaseSensitive((v) => !v)}
+          label="Match case"
           className={cn(
-            "rounded p-1 transition-colors",
+            "size-6 rounded-sm border-transparent bg-transparent shadow-none before:rounded-sm sm:size-6",
             caseSensitive
               ? "bg-primary/20 text-foreground"
               : "text-muted-foreground hover:bg-muted-foreground/20 hover:text-foreground",
           )}
-          aria-label="Match case"
         >
           <span className="text-[10px] font-bold leading-none">Aa</span>
-        </button>
-        <button
-          type="button"
+        </IconButton>
+        <IconButton
           onClick={() => handleSearch("previous")}
-          className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted-foreground/20 hover:text-foreground"
-          aria-label="Previous match (Shift+Enter)"
+          className="size-6 rounded-sm border-transparent bg-transparent text-muted-foreground shadow-none before:rounded-sm hover:bg-muted-foreground/20 hover:text-foreground sm:size-6"
+          label="Previous match (Shift+Enter)"
         >
           <ChevronUpIcon className="size-3.5" />
-        </button>
-        <button
-          type="button"
+        </IconButton>
+        <IconButton
           onClick={() => handleSearch("next")}
-          className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted-foreground/20 hover:text-foreground"
-          aria-label="Next match (Enter)"
+          className="size-6 rounded-sm border-transparent bg-transparent text-muted-foreground shadow-none before:rounded-sm hover:bg-muted-foreground/20 hover:text-foreground sm:size-6"
+          label="Next match (Enter)"
         >
           <ChevronDownIcon className="size-3.5" />
-        </button>
-        <button
-          type="button"
+        </IconButton>
+        <IconButton
           onClick={handleClose}
-          className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted-foreground/20 hover:text-foreground"
-          aria-label="Close search (Esc)"
+          className="size-6 rounded-sm border-transparent bg-transparent text-muted-foreground shadow-none before:rounded-sm hover:bg-muted-foreground/20 hover:text-foreground sm:size-6"
+          label="Close search (Esc)"
         >
           <XIcon className="size-3.5" />
-        </button>
+        </IconButton>
       </div>
     </div>
   );

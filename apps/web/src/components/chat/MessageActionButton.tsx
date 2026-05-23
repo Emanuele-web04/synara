@@ -5,10 +5,11 @@
 
 import { forwardRef, memo, type ComponentProps, type ReactNode } from "react";
 import { cn } from "~/lib/utils";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { IconButton } from "../ui/icon-button";
+import type { TooltipPopup } from "../ui/tooltip";
 
 export const MESSAGE_ACTION_BUTTON_CLASS_NAME =
-  "sidebar-icon-button inline-flex size-5 cursor-pointer border border-transparent bg-transparent shadow-none disabled:cursor-default disabled:opacity-45";
+  "sidebar-icon-button size-5 rounded-sm border-transparent bg-transparent shadow-none before:rounded-sm disabled:cursor-default disabled:opacity-45 sm:size-5";
 
 type MessageActionButtonProps = Omit<
   ComponentProps<"button">,
@@ -26,24 +27,19 @@ export const MessageActionButton = memo(
     ref,
   ) {
     return (
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <button
-              {...props}
-              ref={ref}
-              type={type}
-              aria-label={label}
-              className={cn(MESSAGE_ACTION_BUTTON_CLASS_NAME, className)}
-            />
-          }
-        >
-          {children}
-        </TooltipTrigger>
-        <TooltipPopup side={tooltipSide}>
-          {typeof tooltip === "string" ? <p>{tooltip}</p> : tooltip}
-        </TooltipPopup>
-      </Tooltip>
+      <IconButton
+        {...props}
+        ref={ref}
+        type={type}
+        label={label}
+        tooltip={tooltip}
+        tooltipSide={tooltipSide}
+        className={cn(MESSAGE_ACTION_BUTTON_CLASS_NAME, className)}
+        size="icon-xs"
+        variant="ghost"
+      >
+        {children}
+      </IconButton>
     );
   }),
 );

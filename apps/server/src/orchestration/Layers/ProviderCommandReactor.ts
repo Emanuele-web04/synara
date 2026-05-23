@@ -91,6 +91,31 @@ function toNonEmptyProviderInput(value: string | undefined): string | undefined 
   return normalized && normalized.length > 0 ? normalized : undefined;
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Codex app-server still expects `$skill` text next to the structured skill item.
+export function normalizeSkillMentionTextForProvider(input: {
+  readonly provider: ProviderKind;
+  readonly messageText: string;
+  readonly skills?: ReadonlyArray<ProviderSkillReference>;
+}): string {
+  if (input.provider !== "codex" || !input.skills || input.skills.length === 0) {
+    return input.messageText;
+  }
+
+  let nextText = input.messageText;
+  for (const skill of input.skills) {
+    const escapedName = escapeRegExp(skill.name);
+    nextText = nextText.replace(
+      new RegExp(`(^|\\s)/${escapedName}(?=\\s|$)`, "gi"),
+      `$1$${skill.name}`,
+    );
+  }
+  return nextText;
+}
+
 function attachmentTitleSeed(attachment: ChatAttachment | undefined): string {
   if (!attachment) {
     return "";
@@ -903,7 +928,13 @@ const make = Effect.gen(function* () {
         : priorTranscriptBootstrapText
           ? `<thread_context>\n${priorTranscriptBootstrapText}\n</thread_context>\n\n<latest_user_message>\n${boundaryMessageText}\n</latest_user_message>`
           : boundaryMessageText;
-    const normalizedInput = toNonEmptyProviderInput(providerInput);
+    const normalizedInput = toNonEmptyProviderInput(
+      normalizeSkillMentionTextForProvider({
+        provider: selectedProvider,
+        messageText: providerInput,
+        ...(input.skills !== undefined ? { skills: input.skills } : {}),
+      }),
+    );
     const normalizedAttachments = input.attachments ?? [];
     const activeSession = yield* providerService
       .listSessions()

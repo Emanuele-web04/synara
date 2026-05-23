@@ -648,12 +648,12 @@ function mergeDynamicModelOptions(input: {
 
 function skillMentionPrefix(provider: string): string {
   if (provider === "pi") return "/skill:";
-  return provider === "claudeAgent" ? "/" : "$";
+  return "/";
 }
 
 function promptIncludesSkillMention(prompt: string, skillName: string, provider: string): boolean {
   const escapedSkillName = escapeRegExp(skillName);
-  const prefixes = provider === "pi" ? ["/skill:"] : [skillMentionPrefix(provider)];
+  const prefixes = provider === "pi" ? ["/skill:"] : ["/", "$"];
   return prefixes.some((prefix) => {
     const pattern = new RegExp(`(^|\\s)${escapeRegExp(prefix)}${escapedSkillName}(?=\\s|$)`, "i");
     return pattern.test(prompt);
@@ -2373,7 +2373,10 @@ export default function ChatView({
     composerCommandPicker === null &&
     isMentionTrigger &&
     isLocalFolderMentionQuery(mentionTriggerQuery);
-  const skillTriggerQuery = composerTrigger?.kind === "skill" ? composerTrigger.query : "";
+  const skillTriggerQuery =
+    composerTrigger?.kind === "skill" || composerTrigger?.kind === "slash-command"
+      ? composerTrigger.query
+      : "";
   const isSkillTrigger = composerTriggerKind === "skill";
   const [debouncedPathQuery, composerPathQueryDebouncer] = useDebouncedValue(
     mentionTriggerQuery,
@@ -2415,7 +2418,7 @@ export default function ChatView({
       agentDir: selectedProvider === "pi" ? settings.piAgentDir || null : null,
       query: skillTriggerQuery,
       enabled:
-        (isSkillTrigger || selectedProvider === "pi") &&
+        (isSkillTrigger || composerTriggerKind === "slash-command" || selectedProvider === "pi") &&
         canDiscoverProviderSkills &&
         composerSkillCwd !== null,
     }),
@@ -7132,7 +7135,10 @@ export default function ChatView({
         providerPluginsQuery.isLoading ||
         providerPluginsQuery.isFetching)) ||
     (composerTriggerKind === "slash-command" &&
-      (providerCommandsQuery.isLoading || providerCommandsQuery.isFetching)) ||
+      (providerCommandsQuery.isLoading ||
+        providerCommandsQuery.isFetching ||
+        providerSkillsQuery.isLoading ||
+        providerSkillsQuery.isFetching)) ||
     (composerTriggerKind === "skill" &&
       (providerComposerCapabilitiesQuery.isLoading ||
         providerComposerCapabilitiesQuery.isFetching ||

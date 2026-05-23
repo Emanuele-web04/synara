@@ -277,8 +277,12 @@ export function groupCommandItems(
 
   const builtInItems = items.filter((item) => item.type === "slash-command");
   const providerItems = items.filter((item) => item.type === "provider-native-command");
+  const skillItems = items.filter((item) => item.type === "skill");
   const otherItems = items.filter(
-    (item) => item.type !== "slash-command" && item.type !== "provider-native-command",
+    (item) =>
+      item.type !== "slash-command" &&
+      item.type !== "provider-native-command" &&
+      item.type !== "skill",
   );
 
   const groups: ComposerCommandGroupModel[] = [];
@@ -287,6 +291,9 @@ export function groupCommandItems(
   }
   if (providerItems.length > 0) {
     groups.push({ id: "provider", label: "Provider", items: providerItems });
+  }
+  if (skillItems.length > 0) {
+    groups.push({ id: "skills", label: "Skills", items: skillItems });
   }
   if (otherItems.length > 0) {
     groups.push({ id: "other", label: null, items: otherItems });

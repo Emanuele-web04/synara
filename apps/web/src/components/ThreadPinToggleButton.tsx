@@ -6,6 +6,7 @@
 import type React from "react";
 import { PinIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import { IconButton } from "./ui/icon-button";
 
 export function ThreadPinToggleButton({
   pinned,
@@ -21,13 +22,14 @@ export function ThreadPinToggleButton({
   const label = pinned ? "Unpin thread" : "Pin thread";
 
   return (
-    <button
-      type="button"
-      aria-label={label}
+    <IconButton
+      label={label}
       aria-pressed={pinned}
       title={label}
+      size="icon-xs"
+      variant="ghost"
       className={cn(
-        "sidebar-icon-button pointer-events-auto inline-flex size-5 transition-all hover:text-foreground/82",
+        "sidebar-icon-button pointer-events-auto size-5 rounded-sm border-transparent bg-transparent shadow-none transition-all before:rounded-sm hover:text-foreground/82 sm:size-5",
         toneClassName ?? "text-muted-foreground/34",
         presentation === "overlay"
           ? cn(
@@ -45,6 +47,6 @@ export function ThreadPinToggleButton({
       onClick={onToggle}
     >
       <PinIcon className="size-3.5" />
-    </button>
+    </IconButton>
   );
 }

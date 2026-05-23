@@ -73,3 +73,22 @@ export function ProviderIcon({
     />
   );
 }
+
+export function ProviderOptionLabel({
+  provider,
+  label,
+  className,
+  iconClassName,
+}: {
+  provider: ProviderKind;
+  label: ReactNode;
+  className?: string;
+  iconClassName?: string;
+}) {
+  return (
+    <span className={cn("flex min-w-0 items-center gap-2", className)}>
+      <ProviderIcon provider={provider} className={cn("size-3.5", iconClassName)} />
+      <span className="min-w-0 truncate">{label}</span>
+    </span>
+  );
+}

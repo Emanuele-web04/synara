@@ -44,17 +44,7 @@ import {
 import { APP_VERSION } from "../branding";
 import { SidebarHeaderNavigationControls } from "../components/SidebarHeaderNavigationControls";
 import { useDesktopTopBarTrafficLightGutterClassName } from "../hooks/useDesktopTopBarGutter";
-import {
-  ClaudeAI,
-  CursorIcon,
-  DotGrid2x3Icon,
-  Gemini,
-  GrokIcon,
-  KiloIcon,
-  OpenAI,
-  OpenCodeIcon,
-  PiIcon,
-} from "../components/Icons";
+import { ProviderOptionLabel } from "../components/ProviderIcon";
 import { Button } from "../components/ui/button";
 import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
 import { Input } from "../components/ui/input";
@@ -73,6 +63,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip"
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { isElectron } from "../env";
 import { useTheme } from "../hooks/useTheme";
+import { CentralIcon } from "../lib/central-icons";
 import { gitRemoveWorktreeMutationOptions } from "../lib/gitReactQuery";
 import {
   ArchiveIcon,
@@ -125,6 +116,17 @@ const THEME_OPTIONS = [
     description: "Always use the dark theme.",
   },
 ] as const;
+
+const PROVIDER_SELECT_OPTIONS = [
+  "codex",
+  "claudeAgent",
+  "cursor",
+  "gemini",
+  "grok",
+  "opencode",
+  "kilo",
+  "pi",
+] as const satisfies readonly ProviderKind[];
 
 const TIMESTAMP_FORMAT_LABELS = {
   locale: "System default",
@@ -242,7 +244,7 @@ function SortableProviderVisibilityRow(props: {
           {...attributes}
           {...listeners}
         >
-          <DotGrid2x3Icon className="size-4" />
+          <CentralIcon name="dot-grid-2x3" className="size-4" />
         </button>
         <span className="min-w-0 text-sm text-foreground">{props.option.title}</span>
       </div>
@@ -497,6 +499,37 @@ function SettingResetButton({ label, onClick }: { label: string; onClick: () => 
       <TooltipPopup side="top">Reset to default</TooltipPopup>
     </Tooltip>
   );
+}
+
+function SettingsSelectControl({
+  value,
+  onValueChange,
+  ariaLabel,
+  triggerClassName = "w-full sm:w-44",
+  valueContent,
+  children,
+}: {
+  value: string;
+  onValueChange: (value: string) => void;
+  ariaLabel: string;
+  triggerClassName?: string;
+  valueContent: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <Select value={value} onValueChange={onValueChange}>
+      <SelectTrigger className={triggerClassName} aria-label={ariaLabel}>
+        <SelectValue>{valueContent}</SelectValue>
+      </SelectTrigger>
+      <SelectPopup align="end" alignItemWithTrigger={false}>
+        {children}
+      </SelectPopup>
+    </Select>
+  );
+}
+
+function isProviderSelectOption(value: string): value is ProviderKind {
+  return PROVIDER_SELECT_OPTIONS.includes(value as ProviderKind);
 }
 
 function ProviderDocsLinks({ docs }: { docs: InstallProviderSettings["docs"] }) {
@@ -1340,99 +1373,29 @@ function SettingsRouteView() {
               ) : null
             }
             control={
-              <Select
+              <SettingsSelectControl
                 value={settings.defaultProvider}
                 onValueChange={(value) => {
-                  if (
-                    value !== "codex" &&
-                    value !== "claudeAgent" &&
-                    value !== "cursor" &&
-                    value !== "gemini" &&
-                    value !== "grok" &&
-                    value !== "kilo" &&
-                    value !== "opencode" &&
-                    value !== "pi"
-                  ) {
-                    return;
-                  }
+                  if (!isProviderSelectOption(value)) return;
                   updateSettings({ defaultProvider: value });
                 }}
+                ariaLabel="Default provider"
+                valueContent={
+                  <ProviderOptionLabel
+                    provider={settings.defaultProvider}
+                    label={PROVIDER_DISPLAY_NAMES[settings.defaultProvider]}
+                  />
+                }
               >
-                <SelectTrigger className="w-full sm:w-44" aria-label="Default provider">
-                  <SelectValue>
-                    <span className="flex items-center gap-2">
-                      {settings.defaultProvider === "claudeAgent" ? (
-                        <ClaudeAI className="size-3.5 text-foreground" />
-                      ) : settings.defaultProvider === "cursor" ? (
-                        <CursorIcon className="size-3.5 text-foreground" />
-                      ) : settings.defaultProvider === "gemini" ? (
-                        <Gemini className="size-3.5 text-foreground" />
-                      ) : settings.defaultProvider === "grok" ? (
-                        <GrokIcon className="size-3.5 text-foreground" />
-                      ) : settings.defaultProvider === "kilo" ? (
-                        <KiloIcon className="size-3.5 text-muted-foreground/70" />
-                      ) : settings.defaultProvider === "opencode" ? (
-                        <OpenCodeIcon className="size-3.5 text-muted-foreground/70" />
-                      ) : settings.defaultProvider === "pi" ? (
-                        <PiIcon className="size-3.5 text-foreground" />
-                      ) : (
-                        <OpenAI className="size-3.5" />
-                      )}
-                      {PROVIDER_DISPLAY_NAMES[settings.defaultProvider]}
-                    </span>
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="end" alignItemWithTrigger={false}>
-                  <SelectItem hideIndicator value="codex">
-                    <span className="flex items-center gap-2">
-                      <OpenAI className="size-3.5" />
-                      Codex
-                    </span>
+                {PROVIDER_SELECT_OPTIONS.map((provider) => (
+                  <SelectItem hideIndicator key={provider} value={provider}>
+                    <ProviderOptionLabel
+                      provider={provider}
+                      label={PROVIDER_DISPLAY_NAMES[provider]}
+                    />
                   </SelectItem>
-                  <SelectItem hideIndicator value="claudeAgent">
-                    <span className="flex items-center gap-2">
-                      <ClaudeAI className="size-3.5 text-foreground" />
-                      Claude
-                    </span>
-                  </SelectItem>
-                  <SelectItem hideIndicator value="cursor">
-                    <span className="flex items-center gap-2">
-                      <CursorIcon className="size-3.5 text-foreground" />
-                      Cursor
-                    </span>
-                  </SelectItem>
-                  <SelectItem hideIndicator value="gemini">
-                    <span className="flex items-center gap-2">
-                      <Gemini className="size-3.5 text-foreground" />
-                      Gemini
-                    </span>
-                  </SelectItem>
-                  <SelectItem hideIndicator value="grok">
-                    <span className="flex items-center gap-2">
-                      <GrokIcon className="size-3.5 text-foreground" />
-                      Grok
-                    </span>
-                  </SelectItem>
-                  <SelectItem hideIndicator value="opencode">
-                    <span className="flex items-center gap-2">
-                      <OpenCodeIcon className="size-3.5 text-muted-foreground/70" />
-                      OpenCode
-                    </span>
-                  </SelectItem>
-                  <SelectItem hideIndicator value="kilo">
-                    <span className="flex items-center gap-2">
-                      <KiloIcon className="size-3.5 text-muted-foreground/70" />
-                      Kilo
-                    </span>
-                  </SelectItem>
-                  <SelectItem hideIndicator value="pi">
-                    <span className="flex items-center gap-2">
-                      <PiIcon className="size-3.5 text-foreground" />
-                      Pi
-                    </span>
-                  </SelectItem>
-                </SelectPopup>
-              </Select>
+                ))}
+              </SettingsSelectControl>
             }
           />
 
@@ -1452,7 +1415,7 @@ function SettingsRouteView() {
               ) : null
             }
             control={
-              <Select
+              <SettingsSelectControl
                 value={settings.defaultThreadEnvMode}
                 onValueChange={(value) => {
                   if (value !== "local" && value !== "worktree") return;
@@ -1460,21 +1423,18 @@ function SettingsRouteView() {
                     defaultThreadEnvMode: value,
                   });
                 }}
+                ariaLabel="Default thread mode"
+                valueContent={
+                  settings.defaultThreadEnvMode === "worktree" ? "New worktree" : "Local"
+                }
               >
-                <SelectTrigger className="w-full sm:w-44" aria-label="Default thread mode">
-                  <SelectValue>
-                    {settings.defaultThreadEnvMode === "worktree" ? "New worktree" : "Local"}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="end" alignItemWithTrigger={false}>
-                  <SelectItem hideIndicator value="local">
-                    Local
-                  </SelectItem>
-                  <SelectItem hideIndicator value="worktree">
-                    New worktree
-                  </SelectItem>
-                </SelectPopup>
-              </Select>
+                <SelectItem hideIndicator value="local">
+                  Local
+                </SelectItem>
+                <SelectItem hideIndicator value="worktree">
+                  New worktree
+                </SelectItem>
+              </SettingsSelectControl>
             }
           />
         </div>
@@ -1498,7 +1458,7 @@ function SettingsRouteView() {
               ) : null
             }
             control={
-              <Select
+              <SettingsSelectControl
                 value={settings.sidebarSide}
                 onValueChange={(value) => {
                   if (value !== "left" && value !== "right") {
@@ -1506,19 +1466,16 @@ function SettingsRouteView() {
                   }
                   updateSettings({ sidebarSide: value });
                 }}
+                ariaLabel="Sidebar position"
+                valueContent={SIDEBAR_SIDE_LABELS[settings.sidebarSide]}
               >
-                <SelectTrigger className="w-full sm:w-44" aria-label="Sidebar position">
-                  <SelectValue>{SIDEBAR_SIDE_LABELS[settings.sidebarSide]}</SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="end" alignItemWithTrigger={false}>
-                  <SelectItem hideIndicator value="left">
-                    {SIDEBAR_SIDE_LABELS.left}
-                  </SelectItem>
-                  <SelectItem hideIndicator value="right">
-                    {SIDEBAR_SIDE_LABELS.right}
-                  </SelectItem>
-                </SelectPopup>
-              </Select>
+                <SelectItem hideIndicator value="left">
+                  {SIDEBAR_SIDE_LABELS.left}
+                </SelectItem>
+                <SelectItem hideIndicator value="right">
+                  {SIDEBAR_SIDE_LABELS.right}
+                </SelectItem>
+              </SettingsSelectControl>
             }
           />
 
@@ -1538,7 +1495,7 @@ function SettingsRouteView() {
               ) : null
             }
             control={
-              <Select
+              <SettingsSelectControl
                 value={settings.sidebarProjectSortOrder}
                 onValueChange={(value) => {
                   if (value !== "updated_at" && value !== "created_at" && value !== "manual") {
@@ -1546,24 +1503,21 @@ function SettingsRouteView() {
                   }
                   updateSettings({ sidebarProjectSortOrder: value });
                 }}
+                ariaLabel="Project sort order"
+                valueContent={
+                  SIDEBAR_PROJECT_SORT_ORDER_LABELS[settings.sidebarProjectSortOrder]
+                }
               >
-                <SelectTrigger className="w-full sm:w-44" aria-label="Project sort order">
-                  <SelectValue>
-                    {SIDEBAR_PROJECT_SORT_ORDER_LABELS[settings.sidebarProjectSortOrder]}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="end" alignItemWithTrigger={false}>
-                  <SelectItem hideIndicator value="updated_at">
-                    {SIDEBAR_PROJECT_SORT_ORDER_LABELS.updated_at}
-                  </SelectItem>
-                  <SelectItem hideIndicator value="created_at">
-                    {SIDEBAR_PROJECT_SORT_ORDER_LABELS.created_at}
-                  </SelectItem>
-                  <SelectItem hideIndicator value="manual">
-                    {SIDEBAR_PROJECT_SORT_ORDER_LABELS.manual}
-                  </SelectItem>
-                </SelectPopup>
-              </Select>
+                <SelectItem hideIndicator value="updated_at">
+                  {SIDEBAR_PROJECT_SORT_ORDER_LABELS.updated_at}
+                </SelectItem>
+                <SelectItem hideIndicator value="created_at">
+                  {SIDEBAR_PROJECT_SORT_ORDER_LABELS.created_at}
+                </SelectItem>
+                <SelectItem hideIndicator value="manual">
+                  {SIDEBAR_PROJECT_SORT_ORDER_LABELS.manual}
+                </SelectItem>
+              </SettingsSelectControl>
             }
           />
 
@@ -1583,7 +1537,7 @@ function SettingsRouteView() {
               ) : null
             }
             control={
-              <Select
+              <SettingsSelectControl
                 value={settings.sidebarThreadSortOrder}
                 onValueChange={(value) => {
                   if (value !== "updated_at" && value !== "created_at") {
@@ -1591,21 +1545,16 @@ function SettingsRouteView() {
                   }
                   updateSettings({ sidebarThreadSortOrder: value });
                 }}
+                ariaLabel="Thread sort order"
+                valueContent={SIDEBAR_THREAD_SORT_ORDER_LABELS[settings.sidebarThreadSortOrder]}
               >
-                <SelectTrigger className="w-full sm:w-44" aria-label="Thread sort order">
-                  <SelectValue>
-                    {SIDEBAR_THREAD_SORT_ORDER_LABELS[settings.sidebarThreadSortOrder]}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="end" alignItemWithTrigger={false}>
-                  <SelectItem hideIndicator value="updated_at">
-                    {SIDEBAR_THREAD_SORT_ORDER_LABELS.updated_at}
-                  </SelectItem>
-                  <SelectItem hideIndicator value="created_at">
-                    {SIDEBAR_THREAD_SORT_ORDER_LABELS.created_at}
-                  </SelectItem>
-                </SelectPopup>
-              </Select>
+                <SelectItem hideIndicator value="updated_at">
+                  {SIDEBAR_THREAD_SORT_ORDER_LABELS.updated_at}
+                </SelectItem>
+                <SelectItem hideIndicator value="created_at">
+                  {SIDEBAR_THREAD_SORT_ORDER_LABELS.created_at}
+                </SelectItem>
+              </SettingsSelectControl>
             }
           />
         </div>
@@ -1626,26 +1575,24 @@ function SettingsRouteView() {
               ) : null
             }
             control={
-              <Select
+              <SettingsSelectControl
                 value={theme}
                 onValueChange={(value) => {
                   if (value !== "system" && value !== "light" && value !== "dark") return;
                   setTheme(value);
                 }}
+                ariaLabel="Theme preference"
+                triggerClassName="w-full sm:w-40"
+                valueContent={
+                  THEME_OPTIONS.find((option) => option.value === theme)?.label ?? "System"
+                }
               >
-                <SelectTrigger className="w-full sm:w-40" aria-label="Theme preference">
-                  <SelectValue>
-                    {THEME_OPTIONS.find((option) => option.value === theme)?.label ?? "System"}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="end" alignItemWithTrigger={false}>
-                  {THEME_OPTIONS.map((option) => (
-                    <SelectItem hideIndicator key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectPopup>
-              </Select>
+                {THEME_OPTIONS.map((option) => (
+                  <SelectItem hideIndicator key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SettingsSelectControl>
             }
           />
 
@@ -1798,7 +1745,7 @@ function SettingsRouteView() {
               ) : null
             }
             control={
-              <Select
+              <SettingsSelectControl
                 value={settings.timestampFormat}
                 onValueChange={(value) => {
                   if (value !== "locale" && value !== "12-hour" && value !== "24-hour") {
@@ -1808,22 +1755,20 @@ function SettingsRouteView() {
                     timestampFormat: value,
                   });
                 }}
+                ariaLabel="Timestamp format"
+                triggerClassName="w-full sm:w-40"
+                valueContent={TIMESTAMP_FORMAT_LABELS[settings.timestampFormat]}
               >
-                <SelectTrigger className="w-full sm:w-40" aria-label="Timestamp format">
-                  <SelectValue>{TIMESTAMP_FORMAT_LABELS[settings.timestampFormat]}</SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="end" alignItemWithTrigger={false}>
-                  <SelectItem hideIndicator value="locale">
-                    {TIMESTAMP_FORMAT_LABELS.locale}
-                  </SelectItem>
-                  <SelectItem hideIndicator value="12-hour">
-                    {TIMESTAMP_FORMAT_LABELS["12-hour"]}
-                  </SelectItem>
-                  <SelectItem hideIndicator value="24-hour">
-                    {TIMESTAMP_FORMAT_LABELS["24-hour"]}
-                  </SelectItem>
-                </SelectPopup>
-              </Select>
+                <SelectItem hideIndicator value="locale">
+                  {TIMESTAMP_FORMAT_LABELS.locale}
+                </SelectItem>
+                <SelectItem hideIndicator value="12-hour">
+                  {TIMESTAMP_FORMAT_LABELS["12-hour"]}
+                </SelectItem>
+                <SelectItem hideIndicator value="24-hour">
+                  {TIMESTAMP_FORMAT_LABELS["24-hour"]}
+                </SelectItem>
+              </SettingsSelectControl>
             }
           />
         </div>
@@ -2270,7 +2215,7 @@ function SettingsRouteView() {
               ) : null
             }
             control={
-              <Select
+              <SettingsSelectControl
                 value={currentGitTextGenerationValue}
                 onValueChange={(value) => {
                   if (!value) return;
@@ -2283,22 +2228,20 @@ function SettingsRouteView() {
                     textGenerationModel: model,
                   });
                 }}
+                ariaLabel="Git text generation model"
+                triggerClassName="w-full sm:w-52"
+                valueContent={selectedGitTextGenerationModelLabel}
               >
-                <SelectTrigger className="w-full sm:w-52" aria-label="Git text generation model">
-                  <SelectValue>{selectedGitTextGenerationModelLabel}</SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="end" alignItemWithTrigger={false}>
-                  {gitTextGenerationModelOptions.map((option) => (
-                    <SelectItem
-                      hideIndicator
-                      key={`${option.provider}:${option.slug}`}
-                      value={`${option.provider}:${option.slug}`}
-                    >
-                      {PROVIDER_DISPLAY_NAMES[option.provider]} / {option.name}
-                    </SelectItem>
-                  ))}
-                </SelectPopup>
-              </Select>
+                {gitTextGenerationModelOptions.map((option) => (
+                  <SelectItem
+                    hideIndicator
+                    key={`${option.provider}:${option.slug}`}
+                    value={`${option.provider}:${option.slug}`}
+                  >
+                    {PROVIDER_DISPLAY_NAMES[option.provider]} / {option.name}
+                  </SelectItem>
+                ))}
+              </SettingsSelectControl>
             }
           />
         </div>
