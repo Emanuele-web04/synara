@@ -207,7 +207,9 @@ const make = Effect.gen(function* () {
   const resolveSessionRuntimeForThread = Effect.fnUntraced(function* (
     threadId: ThreadId,
   ): Effect.fn.Return<Option.Option<{ readonly threadId: ThreadId; readonly cwd: string }>> {
-    const thread = yield* projectionSnapshotQuery.getThreadShellById(threadId);
+    const thread = yield* projectionSnapshotQuery
+      .getThreadShellById(threadId)
+      .pipe(Effect.catch(() => Effect.succeed(Option.none())));
     if (Option.isNone(thread)) {
       return Option.none();
     }
@@ -237,13 +239,21 @@ const make = Effect.gen(function* () {
   const getThreadDetail = Effect.fnUntraced(function* (
     threadId: ThreadId,
   ): Effect.fn.Return<OrchestrationThread | undefined> {
-    return Option.getOrUndefined(yield* projectionSnapshotQuery.getThreadDetailById(threadId));
+    return Option.getOrUndefined(
+      yield* projectionSnapshotQuery
+        .getThreadDetailById(threadId)
+        .pipe(Effect.catch(() => Effect.succeed(Option.none()))),
+    );
   });
 
   const getProjectShell = Effect.fnUntraced(function* (
     projectId: ProjectId,
   ): Effect.fn.Return<OrchestrationProjectShell | undefined> {
-    return Option.getOrUndefined(yield* projectionSnapshotQuery.getProjectShellById(projectId));
+    return Option.getOrUndefined(
+      yield* projectionSnapshotQuery
+        .getProjectShellById(projectId)
+        .pipe(Effect.catch(() => Effect.succeed(Option.none()))),
+    );
   });
 
   // Resolves the workspace CWD for checkpoint operations, preferring the

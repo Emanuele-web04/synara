@@ -272,7 +272,15 @@ it.layer(testLayer)("server CLI command", (it) => {
               threads: [] as OrchestrationReadModel["threads"],
               updatedAt: new Date(0).toISOString(),
             }),
+          getCommandReadModel: () =>
+            Effect.succeed({
+              snapshotSequence: 0,
+              projects: [] as OrchestrationReadModel["projects"],
+              threads: [] as OrchestrationReadModel["threads"],
+              updatedAt: new Date(0).toISOString(),
+            }),
           getCounts,
+          getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
           getShellSnapshot: () => Effect.die("unused"),
           getActiveProjectByWorkspaceRoot: () => Effect.die("unused"),
           getProjectShellById: () => Effect.die("unused"),

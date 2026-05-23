@@ -788,7 +788,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     get streamDomainEvents(): OrchestrationEngineShape["streamDomainEvents"] {
       return Stream.fromPubSub(eventPubSub);
     },
-  } as OrchestrationEngineShape & { readonly getReadModel: typeof getReadModel };
+  } satisfies OrchestrationEngineShape;
 });
 
 export const OrchestrationEngineLive = Layer.effect(

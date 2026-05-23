@@ -36,6 +36,13 @@ export interface OrchestrationEngineShape {
   ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError, never>;
 
   /**
+   * Read the command-oriented in-memory model used by orchestration tests and
+   * compatibility callers. Runtime snapshot reads should prefer
+   * ProjectionSnapshotQuery.
+   */
+  readonly getReadModel: () => Effect.Effect<OrchestrationReadModel, never, never>;
+
+  /**
    * Dispatch a validated orchestration command.
    *
    * @param command - Valid orchestration command.

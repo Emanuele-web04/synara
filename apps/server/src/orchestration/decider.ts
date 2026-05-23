@@ -3,6 +3,7 @@ import type {
   OrchestrationEvent,
   OrchestrationReadModel,
 } from "@t3tools/contracts";
+import { TurnId } from "@t3tools/contracts";
 import {
   deriveAssociatedWorktreeMetadata,
   deriveAssociatedWorktreeMetadataPatch,
@@ -1023,7 +1024,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           messageId: command.messageId,
           text: command.text,
           rollbackTurnCount: editTarget.rollbackTurnCount,
-          removedTurnIds: editTarget.removedTurnIds,
+          removedTurnIds: editTarget.removedTurnIds.map((turnId) => TurnId.makeUnsafe(turnId)),
           ...(command.modelSelection !== undefined
             ? { modelSelection: command.modelSelection }
             : {}),

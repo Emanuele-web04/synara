@@ -1130,14 +1130,20 @@ const make = Effect.gen(function* () {
   const getThreadDetail = Effect.fnUntraced(function* (
     threadId: ThreadId,
   ): Effect.fn.Return<OrchestrationThread | undefined> {
-    return Option.getOrUndefined(yield* projectionSnapshotQuery.getThreadDetailById(threadId));
+    return Option.getOrUndefined(
+      yield* projectionSnapshotQuery
+        .getThreadDetailById(threadId)
+        .pipe(Effect.catch(() => Effect.succeed(Option.none()))),
+    );
   });
 
   const getProjectShell = Effect.fnUntraced(function* (
     thread: Pick<OrchestrationThread, "projectId">,
   ): Effect.fn.Return<OrchestrationProjectShell | undefined> {
     return Option.getOrUndefined(
-      yield* projectionSnapshotQuery.getProjectShellById(thread.projectId),
+      yield* projectionSnapshotQuery
+        .getProjectShellById(thread.projectId)
+        .pipe(Effect.catch(() => Effect.succeed(Option.none()))),
     );
   });
 
@@ -1726,7 +1732,7 @@ const make = Effect.gen(function* () {
           const childThreadId = subagentThreadId(parentThread.id, providerThreadId);
           // A single provider event can describe the child both as a collab receiver and
           // as the event's provider thread, so re-read after any earlier dispatch in this handler.
-          const existingThread = yield* projectionSnapshotQuery.getThreadShellById(childThreadId);
+          const existingThread = yield* projectionSnapshotQuery.getThreadDetailById(childThreadId);
           const resolvedModelSelection =
             identity?.model && identity.modelIsRequestedHint !== true
               ? {
@@ -1761,34 +1767,40 @@ const make = Effect.gen(function* () {
               subagentRole: identity?.role ?? null,
               createdAt: now,
             });
-          } else if (
-            identity?.agentId !== undefined ||
-            identity?.nickname !== undefined ||
-            identity?.role !== undefined ||
-            (identity?.model !== undefined && identity.modelIsRequestedHint !== true)
-          ) {
-            yield* orchestrationEngine.dispatch({
-              type: "thread.meta.update",
-              commandId: providerCommandId(event, "subagent-thread-meta-update"),
-              threadId: childThreadId,
-              ...(identity?.nickname !== undefined || identity?.role !== undefined
-                ? {
-                    title: subagentThreadTitle({
-                      nickname: identity?.nickname ?? existingThread.subagentNickname ?? undefined,
-                      role: identity?.role ?? existingThread.subagentRole ?? undefined,
-                      providerThreadId,
-                    }),
-                  }
-                : {}),
-              parentThreadId: parentThread.id,
-              ...(resolvedModelSelection !== undefined &&
-              existingThread.modelSelection.model !== resolvedModelSelection.model
-                ? { modelSelection: resolvedModelSelection }
-                : {}),
-              ...(identity?.agentId !== undefined ? { subagentAgentId: identity.agentId } : {}),
-              ...(identity?.nickname !== undefined ? { subagentNickname: identity.nickname } : {}),
-              ...(identity?.role !== undefined ? { subagentRole: identity.role } : {}),
-            });
+          } else {
+            const existingThreadShell = existingThread.value;
+            if (
+              identity?.agentId !== undefined ||
+              identity?.nickname !== undefined ||
+              identity?.role !== undefined ||
+              (identity?.model !== undefined && identity.modelIsRequestedHint !== true)
+            ) {
+              yield* orchestrationEngine.dispatch({
+                type: "thread.meta.update",
+                commandId: providerCommandId(event, "subagent-thread-meta-update"),
+                threadId: childThreadId,
+                ...(identity?.nickname !== undefined || identity?.role !== undefined
+                  ? {
+                      title: subagentThreadTitle({
+                        nickname:
+                          identity?.nickname ?? existingThreadShell.subagentNickname ?? undefined,
+                        role: identity?.role ?? existingThreadShell.subagentRole ?? undefined,
+                        providerThreadId,
+                      }),
+                    }
+                  : {}),
+                parentThreadId: parentThread.id,
+                ...(resolvedModelSelection !== undefined &&
+                existingThreadShell.modelSelection.model !== resolvedModelSelection.model
+                  ? { modelSelection: resolvedModelSelection }
+                  : {}),
+                ...(identity?.agentId !== undefined ? { subagentAgentId: identity.agentId } : {}),
+                ...(identity?.nickname !== undefined
+                  ? { subagentNickname: identity.nickname }
+                  : {}),
+                ...(identity?.role !== undefined ? { subagentRole: identity.role } : {}),
+              });
+            }
           }
 
           return {

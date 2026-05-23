@@ -41,7 +41,11 @@ import {
 import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { ProviderAdapterRequestError, ProviderServiceError } from "../../provider/Errors.ts";
-import { TextGeneration } from "../../git/Services/TextGeneration.ts";
+import {
+  TextGeneration,
+  type BranchNameGenerationInput,
+  type ThreadTitleGenerationInput,
+} from "../../git/Services/TextGeneration.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { clearWorkspaceIndexCache } from "../../workspaceEntries.ts";
@@ -245,7 +249,9 @@ const make = Effect.gen(function* () {
     thread: Pick<OrchestrationThread, "projectId">,
   ): Effect.fn.Return<OrchestrationProjectShell | undefined> {
     return Option.getOrUndefined(
-      yield* projectionSnapshotQuery.getProjectShellById(thread.projectId),
+      yield* projectionSnapshotQuery
+        .getProjectShellById(thread.projectId)
+        .pipe(Effect.catch(() => Effect.succeed(Option.none()))),
     );
   });
 
@@ -1090,38 +1096,47 @@ const make = Effect.gen(function* () {
       );
       return;
     }
-    yield* textGeneration
-      .generateBranchName({
-        cwd,
-        message: input.messageText,
-        ...(attachments.length > 0 ? { attachments } : {}),
-        ...textGenerationInput,
-      })
-      .pipe(
-        Effect.catch((error) =>
-          Effect.logWarning(
-            "provider command reactor failed to generate worktree branch name; skipping rename",
-            { threadId: input.threadId, cwd, oldBranch, reason: error.message },
-          ),
+    const branchNameGenerationInput: BranchNameGenerationInput = {
+      cwd,
+      message: input.messageText,
+      ...(attachments.length > 0 ? { attachments } : {}),
+      ...("model" in textGenerationInput && typeof textGenerationInput.model === "string"
+        ? { model: textGenerationInput.model }
+        : {}),
+      ...("modelSelection" in textGenerationInput && textGenerationInput.modelSelection
+        ? { modelSelection: textGenerationInput.modelSelection }
+        : {}),
+      ...("providerOptions" in textGenerationInput && textGenerationInput.providerOptions
+        ? { providerOptions: textGenerationInput.providerOptions }
+        : {}),
+    };
+    yield* textGeneration.generateBranchName(branchNameGenerationInput).pipe(
+      Effect.catch((error) =>
+        Effect.logWarning(
+          "provider command reactor failed to generate worktree branch name; skipping rename",
+          { threadId: input.threadId, cwd, oldBranch, reason: error.message },
         ),
-        Effect.flatMap((generated) => {
-          if (!generated) return Effect.void;
+      ),
+      Effect.flatMap((generated) => {
+        if (!generated) return Effect.void;
 
-          const targetBranch = buildGeneratedWorktreeBranchName(generated.branch);
-          return renameTemporaryWorktreeBranch({
-            threadId: input.threadId,
-            cwd,
-            oldBranch,
-            targetBranch,
-          });
+        const targetBranch = buildGeneratedWorktreeBranchName(generated.branch);
+        return renameTemporaryWorktreeBranch({
+          threadId: input.threadId,
+          cwd,
+          oldBranch,
+          targetBranch,
+        });
+      }),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("provider command reactor failed to generate or rename worktree branch", {
+          threadId: input.threadId,
+          cwd,
+          oldBranch,
+          cause: Cause.pretty(cause),
         }),
-        Effect.catchCause((cause) =>
-          Effect.logWarning(
-            "provider command reactor failed to generate or rename worktree branch",
-            { threadId: input.threadId, cwd, oldBranch, cause: Cause.pretty(cause) },
-          ),
-        ),
-      );
+      ),
+    );
   });
 
   // Only auto-rename placeholder titles that still reflect the first-turn draft state.
@@ -1189,30 +1204,37 @@ const make = Effect.gen(function* () {
       textGenerationOptions: textGenerationSelection?.options ?? null,
       hasProviderOptions: Boolean(textGenerationProviderOptions),
     });
-    const nextTitle = yield* textGeneration
-      .generateThreadTitle({
-        cwd: cwd ?? process.cwd(),
-        message: input.messageText,
-        ...(input.attachments?.length ? { attachments: input.attachments } : {}),
-        ...textGenerationInput,
-      })
-      .pipe(
-        Effect.map((generated) => generated.title),
-        Effect.catch((error) =>
-          Effect.logWarning("provider command reactor failed to generate thread title", {
-            threadId: input.threadId,
-            cwd,
-            reason: error.message,
-            threadProvider: thread.modelSelection.provider,
-            threadModel: thread.modelSelection.model,
-            requestedProvider: input.modelSelection?.provider ?? null,
-            requestedModel: input.modelSelection?.model ?? null,
-            textGenerationProvider: textGenerationSelection?.provider ?? null,
-            textGenerationModel,
-            textGenerationOptions: textGenerationSelection?.options ?? null,
-          }).pipe(Effect.as(fallbackTitle)),
-        ),
-      );
+    const titleGenerationInput: ThreadTitleGenerationInput = {
+      cwd: cwd ?? process.cwd(),
+      message: input.messageText,
+      ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+      ...("model" in textGenerationInput && typeof textGenerationInput.model === "string"
+        ? { model: textGenerationInput.model }
+        : {}),
+      ...("modelSelection" in textGenerationInput && textGenerationInput.modelSelection
+        ? { modelSelection: textGenerationInput.modelSelection }
+        : {}),
+      ...("providerOptions" in textGenerationInput && textGenerationInput.providerOptions
+        ? { providerOptions: textGenerationInput.providerOptions }
+        : {}),
+    };
+    const nextTitle = yield* textGeneration.generateThreadTitle(titleGenerationInput).pipe(
+      Effect.map((generated) => generated.title),
+      Effect.catch((error) =>
+        Effect.logWarning("provider command reactor failed to generate thread title", {
+          threadId: input.threadId,
+          cwd,
+          reason: error.message,
+          threadProvider: thread.modelSelection.provider,
+          threadModel: thread.modelSelection.model,
+          requestedProvider: input.modelSelection?.provider ?? null,
+          requestedModel: input.modelSelection?.model ?? null,
+          textGenerationProvider: textGenerationSelection?.provider ?? null,
+          textGenerationModel,
+          textGenerationOptions: textGenerationSelection?.options ?? null,
+        }).pipe(Effect.as(fallbackTitle)),
+      ),
+    );
 
     if (nextTitle === currentTitle) {
       return;
