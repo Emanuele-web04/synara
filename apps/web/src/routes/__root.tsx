@@ -30,8 +30,10 @@ import { WhatsNewPopoutCard } from "../whatsNew/WhatsNewPopoutCard";
 import { shouldRenderTerminalWorkspace } from "../components/ChatView.logic";
 import { Button } from "../components/ui/button";
 import { AnchoredToastProvider, ToastProvider, toastManager } from "../components/ui/toast";
+import { useGitProgressToastPreview } from "../components/useGitProgressToastPreview";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { isElectron } from "../env";
+import { useFeatureFlags } from "../featureFlags";
 import { useFocusedChatContext } from "../focusedChatContext";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import {
@@ -139,8 +141,9 @@ function RootRouteView() {
   }
 
   return (
-    <ToastProvider>
+    <ToastProvider position="top-center">
       <AnchoredToastProvider>
+        <GitProgressToastPreviewDev />
         <EventRouter />
         <GlobalShortcutsDialog />
         <GlobalWhatsNewSurface />
@@ -151,6 +154,13 @@ function RootRouteView() {
       </AnchoredToastProvider>
     </ToastProvider>
   );
+}
+
+function GitProgressToastPreviewDev() {
+  const featureFlags = useFeatureFlags();
+  const enabled = import.meta.env.DEV && featureFlags["pin-git-progress-toast-preview"];
+  useGitProgressToastPreview(enabled);
+  return null;
 }
 
 function ProviderUpdateNotifications() {

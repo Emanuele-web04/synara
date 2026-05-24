@@ -275,6 +275,13 @@ const DebugFeatureFlagsMenu = import.meta.env.DEV
       })),
     )
   : null;
+const GitProgressToastPreviewToggle = import.meta.env.DEV
+  ? lazy(() =>
+      import("./GitProgressToastPreviewToggle").then((module) => ({
+        default: module.GitProgressToastPreviewToggle,
+      })),
+    )
+  : null;
 
 const PROJECT_CONTEXT_MENU_FOLDER_ICON = renderToStaticMarkup(<HiOutlineFolderOpen />);
 const PROJECT_CONTEXT_MENU_EDIT_ICON =
@@ -5916,6 +5923,11 @@ export default function Sidebar() {
         <SidebarMenu>
           <SidebarMenuItem>
             <div className="flex flex-col gap-1">
+              {GitProgressToastPreviewToggle && !isOnSettings ? (
+                <Suspense fallback={null}>
+                  <GitProgressToastPreviewToggle />
+                </Suspense>
+              ) : null}
               {DebugFeatureFlagsMenu && showDebugFeatureFlagsMenu && !isOnSettings ? (
                 <Suspense fallback={null}>
                   <DebugFeatureFlagsMenu />

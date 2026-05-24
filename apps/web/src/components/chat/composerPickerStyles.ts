@@ -22,11 +22,15 @@ export const CHAT_COLUMN_FRAME_CLASS_NAME =
 export const COMPOSER_INPUT_SHELL_CLASS_NAME =
   "group rounded-2xl p-px transition-colors duration-200";
 
+/** Slightly stronger than `--color-border-light` for the composer input shell. */
+export const COMPOSER_INPUT_BORDER_COLOR_CLASS_NAME =
+  "border-[color:color-mix(in_srgb,var(--color-border-light)_55%,var(--color-border)_45%)]";
+
 export const COMPOSER_INPUT_SURFACE_CLASS_NAME =
-  `chat-composer-surface relative rounded-2xl border border-[color:var(--color-border-light)] ${SURFACE_ELEVATION_2XL_SHADOW_CLASS_NAME} transition-colors duration-200 dark:border-transparent`;
+  `chat-composer-surface relative rounded-2xl border ${COMPOSER_INPUT_BORDER_COLOR_CLASS_NAME} ${SURFACE_ELEVATION_2XL_SHADOW_CLASS_NAME} transition-colors duration-200 dark:border-transparent`;
 
 export const COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME =
-  "rounded-t-[calc(var(--radius-2xl)-1px)] border-b border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)]";
+  `rounded-t-[calc(var(--radius-2xl)-1px)] border-b ${COMPOSER_INPUT_BORDER_COLOR_CLASS_NAME} bg-[var(--color-background-elevated-secondary)]`;
 
 export const RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME =
   "text-[var(--runtime-full-access-accent)] hover:opacity-85";
