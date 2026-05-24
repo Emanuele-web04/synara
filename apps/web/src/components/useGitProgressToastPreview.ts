@@ -1,5 +1,5 @@
 // FILE: useGitProgressToastPreview.ts
-// Purpose: Keep a looping git progress toast visible for local toast styling work.
+// Purpose: Keep looping toast previews visible for local toast styling work.
 // Layer: UI helpers
 // Exports: useGitProgressToastPreview
 
@@ -7,14 +7,29 @@ import { useEffect, useRef } from "react";
 
 import { toastManager } from "./ui/toast";
 
-const PREVIEW_STAGES = [
-  "Generating commit message...",
-  "Committing...",
-  "Pushing...",
-] as const;
+type ToastType = "loading" | "success" | "error" | "info" | "warning";
 
-const STAGE_DURATION_MS = 4_000;
-const TICK_MS = 1_000;
+interface PreviewStage {
+  type: ToastType;
+  title: string;
+  description?: string;
+  copyText?: string;
+  hasAction?: boolean;
+}
+
+const PREVIEW_STAGES: PreviewStage[] = [
+  { type: "loading", title: "Generating commit message..." },
+  { type: "loading", title: "Pushing..." },
+  { type: "success", title: "Committed to codex/redesign" },
+  { type: "success", title: "Pushed 3a1f2c to main" },
+  { type: "success", title: "Chat completed", description: "Fix auth flow — updated 3 files", hasAction: true },
+  { type: "warning", title: "Awaiting input", description: "Refactor DB layer — needs confirmation", hasAction: true },
+  { type: "error", title: "Action failed", description: "fatal: unable to access upstream remote", copyText: "fatal: unable to access upstream remote" },
+  { type: "info", title: "Already up to date", description: "main is already synchronized." },
+  { type: "warning", title: "Branch is behind upstream" },
+];
+
+const STAGE_DURATION_MS = 3_000;
 
 const PREVIEW_TOAST_DATA = {
   allowCrossThreadVisibility: true,
@@ -22,20 +37,9 @@ const PREVIEW_TOAST_DATA = {
 
 type PreviewToastId = ReturnType<typeof toastManager.add>;
 
-function formatElapsedDescription(startedAtMs: number): string {
-  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000));
-  if (elapsedSeconds < 60) {
-    return `Running for ${elapsedSeconds}s`;
-  }
-  const minutes = Math.floor(elapsedSeconds / 60);
-  const seconds = elapsedSeconds % 60;
-  return `Running for ${minutes}m ${seconds}s`;
-}
-
 export function useGitProgressToastPreview(enabled: boolean): void {
   const toastIdRef = useRef<PreviewToastId | null>(null);
   const stageIndexRef = useRef(0);
-  const phaseStartedAtMsRef = useRef<number | null>(null);
   const stageStartedAtMsRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -45,66 +49,73 @@ export function useGitProgressToastPreview(enabled: boolean): void {
         toastIdRef.current = null;
       }
       stageIndexRef.current = 0;
-      phaseStartedAtMsRef.current = null;
       stageStartedAtMsRef.current = null;
       return;
     }
 
-    const now = Date.now();
-    phaseStartedAtMsRef.current = now;
-    stageStartedAtMsRef.current = now;
-    stageIndexRef.current = 0;
+    const applyStage = (stage: PreviewStage) => {
+      const data = {
+        ...PREVIEW_TOAST_DATA,
+        ...(stage.copyText ? { copyText: stage.copyText } : {}),
+      };
+      const actionProps = stage.hasAction
+        ? { children: "Open", onClick: () => {} }
+        : undefined;
 
-    const initialTitle = PREVIEW_STAGES[0];
-    toastIdRef.current = toastManager.add({
-      type: "loading",
-      title: initialTitle,
-      description: formatElapsedDescription(now),
-      timeout: 0,
-      data: PREVIEW_TOAST_DATA,
-    });
-
-    const updateToast = () => {
-      const toastId = toastIdRef.current;
-      const phaseStartedAtMs = phaseStartedAtMsRef.current;
-      if (!toastId || phaseStartedAtMs === null) {
-        return;
+      if (toastIdRef.current) {
+        toastManager.update(toastIdRef.current, {
+          type: stage.type,
+          title: stage.title,
+          description: stage.description,
+          timeout: 0,
+          data,
+          actionProps,
+        });
+      } else {
+        toastIdRef.current = toastManager.add({
+          type: stage.type,
+          title: stage.title,
+          description: stage.description,
+          timeout: 0,
+          data,
+          actionProps,
+        });
       }
-
-      toastManager.update(toastId, {
-        type: "loading",
-        title: PREVIEW_STAGES[stageIndexRef.current] ?? initialTitle,
-        description: formatElapsedDescription(phaseStartedAtMs),
-        timeout: 0,
-        data: PREVIEW_TOAST_DATA,
-      });
     };
 
-    const tickIntervalId = window.setInterval(updateToast, TICK_MS);
+    stageStartedAtMsRef.current = Date.now();
+    stageIndexRef.current = 0;
+    applyStage(PREVIEW_STAGES[0]!);
 
-    const stageIntervalId = window.setInterval(() => {
+    const intervalId = window.setInterval(() => {
       const stageStartedAtMs = stageStartedAtMsRef.current;
-      if (stageStartedAtMs === null) {
-        return;
-      }
-      if (Date.now() - stageStartedAtMs < STAGE_DURATION_MS) {
-        return;
-      }
+      if (stageStartedAtMs === null) return;
+      if (Date.now() - stageStartedAtMs < STAGE_DURATION_MS) return;
 
       stageIndexRef.current = (stageIndexRef.current + 1) % PREVIEW_STAGES.length;
       stageStartedAtMsRef.current = Date.now();
-      updateToast();
-    }, TICK_MS);
+
+      const nextStage = PREVIEW_STAGES[stageIndexRef.current]!;
+      const prevStage = PREVIEW_STAGES[(stageIndexRef.current - 1 + PREVIEW_STAGES.length) % PREVIEW_STAGES.length]!;
+      const layoutChanged =
+        Boolean(nextStage.copyText) !== Boolean(prevStage.copyText) ||
+        Boolean(nextStage.hasAction) !== Boolean(prevStage.hasAction);
+
+      if (layoutChanged && toastIdRef.current) {
+        toastManager.close(toastIdRef.current);
+        toastIdRef.current = null;
+      }
+
+      applyStage(nextStage);
+    }, 500);
 
     return () => {
-      window.clearInterval(tickIntervalId);
-      window.clearInterval(stageIntervalId);
+      window.clearInterval(intervalId);
       if (toastIdRef.current) {
         toastManager.close(toastIdRef.current);
         toastIdRef.current = null;
       }
       stageIndexRef.current = 0;
-      phaseStartedAtMsRef.current = null;
       stageStartedAtMsRef.current = null;
     };
   }, [enabled]);

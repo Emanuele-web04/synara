@@ -7473,7 +7473,7 @@ export default function ChatView({
                 key={queuedTurn.id}
                 data-testid="queued-follow-up-row"
                 className={cn(
-                  "chat-composer-surface flex items-center gap-2 border border-b-0 border-[color:var(--color-border)] px-2.5 py-2 text-[12px] shadow-[0_1px_0_rgba(255,255,255,0.03)_inset]",
+                  "chat-composer-surface flex items-center gap-2 border border-b-0 border-[color:var(--color-border)] px-2.5 py-2 text-[12px]",
                   queuedTurnIndex === 0 && !taskListAboveComposer
                     ? "rounded-t-2xl"
                     : "rounded-none",
@@ -8149,7 +8149,7 @@ export default function ChatView({
                             key={queuedTurn.id}
                             data-testid="queued-follow-up-row"
                             className={cn(
-                              "chat-composer-surface flex items-center gap-2 border border-b-0 border-[color:var(--color-border)] px-2.5 py-2 text-[12px] shadow-[0_1px_0_rgba(255,255,255,0.03)_inset]",
+                              "chat-composer-surface flex items-center gap-2 border border-b-0 border-[color:var(--color-border)] px-2.5 py-2 text-[12px]",
                               queuedTurnIndex === 0 && !taskListAboveComposer
                                 ? "rounded-t-2xl"
                                 : "rounded-none",

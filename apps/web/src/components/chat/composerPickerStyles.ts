@@ -3,7 +3,7 @@
 // Layer: UI styling helper for chat controls.
 // Exports: COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME, composer input shell/surface class names
 
-import { SURFACE_ELEVATION_2XL_SHADOW_CLASS_NAME } from "~/lib/surfaceElevation";
+import { SURFACE_OUTER_SHADOW_CLASS_NAME } from "~/lib/surfaceElevation";
 
 // Uses the UI-sm token so picker labels sit slightly below the editor text size.
 // The sm: override is required to beat the Button component's base responsive text classes.
@@ -27,7 +27,7 @@ export const COMPOSER_INPUT_BORDER_COLOR_CLASS_NAME =
   "border-[color:color-mix(in_srgb,var(--color-border-light)_55%,var(--color-border)_45%)]";
 
 export const COMPOSER_INPUT_SURFACE_CLASS_NAME =
-  `chat-composer-surface relative rounded-2xl border ${COMPOSER_INPUT_BORDER_COLOR_CLASS_NAME} ${SURFACE_ELEVATION_2XL_SHADOW_CLASS_NAME} transition-colors duration-200 dark:border-transparent`;
+  `chat-composer-surface rounded-2xl border ${COMPOSER_INPUT_BORDER_COLOR_CLASS_NAME} ${SURFACE_OUTER_SHADOW_CLASS_NAME} transition-colors duration-200 dark:border-transparent`;
 
 export const COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME =
   `rounded-t-[calc(var(--radius-2xl)-1px)] border-b ${COMPOSER_INPUT_BORDER_COLOR_CLASS_NAME} bg-[var(--color-background-elevated-secondary)]`;
