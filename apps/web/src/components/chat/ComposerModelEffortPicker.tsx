@@ -35,7 +35,7 @@ import {
 import { ShortcutKbd } from "../ui/shortcut-kbd";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "../ProviderIcon";
-import { COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME } from "./composerPickerStyles";
+import { COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME, COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME } from "./composerPickerStyles";
 import { getComposerTraitSelection, hasVisibleComposerTraitControls } from "./composerTraits";
 import {
   getProviderIconClassName,
@@ -203,7 +203,7 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
         />
       ) : null}
       {triggerStatusLabel ? (
-        <span className="shrink-0 text-[var(--color-text-foreground-secondary)]">
+        <span className={cn("shrink-0", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}>
           {triggerStatusLabel}
         </span>
       ) : null}
