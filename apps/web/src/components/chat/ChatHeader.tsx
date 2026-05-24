@@ -22,6 +22,7 @@ import type { ThreadPrimarySurface } from "../../types";
 import GitActionsControl from "../GitActionsControl";
 import { AppsIcon, ArrowRightIcon, GlobeIcon, PlusIcon, TerminalIcon, XIcon } from "~/lib/icons";
 import { Button } from "../ui/button";
+import { IconButton } from "../ui/icon-button";
 import { Badge } from "../ui/badge";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -270,24 +271,20 @@ export const ChatHeader = memo(function ChatHeader({
                   {activeThreadTitle}
                 </h2>
                 {showSidechatTitleChip && onCloseThreadPane ? (
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <button
-                          type="button"
-                          className="inline-flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background/55 hover:text-foreground [-webkit-app-region:no-drag]"
-                          aria-label="Close selected sidechat"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            onCloseThreadPane();
-                          }}
-                        >
-                          <XIcon className="size-3" />
-                        </button>
-                      }
-                    />
-                    <TooltipPopup side="bottom">Close selected sidechat</TooltipPopup>
-                  </Tooltip>
+                  <IconButton
+                    variant="chrome"
+                    size="icon-xs"
+                    label="Close selected sidechat"
+                    tooltip="Close selected sidechat"
+                    tooltipSide="bottom"
+                    className="size-5 [-webkit-app-region:no-drag] [&_svg]:size-3"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onCloseThreadPane();
+                    }}
+                  >
+                    <XIcon />
+                  </IconButton>
                 ) : null}
               </div>
               {!hideHandoffControls && handoffBadgeLabel ? (

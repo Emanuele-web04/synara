@@ -588,12 +588,12 @@ function ImportThemeDialog({
         <DialogFooter>
           <DialogClose
             render={
-              <Button variant="outline" type="button">
+              <Button variant="outline" type="button" size="sm">
                 Cancel
               </Button>
             }
           />
-          <Button type="button" disabled={value.trim().length === 0} onClick={handleSubmit}>
+          <Button type="button" size="sm" disabled={value.trim().length === 0} onClick={handleSubmit}>
             Import
           </Button>
         </DialogFooter>

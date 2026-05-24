@@ -46,6 +46,15 @@ function DialogViewport({ className, ...props }: DialogPrimitive.Viewport.Props)
   );
 }
 
+const dialogPopupClassName =
+  "-translate-y-[calc(1.25rem*var(--nested-dialogs))] relative row-start-2 flex max-h-full min-h-0 w-full min-w-0 max-w-lg scale-[calc(1-0.1*var(--nested-dialogs))] flex-col rounded-xl border border-[color:var(--color-border-light)] bg-[var(--composer-surface)] text-[var(--color-text-foreground)] opacity-[calc(1-0.1*var(--nested-dialogs))] transition-[scale,opacity,translate] duration-200 ease-in-out will-change-transform data-nested:data-ending-style:translate-y-8 data-nested:data-starting-style:translate-y-8 data-nested-dialog-open:origin-top data-ending-style:scale-98 data-starting-style:scale-98 data-ending-style:opacity-0 data-starting-style:opacity-0";
+
+const dialogFooterButtonClassName =
+  "[&_[data-slot=button]:not([class*='size-9']):not([class*='size-8']):not([class*='size-7'])]:!h-auto [&_[data-slot=button]:not([class*='size-9']):not([class*='size-8']):not([class*='size-7'])]:!min-h-8 [&_[data-slot=button]:not([class*='size-9']):not([class*='size-8']):not([class*='size-7'])]:!rounded-md [&_[data-slot=button]:not([class*='size-9']):not([class*='size-8']):not([class*='size-7'])]:!px-3 [&_[data-slot=button]:not([class*='size-9']):not([class*='size-8']):not([class*='size-7'])]:!py-1 [&_[data-slot=button]:not([class*='size-9']):not([class*='size-8']):not([class*='size-7'])]:!font-normal sm:[&_[data-slot=button]:not([class*='size-9']):not([class*='size-8']):not([class*='size-7'])]:!min-h-7";
+
+const dialogPanelFieldClassName =
+  "[&_[data-slot=textarea-control]]:min-h-24 [&_[data-slot=textarea-control]_[data-slot=textarea]]:px-2.5 [&_[data-slot=textarea-control]_[data-slot=textarea]]:py-2";
+
 function DialogPopup({
   className,
   children,
@@ -64,9 +73,9 @@ function DialogPopup({
       >
         <DialogPrimitive.Popup
           className={cn(
-            "-translate-y-[calc(1.25rem*var(--nested-dialogs))] relative row-start-2 flex max-h-full min-h-0 w-full min-w-0 max-w-lg scale-[calc(1-0.1*var(--nested-dialogs))] flex-col rounded-2xl border border-[color:var(--color-border-light)] bg-[var(--composer-surface)] not-dark:bg-clip-padding text-[var(--color-text-foreground)] opacity-[calc(1-0.1*var(--nested-dialogs))] shadow-xl transition-[scale,opacity,translate] duration-200 ease-in-out will-change-transform before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-2xl)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] data-nested:data-ending-style:translate-y-8 data-nested:data-starting-style:translate-y-8 data-nested-dialog-open:origin-top data-ending-style:scale-98 data-starting-style:scale-98 data-ending-style:opacity-0 data-starting-style:opacity-0 dark:before:shadow-[0_-1px_--theme(--color-white/6%)]",
+            dialogPopupClassName,
             bottomStickOnMobile &&
-              "max-sm:max-w-none max-sm:rounded-none max-sm:border-x-0 max-sm:border-t max-sm:border-b-0 max-sm:opacity-[calc(1-min(var(--nested-dialogs),1))] max-sm:data-ending-style:translate-y-4 max-sm:data-starting-style:translate-y-4 max-sm:before:hidden max-sm:before:rounded-none",
+              "max-sm:max-w-none max-sm:rounded-none max-sm:border-x-0 max-sm:border-t max-sm:border-b-0 max-sm:opacity-[calc(1-min(var(--nested-dialogs),1))] max-sm:data-ending-style:translate-y-4 max-sm:data-starting-style:translate-y-4",
             className,
           )}
           data-slot="dialog-popup"
@@ -77,7 +86,7 @@ function DialogPopup({
             <DialogPrimitive.Close
               aria-label="Close"
               className="absolute end-2 top-2"
-              render={<Button size="icon" variant="ghost" />}
+              render={<Button size="icon-sm" variant="ghost" />}
             >
               <XIcon />
             </DialogPrimitive.Close>
@@ -92,7 +101,7 @@ function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       className={cn(
-        "flex flex-col gap-2 p-6 in-[[data-slot=dialog-popup]:has([data-slot=dialog-panel])]:pb-3 max-sm:pb-4",
+        "flex flex-col gap-1.5 px-4 pt-4 pb-2 in-[[data-slot=dialog-popup]:has([data-slot=dialog-panel])]:pb-1",
         className,
       )}
       data-slot="dialog-header"
@@ -111,11 +120,12 @@ function DialogFooter({
   return (
     <div
       className={cn(
-        "flex flex-col-reverse gap-2 px-6 sm:flex-row sm:justify-end sm:rounded-b-[calc(var(--radius-2xl)-1px)]",
+        "flex flex-col-reverse gap-2 sm:flex-row sm:justify-end",
+        dialogFooterButtonClassName,
         variant === "default" &&
-          "border-t border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] py-4",
+          "border-t border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] px-4 py-3 sm:rounded-b-[calc(var(--radius-xl)-1px)]",
         variant === "bare" &&
-          "in-[[data-slot=dialog-popup]:has([data-slot=dialog-panel])]:pt-3 pt-4 pb-6",
+          "px-4 pt-3 pb-4 in-[[data-slot=dialog-popup]:has([data-slot=dialog-panel])]:px-0 in-[[data-slot=dialog-popup]:has([data-slot=dialog-panel])]:pb-0",
         className,
       )}
       data-slot="dialog-footer"
@@ -127,7 +137,7 @@ function DialogFooter({
 function DialogTitle({ className, ...props }: DialogPrimitive.Title.Props) {
   return (
     <DialogPrimitive.Title
-      className={cn("font-heading font-semibold text-xl leading-none", className)}
+      className={cn("font-heading font-semibold text-lg leading-tight", className)}
       data-slot="dialog-title"
       {...props}
     />
@@ -137,7 +147,7 @@ function DialogTitle({ className, ...props }: DialogPrimitive.Title.Props) {
 function DialogDescription({ className, ...props }: DialogPrimitive.Description.Props) {
   return (
     <DialogPrimitive.Description
-      className={cn("text-muted-foreground text-sm", className)}
+      className={cn("text-muted-foreground text-sm leading-snug", className)}
       data-slot="dialog-description"
       {...props}
     />
@@ -153,7 +163,8 @@ function DialogPanel({
     <ScrollArea scrollFade={scrollFade}>
       <div
         className={cn(
-          "p-6 in-[[data-slot=dialog-popup]:has([data-slot=dialog-header])]:pt-1 in-[[data-slot=dialog-popup]:has([data-slot=dialog-footer]:not(.border-t))]:pb-1",
+          "px-4 pb-4 pt-1 in-[[data-slot=dialog-popup]:has([data-slot=dialog-header])]:pt-0 in-[[data-slot=dialog-popup]:has([data-slot=dialog-footer]:not(.border-t))]:pb-3",
+          dialogPanelFieldClassName,
           className,
         )}
         data-slot="dialog-panel"

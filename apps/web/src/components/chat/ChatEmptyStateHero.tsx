@@ -4,6 +4,7 @@
 // Depends on: the caller-supplied project display name.
 
 import { memo } from "react";
+import { DpCodeLogo } from "~/components/DpCodeLogo";
 
 export const ChatEmptyStateHero = memo(function ChatEmptyStateHero({
   projectName,
@@ -12,14 +13,7 @@ export const ChatEmptyStateHero = memo(function ChatEmptyStateHero({
 }) {
   return (
     <div className="flex flex-col items-center gap-5 select-none">
-      <img
-        alt="DP Code logo"
-        className="size-14 rounded-lg object-contain"
-        draggable={false}
-        height={112}
-        src="/dpcode-hero.png"
-        width={112}
-      />
+      <DpCodeLogo aria-label="DP Code logo" className="size-14" draggable={false} />
 
       <div className="flex flex-col items-center gap-0.5">
         <h1 className="text-2xl font-semibold text-foreground/90">Let's build</h1>

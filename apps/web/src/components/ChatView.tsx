@@ -57,7 +57,6 @@ import {
   type MouseEvent,
 } from "react";
 import { GoTasklist } from "react-icons/go";
-import { PiArrowBendDownRight } from "react-icons/pi";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Debouncer, useDebouncedValue } from "@tanstack/react-pacer";
 import { useNavigate, useSearch } from "@tanstack/react-router";
@@ -190,6 +189,7 @@ import { useComposerCommandMenuItems } from "../hooks/useComposerCommandMenuItem
 import { useThreadHandoff } from "../hooks/useThreadHandoff";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import BranchToolbar, { RuntimeUsageControls } from "./BranchToolbar";
+import { DpCodeLogo } from "./DpCodeLogo";
 import { ThreadWorktreeHandoffDialog } from "./ThreadWorktreeHandoffDialog";
 import {
   formatShortcutLabel,
@@ -204,12 +204,11 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   ComposerSendArrowIcon,
-  EllipsisIcon,
   QueueArrow,
   RefreshCwIcon,
-  Trash2,
   XIcon,
 } from "~/lib/icons";
+import { QueuedComposerActions } from "./chat/QueuedComposerActions";
 import { Button } from "./ui/button";
 import { Skeleton } from "./ui/skeleton";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
@@ -7486,45 +7485,12 @@ export default function ChatView({
                     {queuedTurn.previewText}
                   </span>
                 </div>
-                <div className="flex shrink-0 items-center gap-0">
-                  <button
-                    type="button"
-                    className="inline-flex items-center gap-1 rounded-lg bg-[var(--color-background-button-secondary)] px-2 py-0.5 text-[11px] font-medium text-[var(--color-text-foreground)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)]"
-                    onClick={() => void onSteerQueuedComposerTurn(queuedTurn)}
-                  >
-                    <PiArrowBendDownRight className="size-3" />
-                    <span>Steer</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="inline-flex size-6 items-center justify-center rounded-lg text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
-                    aria-label="Delete queued follow-up"
-                    onClick={() => removeQueuedComposerTurn(queuedTurn.id)}
-                  >
-                    <Trash2 className="size-3" />
-                  </button>
-                  <Menu>
-                    <MenuTrigger
-                      render={
-                        <button
-                          type="button"
-                          className="inline-flex size-6 items-center justify-center rounded-lg text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
-                          aria-label="Queued follow-up actions"
-                        />
-                      }
-                    >
-                      <EllipsisIcon className="size-3" />
-                    </MenuTrigger>
-                    <MenuPopup align="end" side="top">
-                      <MenuItem onClick={() => onEditQueuedComposerTurn(queuedTurn)}>
-                        Edit queued prompt
-                      </MenuItem>
-                      <MenuItem onClick={() => removeQueuedComposerTurn(queuedTurn.id)}>
-                        Delete queued prompt
-                      </MenuItem>
-                    </MenuPopup>
-                  </Menu>
-                </div>
+                <QueuedComposerActions
+                  queuedTurn={queuedTurn}
+                  onSteer={onSteerQueuedComposerTurn}
+                  onRemove={removeQueuedComposerTurn}
+                  onEdit={onEditQueuedComposerTurn}
+                />
               </div>
             ))}
           </div>
@@ -7799,15 +7765,17 @@ export default function ChatView({
                       </Button>
                     </div>
                   ) : phase === "running" ? (
-                    <button
+                    <Button
                       type="button"
-                      className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-full bg-[var(--color-text-foreground)] text-[var(--color-background-surface)] transition-all duration-150 hover:scale-105 sm:h-[26px] sm:w-[26px]"
+                      variant="prominent"
+                      size="icon-xs"
+                      className="sm:size-[26px]"
                       onClick={() => void onInterrupt()}
                       aria-label="Stop generation"
                       title="Stop the current response. On Mac, press Ctrl+C to interrupt."
                     >
                       <span aria-hidden="true" className="block size-2 rounded-[2px] bg-current" />
-                    </button>
+                    </Button>
                   ) : pendingUserInputs.length === 0 &&
                     !isVoiceRecording &&
                     !isVoiceTranscribing ? (
@@ -7867,9 +7835,11 @@ export default function ChatView({
                             onClick={toggleComposerVoiceRecording}
                           />
                         ) : null}
-                        <button
+                        <Button
                           type="submit"
-                          className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--color-text-foreground)] text-[var(--color-background-surface)] transition-all duration-150 hover:scale-105 disabled:opacity-20 disabled:hover:scale-100 sm:h-8 sm:w-8"
+                          variant="prominent"
+                          size="icon-xs"
+                          className="sm:size-8"
                           disabled={
                             isSendBusy ||
                             isConnecting ||
@@ -7913,7 +7883,7 @@ export default function ChatView({
                               className="size-3.5 shrink-0"
                             />
                           )}
-                        </button>
+                        </Button>
                       </>
                     )
                   ) : null}
@@ -8075,14 +8045,7 @@ export default function ChatView({
               <div className={cn("chat-pane-enter flex flex-1 items-center justify-center", CHAT_COLUMN_GUTTER_CLASS_NAME)}>
                 <div className={cn("flex w-full flex-col justify-center", CHAT_COLUMN_FRAME_CLASS_NAME)}>
                   <div className="flex flex-col items-center gap-4 px-6 pb-5 text-center select-none">
-                    <img
-                      alt="DP Code logo"
-                      className="size-12 rounded-lg object-contain"
-                      draggable={false}
-                      height={96}
-                      src="/dpcode-hero.png"
-                      width={96}
-                    />
+                    <DpCodeLogo aria-label="DP Code logo" className="size-12" draggable={false} />
                     <h2 className="text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]">
                       {isEmptyChatLanding ? (
                         "What should we work on?"
@@ -8198,45 +8161,12 @@ export default function ChatView({
                                 {queuedTurn.previewText}
                               </span>
                             </div>
-                            <div className="flex shrink-0 items-center gap-0">
-                              <button
-                                type="button"
-                                className="inline-flex items-center gap-1 rounded-lg bg-[var(--color-background-button-secondary)] px-2 py-0.5 text-[11px] font-medium text-[var(--color-text-foreground)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)]"
-                                onClick={() => void onSteerQueuedComposerTurn(queuedTurn)}
-                              >
-                                <PiArrowBendDownRight className="size-3" />
-                                <span>Steer</span>
-                              </button>
-                              <button
-                                type="button"
-                                className="inline-flex size-6 items-center justify-center rounded-lg text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
-                                aria-label="Delete queued follow-up"
-                                onClick={() => removeQueuedComposerTurn(queuedTurn.id)}
-                              >
-                                <Trash2 className="size-3" />
-                              </button>
-                              <Menu>
-                                <MenuTrigger
-                                  render={
-                                    <button
-                                      type="button"
-                                      className="inline-flex size-6 items-center justify-center rounded-lg text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]"
-                                      aria-label="Queued follow-up actions"
-                                    />
-                                  }
-                                >
-                                  <EllipsisIcon className="size-3" />
-                                </MenuTrigger>
-                                <MenuPopup align="end" side="top">
-                                  <MenuItem onClick={() => onEditQueuedComposerTurn(queuedTurn)}>
-                                    Edit queued prompt
-                                  </MenuItem>
-                                  <MenuItem onClick={() => removeQueuedComposerTurn(queuedTurn.id)}>
-                                    Delete queued prompt
-                                  </MenuItem>
-                                </MenuPopup>
-                              </Menu>
-                            </div>
+                            <QueuedComposerActions
+                              queuedTurn={queuedTurn}
+                              onSteer={onSteerQueuedComposerTurn}
+                              onRemove={removeQueuedComposerTurn}
+                              onEdit={onEditQueuedComposerTurn}
+                            />
                           </div>
                         ))}
                       </div>
@@ -8529,9 +8459,11 @@ export default function ChatView({
                                   </Button>
                                 </div>
                               ) : phase === "running" ? (
-                                <button
+                                <Button
                                   type="button"
-                                  className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-full bg-[var(--color-text-foreground)] text-[var(--color-background-surface)] transition-all duration-150 hover:scale-105 sm:h-[26px] sm:w-[26px]"
+                                  variant="prominent"
+                                  size="icon-xs"
+                                  className="sm:size-[26px]"
                                   onClick={() => void onInterrupt()}
                                   aria-label="Stop generation"
                                   title="Stop the current response. On Mac, press Ctrl+C to interrupt."
@@ -8540,7 +8472,7 @@ export default function ChatView({
                                     aria-hidden="true"
                                     className="block size-2 rounded-[2px] bg-current"
                                   />
-                                </button>
+                                </Button>
                               ) : pendingUserInputs.length === 0 &&
                                 !isVoiceRecording &&
                                 !isVoiceTranscribing ? (
@@ -8602,9 +8534,11 @@ export default function ChatView({
                                         onClick={toggleComposerVoiceRecording}
                                       />
                                     ) : null}
-                                    <button
+                                    <Button
                                       type="submit"
-                                      className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--color-text-foreground)] text-[var(--color-background-surface)] transition-all duration-150 hover:scale-105 disabled:opacity-20 disabled:hover:scale-100 sm:h-8 sm:w-8"
+                                      variant="prominent"
+                                      size="icon-xs"
+                                      className="sm:size-8"
                                       disabled={
                                         isSendBusy ||
                                         isConnecting ||
@@ -8648,7 +8582,7 @@ export default function ChatView({
                                           className="size-3.5 shrink-0"
                                         />
                                       )}
-                                    </button>
+                                    </Button>
                                   </>
                                 )
                               ) : null}
@@ -8779,6 +8713,7 @@ export default function ChatView({
           aria-modal="true"
           aria-label="Expanded image preview"
         >
+          {/* Full-bleed backdrop click target — intentionally a raw <button> because it has no visible chrome. */}
           <button
             type="button"
             className="absolute inset-0 z-0 cursor-zoom-out"

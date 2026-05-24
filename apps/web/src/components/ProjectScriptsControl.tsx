@@ -404,7 +404,7 @@ export default function ProjectScriptsControl({
                         <Button
                           type="button"
                           variant="outline"
-                          className="size-9 shrink-0 hover:bg-popover active:bg-popover data-pressed:bg-popover data-pressed:shadow-xs/5 data-pressed:before:shadow-[0_1px_--theme(--color-black/4%)] dark:data-pressed:before:shadow-[0_-1px_--theme(--color-white/6%)]"
+                          className="size-9 shrink-0 hover:bg-popover active:bg-popover data-pressed:bg-popover"
                           aria-label="Choose icon"
                         />
                       }
@@ -492,13 +492,14 @@ export default function ProjectScriptsControl({
             <Button
               type="button"
               variant="outline"
+              size="sm"
               onClick={() => {
                 setDialogOpen(false);
               }}
             >
               Cancel
             </Button>
-            <Button form={addScriptFormId} type="submit">
+            <Button form={addScriptFormId} type="submit" size="sm">
               {isEditing ? "Save changes" : "Save action"}
             </Button>
           </DialogFooter>
@@ -512,8 +513,8 @@ export default function ProjectScriptsControl({
             <AlertDialogDescription>This action cannot be undone.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
-            <Button variant="destructive" onClick={confirmDeleteScript}>
+            <AlertDialogClose render={<Button variant="outline" size="sm" />}>Cancel</AlertDialogClose>
+            <Button variant="destructive" size="sm" onClick={confirmDeleteScript}>
               Delete action
             </Button>
           </AlertDialogFooter>

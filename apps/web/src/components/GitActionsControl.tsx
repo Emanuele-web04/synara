@@ -47,7 +47,6 @@ import {
   DialogPopup,
   DialogTitle,
 } from "~/components/ui/dialog";
-import { Group, GroupSeparator } from "~/components/ui/group";
 import {
   Menu,
   MenuGroup,
@@ -1216,7 +1215,7 @@ export default function GitActionsControl({
           {initMutation.isPending ? "Initializing..." : "Initialize Git"}
         </Button>
       ) : (
-        <Group aria-label="Git actions">
+        <div className="inline-flex items-stretch" role="group" aria-label="Git actions">
           {quickActionDisabledReason ? (
             <Popover>
               <PopoverTrigger
@@ -1225,7 +1224,7 @@ export default function GitActionsControl({
                   <Button
                     aria-label={quickAction.label}
                     aria-disabled="true"
-                    className="cursor-not-allowed rounded-e-none border-e-0 opacity-64 before:rounded-e-none"
+                    className="cursor-not-allowed rounded-e-none border-e-0 opacity-64"
                     size={hideQuickActionLabel ? "icon-xs" : "xs"}
                     variant="chrome-outline"
                     title={quickAction.label}
@@ -1234,7 +1233,7 @@ export default function GitActionsControl({
               >
                 <GitQuickActionIcon quickAction={quickAction} />
                 {!hideQuickActionLabel ? (
-                  <span className="ml-0.5 font-normal">{quickAction.label}</span>
+                  <span className="font-normal">{quickAction.label}</span>
                 ) : null}
               </PopoverTrigger>
               <PopoverPopup tooltipStyle side="bottom" align="start">
@@ -1245,6 +1244,7 @@ export default function GitActionsControl({
             <Button
               variant="chrome-outline"
               size={hideQuickActionLabel ? "icon-xs" : "xs"}
+              className="rounded-e-none border-e-0"
               disabled={isGitActionRunning || quickAction.disabled}
               aria-label={quickAction.label}
               title={quickAction.label}
@@ -1252,11 +1252,11 @@ export default function GitActionsControl({
             >
               <GitQuickActionIcon quickAction={quickAction} />
               {!hideQuickActionLabel ? (
-                <span className="ml-0.5 font-normal">{quickAction.label}</span>
+                <span className="font-normal">{quickAction.label}</span>
               ) : null}
             </Button>
           )}
-          <GroupSeparator />
+          <div aria-hidden="true" className="w-px self-stretch bg-border" />
           <Menu
             onOpenChange={(open) => {
               if (open) void invalidateGitQueries(queryClient);
@@ -1268,11 +1268,12 @@ export default function GitActionsControl({
                   aria-label="Git action options"
                   size="icon-xs"
                   variant="chrome-outline"
+                  className="rounded-s-none border-s-0"
                 />
               }
               disabled={isGitActionRunning}
             >
-              <ChevronDownIcon aria-hidden="true" className="size-4" />
+              <ChevronDownIcon aria-hidden="true" className="size-3.5" />
             </MenuTrigger>
             <MenuPopup
               align="end"
@@ -1334,7 +1335,7 @@ export default function GitActionsControl({
               )}
             </MenuPopup>
           </Menu>
-        </Group>
+        </div>
       )}
 
       <Dialog
@@ -1426,6 +1427,7 @@ export default function GitActionsControl({
                                   }}
                                 />
                               )}
+                              {/* Raw <button> intentionally — list-row click target, not a shadcn Button. */}
                               <button
                                 type="button"
                                 className="group flex flex-1 items-center justify-between gap-3 text-left truncate"
@@ -1586,6 +1588,7 @@ export default function GitActionsControl({
               <DialogFooter variant="bare">
                 <Button
                   variant="outline"
+                  size="sm"
                   type="button"
                   onClick={() => {
                     setIsCreateBranchDialogOpen(false);
@@ -1596,6 +1599,7 @@ export default function GitActionsControl({
                 </Button>
                 <Button
                   type="submit"
+                  size="sm"
                   disabled={createBranchName.trim().length === 0 || createBranchNameConflicts}
                 >
                   Create Branch

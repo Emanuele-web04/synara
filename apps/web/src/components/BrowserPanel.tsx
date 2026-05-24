@@ -2,6 +2,9 @@
 // Purpose: Renders the in-app browser chrome and mirrors the native Electron view.
 // Layer: Desktop-only React component
 // Depends on: browserStateStore, nativeApi browser bridge, DiffPanelShell
+//
+// Note: raw <button>s for autocomplete-suggestion rows and tab-title activate
+// regions are intentional — list-row and tab semantics, not shadcn Buttons.
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useStore } from "zustand";

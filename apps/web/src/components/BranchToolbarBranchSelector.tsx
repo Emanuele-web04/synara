@@ -1,6 +1,8 @@
 // Purpose: Branch/worktree picker for the chat toolbar.
 // Coordinates branch checkout/create actions and decorates rows with git metadata.
 // Depends on: git React Query helpers, native API mutations, and toolbar selection rules.
+// Note: the "Create branch" footer row uses raw <button> because it is a
+// menu-item-style affordance inside a ComboboxPopup, not a generic action.
 import type { GitBranch, GitStashInfoResult, GitStatusResult, NativeApi } from "@t3tools/contracts";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -921,6 +923,7 @@ export function BranchToolbarBranchSelector({
               <DialogFooter variant="bare">
                 <Button
                   variant="outline"
+                  size="sm"
                   type="button"
                   onClick={() => {
                     setIsCreateBranchDialogOpen(false);
@@ -931,6 +934,7 @@ export function BranchToolbarBranchSelector({
                 </Button>
                 <Button
                   type="submit"
+                  size="sm"
                   disabled={
                     createBranchName.trim().length === 0 ||
                     branchByName.has(createBranchName.trim())

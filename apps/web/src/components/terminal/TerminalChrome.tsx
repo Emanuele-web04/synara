@@ -2,6 +2,11 @@
 // Purpose: Reusable terminal chrome primitives for tab bars, sidebars, and toolbar actions.
 // Layer: Terminal presentation components
 // Depends on: terminal visual identities plus shared popover/button styling.
+//
+// Note: raw <button> usage in this file is intentional. These are tab-strip and
+// list-row affordances (activate tab, close tab, terminal row, group header)
+// rather than generic action buttons, so they live outside the shadcn Button
+// taxonomy. When/if we introduce a shared Tabs primitive, these can migrate.
 
 import type { ReactNode } from "react";
 

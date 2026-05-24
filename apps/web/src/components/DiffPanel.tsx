@@ -1,3 +1,8 @@
+// Note: raw <button>s in this file are intentional — turn-strip nav arrows
+// (translucent absolute-positioned scrollers), turn chips (selectable tab-like
+// chips with custom inner-div styling), and Summary/Review/Total tabs are
+// specialized affordances that don't fit the shadcn Button taxonomy. The
+// generic close affordance is the IconButton variant chrome instance below.
 import { FileDiff, type FileDiffMetadata, Virtualizer } from "@pierre/diffs/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
@@ -61,6 +66,7 @@ import ChatMarkdown from "./ChatMarkdown";
 import { resolveDiffPanelThread } from "./DiffPanel.logic";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { Button } from "./ui/button";
+import { IconButton } from "./ui/icon-button";
 import {
   Menu,
   MenuCheckboxItem,
@@ -815,17 +821,18 @@ export default function DiffPanel({
           </>
         ) : null}
         {onClosePanel ? (
-          <button
-            type="button"
-            className="inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-transparent text-[var(--color-text-foreground)] transition-colors hover:bg-[var(--sidebar-accent)] [-webkit-app-region:no-drag]"
+          <IconButton
+            variant="chrome"
+            size="icon-xs"
+            label="Close file view"
+            className="[-webkit-app-region:no-drag]"
             onClick={(event) => {
               event.stopPropagation();
               onClosePanel();
             }}
           >
-            <XIcon className="size-3.5" />
-            <span className="sr-only">Close file view</span>
-          </button>
+            <XIcon />
+          </IconButton>
         ) : null}
       </div>
     </>

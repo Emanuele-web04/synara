@@ -1,3 +1,6 @@
+// Note: option rows use raw <button> because they are selectable card/option
+// items with kbd shortcut chips and multi-state styling (selected / responding)
+// that don't fit the shadcn Button taxonomy.
 import { type ApprovalRequestId } from "@t3tools/contracts";
 import { memo, useEffect, useEffectEvent, useRef } from "react";
 import { type PendingUserInput } from "../../session-logic";
