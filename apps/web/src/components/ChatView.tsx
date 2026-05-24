@@ -304,6 +304,7 @@ import {
 } from "./chat/ComposerLocalDirectoryMenu";
 import { ComposerPendingApprovalActions } from "./chat/ComposerPendingApprovalActions";
 import { ComposerExtrasMenu } from "./chat/ComposerExtrasMenu";
+import { ContextWindowMeter } from "./chat/ContextWindowMeter";
 import { ComposerPendingApprovalPanel } from "./chat/ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./chat/ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./chat/ComposerPlanFollowUpBanner";
@@ -7717,6 +7718,22 @@ export default function ChatView({
                       Preparing worktree...
                     </span>
                   ) : null}
+                  {!isVoiceRecording && !isVoiceTranscribing && runtimeUsageContextWindow ? (
+                    <ContextWindowMeter
+                      usage={runtimeUsageContextWindow}
+                      {...(activeCumulativeCostUsd != null
+                        ? { cumulativeCostUsd: activeCumulativeCostUsd }
+                        : {})}
+                      {...(contextWindowSelectionStatus.activeLabel !== undefined
+                        ? { activeWindowLabel: contextWindowSelectionStatus.activeLabel }
+                        : {})}
+                      {...(contextWindowSelectionStatus.pendingSelectedLabel !== undefined
+                        ? {
+                            pendingWindowLabel: contextWindowSelectionStatus.pendingSelectedLabel,
+                          }
+                        : {})}
+                    />
+                  ) : null}
                   {!isVoiceRecording && !isVoiceTranscribing
                     ? composerModelEffortPickerControl
                     : null}
@@ -7845,7 +7862,7 @@ export default function ChatView({
                           type="submit"
                           variant="prominent"
                           size="icon-xs"
-                          className="sm:size-8"
+                          className="size-8 rounded-full"
                           disabled={
                             isSendBusy ||
                             isConnecting ||
@@ -7866,8 +7883,8 @@ export default function ChatView({
                         >
                           {isConnecting || isSendBusy ? (
                             <svg
-                              width="14"
-                              height="14"
+                              width="12"
+                              height="12"
                               viewBox="0 0 14 14"
                               fill="none"
                               className="animate-spin"
@@ -7886,7 +7903,7 @@ export default function ChatView({
                           ) : (
                             <ComposerSendArrowIcon
                               aria-hidden="true"
-                              className="size-3.5 shrink-0"
+                              className="size-4 shrink-0"
                             />
                           )}
                         </Button>
@@ -7922,7 +7939,6 @@ export default function ChatView({
       <div
         className={cn(
           COMPOSER_INPUT_SURFACE_CLASS_NAME,
-          "bg-background/65",
           COMPOSER_COLUMN_FRAME_CLASS_NAME,
         )}
         style={{ height: secondaryChromePlaceholderHeight }}
@@ -8085,18 +8101,8 @@ export default function ChatView({
                 </div>
               </div>
             ) : (
-              <div
-                className={cn(
-                  "flex min-h-0 flex-1 flex-col",
-                  CHAT_COLUMN_GUTTER_CLASS_NAME,
-                )}
-              >
-                <div
-                  className={cn(
-                    "flex min-h-0 flex-1 flex-col overflow-hidden",
-                    CHAT_COLUMN_FRAME_CLASS_NAME,
-                  )}
-                >
+              <div className="flex min-h-0 flex-1 flex-col">
+                <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
                   <ChatTranscriptPane
                 activeThreadId={activeThread.id}
                 activeTurnId={activeThread.session?.activeTurnId ?? null}
@@ -8148,18 +8154,20 @@ export default function ChatView({
 
                 <div
                   className={cn(
-                    "chat-pane-enter shrink-0 overflow-visible w-full pt-0 sm:pt-0",
+                    "chat-pane-enter relative z-10 -mt-5 shrink-0 overflow-visible w-full pt-0 sm:pt-0",
                     isGitRepo ? "pb-0.5" : "pb-2 sm:pb-2.5",
                   )}
                 >
                   {composerSection}
                 </div>
                 {secondaryChromeReady && isGitRepo ? (
-                  <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
-                    <BranchToolbar {...branchToolbarProps} />
+                  <div className={CHAT_COLUMN_GUTTER_CLASS_NAME}>
+                    <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
+                      <BranchToolbar {...branchToolbarProps} />
+                    </div>
                   </div>
                 ) : null}
-                </div>
+              </div>
             )}
 
             {secondaryChromeReady && pullRequestDialogState ? (

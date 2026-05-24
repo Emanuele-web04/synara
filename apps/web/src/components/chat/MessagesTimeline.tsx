@@ -69,6 +69,7 @@ import {
   normalizeChatFontSizePx,
   type TimestampFormat,
 } from "../../appSettings";
+import { CHAT_COLUMN_FRAME_CLASS_NAME } from "./composerPickerStyles";
 import { formatShortTimestamp } from "../../timestampFormat";
 import {
   buildInlineTerminalContextText,
@@ -393,6 +394,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const renderRowContent = (row: MessagesTimelineRow) => (
     <div
       className={cn(
+        CHAT_COLUMN_FRAME_CLASS_NAME,
+        "px-1",
         row.kind === "work" || (row.kind === "message" && row.message.role === "assistant")
           ? "pb-2"
           : "pb-4",

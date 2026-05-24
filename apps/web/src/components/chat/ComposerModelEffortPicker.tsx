@@ -23,19 +23,18 @@ import { buildNextProviderOptions, type ProviderModelOption } from "../../provid
 import { Button } from "../ui/button";
 import {
   Menu,
-  MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
   MenuSeparator,
   MenuSub,
-  MenuSubPopup,
   MenuSubTrigger,
   MenuTrigger,
 } from "../ui/menu";
 import { ShortcutKbd } from "../ui/shortcut-kbd";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { Tooltip, TooltipTrigger } from "../ui/tooltip";
 import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "../ProviderIcon";
 import { COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME, COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME } from "./composerPickerStyles";
+import { ComposerPickerMenuPopup, ComposerPickerMenuSubPopup, ComposerPickerTooltipPopup } from "./ComposerPickerMenuPopup";
 import { getComposerTraitSelection, hasVisibleComposerTraitControls } from "./composerTraits";
 import {
   getProviderIconClassName,
@@ -228,7 +227,7 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
             {triggerContent}
           </TooltipTrigger>
           {!isMenuOpen ? (
-            <TooltipPopup side="top" sideOffset={6}>
+            <ComposerPickerTooltipPopup side="top" sideOffset={6}>
               <span className="inline-flex items-center gap-2 px-1 py-0.5">
                 <span>Change model</span>
                 <ShortcutKbd
@@ -236,13 +235,13 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
                   className="h-4 min-w-4 px-1 text-[length:var(--app-font-size-ui-2xs,9px)] text-muted-foreground"
                 />
               </span>
-            </TooltipPopup>
+            </ComposerPickerTooltipPopup>
           ) : null}
         </Tooltip>
       ) : (
         <MenuTrigger render={triggerButton}>{triggerContent}</MenuTrigger>
       )}
-      <MenuPopup align="end" side="top" className="min-w-48">
+      <ComposerPickerMenuPopup align="end" side="top">
         {hasTraitsTopSection ? (
           <TraitsMenuContent
             provider={props.provider}
@@ -269,7 +268,7 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
             />
             <span className="truncate">{modelLabel}</span>
           </MenuSubTrigger>
-          <MenuSubPopup className="[--available-height:min(24rem,70vh)]">
+          <ComposerPickerMenuSubPopup className="[--available-height:min(24rem,70vh)]">
             <ProviderModelMenuItems
               provider={props.provider}
               model={props.model}
@@ -285,7 +284,7 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
               onProviderModelChange={props.onProviderModelChange}
               onAfterSelection={handleAfterModelSelection}
             />
-          </MenuSubPopup>
+          </ComposerPickerMenuSubPopup>
         </MenuSub>
 
         {supportsFastModeControl ? (
@@ -305,7 +304,7 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
                 ) : null}
               </span>
             </MenuSubTrigger>
-            <MenuSubPopup>
+            <ComposerPickerMenuSubPopup>
               <MenuRadioGroup
                 value={fastModeEnabled ? "on" : "off"}
                 onValueChange={handleFastModeChange}
@@ -313,10 +312,10 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
                 <MenuRadioItem value="off">Default</MenuRadioItem>
                 <MenuRadioItem value="on">Fast</MenuRadioItem>
               </MenuRadioGroup>
-            </MenuSubPopup>
+            </ComposerPickerMenuSubPopup>
           </MenuSub>
         ) : null}
-      </MenuPopup>
+      </ComposerPickerMenuPopup>
     </Menu>
   );
 });

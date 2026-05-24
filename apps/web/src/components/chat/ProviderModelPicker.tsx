@@ -24,7 +24,6 @@ import {
   MenuGroup,
   MenuGroupLabel,
   MenuItem,
-  MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
   MenuSeparator,
@@ -37,8 +36,9 @@ import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "../ProviderIcon";
 import { cn } from "~/lib/utils";
 import { PickerPanelShell } from "./PickerPanelShell";
 import { PickerTriggerButton } from "./PickerTriggerButton";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { ComposerPickerMenuPopup, ComposerPickerTooltipPopup } from "./ComposerPickerMenuPopup";
 import { ShortcutKbd } from "../ui/shortcut-kbd";
+import { Tooltip, TooltipTrigger } from "../ui/tooltip";
 import {
   groupProviderModelOptions,
   groupProviderModelOptionsWithFavorites,
@@ -436,7 +436,7 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
         onQueryChange={setModelSearchQuery}
         stopSearchKeyPropagation
         autoFocusSearch
-        widthClassName="w-60"
+        widthClassName="w-full"
         bleedParentPadding
       >
         {content}
@@ -634,7 +634,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(
             <span className="sr-only">{selectedModelLabel}</span>
           </TooltipTrigger>
           {!isMenuOpen ? (
-            <TooltipPopup side="top" sideOffset={6}>
+            <ComposerPickerTooltipPopup side="top" sideOffset={6}>
               <span className="inline-flex items-center gap-2 px-1 py-0.5">
                 <span>Change model</span>
                 <ShortcutKbd
@@ -642,7 +642,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(
                   className="h-4 min-w-4 px-1 text-[length:var(--app-font-size-ui-2xs,9px)] text-muted-foreground"
                 />
               </span>
-            </TooltipPopup>
+            </ComposerPickerTooltipPopup>
           ) : null}
         </Tooltip>
       ) : (
@@ -650,7 +650,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(
           <span className="sr-only">{selectedModelLabel}</span>
         </MenuTrigger>
       )}
-      <MenuPopup align="start">
+      <ComposerPickerMenuPopup align="start">
         <ProviderModelMenuItems
           provider={props.provider}
           model={props.model}
@@ -666,7 +666,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(
           onProviderModelChange={props.onProviderModelChange}
           onAfterSelection={handleAfterSelection}
         />
-      </MenuPopup>
+      </ComposerPickerMenuPopup>
     </Menu>
   );
 });

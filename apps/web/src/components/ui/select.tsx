@@ -182,14 +182,20 @@ function SelectItem({
     <SelectPrimitive.Item
       className={cn(
         "grid min-h-8 in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)] cursor-default items-center gap-2 rounded-sm py-1 text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-foreground)] outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 sm:min-h-7 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
-        hideIndicator ? "grid-cols-[1fr] ps-3 pe-3" : "grid-cols-[1rem_1fr] ps-2 pe-4",
+        hideIndicator ? "grid-cols-[1fr] ps-3 pe-3" : "grid-cols-[1fr_auto] gap-3 px-2.5",
         className,
       )}
       data-slot="select-item"
       {...props}
     >
+      <SelectPrimitive.ItemText className="col-start-1 min-w-0" data-slot="select-item-text">
+        {children}
+      </SelectPrimitive.ItemText>
       {hideIndicator ? null : (
-        <SelectPrimitive.ItemIndicator className="col-start-1" data-slot="select-item-indicator">
+        <SelectPrimitive.ItemIndicator
+          className="col-start-2 justify-self-end"
+          data-slot="select-item-indicator"
+        >
           <svg
             fill="none"
             height="24"
@@ -205,12 +211,6 @@ function SelectItem({
           </svg>
         </SelectPrimitive.ItemIndicator>
       )}
-      <SelectPrimitive.ItemText
-        className={cn("min-w-0", hideIndicator ? "col-start-1" : "col-start-2")}
-        data-slot="select-item-text"
-      >
-        {children}
-      </SelectPrimitive.ItemText>
     </SelectPrimitive.Item>
   );
 }

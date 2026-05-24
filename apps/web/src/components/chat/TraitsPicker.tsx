@@ -18,7 +18,6 @@ import { Button } from "../ui/button";
 import {
   Menu,
   MenuGroup,
-  MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
   MenuSeparator as MenuDivider,
@@ -30,9 +29,10 @@ import {
   buildProviderOptionPatch,
   type ProviderOptions,
 } from "../../providerModelOptions";
-import { COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME } from "./composerPickerStyles";
+import { COMPOSER_PICKER_SECTION_LABEL_CLASS_NAME, COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME } from "./composerPickerStyles";
+import { ComposerPickerMenuPopup, ComposerPickerTooltipPopup } from "./ComposerPickerMenuPopup";
 import { getComposerTraitSelection, hasVisibleComposerTraitControls } from "./composerTraits";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { Tooltip, TooltipTrigger } from "../ui/tooltip";
 import { ShortcutKbd } from "../ui/shortcut-kbd";
 
 const ULTRATHINK_PROMPT_PREFIX = "Ultrathink:\n";
@@ -184,7 +184,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
       {effortLevels.length > 0 ? (
         <>
           <MenuGroup>
-            <div className="px-2 pt-1.5 pb-1 font-medium text-muted-foreground text-xs">
+            <div className={COMPOSER_PICKER_SECTION_LABEL_CLASS_NAME}>
               {provider === "kilo" || provider === "opencode" ? "Variant" : "Effort"}
             </div>
             {ultrathinkPromptControlled ? (
@@ -208,9 +208,9 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
                 return option.description ? (
                   <Tooltip key={option.value}>
                     <TooltipTrigger render={item} />
-                    <TooltipPopup side="right" className="max-w-80 whitespace-normal leading-tight">
+                    <ComposerPickerTooltipPopup side="right" className="max-w-80 whitespace-normal leading-tight">
                       {option.description}
-                    </TooltipPopup>
+                    </ComposerPickerTooltipPopup>
                   </Tooltip>
                 ) : (
                   item
@@ -221,7 +221,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
         </>
       ) : thinkingEnabled !== null ? (
         <MenuGroup>
-          <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Thinking</div>
+          <div className={COMPOSER_PICKER_SECTION_LABEL_CLASS_NAME}>Thinking</div>
           <MenuRadioGroup
             value={thinkingEnabled ? "on" : "off"}
             onValueChange={(value) => {
@@ -247,7 +247,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
         <>
           {hasPriorFastModeSection ? <MenuDivider /> : null}
           <MenuGroup>
-            <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Fast Mode</div>
+            <div className={COMPOSER_PICKER_SECTION_LABEL_CLASS_NAME}>Fast Mode</div>
             <MenuRadioGroup
               value={fastModeEnabled ? "on" : "off"}
               onValueChange={(value) => {
@@ -274,7 +274,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
         <>
           <MenuDivider />
           <MenuGroup>
-            <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">
+            <div className={COMPOSER_PICKER_SECTION_LABEL_CLASS_NAME}>
               Context Window
             </div>
             <MenuRadioGroup
@@ -307,7 +307,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
         <>
           {hasVisibleControls ? <MenuDivider /> : null}
           <MenuGroup>
-            <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">
+            <div className={COMPOSER_PICKER_SECTION_LABEL_CLASS_NAME}>
               {provider === "kilo" ? "Mode" : "Agent"}
             </div>
             <MenuRadioGroup
@@ -339,9 +339,9 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
                 return agent.description ? (
                   <Tooltip key={agent.name}>
                     <TooltipTrigger render={item} />
-                    <TooltipPopup side="right" className="max-w-80 whitespace-normal leading-tight">
+                    <ComposerPickerTooltipPopup side="right" className="max-w-80 whitespace-normal leading-tight">
                       {agent.description}
-                    </TooltipPopup>
+                    </ComposerPickerTooltipPopup>
                   </Tooltip>
                 ) : (
                   item
@@ -520,7 +520,7 @@ export const TraitsPicker = memo(function TraitsPicker({
             {triggerContent}
           </TooltipTrigger>
           {!isMenuOpen ? (
-            <TooltipPopup side="top" sideOffset={6}>
+            <ComposerPickerTooltipPopup side="top" sideOffset={6}>
               <span className="inline-flex items-center gap-2 px-1 py-0.5">
                 <span>Change reasoning</span>
                 <ShortcutKbd
@@ -528,13 +528,13 @@ export const TraitsPicker = memo(function TraitsPicker({
                   className="h-4 min-w-4 px-1 text-[length:var(--app-font-size-ui-2xs,9px)] text-muted-foreground"
                 />
               </span>
-            </TooltipPopup>
+            </ComposerPickerTooltipPopup>
           ) : null}
         </Tooltip>
       ) : (
         <MenuTrigger render={triggerButton}>{triggerContent}</MenuTrigger>
       )}
-      <MenuPopup align="start">
+      <ComposerPickerMenuPopup align="start">
         <TraitsMenuContent
           provider={provider}
           threadId={threadId}
@@ -547,7 +547,7 @@ export const TraitsPicker = memo(function TraitsPicker({
           modelOptions={modelOptions}
           onSelectionComplete={() => setMenuOpen(false)}
         />
-      </MenuPopup>
+      </ComposerPickerMenuPopup>
     </Menu>
   );
 });

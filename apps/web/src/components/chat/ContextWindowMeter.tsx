@@ -27,7 +27,7 @@ export function ContextWindowMeter(props: {
         render={
           <button
             type="button"
-            className="group inline-flex items-center gap-1.5 rounded-full px-1 py-0.5 text-[10px] text-muted-foreground/60 transition-colors hover:text-muted-foreground"
+            className="group inline-flex shrink-0 items-center justify-center rounded-full p-0.5 transition-opacity hover:opacity-80"
             aria-label={display.ariaLabel}
           >
             <span className="relative flex h-3.5 w-3.5 items-center justify-center">
@@ -43,7 +43,7 @@ export function ContextWindowMeter(props: {
                   fill="none"
                   stroke="currentColor"
                   strokeWidth="1.5"
-                  opacity="0.2"
+                  className="text-muted-foreground/25 dark:text-muted-foreground/40"
                 />
                 <circle
                   cx="8"
@@ -55,11 +55,10 @@ export function ContextWindowMeter(props: {
                   strokeLinecap="round"
                   strokeDasharray={circumference}
                   strokeDashoffset={dashOffset}
-                  className="transition-[stroke-dashoffset] duration-500 ease-out motion-reduce:transition-none"
+                  className="text-primary transition-[stroke-dashoffset] duration-500 ease-out motion-reduce:transition-none dark:text-[var(--color-text-foreground)]"
                 />
               </svg>
             </span>
-            <span className="tabular-nums font-medium leading-none">{display.compactLabel}</span>
           </button>
         }
       />

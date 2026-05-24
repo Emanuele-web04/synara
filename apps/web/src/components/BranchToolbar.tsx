@@ -28,7 +28,6 @@ import {
   resolveEffectiveEnvMode,
 } from "./BranchToolbar.logic";
 import { BranchToolbarBranchSelector } from "./BranchToolbarBranchSelector";
-import { ContextWindowMeter } from "./chat/ContextWindowMeter";
 import { RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME, COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME } from "./chat/composerPickerStyles";
 import type { ContextWindowSnapshot } from "../lib/contextWindow";
 import { ProviderUsagePanelContent } from "./ProviderUsagePanelContent";
@@ -73,10 +72,6 @@ export interface RuntimeUsageControlsProps {
 export function RuntimeUsageControls({
   runtimeMode,
   onRuntimeModeChange,
-  contextWindow,
-  cumulativeCostUsd,
-  activeContextWindowLabel,
-  pendingContextWindowLabel,
   className,
 }: RuntimeUsageControlsProps) {
   return (
@@ -150,18 +145,6 @@ export function RuntimeUsageControls({
             </MenuRadioGroup>
           </MenuPopup>
         </Menu>
-      ) : null}
-      {contextWindow ? (
-        <ContextWindowMeter
-          usage={contextWindow}
-          {...(cumulativeCostUsd != null ? { cumulativeCostUsd } : {})}
-          {...(activeContextWindowLabel !== undefined
-            ? { activeWindowLabel: activeContextWindowLabel }
-            : {})}
-          {...(pendingContextWindowLabel !== undefined
-            ? { pendingWindowLabel: pendingContextWindowLabel }
-            : {})}
-        />
       ) : null}
     </div>
   );
@@ -316,7 +299,7 @@ export default function BranchToolbar({
   return (
     <div
       className={cn(
-        "mx-auto flex w-full items-center justify-between px-3 pb-3 pt-1",
+        "mx-auto flex w-full items-center justify-between px-3 pb-1.5 pt-1",
         className,
       )}
     >

@@ -430,6 +430,12 @@ label:has(> select#reasoning-effort) select {
   word-break: break-word;
 }
 
+.chat-markdown strong,
+.chat-markdown b {
+  font-weight: 600;
+  font-synthesis: none;
+}
+
 .chat-markdown > :first-child {
   margin-top: 0;
 }
@@ -882,6 +888,11 @@ diffs-container {
 
 .chat-composer-surface {
   background: var(--composer-surface);
+}
+
+.composer-picker-menu {
+  width: 13.5rem;
+  min-width: 13.5rem;
 }
 
 @keyframes ultrathink-rainbow {

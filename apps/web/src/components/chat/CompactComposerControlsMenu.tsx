@@ -2,10 +2,11 @@ import { ProviderInteractionMode, RuntimeMode } from "@t3tools/contracts";
 import { memo, type ReactNode } from "react";
 import { EllipsisIcon, ListTodoIcon } from "~/lib/icons";
 import { Button } from "../ui/button";
+import { COMPOSER_PICKER_SECTION_LABEL_CLASS_NAME } from "./composerPickerStyles";
+import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
 import {
   Menu,
   MenuItem,
-  MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
   MenuSeparator as MenuDivider,
@@ -36,14 +37,14 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
       >
         <EllipsisIcon aria-hidden="true" className="size-4" />
       </MenuTrigger>
-      <MenuPopup align="start">
+      <ComposerPickerMenuPopup align="start">
         {props.traitsMenuContent ? (
           <>
             {props.traitsMenuContent}
             <MenuDivider />
           </>
         ) : null}
-        <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Mode</div>
+        <div className={COMPOSER_PICKER_SECTION_LABEL_CLASS_NAME}>Mode</div>
         <MenuRadioGroup
           value={props.interactionMode}
           onValueChange={(value) => {
@@ -63,7 +64,7 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
             </MenuItem>
           </>
         ) : null}
-      </MenuPopup>
+      </ComposerPickerMenuPopup>
     </Menu>
   );
 });

@@ -5,6 +5,7 @@ import { ChevronRightIcon } from "~/lib/icons";
 import type * as React from "react";
 
 import { cn } from "~/lib/utils";
+import { COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME } from "../chat/composerPickerStyles";
 
 const MenuCreateHandle = MenuPrimitive.createHandle;
 
@@ -23,6 +24,7 @@ function MenuTrigger({ className, children, ...props }: MenuPrimitive.Trigger.Pr
 function MenuPopup({
   children,
   className,
+  surface = "default",
   sideOffset = 4,
   align = "center",
   alignOffset,
@@ -35,22 +37,28 @@ function MenuPopup({
   alignOffset?: MenuPrimitive.Positioner.Props["alignOffset"];
   side?: MenuPrimitive.Positioner.Props["side"];
   anchor?: MenuPrimitive.Positioner.Props["anchor"];
+  surface?: "default" | "composer";
 }) {
+  const popupSurfaceClassName =
+    surface === "composer"
+      ? COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME
+      : "rounded-xl border border-[color:var(--color-border-light)] bg-[var(--composer-surface)] shadow-xl";
+
   return (
     <MenuPrimitive.Portal>
       <MenuPrimitive.Positioner
         align={align}
         alignOffset={alignOffset}
         anchor={anchor}
-        className="z-50"
+        className={cn("z-50 min-w-32", className)}
         data-slot="menu-positioner"
         side={side}
         sideOffset={sideOffset}
       >
         <MenuPrimitive.Popup
           className={cn(
-            "relative flex not-[class*='w-']:min-w-32 origin-(--transform-origin) rounded-xl border border-[color:var(--color-border-light)] bg-[var(--composer-surface)] text-[var(--color-text-foreground)] shadow-xl outline-none focus:outline-none",
-            className,
+            "relative flex w-full min-w-full origin-(--transform-origin) text-[var(--color-text-foreground)] outline-none focus:outline-none",
+            popupSurfaceClassName,
           )}
           data-slot="menu-popup"
           {...props}
@@ -103,7 +111,7 @@ function MenuCheckboxItem({
       checked={checked}
       className={cn(
         "grid min-h-8 in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)] cursor-default items-center gap-2 rounded-sm py-1 ps-2 text-[length:var(--app-font-size-ui,12px)] text-foreground outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 sm:min-h-7 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
-        variant === "switch" ? "grid-cols-[1fr_auto] gap-4 pe-1.5" : "grid-cols-[1rem_1fr] pe-4",
+        variant === "switch" ? "grid-cols-[1fr_auto] gap-4 pe-1.5" : "grid-cols-[1fr_auto] gap-3 px-2.5",
         className,
       )}
       data-slot="menu-checkbox-item"
@@ -121,7 +129,8 @@ function MenuCheckboxItem({
         </>
       ) : (
         <>
-          <MenuPrimitive.CheckboxItemIndicator className="col-start-1">
+          <span className="col-start-1 min-w-0">{children}</span>
+          <MenuPrimitive.CheckboxItemIndicator className="col-start-2 justify-self-end">
             <svg
               fill="none"
               height="24"
@@ -136,7 +145,6 @@ function MenuCheckboxItem({
               <path d="M5.252 12.7 10.2 18.63 18.748 5.37" />
             </svg>
           </MenuPrimitive.CheckboxItemIndicator>
-          <span className="col-start-2">{children}</span>
         </>
       )}
     </MenuPrimitive.CheckboxItem>
@@ -151,13 +159,14 @@ function MenuRadioItem({ className, children, ...props }: MenuPrimitive.RadioIte
   return (
     <MenuPrimitive.RadioItem
       className={cn(
-        "grid min-h-8 in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)] cursor-default grid-cols-[1rem_1fr] items-center gap-2 rounded-sm py-1 ps-2 pe-4 text-[length:var(--app-font-size-ui,12px)] text-foreground outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 sm:min-h-7 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
+        "grid min-h-8 in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)] cursor-default grid-cols-[1fr_auto] items-center gap-3 rounded-sm px-2.5 py-1 text-[length:var(--app-font-size-ui,12px)] text-foreground outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 sm:min-h-7 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
         className,
       )}
       data-slot="menu-radio-item"
       {...props}
     >
-      <MenuPrimitive.RadioItemIndicator className="col-start-1">
+      <span className="col-start-1 min-w-0">{children}</span>
+      <MenuPrimitive.RadioItemIndicator className="col-start-2 justify-self-end">
         <svg
           fill="none"
           height="24"
@@ -172,7 +181,6 @@ function MenuRadioItem({ className, children, ...props }: MenuPrimitive.RadioIte
           <path d="M5.252 12.7 10.2 18.63 18.748 5.37" />
         </svg>
       </MenuPrimitive.RadioItemIndicator>
-      <span className="col-start-2 min-w-0">{children}</span>
     </MenuPrimitive.RadioItem>
   );
 }
@@ -250,6 +258,7 @@ function MenuSubTrigger({
 
 function MenuSubPopup({
   className,
+  surface = "default",
   sideOffset = 0,
   alignOffset,
   align = "start",
@@ -258,6 +267,7 @@ function MenuSubPopup({
   align?: MenuPrimitive.Positioner.Props["align"];
   sideOffset?: MenuPrimitive.Positioner.Props["sideOffset"];
   alignOffset?: MenuPrimitive.Positioner.Props["alignOffset"];
+  surface?: "default" | "composer";
 }) {
   const defaultAlignOffset = align !== "center" ? -5 : undefined;
 
@@ -269,6 +279,7 @@ function MenuSubPopup({
       data-slot="menu-sub-content"
       side="inline-end"
       sideOffset={sideOffset}
+      surface={surface}
       {...props}
     />
   );
