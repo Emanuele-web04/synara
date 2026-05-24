@@ -4,7 +4,6 @@ import { RiApps2Line } from "react-icons/ri";
 import { SiGithub } from "react-icons/si";
 import { VscMcp } from "react-icons/vsc";
 import { LuSplit } from "react-icons/lu";
-import { TbArrowsRightLeft } from "react-icons/tb";
 import { CentralIcon } from "./central-icons";
 import {
   IconAdjustments,
@@ -116,11 +115,9 @@ export const AppsIcon: LucideIcon = (props) => (
 );
 export const QueueArrow: LucideIcon = centralIconWrapper("reading-list");
 export const ComposerSendArrowIcon: LucideIcon = centralIconWrapper("arrow-up");
+export const HandoffIcon: LucideIcon = centralIconWrapper("branch-simple");
 export const SkillCubeIcon: LucideIcon = centralIconWrapper("box-2");
-// NewThreadIcon stays distinct from SquarePenIcon so the "file-change" /
-// "edit user message" work-entry rows keep the pencil glyph instead of the
-// chat-bubble used for thread creation actions.
-export const NewThreadIcon: LucideIcon = centralIconWrapper("bubble-plus");
+export const NewThreadIcon: LucideIcon = centralIconWrapper("compose-pencil");
 export const ArrowLeftIcon = adaptIcon(IconArrowLeft);
 export const BellIcon = adaptIcon(IconBell);
 export const ArrowRightIcon = adaptIcon(IconArrowRight);
@@ -171,9 +168,6 @@ export const McpIcon: LucideIcon = (props) => (
 );
 export const PlugIcon: LucideIcon = centralIconWrapper("plugin-1");
 export const HammerIcon = adaptIcon(IconTool);
-export const HandoffIcon: LucideIcon = (props) => (
-  <TbArrowsRightLeft className={props.className} style={props.style} />
-);
 export const InfoIcon = adaptIcon(IconInfoCircle);
 export const ListChecksIcon = adaptIcon(IconListCheck);
 export const ListTodoIcon = adaptIcon(IconListDetails);

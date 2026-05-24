@@ -254,10 +254,12 @@
   --success-foreground: var(--color-emerald-700);
   --sidebar: var(--card);
   --sidebar-foreground: var(--foreground);
-  --sidebar-accent: var(--color-background-button-secondary, var(--accent));
-  --sidebar-accent-active: var(--color-background-button-secondary, var(--sidebar-accent));
+  --sidebar-accent: var(--secondary);
+  --sidebar-accent-active: var(--secondary);
   --sidebar-accent-foreground: var(--color-text-foreground, var(--foreground));
   --sidebar-border: var(--border);
+  --color-background-button-secondary-hover: var(--secondary);
+  --color-background-elevated-secondary: var(--secondary);
   --warning: var(--color-amber-500);
   --warning-foreground: var(--color-amber-700);
   --claude: #d97757;
@@ -289,10 +291,12 @@
     --success-foreground: var(--color-emerald-400);
     --sidebar: var(--card);
     --sidebar-foreground: var(--foreground);
-    --sidebar-accent: var(--color-background-button-secondary, var(--accent));
-    --sidebar-accent-active: var(--color-background-button-secondary, var(--sidebar-accent));
+    --sidebar-accent: var(--secondary);
+    --sidebar-accent-active: var(--secondary);
     --sidebar-accent-foreground: var(--color-text-foreground, var(--foreground));
     --sidebar-border: var(--border);
+    --color-background-button-secondary-hover: var(--secondary);
+    --color-background-elevated-secondary: var(--secondary);
     --warning: var(--color-amber-500);
     --warning-foreground: var(--color-amber-400);
   }

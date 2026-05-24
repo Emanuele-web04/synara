@@ -20,7 +20,7 @@ import { HiMiniArrowsPointingOut } from "react-icons/hi2";
 import { TbExchange, TbLayoutSidebarRight } from "react-icons/tb";
 import type { ThreadPrimarySurface } from "../../types";
 import GitActionsControl from "../GitActionsControl";
-import { AppsIcon, ArrowRightIcon, GlobeIcon, PlusIcon, TerminalIcon, XIcon } from "~/lib/icons";
+import { AppsIcon, ArrowRightIcon, GlobeIcon, HandoffIcon, PlusIcon, TerminalIcon, XIcon } from "~/lib/icons";
 import { Button } from "../ui/button";
 import { IconButton } from "../ui/icon-button";
 import { Badge } from "../ui/badge";
@@ -330,7 +330,7 @@ export const ChatHeader = memo(function ChatHeader({
                       />
                     }
                   >
-                    <FiGitBranch className="size-3.5 shrink-0" />
+                    <HandoffIcon className="size-[1em] shrink-0 opacity-80" />
                     {!compact ? <span className="truncate font-normal">Hand off</span> : null}
                   </MenuTrigger>
                 }

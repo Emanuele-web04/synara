@@ -3,7 +3,7 @@
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
-import { Button } from "~/components/ui/button";
+import { Button, dialogActionButtonClassName } from "~/components/ui/button";
 import { ScrollArea } from "~/components/ui/scroll-area";
 
 const DialogCreateHandle = DialogPrimitive.createHandle;
@@ -49,8 +49,14 @@ function DialogViewport({ className, ...props }: DialogPrimitive.Viewport.Props)
 const dialogPopupClassName =
   "-translate-y-[calc(1.25rem*var(--nested-dialogs))] relative row-start-2 flex max-h-full min-h-0 w-full min-w-0 max-w-lg scale-[calc(1-0.1*var(--nested-dialogs))] flex-col rounded-xl border border-[color:var(--color-border-light)] bg-[var(--composer-surface)] text-[var(--color-text-foreground)] opacity-[calc(1-0.1*var(--nested-dialogs))] transition-[scale,opacity,translate] duration-200 ease-in-out will-change-transform data-nested:data-ending-style:translate-y-8 data-nested:data-starting-style:translate-y-8 data-nested-dialog-open:origin-top data-ending-style:scale-98 data-starting-style:scale-98 data-ending-style:opacity-0 data-starting-style:opacity-0";
 
-const dialogFooterButtonClassName =
-  "[&_[data-slot=button]:not([class*='size-9']):not([class*='size-8']):not([class*='size-7'])]:!h-auto [&_[data-slot=button]:not([class*='size-9']):not([class*='size-8']):not([class*='size-7'])]:!min-h-8 [&_[data-slot=button]:not([class*='size-9']):not([class*='size-8']):not([class*='size-7'])]:!rounded-md [&_[data-slot=button]:not([class*='size-9']):not([class*='size-8']):not([class*='size-7'])]:!px-3 [&_[data-slot=button]:not([class*='size-9']):not([class*='size-8']):not([class*='size-7'])]:!py-1 [&_[data-slot=button]:not([class*='size-9']):not([class*='size-8']):not([class*='size-7'])]:!font-normal sm:[&_[data-slot=button]:not([class*='size-9']):not([class*='size-8']):not([class*='size-7'])]:!min-h-7";
+const dialogFooterButtonSlotSelector =
+  "[&_[data-slot=button]:not([class*='size-9']):not([class*='size-8']):not([class*='size-7'])]";
+
+const dialogFooterButtonClassName = dialogActionButtonClassName
+  .split(/\s+/)
+  .filter(Boolean)
+  .map((className) => `${dialogFooterButtonSlotSelector}:${className.replace(/!/g, "\\!")}`)
+  .join(" ");
 
 const dialogPanelFieldClassName =
   "[&_[data-slot=textarea-control]]:min-h-24 [&_[data-slot=textarea-control]_[data-slot=textarea]]:px-2.5 [&_[data-slot=textarea-control]_[data-slot=textarea]]:py-2";

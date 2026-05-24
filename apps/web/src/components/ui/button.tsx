@@ -56,7 +56,7 @@ const buttonVariants = cva(
         chrome:
           "border-transparent bg-transparent text-[var(--color-text-foreground-secondary)] focus-visible:ring-[color:var(--color-border-focus)]/60 focus-visible:ring-offset-0 [:hover,[data-pressed]]:bg-[var(--color-background-elevated-secondary)] [:hover,[data-pressed]]:text-[var(--color-text-foreground)] data-pressed:bg-[var(--color-background-elevated-secondary)] data-pressed:text-[var(--color-text-foreground)]",
         "chrome-outline":
-          "border-[color:var(--color-border)] bg-transparent text-[var(--color-text-foreground)] focus-visible:ring-[color:var(--color-border-focus)]/60 [:hover,[data-pressed]]:bg-[var(--sidebar-accent)] dark:[:hover,[data-pressed]]:bg-[var(--sidebar-accent)] [&_svg]:mx-0",
+          "border-[color:var(--color-border)] bg-transparent text-[var(--color-text-foreground)] focus-visible:ring-[color:var(--color-border-focus)]/60 [:hover,[data-pressed]]:bg-secondary dark:[:hover,[data-pressed]]:bg-secondary [&_svg]:mx-0",
         default:
           "border-transparent bg-primary text-primary-foreground [:hover,[data-pressed]]:bg-primary/90",
         destructive:
@@ -82,8 +82,15 @@ const buttonVariants = cva(
     },
     compoundVariants: [
       {
-        class: "gap-1.5 px-[calc(--spacing(2.5)-1px)] sm:px-[calc(--spacing(2.5)-1px)]",
+        class:
+          "!box-border !h-auto !min-h-7.5 gap-1.5 rounded-md px-[calc(--spacing(2.5)-1px)] !py-0.5 text-[length:var(--app-font-size-ui,12px)] sm:!h-auto sm:!min-h-7 sm:px-[calc(--spacing(2.5)-1px)] sm:text-[length:var(--app-font-size-ui-sm,11px)]",
         size: "xs",
+        variant: "chrome-outline",
+      },
+      {
+        class:
+          "!size-8 rounded-md sm:!size-7",
+        size: "icon-xs",
         variant: "chrome-outline",
       },
     ],
@@ -117,4 +124,8 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
   });
 });
 
-export { Button, buttonVariants };
+/** Dialog footers and inline error actions share this sizing override. */
+const dialogActionButtonClassName =
+  "!h-auto !min-h-8 !rounded-md !px-3 !py-1 !font-normal sm:!min-h-7";
+
+export { Button, buttonVariants, dialogActionButtonClassName };
