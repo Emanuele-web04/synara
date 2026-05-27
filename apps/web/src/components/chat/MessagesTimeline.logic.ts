@@ -4,7 +4,7 @@
 // Exports: row derivation, structural sharing, copy/timer helpers
 
 import { type MessageId, type TurnId } from "@t3tools/contracts";
-import { type TimelineEntry, type WorkLogEntry } from "../../session-logic";
+import { type TimelineEntry, type WorkLogEntry, formatElapsed } from "../../session-logic";
 import { normalizeCompactToolLabel as normalizeCompactToolLabelValue } from "../../lib/toolCallLabel";
 import { type ChatMessage, type ProposedPlan, type TurnDiffSummary } from "../../types";
 
@@ -32,6 +32,8 @@ export type MessagesTimelineRow =
       message: ChatMessage;
       inlineWorkEntries?: WorkLogEntry[];
       inlineWorkGroupId?: string;
+      collapsedWorkEntries?: WorkLogEntry[];
+      collapsedWorkElapsed?: string | null;
       durationStart: string;
       showCompletionDivider: boolean;
       completionSummary: string | null;
@@ -301,7 +303,55 @@ export function deriveMessagesTimelineRows(input: {
     });
   }
 
+  collapseCompletedTurnWork(nextRows);
+
   return nextRows;
+}
+
+// Post-pass: for each completed (non-streaming) assistant message, absorb all
+// preceding work rows since the last user message into collapsedWorkEntries.
+// The work rows are removed from the output so the timeline shows only the
+// "Worked for Xs" toggle + final response by default.
+function collapseCompletedTurnWork(rows: MessagesTimelineRow[]): void {
+  for (let pass = rows.length - 1; pass >= 0; pass -= 1) {
+    const row = rows[pass]!;
+    if (
+      row.kind !== "message" ||
+      row.message.role !== "assistant" ||
+      row.message.streaming
+    ) {
+      continue;
+    }
+
+    const allWork: WorkLogEntry[] = [];
+    const indicesToRemove: number[] = [];
+
+    for (let scan = pass - 1; scan >= 0; scan -= 1) {
+      const prev = rows[scan]!;
+      if (prev.kind === "message" && prev.message.role === "user") break;
+      if (prev.kind === "work") {
+        allWork.unshift(...prev.groupedEntries);
+        indicesToRemove.push(scan);
+      }
+    }
+
+    if (row.inlineWorkEntries && row.inlineWorkEntries.length > 0) {
+      allWork.push(...row.inlineWorkEntries);
+    }
+
+    if (allWork.length > 0) {
+      const elapsed = formatElapsed(row.durationStart, row.message.completedAt);
+      row.collapsedWorkEntries = allWork;
+      row.collapsedWorkElapsed = elapsed ?? null;
+      delete row.inlineWorkEntries;
+      delete row.inlineWorkGroupId;
+
+      for (const index of indicesToRemove) {
+        rows.splice(index, 1);
+        pass -= 1;
+      }
+    }
+  }
 }
 
 // Reuses stable row references so streaming updates only invalidate rows whose
@@ -440,6 +490,8 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.message === bm.message &&
         workLogEntryArraysEqual(a.inlineWorkEntries, bm.inlineWorkEntries) &&
         a.inlineWorkGroupId === bm.inlineWorkGroupId &&
+        workLogEntryArraysEqual(a.collapsedWorkEntries, bm.collapsedWorkEntries) &&
+        a.collapsedWorkElapsed === bm.collapsedWorkElapsed &&
         a.durationStart === bm.durationStart &&
         a.showCompletionDivider === bm.showCompletionDivider &&
         a.completionSummary === bm.completionSummary &&

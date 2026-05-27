@@ -44,7 +44,7 @@ export const ActiveTaskListCard = memo(function ActiveTaskListCard({
   return (
     <div
       data-testid="active-task-list-card"
-      className="overflow-hidden rounded-t-2xl border border-b-0 border-[color:var(--color-border)] bg-[var(--color-background-surface-under)]"
+      className="overflow-hidden rounded-t-2xl border border-b-0 border-[color:var(--color-border)] bg-[var(--composer-surface)]"
     >
       <div className="flex items-center justify-between gap-2 px-2.5 py-2">
         <div className="flex min-w-0 items-center gap-1.5 text-[12px] text-muted-foreground/80">

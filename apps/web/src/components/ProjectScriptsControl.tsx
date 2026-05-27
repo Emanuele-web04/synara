@@ -44,7 +44,7 @@ import {
   AlertDialogPopup,
   AlertDialogTitle,
 } from "./ui/alert-dialog";
-import { Button } from "./ui/button";
+import { Button, headerButtonDarkBorderClassName } from "./ui/button";
 import {
   Dialog,
   DialogDescription,
@@ -299,6 +299,7 @@ export default function ProjectScriptsControl({
           <Button
             size="xs"
             variant="outline"
+            className={headerButtonDarkBorderClassName}
             onClick={() => onRunScript(primaryScript)}
             title={`Run ${primaryScript.name}`}
           >
@@ -310,7 +311,14 @@ export default function ProjectScriptsControl({
           <GroupSeparator className="hidden @sm/header-actions:block" />
           <Menu highlightItemOnHover={false}>
             <MenuTrigger
-              render={<Button size="icon-xs" variant="outline" aria-label="Script actions" />}
+              render={
+                <Button
+                  size="icon-xs"
+                  variant="outline"
+                  className={headerButtonDarkBorderClassName}
+                  aria-label="Script actions"
+                />
+              }
             >
               <ChevronDownIcon className="size-4" />
             </MenuTrigger>

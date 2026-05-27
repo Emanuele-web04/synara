@@ -35,6 +35,7 @@ import { Tooltip, TooltipTrigger } from "../ui/tooltip";
 import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "../ProviderIcon";
 import { COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME, COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME } from "./composerPickerStyles";
 import { ComposerPickerMenuPopup, ComposerPickerMenuSubPopup, ComposerPickerTooltipPopup } from "./ComposerPickerMenuPopup";
+import { COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME } from "./composerPickerStyles";
 import { getComposerTraitSelection, hasVisibleComposerTraitControls } from "./composerTraits";
 import {
   getProviderIconClassName,
@@ -268,7 +269,7 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
             />
             <span className="truncate">{modelLabel}</span>
           </MenuSubTrigger>
-          <ComposerPickerMenuSubPopup className="[--available-height:min(24rem,70vh)]">
+          <ComposerPickerMenuSubPopup className={COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME}>
             <ProviderModelMenuItems
               provider={props.provider}
               model={props.model}

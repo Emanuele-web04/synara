@@ -1,0 +1,24 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/emanueledipietro/.codex/worktrees/8980/t3code/.dpcode-picker-test/dev/logs/terminals/_managed-bin/notify-hook.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/emanueledipietro/.codex/worktrees/8980/t3code/.dpcode-picker-test/dev/logs/terminals/_managed-bin/notify-hook.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

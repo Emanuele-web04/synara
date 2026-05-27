@@ -29,7 +29,6 @@ import {
   IconCircleCheck,
   IconCloudUpload,
   IconColumns2,
-  IconCopy,
   IconDots,
   IconDownload,
   IconExternalLink,
@@ -137,7 +136,7 @@ export const CircleAlertIcon = adaptIcon(IconAlertCircle);
 export const CircleCheckIcon = adaptIcon(IconCircleCheck);
 export const CloudUploadIcon = adaptIcon(IconCloudUpload);
 export const Columns2Icon = adaptIcon(IconColumns2);
-export const CopyIcon = adaptIcon(IconCopy);
+export const CopyIcon = centralIconWrapper("square-behind-square-6");
 export const DiffIcon = adaptIcon(IconGitCompare);
 export const DownloadIcon = adaptIcon(IconDownload);
 export const EllipsisIcon = adaptIcon(IconDots);

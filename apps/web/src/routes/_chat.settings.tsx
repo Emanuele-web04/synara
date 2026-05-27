@@ -3079,7 +3079,7 @@ function SettingsRouteView() {
         {isElectron ? (
           <div
             className={cn(
-              "drag-region flex h-[52px] shrink-0 items-center border-b border-border/70 px-5",
+              "drag-region flex h-[46px] shrink-0 items-center border-b border-border/70 px-5",
               desktopTopBarTrafficLightGutterClassName,
             )}
           >

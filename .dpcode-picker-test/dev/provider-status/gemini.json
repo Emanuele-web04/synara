@@ -1,0 +1,18 @@
+{
+  "provider": "gemini",
+  "status": "ready",
+  "available": true,
+  "authStatus": "authenticated",
+  "version": "0.43.0",
+  "checkedAt": "2026-05-25T12:52:39.032Z",
+  "message": "Gemini CLI is installed and authenticated.",
+  "versionAdvisory": {
+    "status": "current",
+    "currentVersion": "0.43.0",
+    "latestVersion": "0.43.0",
+    "updateCommand": "npm install -g @google/gemini-cli@latest",
+    "canUpdate": true,
+    "checkedAt": "2026-05-25T12:52:46.687Z",
+    "message": null
+  }
+}

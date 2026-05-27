@@ -749,6 +749,44 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["task-progress"]);
   });
 
+  it("omits quiet turn lifecycle entries while keeping failed turn state visible", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "turn-success",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "turn.completed",
+        summary: "Turn completed",
+        tone: "info",
+        payload: {
+          state: "completed",
+        },
+      }),
+      makeActivity({
+        id: "turn-aborted",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "turn.aborted",
+        summary: "Turn aborted",
+        tone: "info",
+        payload: {
+          state: "cancelled",
+        },
+      }),
+      makeActivity({
+        id: "turn-failed",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "turn.completed",
+        summary: "Turn failed",
+        tone: "error",
+        payload: {
+          state: "failed",
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries.map((entry) => entry.id)).toEqual(["turn-failed"]);
+  });
+
   it("filters by turn id when provided", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({ id: "turn-1", turnId: "turn-1", summary: "Tool call", kind: "tool.started" }),

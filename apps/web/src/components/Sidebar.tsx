@@ -4007,7 +4007,7 @@ export default function Sidebar() {
           tabIndex={0}
           data-thread-item
           className={cn(
-            "grid h-8 w-full items-center gap-x-1.5 rounded-md px-2 text-left text-[length:var(--app-font-size-ui,12px)] transition-colors cursor-pointer",
+            "grid h-7.5 w-full items-center gap-x-1.5 rounded-sm px-2 text-left text-[length:var(--app-font-size-ui,12px)] transition-colors cursor-pointer",
             showThreadIdentityGlyph
               ? "grid-cols-[auto_auto_minmax(0,1fr)_auto_3.5rem]"
               : "grid-cols-[auto_minmax(0,1fr)_auto_3.5rem]",
@@ -4266,7 +4266,7 @@ export default function Sidebar() {
               isActive,
               isSelected,
             }),
-            isSubagentThread ? "h-7 pr-7.5" : undefined,
+            isSubagentThread ? "pr-7.5" : undefined,
           )}
           draggable={renamingThreadId !== thread.id}
           onDragStart={(event) => {
@@ -4520,7 +4520,7 @@ export default function Sidebar() {
           <SidebarMenuButton
             ref={isManualProjectSorting ? dragHandleProps?.setActivatorNodeRef : undefined}
             size="sm"
-            className={`h-8 gap-2 rounded-md px-2 py-0.5 text-left text-[length:var(--app-font-size-ui,12px)] font-normal transition-[padding] duration-150 ease-out hover:bg-[var(--sidebar-accent)] group-hover/project-header:bg-[var(--sidebar-accent)] group-hover/project-header:pr-[4.75rem] group-hover/project-header:text-[var(--sidebar-accent-foreground)] group-focus-within/project-header:pr-[4.75rem] ${
+            className={`h-7.5 gap-2 rounded-sm px-2 py-0.5 text-left text-[length:var(--app-font-size-ui,12px)] font-normal transition-[padding] duration-150 ease-out hover:bg-[var(--sidebar-accent)] group-hover/project-header:bg-[var(--sidebar-accent)] group-hover/project-header:pr-[4.75rem] group-hover/project-header:text-[var(--sidebar-accent-foreground)] group-focus-within/project-header:pr-[4.75rem] ${
               isManualProjectSorting ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
             }`}
             {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.attributes : {})}
@@ -5323,7 +5323,7 @@ export default function Sidebar() {
         <>
           <SidebarHeader
             className={cn(
-              "drag-region h-[48px] flex-row items-center gap-2 px-4 py-0 font-system-ui",
+              "drag-region h-[46px] flex-row items-center gap-2 px-4 py-0 font-system-ui",
               appSettings.sidebarSide === "left" && "pl-[90px]",
             )}
           >

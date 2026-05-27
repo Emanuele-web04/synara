@@ -96,6 +96,7 @@ export interface ThemeDerivedTokens {
   textForeground: string;
   textForegroundSecondary: string;
   textForegroundTertiary: string;
+  userMessageBackground: string;
 }
 
 export interface ResolvedThemeTokens {
@@ -668,7 +669,15 @@ export function buildThemeCssVariables(
   const composerSurface =
     variant === "dark"
       ? readCodexVariable("--color-background-control-opaque")
-      : "color-mix(in srgb, var(--color-background-surface-under) 97%, white 3%)";
+      : readCodexVariable("--color-background-surface");
+  const composerPickerSurfaceColor =
+    variant === "dark"
+      ? readCodexVariable("--color-background-control-opaque")
+      : "#ffffff";
+  const composerPickerMenuSurface =
+    variant === "dark"
+      ? `color-mix(in srgb, white 8%, color-mix(in srgb, ${composerPickerSurfaceColor} 76%, transparent))`
+      : `color-mix(in srgb, ${composerPickerSurfaceColor} 76%, transparent)`;
   const composerFocusBorder = buildComposerFocusBorder(
     pack,
     variant,
@@ -682,6 +691,9 @@ export function buildThemeCssVariables(
         ? "transparent"
         : readCodexVariable("--color-background-surface-under"),
     "--app-composer-focus-border": composerFocusBorder,
+    "--app-composer-picker-backdrop-filter": "blur(32px)",
+    "--app-composer-picker-surface": composerPickerMenuSurface,
+    "--app-user-message-background": readCodexVariable("--color-background-user-message"),
     "--app-sidebar-backdrop-filter":
       material === "translucent" ? "blur(8px) saturate(135%)" : "none",
     "--app-sidebar-shadow":
@@ -825,6 +837,7 @@ function buildCodexCssVariables(
     "--color-background-panel": panelBackground,
     "--color-background-surface": theme.theme.surface,
     "--color-background-surface-under": theme.surfaceUnder,
+    "--color-background-user-message": derivedTokens.userMessageBackground,
     "--color-border": derivedTokens.border,
     "--color-border-focus": derivedTokens.borderFocus,
     "--color-border-heavy": derivedTokens.borderHeavy,
@@ -979,6 +992,7 @@ function buildLightDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
     textForeground: theme.theme.ink,
     textForegroundSecondary: formatRgba(theme.ink, 0.65 + theme.contrast * 0.1),
     textForegroundTertiary: formatRgba(theme.ink, 0.45 + theme.contrast * 0.1),
+    userMessageBackground: buildCodexUserMessageBackground(theme.surface),
   };
 }
 
@@ -1026,13 +1040,22 @@ function buildDarkDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
     // Codex brightens dark accent affordances through the same focus mix used
     // for the border, rather than using the raw accent directly.
     textAccent: formatOpaqueRgb(focusBase),
-    textButtonPrimary: formatOpaqueRgb(primaryButtonBase),
+    textButtonPrimary: theme.theme.ink,
     textButtonSecondary: mixHex(theme.theme.ink, theme.theme.surface, 0.7 + theme.contrast * 0.1),
     textButtonTertiary: formatRgba(theme.ink, 0.45 + theme.contrast * 0.1),
     textForeground: theme.theme.ink,
     textForegroundSecondary: formatRgba(theme.ink, 0.65 + theme.contrast * 0.1),
     textForegroundTertiary: formatRgba(theme.ink, 0.42 + theme.contrast * 0.13),
+    userMessageBackground: buildCodexUserMessageBackground(theme.surface),
   };
+}
+
+// Mirrors Codex TUI's user_message_bg(): fixed black/white overlay on the
+// terminal/app background, independent of the theme foreground ink.
+function buildCodexUserMessageBackground(surface: RgbColor): string {
+  const foreground = isLightRgb(surface) ? BLACK : WHITE;
+  const alpha = isLightRgb(surface) ? 0.04 : 0.12;
+  return formatHex(blendRgb(foreground, surface, alpha));
 }
 
 function buildSurfaceUnder(
@@ -1236,8 +1259,25 @@ function mixRgb(from: RgbColor, to: RgbColor, amount: number): RgbColor {
   };
 }
 
+function blendRgb(foreground: RgbColor, background: RgbColor, alpha: number): RgbColor {
+  const clampedAlpha = Math.min(1, Math.max(0, alpha));
+  return {
+    blue: blendChannel(foreground.blue, background.blue, clampedAlpha),
+    green: blendChannel(foreground.green, background.green, clampedAlpha),
+    red: blendChannel(foreground.red, background.red, clampedAlpha),
+  };
+}
+
 function mixChannel(from: number, to: number, amount: number): number {
   return Math.round(from + (to - from) * amount);
+}
+
+function blendChannel(foreground: number, background: number, alpha: number): number {
+  return Math.floor(foreground * alpha + background * (1 - alpha));
+}
+
+function isLightRgb(color: RgbColor): boolean {
+  return color.red * 0.299 + color.green * 0.587 + color.blue * 0.114 > 128;
 }
 
 function formatHex(color: RgbColor): string {

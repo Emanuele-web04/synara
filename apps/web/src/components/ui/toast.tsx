@@ -29,6 +29,7 @@ import {
 type ThreadToastData = {
   allowCrossThreadVisibility?: boolean;
   copyText?: string;
+  onClose?: () => void;
   secondaryActionProps?: React.ComponentProps<typeof Button>;
   threadId?: ThreadId | null;
   tooltipStyle?: boolean;
@@ -49,10 +50,10 @@ const TOAST_ICONS = {
 } as const;
 
 const COMPACT_TOAST_ROOT_CLASS =
-  "w-max max-w-[min(calc(100vw-2rem),28rem)] rounded-lg border border-[color-mix(in_srgb,var(--color-text-accent)_17%,transparent)] bg-[color-mix(in_srgb,var(--color-text-accent)_13%,transparent)] text-foreground shadow-lg/10 backdrop-blur-xl before:hidden dark:border-[color-mix(in_srgb,var(--color-text-accent)_10%,transparent)] dark:bg-[color-mix(in_srgb,var(--color-text-accent)_10%,transparent)] dark:text-white dark:shadow-lg/15";
+  "w-max max-w-[min(calc(100vw-2rem),28rem)] rounded-lg border border-[color-mix(in_srgb,var(--color-text-accent)_7%,transparent)] bg-[color-mix(in_srgb,var(--color-text-accent)_5%,transparent)] text-foreground shadow-lg/10 backdrop-blur-xl before:hidden dark:border-[color-mix(in_srgb,var(--color-text-accent)_10%,transparent)] dark:bg-[color-mix(in_srgb,var(--color-text-accent)_10%,transparent)] dark:text-white dark:shadow-lg/15";
 
 const EXPANDED_TOAST_ROOT_CLASS =
-  "w-full rounded-xl border border-[color-mix(in_srgb,var(--color-text-accent)_17%,transparent)] bg-[color-mix(in_srgb,var(--color-text-accent)_13%,transparent)] text-foreground shadow-lg/10 backdrop-blur-xl before:hidden dark:border-[color-mix(in_srgb,var(--color-text-accent)_10%,transparent)] dark:bg-[color-mix(in_srgb,var(--color-text-accent)_10%,transparent)] dark:text-white dark:shadow-lg/15";
+  "w-full rounded-xl border border-[color-mix(in_srgb,var(--color-text-accent)_7%,transparent)] bg-[color-mix(in_srgb,var(--color-text-accent)_5%,transparent)] text-foreground shadow-lg/10 backdrop-blur-xl before:hidden dark:border-[color-mix(in_srgb,var(--color-text-accent)_10%,transparent)] dark:bg-[color-mix(in_srgb,var(--color-text-accent)_10%,transparent)] dark:text-white dark:shadow-lg/15";
 
 function shouldUseCompactToast(toast: ToastObject<ThreadToastData>): boolean {
   return !toast.data?.copyText && !toast.actionProps && !toast.data?.secondaryActionProps;
@@ -248,7 +249,13 @@ function ToastActions({
   );
 }
 
-function ToastCloseButton({ compact = false }: { compact?: boolean }) {
+function ToastCloseButton({
+  compact = false,
+  onClose,
+}: {
+  compact?: boolean;
+  onClose?: () => void;
+}) {
   return (
     <Toast.Close
       aria-label="Dismiss toast"
@@ -257,6 +264,7 @@ function ToastCloseButton({ compact = false }: { compact?: boolean }) {
         compact ? "size-5" : "absolute top-2 right-2 size-6",
       )}
       data-slot="toast-close"
+      onClick={onClose}
       title="Dismiss toast"
     >
       <XIcon className={compact ? "size-3" : "size-3.5"} />
@@ -323,7 +331,7 @@ function ToastSurface({
         ) : null}
       </div>
 
-      <ToastCloseButton compact={compact} />
+      <ToastCloseButton compact={compact} onClose={toast.data?.onClose} />
     </Toast.Content>
   );
 }
@@ -362,8 +370,8 @@ function Toasts({ position = "top-center" }: { position: ToastPosition }) {
           "fixed z-[200] mx-auto flex w-[calc(100%-var(--toast-inset)*2)] max-w-sm [--toast-inset:--spacing(4)] sm:[--toast-inset:--spacing(8)]",
           // Vertical positioning
           "data-[position=top-center]:top-4",
-          "data-[position=top-left]:top-[calc(var(--toast-inset)+52px)]",
-          "data-[position=top-right]:top-[calc(var(--toast-inset)+52px)]",
+          "data-[position=top-left]:top-[calc(var(--toast-inset)+46px)]",
+          "data-[position=top-right]:top-[calc(var(--toast-inset)+46px)]",
           "data-[position*=bottom]:bottom-(--toast-inset)",
           // Horizontal positioning
           "data-[position*=left]:left-(--toast-inset)",

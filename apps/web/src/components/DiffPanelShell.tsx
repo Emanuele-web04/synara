@@ -11,7 +11,7 @@ function getDiffPanelHeaderRowClassName(mode: DiffPanelMode) {
   const shouldUseDragRegion = isElectron && mode !== "sheet";
   return cn(
     "flex items-center justify-between gap-2 px-4",
-    shouldUseDragRegion ? "drag-region h-[52px] border-b border-border" : "h-12",
+    shouldUseDragRegion ? "drag-region h-[46px] border-b border-border" : "h-[46px]",
   );
 }
 

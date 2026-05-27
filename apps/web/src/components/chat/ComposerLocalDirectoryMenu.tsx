@@ -391,7 +391,7 @@ export const ComposerLocalDirectoryMenu = memo(function ComposerLocalDirectoryMe
 
   return (
     <Command autoHighlight={false} mode="none">
-      <div className="chat-composer-surface relative overflow-hidden rounded-xl border border-[color:var(--color-border-light)] bg-[var(--color-background-surface-under)]">
+      <div className="chat-composer-surface relative overflow-hidden rounded-xl border border-[color:var(--color-border-light)]">
         <div className="flex items-center gap-2 border-b px-2 py-1.5">
           {parent ? (
             <button

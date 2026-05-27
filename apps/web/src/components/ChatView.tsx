@@ -324,6 +324,7 @@ import {
   COMPOSER_FOOTER_APPROVAL_ROW_CLASS_NAME,
   COMPOSER_FOOTER_ROW_CLASS_NAME,
   COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
+  CHAT_BACKGROUND_CLASS_NAME,
   CHAT_COLUMN_FRAME_CLASS_NAME,
   CHAT_COLUMN_GUTTER_CLASS_NAME,
 } from "./chat/composerPickerStyles";
@@ -1030,6 +1031,7 @@ export default function ChatView({
   const [isTraitsPickerOpen, setIsTraitsPickerOpen] = useState(false);
   const legendListRef = useRef<LegendListRef | null>(null);
   const isAtEndRef = useRef(true);
+  const autoFollowThreadIdRef = useRef<ThreadId | null>(null);
   const pendingInteractionAnchorRef = useRef<{
     element: HTMLElement;
     top: number;
@@ -3862,6 +3864,15 @@ export default function ChatView({
     programmaticScrollUntilRef.current = performance.now() + 200;
     legendListRef.current?.scrollToEnd?.({ animated });
   }, []);
+  const armTranscriptAutoFollow = useCallback((targetThreadId: ThreadId) => {
+    autoFollowThreadIdRef.current = targetThreadId;
+    isAtEndRef.current = true;
+    showScrollDebouncer.current.cancel();
+    setShowScrollToBottom(false);
+  }, []);
+  const clearTranscriptAutoFollow = useCallback(() => {
+    autoFollowThreadIdRef.current = null;
+  }, []);
   useLayoutEffect(() => {
     const previousHeight = previousActiveTaskListCardHeightRef.current;
     previousActiveTaskListCardHeightRef.current = activeTaskListCardHeight;
@@ -3890,6 +3901,24 @@ export default function ChatView({
     () => timelineEntries.filter((entry) => entry.kind === "message").length,
     [timelineEntries],
   );
+  const latestTranscriptMessage = useMemo(() => {
+    for (let index = timelineEntries.length - 1; index >= 0; index -= 1) {
+      const entry = timelineEntries[index];
+      if (entry?.kind === "message") {
+        return entry.message;
+      }
+    }
+    return null;
+  }, [timelineEntries]);
+  const transcriptTailKey = latestTranscriptMessage
+    ? [
+        latestTranscriptMessage.id,
+        latestTranscriptMessage.role,
+        latestTranscriptMessage.streaming ? "streaming" : "settled",
+        latestTranscriptMessage.text.length > 0 ? "content" : "empty",
+        latestTranscriptMessage.completedAt ?? "",
+      ].join(":")
+    : "empty";
   const onIsAtEndChange = useCallback((isAtEnd: boolean) => {
     if (isAtEndRef.current === isAtEnd) return;
     if (!isAtEnd && performance.now() < programmaticScrollUntilRef.current) return;
@@ -3941,16 +3970,28 @@ export default function ChatView({
     },
     [cancelPendingInteractionAnchorAdjustment],
   );
-  const onMessagesPointerCancelBase = useCallback(() => {}, []);
-  const onMessagesPointerDownBase = useCallback(() => {}, []);
+  const onMessagesPointerCancelBase = useCallback(() => {
+    clearTranscriptAutoFollow();
+  }, [clearTranscriptAutoFollow]);
+  const onMessagesPointerDownBase = useCallback(() => {
+    clearTranscriptAutoFollow();
+  }, [clearTranscriptAutoFollow]);
   const onMessagesPointerUpBase = useCallback(() => {}, []);
   const onMessagesScrollBase = useCallback(() => {}, []);
   const onMessagesTouchEndBase = useCallback(() => {}, []);
-  const onMessagesTouchMoveBase = useCallback(() => {}, []);
-  const onMessagesTouchStartBase = useCallback(() => {}, []);
-  const onMessagesWheelBase = useCallback(() => {}, []);
+  const onMessagesTouchMoveBase = useCallback(() => {
+    clearTranscriptAutoFollow();
+  }, [clearTranscriptAutoFollow]);
+  const onMessagesTouchStartBase = useCallback(() => {
+    clearTranscriptAutoFollow();
+  }, [clearTranscriptAutoFollow]);
+  const onMessagesWheelBase = useCallback(() => {
+    clearTranscriptAutoFollow();
+  }, [clearTranscriptAutoFollow]);
   useEffect(() => {
-    if (!isAtEndRef.current) {
+    const shouldFollowPendingTurn =
+      activeThread?.id !== undefined && autoFollowThreadIdRef.current === activeThread.id;
+    if (!isAtEndRef.current && !shouldFollowPendingTurn) {
       return;
     }
     // Re-apply the bottom stick only for real transcript messages; tool/work
@@ -3961,7 +4002,7 @@ export default function ChatView({
     return () => {
       window.cancelAnimationFrame(frameId);
     };
-  }, [scrollToEnd, transcriptMessageCount]);
+  }, [activeThread?.id, scrollToEnd, transcriptMessageCount, transcriptTailKey]);
   const {
     pendingTranscriptSelectionAction,
     commitTranscriptAssistantSelection,
@@ -5560,9 +5601,7 @@ export default function ChatView({
     ]);
     // Mark the transcript as anchored before the optimistic row lands so the
     // re-snap effect on row count change pulls us to the new tail.
-    isAtEndRef.current = true;
-    showScrollDebouncer.current.cancel();
-    setShowScrollToBottom(false);
+    armTranscriptAutoFollow(threadIdForSend);
 
     setThreadError(threadIdForSend, null);
     if (expiredTerminalContextCount > 0) {
@@ -6058,9 +6097,7 @@ export default function ChatView({
         source: "native",
       },
     ]);
-    isAtEndRef.current = true;
-    showScrollDebouncer.current.cancel();
-    setShowScrollToBottom(false);
+    armTranscriptAutoFollow(threadIdForSend);
 
     try {
       await persistThreadSettingsForNextTurn({
@@ -7339,7 +7376,12 @@ export default function ChatView({
   // Empty state: no active thread
   if (!activeThread) {
     return (
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--color-background-surface)] text-[var(--color-text-foreground-secondary)]">
+      <div
+        className={cn(
+          "flex min-h-0 min-w-0 flex-1 flex-col text-[var(--color-text-foreground-secondary)]",
+          CHAT_BACKGROUND_CLASS_NAME,
+        )}
+      >
         {!isElectron && (
           <header className="border-b border-[color:var(--color-border-light)] px-3 py-2 md:hidden">
             <div className="flex items-center gap-2">
@@ -7353,7 +7395,7 @@ export default function ChatView({
         {isElectron && (
           <div
             className={cn(
-              "drag-region flex h-[52px] shrink-0 items-center border-b border-[color:var(--color-border-light)] px-5",
+              "drag-region flex h-[46px] shrink-0 items-center border-b border-[color:var(--color-border-light)] px-5",
               desktopTopBarTrafficLightGutterClassName,
             )}
           >
@@ -7947,12 +7989,17 @@ export default function ChatView({
   );
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
+    <div
+      className={cn(
+        "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
+        CHAT_BACKGROUND_CLASS_NAME,
+      )}
+    >
       {/* Top bar */}
       <header
         className={cn(
           "border-b border-[color:var(--color-border-light)] px-3 sm:px-5",
-          isElectron ? "drag-region flex h-[52px] items-center" : "py-2 sm:py-3",
+          isElectron ? "drag-region flex h-[46px] items-center" : "flex h-[46px] items-center",
           desktopTopBarTrafficLightGutterClassName,
         )}
       >

@@ -7,7 +7,6 @@ import { type ModelSlug, type ProviderKind, type ServerProviderStatus } from "@t
 import { resolveSelectableModel } from "@t3tools/shared/model";
 import * as Schema from "effect/Schema";
 import {
-  Fragment,
   memo,
   useCallback,
   useDeferredValue,
@@ -21,11 +20,8 @@ import { formatProviderModelOptionName } from "../../providerModelOptions";
 import { compareProvidersByOrder } from "../../providerOrdering";
 import {
   Menu,
-  MenuGroup,
-  MenuGroupLabel,
   MenuItem,
   MenuRadioGroup,
-  MenuRadioItem,
   MenuSeparator,
   MenuSub,
   MenuSubPopup,
@@ -36,16 +32,22 @@ import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "../ProviderIcon";
 import { cn } from "~/lib/utils";
 import { PickerPanelShell } from "./PickerPanelShell";
 import { PickerTriggerButton } from "./PickerTriggerButton";
+import { ProviderModelOptionGroupList } from "./ProviderModelOptionGroupList";
 import { ComposerPickerMenuPopup, ComposerPickerTooltipPopup } from "./ComposerPickerMenuPopup";
+import {
+  COMPOSER_PICKER_MODEL_LIST_MAX_HEIGHT_CLASS_NAME,
+  COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME,
+  COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME,
+} from "./composerPickerStyles";
 import { ShortcutKbd } from "../ui/shortcut-kbd";
 import { Tooltip, TooltipTrigger } from "../ui/tooltip";
 import {
   groupProviderModelOptions,
   groupProviderModelOptionsWithFavorites,
+  shouldUseCollapsibleModelGroups,
   type ProviderModelOption,
 } from "../../providerModelOptions";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
-import { StarFilledIcon, StarIcon } from "../../lib/icons";
 import { Skeleton } from "../ui/skeleton";
 
 function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): option is {
@@ -364,68 +366,38 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
           value={activeProvider === provider ? props.model : ""}
           onValueChange={(value) => handleModelChange(provider, value)}
         >
-          {groupedOptions.map((group, index) => (
-            <Fragment key={`${provider}:${group.key}`}>
-              <MenuGroup>
-                {group.label ? <MenuGroupLabel>{group.label}</MenuGroupLabel> : null}
-                {group.options.map((modelOption) => {
-                  const isFavorite = favoriteModelSlugSet?.has(modelOption.slug) ?? false;
-                  return (
-                    <MenuRadioItem
-                      key={`${provider}:${modelOption.slug}`}
-                      value={modelOption.slug}
-                      onClick={() => {
-                        onAfterSelection?.();
-                      }}
-                    >
-                      {favoriteModelSlugSet !== undefined ? (
-                        <span className="flex w-full min-w-0 items-center gap-2">
-                          <span className="block min-w-0 flex-1 truncate">{modelOption.name}</span>
-                          <button
-                            type="button"
-                            aria-label={
-                              isFavorite
-                                ? `Remove ${modelOption.name} from favourites`
-                                : `Add ${modelOption.name} to favourites`
-                            }
-                            className={cn(
-                              "-me-2 ms-auto inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground/55 transition-colors hover:bg-[var(--color-background-elevated-tertiary)] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/60",
-                              isFavorite && "text-amber-300 hover:text-amber-200",
-                            )}
-                            onClick={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              if (favoriteProvider !== null) {
-                                toggleFavoriteModel(favoriteProvider, modelOption.slug);
-                              }
-                            }}
-                            onPointerDown={(event) => {
-                              event.stopPropagation();
-                            }}
-                          >
-                            {isFavorite ? (
-                              <StarFilledIcon aria-hidden="true" className="size-3.5" />
-                            ) : (
-                              <StarIcon aria-hidden="true" className="size-3.5" />
-                            )}
-                          </button>
-                        </span>
-                      ) : (
-                        modelOption.name
-                      )}
-                    </MenuRadioItem>
-                  );
-                })}
-              </MenuGroup>
-              {index < groupedOptions.length - 1 ? <MenuSeparator /> : null}
-            </Fragment>
-          ))}
+          <ProviderModelOptionGroupList
+            groupedOptions={groupedOptions}
+            provider={provider}
+            activeModel={props.model}
+            isSearching={normalizedModelSearchQuery.length > 0}
+            favoriteProvider={favoriteProvider}
+            favoriteModelSlugSet={favoriteModelSlugSet}
+            onToggleFavorite={toggleFavoriteModel}
+            {...(onAfterSelection ? { onAfterSelection } : {})}
+          />
         </MenuRadioGroup>
       ) : (
         <div className="px-2 py-2 text-muted-foreground text-sm">No matches</div>
       );
 
     if (!shouldShowSearch) {
+      const needsScrollContainer =
+        filteredOptions.length >= SEARCHABLE_MODEL_PICKER_THRESHOLD ||
+        shouldUseCollapsibleModelGroups(groupedOptions.length, false);
+      if (needsScrollContainer) {
+        return (
+          <div
+            className={cn(
+              "overflow-y-auto overscroll-contain py-0.5",
+              COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME,
+              COMPOSER_PICKER_MODEL_LIST_MAX_HEIGHT_CLASS_NAME,
+            )}
+          >
+            {content}
+          </div>
+        );
+      }
       return content;
     }
 
@@ -438,6 +410,7 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
         autoFocusSearch
         widthClassName="w-full"
         bleedParentPadding
+        listMaxHeightClassName={COMPOSER_PICKER_MODEL_LIST_MAX_HEIGHT_CLASS_NAME}
       >
         {content}
       </PickerPanelShell>
@@ -483,7 +456,7 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
               />
               {option.label}
             </MenuSubTrigger>
-            <MenuSubPopup className="[--available-height:min(24rem,70vh)]">
+            <MenuSubPopup className={COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME}>
               {renderModelRadioGroup(option.value)}
             </MenuSubPopup>
           </MenuSub>

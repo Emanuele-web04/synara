@@ -320,7 +320,8 @@ describe("buildThemeCssVariables", () => {
     expect(tokens.derived.textForegroundSecondary).toBe("rgba(227, 228, 230, 0.645)");
     expect(tokens.derived.buttonSecondaryBackground).toBe("rgba(227, 228, 230, 0.039)");
     expect(tokens.derived.iconAccent).toBe("rgb(143, 150, 219)");
-    expect(tokens.derived.textButtonPrimary).toBe("rgb(9, 9, 11)");
+    expect(tokens.derived.textButtonPrimary).toBe("#e3e4e6");
+    expect(tokens.derived.userMessageBackground).toBe("#2b2b2d");
     expect(tokens.aliases["--color-token-side-bar-background"]).toBe("#0d0d0f");
     expect(tokens.aliases["--color-token-list-hover-background"]).toBe(
       tokens.derived.buttonSecondaryBackgroundHover,
@@ -357,5 +358,47 @@ describe("buildThemeCssVariables", () => {
     expect(tokens.derived.buttonPrimaryBackground).toBe(DEFAULT_THEME_STATE.chromeThemes.light.ink);
     expect(tokens.derived.textButtonPrimary).toBe(DEFAULT_THEME_STATE.chromeThemes.light.surface);
     expect(tokens.derived.textButtonPrimary).not.toBe(tokens.derived.buttonPrimaryBackground);
+  });
+
+  it("uses the dark-theme foreground color for the primary button label", () => {
+    const tokens = buildResolvedThemeTokens(
+      {
+        codeThemeId: "codex",
+        theme: DEFAULT_THEME_STATE.chromeThemes.dark,
+      },
+      "dark",
+    );
+
+    expect(tokens.derived.textButtonPrimary).toBe(DEFAULT_THEME_STATE.chromeThemes.dark.ink);
+    expect(tokens.derived.textButtonPrimary).not.toBe(tokens.derived.buttonPrimaryBackground);
+  });
+
+  it("matches Codex's user message bubble blend instead of tinting with theme ink", () => {
+    const tokens = buildResolvedThemeTokens(
+      {
+        codeThemeId: "custom-light",
+        theme: {
+          ...DEFAULT_THEME_STATE.chromeThemes.light,
+          ink: "#2d2d2b",
+          surface: "#f8f8f6",
+        },
+      },
+      "light",
+    );
+    const cssVariables = buildThemeCssVariables(
+      {
+        codeThemeId: "custom-light",
+        theme: {
+          ...DEFAULT_THEME_STATE.chromeThemes.light,
+          ink: "#2d2d2b",
+          surface: "#f8f8f6",
+        },
+      },
+      "light",
+    );
+
+    expect(tokens.derived.userMessageBackground).toBe("#eeeeec");
+    expect(tokens.derived.userMessageBackground).not.toBe(tokens.derived.buttonSecondaryBackground);
+    expect(cssVariables.variables["--app-user-message-background"]).toBe("#eeeeec");
   });
 });

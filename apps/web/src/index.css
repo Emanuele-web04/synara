@@ -198,6 +198,7 @@
 :root {
   color-scheme: light;
   --radius: 0.75rem;
+  --radius-user-message: 0.85rem;
   --font-ui-family: var(
     --app-font-ui-override,
     var(
@@ -432,7 +433,7 @@ label:has(> select#reasoning-effort) select {
 
 .chat-markdown strong,
 .chat-markdown b {
-  font-weight: 600;
+  font-weight: 500;
   font-synthesis: none;
 }
 
@@ -874,10 +875,10 @@ diffs-container {
   background: color-mix(in srgb, var(--card) 92%, var(--background));
 }
 
-/* Composer surface follows Codex's renderer token path; dark Electron composer uses
-   the opaque control/dropdown token derived from the active chrome theme. */
+/* Composer surface follows the theme Background setting in light mode; dark Electron
+   composer uses the opaque control/dropdown token derived from the active chrome theme. */
 :root {
-  --composer-surface: color-mix(in srgb, var(--color-background-surface-under) 97%, white 3%);
+  --composer-surface: var(--color-background-surface);
   --runtime-full-access-accent: #e25505;
 }
 
@@ -890,9 +891,38 @@ diffs-container {
   background: var(--composer-surface);
 }
 
+/* Frosted white shell for composer picker dropdowns (model, effort, traits). */
+.composer-picker-menu-surface {
+  background: var(
+    --app-composer-picker-surface,
+    color-mix(in srgb, white 76%, transparent)
+  );
+  backdrop-filter: var(--app-composer-picker-backdrop-filter, blur(32px));
+  -webkit-backdrop-filter: var(--app-composer-picker-backdrop-filter, blur(32px));
+}
+
 .composer-picker-menu {
-  width: 13.5rem;
-  min-width: 13.5rem;
+  width: 15rem;
+  min-width: 15rem;
+}
+
+/* Thin scrollbar for long model-provider lists inside picker submenus. */
+.composer-picker-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--foreground) 18%, transparent) transparent;
+}
+
+.composer-picker-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.composer-picker-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--foreground) 16%, transparent);
+}
+
+.composer-picker-scroll::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--foreground) 28%, transparent);
 }
 
 @keyframes ultrathink-rainbow {

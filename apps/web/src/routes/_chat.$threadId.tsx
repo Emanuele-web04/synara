@@ -89,6 +89,7 @@ import {
   resolveToggledChatPanelPatch,
 } from "./-chatThreadRoute.logic";
 import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
+import { CHAT_BACKGROUND_CLASS_NAME } from "../components/chat/composerPickerStyles";
 import { cn } from "~/lib/utils";
 import { Sidebar, SidebarInset, SidebarProvider, SidebarRail } from "~/components/ui/sidebar";
 
@@ -599,7 +600,8 @@ function SplitPaneEmptyState(props: {
   return (
     <div
       className={cn(
-        "flex min-h-0 min-w-0 flex-1 flex-col items-center bg-background px-6 pt-16",
+        "flex min-h-0 min-w-0 flex-1 flex-col items-center px-6 pt-16",
+        CHAT_BACKGROUND_CLASS_NAME,
         props.isFocused ? "ring-2 ring-inset ring-primary/70" : "",
       )}
       onMouseDown={props.onFocus}
@@ -808,10 +810,15 @@ function PaneRenderer(props: {
 
 function ChatMountSkeleton() {
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground [contain:layout_style_paint]">
+    <div
+      className={cn(
+        "flex min-h-0 min-w-0 flex-1 flex-col text-foreground [contain:layout_style_paint]",
+        CHAT_BACKGROUND_CLASS_NAME,
+      )}
+    >
       {/* Mirrors the real chat shell so route changes paint immediately while ChatView mounts
           on the next frames. */}
-      <div className="flex h-[52px] shrink-0 items-center gap-3 border-b border-[color:var(--color-border-light)] px-4">
+      <div className="flex h-[46px] shrink-0 items-center gap-3 border-b border-[color:var(--color-border-light)] px-4">
         <div className="size-5 rounded-full bg-muted" />
         <div className="min-w-0 flex-1 space-y-1.5">
           <div className="h-3.5 w-44 max-w-[48%] rounded-full bg-muted" />
@@ -972,7 +979,8 @@ function SplitPaneSurface(props: {
   return (
     <div
       className={cn(
-        "group relative flex min-h-0 min-w-0 flex-1 bg-background [contain:layout_style_paint]",
+        "group relative flex min-h-0 min-w-0 flex-1 [contain:layout_style_paint]",
+        CHAT_BACKGROUND_CLASS_NAME,
       )}
     >
       <ChatPaneDropOverlay
@@ -987,6 +995,7 @@ function SplitPaneSurface(props: {
             "min-h-0 min-w-0 overflow-hidden overscroll-y-none text-foreground transition-shadow",
             props.isFocused ? "ring-2 ring-inset ring-primary/70" : "",
           )}
+          surfaceClassName={CHAT_BACKGROUND_CLASS_NAME}
           onMouseDown={props.onFocus}
         >
           {props.threadId ? (
@@ -1470,7 +1479,12 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
 
   return (
     <>
-      <div className="flex h-dvh min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
+      <div
+        className={cn(
+          "flex h-dvh min-h-0 min-w-0 flex-1 overflow-hidden",
+          CHAT_BACKGROUND_CLASS_NAME,
+        )}
+      >
         <PaneRenderer
           pane={activeSplitView.root}
           splitView={activeSplitView}
@@ -1700,14 +1714,22 @@ function SingleChatSurface(props: {
 
   if (!shouldUseDiffSheet || activePanel === "browser") {
     return (
-      <div className="flex h-dvh min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
+      <div
+        className={cn(
+          "flex h-dvh min-h-0 min-w-0 flex-1 overflow-hidden",
+          CHAT_BACKGROUND_CLASS_NAME,
+        )}
+      >
         <ChatPaneDropOverlay
           canDropInDirection={allowAnySplitDirection}
           excludedThreadIds={excludedThreadIds}
           onDrop={handleDropThread}
           className="flex h-full min-h-0 min-w-0 flex-1"
         >
-          <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground">
+          <SidebarInset
+            className="h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground"
+            surfaceClassName={CHAT_BACKGROUND_CLASS_NAME}
+          >
             <DeferredChatView
               threadId={props.threadId}
               paneScopeId="single"
@@ -1754,7 +1776,10 @@ function SingleChatSurface(props: {
         onDrop={handleDropThread}
         className="flex h-dvh min-h-0 min-w-0 flex-1"
       >
-        <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground">
+        <SidebarInset
+          className="h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground"
+          surfaceClassName={CHAT_BACKGROUND_CLASS_NAME}
+        >
           <DeferredChatView
             threadId={props.threadId}
             paneScopeId="single"

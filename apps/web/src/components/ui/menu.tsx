@@ -5,7 +5,10 @@ import { ChevronRightIcon } from "~/lib/icons";
 import type * as React from "react";
 
 import { cn } from "~/lib/utils";
-import { COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME } from "../chat/composerPickerStyles";
+import {
+  COMPOSER_PICKER_MENU_BACKDROP_CLASS_NAME,
+  COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME,
+} from "../chat/composerPickerStyles";
 
 const MenuCreateHandle = MenuPrimitive.createHandle;
 
@@ -63,7 +66,22 @@ function MenuPopup({
           data-slot="menu-popup"
           {...props}
         >
-          <div className="max-h-(--available-height) w-full overflow-y-auto p-1">{children}</div>
+          {surface === "composer" ? (
+            <>
+              <div
+                aria-hidden="true"
+                className={cn(
+                  COMPOSER_PICKER_MENU_BACKDROP_CLASS_NAME,
+                  "pointer-events-none absolute inset-0 rounded-[inherit]",
+                )}
+              />
+              <div className="relative z-1 max-h-(--available-height) w-full overflow-y-auto p-1">
+                {children}
+              </div>
+            </>
+          ) : (
+            <div className="max-h-(--available-height) w-full overflow-y-auto p-1">{children}</div>
+          )}
         </MenuPrimitive.Popup>
       </MenuPrimitive.Positioner>
     </MenuPrimitive.Portal>

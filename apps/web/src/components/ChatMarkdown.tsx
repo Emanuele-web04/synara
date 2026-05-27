@@ -693,7 +693,7 @@ function ChatMarkdown({
 
   return (
     <div
-      className={`chat-markdown w-full min-w-0 ${className} text-neutral-900 dark:text-foreground/80`}
+      className={`chat-markdown w-full min-w-0 ${className} text-foreground`}
       style={style}
     >
       <ReactMarkdown

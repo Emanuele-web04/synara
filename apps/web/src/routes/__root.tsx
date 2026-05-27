@@ -87,6 +87,27 @@ const SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS = 1_500;
 const THREAD_DETAIL_CATCHUP_INTERVAL_MS = 1_500;
 const seenProviderUpdateNotificationKeys = new Set<string>();
 
+type ProviderUpdateToastId = ReturnType<typeof toastManager.add>;
+type ActiveProviderUpdateToast =
+  | { readonly kind: "prompt"; readonly key: string; readonly toastId: ProviderUpdateToastId }
+  | { readonly kind: "update"; readonly key: string; readonly toastId: ProviderUpdateToastId };
+
+function isProviderUpdateActive(provider: ServerProviderStatus): boolean {
+  return provider.updateState?.status === "queued" || provider.updateState?.status === "running";
+}
+
+function providerUpdateNotificationKey(
+  providers: ReadonlyArray<ServerProviderStatus>,
+): string | null {
+  const parts = providers
+    .map((provider) =>
+      [provider.provider, provider.versionAdvisory?.latestVersion ?? "unknown"].join(":"),
+    )
+    .toSorted();
+
+  return parts.length > 0 ? parts.join("|") : null;
+}
+
 function shellThreadHasStarted(thread: OrchestrationShellSnapshot["threads"][number]): boolean {
   return thread.latestTurn !== null || thread.session !== null;
 }
@@ -168,74 +189,129 @@ function ProviderUpdateNotifications() {
   const queryClient = useQueryClient();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const [isUpdatingAll, setIsUpdatingAll] = useState(false);
-  const updateToastIdRef = useRef<ReturnType<typeof toastManager.add> | null>(null);
+  const activeToastRef = useRef<ActiveProviderUpdateToast | null>(null);
+  const isUpdatingAllRef = useRef(false);
+  const progressToastDismissedRef = useRef(false);
   const outdatedProviders = useMemo(
     () =>
       (serverConfigQuery.data?.providers ?? []).filter(
         (provider) =>
           provider.versionAdvisory?.status === "behind_latest" &&
-          provider.versionAdvisory.canUpdate,
+          provider.versionAdvisory.latestVersion !== null &&
+          provider.versionAdvisory.canUpdate === true &&
+          provider.versionAdvisory.updateCommand !== null,
       ),
     [serverConfigQuery.data?.providers],
+  );
+  const oneClickProviders = useMemo(
+    () =>
+      outdatedProviders.filter(
+        (provider) => !isProviderUpdateActive(provider),
+      ),
+    [outdatedProviders],
+  );
+  const notificationKey = useMemo(
+    () => providerUpdateNotificationKey(outdatedProviders),
+    [outdatedProviders],
   );
 
   const updateAll = useCallback(
     async (providers: ReadonlyArray<ServerProviderStatus>) => {
-      if (isUpdatingAll || providers.length === 0) {
+      const activeNotificationKey = providerUpdateNotificationKey(providers);
+      if (isUpdatingAllRef.current || providers.length === 0 || !activeNotificationKey) {
         return;
       }
 
+      isUpdatingAllRef.current = true;
+      progressToastDismissedRef.current = false;
       setIsUpdatingAll(true);
-      if (updateToastIdRef.current) {
-        toastManager.update(updateToastIdRef.current, {
+      const trackedToast = activeToastRef.current;
+      const toastId =
+        trackedToast?.toastId ??
+        toastManager.add({
           type: "loading",
           title: "Updating providers...",
           description:
             providers.length === 1
               ? `Updating ${PROVIDER_DISPLAY_NAMES[providers[0]!.provider]}.`
               : `Updating ${providers.length} providers.`,
-          actionProps: undefined,
-          data: undefined,
           timeout: 0,
         });
-      }
+      activeToastRef.current = { kind: "update", key: activeNotificationKey, toastId };
+      const dismissProgressToast = () => {
+        progressToastDismissedRef.current = true;
+        if (activeToastRef.current?.toastId === toastId) {
+          activeToastRef.current = null;
+        }
+      };
 
-      const api = ensureNativeApi();
+      toastManager.update(toastId, {
+        type: "loading",
+        title: "Updating providers...",
+        description:
+          providers.length === 1
+            ? `Updating ${PROVIDER_DISPLAY_NAMES[providers[0]!.provider]}.`
+            : `Updating ${providers.length} providers.`,
+        actionProps: undefined,
+        data: { onClose: dismissProgressToast },
+        timeout: 0,
+      });
+
       const failures: Array<{ provider: ServerProviderStatus; reason: string }> = [];
 
-      for (const provider of providers) {
-        try {
-          const result = await api.server.updateProvider({ provider: provider.provider });
-          const refreshed = result.providers.find((entry) => entry.provider === provider.provider);
-          const updateState = refreshed?.updateState;
-          if (updateState?.status === "failed" || updateState?.status === "unchanged") {
+      try {
+        const api = ensureNativeApi();
+        for (const provider of providers) {
+          try {
+            const result = await api.server.updateProvider({ provider: provider.provider });
+            const refreshed = result.providers.find(
+              (entry) => entry.provider === provider.provider,
+            );
+            const updateState = refreshed?.updateState;
+            if (updateState?.status === "failed" || updateState?.status === "unchanged") {
+              failures.push({
+                provider,
+                reason: updateState.message ?? "The update command did not complete successfully.",
+              });
+            } else if (refreshed?.versionAdvisory?.status === "behind_latest") {
+              failures.push({
+                provider,
+                reason: "The provider still appears outdated after updating.",
+              });
+            }
+          } catch (error) {
             failures.push({
               provider,
-              reason: updateState.message ?? "The update command did not complete successfully.",
-            });
-          } else if (refreshed?.versionAdvisory?.status === "behind_latest") {
-            failures.push({
-              provider,
-              reason: "The provider still appears outdated after updating.",
+              reason: error instanceof Error ? error.message : "The update request failed.",
             });
           }
-        } catch (error) {
+        }
+      } catch (error) {
+        for (const provider of providers) {
           failures.push({
             provider,
-            reason: error instanceof Error ? error.message : "The update request failed.",
+            reason:
+              error instanceof Error
+                ? error.message
+                : "The provider update request could not start.",
           });
         }
+      } finally {
+        // Refresh is best-effort UI sync; it must not keep the progress toast alive.
+        await queryClient
+          .invalidateQueries({ queryKey: serverQueryKeys.config() })
+          .catch(() => undefined);
+        isUpdatingAllRef.current = false;
+        setIsUpdatingAll(false);
       }
 
-      await queryClient.invalidateQueries({ queryKey: serverQueryKeys.config() });
-      setIsUpdatingAll(false);
+      if (progressToastDismissedRef.current || activeToastRef.current?.toastId !== toastId) {
+        return;
+      }
 
       if (failures.length > 0) {
-        if (updateToastIdRef.current) {
-          toastManager.close(updateToastIdRef.current);
-          updateToastIdRef.current = null;
-        }
-        toastManager.add({
+        activeToastRef.current = null;
+        toastManager.update(toastId, {
           type: "error",
           title:
             failures.length === providers.length
@@ -246,52 +322,48 @@ function ProviderUpdateNotifications() {
               ({ provider, reason }) => `${PROVIDER_DISPLAY_NAMES[provider.provider]}: ${reason}`,
             )
             .join("\n"),
+          data: { onClose: dismissProgressToast },
+          timeout: 0,
         });
         return;
       }
 
-      if (updateToastIdRef.current) {
-        toastManager.update(updateToastIdRef.current, {
-          type: "success",
-          title:
-            providers.length === 1
-              ? `${PROVIDER_DISPLAY_NAMES[providers[0]!.provider]} updated`
-              : `${providers.length} providers updated`,
-          description: "New sessions will use the refreshed provider tools.",
-          timeout: 6000,
-        });
-        updateToastIdRef.current = null;
-      } else {
-        toastManager.add({
-          type: "success",
-          title:
-            providers.length === 1
-              ? `${PROVIDER_DISPLAY_NAMES[providers[0]!.provider]} updated`
-              : `${providers.length} providers updated`,
-          description: "New sessions will use the refreshed provider tools.",
-        });
-      }
+      activeToastRef.current = null;
+      toastManager.update(toastId, {
+        type: "success",
+        title:
+          providers.length === 1
+            ? `${PROVIDER_DISPLAY_NAMES[providers[0]!.provider]} updated`
+            : `${providers.length} providers updated`,
+        description: "New sessions will use the refreshed provider tools.",
+        data: { onClose: dismissProgressToast },
+        timeout: 6000,
+      });
     },
-    [isUpdatingAll, queryClient],
+    [queryClient],
   );
 
   useEffect(() => {
-    if (outdatedProviders.length === 0 || isUpdatingAll) {
+    const activeToast = activeToastRef.current;
+    if (activeToast?.kind === "prompt" && activeToast.key !== notificationKey) {
+      toastManager.close(activeToast.toastId);
+      activeToastRef.current = null;
+    }
+
+    if (
+      outdatedProviders.length === 0 ||
+      oneClickProviders.length === 0 ||
+      !notificationKey ||
+      isUpdatingAll ||
+      activeToastRef.current ||
+      seenProviderUpdateNotificationKeys.has(notificationKey)
+    ) {
       return;
     }
 
-    const newNotifications = outdatedProviders.filter((provider) => {
-      const notificationKey = `${provider.provider}:${provider.versionAdvisory?.latestVersion ?? "unknown"}`;
-      if (seenProviderUpdateNotificationKeys.has(notificationKey)) {
-        return false;
-      }
-      seenProviderUpdateNotificationKeys.add(notificationKey);
-      return true;
-    });
-
-    if (newNotifications.length === 0) {
-      return;
-    }
+    // Key the prompt by the complete provider/version set so a partial refresh
+    // cannot stack a second "Update all" prompt on top of the first one.
+    seenProviderUpdateNotificationKeys.add(notificationKey);
 
     const firstProvider = outdatedProviders[0]!;
     const additionalCount = outdatedProviders.length - 1;
@@ -305,7 +377,13 @@ function ProviderUpdateNotifications() {
         ? `${providerName} has a newer version available.`
         : `${providerName} and ${additionalCount} more provider${additionalCount === 1 ? "" : "s"} have newer versions available.`;
 
-    updateToastIdRef.current = toastManager.add({
+    let toastId!: ProviderUpdateToastId;
+    const closeTrackedPrompt = () => {
+      if (activeToastRef.current?.toastId === toastId) {
+        activeToastRef.current = null;
+      }
+    };
+    toastId = toastManager.add({
       type: "warning",
       title,
       description,
@@ -313,9 +391,9 @@ function ProviderUpdateNotifications() {
       actionProps: {
         children: "Review updates",
         onClick: () => {
-          if (updateToastIdRef.current) {
-            toastManager.close(updateToastIdRef.current);
-            updateToastIdRef.current = null;
+          if (activeToastRef.current?.toastId === toastId) {
+            toastManager.close(toastId);
+            activeToastRef.current = null;
           }
           void navigate({
             to: "/settings",
@@ -324,15 +402,17 @@ function ProviderUpdateNotifications() {
         },
       },
       data: {
+        onClose: closeTrackedPrompt,
         secondaryActionProps: {
           children: "Update all",
           onClick: () => {
-            void updateAll(outdatedProviders);
+            void updateAll(oneClickProviders);
           },
         },
       },
     });
-  }, [isUpdatingAll, navigate, outdatedProviders, updateAll]);
+    activeToastRef.current = { kind: "prompt", key: notificationKey, toastId };
+  }, [isUpdatingAll, navigate, notificationKey, oneClickProviders, outdatedProviders, updateAll]);
 
   return null;
 }

@@ -403,7 +403,7 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
             desktopTopBarTrafficLightGutterClassName,
           )}
         >
-          <div className="flex h-[52px] items-center gap-2 sm:gap-3">
+          <div className="flex h-[46px] items-center gap-2 sm:gap-3">
             <SidebarHeaderNavigationControls />
             <div className="flex min-w-0 flex-1 items-center gap-2">
               {renaming ? (

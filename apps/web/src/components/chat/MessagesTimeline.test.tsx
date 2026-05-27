@@ -199,9 +199,12 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain("flex w-full justify-end");
     expect(markup).toContain("group flex flex-col items-end gap-px max-w-[80%]");
-    expect(markup).toContain("w-max max-w-full min-w-0 self-end rounded-lg bg-secondary px-3.5");
-    expect(markup).toContain("pt-[5.5px] pb-[7px]");
-    expect(markup).toContain("text-muted-foreground/45");
+    expect(markup).toContain(
+      "w-max max-w-full min-w-0 self-end bg-[var(--app-user-message-background)]",
+    );
+    expect(markup).toContain("rounded-[var(--radius-user-message)]");
+    expect(markup).toContain("py-[8px]");
+    expect(markup).toContain("group-hover:opacity-100");
   });
 
   it("renders edit beside copy for user messages", async () => {
@@ -263,10 +266,10 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('aria-label="Copy message"');
     expect(markup).toContain('aria-label="Edit message"');
     expect(markup).toContain('aria-label="Revert to this message"');
-    expect(markup).toContain("sidebar-icon-button");
+    expect(markup).toContain("size-[1.125em]");
   });
 
-  it("keeps edit available and undo visible before a revert checkpoint exists", async () => {
+  it("keeps edit available and hides undo before a revert checkpoint exists", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -320,11 +323,10 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain('aria-label="Revert to this message"');
     expect(markup).toContain('aria-label="Edit message"');
+    expect(markup).not.toContain('aria-label="Revert to this message"');
     expect(markup).not.toContain('title="Edit message"');
     expect(markup).not.toContain('title="Revert to this message"');
-    expect(markup).toMatch(/<button[^>]*disabled=""[^>]*aria-label="Revert to this message"/);
   });
 
   it("keeps edit available while an assistant turn is running", async () => {
@@ -524,7 +526,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain(
-      "inline-block max-w-full min-w-0 whitespace-pre-wrap break-words font-system-ui",
+      "block max-w-full min-w-0 whitespace-pre-wrap break-words font-system-ui",
     );
     expect(markup).not.toContain("<pre");
   });

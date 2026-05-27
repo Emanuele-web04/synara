@@ -15,6 +15,29 @@ export const COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME =
 /** Fixed width for composer picker dropdown menus (model, effort, traits, etc.). */
 export const COMPOSER_PICKER_MENU_MIN_WIDTH_CLASS_NAME = "composer-picker-menu";
 
+/** Caps model-provider submenu height; pairs with the list scroll class below. */
+export const COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME =
+  "[--available-height:min(20rem,55vh)]";
+
+/** Sticky search header inside frosted composer picker submenus. */
+export const COMPOSER_PICKER_SEARCH_HEADER_CLASS_NAME =
+  "sticky z-20 shrink-0 border-b border-[color:color-mix(in_srgb,var(--foreground)_6%,transparent)] bg-transparent px-1.5 pb-1.5 pt-1";
+
+/** Search field styling inside composer picker submenus. */
+export const COMPOSER_PICKER_SEARCH_INPUT_CLASS_NAME =
+  "rounded-lg border-[color:color-mix(in_srgb,var(--foreground)_8%,transparent)] bg-[color-mix(in_srgb,white_92%,transparent)] shadow-none before:hidden has-focus-visible:border-[color:color-mix(in_srgb,var(--foreground)_14%,transparent)] has-focus-visible:ring-0 [&_input]:font-sans [&_input]:placeholder:text-muted-foreground/55";
+
+/** Scrollable model list body inside searchable provider submenus. */
+export const COMPOSER_PICKER_MODEL_LIST_MAX_HEIGHT_CLASS_NAME =
+  "max-h-[min(var(--available-height,20rem),20rem)]";
+
+/** Scroll chrome for long model-provider lists. */
+export const COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME = "composer-picker-scroll";
+
+/** Collapsible section headers inside model provider lists. */
+export const COMPOSER_PICKER_MODEL_GROUP_HEADER_CLASS_NAME =
+  "flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[10px] font-medium uppercase tracking-[0.06em] text-muted-foreground/80 outline-none transition-colors hover:bg-[color-mix(in_srgb,var(--foreground)_4%,transparent)] focus-visible:ring-0";
+
 /** Muted accent text for effort labels and empty-landing folder names. */
 export const COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME = "text-muted-foreground/45";
 
@@ -23,6 +46,9 @@ export const COMPOSER_PICKER_SECTION_LABEL_CLASS_NAME =
   `px-2 py-1.5 font-normal text-xs ${COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME}`;
 
 export const COMPOSER_MAX_WIDTH_CLASS_NAME = "max-w-[42rem]";
+/** Main chat column background — matches the theme Background setting exactly. */
+export const CHAT_BACKGROUND_CLASS_NAME = "bg-[var(--color-background-surface)]";
+
 /** Shared max width for the chat column (transcript + composer). */
 export const CHAT_COLUMN_MAX_WIDTH_CLASS_NAME = COMPOSER_MAX_WIDTH_CLASS_NAME;
 /** Horizontal padding shared by the transcript and composer columns. */
@@ -48,9 +74,12 @@ export const COMPOSER_SURFACE_CHROME_CLASS_NAME =
 export const COMPOSER_INPUT_SURFACE_CLASS_NAME =
   `chat-composer-surface rounded-[1.2rem] ${COMPOSER_SURFACE_CHROME_CLASS_NAME} transition-colors duration-200`;
 
+/** Frosted backdrop layer inside composer picker dropdown panels. */
+export const COMPOSER_PICKER_MENU_BACKDROP_CLASS_NAME = "composer-picker-menu-surface";
+
 /** Visual shell for composer picker dropdown panels (menus attached to the composer). */
 export const COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME =
-  `chat-composer-surface rounded-xl ${COMPOSER_SURFACE_CHROME_CLASS_NAME}`;
+  `overflow-hidden rounded-xl bg-transparent ${COMPOSER_SURFACE_CHROME_CLASS_NAME}`;
 
 /** Same chrome as picker menus, for composer-attached tooltips. */
 export const COMPOSER_PICKER_TOOLTIP_SURFACE_CLASS_NAME =

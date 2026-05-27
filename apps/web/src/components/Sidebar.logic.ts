@@ -205,7 +205,7 @@ export function resolveThreadRowClassName(input: {
 }): string {
   // Reserve room for the absolute fork/worktree/timestamp cluster so long titles truncate cleanly.
   const baseClassName =
-    "h-8 w-full translate-x-0 cursor-pointer justify-start rounded-md pr-[4.25rem] pl-8 text-left text-[13px] select-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring";
+    "h-7.5 w-full translate-x-0 cursor-pointer justify-start rounded-sm pr-[4.25rem] pl-8 text-left text-[13px] select-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring";
 
   if (input.isSelected && input.isActive) {
     return cn(
