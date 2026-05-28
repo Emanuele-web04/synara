@@ -7960,7 +7960,12 @@ export default function ChatView({
         </div>
       </form>
       {isEmptyChatLanding ? (
-        <div className="mt-2 flex w-full items-center justify-start gap-3 px-3">
+        <div
+          className={cn(
+            "mt-2 flex items-center justify-start gap-3 px-3",
+            COMPOSER_COLUMN_FRAME_CLASS_NAME,
+          )}
+        >
           <ProjectPicker
             align="start"
             side="top"
