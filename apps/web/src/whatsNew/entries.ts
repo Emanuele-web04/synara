@@ -22,6 +22,17 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.0.50",
+    date: "May 28",
+    features: [
+      {
+        id: "claude-opus-4-8",
+        title: "Claude Opus 4.8 is available",
+        description: "DP Code now includes Claude Opus 4.8 in the Claude model picker.",
+      },
+    ],
+  },
+  {
     version: "0.0.49",
     date: "May 23",
     features: [
