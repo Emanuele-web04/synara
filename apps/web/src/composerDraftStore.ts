@@ -880,7 +880,8 @@ function normalizeProviderModelOptions(
     claudeCandidate?.effort === "high" ||
     claudeCandidate?.effort === "xhigh" ||
     claudeCandidate?.effort === "max" ||
-    claudeCandidate?.effort === "ultrathink"
+    claudeCandidate?.effort === "ultrathink" ||
+    claudeCandidate?.effort === "ultracode"
       ? claudeCandidate.effort
       : undefined;
   const claudeFastMode =
