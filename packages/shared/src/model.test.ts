@@ -195,6 +195,19 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
       "xhigh",
       "max",
       "ultrathink",
+      "ultracode",
+    ]);
+  });
+
+  it("returns claude effort options for Opus 4.8", () => {
+    expect(values("claudeAgent", "claude-opus-4-8")).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultrathink",
+      "ultracode",
     ]);
   });
 
@@ -558,6 +571,7 @@ describe("getModelCapabilities Claude capability flags", () => {
   it("only enables adaptive reasoning for Opus 4.6 and Sonnet 4.6", () => {
     const has = (m: string | undefined) =>
       getModelCapabilities("claudeAgent", m).reasoningEffortLevels.length > 0;
+    expect(has("claude-opus-4-8")).toBe(true);
     expect(has("claude-opus-4-7")).toBe(true);
     expect(has("claude-opus-4-6")).toBe(true);
     expect(has("claude-sonnet-4-6")).toBe(true);
@@ -568,6 +582,7 @@ describe("getModelCapabilities Claude capability flags", () => {
   it("only enables max effort for Opus 4.6 and Sonnet 4.6", () => {
     const has = (m: string | undefined) =>
       getModelCapabilities("claudeAgent", m).reasoningEffortLevels.some((l) => l.value === "max");
+    expect(has("claude-opus-4-8")).toBe(true);
     expect(has("claude-opus-4-7")).toBe(true);
     expect(has("claude-opus-4-6")).toBe(true);
     expect(has("claude-sonnet-4-6")).toBe(true);
@@ -577,6 +592,7 @@ describe("getModelCapabilities Claude capability flags", () => {
 
   it("only enables Claude fast mode for Opus 4.6", () => {
     const has = (m: string | undefined) => getModelCapabilities("claudeAgent", m).supportsFastMode;
+    expect(has("claude-opus-4-8")).toBe(true);
     expect(has("claude-opus-4-7")).toBe(true);
     expect(has("claude-opus-4-6")).toBe(true);
     expect(has("opus")).toBe(true);
@@ -588,6 +604,7 @@ describe("getModelCapabilities Claude capability flags", () => {
   it("only enables ultrathink keyword handling for Opus 4.6 and Sonnet 4.6", () => {
     const has = (m: string | undefined) =>
       getModelCapabilities("claudeAgent", m).promptInjectedEffortLevels.includes("ultrathink");
+    expect(has("claude-opus-4-8")).toBe(true);
     expect(has("claude-opus-4-7")).toBe(true);
     expect(has("claude-opus-4-6")).toBe(true);
     expect(has("claude-sonnet-4-6")).toBe(true);
