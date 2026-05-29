@@ -468,21 +468,21 @@ function ProviderAvatarWithTerminal({
 
   const hasHandoff = Boolean(handoffSourceProvider);
   const containerClass = hasHandoff
-    ? "relative inline-flex h-3.5 w-5 shrink-0 items-center"
-    : "relative inline-flex size-3.5 shrink-0 items-center justify-center";
+    ? "relative inline-flex h-3 w-4.5 shrink-0 items-center"
+    : "relative inline-flex size-3 shrink-0 items-center justify-center";
 
   const avatarNode = hasHandoff ? (
     <span className={containerClass}>
-      <span className="absolute left-0 top-1/2 inline-flex size-3.5 -translate-y-1/2 items-center justify-center rounded-full bg-background shadow-xs">
-        <ProviderIcon provider={handoffSourceProvider!} className="size-2.5" />
+      <span className="absolute left-0 top-1/2 inline-flex size-3 -translate-y-1/2 items-center justify-center rounded-full bg-background shadow-xs">
+        <ProviderIcon provider={handoffSourceProvider!} className="size-2" />
       </span>
-      <span className="absolute right-0 top-1/2 z-10 inline-flex size-3.5 -translate-y-1/2 items-center justify-center rounded-full bg-background shadow-xs">
-        <ProviderIcon provider={provider} className="size-2.5" />
+      <span className="absolute right-0 top-1/2 z-10 inline-flex size-3 -translate-y-1/2 items-center justify-center rounded-full bg-background shadow-xs">
+        <ProviderIcon provider={provider} className="size-2" />
       </span>
     </span>
   ) : (
     <span className={containerClass}>
-      <ProviderIcon provider={provider} className="size-3.5" />
+      <ProviderIcon provider={provider} className="size-3" />
     </span>
   );
 
@@ -3943,7 +3943,7 @@ export default function Sidebar() {
       : "mr-1 w-[1.625rem] text-right text-[length:var(--app-font-size-ui-meta,11px)] leading-none tabular-nums text-muted-foreground/38 transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0";
 
     return (
-      <div key={thread.id} className="group/thread-row relative w-full">
+      <div key={thread.id} className="group/thread-row relative w-full opacity-85">
         <div
           role="button"
           tabIndex={0}
@@ -4158,7 +4158,11 @@ export default function Sidebar() {
       : "border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground-secondary)] hover:border-[color:var(--color-border)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]";
 
     return (
-      <SidebarMenuSubItem key={thread.id} className="group/thread-row w-full" data-thread-item>
+      <SidebarMenuSubItem
+        key={thread.id}
+        className="group/thread-row w-full opacity-85"
+        data-thread-item
+      >
         {leadingPrStatus ? (
           <span
             aria-label={leadingPrStatus.tooltip}
