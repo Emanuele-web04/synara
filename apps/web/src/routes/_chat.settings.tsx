@@ -42,7 +42,6 @@ import {
   useAppSettings,
 } from "../appSettings";
 import { APP_VERSION } from "../branding";
-import { SidebarHeaderNavigationControls } from "../components/SidebarHeaderNavigationControls";
 import { useDesktopTopBarTrafficLightGutterClassName } from "../hooks/useDesktopTopBarGutter";
 import { ProviderOptionLabel } from "../components/ProviderIcon";
 import { Button } from "../components/ui/button";
@@ -51,14 +50,14 @@ import { Input } from "../components/ui/input";
 import {
   Select,
   SelectItem,
-  SelectPopup,
   SelectTrigger,
   SelectValue,
 } from "../components/ui/select";
 import { Switch } from "../components/ui/switch";
 import { toastManager } from "../components/ui/toast";
 import { ThemePackEditor } from "../components/ThemePackEditor";
-import { SidebarHeaderTrigger, SidebarInset } from "../components/ui/sidebar";
+import { ComposerPickerSelectPopup } from "../components/chat/ComposerPickerMenuPopup";
+import { SidebarInset } from "../components/ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { isElectron } from "../env";
@@ -89,7 +88,19 @@ import {
   readBrowserNotificationPermissionState,
   requestBrowserNotificationPermission,
 } from "../notifications/taskCompletion";
+import {
+  SettingsCard,
+  SettingsRow,
+  SettingsSection,
+} from "../components/settings/SettingsPanelPrimitives";
 import { normalizeSettingsSection, SETTINGS_NAV_ITEMS } from "../settingsNavigation";
+import {
+  SETTINGS_CARD_ROW_DIVIDER_CLASS_NAME,
+  SETTINGS_EMPTY_STATE_CLASS_NAME,
+  SETTINGS_INSET_LIST_CLASS_NAME,
+  SETTINGS_PAGE_BACKGROUND_CLASS_NAME,
+  SETTINGS_SECTION_LABEL_CLASS_NAME,
+} from "../settingsPanelStyles";
 import { useStore } from "../store";
 import ReleaseHistoryDialog from "../components/ReleaseHistoryDialog";
 import { createAllThreadsSelector } from "../storeSelectors";
@@ -231,7 +242,7 @@ function SortableProviderVisibilityRow(props: {
         transition,
       }}
       className={cn(
-        "flex items-center justify-between gap-3 rounded-lg border border-border/60 bg-[var(--color-background-elevated-secondary)]/40 px-3 py-2.5",
+        "flex items-center justify-between gap-3 rounded-lg border border-[color:var(--color-border)] bg-[var(--color-background-surface)] px-3 py-2.5",
         isDragging && "z-10 opacity-80 shadow-lg",
       )}
     >
@@ -416,67 +427,6 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
 
 // ── Settings UI primitives ────────────────────────────────────────────────
 
-function SettingsSection({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <section className="space-y-2">
-      <h2 className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground px-1">
-        {title}
-      </h2>
-      {children}
-    </section>
-  );
-}
-
-function SettingsRow({
-  title,
-  description,
-  status,
-  resetAction,
-  control,
-  children,
-  onClick,
-}: {
-  title: string;
-  description: string;
-  status?: ReactNode;
-  resetAction?: ReactNode;
-  control?: ReactNode;
-  children?: ReactNode;
-  onClick?: () => void;
-}) {
-  return (
-    <div
-      className="rounded-xl border border-[color:var(--color-border-light)] bg-[var(--color-background-panel)] px-4 py-3.5 transition-colors hover:bg-[var(--sidebar-accent)]"
-      data-slot="settings-row"
-    >
-      <div
-        className={cn(
-          "flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between",
-          onClick && "cursor-pointer",
-        )}
-        onClick={onClick}
-      >
-        <div className="min-w-0 flex-1 space-y-0.5">
-          <div className="flex min-h-5 items-center gap-1.5">
-            <h3 className="text-sm font-medium text-foreground">{title}</h3>
-            <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center">
-              {resetAction}
-            </span>
-          </div>
-          <p className="text-xs text-muted-foreground">{description}</p>
-          {status ? <div className="pt-1 text-[11px] text-muted-foreground">{status}</div> : null}
-        </div>
-        {control ? (
-          <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
-            {control}
-          </div>
-        ) : null}
-      </div>
-      {children}
-    </div>
-  );
-}
-
 function SettingResetButton({ label, onClick }: { label: string; onClick: () => void }) {
   return (
     <Tooltip>
@@ -521,9 +471,7 @@ function SettingsSelectControl({
       <SelectTrigger className={triggerClassName} aria-label={ariaLabel}>
         <SelectValue>{valueContent}</SelectValue>
       </SelectTrigger>
-      <SelectPopup align="end" alignItemWithTrigger={false}>
-        {children}
-      </SelectPopup>
+      <ComposerPickerSelectPopup>{children}</ComposerPickerSelectPopup>
     </Select>
   );
 }
@@ -534,7 +482,7 @@ function isProviderSelectOption(value: string): value is ProviderKind {
 
 function ProviderDocsLinks({ docs }: { docs: InstallProviderSettings["docs"] }) {
   return (
-    <div className="rounded-lg border border-border/60 bg-[var(--color-background-elevated-secondary)]/35 px-3 py-2.5">
+    <div className={cn(SETTINGS_INSET_LIST_CLASS_NAME, "px-3 py-2.5")}>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <span className="text-xs font-medium text-foreground">CLI docs</span>
         <div className="flex flex-wrap gap-2">
@@ -544,7 +492,7 @@ function ProviderDocsLinks({ docs }: { docs: InstallProviderSettings["docs"] }) 
               href={doc.href}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border/70 px-2.5 text-xs text-muted-foreground transition-colors hover:border-border hover:bg-[var(--color-background-panel)] hover:text-foreground"
+              className="inline-flex h-7 items-center gap-1.5 rounded-md border border-[color:var(--color-border)] bg-transparent px-2.5 text-xs text-muted-foreground transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-foreground"
             >
               <span>{doc.label}</span>
               <ExternalLinkIcon className="size-3" />
@@ -1360,7 +1308,6 @@ function SettingsRouteView() {
   const renderGeneralPanel = () => (
     <div className="space-y-6">
       <SettingsSection title="Core defaults">
-        <div className="space-y-2">
           <SettingsRow
             title="Default provider"
             description="Choose the provider used for new chats."
@@ -1437,11 +1384,9 @@ function SettingsRouteView() {
               </SettingsSelectControl>
             }
           />
-        </div>
       </SettingsSection>
 
       <SettingsSection title="Sidebar organization">
-        <div className="space-y-2">
           <SettingsRow
             title="Position"
             description="Choose which side of the screen the sidebar appears on."
@@ -1555,15 +1500,15 @@ function SettingsRouteView() {
               </SettingsSelectControl>
             }
           />
-        </div>
       </SettingsSection>
     </div>
   );
 
   const renderAppearancePanel = () => (
     <div className="space-y-6">
-      <SettingsSection title="Theme and typography">
-        <div className="space-y-2">
+      <section className="space-y-2">
+        <h2 className={SETTINGS_SECTION_LABEL_CLASS_NAME}>Theme and typography</h2>
+        <SettingsCard>
           <SettingsRow
             title="Theme"
             description="Choose how DP Code looks across the app."
@@ -1593,21 +1538,23 @@ function SettingsRouteView() {
               </SettingsSelectControl>
             }
           />
+        </SettingsCard>
 
-          <div className="space-y-3 pt-1">
-            {(resolvedTheme === "dark"
-              ? (["dark", "light"] as const)
-              : (["light", "dark"] as const)
-            ).map((variant) => (
-              <ThemePackEditor
-                key={variant}
-                variant={variant}
-                isActive={resolvedTheme === variant}
-                mode={theme}
-              />
-            ))}
-          </div>
+        <div className="space-y-3">
+          {(resolvedTheme === "dark"
+            ? (["dark", "light"] as const)
+            : (["light", "dark"] as const)
+          ).map((variant) => (
+            <ThemePackEditor
+              key={variant}
+              variant={variant}
+              isActive={resolvedTheme === variant}
+              mode={theme}
+            />
+          ))}
+        </div>
 
+        <SettingsCard>
           <SettingsRow
             title="UI font"
             description="Set a custom font for the interface. Leave empty to use the active theme's UI font."
@@ -1722,11 +1669,10 @@ function SettingsRouteView() {
               }
             />
           ) : null}
-        </div>
-      </SettingsSection>
+        </SettingsCard>
+      </section>
 
       <SettingsSection title="Time and reading">
-        <div className="space-y-2">
           <SettingsRow
             title="Time format"
             description="System default follows your browser or OS clock preference."
@@ -1769,7 +1715,6 @@ function SettingsRouteView() {
               </SettingsSelectControl>
             }
           />
-        </div>
       </SettingsSection>
     </div>
   );
@@ -1777,7 +1722,6 @@ function SettingsRouteView() {
   const renderNotificationsPanel = () => (
     <div className="space-y-6">
       <SettingsSection title="Activity alerts">
-        <div className="space-y-2">
           <SettingsRow
             title="Activity toasts"
             description="Show an in-app toast when a chat or managed terminal agent finishes or needs input."
@@ -1837,7 +1781,6 @@ function SettingsRouteView() {
               </div>
             }
           />
-        </div>
       </SettingsSection>
     </div>
   );
@@ -1845,7 +1788,6 @@ function SettingsRouteView() {
   const renderBehaviorPanel = () => (
     <div className="space-y-6">
       <SettingsSection title="Runtime behavior">
-        <div className="space-y-2">
           <SettingsRow
             title="Assistant output"
             description="Show token-by-token output while a response is in progress."
@@ -1901,11 +1843,9 @@ function SettingsRouteView() {
               />
             }
           />
-        </div>
       </SettingsSection>
 
       <SettingsSection title="Safety confirmations">
-        <div className="space-y-2">
           <SettingsRow
             title="Delete confirmation"
             description="Ask before deleting a thread and its chat history."
@@ -1989,7 +1929,6 @@ function SettingsRouteView() {
               />
             }
           />
-        </div>
       </SettingsSection>
     </div>
   );
@@ -1999,17 +1938,22 @@ function SettingsRouteView() {
       <SettingsSection title="Managed worktrees">
         <div className="space-y-4">
           {serverWorktreesQuery.isLoading ? (
-            <div className="rounded-xl border border-dashed border-border/70 px-4 py-6 text-sm text-muted-foreground">
+            <div className={cn(SETTINGS_EMPTY_STATE_CLASS_NAME, "px-4 py-6 text-sm text-muted-foreground")}>
               Loading managed worktrees...
             </div>
           ) : serverWorktreesQuery.isError ? (
-            <div className="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-6 text-sm text-destructive">
+            <div
+              className={cn(
+                SETTINGS_EMPTY_STATE_CLASS_NAME,
+                "border-destructive/30 bg-destructive/5 px-4 py-6 text-sm text-destructive",
+              )}
+            >
               {serverWorktreesQuery.error instanceof Error
                 ? serverWorktreesQuery.error.message
                 : "Unable to load worktrees."}
             </div>
           ) : worktreesByWorkspaceRoot.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-border/70 px-4 py-6 text-sm text-muted-foreground">
+            <div className={cn(SETTINGS_EMPTY_STATE_CLASS_NAME, "px-4 py-6 text-sm text-muted-foreground")}>
               No app-managed worktrees found yet.
             </div>
           ) : (
@@ -2019,7 +1963,7 @@ function SettingsRouteView() {
                   {group.workspaceRoot}
                 </h3>
 
-                <div className="overflow-hidden rounded-2xl border border-border/70 bg-card/50">
+                <div className={SETTINGS_INSET_LIST_CLASS_NAME}>
                   {group.worktrees.map((worktree, index) => {
                     const deleteDisabled = removeWorktreeMutation.isPending;
                     return (
@@ -2027,7 +1971,7 @@ function SettingsRouteView() {
                         key={worktree.path}
                         className={cn(
                           "flex flex-col gap-4 px-4 py-4 sm:flex-row sm:items-start sm:justify-between",
-                          index > 0 && "border-t border-border/60",
+                          index > 0 && "border-t border-[color:var(--color-border)]",
                         )}
                       >
                         <div className="min-w-0 flex-1 space-y-2">
@@ -2126,7 +2070,12 @@ function SettingsRouteView() {
       <div className="space-y-6">
         {archivedGroups.length === 0 ? (
           <SettingsSection title="Archived threads">
-            <div className="rounded-2xl border border-dashed border-border/70 bg-card/35 px-5 py-10 text-center">
+            <div
+              className={cn(
+                SETTINGS_EMPTY_STATE_CLASS_NAME,
+                "px-5 py-10 text-center",
+              )}
+            >
               <div className="mx-auto mb-3 flex size-11 items-center justify-center rounded-full border border-border/70 bg-background/70 text-muted-foreground">
                 <ArchiveIcon className="size-5" />
               </div>
@@ -2142,13 +2091,13 @@ function SettingsRouteView() {
               key={project?.id ?? "unknown-project"}
               title={project?.name ?? "Unknown project"}
             >
-              <div className="overflow-hidden rounded-2xl border border-border/70 bg-card/50">
+              <div className={SETTINGS_INSET_LIST_CLASS_NAME}>
                 {projectThreads.map((thread, index) => (
                   <div
                     key={thread.id}
                     className={cn(
                       "flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between",
-                      index > 0 && "border-t border-border/60",
+                      index > 0 && "border-t border-[color:var(--color-border)]",
                     )}
                     onContextMenu={(event) => {
                       event.preventDefault();
@@ -2195,7 +2144,6 @@ function SettingsRouteView() {
   const renderModelsPanel = () => (
     <div className="space-y-6">
       <SettingsSection title="Generation defaults">
-        <div className="space-y-2">
           <SettingsRow
             title="Git writing model"
             description="Used for generated commit messages, PR titles, and branch names."
@@ -2242,11 +2190,9 @@ function SettingsRouteView() {
               </SettingsSelectControl>
             }
           />
-        </div>
       </SettingsSection>
 
       <SettingsSection title="Custom models">
-        <div className="space-y-2">
           <SettingsRow
             title="Saved model slugs"
             description="Add custom model slugs for supported providers."
@@ -2272,7 +2218,7 @@ function SettingsRouteView() {
               ) : null
             }
           >
-            <div className="mt-4 border-t border-border pt-4">
+            <div className={cn("mt-4 pt-4", SETTINGS_CARD_ROW_DIVIDER_CLASS_NAME)}>
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                 <Select
                   value={selectedCustomModelProvider}
@@ -2299,18 +2245,13 @@ function SettingsRouteView() {
                   >
                     <SelectValue>{selectedCustomModelProviderSettings.title}</SelectValue>
                   </SelectTrigger>
-                  <SelectPopup align="start" alignItemWithTrigger={false}>
+                  <ComposerPickerSelectPopup align="start">
                     {MODEL_PROVIDER_SETTINGS.map((providerSettings) => (
-                      <SelectItem
-                        hideIndicator
-                        className="min-h-7 text-sm"
-                        key={providerSettings.provider}
-                        value={providerSettings.provider}
-                      >
+                      <SelectItem hideIndicator key={providerSettings.provider} value={providerSettings.provider}>
                         {providerSettings.title}
                       </SelectItem>
                     ))}
-                  </SelectPopup>
+                  </ComposerPickerSelectPopup>
                 </Select>
                 <Input
                   id="custom-model-slug"
@@ -2351,12 +2292,11 @@ function SettingsRouteView() {
               ) : null}
 
               {totalCustomModels > 0 ? (
-                <div className="mt-3">
-                  <div>
+                <div className={cn("mt-3", SETTINGS_INSET_LIST_CLASS_NAME)}>
                     {visibleCustomModelRows.map((row) => (
                       <div
                         key={row.key}
-                        className="group grid grid-cols-[minmax(5rem,6rem)_minmax(0,1fr)_auto] items-center gap-3 border-t border-border/60 px-4 py-2 first:border-t-0"
+                        className="group grid grid-cols-[minmax(5rem,6rem)_minmax(0,1fr)_auto] items-center gap-3 border-t border-[color:var(--color-border)] px-4 py-2 first:border-t-0"
                       >
                         <span className="truncate text-xs text-muted-foreground">
                           {row.providerTitle}
@@ -2372,7 +2312,6 @@ function SettingsRouteView() {
                         </button>
                       </div>
                     ))}
-                  </div>
 
                   {savedCustomModelRows.length > 5 ? (
                     <button
@@ -2389,7 +2328,6 @@ function SettingsRouteView() {
               ) : null}
             </div>
           </SettingsRow>
-        </div>
       </SettingsSection>
     </div>
   );
@@ -2398,7 +2336,6 @@ function SettingsRouteView() {
     <div className="space-y-6">
       {renderProviderUpdatesSection()}
       <SettingsSection title="Provider picker">
-        <div className="space-y-2">
           <SettingsRow
             title="Visible providers"
             description="Drag providers into your preferred picker order and hide the ones you don't use. The provider you're currently using on a thread always stays visible."
@@ -2454,7 +2391,6 @@ function SettingsRouteView() {
               </SortableContext>
             </DndContext>
           </SettingsRow>
-        </div>
       </SettingsSection>
       {renderProviderInstallsSection()}
     </div>
@@ -2463,7 +2399,6 @@ function SettingsRouteView() {
   const renderProviderUpdatesSection = () => (
     <div ref={providerUpdatesRef} id="provider-updates">
       <SettingsSection title="Updates">
-        <div className="space-y-2">
           <SettingsRow
             title="Provider updates"
             description="Update installed provider tools that DP Code can safely update."
@@ -2474,7 +2409,7 @@ function SettingsRouteView() {
             }
           >
             {outdatedProviderStatuses.length > 0 ? (
-              <div className="mt-4 overflow-hidden rounded-lg border border-border/70">
+              <div className={cn("mt-4", SETTINGS_INSET_LIST_CLASS_NAME)}>
                 {outdatedProviderStatuses.map((providerStatus) => {
                   const updateAdvisory = providerStatus.versionAdvisory;
                   const updateState = providerStatus.updateState?.status;
@@ -2489,7 +2424,7 @@ function SettingsRouteView() {
                   return (
                     <div
                       key={providerStatus.provider}
-                      className="flex min-h-11 items-center gap-3 border-t border-border/70 px-3 py-2 first:border-t-0"
+                      className="flex min-h-11 items-center gap-3 border-t border-[color:var(--color-border)] px-3 py-2 first:border-t-0"
                     >
                       <div className="min-w-0 flex-1">
                         <div className="truncate text-sm font-medium text-foreground">
@@ -2532,7 +2467,6 @@ function SettingsRouteView() {
               </div>
             ) : null}
           </SettingsRow>
-        </div>
       </SettingsSection>
     </div>
   );
@@ -2540,7 +2474,6 @@ function SettingsRouteView() {
   const renderProviderInstallsSection = () => (
     <div ref={providerInstallsRef} id="provider-installs">
       <SettingsSection title="Provider tools">
-        <div className="space-y-2">
           <SettingsRow
             title="Installed CLIs"
             description="Review provider versions and update tools. Open a row only when you need binary overrides."
@@ -2587,7 +2520,7 @@ function SettingsRouteView() {
             }
           >
             <div className="mt-4">
-              <div className="overflow-hidden rounded-lg border border-border/70">
+              <div className={SETTINGS_INSET_LIST_CLASS_NAME}>
                 {INSTALL_PROVIDER_SETTINGS.map((providerSettings) => {
                   const isOpen = openInstallProviders[providerSettings.provider];
                   const isDirty =
@@ -2942,7 +2875,6 @@ function SettingsRouteView() {
               </div>
             </div>
           </SettingsRow>
-        </div>
       </SettingsSection>
     </div>
   );
@@ -2950,7 +2882,6 @@ function SettingsRouteView() {
   const renderAdvancedPanel = () => (
     <div className="space-y-6">
       <SettingsSection title="Developer tools">
-        <div className="space-y-2">
           <SettingsRow
             title="Keybindings"
             description="Open the persisted `keybindings.json` file to edit advanced bindings directly."
@@ -3013,7 +2944,12 @@ function SettingsRouteView() {
                   />
                 </button>
                 {showRecoveryTools ? (
-                  <div className="mt-3 rounded-xl border border-border/70 px-3 py-3 text-xs text-muted-foreground">
+                  <div
+                    className={cn(
+                      "mt-3 px-3 py-3 text-xs text-muted-foreground",
+                      SETTINGS_INSET_LIST_CLASS_NAME,
+                    )}
+                  >
                     Rebuilds local project indexes and refreshes project snapshots. Existing chats
                     stay in place.
                   </div>
@@ -3021,11 +2957,9 @@ function SettingsRouteView() {
               </div>
             ) : null}
           </SettingsRow>
-        </div>
       </SettingsSection>
 
       <SettingsSection title="About">
-        <div className="space-y-2">
           <SettingsRow
             title="Version"
             description="Current application version."
@@ -3042,7 +2976,6 @@ function SettingsRouteView() {
               </Button>
             }
           />
-        </div>
       </SettingsSection>
     </div>
   );
@@ -3073,59 +3006,39 @@ function SettingsRouteView() {
   };
 
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground">
+    <SidebarInset
+      className={cn(
+        "h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground",
+        SETTINGS_PAGE_BACKGROUND_CLASS_NAME,
+      )}
+    >
       <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
-        {/* Header */}
-        {isElectron ? (
+        <div className={cn("flex-1 overflow-y-auto", SETTINGS_PAGE_BACKGROUND_CLASS_NAME)}>
           <div
             className={cn(
-              "drag-region flex h-[46px] shrink-0 items-center border-b border-border/70 px-5",
+              "mx-auto w-full max-w-2xl px-6 py-8",
               desktopTopBarTrafficLightGutterClassName,
             )}
           >
-            <SidebarHeaderNavigationControls />
-            <span className="text-xs font-medium tracking-wide text-muted-foreground/70">
-              Settings
-            </span>
-            <div className="ms-auto flex items-center gap-2">
+            <div className="mb-8 flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <h1 className="text-[1.75rem] font-semibold tracking-tight text-foreground">
+                  {activeSectionItem.label}
+                </h1>
+                <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+                  {activeSectionItem.description}
+                </p>
+              </div>
               <Button
                 size="xs"
                 variant="outline"
+                className="shrink-0"
                 disabled={changedSettingLabels.length === 0}
                 onClick={() => void restoreDefaults()}
               >
                 <RotateCcwIcon className="size-3.5" />
                 Restore defaults
               </Button>
-            </div>
-          </div>
-        ) : (
-          <header className="border-b border-border/70 px-3 py-2 sm:px-5">
-            <div className="flex items-center gap-2">
-              <SidebarHeaderTrigger className="size-7 shrink-0" />
-              <span className="text-sm font-medium text-foreground">Settings</span>
-              <div className="ms-auto flex items-center gap-2">
-                <Button
-                  size="xs"
-                  variant="outline"
-                  disabled={changedSettingLabels.length === 0}
-                  onClick={() => void restoreDefaults()}
-                >
-                  <RotateCcwIcon className="size-3.5" />
-                  Restore defaults
-                </Button>
-              </div>
-            </div>
-          </header>
-        )}
-
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto">
-          <div className="mx-auto w-full max-w-2xl px-6 py-6">
-            {/* Section header */}
-            <div className="mb-6">
-              <h1 className="text-2xl font-semibold text-foreground">{activeSectionItem.label}</h1>
-              <p className="mt-1 text-sm text-muted-foreground">{activeSectionItem.description}</p>
             </div>
 
             {renderActivePanel()}

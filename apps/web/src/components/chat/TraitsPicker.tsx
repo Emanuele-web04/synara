@@ -534,7 +534,7 @@ export const TraitsPicker = memo(function TraitsPicker({
       ) : (
         <MenuTrigger render={triggerButton}>{triggerContent}</MenuTrigger>
       )}
-      <ComposerPickerMenuPopup align="start">
+      <ComposerPickerMenuPopup align="start" fixedWidth>
         <TraitsMenuContent
           provider={provider}
           threadId={threadId}

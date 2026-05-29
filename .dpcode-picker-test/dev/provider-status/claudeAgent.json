@@ -3,17 +3,17 @@
   "status": "ready",
   "available": true,
   "authStatus": "authenticated",
-  "version": "2.1.150",
+  "version": "2.1.154",
   "authType": "pro",
   "authLabel": "Claude Pro Subscription",
-  "checkedAt": "2026-05-25T12:52:39.029Z",
+  "checkedAt": "2026-05-28T18:16:09.143Z",
   "versionAdvisory": {
     "status": "current",
-    "currentVersion": "2.1.150",
-    "latestVersion": "2.1.150",
+    "currentVersion": "2.1.154",
+    "latestVersion": "2.1.154",
     "updateCommand": "claude update",
     "canUpdate": true,
-    "checkedAt": "2026-05-25T12:52:46.544Z",
+    "checkedAt": "2026-05-28T18:16:19.998Z",
     "message": null
   }
 }

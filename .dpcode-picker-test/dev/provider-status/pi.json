@@ -3,16 +3,16 @@
   "status": "ready",
   "available": true,
   "authStatus": "authenticated",
-  "version": "0.75.5",
-  "checkedAt": "2026-05-25T12:52:39.035Z",
+  "version": "0.76.0",
+  "checkedAt": "2026-05-28T18:16:09.179Z",
   "message": "Pi SDK is available with 10 authenticated models.",
   "versionAdvisory": {
     "status": "current",
-    "currentVersion": "0.75.5",
-    "latestVersion": "0.75.5",
+    "currentVersion": "0.76.0",
+    "latestVersion": "0.76.0",
     "updateCommand": "pi update",
     "canUpdate": true,
-    "checkedAt": "2026-05-25T12:52:46.554Z",
+    "checkedAt": "2026-05-28T18:16:20.026Z",
     "message": null
   }
 }

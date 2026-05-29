@@ -24,7 +24,6 @@ import {
   MenuRadioGroup,
   MenuSeparator,
   MenuSub,
-  MenuSubPopup,
   MenuSubTrigger,
   MenuTrigger,
 } from "../ui/menu";
@@ -33,7 +32,11 @@ import { cn } from "~/lib/utils";
 import { PickerPanelShell } from "./PickerPanelShell";
 import { PickerTriggerButton } from "./PickerTriggerButton";
 import { ProviderModelOptionGroupList } from "./ProviderModelOptionGroupList";
-import { ComposerPickerMenuPopup, ComposerPickerTooltipPopup } from "./ComposerPickerMenuPopup";
+import {
+  ComposerPickerMenuPopup,
+  ComposerPickerMenuSubPopup,
+  ComposerPickerTooltipPopup,
+} from "./ComposerPickerMenuPopup";
 import {
   COMPOSER_PICKER_MODEL_LIST_MAX_HEIGHT_CLASS_NAME,
   COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME,
@@ -324,7 +327,7 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
   const renderModelRadioGroup = (provider: ProviderKind) => {
     if (props.loadingModelProviders?.[provider]) {
       return (
-        <div className="w-60 space-y-2 px-2 py-2" aria-label="Loading models">
+        <div className="space-y-2 px-2 py-2" aria-label="Loading models">
           {Array.from({ length: 6 }, (_, index) => (
             <div key={index} className="flex items-center gap-2 rounded-md px-2 py-1.5">
               <Skeleton className="size-3.5 rounded-full" />
@@ -456,9 +459,12 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
               />
               {option.label}
             </MenuSubTrigger>
-            <MenuSubPopup className={COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME}>
+            <ComposerPickerMenuSubPopup
+              fixedWidth
+              className={COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME}
+            >
               {renderModelRadioGroup(option.value)}
-            </MenuSubPopup>
+            </ComposerPickerMenuSubPopup>
           </MenuSub>
         );
       })}
@@ -623,7 +629,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(
           <span className="sr-only">{selectedModelLabel}</span>
         </MenuTrigger>
       )}
-      <ComposerPickerMenuPopup align="start">
+      <ComposerPickerMenuPopup align="start" fixedWidth={props.lockedProvider !== null}>
         <ProviderModelMenuItems
           provider={props.provider}
           model={props.model}

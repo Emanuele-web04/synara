@@ -41,7 +41,7 @@ export function providerIconToneClassName(
     return "text-muted-foreground/70";
   }
   if (provider === "codex") {
-    return tone === "header" ? "text-muted-foreground/75" : "text-muted-foreground/60";
+    return tone === "header" ? "text-muted-foreground/85" : "text-foreground";
   }
   return "text-foreground";
 }

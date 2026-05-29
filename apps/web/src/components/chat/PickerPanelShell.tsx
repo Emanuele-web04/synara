@@ -8,6 +8,7 @@ import { cn } from "~/lib/utils";
 import { Input } from "../ui/input";
 import {
   COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME,
+  COMPOSER_PICKER_RADIUS_CLASS_NAME,
   COMPOSER_PICKER_SEARCH_HEADER_CLASS_NAME,
   COMPOSER_PICKER_SEARCH_INPUT_CLASS_NAME,
 } from "./composerPickerStyles";
@@ -68,7 +69,7 @@ export function PickerPanelShell(props: {
         "flex min-h-0 flex-col",
         widthClassName,
         listMaxHeightClassName,
-        bleedParentPadding ? "-m-1 overflow-clip rounded-xl" : null,
+        bleedParentPadding ? cn("-m-1 overflow-clip", COMPOSER_PICKER_RADIUS_CLASS_NAME) : null,
       )}
     >
       {onQueryChange ? (

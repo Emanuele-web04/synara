@@ -198,7 +198,7 @@
 :root {
   color-scheme: light;
   --radius: 0.75rem;
-  --radius-user-message: 0.85rem;
+  --radius-user-message: 0.8rem;
   --font-ui-family: var(
     --app-font-ui-override,
     var(
@@ -364,6 +364,7 @@ input {
 /* Scrollbar styling */
 ::-webkit-scrollbar {
   width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
@@ -549,7 +550,7 @@ label:has(> select#reasoning-effort) select {
   max-width: 100%;
   overflow-x: auto;
   border-radius: 1rem;
-  background: var(--muted);
+  background: var(--app-chat-code-surface);
   padding: 0.5rem 0.6rem;
   font-family: var(--font-chat-code-family);
 }
@@ -609,7 +610,7 @@ label:has(> select#reasoning-effort) select {
 }
 
 .chat-markdown .chat-markdown-shiki .shiki {
-  background: color-mix(in srgb, var(--muted) 78%, var(--background)) !important;
+  background: var(--app-chat-code-surface) !important;
   font-family: var(--font-chat-code-family) !important;
 }
 
@@ -875,10 +876,10 @@ diffs-container {
   background: color-mix(in srgb, var(--card) 92%, var(--background));
 }
 
-/* Composer surface follows the theme Background setting in light mode; dark Electron
-   composer uses the opaque control/dropdown token derived from the active chrome theme. */
+/* Composer surface follows Codex's renderer token path; dark Electron composer uses
+   the opaque control/dropdown token derived from the active chrome theme. */
 :root {
-  --composer-surface: var(--color-background-surface);
+  --composer-surface: color-mix(in srgb, var(--color-background-surface-under) 97%, white 3%);
   --runtime-full-access-accent: #e25505;
 }
 
@@ -901,9 +902,123 @@ diffs-container {
   -webkit-backdrop-filter: var(--app-composer-picker-backdrop-filter, blur(32px));
 }
 
-.composer-picker-menu {
-  width: 15rem;
-  min-width: 15rem;
+/* Density tokens per size modifier (--normal / --small). Width is opt-in below. */
+.composer-picker-menu--normal {
+  --picker-menu-body-p: 0.25rem;
+  --picker-option-min-h: 2rem;
+  --picker-option-px: 0.5rem;
+  --picker-option-py: 0.25rem;
+  --picker-option-gap: 0.5rem;
+  --picker-option-icon-size: 1.125rem;
+  --picker-section-py: 0.375rem;
+  --picker-separator-my: 0.25rem;
+  --picker-separator-mx: 0.5rem;
+  --picker-sub-chevron-ms: auto;
+  --picker-sub-chevron-size: 1rem;
+  --picker-sub-chevron-opacity: 0.8;
+}
+
+.composer-picker-menu--small {
+  --picker-menu-body-p: 0.1875rem;
+  --picker-option-min-h: 1.875rem;
+  --picker-option-px: 0.5rem;
+  --picker-option-py: 0.1875rem;
+  --picker-option-gap: 0.4375rem;
+  --picker-option-icon-size: 1.0625rem;
+  --picker-section-py: 0.3125rem;
+  --picker-separator-my: 0.1875rem;
+  --picker-separator-mx: 0.4375rem;
+  --picker-sub-chevron-ms: auto;
+  --picker-sub-chevron-size: 0.9375rem;
+  --picker-sub-chevron-opacity: 0.8;
+}
+
+/* Fixed width — only the composer model/effort/provider pickers opt in. */
+.composer-picker-menu-fixed.composer-picker-menu--normal {
+  width: 13rem;
+  min-width: 13rem;
+  max-width: min(13rem, 92vw);
+}
+
+.composer-picker-menu-fixed.composer-picker-menu--small {
+  width: 10rem;
+  min-width: 10rem;
+  max-width: min(10rem, 92vw);
+}
+
+/* Size-aware option rows inside composer picker shells. */
+.composer-picker-menu--small [data-slot="menu-item"],
+.composer-picker-menu--small [data-slot="menu-radio-item"],
+.composer-picker-menu--small [data-slot="menu-checkbox-item"],
+.composer-picker-menu--small [data-slot="menu-sub-trigger"],
+.composer-picker-menu--small [data-slot="select-item"],
+.composer-picker-menu-wide--small [data-slot="menu-item"],
+.composer-picker-menu-wide--small [data-slot="menu-radio-item"],
+.composer-picker-menu-wide--small [data-slot="menu-checkbox-item"],
+.composer-picker-menu-wide--small [data-slot="menu-sub-trigger"],
+.composer-picker-menu-wide--small [data-slot="select-item"],
+.composer-picker-menu--normal [data-slot="menu-item"],
+.composer-picker-menu--normal [data-slot="menu-radio-item"],
+.composer-picker-menu--normal [data-slot="menu-checkbox-item"],
+.composer-picker-menu--normal [data-slot="menu-sub-trigger"],
+.composer-picker-menu--normal [data-slot="select-item"],
+.composer-picker-menu-wide--normal [data-slot="menu-item"],
+.composer-picker-menu-wide--normal [data-slot="menu-radio-item"],
+.composer-picker-menu-wide--normal [data-slot="menu-checkbox-item"],
+.composer-picker-menu-wide--normal [data-slot="menu-sub-trigger"],
+.composer-picker-menu-wide--normal [data-slot="select-item"] {
+  min-height: var(--picker-option-min-h);
+  padding-inline: var(--picker-option-px);
+  padding-block: var(--picker-option-py);
+  gap: var(--picker-option-gap);
+}
+
+.composer-picker-menu--small [data-slot="menu-item"] > svg:not([class*="size-"]),
+.composer-picker-menu--small [data-slot="menu-radio-item"] > svg:not([class*="size-"]),
+.composer-picker-menu--small [data-slot="menu-sub-trigger"] > svg:not([class*="size-"]):first-of-type,
+.composer-picker-menu-wide--small [data-slot="menu-item"] > svg:not([class*="size-"]),
+.composer-picker-menu-wide--small [data-slot="menu-radio-item"] > svg:not([class*="size-"]),
+.composer-picker-menu-wide--small [data-slot="menu-sub-trigger"] > svg:not([class*="size-"]):first-of-type,
+.composer-picker-menu--normal [data-slot="menu-item"] > svg:not([class*="size-"]),
+.composer-picker-menu--normal [data-slot="menu-radio-item"] > svg:not([class*="size-"]),
+.composer-picker-menu--normal [data-slot="menu-sub-trigger"] > svg:not([class*="size-"]):first-of-type,
+.composer-picker-menu-wide--normal [data-slot="menu-item"] > svg:not([class*="size-"]),
+.composer-picker-menu-wide--normal [data-slot="menu-radio-item"] > svg:not([class*="size-"]),
+.composer-picker-menu-wide--normal [data-slot="menu-sub-trigger"] > svg:not([class*="size-"]):first-of-type {
+  width: var(--picker-option-icon-size);
+  height: var(--picker-option-icon-size);
+}
+
+.composer-picker-menu--small [data-slot="menu-sub-trigger"] > svg:last-of-type,
+.composer-picker-menu-wide--small [data-slot="menu-sub-trigger"] > svg:last-of-type,
+.composer-picker-menu--normal [data-slot="menu-sub-trigger"] > svg:last-of-type,
+.composer-picker-menu-wide--normal [data-slot="menu-sub-trigger"] > svg:last-of-type {
+  margin-inline-start: var(--picker-sub-chevron-ms);
+  width: var(--picker-sub-chevron-size);
+  height: var(--picker-sub-chevron-size);
+  opacity: var(--picker-sub-chevron-opacity);
+}
+
+.composer-picker-menu--small [data-slot="menu-label"],
+.composer-picker-menu-wide--small [data-slot="menu-label"],
+.composer-picker-menu--normal [data-slot="menu-label"],
+.composer-picker-menu-wide--normal [data-slot="menu-label"] {
+  padding-block: var(--picker-section-py);
+}
+
+.composer-picker-menu--small [data-slot="menu-separator"],
+.composer-picker-menu-wide--small [data-slot="menu-separator"],
+.composer-picker-menu--normal [data-slot="menu-separator"],
+.composer-picker-menu-wide--normal [data-slot="menu-separator"] {
+  margin-block: var(--picker-separator-my);
+  margin-inline: var(--picker-separator-mx);
+}
+
+.composer-picker-menu--small [data-slot="menu-popup-body"],
+.composer-picker-menu-wide--small [data-slot="menu-popup-body"],
+.composer-picker-menu--normal [data-slot="menu-popup-body"],
+.composer-picker-menu-wide--normal [data-slot="menu-popup-body"] {
+  padding: var(--picker-menu-body-p);
 }
 
 /* Thin scrollbar for long model-provider lists inside picker submenus. */

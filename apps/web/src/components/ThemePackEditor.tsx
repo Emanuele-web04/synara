@@ -26,6 +26,10 @@ import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { type ChromeTheme, type ThemeMode, type ThemeVariant, useTheme } from "../hooks/useTheme";
 import { cn } from "../lib/utils";
 import {
+  SETTINGS_CARD_CLASS_NAME,
+  SETTINGS_CARD_ROW_CLASS_NAME,
+} from "../settingsPanelStyles";
+import {
   CODE_THEME_OPTIONS,
   DEFAULT_THEME_STATE,
   getAvailableCodeThemes,
@@ -105,7 +109,7 @@ export function ThemePackEditor({
   };
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-[color:var(--color-border)] bg-[var(--color-background-panel)] shadow-[0_1px_0_rgba(255,255,255,0.03)_inset]">
+    <div className={cn(SETTINGS_CARD_CLASS_NAME, "overflow-hidden")}>
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:py-3.5">
         <div className="flex items-center gap-2">
@@ -160,11 +164,11 @@ export function ThemePackEditor({
           </Select>
         </div>
       </div>
-      <div className="px-4 pb-3 text-[11px] text-[var(--color-text-foreground-secondary)] sm:px-4">
+      <div className="border-b border-[color:var(--color-border)] px-4 pb-3 text-[11px] text-[var(--color-text-foreground-secondary)]">
         {contextLabel}
       </div>
 
-      <div className="border-t border-border/40">
+      <div className="divide-y divide-[color:var(--color-border)]">
         <ThemeRow label="Accent">
           <ColorPill
             color={theme.accent}
@@ -262,7 +266,12 @@ export function ThemePackEditor({
 
 function ThemeRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex min-h-12 items-center justify-between gap-3 border-t border-border/30 px-4 py-2 first:border-t-0">
+    <div
+      className={cn(
+        SETTINGS_CARD_ROW_CLASS_NAME,
+        "flex min-h-12 items-center justify-between gap-3",
+      )}
+    >
       <span className="text-sm text-foreground/90">{label}</span>
       <div className="flex shrink-0 items-center gap-2">{children}</div>
     </div>

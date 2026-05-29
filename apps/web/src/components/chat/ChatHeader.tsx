@@ -24,7 +24,8 @@ import { AppsIcon, ArrowRightIcon, GlobeIcon, HandoffIcon, PlusIcon, TerminalIco
 import { Button } from "../ui/button";
 import { IconButton } from "../ui/icon-button";
 import { Badge } from "../ui/badge";
-import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
+import { Menu, MenuItem, MenuSeparator, MenuTrigger } from "../ui/menu";
+import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { SidebarHeaderNavigationControls } from "../SidebarHeaderNavigationControls";
 import ProjectScriptsControl, { type NewProjectScriptInput } from "../ProjectScriptsControl";
@@ -337,14 +338,14 @@ export const ChatHeader = memo(function ChatHeader({
               />
               <TooltipPopup side="bottom">{handoffActionLabel}</TooltipPopup>
             </Tooltip>
-            <MenuPopup align="end" side="bottom" className="w-48">
+            <ComposerPickerMenuPopup align="end" side="bottom" className="w-48 min-w-48">
               {handoffActionTargetProviders.map((provider) => (
                 <MenuItem key={provider} onClick={() => onCreateHandoff(provider)}>
                   {renderProviderIcon(provider, "size-3.5 shrink-0")}
                   <span>Handoff to {PROVIDER_DISPLAY_NAMES[provider]}</span>
                 </MenuItem>
               ))}
-            </MenuPopup>
+            </ComposerPickerMenuPopup>
           </Menu>
         ) : null}
         {/* Keep one shared project-actions controller mounted so both inline and
@@ -403,11 +404,7 @@ export const ChatHeader = memo(function ChatHeader({
             >
               <AppsIcon className="size-3.5" />
             </MenuTrigger>
-            <MenuPopup
-              align="end"
-              side="bottom"
-              className="w-50 rounded-lg border-[color:var(--color-border)] bg-[var(--composer-surface)] shadow-lg"
-            >
+            <ComposerPickerMenuPopup align="end" side="bottom" className="w-50 min-w-50">
               {activeProjectName ? (
                 <MenuItem
                   onClick={() => {
@@ -474,7 +471,7 @@ export const ChatHeader = memo(function ChatHeader({
                   </MenuItem>
                 </>
               ) : null}
-            </MenuPopup>
+            </ComposerPickerMenuPopup>
           </Menu>
         ) : null}
 

@@ -6,7 +6,9 @@ import type * as React from "react";
 
 import { cn } from "~/lib/utils";
 import {
-  COMPOSER_PICKER_MENU_BACKDROP_CLASS_NAME,
+  COMPOSER_PICKER_MENU_OPTION_CLASS_NAME,
+  COMPOSER_PICKER_MENU_POPUP_BACKDROP_LAYER_CLASS_NAME,
+  COMPOSER_PICKER_MENU_POPUP_BODY_CLASS_NAME,
   COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME,
 } from "../chat/composerPickerStyles";
 
@@ -28,6 +30,7 @@ function MenuPopup({
   children,
   className,
   surface = "default",
+  pickerSize,
   sideOffset = 4,
   align = "center",
   alignOffset,
@@ -41,11 +44,14 @@ function MenuPopup({
   side?: MenuPrimitive.Positioner.Props["side"];
   anchor?: MenuPrimitive.Positioner.Props["anchor"];
   surface?: "default" | "composer";
+  pickerSize?: "small" | "normal";
 }) {
   const popupSurfaceClassName =
     surface === "composer"
       ? COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME
       : "rounded-xl border border-[color:var(--color-border-light)] bg-[var(--composer-surface)] shadow-xl";
+
+  const isComposerSurface = surface === "composer";
 
   return (
     <MenuPrimitive.Portal>
@@ -53,14 +59,16 @@ function MenuPopup({
         align={align}
         alignOffset={alignOffset}
         anchor={anchor}
-        className={cn("z-50 min-w-32", className)}
+        className={cn("z-50 min-w-32", isComposerSurface ? undefined : className)}
         data-slot="menu-positioner"
         side={side}
         sideOffset={sideOffset}
       >
         <MenuPrimitive.Popup
           className={cn(
-            "relative flex w-full min-w-full origin-(--transform-origin) text-[var(--color-text-foreground)] outline-none focus:outline-none",
+            "relative flex origin-(--transform-origin) text-[var(--color-text-foreground)] outline-none focus:outline-none",
+            isComposerSurface ? "min-w-0 max-w-[92vw]" : "w-full min-w-full",
+            isComposerSurface ? className : null,
             popupSurfaceClassName,
           )}
           data-slot="menu-popup"
@@ -70,12 +78,16 @@ function MenuPopup({
             <>
               <div
                 aria-hidden="true"
-                className={cn(
-                  COMPOSER_PICKER_MENU_BACKDROP_CLASS_NAME,
-                  "pointer-events-none absolute inset-0 rounded-[inherit]",
-                )}
+                className={COMPOSER_PICKER_MENU_POPUP_BACKDROP_LAYER_CLASS_NAME}
               />
-              <div className="relative z-1 max-h-(--available-height) w-full overflow-y-auto p-1">
+              <div
+                className={cn(
+                  COMPOSER_PICKER_MENU_POPUP_BODY_CLASS_NAME,
+                  "max-h-(--available-height)",
+                )}
+                data-picker-size={pickerSize}
+                data-slot="menu-popup-body"
+              >
                 {children}
               </div>
             </>
@@ -104,7 +116,8 @@ function MenuItem({
   return (
     <MenuPrimitive.Item
       className={cn(
-        "[&>svg]:-mx-0.5 flex min-h-8 cursor-default select-none items-center gap-2 rounded-sm px-2 py-1 text-[length:var(--app-font-size-ui,12px)] text-foreground outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-inset:ps-8 data-[variant=destructive]:text-destructive-foreground data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 sm:min-h-7 [&>svg:not([class*='opacity-'])]:opacity-80 [&>svg:not([class*='size-'])]:size-4.5 sm:[&>svg:not([class*='size-'])]:size-4 [&>svg]:pointer-events-none [&>svg]:shrink-0",
+        COMPOSER_PICKER_MENU_OPTION_CLASS_NAME,
+        "data-inset:ps-8 data-[variant=destructive]:text-destructive-foreground",
         className,
       )}
       data-inset={inset}
@@ -128,7 +141,10 @@ function MenuCheckboxItem({
     <MenuPrimitive.CheckboxItem
       checked={checked}
       className={cn(
-        "grid min-h-8 in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)] cursor-default items-center gap-2 rounded-sm py-1 ps-2 text-[length:var(--app-font-size-ui,12px)] text-foreground outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 sm:min-h-7 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
+        cn(
+          COMPOSER_PICKER_MENU_OPTION_CLASS_NAME,
+          "grid in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)] py-1 ps-2",
+        ),
         variant === "switch" ? "grid-cols-[1fr_auto] gap-4 pe-1.5" : "grid-cols-[1fr_auto] gap-3 px-2.5",
         className,
       )}
@@ -150,6 +166,7 @@ function MenuCheckboxItem({
           <span className="col-start-1 min-w-0">{children}</span>
           <MenuPrimitive.CheckboxItemIndicator className="col-start-2 justify-self-end">
             <svg
+              className="size-4"
               fill="none"
               height="24"
               stroke="currentColor"
@@ -177,7 +194,10 @@ function MenuRadioItem({ className, children, ...props }: MenuPrimitive.RadioIte
   return (
     <MenuPrimitive.RadioItem
       className={cn(
-        "grid min-h-8 in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)] cursor-default grid-cols-[1fr_auto] items-center gap-3 rounded-sm px-2.5 py-1 text-[length:var(--app-font-size-ui,12px)] text-foreground outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 sm:min-h-7 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
+        cn(
+          COMPOSER_PICKER_MENU_OPTION_CLASS_NAME,
+          "grid grid-cols-[1fr_auto] gap-3 px-2.5 in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)]",
+        ),
         className,
       )}
       data-slot="menu-radio-item"
@@ -186,6 +206,7 @@ function MenuRadioItem({ className, children, ...props }: MenuPrimitive.RadioIte
       <span className="col-start-1 min-w-0">{children}</span>
       <MenuPrimitive.RadioItemIndicator className="col-start-2 justify-self-end">
         <svg
+          className="size-4"
           fill="none"
           height="24"
           stroke="currentColor"
@@ -261,7 +282,10 @@ function MenuSubTrigger({
   return (
     <MenuPrimitive.SubmenuTrigger
       className={cn(
-        "flex min-h-8 items-center gap-2 rounded-sm px-2 py-1 text-[length:var(--app-font-size-ui,12px)] text-foreground outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-popup-open:bg-[var(--color-background-button-secondary-hover)] data-inset:ps-8 data-highlighted:text-[var(--color-text-foreground)] data-popup-open:text-[var(--color-text-foreground)] data-disabled:opacity-64 sm:min-h-7 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none",
+        cn(
+          COMPOSER_PICKER_MENU_OPTION_CLASS_NAME,
+          "data-popup-open:bg-[var(--color-background-button-secondary-hover)] data-popup-open:text-[var(--color-text-foreground)] data-inset:ps-8",
+        ),
         className,
       )}
       data-inset={inset}
@@ -269,7 +293,7 @@ function MenuSubTrigger({
       {...props}
     >
       {children}
-      <ChevronRightIcon className="-me-0.5 ms-auto opacity-80" />
+      <ChevronRightIcon className="-me-0.5 shrink-0" />
     </MenuPrimitive.SubmenuTrigger>
   );
 }
@@ -277,6 +301,7 @@ function MenuSubTrigger({
 function MenuSubPopup({
   className,
   surface = "default",
+  pickerSize,
   sideOffset = 0,
   alignOffset,
   align = "start",
@@ -286,6 +311,7 @@ function MenuSubPopup({
   sideOffset?: MenuPrimitive.Positioner.Props["sideOffset"];
   alignOffset?: MenuPrimitive.Positioner.Props["alignOffset"];
   surface?: "default" | "composer";
+  pickerSize?: "small" | "normal";
 }) {
   const defaultAlignOffset = align !== "center" ? -5 : undefined;
 
@@ -295,6 +321,7 @@ function MenuSubPopup({
       alignOffset={alignOffset ?? defaultAlignOffset}
       className={className}
       data-slot="menu-sub-content"
+      pickerSize={pickerSize}
       side="inline-end"
       sideOffset={sideOffset}
       surface={surface}

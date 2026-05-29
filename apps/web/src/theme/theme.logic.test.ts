@@ -321,7 +321,6 @@ describe("buildThemeCssVariables", () => {
     expect(tokens.derived.buttonSecondaryBackground).toBe("rgba(227, 228, 230, 0.039)");
     expect(tokens.derived.iconAccent).toBe("rgb(143, 150, 219)");
     expect(tokens.derived.textButtonPrimary).toBe("#e3e4e6");
-    expect(tokens.derived.userMessageBackground).toBe("#2b2b2d");
     expect(tokens.aliases["--color-token-side-bar-background"]).toBe("#0d0d0f");
     expect(tokens.aliases["--color-token-list-hover-background"]).toBe(
       tokens.derived.buttonSecondaryBackgroundHover,
@@ -373,32 +372,23 @@ describe("buildThemeCssVariables", () => {
     expect(tokens.derived.textButtonPrimary).not.toBe(tokens.derived.buttonPrimaryBackground);
   });
 
-  it("matches Codex's user message bubble blend instead of tinting with theme ink", () => {
-    const tokens = buildResolvedThemeTokens(
-      {
-        codeThemeId: "custom-light",
-        theme: {
-          ...DEFAULT_THEME_STATE.chromeThemes.light,
-          ink: "#2d2d2b",
-          surface: "#f8f8f6",
-        },
+  it("shares the user message bubble background with the chat code-block surface", () => {
+    const pack = {
+      codeThemeId: "custom-light",
+      theme: {
+        ...DEFAULT_THEME_STATE.chromeThemes.light,
+        ink: "#2d2d2b",
+        surface: "#f8f8f6",
       },
-      "light",
-    );
-    const cssVariables = buildThemeCssVariables(
-      {
-        codeThemeId: "custom-light",
-        theme: {
-          ...DEFAULT_THEME_STATE.chromeThemes.light,
-          ink: "#2d2d2b",
-          surface: "#f8f8f6",
-        },
-      },
-      "light",
-    );
+    };
+    const tokens = buildResolvedThemeTokens(pack, "light");
+    const cssVariables = buildThemeCssVariables(pack, "light");
 
-    expect(tokens.derived.userMessageBackground).toBe("#eeeeec");
-    expect(tokens.derived.userMessageBackground).not.toBe(tokens.derived.buttonSecondaryBackground);
-    expect(cssVariables.variables["--app-user-message-background"]).toBe("#eeeeec");
+    expect(cssVariables.variables["--app-user-message-background"]).toBe(
+      tokens.derived.buttonSecondaryBackground,
+    );
+    expect(cssVariables.variables["--app-chat-code-surface"]).toBe(
+      cssVariables.variables["--app-user-message-background"],
+    );
   });
 });

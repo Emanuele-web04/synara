@@ -19,6 +19,7 @@ import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { MenuGroup, MenuGroupLabel, MenuRadioItem } from "../ui/menu";
 import {
   COMPOSER_PICKER_MODEL_GROUP_HEADER_CLASS_NAME,
+  COMPOSER_PICKER_RADIUS_CLASS_NAME,
   COMPOSER_PICKER_SECTION_LABEL_CLASS_NAME,
 } from "./composerPickerStyles";
 
@@ -68,7 +69,10 @@ function ProviderModelRadioItem(
                 : `Add ${modelOption.name} to favourites`
             }
             className={cn(
-              "-me-2 ms-auto inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground/55 transition-colors hover:bg-[color-mix(in_srgb,var(--foreground)_6%,transparent)] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/60",
+              cn(
+                "-me-2 ms-auto inline-flex size-6 shrink-0 items-center justify-center text-muted-foreground/55 transition-colors hover:bg-[color-mix(in_srgb,var(--foreground)_6%,transparent)] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/60",
+                COMPOSER_PICKER_RADIUS_CLASS_NAME,
+              ),
               isFavorite && "text-amber-400 hover:text-amber-300",
             )}
             onClick={(event) => {

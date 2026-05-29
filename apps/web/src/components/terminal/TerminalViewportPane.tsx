@@ -86,7 +86,7 @@ function PaneActionButton(props: {
   return (
     <IconButton
       className={cn(
-        "size-7 rounded-none border-transparent bg-background text-foreground/80 shadow-none before:rounded-none hover:bg-[var(--sidebar-accent)] hover:text-foreground sm:size-7",
+        "size-7 rounded-none border-transparent bg-background text-foreground/80 shadow-none hover:bg-[var(--sidebar-accent)] hover:text-foreground sm:size-7",
         props.className,
       )}
       onClick={(event) => {

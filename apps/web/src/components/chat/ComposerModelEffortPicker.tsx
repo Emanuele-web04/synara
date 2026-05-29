@@ -242,7 +242,7 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
       ) : (
         <MenuTrigger render={triggerButton}>{triggerContent}</MenuTrigger>
       )}
-      <ComposerPickerMenuPopup align="end" side="top">
+      <ComposerPickerMenuPopup align="end" side="top" fixedWidth>
         {hasTraitsTopSection ? (
           <TraitsMenuContent
             provider={props.provider}
@@ -269,7 +269,10 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
             />
             <span className="truncate">{modelLabel}</span>
           </MenuSubTrigger>
-          <ComposerPickerMenuSubPopup className={COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME}>
+          <ComposerPickerMenuSubPopup
+            fixedWidth
+            className={COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME}
+          >
             <ProviderModelMenuItems
               provider={props.provider}
               model={props.model}
@@ -305,7 +308,7 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
                 ) : null}
               </span>
             </MenuSubTrigger>
-            <ComposerPickerMenuSubPopup>
+            <ComposerPickerMenuSubPopup fixedWidth>
               <MenuRadioGroup
                 value={fastModeEnabled ? "on" : "off"}
                 onValueChange={handleFastModeChange}

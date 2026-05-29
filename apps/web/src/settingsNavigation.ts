@@ -3,19 +3,6 @@
 // Layer: Route/UI support
 // Exports: section ids, nav items, and search normalization helper
 
-import {
-  AdjustmentsIcon,
-  ArchiveIcon,
-  BellIcon,
-  BrainIcon,
-  type LucideIcon,
-  PaletteIcon,
-  PlugIcon,
-  SettingsIcon,
-  WrenchIcon,
-  WorktreeIcon,
-} from "./lib/icons";
-
 export const SETTINGS_SECTION_IDS = [
   "general",
   "appearance",
@@ -36,7 +23,8 @@ export type SettingsNavItem = {
   group: SettingsNavGroupId;
   label: string;
   description: string;
-  icon: LucideIcon;
+  /** Basename of a SVG under `/central-icons-reversed`. */
+  icon: string;
   eyebrow: string;
 };
 
@@ -54,7 +42,7 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     group: "app",
     label: "General",
     description: "Default provider, thread mode, and sidebar organization.",
-    icon: SettingsIcon,
+    icon: "settings-gear-1",
     eyebrow: "Workflow defaults",
   },
   {
@@ -62,7 +50,7 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     group: "app",
     label: "Appearance",
     description: "Theme, typography, and timestamp formatting.",
-    icon: PaletteIcon,
+    icon: "color-palette",
     eyebrow: "Visual language",
   },
   {
@@ -70,7 +58,7 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     group: "app",
     label: "Notifications",
     description: "In-app toasts and desktop alerts.",
-    icon: BellIcon,
+    icon: "bell",
     eyebrow: "Alerts",
   },
   {
@@ -78,7 +66,7 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     group: "app",
     label: "Behavior",
     description: "Streaming, diff handling, and destructive confirmations.",
-    icon: AdjustmentsIcon,
+    icon: "settings-slider-hor",
     eyebrow: "Interaction rules",
   },
   {
@@ -86,7 +74,7 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     group: "app",
     label: "Worktrees",
     description: "Review and clean up the worktrees created by DP Code.",
-    icon: WorktreeIcon,
+    icon: "branch-simple",
     eyebrow: "Workspace management",
   },
   {
@@ -94,7 +82,7 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     group: "app",
     label: "Archived",
     description: "View and restore archived threads.",
-    icon: ArchiveIcon,
+    icon: "archive",
     eyebrow: "Thread management",
   },
   {
@@ -102,7 +90,7 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     group: "dpcode",
     label: "Models",
     description: "Git writing defaults and custom model slugs.",
-    icon: BrainIcon,
+    icon: "brain",
     eyebrow: "AI configuration",
   },
   {
@@ -110,7 +98,7 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     group: "dpcode",
     label: "Providers",
     description: "Choose visible providers, review CLI installs, and update provider tools.",
-    icon: PlugIcon,
+    icon: "plugin-1",
     eyebrow: "Picker visibility",
   },
   {
@@ -118,7 +106,7 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     group: "dpcode",
     label: "Advanced",
     description: "Keybindings, recovery, and version info.",
-    icon: WrenchIcon,
+    icon: "toolbox",
     eyebrow: "System tools",
   },
 ] as const;

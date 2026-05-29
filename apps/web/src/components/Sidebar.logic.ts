@@ -199,13 +199,29 @@ export function pruneExpandedProjectThreadListsForCollapsedProjects<
   return changed ? nextExpandedProjectThreadListCwds : expandedProjectThreadListCwds;
 }
 
+/**
+ * Trailing padding that protects the title from the absolutely-positioned
+ * meta-chip + timestamp / hover-action cluster. Sized to the actual number of
+ * meta chips so rows without fork/worktree/handoff badges let the title use the
+ * freed width instead of truncating against permanently-reserved empty space.
+ *
+ * Literal class strings are required so Tailwind's JIT scanner emits them.
+ */
+export function resolveThreadRowTrailingReserveClass(metaChipCount: number): string {
+  if (metaChipCount <= 0) return "pr-[2.75rem]";
+  if (metaChipCount === 1) return "pr-[3.75rem]";
+  if (metaChipCount === 2) return "pr-[4.25rem]";
+  return "pr-[4.75rem]";
+}
+
 export function resolveThreadRowClassName(input: {
   isActive: boolean;
   isSelected: boolean;
 }): string {
-  // Reserve room for the absolute fork/worktree/timestamp cluster so long titles truncate cleanly.
+  // Trailing reserve for the absolute cluster is applied separately by callers
+  // via resolveThreadRowTrailingReserveClass so it can flex with the chip count.
   const baseClassName =
-    "h-7.5 w-full translate-x-0 cursor-pointer justify-start rounded-sm pr-[4.25rem] pl-8 text-left text-[13px] select-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring";
+    "h-7.5 w-full translate-x-0 cursor-pointer justify-start rounded-sm pl-8 text-left text-[13px] select-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring";
 
   if (input.isSelected && input.isActive) {
     return cn(

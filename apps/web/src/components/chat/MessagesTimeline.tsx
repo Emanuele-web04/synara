@@ -452,7 +452,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     key={`work-row:${workEntry.id}`}
                     workEntry={workEntry}
                     chatMetaFontSizePx={appTypographyScale.chatMetaPx}
-                    textFontSizePx={appTypographyScale.uiSmPx}
+                    textFontSizePx={normalizedChatFontSizePx}
                     density={prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"}
                     {...(onOpenThread ? { onOpenThread } : {})}
                   />
@@ -781,7 +781,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                             key={`collapsed-work:${row.message.id}:${workEntry.id}`}
                             workEntry={workEntry}
                             chatMetaFontSizePx={appTypographyScale.chatMetaPx}
-                            textFontSizePx={appTypographyScale.uiSmPx}
+                            textFontSizePx={normalizedChatFontSizePx}
                             density={
                               prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"
                             }
@@ -1020,7 +1020,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       {row.kind === "working" && (
         <div
           className="pt-0.5 text-muted-foreground/70 font-system-ui"
-          style={{ fontSize: `${appTypographyScale.chatMetaPx}px` }}
+          style={{ fontSize: `${appTypographyScale.chatPx}px` }}
         >
           {row.createdAt ? (
             <>

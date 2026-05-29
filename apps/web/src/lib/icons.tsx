@@ -3,7 +3,8 @@ import { PiGitCommit, PiSquareSplitHorizontal, PiSquareSplitVertical } from "rea
 import { RiApps2Line } from "react-icons/ri";
 import { SiGithub } from "react-icons/si";
 import { VscMcp } from "react-icons/vsc";
-import { LuSplit } from "react-icons/lu";
+import { LuMessageSquareDashed, LuSplit } from "react-icons/lu";
+import { cn } from "./utils";
 import { CentralIcon } from "./central-icons";
 import {
   IconAdjustments,
@@ -205,6 +206,14 @@ export const SquareSplitHorizontal: LucideIcon = (props) => (
 );
 export const SquareSplitVertical: LucideIcon = (props) => (
   <PiSquareSplitVertical className={props.className} style={props.style} />
+);
+// react-icons/lu glyphs occupy more of the 24×24 viewBox than Tabler/Central icons at
+// the same Tailwind size — use `chromeLu` in sidebarGlyphs beside `chrome` controls.
+export const DisposableThreadIcon: LucideIcon = (props) => (
+  <LuMessageSquareDashed
+    className={cn("size-3 shrink-0", props.className)}
+    style={props.style}
+  />
 );
 export const TerminalIcon = adaptIcon(IconTerminal);
 export const TerminalSquare = adaptIcon(IconTerminal2);

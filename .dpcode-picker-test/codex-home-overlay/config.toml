@@ -1,5 +1,5 @@
 model = "gpt-5.5"
-model_reasoning_effort = "xhigh"
+model_reasoning_effort = "medium"
 personality = "friendly"
 plan_mode_reasoning_effort = "high"
 approval_policy = "never"
@@ -29,16 +29,16 @@ command = "/Applications/Codex.app/Contents/Resources/node_repl"
 startup_timeout_sec = 120
 
 [mcp_servers.node_repl.env]
-BROWSER_USE_AVAILABLE_BACKENDS = "iab"
-BROWSER_USE_MARKETPLACE_NAME = "openai-bundled"
-CODEX_CLI_PATH = "/Applications/Codex.app/Contents/Resources/codex"
-CODEX_HOME = "/Users/emanueledipietro/.codex"
 NODE_REPL_NATIVE_PIPE_CONNECT_TIMEOUT_MS = "1000"
 NODE_REPL_NODE_MODULE_DIRS = ""
 NODE_REPL_NODE_PATH = "/Applications/Codex.app/Contents/Resources/node"
-NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S = "167fdf579477181fba1773c1efb067b00c5a64fe85dafb50a2001bde198dc739"
 NODE_REPL_TRUSTED_CODE_PATHS = "/Users/emanueledipietro/.codex"
+CODEX_HOME = "/Users/emanueledipietro/.codex"
+NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S = "496c7b3cb95b4bc20cff49b513150606e0da0000c92bf752206bee5a6c248423"
+BROWSER_USE_AVAILABLE_BACKENDS = "iab"
+BROWSER_USE_MARKETPLACE_NAME = "openai-bundled"
 NODE_REPL_UNTRUSTED_ENV_ALLOWLIST = "BROWSER_USE_MARKETPLACE_NAME"
+CODEX_CLI_PATH = "/Applications/Codex.app/Contents/Resources/codex"
 
 [projects."/Users/emanueledipietro/Developer/link-manager"]
 trust_level = "trusted"
@@ -343,6 +343,24 @@ trust_level = "trusted"
 [projects."/Users/emanueledipietro/Documents/Codex/2026-05-24/look-through-my-recent-codex-sessions"]
 trust_level = "trusted"
 
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-25/hi-there"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-25/files-mentioned-by-the-user-rc"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-27/add-this-skill-skill-creator-users"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-27/builtwithcodex-users-emanueledipietro-codex-skills-builtwithcodex"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Developer/emanueledipietro"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-28/from-gmail-plugin-gmail-openai-curated"]
+trust_level = "trusted"
+
 [[skills.config]]
 path = "/Users/emanueledipietro/.codex/skills/stripe-integration/SKILL.md"
 enabled = false
@@ -403,7 +421,7 @@ fast_default_opt_out = true
 enabled = false
 
 [marketplaces.openai-bundled]
-last_updated = "2026-05-24T22:18:11Z"
+last_updated = "2026-05-28T12:38:08Z"
 source_type = "local"
 source = "/Users/emanueledipietro/.codex/.tmp/bundled-marketplaces/openai-bundled"
 
@@ -435,7 +453,7 @@ trusted_hash = "sha256:7ba89c11231ce0c6523c3d0d1ff7ed54d1f7477e903bfafcc9eda2ce8
 appearanceTheme = "system"
 appearanceLightCodeThemeId = "absolutely"
 appearanceDarkCodeThemeId = "linear"
-sansFontSize = 14
+sansFontSize = 13
 codeFontSize = 13
 useFontSmoothing = true
 usePointerCursors = false
@@ -444,13 +462,12 @@ followUpQueueMode = "queue"
 reviewDelivery = "detached"
 preventSleepWhileRunning = true
 keepRemoteControlAwakeWhilePluggedIn = true
-git-create-pull-request-as-draft = false
+git-create-pull-request-as-draft = true
 git-show-sidebar-pr-icons = true
 notifications-turn-mode = "always"
 selected-avatar-id = "custom:icarus"
 conversationDetailMode = "STEPS_COMMANDS"
 appearanceDiffMarkerStyle = "color"
-default-service-tier = "priority"
 
 [desktop.appearanceLightChromeTheme]
 accent = "#cc7d5e"
@@ -494,9 +511,6 @@ global = "vscode"
 [plugins."remotion@openai-curated"]
 enabled = true
 
-[plugins."gmail@openai-curated"]
-enabled = true
-
 [plugins."documents@openai-primary-runtime"]
 enabled = true
 
@@ -510,6 +524,12 @@ enabled = true
 enabled = true
 
 [plugins."browser-use@openai-bundled-beta"]
+enabled = true
+
+[plugins."figma@openai-curated"]
+enabled = true
+
+[plugins."gmail@openai-curated"]
 enabled = true
 
 [plugins."browser@openai-bundled"]

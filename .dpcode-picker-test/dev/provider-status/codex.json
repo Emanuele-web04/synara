@@ -3,15 +3,15 @@
   "status": "ready",
   "available": true,
   "authStatus": "authenticated",
-  "version": "0.133.0",
-  "checkedAt": "2026-05-25T12:52:39.017Z",
+  "version": "0.134.0",
+  "checkedAt": "2026-05-28T18:16:09.094Z",
   "versionAdvisory": {
     "status": "current",
-    "currentVersion": "0.133.0",
-    "latestVersion": "0.133.0",
+    "currentVersion": "0.134.0",
+    "latestVersion": "0.134.0",
     "updateCommand": "npm install -g @openai/codex@latest",
     "canUpdate": true,
-    "checkedAt": "2026-05-25T12:52:46.688Z",
+    "checkedAt": "2026-05-28T18:16:20.430Z",
     "message": null
   }
 }

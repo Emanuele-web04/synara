@@ -52,10 +52,10 @@ import {
   MenuGroup,
   MenuGroupLabel,
   MenuItem,
-  MenuPopup,
   MenuSeparator,
   MenuTrigger,
 } from "~/components/ui/menu";
+import { ComposerPickerMenuPopup } from "~/components/chat/ComposerPickerMenuPopup";
 import { Popover, PopoverPopup, PopoverTrigger } from "~/components/ui/popover";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { Textarea } from "~/components/ui/textarea";
@@ -1275,11 +1275,7 @@ export default function GitActionsControl({
             >
               <ChevronDownIcon aria-hidden="true" className="size-3.5" />
             </MenuTrigger>
-            <MenuPopup
-              align="end"
-              side="bottom"
-              className="w-50 rounded-lg border-[color:var(--color-border)] bg-[var(--composer-surface)] shadow-lg"
-            >
+            <ComposerPickerMenuPopup align="end" side="bottom" className="w-50 min-w-50">
               <MenuGroup>
                 <MenuGroupLabel>Git actions</MenuGroupLabel>
                 {gitPickerMenuItems.map((item) => {
@@ -1333,7 +1329,7 @@ export default function GitActionsControl({
               {gitStatusError && (
                 <p className="px-3 py-1.5 text-xs text-destructive">{gitStatusError.message}</p>
               )}
-            </MenuPopup>
+            </ComposerPickerMenuPopup>
           </Menu>
         </div>
       )}

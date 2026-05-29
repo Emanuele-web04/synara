@@ -3,16 +3,16 @@
   "status": "ready",
   "available": true,
   "authStatus": "unknown",
-  "version": "7.3.1",
-  "checkedAt": "2026-05-25T12:52:39.034Z",
+  "version": "7.3.12",
+  "checkedAt": "2026-05-28T18:16:09.160Z",
   "message": "Kilo CLI is installed. Configure provider credentials inside Kilo as needed.",
   "versionAdvisory": {
     "status": "current",
-    "currentVersion": "7.3.1",
-    "latestVersion": "7.3.1",
+    "currentVersion": "7.3.12",
+    "latestVersion": "7.3.12",
     "updateCommand": "kilo upgrade",
     "canUpdate": true,
-    "checkedAt": "2026-05-25T12:52:46.567Z",
+    "checkedAt": "2026-05-28T18:16:20.003Z",
     "message": null
   }
 }

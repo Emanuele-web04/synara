@@ -3,16 +3,16 @@
   "status": "ready",
   "available": true,
   "authStatus": "unknown",
-  "version": "2026.05.07-42ddaca",
-  "checkedAt": "2026-05-25T12:52:39.031Z",
+  "version": "2026.05.27-fe9a6e2",
+  "checkedAt": "2026-05-28T18:16:09.147Z",
   "message": "Cursor Agent CLI is installed. Sign in with Cursor if a session prompts for authentication.",
   "versionAdvisory": {
     "status": "unknown",
-    "currentVersion": "2026.05.07-42ddaca",
+    "currentVersion": "2026.05.27-fe9a6e2",
     "latestVersion": null,
     "updateCommand": "cursor-agent update",
     "canUpdate": true,
-    "checkedAt": "2026-05-25T12:52:46.196Z",
+    "checkedAt": "2026-05-28T18:16:19.591Z",
     "message": null
   }
 }

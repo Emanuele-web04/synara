@@ -3,16 +3,16 @@
   "status": "ready",
   "available": true,
   "authStatus": "unknown",
-  "version": "0.1.212",
-  "checkedAt": "2026-05-25T12:52:39.033Z",
+  "version": "0.2.8",
+  "checkedAt": "2026-05-28T18:16:09.156Z",
   "message": "Grok CLI is installed. Run `grok` to authenticate locally, or set XAI_API_KEY before starting a session.",
   "versionAdvisory": {
     "status": "unknown",
-    "currentVersion": "0.1.212",
+    "currentVersion": "0.2.8",
     "latestVersion": null,
     "updateCommand": null,
     "canUpdate": false,
-    "checkedAt": "2026-05-25T12:52:46.196Z",
+    "checkedAt": "2026-05-28T18:16:19.591Z",
     "message": null
   }
 }

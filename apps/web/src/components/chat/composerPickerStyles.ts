@@ -1,7 +1,9 @@
 // FILE: composerPickerStyles.ts
-// Purpose: Shares typography tokens for the chat composer pickers.
-// Layer: UI styling helper for chat controls.
-// Exports: COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME, composer input shell/surface class names
+// Purpose: Shared tokens for picker open panels (shell, options, radius) and composer chrome.
+// Layer: UI styling helper
+// Exports: surface/option/radius tokens; open panels via ComposerPickerMenuPopup / ComposerPickerSelectPopup
+
+export { COMPOSER_PICKER_SIZE, type ComposerPickerSize } from "./composerPickerSize";
 
 /** Soft, dispersed outer shadow for the composer input shell and floating pickers. */
 export const COMPOSER_SURFACE_SHADOW_CLASS_NAME =
@@ -11,9 +13,6 @@ export const COMPOSER_SURFACE_SHADOW_CLASS_NAME =
 // The sm: override is required to beat the Button component's base responsive text classes.
 export const COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME =
   "text-[length:var(--app-font-size-ui-sm,11px)] text-[var(--color-text-foreground-secondary)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal hover:text-[var(--color-text-foreground)] data-pressed:text-[var(--color-text-foreground)]";
-
-/** Fixed width for composer picker dropdown menus (model, effort, traits, etc.). */
-export const COMPOSER_PICKER_MENU_MIN_WIDTH_CLASS_NAME = "composer-picker-menu";
 
 /** Caps model-provider submenu height; pairs with the list scroll class below. */
 export const COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME =
@@ -34,16 +33,19 @@ export const COMPOSER_PICKER_MODEL_LIST_MAX_HEIGHT_CLASS_NAME =
 /** Scroll chrome for long model-provider lists. */
 export const COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME = "composer-picker-scroll";
 
+/** Shared corner radius for picker panels and option hover/selection rows. */
+export const COMPOSER_PICKER_RADIUS_CLASS_NAME = "rounded-lg";
+
 /** Collapsible section headers inside model provider lists. */
 export const COMPOSER_PICKER_MODEL_GROUP_HEADER_CLASS_NAME =
-  "flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[10px] font-medium uppercase tracking-[0.06em] text-muted-foreground/80 outline-none transition-colors hover:bg-[color-mix(in_srgb,var(--foreground)_4%,transparent)] focus-visible:ring-0";
+  `flex w-full items-center gap-1.5 ${COMPOSER_PICKER_RADIUS_CLASS_NAME} px-2 py-1.5 text-left text-[10px] font-medium uppercase tracking-[0.06em] text-muted-foreground/80 outline-none transition-colors hover:bg-[color-mix(in_srgb,var(--foreground)_4%,transparent)] focus-visible:ring-0`;
 
 /** Muted accent text for effort labels and empty-landing folder names. */
 export const COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME = "text-muted-foreground/45";
 
 /** Section headers inside composer picker menus (Effort, Thinking, Speed, etc.). */
 export const COMPOSER_PICKER_SECTION_LABEL_CLASS_NAME =
-  `px-2 py-1.5 font-normal text-xs ${COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME}`;
+  `px-2 py-[var(--picker-section-py,0.375rem)] font-normal text-xs ${COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME}`;
 
 export const COMPOSER_MAX_WIDTH_CLASS_NAME = "max-w-[42rem]";
 /** Main chat column background — matches the theme Background setting exactly. */
@@ -79,7 +81,27 @@ export const COMPOSER_PICKER_MENU_BACKDROP_CLASS_NAME = "composer-picker-menu-su
 
 /** Visual shell for composer picker dropdown panels (menus attached to the composer). */
 export const COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME =
-  `overflow-hidden rounded-xl bg-transparent ${COMPOSER_SURFACE_CHROME_CLASS_NAME}`;
+  `overflow-hidden ${COMPOSER_PICKER_RADIUS_CLASS_NAME} bg-transparent ${COMPOSER_SURFACE_CHROME_CLASS_NAME}`;
+
+/** Frosted backdrop layer inside open picker panels (composer menus + settings selects). */
+export const COMPOSER_PICKER_MENU_POPUP_BACKDROP_LAYER_CLASS_NAME =
+  `${COMPOSER_PICKER_MENU_BACKDROP_CLASS_NAME} pointer-events-none absolute inset-0 rounded-[inherit]`;
+
+/** Scrollable list body inside open picker panels. */
+export const COMPOSER_PICKER_MENU_POPUP_BODY_CLASS_NAME =
+  `relative z-1 w-full min-w-0 overflow-y-auto overscroll-contain ${COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME}`;
+
+/** Viewport wrapper for anchored select popups (width follows trigger). */
+export const COMPOSER_PICKER_MENU_POPUP_VIEWPORT_CLASS_NAME =
+  "relative min-w-(--anchor-width) max-h-[min(var(--available-height),28rem)]";
+
+/** Option row shared by composer menus and composer-surface select popups. Sizing via picker size CSS vars. */
+export const COMPOSER_PICKER_MENU_OPTION_CLASS_NAME =
+  `[&>svg]:-mx-0.5 flex cursor-default select-none items-center rounded-lg text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-foreground)] outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 [&>svg:not([class*='opacity-'])]:opacity-80 [&>svg]:pointer-events-none [&>svg]:shrink-0`;
+
+/** Same as menu options, adapted for select item grid layout. */
+export const COMPOSER_PICKER_SELECT_OPTION_CLASS_NAME =
+  `${COMPOSER_PICKER_MENU_OPTION_CLASS_NAME} grid in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)]`;
 
 /** Same chrome as picker menus, for composer-attached tooltips. */
 export const COMPOSER_PICKER_TOOLTIP_SURFACE_CLASS_NAME =
