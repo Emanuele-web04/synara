@@ -129,9 +129,9 @@ function DialogFooter({
         "flex flex-col-reverse gap-2 sm:flex-row sm:justify-end",
         dialogFooterButtonClassName,
         variant === "default" &&
-          "border-t border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] px-4 py-3 sm:rounded-b-[calc(var(--radius-xl)-1px)]",
+          "px-4 py-3 in-[[data-slot=dialog-panel]]:px-0 in-[[data-slot=dialog-panel]]:pb-0",
         variant === "bare" &&
-          "px-4 pt-3 pb-4 in-[[data-slot=dialog-popup]:has([data-slot=dialog-panel])]:px-0 in-[[data-slot=dialog-popup]:has([data-slot=dialog-panel])]:pb-0",
+          "px-4 pt-3 pb-4 in-[[data-slot=dialog-panel]]:px-0 in-[[data-slot=dialog-panel]]:pb-0",
         className,
       )}
       data-slot="dialog-footer"
@@ -169,7 +169,7 @@ function DialogPanel({
     <ScrollArea scrollFade={scrollFade}>
       <div
         className={cn(
-          "px-4 pb-4 pt-1 in-[[data-slot=dialog-popup]:has([data-slot=dialog-header])]:pt-0 in-[[data-slot=dialog-popup]:has([data-slot=dialog-footer]:not(.border-t))]:pb-3",
+          "px-4 pb-4 pt-1 in-[[data-slot=dialog-popup]:has([data-slot=dialog-header])]:pt-0 in-[[data-slot=dialog-popup]:has(>[data-slot=dialog-footer])]:pb-3",
           dialogPanelFieldClassName,
           className,
         )}

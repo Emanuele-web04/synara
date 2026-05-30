@@ -34,7 +34,7 @@ import {
   primaryProjectScript,
 } from "~/projectScripts";
 import { shortcutLabelForCommand } from "~/keybindings";
-import { isMacPlatform } from "~/lib/utils";
+import { cn, isMacPlatform } from "~/lib/utils";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -299,7 +299,7 @@ export default function ProjectScriptsControl({
           <Button
             size="xs"
             variant="outline"
-            className={headerButtonDarkBorderClassName}
+            className={cn(headerButtonDarkBorderClassName, "rounded-lg")}
             onClick={() => onRunScript(primaryScript)}
             title={`Run ${primaryScript.name}`}
           >
@@ -315,7 +315,7 @@ export default function ProjectScriptsControl({
                 <Button
                   size="icon-xs"
                   variant="outline"
-                  className={headerButtonDarkBorderClassName}
+                  className={cn(headerButtonDarkBorderClassName, "rounded-lg")}
                   aria-label="Script actions"
                 />
               }

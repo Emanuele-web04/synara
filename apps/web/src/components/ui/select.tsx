@@ -9,16 +9,21 @@ import * as React from "react";
 
 import { cn } from "~/lib/utils";
 import {
-  COMPOSER_PICKER_MENU_POPUP_BACKDROP_LAYER_CLASS_NAME,
+  APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME,
+  APP_TRANSLUCENT_POPUP_SURFACE_CLASS_NAME,
   COMPOSER_PICKER_MENU_POPUP_BODY_CLASS_NAME,
   COMPOSER_PICKER_MENU_POPUP_VIEWPORT_CLASS_NAME,
   COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME,
   COMPOSER_PICKER_SELECT_OPTION_CLASS_NAME,
+  COMPOSER_SURFACE_SHADOW_CLASS_NAME,
 } from "../chat/composerPickerStyles";
 
 const Select = SelectPrimitive.Root;
 
-type SelectPopupSurface = "default" | "composer";
+type SelectPopupSurface = "default" | "composer" | "settings";
+
+const settingsSelectOptionClassName =
+  "[&>svg]:-mx-0.5 flex cursor-default select-none items-center rounded-md text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-foreground)] outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 [&>svg:not([class*='opacity-'])]:opacity-80 [&>svg]:pointer-events-none [&>svg]:shrink-0 grid in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)]";
 
 const SelectPopupSurfaceContext = React.createContext<SelectPopupSurface>("default");
 
@@ -138,16 +143,25 @@ function SelectPopup({
   /** Size/shell classes applied to the composer picker viewport wrapper. */
   shellClassName?: string;
 }) {
-  const isComposerSurface = surface === "composer";
-  const viewportClassName = isComposerSurface
+  const isComposerLikeSurface = surface === "composer" || surface === "settings";
+  const viewportClassName = isComposerLikeSurface
     ? cn(
         COMPOSER_PICKER_MENU_POPUP_VIEWPORT_CLASS_NAME,
-        COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME,
+        surface === "settings"
+          ? cn(
+              APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME,
+              "rounded-md",
+              COMPOSER_SURFACE_SHADOW_CLASS_NAME,
+            )
+          : COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME,
         shellClassName,
       )
-    : "relative min-w-(--anchor-width) max-h-[min(var(--available-height),28rem)] rounded-xl border border-[color:var(--color-border-light)] bg-[var(--composer-surface)] shadow-xl";
+    : cn(
+        APP_TRANSLUCENT_POPUP_SURFACE_CLASS_NAME,
+        "relative min-w-(--anchor-width) max-h-[min(var(--available-height),28rem)]",
+      );
 
-  const listClassName = isComposerSurface
+  const listClassName = isComposerLikeSurface
     ? cn(
         COMPOSER_PICKER_MENU_POPUP_BODY_CLASS_NAME,
         "max-h-[min(var(--available-height),28rem)]",
@@ -174,7 +188,7 @@ function SelectPopup({
           <SelectPrimitive.Popup
             className={cn(
               "origin-(--transform-origin)",
-              isComposerSurface ? "text-[var(--color-text-foreground)]" : "text-foreground",
+              isComposerLikeSurface ? "text-[var(--color-text-foreground)]" : "text-foreground",
             )}
             data-slot="select-popup"
             {...props}
@@ -188,15 +202,12 @@ function SelectPopup({
             {/* Keep a hard popup viewport cap so long theme lists can always scroll
                 fully to both edges even when the positioner reports a tight height. */}
             <div className={viewportClassName}>
-              {isComposerSurface ? (
-                <div
-                  aria-hidden="true"
-                  className={COMPOSER_PICKER_MENU_POPUP_BACKDROP_LAYER_CLASS_NAME}
-                />
-              ) : null}
               <SelectPrimitive.List
-                className={listClassName}
-                data-slot={isComposerSurface ? "menu-popup-body" : "select-list"}
+                className={cn(
+                  listClassName,
+                  isComposerLikeSurface ? "relative z-1" : null,
+                )}
+                data-slot={isComposerLikeSurface ? "menu-popup-body" : "select-list"}
               >
                 {children}
               </SelectPrimitive.List>
@@ -215,7 +226,7 @@ function SelectPopup({
 }
 
 const selectItemDefaultClassName =
-  "grid min-h-8 in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)] cursor-default items-center gap-2 rounded-sm py-1 text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-foreground)] outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 sm:min-h-7 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0";
+  "grid min-h-[1.625rem] in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)] cursor-default items-center gap-2 rounded-lg py-px text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-foreground)] outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 sm:min-h-6 [&_svg:not([class*='size-'])]:size-3 [&_svg]:pointer-events-none [&_svg]:shrink-0";
 
 function SelectItem({
   className,
@@ -227,7 +238,11 @@ function SelectItem({
 }) {
   const popupSurface = React.useContext(SelectPopupSurfaceContext);
   const optionBaseClassName =
-    popupSurface === "composer" ? COMPOSER_PICKER_SELECT_OPTION_CLASS_NAME : selectItemDefaultClassName;
+    popupSurface === "composer"
+      ? COMPOSER_PICKER_SELECT_OPTION_CLASS_NAME
+      : popupSurface === "settings"
+        ? settingsSelectOptionClassName
+        : selectItemDefaultClassName;
 
   return (
     <SelectPrimitive.Item
@@ -248,7 +263,7 @@ function SelectItem({
           data-slot="select-item-indicator"
         >
           <svg
-            className="size-4"
+            className="size-3"
             fill="none"
             height="24"
             stroke="currentColor"

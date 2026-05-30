@@ -6,6 +6,12 @@ import type { KeybindingCommand, ProjectId, ThreadId } from "@t3tools/contracts"
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "../appSettings";
 import type { ChatMessage, Project, SidebarThreadSummary, Thread } from "../types";
 import { cn } from "../lib/utils";
+import {
+  SIDEBAR_ROW_ACTIVE_CLASS_NAME,
+  SIDEBAR_ROW_HOVER_CLASS_NAME,
+  SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
+  SIDEBAR_THREAD_ROW_BASE_CLASS_NAME,
+} from "../sidebarRowStyles";
 import { isDuplicateProjectCreateError } from "../lib/projectCreateRecovery";
 import { workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
 import {
@@ -220,34 +226,21 @@ export function resolveThreadRowClassName(input: {
 }): string {
   // Trailing reserve for the absolute cluster is applied separately by callers
   // via resolveThreadRowTrailingReserveClass so it can flex with the chip count.
-  const baseClassName =
-    "h-7.5 w-full translate-x-0 cursor-pointer justify-start rounded-sm pl-8 text-left text-[13px] select-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring";
+  const baseClassName = SIDEBAR_THREAD_ROW_BASE_CLASS_NAME;
 
   if (input.isSelected && input.isActive) {
-    return cn(
-      baseClassName,
-      "bg-[var(--color-background-button-secondary-hover)] text-[var(--color-text-foreground)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]",
-    );
+    return cn(baseClassName, SIDEBAR_ROW_ACTIVE_CLASS_NAME);
   }
 
   if (input.isSelected) {
-    return cn(
-      baseClassName,
-      "bg-[var(--color-background-button-secondary-hover)] text-[var(--color-text-foreground)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]",
-    );
+    return cn(baseClassName, SIDEBAR_ROW_ACTIVE_CLASS_NAME);
   }
 
   if (input.isActive) {
-    return cn(
-      baseClassName,
-      "bg-[var(--color-background-button-secondary-hover)] text-[var(--color-text-foreground)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]",
-    );
+    return cn(baseClassName, SIDEBAR_ROW_ACTIVE_CLASS_NAME);
   }
 
-  return cn(
-    baseClassName,
-    "text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]",
-  );
+  return cn(baseClassName, SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME);
 }
 
 export function resolveThreadStatusPill(input: {

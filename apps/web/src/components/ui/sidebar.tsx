@@ -667,8 +667,8 @@ function SidebarInset({
           and bg are visible even when padding offsets the sidebar area. */}
       <div
         className={cn(
-          "flex min-h-0 min-w-0 flex-1 flex-col bg-background text-inherit",
-          surfaceClassName,
+          "flex min-h-0 min-w-0 flex-1 flex-col text-inherit",
+          surfaceClassName ?? "bg-background",
         )}
         data-slot="sidebar-inset-surface"
       >
@@ -724,7 +724,7 @@ function SidebarSeparator({ className, ...props }: React.ComponentProps<typeof S
 
 function SidebarContent({ className, ...props }: React.ComponentProps<"div">) {
   return (
-    <ScrollArea hideScrollbars scrollFade className="h-auto min-h-0 flex-1">
+    <ScrollArea hideScrollbars className="h-auto min-h-0 flex-1">
       <div
         className={cn(
           "flex w-full min-w-0 flex-col gap-2 group-data-[collapsible=icon]:overflow-hidden",

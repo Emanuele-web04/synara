@@ -6,8 +6,8 @@ import type * as React from "react";
 
 import { cn } from "~/lib/utils";
 import {
+  APP_TRANSLUCENT_POPUP_SURFACE_CLASS_NAME,
   COMPOSER_PICKER_MENU_OPTION_CLASS_NAME,
-  COMPOSER_PICKER_MENU_POPUP_BACKDROP_LAYER_CLASS_NAME,
   COMPOSER_PICKER_MENU_POPUP_BODY_CLASS_NAME,
   COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME,
 } from "../chat/composerPickerStyles";
@@ -49,7 +49,7 @@ function MenuPopup({
   const popupSurfaceClassName =
     surface === "composer"
       ? COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME
-      : "rounded-xl border border-[color:var(--color-border-light)] bg-[var(--composer-surface)] shadow-xl";
+      : APP_TRANSLUCENT_POPUP_SURFACE_CLASS_NAME;
 
   const isComposerSurface = surface === "composer";
 
@@ -75,22 +75,16 @@ function MenuPopup({
           {...props}
         >
           {surface === "composer" ? (
-            <>
-              <div
-                aria-hidden="true"
-                className={COMPOSER_PICKER_MENU_POPUP_BACKDROP_LAYER_CLASS_NAME}
-              />
-              <div
-                className={cn(
-                  COMPOSER_PICKER_MENU_POPUP_BODY_CLASS_NAME,
-                  "max-h-(--available-height)",
-                )}
-                data-picker-size={pickerSize}
-                data-slot="menu-popup-body"
-              >
-                {children}
-              </div>
-            </>
+            <div
+              className={cn(
+                COMPOSER_PICKER_MENU_POPUP_BODY_CLASS_NAME,
+                "relative z-1 max-h-(--available-height)",
+              )}
+              data-picker-size={pickerSize}
+              data-slot="menu-popup-body"
+            >
+              {children}
+            </div>
           ) : (
             <div className="max-h-(--available-height) w-full overflow-y-auto p-1">{children}</div>
           )}
@@ -166,7 +160,7 @@ function MenuCheckboxItem({
           <span className="col-start-1 min-w-0">{children}</span>
           <MenuPrimitive.CheckboxItemIndicator className="col-start-2 justify-self-end">
             <svg
-              className="size-4"
+              className="size-3"
               fill="none"
               height="24"
               stroke="currentColor"
@@ -190,36 +184,75 @@ function MenuRadioGroup(props: MenuPrimitive.RadioGroup.Props) {
   return <MenuPrimitive.RadioGroup data-slot="menu-radio-group" {...props} />;
 }
 
-function MenuRadioItem({ className, children, ...props }: MenuPrimitive.RadioItem.Props) {
+function MenuRadioItem({
+  className,
+  children,
+  preserveChildLayout = false,
+  trailing,
+  ...props
+}: MenuPrimitive.RadioItem.Props & {
+  preserveChildLayout?: boolean;
+  trailing?: React.ReactNode;
+}) {
   return (
     <MenuPrimitive.RadioItem
       className={cn(
         cn(
           COMPOSER_PICKER_MENU_OPTION_CLASS_NAME,
-          "grid grid-cols-[1fr_auto] gap-3 px-2.5 in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)]",
+          "grid in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)]",
+          preserveChildLayout
+            ? "grid-cols-[minmax(0,1fr)_2.5rem] gap-x-1.5 gap-y-0 px-2"
+            : "grid-cols-[1fr_auto] gap-3 px-2.5",
         ),
         className,
       )}
       data-slot="menu-radio-item"
       {...props}
     >
-      <span className="col-start-1 min-w-0">{children}</span>
-      <MenuPrimitive.RadioItemIndicator className="col-start-2 justify-self-end">
-        <svg
-          className="size-4"
-          fill="none"
-          height="24"
-          stroke="currentColor"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth="2"
-          viewBox="0 0 24 24"
-          width="24"
-          xmlns="http://www.w3.org/2000/svg"
-        >
-          <path d="M5.252 12.7 10.2 18.63 18.748 5.37" />
-        </svg>
-      </MenuPrimitive.RadioItemIndicator>
+      {preserveChildLayout ? (
+        <>
+          <span className="col-start-1 min-w-0">{children}</span>
+          <div className="col-start-2 flex shrink-0 items-center justify-end gap-0.5">
+            <MenuPrimitive.RadioItemIndicator className="shrink-0 data-unchecked:hidden">
+              <svg
+                className="size-3"
+                fill="none"
+                height="24"
+                stroke="currentColor"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="2"
+                viewBox="0 0 24 24"
+                width="24"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path d="M5.252 12.7 10.2 18.63 18.748 5.37" />
+              </svg>
+            </MenuPrimitive.RadioItemIndicator>
+            {trailing}
+          </div>
+        </>
+      ) : (
+        <>
+          <span className="col-start-1 min-w-0">{children}</span>
+          <MenuPrimitive.RadioItemIndicator className="col-start-2 justify-self-end">
+            <svg
+              className="size-3"
+              fill="none"
+              height="24"
+              stroke="currentColor"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="2"
+              viewBox="0 0 24 24"
+              width="24"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path d="M5.252 12.7 10.2 18.63 18.748 5.37" />
+            </svg>
+          </MenuPrimitive.RadioItemIndicator>
+        </>
+      )}
     </MenuPrimitive.RadioItem>
   );
 }

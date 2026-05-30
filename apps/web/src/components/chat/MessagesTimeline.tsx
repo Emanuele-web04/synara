@@ -27,6 +27,7 @@ import {
   CheckIcon,
   CircleAlertIcon,
   EyeIcon,
+  FileIcon,
   GitHubIcon,
   GlobeIcon,
   HammerIcon,
@@ -42,6 +43,7 @@ import {
 import { Button } from "../ui/button";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
+import { ChangedFilesTree } from "./ChangedFilesTree";
 import { DiffStatLabel } from "./DiffStatLabel";
 import { FileEntryIcon } from "./FileEntryIcon";
 import { MentionChipIcon } from "./MentionChipIcon";
@@ -705,6 +707,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             hasGenericInlineFileChangeEntry && (turnSummary?.files.length ?? 0) > 0
               ? turnSummary!.files
               : [];
+          const inlineFileChangeDetailsAlreadyVisible =
+            inlineEditedFilesFromTurnSummary.length > 0 ||
+            visibleRenderableInlineToolEntries.some(
+              (workEntry) =>
+                isFileChangeWorkEntry(workEntry) && (workEntry.changedFiles?.length ?? 0) > 0,
+            );
           const assistantMeta = row.message.streaming ? (
             nowIso ? (
               [
@@ -890,6 +898,18 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     ))}
                   </div>
                 )}
+                <div
+                  className="mt-0.5 flex items-center gap-2 font-system-ui font-normal text-muted-foreground/45"
+                  style={chatMessageFooterStyle}
+                >
+                  {assistantCopyState.visible ? (
+                    <MessageCopyButton
+                      text={assistantCopyState.text ?? ""}
+                      className={MESSAGE_HOVER_REVEAL_CLASS_NAME}
+                    />
+                  ) : null}
+                  <p className={cn("tabular-nums", MESSAGE_HOVER_REVEAL_CLASS_NAME)}>{assistantMeta}</p>
+                </div>
                 {(() => {
                   if (!turnSummary) return null;
                   const checkpointFiles = turnSummary.files;
@@ -902,18 +922,74 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   const canUndo =
                     correspondingUserMessageId != null &&
                     revertTurnCountByUserMessageId.has(correspondingUserMessageId);
+                  const showExpandedFileDetails =
+                    fileChangesExpanded &&
+                    (!inlineFileChangeDetailsAlreadyVisible || checkpointFiles.length > 0);
+                  const totalAdditions = checkpointFiles.reduce(
+                    (sum, file) => sum + (file.additions ?? 0),
+                    0,
+                  );
+                  const totalDeletions = checkpointFiles.reduce(
+                    (sum, file) => sum + (file.deletions ?? 0),
+                    0,
+                  );
+                  const editedFilesLabel =
+                    checkpointFiles.length === 1
+                      ? "Edited 1 file"
+                      : `Edited ${checkpointFiles.length} files`;
                   return (
-                    <div className="mt-5 overflow-hidden rounded-xl border border-[color:var(--color-border-light)] bg-[var(--composer-surface)]">
-                      <div className="flex items-center justify-between gap-2 border-b border-[color:var(--color-border-light)] px-3 py-2">
-                        <span
-                          className="truncate font-normal text-foreground/92"
-                          style={{ fontSize: chatTypographyStyle.fontSize }}
-                        >
-                          {checkpointFiles.length === 1
-                            ? "1 File changed"
-                            : `${checkpointFiles.length} Files changed`}
-                        </span>
-                        <div className="flex items-center gap-4">
+                    <div className="mt-4 overflow-hidden rounded-[0.65rem] bg-[var(--app-user-message-background)]">
+                      <div
+                        className={cn(
+                          "flex items-center justify-between gap-3 px-3 py-1.5",
+                          showExpandedFileDetails &&
+                            "border-b border-[color:var(--color-border-light)]",
+                        )}
+                      >
+                        <div className="flex min-w-0 items-center gap-2.5">
+                          <span className="flex size-5 shrink-0 items-center justify-center rounded-md border border-[color:var(--color-border-light)] text-muted-foreground/70">
+                            <FileIcon className="size-3" />
+                          </span>
+                          <div className="min-w-0">
+                            <div
+                              className="truncate font-normal text-foreground/92"
+                              style={{ fontSize: chatTypographyStyle.fontSize }}
+                            >
+                              {editedFilesLabel}
+                            </div>
+                            {totalAdditions + totalDeletions > 0 ? (
+                              <div
+                                className="font-system-ui tabular-nums"
+                                style={{ fontSize: `${appTypographyScale.chatMetaPx}px` }}
+                              >
+                                <DiffStatLabel
+                                  additions={totalAdditions}
+                                  deletions={totalDeletions}
+                                />
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          {canUndo && (
+                            <button
+                              type="button"
+                              className="flex items-center gap-1 text-muted-foreground transition-colors hover:text-foreground"
+                              style={{ fontSize: chatTypographyStyle.fontSize }}
+                              onClick={() => onRevertUserMessage(correspondingUserMessageId)}
+                            >
+                              Undo
+                              <Undo2Icon className="size-3" />
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className="rounded-md border border-[color:var(--color-border-light)] px-2.5 py-0.5 text-foreground/90 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground"
+                            style={{ fontSize: chatTypographyStyle.fontSize }}
+                            onClick={() => onOpenTurnDiff(turnSummary.turnId)}
+                          >
+                            Review
+                          </button>
                           <button
                             type="button"
                             className="inline-flex items-center justify-center rounded-md p-1 text-muted-foreground/70 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground/80"
@@ -934,73 +1010,62 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                               className="dark:text-muted-foreground/50"
                             />
                           </button>
-                          {canUndo && (
-                            <button
-                              type="button"
-                              className="flex items-center gap-1 text-muted-foreground transition-colors hover:text-foreground"
-                              style={{ fontSize: chatTypographyStyle.fontSize }}
-                              onClick={() => onRevertUserMessage(correspondingUserMessageId)}
-                            >
-                              Undo
-                              <Undo2Icon className="size-3" />
-                            </button>
-                          )}
                         </div>
                       </div>
-                      {fileChangesExpanded && (
-                        <div className="bg-[var(--composer-surface)]">
-                          {checkpointFiles.map((file) => (
-                            <button
-                              key={file.path}
-                              type="button"
-                              className="group flex w-full items-center gap-2 border-t border-[color:var(--color-border-light)] px-3 py-1.5 text-left first:border-t-0 transition-colors hover:bg-[var(--color-background-button-secondary-hover)]"
-                              onClick={() => onOpenTurnDiff(turnSummary.turnId, file.path)}
-                            >
-                              <FileEntryIcon
-                                pathValue={file.path}
-                                kind="file"
-                                theme={resolvedTheme}
-                                className="size-4 shrink-0 opacity-50 dark:opacity-30"
+                      {showExpandedFileDetails ? (
+                        <div className="bg-[var(--app-user-message-background)]">
+                          {inlineFileChangeDetailsAlreadyVisible ? (
+                            <div className="px-3 py-2">
+                              <ChangedFilesTree
+                                turnId={turnSummary.turnId}
+                                files={checkpointFiles}
+                                allDirectoriesExpanded
+                                resolvedTheme={resolvedTheme}
+                                onOpenTurnDiff={onOpenTurnDiff}
                               />
-                              <span
-                                className="font-system-ui truncate font-normal underline-offset-2 group-hover:underline group-focus-visible:underline"
-                                style={{
-                                  fontSize: chatTypographyStyle.fontSize,
-                                  color: "var(--color-text-foreground)",
-                                }}
+                            </div>
+                          ) : (
+                            checkpointFiles.map((file) => (
+                              <button
+                                key={file.path}
+                                type="button"
+                                className="group flex w-full items-center gap-2 border-t border-[color:var(--color-border-light)] px-3 py-1 text-left first:border-t-0 transition-colors hover:bg-[var(--color-background-button-secondary-hover)]"
+                                onClick={() => onOpenTurnDiff(turnSummary.turnId, file.path)}
                               >
-                                {file.path}
-                              </span>
-                              {(file.additions ?? 0) + (file.deletions ?? 0) > 0 && (
+                                <FileEntryIcon
+                                  pathValue={file.path}
+                                  kind="file"
+                                  theme={resolvedTheme}
+                                  className="size-4 shrink-0 opacity-50 dark:opacity-30"
+                                />
                                 <span
-                                  className="font-system-ui ml-auto shrink-0 tabular-nums"
-                                  style={{ fontSize: `${appTypographyScale.chatMetaPx}px` }}
+                                  className="font-system-ui truncate font-normal underline-offset-2 group-hover:underline group-focus-visible:underline"
+                                  style={{
+                                    fontSize: chatTypographyStyle.fontSize,
+                                    color: "var(--color-text-foreground)",
+                                  }}
                                 >
-                                  <DiffStatLabel
-                                    additions={file.additions ?? 0}
-                                    deletions={file.deletions ?? 0}
-                                  />
+                                  {file.path}
                                 </span>
-                              )}
-                            </button>
-                          ))}
+                                {(file.additions ?? 0) + (file.deletions ?? 0) > 0 && (
+                                  <span
+                                    className="font-system-ui ml-auto shrink-0 tabular-nums"
+                                    style={{ fontSize: `${appTypographyScale.chatMetaPx}px` }}
+                                  >
+                                    <DiffStatLabel
+                                      additions={file.additions ?? 0}
+                                      deletions={file.deletions ?? 0}
+                                    />
+                                  </span>
+                                )}
+                              </button>
+                            ))
+                          )}
                         </div>
-                      )}
+                      ) : null}
                     </div>
                   );
                 })()}
-                <div
-                  className="mt-0.5 flex items-center gap-2 font-system-ui font-normal text-muted-foreground/45"
-                  style={chatMessageFooterStyle}
-                >
-                  {assistantCopyState.visible ? (
-                    <MessageCopyButton
-                      text={assistantCopyState.text ?? ""}
-                      className={MESSAGE_HOVER_REVEAL_CLASS_NAME}
-                    />
-                  ) : null}
-                  <p className={cn("tabular-nums", MESSAGE_HOVER_REVEAL_CLASS_NAME)}>{assistantMeta}</p>
-                </div>
               </div>
             </>
           );

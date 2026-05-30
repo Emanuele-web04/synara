@@ -1,15 +1,17 @@
 // FILE: SettingsPanelPrimitives.tsx
 // Purpose: Shared settings section card and row primitives (Codex-style bordered groups).
 // Layer: Settings UI components
-// Exports: SettingsSection, SettingsRow
+// Exports: SettingsSection, SettingsRow, SettingsSelectPopup
 
-import { type ReactNode } from "react";
+import { type ComponentProps, type ReactNode } from "react";
 import { cn } from "~/lib/utils";
 import {
   SETTINGS_CARD_CLASS_NAME,
   SETTINGS_CARD_ROW_CLASS_NAME,
   SETTINGS_SECTION_LABEL_CLASS_NAME,
 } from "~/settingsPanelStyles";
+import { SelectPopup } from "~/components/ui/select";
+import { composerPickerMenuShellClassName } from "~/components/chat/composerPickerSize";
 
 const settingsCardClassName = cn(
   SETTINGS_CARD_CLASS_NAME,
@@ -26,6 +28,24 @@ export function SettingsSection({ title, children }: { title: string; children: 
       <h2 className={SETTINGS_SECTION_LABEL_CLASS_NAME}>{title}</h2>
       <SettingsCard>{children}</SettingsCard>
     </section>
+  );
+}
+
+/** Frosted select dropdown panel with settings `rounded-md` chrome. */
+export function SettingsSelectPopup({
+  align = "end",
+  alignItemWithTrigger = false,
+  shellClassName,
+  ...props
+}: ComponentProps<typeof SelectPopup>) {
+  return (
+    <SelectPopup
+      align={align}
+      alignItemWithTrigger={alignItemWithTrigger}
+      surface="settings"
+      shellClassName={cn(composerPickerMenuShellClassName(), shellClassName)}
+      {...props}
+    />
   );
 }
 

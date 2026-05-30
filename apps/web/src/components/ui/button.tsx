@@ -87,13 +87,13 @@ const buttonVariants = cva(
     compoundVariants: [
       {
         class:
-          "!box-border !h-auto !min-h-7 gap-1.5 rounded-md px-[calc(--spacing(2.5)-1px)] !py-0.5 text-[length:var(--app-font-size-ui,12px)] sm:!h-auto sm:px-[calc(--spacing(2.5)-1px)] sm:text-[length:var(--app-font-size-ui-sm,11px)]",
+          "!box-border !h-auto !min-h-7 gap-1.5 rounded-lg px-[calc(--spacing(2.5)-1px)] !py-0.5 text-[length:var(--app-font-size-ui,12px)] sm:!h-auto sm:px-[calc(--spacing(2.5)-1px)] sm:text-[length:var(--app-font-size-ui-sm,11px)]",
         size: "xs",
         variant: "chrome-outline",
       },
       {
         class:
-          "!size-8 rounded-md sm:!size-7",
+          "!size-8 rounded-lg sm:!size-7",
         size: "icon-xs",
         variant: "chrome-outline",
       },

@@ -14,6 +14,7 @@ import {
   SETTINGS_SIDEBAR_ICON_CLASS_NAME,
   SETTINGS_SIDEBAR_ITEM_CLASS_NAME,
   SETTINGS_SIDEBAR_ITEM_LABEL_CLASS_NAME,
+  SETTINGS_SIDEBAR_LIST_GAP_CLASS_NAME,
   SETTINGS_SIDEBAR_ROW_FILL_ACTIVE_CLASS_NAME,
   SETTINGS_SIDEBAR_ROW_FILL_HOVER_CLASS_NAME,
   SETTINGS_SIDEBAR_SECTION_CLASS_NAME,
@@ -57,7 +58,7 @@ export function SettingsSidebarNav(props: {
               >
                 {group.label}
               </h2>
-              <ul className="flex flex-col gap-px">
+              <ul className={cn("flex flex-col", SETTINGS_SIDEBAR_LIST_GAP_CLASS_NAME)}>
                 {items.map((item) => {
                   const isActive = item.id === props.activeSection;
                   return (

@@ -18,10 +18,11 @@ import {
 } from "./ui/dialog";
 import { Input } from "./ui/input";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./ui/select";
+import { Select, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Switch } from "./ui/switch";
 import { Textarea } from "./ui/textarea";
 import { toastManager } from "./ui/toast";
+import { SettingsSelectPopup } from "./settings/SettingsPanelPrimitives";
 import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { type ChromeTheme, type ThemeMode, type ThemeVariant, useTheme } from "../hooks/useTheme";
 import { cn } from "../lib/utils";
@@ -118,7 +119,7 @@ export function ThemePackEditor({
             <button
               type="button"
               onClick={() => resetThemeVariant(variant)}
-              className="rounded-sm px-1.5 py-0.5 text-[11px] text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)]"
+              className="rounded-md px-1.5 py-0.5 text-[11px] text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)]"
             >
               Reset
             </button>
@@ -149,18 +150,18 @@ export function ThemePackEditor({
                 <CodeThemeSelectOption label={codeThemeLabel} theme={theme} />
               </SelectValue>
             </SelectTrigger>
-            <SelectPopup align="end" alignItemWithTrigger={false} className="p-1.5">
+            <SettingsSelectPopup align="end" alignItemWithTrigger={false} className="p-1.5">
               {codeThemes.map((option) => (
                 <SelectItem
                   hideIndicator
                   key={option.id}
                   value={option.id}
-                  className="rounded-lg px-2 py-2"
+                  className="rounded-md px-2 py-2"
                 >
                   <CodeThemeSelectOption label={option.label} theme={option.previewTheme} />
                 </SelectItem>
               ))}
-            </SelectPopup>
+            </SettingsSelectPopup>
           </Select>
         </div>
       </div>
@@ -373,7 +374,7 @@ function ColorPill({
             setDraftHex(null);
             onReset();
           }}
-          className="rounded-sm p-1 text-[var(--color-text-foreground-tertiary)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)]"
+          className="rounded-md p-1 text-[var(--color-text-foreground-tertiary)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)]"
           aria-label={`Reset ${ariaLabel}`}
           title="Reset to default"
         >

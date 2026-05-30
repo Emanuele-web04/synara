@@ -118,7 +118,6 @@ import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { SidebarIconButton } from "./SidebarIconButton";
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
 import { SidebarMetaChipStack } from "./SidebarMetaChip";
-import { SidebarProjectHeaderAction } from "./SidebarProjectHeaderAction";
 import { SidebarRowHoverActions } from "./SidebarRowHoverActions";
 import { SidebarSectionToolbar } from "./SidebarSectionToolbar";
 import { SidebarGlyph, sidebarGlyphClass } from "./sidebarGlyphs";
@@ -177,7 +176,6 @@ import {
   SidebarMenuSub,
   SidebarMenuSubButton,
   SidebarMenuSubItem,
-  SidebarSeparator,
   SidebarTrigger,
 } from "./ui/sidebar";
 import { useThreadSelectionStore } from "../threadSelectionStore";
@@ -224,7 +222,17 @@ import {
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { parseDiffRouteSearch } from "../diffRouteSearch";
 import { normalizeSettingsSection } from "../settingsNavigation";
+import {
+  SIDEBAR_HEADER_LABEL_CLASS_NAME,
+  SIDEBAR_HEADER_ROW_CLASS_NAME,
+  SIDEBAR_NESTED_LIST_GAP_CLASS_NAME,
+  SIDEBAR_NESTED_LIST_OFFSET_CLASS_NAME,
+  SIDEBAR_ROW_ACTIVE_CLASS_NAME,
+  SIDEBAR_ROW_HOVER_CLASS_NAME,
+  SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
+} from "../sidebarRowStyles";
 import { SettingsSidebarNav } from "./SettingsSidebarNav";
+import { SIDEBAR_SEGMENTED_PICKER_ACTIVE_CLASS_NAME } from "./chat/composerPickerStyles";
 import {
   resolveSplitViewFocusedThreadId,
   resolveSplitViewPaneIdForThread,
@@ -970,17 +978,18 @@ function SidebarSegmentedPicker({
 }) {
   return (
     <div className="px-3 pb-2.5">
-      <div className="inline-flex w-full rounded-md bg-[var(--color-background-elevated-secondary)] p-0.5">
+      <div className="sidebar-segmented-picker inline-flex w-full rounded-lg p-0.5">
         {(["threads", "workspace"] as const).map((view) => {
           const active = activeView === view;
           return (
             <button
               key={view}
               type="button"
+              data-sidebar-segmented-active={active ? "true" : undefined}
               className={cn(
-                "flex-1 rounded-sm px-2.5 py-1 text-[11.5px] font-medium transition-colors",
+                "flex-1 rounded-md px-2.5 py-1 text-[11.5px] font-medium transition-colors",
                 active
-                  ? "bg-[var(--composer-surface)] text-[var(--color-text-foreground)] shadow-xs"
+                  ? SIDEBAR_SEGMENTED_PICKER_ACTIVE_CLASS_NAME
                   : "text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]",
               )}
               onClick={() => onSelectView(view)}
@@ -1681,15 +1690,29 @@ export default function Sidebar() {
         return;
       }
 
+      const latestThread = sortThreadsForSidebar(
+        sidebarThreads,
+        appSettings.sidebarThreadSortOrder,
+      )[0];
+      if (latestThread) {
+        void navigate({
+          to: "/$threadId",
+          params: { threadId: latestThread.id },
+        });
+        return;
+      }
+
       void handleNewChat({ fresh: true });
     },
     [
+      appSettings.sidebarThreadSortOrder,
       handleNewChat,
       lastThreadRoute,
       navigate,
       navigateToWorkspace,
       routeWorkspaceId,
       sidebarThreadSummaryById,
+      sidebarThreads,
       workspacePages,
     ],
   );
@@ -3949,13 +3972,14 @@ export default function Sidebar() {
           tabIndex={0}
           data-thread-item
           className={cn(
-            "grid h-7.5 w-full items-center gap-x-1.5 rounded-sm px-2 text-left text-[length:var(--app-font-size-ui,12px)] transition-colors cursor-pointer",
+            SIDEBAR_HEADER_ROW_CLASS_NAME,
+            "grid w-full items-center gap-x-1.5 transition-colors",
             showThreadIdentityGlyph
               ? "grid-cols-[auto_auto_minmax(0,1fr)_auto_3.5rem]"
               : "grid-cols-[auto_minmax(0,1fr)_auto_3.5rem]",
             isActive
-              ? "bg-[var(--sidebar-accent-active)] text-[var(--sidebar-accent-foreground)]"
-              : "text-foreground/89 hover:bg-[var(--sidebar-accent)]",
+              ? SIDEBAR_ROW_ACTIVE_CLASS_NAME
+              : cn(SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME),
           )}
           onPointerDown={(event) => primeThreadActivation(event, thread.id)}
           onClick={() => activateThreadFromSidebarIntent(thread.id)}
@@ -4480,9 +4504,11 @@ export default function Sidebar() {
           <SidebarMenuButton
             ref={isManualProjectSorting ? dragHandleProps?.setActivatorNodeRef : undefined}
             size="sm"
-            className={`h-7.5 gap-2 rounded-sm px-2 py-0.5 text-left text-[length:var(--app-font-size-ui,12px)] font-normal transition-[padding] duration-150 ease-out hover:bg-[var(--sidebar-accent)] group-hover/project-header:bg-[var(--sidebar-accent)] group-hover/project-header:pr-[4.75rem] group-hover/project-header:text-[var(--sidebar-accent-foreground)] group-focus-within/project-header:pr-[4.75rem] ${
-              isManualProjectSorting ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
-            }`}
+            className={cn(
+              SIDEBAR_HEADER_ROW_CLASS_NAME,
+              "transition-[padding] duration-150 ease-out hover:bg-[var(--sidebar-accent)] group-hover/project-header:bg-[var(--sidebar-accent)] group-hover/project-header:pr-[4.75rem] group-hover/project-header:text-[var(--sidebar-accent-foreground)] group-focus-within/project-header:pr-[4.75rem]",
+              isManualProjectSorting ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
+            )}
             {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.attributes : {})}
             {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.listeners : {})}
             onPointerDownCapture={handleProjectTitlePointerDownCapture}
@@ -4560,73 +4586,77 @@ export default function Sidebar() {
               )}
             </div>
           </SidebarMenuButton>
-          <SidebarProjectHeaderAction
-            icon={TerminalIcon}
-            label={`Create new terminal thread in ${project.name}`}
-            tooltip={
-              newTerminalThreadShortcutLabel
-                ? `New terminal thread (${newTerminalThreadShortcutLabel})`
-                : "New terminal thread"
-            }
-            offsetClassName="right-[1.875rem]"
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              void handleNewThread(project.id, {
-                envMode: resolveSidebarNewThreadEnvMode({
-                  defaultEnvMode: appSettings.defaultThreadEnvMode,
-                }),
-                entryPoint: "terminal",
-              });
-            }}
-          />
-          <SidebarProjectHeaderAction
-            icon={DisposableThreadIcon}
-            glyph="chromeLu"
-            label={`Create disposable thread in ${project.name}`}
-            tooltip="New disposable thread"
-            offsetClassName="right-[3.375rem]"
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              void handleNewThread(project.id, {
-                envMode: resolveSidebarNewThreadEnvMode({
-                  defaultEnvMode: appSettings.defaultThreadEnvMode,
-                }),
-                temporary: true,
-              });
-            }}
-          />
-          <SidebarProjectHeaderAction
-            icon={NewThreadIcon}
-            label={`Create new thread in ${project.name}`}
-            tooltip={
-              newThreadShortcutLabel ? `New thread (${newThreadShortcutLabel})` : "New thread"
-            }
-            offsetClassName="right-1.5"
-            testId="new-thread-button"
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              void handleNewThread(project.id, {
-                envMode: resolveSidebarNewThreadEnvMode({
-                  defaultEnvMode: appSettings.defaultThreadEnvMode,
-                }),
-              });
-            }}
-          />
+          <SidebarSectionToolbar placement="overlay" revealOnHover>
+            <SidebarIconButton
+              icon={TerminalIcon}
+              label={`Create new terminal thread in ${project.name}`}
+              tooltip={
+                newTerminalThreadShortcutLabel
+                  ? `New terminal thread (${newTerminalThreadShortcutLabel})`
+                  : "New terminal thread"
+              }
+              tooltipSide="top"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                void handleNewThread(project.id, {
+                  envMode: resolveSidebarNewThreadEnvMode({
+                    defaultEnvMode: appSettings.defaultThreadEnvMode,
+                  }),
+                  entryPoint: "terminal",
+                });
+              }}
+            />
+            <SidebarIconButton
+              icon={DisposableThreadIcon}
+              glyph="chromeLu"
+              label={`Create disposable thread in ${project.name}`}
+              tooltip="New disposable thread"
+              tooltipSide="top"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                void handleNewThread(project.id, {
+                  envMode: resolveSidebarNewThreadEnvMode({
+                    defaultEnvMode: appSettings.defaultThreadEnvMode,
+                  }),
+                  temporary: true,
+                });
+              }}
+            />
+            <SidebarIconButton
+              icon={NewThreadIcon}
+              label={`Create new thread in ${project.name}`}
+              tooltip={
+                newThreadShortcutLabel ? `New thread (${newThreadShortcutLabel})` : "New thread"
+              }
+              tooltipSide="top"
+              data-testid="new-thread-button"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                void handleNewThread(project.id, {
+                  envMode: resolveSidebarNewThreadEnvMode({
+                    defaultEnvMode: appSettings.defaultThreadEnvMode,
+                  }),
+                });
+              }}
+            />
+          </SidebarSectionToolbar>
         </div>
 
         <div
           className={cn(
-            "grid pt-1 transition-[grid-template-rows,opacity] duration-220 ease-out",
+            "grid transition-[grid-template-rows,opacity] duration-220 ease-out",
+            SIDEBAR_NESTED_LIST_OFFSET_CLASS_NAME,
             project.expanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
           )}
         >
           <div className="min-h-0 overflow-hidden">
             <SidebarMenuSub
               className={cn(
-                "mx-0 my-0 w-full translate-x-0 gap-0.5 border-l-0 px-0 py-0 transition-transform duration-220 ease-out",
+                "mx-0 my-0 w-full translate-x-0 border-l-0 px-0 py-0 transition-transform duration-220 ease-out",
+                SIDEBAR_NESTED_LIST_GAP_CLASS_NAME,
                 project.expanded ? "translate-y-0" : "-translate-y-1 pointer-events-none",
               )}
             >
@@ -5631,14 +5661,18 @@ export default function Sidebar() {
         )}
       </SidebarContent>
 
-      <SidebarSeparator />
       <SidebarFooter className="gap-2 p-2 font-system-ui">
         {!isOnSettings ? (
           <div className="group/collapsible">
             <div className="group/project-header relative">
               <SidebarMenuButton
                 size="sm"
-                className="h-7.5 gap-2 rounded-lg px-2 py-0.5 text-left text-[length:var(--app-font-size-ui,12px)] font-normal hover:bg-[var(--sidebar-accent)] group-hover/project-header:bg-[var(--sidebar-accent)] cursor-pointer"
+                className={cn(
+                  SIDEBAR_HEADER_ROW_CLASS_NAME,
+                  SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
+                  SIDEBAR_ROW_HOVER_CLASS_NAME,
+                  "cursor-pointer",
+                )}
                 onClick={() => setChatSectionExpanded((current) => !current)}
                 onKeyDown={(event) => {
                   if (event.key !== "Enter" && event.key !== " ") return;
@@ -5739,11 +5773,16 @@ export default function Sidebar() {
               <div className="flex items-center gap-2">
                 {!isOnSettings && (
                   <SidebarMenuButton
-                    size="default"
-                    className="h-8 flex-1 gap-2.5 rounded-lg px-2 text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79 hover:bg-[var(--sidebar-accent)]"
+                    size="sm"
+                    className={cn(
+                      SIDEBAR_HEADER_ROW_CLASS_NAME,
+                      SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
+                      SIDEBAR_ROW_HOVER_CLASS_NAME,
+                      "flex-1",
+                    )}
                     onClick={() => void navigate({ to: "/settings" })}
                   >
-                    <SidebarLeadingIcon size="md">
+                    <SidebarLeadingIcon size="sm">
                       <SidebarGlyph icon={SettingsIcon} variant="leading" />
                     </SidebarLeadingIcon>
                     <span>Settings</span>

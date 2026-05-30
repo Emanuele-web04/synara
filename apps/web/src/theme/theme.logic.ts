@@ -665,6 +665,7 @@ export function buildThemeCssVariables(
   const warningColor = variant === "dark" ? "#f5b44a" : "#d97706";
   const sidebarSurfaceUnder = readCodexVariable("--color-background-surface-under");
   const sidebarRaisedSurface = readCodexVariable("--color-background-elevated-primary");
+  const settingsSurface = readCodexVariable("--color-background-surface");
   const composerSurface =
     variant === "dark"
       ? readCodexVariable("--color-background-control-opaque")
@@ -673,7 +674,7 @@ export function buildThemeCssVariables(
   // token by 5% in oklab over the existing backdrop blur. Light vs dark is already
   // handled by --color-background-control-opaque (white in light, dark control in dark).
   const composerPickerMenuSurface =
-    "color-mix(in oklab, var(--color-background-control-opaque) 95%, transparent)";
+    "color-mix(in oklab, var(--popover) 70%, transparent)";
   const composerFocusBorder = buildComposerFocusBorder(
     pack,
     variant,
@@ -697,6 +698,8 @@ export function buildThemeCssVariables(
     "--app-user-message-background": chatCodeSurface,
     "--app-sidebar-backdrop-filter":
       material === "translucent" ? "blur(8px) saturate(135%)" : "none",
+    "--app-settings-backdrop-filter":
+      material === "translucent" ? "blur(8px) saturate(135%)" : "none",
     "--app-sidebar-shadow":
       material === "translucent"
         ? variant === "dark"
@@ -711,6 +714,12 @@ export function buildThemeCssVariables(
           ? `color-mix(in srgb, ${sidebarSurfaceUnder} 72%, transparent)`
           : `color-mix(in srgb, ${sidebarSurfaceUnder} 64%, transparent)`
         : sidebarSurfaceUnder,
+    "--app-settings-surface":
+      material === "translucent"
+        ? variant === "dark"
+          ? `color-mix(in srgb, ${settingsSurface} 72%, transparent)`
+          : `color-mix(in srgb, ${settingsSurface} 64%, transparent)`
+        : settingsSurface,
     "--background": readCodexVariable("--color-background-surface-under"),
     "--border": readCodexVariable("--color-border"),
     "--card": readCodexVariable("--color-background-panel"),
@@ -1002,7 +1011,6 @@ function buildDarkDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
   // Mirrors Codex Electron's dark chrome derivation from chrome-theme-C3NmvE0H.js.
   const controlBase = mixRgb(theme.surface, theme.ink, 0.06 + theme.contrast * 0.05);
   const focusBase = mixRgb(theme.accent, WHITE, 0.3 + theme.contrast * 0.15);
-  const primaryButtonBase = mixRgb(theme.surface, BLACK, 0.38 + theme.contrast * 0.12);
   const elevatedPrimaryBase = mixRgb(theme.surface, theme.ink, 0.08 + theme.contrast * 0.08);
 
   return {
@@ -1013,7 +1021,10 @@ function buildDarkDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
     borderFocus: formatRgba(focusBase, 0.7 + theme.contrast * 0.1),
     borderHeavy: formatRgba(theme.ink, 0.16 + theme.contrast * 0.06),
     borderLight: formatRgba(theme.ink, 0.06 + theme.contrast * 0.02),
-    buttonPrimaryBackground: formatOpaqueRgb(primaryButtonBase),
+    // High-contrast primary button (white-on-dark) mirroring the light-mode
+    // derivation (bg = ink, text = surface). Intentionally diverges from Codex
+    // Electron's dark elevated primary so the primary action reads as filled.
+    buttonPrimaryBackground: theme.theme.ink,
     buttonPrimaryBackgroundActive: formatRgba(theme.ink, 0.07 + theme.contrast * 0.05),
     buttonPrimaryBackgroundHover: formatRgba(theme.ink, 0.04 + theme.contrast * 0.03),
     buttonPrimaryBackgroundInactive: formatRgba(theme.ink, 0.02 + theme.contrast * 0.02),
@@ -1042,7 +1053,7 @@ function buildDarkDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
     // Codex brightens dark accent affordances through the same focus mix used
     // for the border, rather than using the raw accent directly.
     textAccent: formatOpaqueRgb(focusBase),
-    textButtonPrimary: theme.theme.ink,
+    textButtonPrimary: theme.theme.surface,
     textButtonSecondary: mixHex(theme.theme.ink, theme.theme.surface, 0.7 + theme.contrast * 0.1),
     textButtonTertiary: formatRgba(theme.ink, 0.45 + theme.contrast * 0.1),
     textForeground: theme.theme.ink,

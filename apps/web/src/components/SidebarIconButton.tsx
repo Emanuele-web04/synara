@@ -1,6 +1,6 @@
 // FILE: SidebarIconButton.tsx
 // Purpose: Single square icon-button primitive shared by every sidebar control
-//          (section headers + row hover actions).
+//          (section headers, project headers, and row hover actions).
 // Layer: Sidebar UI primitive
 // Exports: SidebarIconButton, SidebarIconButtonSize
 // Why: The sidebar had ~7 near-identical `sidebar-icon-button inline-flex size-N`

@@ -265,7 +265,7 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
           <MenuSubTrigger>
             <ProviderIcon
               aria-hidden="true"
-              className={cn("size-4 shrink-0", getProviderIconClassName(activeProvider))}
+              className={cn("size-3 shrink-0", getProviderIconClassName(activeProvider))}
             />
             <span className="truncate">{modelLabel}</span>
           </MenuSubTrigger>
@@ -297,7 +297,7 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
               <IoFlash
                 aria-hidden="true"
                 className={cn(
-                  "size-4 shrink-0",
+                  "size-3 shrink-0",
                   fastModeEnabled ? "text-[hsl(var(--chart-4))]" : "text-muted-foreground/85",
                 )}
               />

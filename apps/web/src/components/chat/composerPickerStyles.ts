@@ -34,11 +34,14 @@ export const COMPOSER_PICKER_MODEL_LIST_MAX_HEIGHT_CLASS_NAME =
 export const COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME = "composer-picker-scroll";
 
 /** Shared corner radius for picker panels and option hover/selection rows. */
-export const COMPOSER_PICKER_RADIUS_CLASS_NAME = "rounded-lg";
+export const COMPOSER_PICKER_RADIUS_CLASS_NAME = "rounded-[0.6rem]";
 
 /** Collapsible section headers inside model provider lists. */
 export const COMPOSER_PICKER_MODEL_GROUP_HEADER_CLASS_NAME =
-  `flex w-full items-center gap-1.5 ${COMPOSER_PICKER_RADIUS_CLASS_NAME} px-2 py-1.5 text-left text-[10px] font-medium uppercase tracking-[0.06em] text-muted-foreground/80 outline-none transition-colors hover:bg-[color-mix(in_srgb,var(--foreground)_4%,transparent)] focus-visible:ring-0`;
+  `grid w-full grid-cols-[0.75rem_minmax(0,1fr)_2.5rem] items-center gap-x-1.5 ${COMPOSER_PICKER_RADIUS_CLASS_NAME} px-2 py-1 text-left text-[10px] font-medium uppercase tracking-[0.06em] text-muted-foreground/80 outline-none transition-colors hover:bg-[color-mix(in_srgb,var(--foreground)_4%,transparent)] focus-visible:ring-0`;
+
+/** Indents model row labels under collapsible group headers. */
+export const COMPOSER_PICKER_MODEL_ROW_LABEL_INDENT_CLASS_NAME = "pl-[1.125rem]";
 
 /** Muted accent text for effort labels and empty-landing folder names. */
 export const COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME = "text-muted-foreground/45";
@@ -76,12 +79,24 @@ export const COMPOSER_SURFACE_CHROME_CLASS_NAME =
 export const COMPOSER_INPUT_SURFACE_CLASS_NAME =
   `chat-composer-surface rounded-[1.2rem] ${COMPOSER_SURFACE_CHROME_CLASS_NAME} transition-colors duration-200`;
 
-/** Frosted backdrop layer inside composer picker dropdown panels. */
+/** Active segment fill in the sidebar Threads/Workspace picker. */
+export const SIDEBAR_SEGMENTED_PICKER_ACTIVE_CLASS_NAME =
+  "relative z-[1] text-[var(--color-text-foreground)]";
+
+/** Shadcn default-translucent shell for floating menus, pickers, and popovers. */
+export const APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME =
+  "relative overflow-hidden border border-border bg-popover/70 text-popover-foreground before:pointer-events-none before:absolute before:inset-0 before:-z-1 before:rounded-[inherit] before:backdrop-blur-2xl before:backdrop-saturate-150";
+
+/** Default floating popup shell (dropdown menus, selects, popovers). */
+export const APP_TRANSLUCENT_POPUP_SURFACE_CLASS_NAME =
+  `${APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME} rounded-xl shadow-xl`;
+
+/** Frosted backdrop layer inside composer picker dropdown panels. @deprecated Use APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME instead. */
 export const COMPOSER_PICKER_MENU_BACKDROP_CLASS_NAME = "composer-picker-menu-surface";
 
 /** Visual shell for composer picker dropdown panels (menus attached to the composer). */
 export const COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME =
-  `overflow-hidden ${COMPOSER_PICKER_RADIUS_CLASS_NAME} bg-transparent ${COMPOSER_SURFACE_CHROME_CLASS_NAME}`;
+  `${APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME} ${COMPOSER_PICKER_RADIUS_CLASS_NAME} ${COMPOSER_SURFACE_SHADOW_CLASS_NAME}`;
 
 /** Frosted backdrop layer inside open picker panels (composer menus + settings selects). */
 export const COMPOSER_PICKER_MENU_POPUP_BACKDROP_LAYER_CLASS_NAME =
@@ -97,7 +112,7 @@ export const COMPOSER_PICKER_MENU_POPUP_VIEWPORT_CLASS_NAME =
 
 /** Option row shared by composer menus and composer-surface select popups. Sizing via picker size CSS vars. */
 export const COMPOSER_PICKER_MENU_OPTION_CLASS_NAME =
-  `[&>svg]:-mx-0.5 flex cursor-default select-none items-center rounded-lg text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-foreground)] outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 [&>svg:not([class*='opacity-'])]:opacity-80 [&>svg]:pointer-events-none [&>svg]:shrink-0`;
+  `[&>svg]:-mx-0.5 flex cursor-default select-none items-center ${COMPOSER_PICKER_RADIUS_CLASS_NAME} text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-foreground)] outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 [&>svg:not([class*='opacity-'])]:opacity-80 [&>svg]:pointer-events-none [&>svg]:shrink-0`;
 
 /** Same as menu options, adapted for select item grid layout. */
 export const COMPOSER_PICKER_SELECT_OPTION_CLASS_NAME =

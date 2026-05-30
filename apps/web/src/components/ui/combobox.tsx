@@ -7,6 +7,7 @@ import * as React from "react";
 import { cn } from "~/lib/utils";
 import { Input } from "~/components/ui/input";
 import { ScrollArea } from "~/components/ui/scroll-area";
+import { APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME } from "../chat/composerPickerStyles";
 
 const ComboboxContext = React.createContext<{
   chipsRef: React.RefObject<Element | null> | null;
@@ -167,7 +168,8 @@ function ComboboxPopup({
       >
         <span
           className={cn(
-            "relative flex max-h-full min-w-(--anchor-width) max-w-(--available-width) origin-(--transform-origin) overflow-hidden rounded-lg border border-[color:var(--color-border-light)] bg-[var(--color-background-surface-under)] not-dark:bg-clip-padding shadow-lg/5 transition-[scale,opacity] before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-lg)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] dark:before:shadow-[0_-1px_--theme(--color-white/6%)]",
+            APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME,
+            "relative flex max-h-full min-w-(--anchor-width) max-w-(--available-width) origin-(--transform-origin) rounded-lg not-dark:bg-clip-padding shadow-lg/5 transition-[scale,opacity]",
             className,
           )}
         >
@@ -195,7 +197,7 @@ function ComboboxItem({
   return (
     <ComboboxPrimitive.Item
       className={cn(
-        "grid min-h-8 in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)] cursor-default grid-cols-[1fr_auto] items-center gap-3 rounded-sm px-2.5 py-1 text-base text-[var(--color-text-foreground)] outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 sm:min-h-7 sm:text-sm [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
+        "grid min-h-[1.625rem] in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)] cursor-default grid-cols-[1fr_auto] items-center gap-3 rounded-lg px-2.5 py-px text-base text-[var(--color-text-foreground)] outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 sm:min-h-6 sm:text-sm [&_svg:not([class*='size-'])]:size-3 [&_svg]:pointer-events-none [&_svg]:shrink-0",
         className,
       )}
       data-slot="combobox-item"
@@ -207,7 +209,7 @@ function ComboboxItem({
       <ComboboxPrimitive.ItemIndicator
         className={cn("col-start-2 justify-self-end", hideIndicator && "hidden")}
       >
-        <CheckIcon />
+        <CheckIcon className="size-3" />
       </ComboboxPrimitive.ItemIndicator>
     </ComboboxPrimitive.Item>
   );

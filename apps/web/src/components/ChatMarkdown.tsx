@@ -4,7 +4,7 @@
 // Exports: ChatMarkdown
 
 import { DiffsHighlighter, getSharedHighlighter, SupportedLanguages } from "@pierre/diffs";
-import { CheckIcon, CopyIcon } from "~/lib/icons";
+import { CheckIcon, CopyIcon, TextWrapIcon } from "~/lib/icons";
 import React, {
   Children,
   type CSSProperties,
@@ -510,8 +510,17 @@ function getHighlighterPromise(language: string): Promise<DiffsHighlighter> {
   return promise;
 }
 
-function MarkdownCodeBlock({ code, children }: { code: string; children: ReactNode }) {
+function MarkdownCodeBlock({
+  code,
+  language,
+  children,
+}: {
+  code: string;
+  language: string;
+  children: ReactNode;
+}) {
   const [copied, setCopied] = useState(false);
+  const [wrap, setWrap] = useState(false);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleCopy = useCallback(() => {
     void copyTextToClipboard(code)
@@ -527,6 +536,7 @@ function MarkdownCodeBlock({ code, children }: { code: string; children: ReactNo
       })
       .catch(() => undefined);
   }, [code]);
+  const toggleWrap = useCallback(() => setWrap((previous) => !previous), []);
 
   useEffect(
     () => () => {
@@ -539,18 +549,35 @@ function MarkdownCodeBlock({ code, children }: { code: string; children: ReactNo
   );
 
   return (
-    <div className="chat-markdown-codeblock">
-      <IconButton
-        className="chat-markdown-copy-button"
-        onClick={handleCopy}
-        title={copied ? "Copied" : "Copy code"}
-        label={copied ? "Copied" : "Copy code"}
-        size="icon-xs"
-        variant="ghost"
-      >
-        {copied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
-      </IconButton>
-      {children}
+    <div className="chat-markdown-codeblock" data-wrap={wrap ? "true" : "false"}>
+      <div className="chat-markdown-codeblock__header">
+        <span className="chat-markdown-codeblock__lang">{language}</span>
+        <div className="chat-markdown-codeblock__actions">
+          <IconButton
+            className="chat-markdown-codeblock__action"
+            onClick={toggleWrap}
+            title={wrap ? "Disable soft wrap" : "Enable soft wrap"}
+            label={wrap ? "Disable soft wrap" : "Enable soft wrap"}
+            aria-pressed={wrap}
+            data-active={wrap ? "true" : "false"}
+            size="icon-xs"
+            variant="ghost"
+          >
+            <TextWrapIcon className="size-3" />
+          </IconButton>
+          <IconButton
+            className="chat-markdown-codeblock__action"
+            onClick={handleCopy}
+            title={copied ? "Copied" : "Copy code"}
+            label={copied ? "Copied" : "Copy code"}
+            size="icon-xs"
+            variant="ghost"
+          >
+            {copied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
+          </IconButton>
+        </div>
+      </div>
+      <div className="chat-markdown-codeblock__body">{children}</div>
     </div>
   );
 }
@@ -658,8 +685,10 @@ function ChatMarkdown({
           return <pre {...props}>{children}</pre>;
         }
 
+        const language = extractFenceLanguage(codeBlock.className);
+
         return (
-          <MarkdownCodeBlock code={codeBlock.code}>
+          <MarkdownCodeBlock code={codeBlock.code} language={language}>
             <CodeHighlightErrorBoundary fallback={<pre {...props}>{children}</pre>}>
               <Suspense fallback={<pre {...props}>{children}</pre>}>
                 <SuspenseShikiCodeBlock

@@ -50,10 +50,10 @@ const TOAST_ICONS = {
 } as const;
 
 const COMPACT_TOAST_ROOT_CLASS =
-  "w-max max-w-[min(calc(100vw-2rem),28rem)] rounded-lg border border-[color-mix(in_srgb,var(--color-text-accent)_7%,transparent)] bg-[color-mix(in_srgb,var(--color-text-accent)_5%,transparent)] text-foreground shadow-lg/10 backdrop-blur-xl before:hidden dark:border-[color-mix(in_srgb,var(--color-text-accent)_10%,transparent)] dark:bg-[color-mix(in_srgb,var(--color-text-accent)_10%,transparent)] dark:text-white dark:shadow-lg/15";
+  "w-max max-w-[min(calc(100vw-2rem),28rem)] rounded-lg border border-[color-mix(in_srgb,var(--color-text-accent)_32%,transparent)] bg-[color-mix(in_srgb,var(--color-text-accent)_50%,transparent)] text-white shadow-lg/15 backdrop-blur-xl before:hidden dark:border-[color-mix(in_srgb,var(--color-text-accent)_10%,transparent)] dark:bg-[color-mix(in_srgb,var(--color-text-accent)_10%,transparent)]";
 
 const EXPANDED_TOAST_ROOT_CLASS =
-  "w-full rounded-xl border border-[color-mix(in_srgb,var(--color-text-accent)_7%,transparent)] bg-[color-mix(in_srgb,var(--color-text-accent)_5%,transparent)] text-foreground shadow-lg/10 backdrop-blur-xl before:hidden dark:border-[color-mix(in_srgb,var(--color-text-accent)_10%,transparent)] dark:bg-[color-mix(in_srgb,var(--color-text-accent)_10%,transparent)] dark:text-white dark:shadow-lg/15";
+  "w-full rounded-xl border border-[color-mix(in_srgb,var(--color-text-accent)_32%,transparent)] bg-[color-mix(in_srgb,var(--color-text-accent)_50%,transparent)] text-white shadow-lg/15 backdrop-blur-xl before:hidden dark:border-[color-mix(in_srgb,var(--color-text-accent)_10%,transparent)] dark:bg-[color-mix(in_srgb,var(--color-text-accent)_10%,transparent)]";
 
 function shouldUseCompactToast(toast: ToastObject<ThreadToastData>): boolean {
   return !toast.data?.copyText && !toast.actionProps && !toast.data?.secondaryActionProps;
@@ -68,7 +68,7 @@ function toastRootClassName(position: ToastPosition, compact: boolean): string {
 
 function toastIconClassName(type: ToastObject<ThreadToastData>["type"]): string {
   return cn(
-    "text-foreground/72 dark:text-white/92",
+    "text-white/92",
     type === "loading" && "animate-spin opacity-90",
   );
 }
@@ -209,7 +209,7 @@ function ToastActions({
       {copyText && (
         <Button
           aria-label={isCopied ? "Copied error message" : "Copy error message"}
-          className="self-start border-foreground/12 bg-foreground/6 text-foreground hover:bg-foreground/12 dark:border-white/20 dark:bg-white/10 dark:text-white dark:hover:bg-white/20"
+          className="self-start border-white/20 bg-white/10 text-white hover:bg-white/20"
           onClick={() => {
             copyToClipboard(copyText, undefined);
           }}
@@ -226,7 +226,7 @@ function ToastActions({
           {...actionProps}
           className={cn(
             buttonVariants({ size: "xs", variant: "outline" }),
-            "self-start border-foreground/12 bg-foreground/6 text-foreground hover:bg-foreground/12 dark:border-white/20 dark:bg-white/10 dark:text-white dark:hover:bg-white/20",
+            "self-start border-white/20 bg-white/10 text-white hover:bg-white/20",
             actionProps.className,
           )}
           data-slot="toast-action"
@@ -238,7 +238,7 @@ function ToastActions({
         <Button
           {...secondaryActionProps}
           className={cn(
-            "self-start border-foreground/12 bg-foreground/6 text-foreground hover:bg-foreground/12 dark:border-white/20 dark:bg-white/10 dark:text-white dark:hover:bg-white/20",
+            "self-start border-white/20 bg-white/10 text-white hover:bg-white/20",
             secondaryActionProps.className,
           )}
           size={secondaryActionProps.size ?? "xs"}
@@ -260,7 +260,7 @@ function ToastCloseButton({
     <Toast.Close
       aria-label="Dismiss toast"
       className={cn(
-        "inline-flex shrink-0 items-center justify-center rounded-full text-foreground/40 transition-colors hover:bg-foreground/8 hover:text-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/20 dark:text-white/65 dark:hover:bg-white/10 dark:hover:text-white dark:focus-visible:ring-white/35",
+        "inline-flex shrink-0 items-center justify-center rounded-full text-white/65 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/35",
         compact ? "size-5" : "absolute top-2 right-2 size-6",
       )}
       data-slot="toast-close"
@@ -318,7 +318,7 @@ function ToastSurface({
         />
         {!compact ? (
           <Toast.Description
-            className="min-w-0 break-words text-foreground/60 dark:text-white/72"
+            className="min-w-0 break-words text-white/72"
             data-slot="toast-description"
           />
         ) : null}

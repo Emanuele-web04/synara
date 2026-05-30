@@ -3,15 +3,16 @@
 // Layer: Settings UI styling
 // Exports: border, surface, card, row, and inset list class names
 
-import { COMPOSER_PICKER_RADIUS_CLASS_NAME } from "./components/chat/composerPickerStyles";
+/** Shared corner radius for settings cards, controls, and select popups. */
+export const SETTINGS_RADIUS_CLASS_NAME = "rounded-md";
 
 /** Same border token as Button `outline` / `chrome-outline` variants. */
 export const SETTINGS_CONTROL_BORDER_CLASS_NAME =
   "border border-[color:var(--color-border)]";
 
-/** Main settings scroll surface — follows the active theme Background. */
+/** Main settings shell — lets Electron translucent themes show through the route surface. */
 export const SETTINGS_PAGE_BACKGROUND_CLASS_NAME =
-  "bg-[var(--color-background-surface)]";
+  "app-settings-surface";
 
 /** Section label above a bordered card group. */
 export const SETTINGS_SECTION_LABEL_CLASS_NAME =
@@ -21,7 +22,7 @@ export const SETTINGS_SECTION_LABEL_CLASS_NAME =
 export const SETTINGS_CARD_CLASS_NAME = [
   "overflow-hidden bg-[var(--color-background-surface)]",
   SETTINGS_CONTROL_BORDER_CLASS_NAME,
-  COMPOSER_PICKER_RADIUS_CLASS_NAME,
+  SETTINGS_RADIUS_CLASS_NAME,
 ].join(" ");
 
 /** Row padding inside a settings card. */
@@ -38,6 +39,6 @@ export const SETTINGS_INSET_LIST_CLASS_NAME = SETTINGS_CARD_CLASS_NAME;
 export const SETTINGS_EMPTY_STATE_CLASS_NAME = [
   "bg-[var(--color-background-surface)]",
   SETTINGS_CONTROL_BORDER_CLASS_NAME,
-  COMPOSER_PICKER_RADIUS_CLASS_NAME,
+  SETTINGS_RADIUS_CLASS_NAME,
   "border-dashed",
 ].join(" ");

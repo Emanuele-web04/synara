@@ -56,7 +56,12 @@ import {
 import { Switch } from "../components/ui/switch";
 import { toastManager } from "../components/ui/toast";
 import { ThemePackEditor } from "../components/ThemePackEditor";
-import { ComposerPickerSelectPopup } from "../components/chat/ComposerPickerMenuPopup";
+import {
+  SettingsCard,
+  SettingsRow,
+  SettingsSection,
+  SettingsSelectPopup,
+} from "../components/settings/SettingsPanelPrimitives";
 import { SidebarInset } from "../components/ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
@@ -88,11 +93,6 @@ import {
   readBrowserNotificationPermissionState,
   requestBrowserNotificationPermission,
 } from "../notifications/taskCompletion";
-import {
-  SettingsCard,
-  SettingsRow,
-  SettingsSection,
-} from "../components/settings/SettingsPanelPrimitives";
 import { normalizeSettingsSection, SETTINGS_NAV_ITEMS } from "../settingsNavigation";
 import {
   SETTINGS_CARD_ROW_DIVIDER_CLASS_NAME,
@@ -242,7 +242,7 @@ function SortableProviderVisibilityRow(props: {
         transition,
       }}
       className={cn(
-        "flex items-center justify-between gap-3 rounded-lg border border-[color:var(--color-border)] bg-[var(--color-background-surface)] px-3 py-2.5",
+        "flex items-center justify-between gap-3 rounded-md border border-[color:var(--color-border)] bg-[var(--color-background-surface)] px-3 py-2.5",
         isDragging && "z-10 opacity-80 shadow-lg",
       )}
     >
@@ -436,7 +436,7 @@ function SettingResetButton({ label, onClick }: { label: string; onClick: () => 
             size="icon-xs"
             variant="ghost"
             aria-label={`Reset ${label} to default`}
-            className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
+            className="size-5 rounded-md p-0 text-muted-foreground hover:text-foreground"
             onClick={(event) => {
               event.stopPropagation();
               onClick();
@@ -471,7 +471,7 @@ function SettingsSelectControl({
       <SelectTrigger className={triggerClassName} aria-label={ariaLabel}>
         <SelectValue>{valueContent}</SelectValue>
       </SelectTrigger>
-      <ComposerPickerSelectPopup>{children}</ComposerPickerSelectPopup>
+      <SettingsSelectPopup>{children}</SettingsSelectPopup>
     </Select>
   );
 }
@@ -2245,13 +2245,13 @@ function SettingsRouteView() {
                   >
                     <SelectValue>{selectedCustomModelProviderSettings.title}</SelectValue>
                   </SelectTrigger>
-                  <ComposerPickerSelectPopup align="start">
+                  <SettingsSelectPopup align="start">
                     {MODEL_PROVIDER_SETTINGS.map((providerSettings) => (
                       <SelectItem hideIndicator key={providerSettings.provider} value={providerSettings.provider}>
                         {providerSettings.title}
                       </SelectItem>
                     ))}
-                  </ComposerPickerSelectPopup>
+                  </SettingsSelectPopup>
                 </Select>
                 <Input
                   id="custom-model-slug"
@@ -3007,13 +3007,11 @@ function SettingsRouteView() {
 
   return (
     <SidebarInset
-      className={cn(
-        "h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground",
-        SETTINGS_PAGE_BACKGROUND_CLASS_NAME,
-      )}
+      className="h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground"
+      surfaceClassName={SETTINGS_PAGE_BACKGROUND_CLASS_NAME}
     >
       <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
-        <div className={cn("flex-1 overflow-y-auto", SETTINGS_PAGE_BACKGROUND_CLASS_NAME)}>
+        <div className="flex-1 overflow-y-auto">
           <div
             className={cn(
               "mx-auto w-full max-w-2xl px-6 py-8",

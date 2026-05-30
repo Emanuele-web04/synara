@@ -436,7 +436,7 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
               <OptionIcon
                 aria-hidden="true"
                 className={cn(
-                  "size-4 shrink-0 opacity-80",
+                  "size-3 shrink-0 opacity-80",
                   providerIconClassName(option.value, "text-muted-foreground/85"),
                 )}
               />
@@ -453,7 +453,7 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
               <OptionIcon
                 aria-hidden="true"
                 className={cn(
-                  "size-4 shrink-0",
+                  "size-3 shrink-0",
                   providerIconClassName(option.value, "text-muted-foreground/85"),
                 )}
               />
@@ -475,7 +475,7 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
           <MenuItem key={option.value} disabled>
             <OptionIcon
               aria-hidden="true"
-              className="size-4 shrink-0 text-muted-foreground/85 opacity-80"
+              className="size-3 shrink-0 text-muted-foreground/85 opacity-80"
             />
             <span>{option.label}</span>
             <span className="ms-auto text-[11px] text-muted-foreground/80 uppercase tracking-[0.08em]">

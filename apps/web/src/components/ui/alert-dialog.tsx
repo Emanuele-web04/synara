@@ -96,8 +96,7 @@ function AlertDialogFooter({
       className={cn(
         "flex flex-col-reverse gap-2 px-4 sm:flex-row sm:justify-end",
         alertDialogFooterButtonClassName,
-        variant === "default" &&
-          "border-t border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] py-3 sm:rounded-b-[calc(var(--radius-xl)-1px)]",
+        variant === "default" && "py-3",
         variant === "bare" && "pb-4 pt-3",
         className,
       )}

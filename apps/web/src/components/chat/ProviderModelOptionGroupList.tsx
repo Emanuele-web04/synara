@@ -19,6 +19,7 @@ import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { MenuGroup, MenuGroupLabel, MenuRadioItem } from "../ui/menu";
 import {
   COMPOSER_PICKER_MODEL_GROUP_HEADER_CLASS_NAME,
+  COMPOSER_PICKER_MODEL_ROW_LABEL_INDENT_CLASS_NAME,
   COMPOSER_PICKER_RADIUS_CLASS_NAME,
   COMPOSER_PICKER_SECTION_LABEL_CLASS_NAME,
 } from "./composerPickerStyles";
@@ -54,13 +55,9 @@ function ProviderModelRadioItem(
     <MenuRadioItem
       key={`${provider}:${modelOption.slug}`}
       value={modelOption.slug}
-      onClick={() => {
-        onAfterSelection?.();
-      }}
-    >
-      {supportsFavorites ? (
-        <span className="flex w-full min-w-0 items-center gap-2">
-          <span className="block min-w-0 flex-1 truncate">{modelOption.name}</span>
+      preserveChildLayout={supportsFavorites}
+      trailing={
+        supportsFavorites ? (
           <button
             type="button"
             aria-label={
@@ -69,10 +66,8 @@ function ProviderModelRadioItem(
                 : `Add ${modelOption.name} to favourites`
             }
             className={cn(
-              cn(
-                "-me-2 ms-auto inline-flex size-6 shrink-0 items-center justify-center text-muted-foreground/55 transition-colors hover:bg-[color-mix(in_srgb,var(--foreground)_6%,transparent)] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/60",
-                COMPOSER_PICKER_RADIUS_CLASS_NAME,
-              ),
+              "inline-flex size-5 shrink-0 items-center justify-center text-muted-foreground/50 transition-colors hover:bg-[color-mix(in_srgb,var(--foreground)_5%,transparent)] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/60",
+              COMPOSER_PICKER_RADIUS_CLASS_NAME,
               isFavorite && "text-amber-400 hover:text-amber-300",
             )}
             onClick={(event) => {
@@ -85,11 +80,20 @@ function ProviderModelRadioItem(
             }}
           >
             {isFavorite ? (
-              <StarFilledIcon aria-hidden="true" className="size-3.5" />
+              <StarFilledIcon aria-hidden="true" className="size-3" />
             ) : (
-              <StarIcon aria-hidden="true" className="size-3.5" />
+              <StarIcon aria-hidden="true" className="size-3" />
             )}
           </button>
+        ) : null
+      }
+      onClick={() => {
+        onAfterSelection?.();
+      }}
+    >
+      {supportsFavorites ? (
+        <span className={cn("block min-w-0 truncate", COMPOSER_PICKER_MODEL_ROW_LABEL_INDENT_CLASS_NAME)}>
+          {modelOption.name}
         </span>
       ) : (
         modelOption.name
@@ -115,13 +119,15 @@ function CollapsibleModelGroup(
           event.stopPropagation();
         }}
       >
-        <DisclosureChevron open={open} className="size-3 shrink-0 opacity-50" />
-        <span className="min-w-0 flex-1 truncate normal-case tracking-normal">{props.group.label}</span>
-        <span className="shrink-0 rounded-full bg-[color-mix(in_srgb,var(--foreground)_6%,transparent)] px-1.5 py-px text-[9px] font-normal tabular-nums normal-case tracking-normal text-muted-foreground/70">
+        <DisclosureChevron open={open} className="col-start-1 size-3 shrink-0 opacity-50" />
+        <span className="col-start-2 min-w-0 truncate normal-case tracking-normal">
+          {props.group.label}
+        </span>
+        <span className="col-start-3 shrink-0 justify-self-end rounded-full bg-[color-mix(in_srgb,var(--foreground)_6%,transparent)] px-1.5 py-px text-[9px] font-normal tabular-nums normal-case tracking-normal text-muted-foreground/70">
           {props.group.options.length}
         </span>
       </CollapsibleTrigger>
-      <CollapsiblePanel className="pb-0.5">{props.children}</CollapsiblePanel>
+      <CollapsiblePanel className="flex flex-col gap-px pb-0.5">{props.children}</CollapsiblePanel>
     </Collapsible>
   );
 }
@@ -135,7 +141,7 @@ export const ProviderModelOptionGroupList = memo(function ProviderModelOptionGro
   );
 
   return (
-    <div className="flex flex-col gap-0.5">
+    <div className="flex flex-col gap-px">
       {props.groupedOptions.map((group) => {
         const groupItems = group.options.map((modelOption) => (
           <ProviderModelRadioItem
@@ -151,7 +157,7 @@ export const ProviderModelOptionGroupList = memo(function ProviderModelOptionGro
 
         if (group.label === null) {
           return (
-            <MenuGroup key={`${props.provider}:${group.key}`} className="px-0.5">
+            <MenuGroup key={`${props.provider}:${group.key}`} className="flex flex-col gap-px px-0.5">
               {groupItems}
             </MenuGroup>
           );
@@ -175,7 +181,7 @@ export const ProviderModelOptionGroupList = memo(function ProviderModelOptionGro
         }
 
         return (
-          <MenuGroup key={`${props.provider}:${group.key}`} className="px-0.5">
+          <MenuGroup key={`${props.provider}:${group.key}`} className="flex flex-col gap-px px-0.5">
             <MenuGroupLabel className={COMPOSER_PICKER_SECTION_LABEL_CLASS_NAME}>
               {group.label}
             </MenuGroupLabel>

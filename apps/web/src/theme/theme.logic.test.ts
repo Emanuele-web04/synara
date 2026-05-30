@@ -320,7 +320,9 @@ describe("buildThemeCssVariables", () => {
     expect(tokens.derived.textForegroundSecondary).toBe("rgba(227, 228, 230, 0.645)");
     expect(tokens.derived.buttonSecondaryBackground).toBe("rgba(227, 228, 230, 0.039)");
     expect(tokens.derived.iconAccent).toBe("rgb(143, 150, 219)");
-    expect(tokens.derived.textButtonPrimary).toBe("#e3e4e6");
+    // Dark primary button label is the surface color (dark) on the white (ink) button.
+    expect(tokens.derived.textButtonPrimary).toBe("#0f0f11");
+    expect(tokens.derived.buttonPrimaryBackground).toBe("#e3e4e6");
     expect(tokens.aliases["--color-token-side-bar-background"]).toBe("#0d0d0f");
     expect(tokens.aliases["--color-token-list-hover-background"]).toBe(
       tokens.derived.buttonSecondaryBackgroundHover,
@@ -359,7 +361,7 @@ describe("buildThemeCssVariables", () => {
     expect(tokens.derived.textButtonPrimary).not.toBe(tokens.derived.buttonPrimaryBackground);
   });
 
-  it("uses the dark-theme foreground color for the primary button label", () => {
+  it("uses the dark-theme foreground color for the primary button background", () => {
     const tokens = buildResolvedThemeTokens(
       {
         codeThemeId: "codex",
@@ -368,7 +370,10 @@ describe("buildThemeCssVariables", () => {
       "dark",
     );
 
-    expect(tokens.derived.textButtonPrimary).toBe(DEFAULT_THEME_STATE.chromeThemes.dark.ink);
+    // Dark mode mirrors light mode's high-contrast primary: bg = ink (white),
+    // label = surface (dark), so the primary action reads as a filled button.
+    expect(tokens.derived.buttonPrimaryBackground).toBe(DEFAULT_THEME_STATE.chromeThemes.dark.ink);
+    expect(tokens.derived.textButtonPrimary).toBe(DEFAULT_THEME_STATE.chromeThemes.dark.surface);
     expect(tokens.derived.textButtonPrimary).not.toBe(tokens.derived.buttonPrimaryBackground);
   });
 

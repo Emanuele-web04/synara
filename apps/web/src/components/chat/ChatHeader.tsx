@@ -278,7 +278,7 @@ export const ChatHeader = memo(function ChatHeader({
                     label="Close selected sidechat"
                     tooltip="Close selected sidechat"
                     tooltipSide="bottom"
-                    className="size-5 [-webkit-app-region:no-drag] [&_svg]:size-3"
+                    className="size-5 rounded-lg [-webkit-app-region:no-drag] [&_svg]:size-3"
                     onClick={(event) => {
                       event.stopPropagation();
                       onCloseThreadPane();
@@ -487,7 +487,7 @@ export const ChatHeader = memo(function ChatHeader({
             render={
               <Toggle
                 className={cn(
-                  "shrink-0 border-0",
+                  "shrink-0 rounded-lg border-0",
                   showDiffTotals
                     ? "gap-2 px-1.5 text-[length:var(--app-font-size-ui-sm,11px)]"
                     : "",

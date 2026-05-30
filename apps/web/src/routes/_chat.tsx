@@ -476,9 +476,9 @@ function ChatRouteGlobalShortcuts() {
 }
 
 const SIDEBAR_GAP_CLASS = {
-  left: "overflow-hidden after:absolute after:inset-y-0 after:right-0 after:w-px after:bg-[color:var(--color-border-light)]",
+  left: "overflow-hidden before:absolute before:inset-0 before:bg-[radial-gradient(90%_75%_at_0%_0%,rgba(255,255,255,0.06),transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.025),rgba(255,255,255,0.008))] dark:before:bg-[radial-gradient(90%_75%_at_0%_0%,rgba(255,255,255,0.04),transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.018),rgba(255,255,255,0.006))]",
   right:
-    "overflow-hidden after:absolute after:inset-y-0 after:left-0 after:w-px after:bg-[color:var(--color-border-light)]",
+    "overflow-hidden before:absolute before:inset-0 before:bg-[radial-gradient(90%_75%_at_100%_0%,rgba(255,255,255,0.06),transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.025),rgba(255,255,255,0.008))] dark:before:bg-[radial-gradient(90%_75%_at_100%_0%,rgba(255,255,255,0.04),transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.018),rgba(255,255,255,0.006))]",
 } as const;
 
 const SIDEBAR_INNER_CLASS = {

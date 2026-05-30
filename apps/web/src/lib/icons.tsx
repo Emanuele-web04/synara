@@ -115,7 +115,7 @@ export const AppsIcon: LucideIcon = (props) => (
 );
 export const QueueArrow: LucideIcon = centralIconWrapper("reading-list");
 export const ComposerSendArrowIcon: LucideIcon = centralIconWrapper("arrow-up");
-export const HandoffIcon: LucideIcon = centralIconWrapper("branch-simple");
+export const HandoffIcon: LucideIcon = centralIconWrapper("arrow-left-right");
 export const SkillCubeIcon: LucideIcon = centralIconWrapper("box-2");
 export const NewThreadIcon: LucideIcon = centralIconWrapper("compose-pencil");
 export const ArrowLeftIcon = adaptIcon(IconArrowLeft);
