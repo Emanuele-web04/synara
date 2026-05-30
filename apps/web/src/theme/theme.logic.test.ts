@@ -347,6 +347,22 @@ describe("buildThemeCssVariables", () => {
     expect(tokens.aliases["--color-token-dropdown-background"]).toBe("rgb(45, 45, 45)");
   });
 
+  it("matches Codex's light composer surface token path", () => {
+    const cssVariables = buildThemeCssVariables(
+      {
+        codeThemeId: "absolutely",
+        theme: getCodeThemeSeed("absolutely", "light"),
+      },
+      "light",
+      { electron: true },
+    );
+
+    expect(cssVariables.variables["--composer-surface"]).toBe(
+      "color-mix(in oklab, var(--color-background-control) 90%, transparent)",
+    );
+    expect(cssVariables.variables["--color-background-control"]).toBe("rgba(250, 250, 248, 0.96)");
+  });
+
   it("uses the light-theme foreground color for the primary button background", () => {
     const tokens = buildResolvedThemeTokens(
       {

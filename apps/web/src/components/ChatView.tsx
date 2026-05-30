@@ -189,7 +189,7 @@ import { useComposerCommandMenuItems } from "../hooks/useComposerCommandMenuItem
 import { useThreadHandoff } from "../hooks/useThreadHandoff";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import BranchToolbar, { RuntimeUsageControls } from "./BranchToolbar";
-import { DpCodeLogo } from "./DpCodeLogo";
+import { SynaraLogo } from "./SynaraLogo";
 import { ThreadWorktreeHandoffDialog } from "./ThreadWorktreeHandoffDialog";
 import {
   formatShortcutLabel,
@@ -8129,7 +8129,7 @@ export default function ChatView({
                       CHAT_COLUMN_FRAME_CLASS_NAME,
                     )}
                   >
-                    <DpCodeLogo aria-label="DP Code logo" className="size-12" draggable={false} />
+                    <SynaraLogo aria-label="Synara logo" className="size-12" draggable={false} />
                     <h2 className="text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]">
                       {isEmptyChatLanding ? (
                         "What should we work on?"

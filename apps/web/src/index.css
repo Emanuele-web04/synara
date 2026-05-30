@@ -933,10 +933,11 @@ diffs-container {
   background: color-mix(in srgb, var(--card) 92%, var(--background));
 }
 
-/* Composer surface follows Codex's renderer token path; dark Electron composer uses
-   the opaque control/dropdown token derived from the active chrome theme. */
+/* Composer surface follows Codex's renderer token path: light uses
+   bg-token-input-background/90 + backdrop blur; dark Electron uses the opaque
+   dropdown/control token derived from the active chrome theme. */
 :root {
-  --composer-surface: color-mix(in srgb, var(--color-background-surface-under) 97%, white 3%);
+  --composer-surface: color-mix(in oklab, var(--color-background-control) 90%, transparent);
   --runtime-full-access-accent: #e25505;
 }
 
@@ -947,6 +948,8 @@ diffs-container {
 
 .chat-composer-surface {
   background: var(--composer-surface);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
 }
 
 .sidebar-segmented-picker {

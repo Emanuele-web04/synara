@@ -1511,7 +1511,7 @@ function SettingsRouteView() {
         <SettingsCard>
           <SettingsRow
             title="Theme"
-            description="Choose how DP Code looks across the app."
+            description="Choose how Synara looks across the app."
             resetAction={
               theme !== "system" ? (
                 <SettingResetButton label="theme" onClick={() => setTheme("system")} />
@@ -2401,7 +2401,7 @@ function SettingsRouteView() {
       <SettingsSection title="Updates">
           <SettingsRow
             title="Provider updates"
-            description="Update installed provider tools that DP Code can safely update."
+            description="Update installed provider tools that Synara can safely update."
             status={
               outdatedProviderCount > 0
                 ? `${outdatedProviderCount} update${outdatedProviderCount === 1 ? "" : "s"} available`
@@ -2669,7 +2669,7 @@ function SettingsRouteView() {
                                       </code>
                                     </>
                                   ) : (
-                                    "A newer version is available, but DP Code could not identify a safe one-click update command for this installation."
+                                    "A newer version is available, but Synara could not identify a safe one-click update command for this installation."
                                   )}
                                 </div>
                               ) : null}

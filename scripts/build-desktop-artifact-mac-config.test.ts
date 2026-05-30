@@ -58,12 +58,12 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.equal(linux.afterPack, undefined);
     assert.deepStrictEqual(linux.linux, {
       target: ["AppImage"],
-      executableName: "dpcode",
+      executableName: "synara",
       icon: "icon.png",
       category: "Development",
       desktop: {
         entry: {
-          StartupWMClass: "dpcode",
+          StartupWMClass: "synara",
         },
       },
     });

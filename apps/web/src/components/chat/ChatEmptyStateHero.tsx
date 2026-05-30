@@ -4,7 +4,7 @@
 // Depends on: the caller-supplied project display name.
 
 import { memo } from "react";
-import { DpCodeLogo } from "~/components/DpCodeLogo";
+import { SynaraLogo } from "~/components/SynaraLogo";
 
 export const ChatEmptyStateHero = memo(function ChatEmptyStateHero({
   projectName,
@@ -13,7 +13,7 @@ export const ChatEmptyStateHero = memo(function ChatEmptyStateHero({
 }) {
   return (
     <div className="flex flex-col items-center gap-5 select-none">
-      <DpCodeLogo aria-label="DP Code logo" className="size-14" draggable={false} />
+      <SynaraLogo aria-label="Synara logo" className="size-14" draggable={false} />
 
       <div className="flex flex-col items-center gap-0.5">
         <h1 className="text-2xl font-semibold text-foreground/90">Let's build</h1>

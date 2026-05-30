@@ -514,9 +514,9 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   hasMacIconComposer: boolean,
 ) {
   const buildConfig: Record<string, unknown> = {
-    appId: "com.t3tools.dpcode",
+    appId: "com.t3tools.synara",
     productName,
-    artifactName: "DP-Code-${version}-${arch}.${ext}",
+    artifactName: "Synara-${version}-${arch}.${ext}",
     directories: {
       buildResources: "apps/desktop/resources",
     },
@@ -714,18 +714,18 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* fs.copy(stageResourcesDir, path.join(stageAppDir, "apps/desktop/prod-resources"));
 
   const stagePackageJson: StagePackageJson = {
-    name: "dp-code-desktop",
+    name: "synara-desktop",
     version: appVersion,
     buildVersion: appVersion,
     t3codeCommitHash: commitHash,
     private: true,
-    description: "DP Code desktop build",
+    description: "Synara desktop build",
     author: "Emanuele Di Pietro",
     main: "apps/desktop/dist-electron/main.js",
     build: yield* createBuildConfig(
       options.platform,
       options.target,
-      desktopPackageJson.productName ?? "DP Code",
+      desktopPackageJson.productName ?? "Synara",
       options.signed,
       options.mockUpdates,
       options.mockUpdateServerPort,
@@ -878,7 +878,7 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
     Flag.optional,
   ),
 }).pipe(
-  Command.withDescription("Build a desktop artifact for DP Code."),
+  Command.withDescription("Build a desktop artifact for Synara."),
   Command.withHandler((input) => Effect.flatMap(resolveBuildOptions(input), buildDesktopArtifact)),
 );
 

@@ -242,7 +242,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(status.authStatus, "unknown");
         assert.strictEqual(
           status.message,
-          "Codex CLI v0.36.0 is too old for DP Code. Upgrade to v0.37.0 or newer and restart DP Code.",
+          "Codex CLI v0.36.0 is too old for Synara. Upgrade to v0.37.0 or newer and restart Synara.",
         );
       }).pipe(
         Effect.provide(

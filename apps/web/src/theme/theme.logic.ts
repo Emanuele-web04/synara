@@ -195,7 +195,7 @@ export const CODE_THEME_OPTIONS: readonly CodeThemeOption[] = [
   { id: "ayu", label: "Ayu", variants: ["dark"] },
   { id: "catppuccin", label: "Catppuccin", variants: ["light", "dark"] },
   { id: "codex", label: "Codex", variants: ["light", "dark"] },
-  { id: "dp-code", label: "DP Code", variants: ["light", "dark"] },
+  { id: "dp-code", label: "Synara", variants: ["light", "dark"] },
   { id: "dracula", label: "Dracula", variants: ["dark"] },
   { id: "everforest", label: "Everforest", variants: ["light", "dark"] },
   { id: "github", label: "GitHub", variants: ["light", "dark"] },
@@ -669,7 +669,7 @@ export function buildThemeCssVariables(
   const composerSurface =
     variant === "dark"
       ? readCodexVariable("--color-background-control-opaque")
-      : "color-mix(in srgb, var(--color-background-surface-under) 97%, white 3%)";
+      : "color-mix(in oklab, var(--color-background-control) 90%, transparent)";
   // Mirrors Codex Electron's [cmdk-root] dropdown shell: thin the dropdown-background
   // token by 5% in oklab over the existing backdrop blur. Light vs dark is already
   // handled by --color-background-control-opaque (white in light, dark control in dark).

@@ -12,6 +12,6 @@ export function resolveServerEnvironmentLabel(input: {
   return (
     normalizeLabel(input.hostname ?? OS.hostname()) ??
     normalizeLabel(input.cwdBaseName) ??
-    "DP Code"
+    "Synara"
   );
 }

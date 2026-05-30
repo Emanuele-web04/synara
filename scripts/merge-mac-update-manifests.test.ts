@@ -11,13 +11,13 @@ describe("merge-mac-update-manifests", () => {
     const arm64 = parseMacUpdateManifest(
       `version: 0.0.4
 files:
-  - url: DP-Code-0.0.4-arm64.zip
+  - url: Synara-0.0.4-arm64.zip
     sha512: arm64zip
     size: 125621344
-  - url: DP-Code-0.0.4-arm64.dmg
+  - url: Synara-0.0.4-arm64.dmg
     sha512: arm64dmg
     size: 131754935
-path: DP-Code-0.0.4-arm64.zip
+path: Synara-0.0.4-arm64.zip
 sha512: arm64zip
 releaseDate: '2026-03-07T10:32:14.587Z'
 `,
@@ -27,13 +27,13 @@ releaseDate: '2026-03-07T10:32:14.587Z'
     const x64 = parseMacUpdateManifest(
       `version: 0.0.4
 files:
-  - url: DP-Code-0.0.4-x64.zip
+  - url: Synara-0.0.4-x64.zip
     sha512: x64zip
     size: 132000112
-  - url: DP-Code-0.0.4-x64.dmg
+  - url: Synara-0.0.4-x64.dmg
     sha512: x64dmg
     size: 138148807
-path: DP-Code-0.0.4-x64.zip
+path: Synara-0.0.4-x64.zip
 sha512: x64zip
 releaseDate: '2026-03-07T10:36:07.540Z'
 `,
@@ -47,10 +47,10 @@ releaseDate: '2026-03-07T10:36:07.540Z'
     assert.deepStrictEqual(
       merged.files.map((file) => file.url),
       [
-        "DP-Code-0.0.4-arm64.zip",
-        "DP-Code-0.0.4-arm64.dmg",
-        "DP-Code-0.0.4-x64.zip",
-        "DP-Code-0.0.4-x64.dmg",
+        "Synara-0.0.4-arm64.zip",
+        "Synara-0.0.4-arm64.dmg",
+        "Synara-0.0.4-x64.zip",
+        "Synara-0.0.4-x64.dmg",
       ],
     );
 
@@ -63,7 +63,7 @@ releaseDate: '2026-03-07T10:36:07.540Z'
     const arm64 = parseMacUpdateManifest(
       `version: 0.0.4
 files:
-  - url: DP-Code-0.0.4-arm64.zip
+  - url: Synara-0.0.4-arm64.zip
     sha512: arm64zip
     size: 1
 releaseDate: '2026-03-07T10:32:14.587Z'
@@ -74,7 +74,7 @@ releaseDate: '2026-03-07T10:32:14.587Z'
     const x64 = parseMacUpdateManifest(
       `version: 0.0.5
 files:
-  - url: DP-Code-0.0.5-x64.zip
+  - url: Synara-0.0.5-x64.zip
     sha512: x64zip
     size: 1
 releaseDate: '2026-03-07T10:36:07.540Z'
@@ -89,7 +89,7 @@ releaseDate: '2026-03-07T10:36:07.540Z'
     const manifest = parseMacUpdateManifest(
       `version: '1.0'
 files:
-  - url: DP-Code-1.0-x64.zip
+  - url: Synara-1.0-x64.zip
     sha512: zipsha
     size: 1
 releaseName: 'true'

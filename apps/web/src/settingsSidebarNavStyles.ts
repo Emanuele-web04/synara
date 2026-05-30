@@ -16,7 +16,7 @@ import {
 /** Wrapper for each settings group — generous break before the next header. */
 export const SETTINGS_SIDEBAR_SECTION_CLASS_NAME = "flex flex-col not-first:mt-7";
 
-/** Section labels ("App", "DP Code") — light gray, spaced from items below. */
+/** Section labels ("App", "Synara") — light gray, spaced from items below. */
 export const SETTINGS_SIDEBAR_SECTION_LABEL_CLASS_NAME =
   "px-2 pb-2 text-[length:var(--app-font-size-ui,11px)] font-normal text-muted-foreground/50";
 

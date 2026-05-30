@@ -1,7 +1,7 @@
 /**
  * PiAdapter - Pi direct SDK implementation of the generic provider adapter contract.
  *
- * Pi is intentionally treated as an unopinionated harness: DP Code does not add
+ * Pi is intentionally treated as an unopinionated harness: Synara does not add
  * permissions or plan-mode semantics on top of it.
  *
  * @module PiAdapter

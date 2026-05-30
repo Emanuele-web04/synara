@@ -10,7 +10,7 @@
 export const DEFAULT_CURSOR_AGENT_BINARY = "cursor-agent";
 export const LEGACY_CURSOR_AGENT_BINARY = "agent";
 
-// Resolves persisted/default Cursor binary settings into the executable DP Code should spawn.
+// Resolves persisted/default Cursor binary settings into the executable Synara should spawn.
 export function resolveCursorAgentBinaryPath(binaryPath: string | null | undefined): string {
   const configuredBinaryPath = binaryPath?.trim();
   return !configuredBinaryPath || configuredBinaryPath === LEGACY_CURSOR_AGENT_BINARY

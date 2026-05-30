@@ -19,6 +19,11 @@ import { cn } from "~/lib/utils";
 import { Button, buttonVariants } from "~/components/ui/button";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { buildVisibleToastLayout, shouldHideCollapsedToastContent } from "./toast.logic";
+import {
+  COMPACT_NOTIFICATION_SURFACE_CLASS_NAME,
+  EXPANDED_NOTIFICATION_SURFACE_CLASS_NAME,
+  NOTIFICATION_ICON_CLASS_NAME,
+} from "./notificationSurface";
 import { parseDiffRouteSearch } from "../../diffRouteSearch";
 import { selectSplitView, useSplitViewStore } from "../../splitViewStore";
 import {
@@ -49,26 +54,20 @@ const TOAST_ICONS = {
   warning: TriangleAlertIcon,
 } as const;
 
-const COMPACT_TOAST_ROOT_CLASS =
-  "w-max max-w-[min(calc(100vw-2rem),28rem)] rounded-lg border border-[color-mix(in_srgb,var(--color-text-accent)_32%,transparent)] bg-[color-mix(in_srgb,var(--color-text-accent)_50%,transparent)] text-white shadow-lg/15 backdrop-blur-xl before:hidden dark:border-[color-mix(in_srgb,var(--color-text-accent)_10%,transparent)] dark:bg-[color-mix(in_srgb,var(--color-text-accent)_10%,transparent)]";
-
-const EXPANDED_TOAST_ROOT_CLASS =
-  "w-full rounded-xl border border-[color-mix(in_srgb,var(--color-text-accent)_32%,transparent)] bg-[color-mix(in_srgb,var(--color-text-accent)_50%,transparent)] text-white shadow-lg/15 backdrop-blur-xl before:hidden dark:border-[color-mix(in_srgb,var(--color-text-accent)_10%,transparent)] dark:bg-[color-mix(in_srgb,var(--color-text-accent)_10%,transparent)]";
-
 function shouldUseCompactToast(toast: ToastObject<ThreadToastData>): boolean {
   return !toast.data?.copyText && !toast.actionProps && !toast.data?.secondaryActionProps;
 }
 
 function toastRootClassName(position: ToastPosition, compact: boolean): string {
   return cn(
-    compact ? COMPACT_TOAST_ROOT_CLASS : EXPANDED_TOAST_ROOT_CLASS,
+    compact ? COMPACT_NOTIFICATION_SURFACE_CLASS_NAME : EXPANDED_NOTIFICATION_SURFACE_CLASS_NAME,
     position.includes("center") ? "mx-auto" : compact ? "" : "w-full",
   );
 }
 
 function toastIconClassName(type: ToastObject<ThreadToastData>["type"]): string {
   return cn(
-    "text-white/92",
+    NOTIFICATION_ICON_CLASS_NAME,
     type === "loading" && "animate-spin opacity-90",
   );
 }

@@ -42,7 +42,7 @@ export function resolveDpCodeCodexHomeOverlayPath(
 
 /**
  * Returns the home directory that the codex app-server child process actually
- * writes under. This is the overlay home when DP Code wraps Codex with the
+ * writes under. This is the overlay home when Synara wraps Codex with the
  * dpcode-browser plugin disabled (the production default), otherwise the
  * caller-supplied or env-provided home.
  */

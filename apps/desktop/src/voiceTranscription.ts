@@ -177,8 +177,8 @@ async function resolveDesktopVoiceAuth(
         method: "initialize",
         params: {
           clientInfo: {
-            name: "dp-code-desktop",
-            title: "DP Code Desktop",
+            name: "synara-desktop",
+            title: "Synara Desktop",
             version: app.getVersion(),
           },
           capabilities: { experimentalApi: true },

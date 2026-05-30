@@ -9,7 +9,7 @@ import { type KeyboardEvent } from "react";
 
 import { XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
-import { DpCodeLogo } from "~/components/DpCodeLogo";
+import { SynaraLogo } from "~/components/SynaraLogo";
 
 import type { WhatsNewEntry } from "./logic";
 
@@ -115,7 +115,7 @@ export function WhatsNewPopoutCard({
               aria-hidden="true"
               className="flex h-full w-full items-center justify-center bg-[radial-gradient(120%_140%_at_10%_0%,color-mix(in_srgb,var(--color-primary)_38%,transparent)_0%,transparent_60%),radial-gradient(100%_120%_at_100%_100%,color-mix(in_srgb,var(--color-primary)_22%,transparent)_0%,transparent_70%)]"
             >
-              <DpCodeLogo aria-hidden className="size-9 text-foreground" />
+              <SynaraLogo aria-hidden className="size-9 text-foreground" />
             </div>
           )}
           {/* Subtle bottom gradient so text below the band always reads. */}
