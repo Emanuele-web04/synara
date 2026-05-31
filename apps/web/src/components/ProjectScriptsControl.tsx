@@ -46,6 +46,10 @@ import {
 } from "./ui/alert-dialog";
 import { Button, headerButtonDarkBorderClassName } from "./ui/button";
 import {
+  CHAT_HEADER_CONTROL_CLASS_NAME,
+  CHAT_HEADER_ICON_CONTROL_CLASS_NAME,
+} from "./chat/chatHeaderControls";
+import {
   Dialog,
   DialogDescription,
   DialogFooter,
@@ -299,7 +303,7 @@ export default function ProjectScriptsControl({
           <Button
             size="xs"
             variant="outline"
-            className={cn(headerButtonDarkBorderClassName, "rounded-lg")}
+            className={cn(headerButtonDarkBorderClassName, CHAT_HEADER_CONTROL_CLASS_NAME)}
             onClick={() => onRunScript(primaryScript)}
             title={`Run ${primaryScript.name}`}
           >
@@ -315,7 +319,7 @@ export default function ProjectScriptsControl({
                 <Button
                   size="icon-xs"
                   variant="outline"
-                  className={cn(headerButtonDarkBorderClassName, "rounded-lg")}
+                  className={cn(headerButtonDarkBorderClassName, CHAT_HEADER_ICON_CONTROL_CLASS_NAME)}
                   aria-label="Script actions"
                 />
               }

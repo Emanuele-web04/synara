@@ -37,6 +37,10 @@ import {
 } from "./GitActionsControl.logic";
 import { getProviderStartOptions, useAppSettings } from "~/appSettings";
 import { Button } from "~/components/ui/button";
+import {
+  CHAT_HEADER_CONTROL_CLASS_NAME,
+  CHAT_HEADER_ICON_CONTROL_CLASS_NAME,
+} from "./chat/chatHeaderControls";
 import { Checkbox } from "~/components/ui/checkbox";
 import {
   Dialog,
@@ -70,7 +74,7 @@ import {
   gitStatusQueryOptions,
   invalidateGitQueries,
 } from "~/lib/gitReactQuery";
-import { newCommandId, randomUUID } from "~/lib/utils";
+import { cn, newCommandId, randomUUID } from "~/lib/utils";
 import { resolvePathLinkTarget } from "~/terminal-links";
 import { readNativeApi } from "~/nativeApi";
 import { createThreadSelector } from "~/storeSelectors";
@@ -1209,6 +1213,7 @@ export default function GitActionsControl({
         <Button
           variant="chrome-outline"
           size="xs"
+          className={CHAT_HEADER_CONTROL_CLASS_NAME}
           disabled={initMutation.isPending}
           onClick={() => initMutation.mutate()}
         >
@@ -1224,7 +1229,12 @@ export default function GitActionsControl({
                   <Button
                     aria-label={quickAction.label}
                     aria-disabled="true"
-                    className="cursor-not-allowed rounded-e-none border-e-0 opacity-64"
+                    className={cn(
+                      hideQuickActionLabel
+                        ? CHAT_HEADER_ICON_CONTROL_CLASS_NAME
+                        : CHAT_HEADER_CONTROL_CLASS_NAME,
+                      "cursor-not-allowed rounded-e-none border-e-0 opacity-64",
+                    )}
                     size={hideQuickActionLabel ? "icon-xs" : "xs"}
                     variant="chrome-outline"
                     title={quickAction.label}
@@ -1244,7 +1254,12 @@ export default function GitActionsControl({
             <Button
               variant="chrome-outline"
               size={hideQuickActionLabel ? "icon-xs" : "xs"}
-              className="rounded-e-none border-e-0"
+              className={cn(
+                hideQuickActionLabel
+                  ? CHAT_HEADER_ICON_CONTROL_CLASS_NAME
+                  : CHAT_HEADER_CONTROL_CLASS_NAME,
+                "rounded-e-none border-e-0",
+              )}
               disabled={isGitActionRunning || quickAction.disabled}
               aria-label={quickAction.label}
               title={quickAction.label}
@@ -1268,7 +1283,7 @@ export default function GitActionsControl({
                   aria-label="Git action options"
                   size="icon-xs"
                   variant="chrome-outline"
-                  className="rounded-s-none border-s-0"
+                  className={cn(CHAT_HEADER_ICON_CONTROL_CLASS_NAME, "rounded-s-none border-s-0")}
                 />
               }
               disabled={isGitActionRunning}

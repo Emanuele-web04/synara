@@ -21,7 +21,7 @@ import { TbExchange, TbLayoutSidebarRight } from "react-icons/tb";
 import type { ThreadPrimarySurface } from "../../types";
 import GitActionsControl from "../GitActionsControl";
 import { AppsIcon, ArrowRightIcon, GlobeIcon, HandoffIcon, PlusIcon, TerminalIcon, XIcon } from "~/lib/icons";
-import { Button } from "../ui/button";
+import { CHAT_HEADER_CONTROL_CLASS_NAME, ChatHeaderButton, ChatHeaderIconButton } from "./chatHeaderControls";
 import { IconButton } from "../ui/icon-button";
 import { Badge } from "../ui/badge";
 import { Menu, MenuItem, MenuSeparator, MenuTrigger } from "../ui/menu";
@@ -321,11 +321,10 @@ export const ChatHeader = memo(function ChatHeader({
                 render={
                   <MenuTrigger
                     render={
-                      <Button
+                      <ChatHeaderButton
                         type="button"
-                        size="xs"
-                        variant="chrome-outline"
-                        className={cn("shrink-0", compact ? "gap-1" : "gap-1.5")}
+                        tone="outline"
+                        className={compact ? "gap-1" : "gap-1.5"}
                         aria-label={handoffActionLabel}
                         disabled={handoffDisabled || handoffActionTargetProviders.length === 0}
                       />
@@ -368,16 +367,13 @@ export const ChatHeader = memo(function ChatHeader({
           <Tooltip>
             <TooltipTrigger
               render={
-                <Button
+                <ChatHeaderIconButton
                   type="button"
-                  size="icon-xs"
-                  variant="chrome-outline"
-                  className="shrink-0"
-                  aria-label={inlineChatLayoutAction.label}
+                  label={inlineChatLayoutAction.label}
                   onClick={inlineChatLayoutAction.onClick}
                 >
                   <HiMiniArrowsPointingOut className="size-3.5" />
-                </Button>
+                </ChatHeaderIconButton>
               }
             />
             <TooltipPopup side="bottom">{inlineChatLayoutAction.label}</TooltipPopup>
@@ -393,14 +389,7 @@ export const ChatHeader = memo(function ChatHeader({
           isElectron) ? (
           <Menu modal={false}>
             <MenuTrigger
-              render={
-                <Button
-                  size="icon-xs"
-                  variant="chrome-outline"
-                  className="shrink-0"
-                  aria-label="Panel toggles"
-                />
-              }
+              render={<ChatHeaderIconButton label="Panel toggles" />}
             >
               <AppsIcon className="size-3.5" />
             </MenuTrigger>
@@ -487,10 +476,11 @@ export const ChatHeader = memo(function ChatHeader({
             render={
               <Toggle
                 className={cn(
-                  "shrink-0 rounded-lg border-0",
+                  CHAT_HEADER_CONTROL_CLASS_NAME,
+                  "border-0",
                   showDiffTotals
                     ? "gap-2 px-1.5 text-[length:var(--app-font-size-ui-sm,11px)]"
-                    : "",
+                    : "!size-7 [&_svg]:mx-0",
                 )}
                 pressed={diffOpen}
                 onPressedChange={onToggleDiff}
