@@ -112,6 +112,7 @@ import { dispatchThreadRename } from "../lib/threadRename";
 import { quotePosixShellArgument } from "../lib/shellQuote";
 import { DEFAULT_THREAD_TERMINAL_ID, type SidebarThreadSummary, type Thread } from "../types";
 import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
+import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
 import { ProviderIcon } from "./ProviderIcon";
 import { AppNavigationButtons } from "./AppNavigationButtons";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
@@ -376,10 +377,7 @@ function buildThreadJumpLabelMap(input: {
 }
 function WorktreeBadgeGlyph({ className }: { className?: string }) {
   return (
-    <LuSplit
-      aria-hidden="true"
-      className={cn("rotate-90", sidebarGlyphClass("meta", className))}
-    />
+    <LuSplit aria-hidden="true" className={cn("rotate-90", sidebarGlyphClass("meta", className))} />
   );
 }
 
@@ -1080,7 +1078,9 @@ export default function Sidebar() {
   const homeDir = useWorkspaceStore((store) => store.homeDir);
   const navigate = useNavigate();
   const pathname = useLocation({ select: (loc) => loc.pathname });
-  const isOnSettings = useLocation({ select: (loc) => loc.pathname === "/settings" });
+  const isOnSettings = useLocation({
+    select: (loc) => loc.pathname === "/settings",
+  });
   const isOnWorkspace = pathname.startsWith("/workspace");
   const { settings: appSettings, updateSettings } = useAppSettings();
   const { handleNewThread } = useHandleNewThread();
@@ -1222,7 +1222,10 @@ export default function Sidebar() {
   const autoRevealedSubagentThreadIdRef = useRef<ThreadId | null>(null);
   const renamingCommittedRef = useRef(false);
   const renamingInputRef = useRef<HTMLInputElement | null>(null);
-  const lastThreadRenameTapRef = useRef<{ threadId: ThreadId; timestamp: number } | null>(null);
+  const lastThreadRenameTapRef = useRef<{
+    threadId: ThreadId;
+    timestamp: number;
+  } | null>(null);
   const renamingProjectCommittedRef = useRef(false);
   const renamingProjectInputRef = useRef<HTMLInputElement | null>(null);
   const dragInProgressRef = useRef(false);
@@ -1382,7 +1385,10 @@ export default function Sidebar() {
     (threadId: ThreadId) => {
       const isPinned = pinnedThreadIdSet.has(threadId);
       void setThreadPinned(threadId, !isPinned).catch((error) => {
-        console.error("Failed to update pinned thread state", { threadId, error });
+        console.error("Failed to update pinned thread state", {
+          threadId,
+          error,
+        });
         toastManager.add({
           type: "error",
           title: isPinned ? "Unable to unpin thread" : "Unable to pin thread",
@@ -2114,7 +2120,10 @@ export default function Sidebar() {
       });
 
       if (outcome === "empty") {
-        toastManager.add({ type: "warning", title: "Thread title cannot be empty" });
+        toastManager.add({
+          type: "warning",
+          title: "Thread title cannot be empty",
+        });
         finishRename();
         return;
       }
@@ -2365,7 +2374,9 @@ export default function Sidebar() {
     ],
   );
 
-  const { copyToClipboard: copyThreadIdToClipboard } = useCopyToClipboard<{ threadId: ThreadId }>({
+  const { copyToClipboard: copyThreadIdToClipboard } = useCopyToClipboard<{
+    threadId: ThreadId;
+  }>({
     onCopy: (ctx) => {
       toastManager.add({
         type: "success",
@@ -2381,7 +2392,9 @@ export default function Sidebar() {
       });
     },
   });
-  const { copyToClipboard: copyPathToClipboard } = useCopyToClipboard<{ path: string }>({
+  const { copyToClipboard: copyPathToClipboard } = useCopyToClipboard<{
+    path: string;
+  }>({
     onCopy: (ctx) => {
       toastManager.add({
         type: "success",
@@ -3489,7 +3502,10 @@ export default function Sidebar() {
         continue;
       }
       void setThreadPinned(threadId, true).catch((error) => {
-        console.error("Failed to migrate pinned thread state", { threadId, error });
+        console.error("Failed to migrate pinned thread state", {
+          threadId,
+          error,
+        });
       });
     }
   }, [persistedPinnedThreadIds, setThreadPinned, sidebarThreads, threadsHydrated]);
@@ -3927,7 +3943,9 @@ export default function Sidebar() {
             <span>Confirm</span>
           </button>
         ) : (
-          renderThreadArchiveAction(input.threadId, input.toneClassName, { compact })
+          renderThreadArchiveAction(input.threadId, input.toneClassName, {
+            compact,
+          })
         )}
       </SidebarRowHoverActions>
     );
@@ -5254,7 +5272,8 @@ export default function Sidebar() {
         <>
           <SidebarHeader
             className={cn(
-              "drag-region h-[46px] flex-row items-center gap-2 px-4 py-0 font-system-ui",
+              "drag-region flex-row items-center gap-2 px-4 py-0 font-system-ui",
+              CHAT_SURFACE_HEADER_HEIGHT_CLASS,
               appSettings.sidebarSide === "left" && "pl-[90px]",
             )}
           >

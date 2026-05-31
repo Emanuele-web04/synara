@@ -17,11 +17,52 @@ import { cn } from "~/lib/utils";
 
 import { Button } from "../ui/button";
 
+/**
+ * Fixed height of the top chrome bar shared by the chat header, the diff panel
+ * header, and the right-dock tab strip. Keeping these on one token ensures their
+ * bottom borders line up across the vertical pane divider.
+ */
+export const CHAT_SURFACE_HEADER_HEIGHT_CLASS = "h-[46px]";
+
 /** Fixed control height + radius for every header toolbar control. */
 export const CHAT_HEADER_CONTROL_CLASS_NAME = "!h-7 shrink-0 rounded-lg";
 
 /** Square footprint for icon-only header controls (height-matched, centered glyph). */
 export const CHAT_HEADER_ICON_CONTROL_CLASS_NAME = "!size-7 shrink-0 rounded-lg [&_svg]:mx-0";
+
+/** Flatten the trailing edge of a split-button's leading control so it butts up
+ *  against the shared divider (drops the end radius + the doubled end border). */
+export const CHAT_HEADER_SPLIT_LEADING_CLASS_NAME = "rounded-e-none border-e-0";
+
+/** Flatten the leading edge of a split-button's trailing (chevron) control. */
+export const CHAT_HEADER_SPLIT_TRAILING_CLASS_NAME = "rounded-s-none border-s-0";
+
+/**
+ * Container for a header split-button: a leading action, the shared
+ * {@link ChatHeaderSplitDivider}, and a trailing menu trigger, all sharing one
+ * rounded chrome footprint. Used by the git action control and the editor picker
+ * so both split buttons look identical.
+ */
+export function ChatHeaderSplitGroup({
+  label,
+  className,
+  children,
+}: {
+  label: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div role="group" aria-label={label} className={cn("inline-flex items-stretch", className)}>
+      {children}
+    </div>
+  );
+}
+
+/** Hairline separator between a split-button's leading and trailing controls. */
+export function ChatHeaderSplitDivider() {
+  return <div aria-hidden="true" className="w-px self-stretch bg-border" />;
+}
 
 /** Visual treatment shared across the header row. */
 export type ChatHeaderControlTone = "plain" | "outline";

@@ -116,11 +116,9 @@ function warnIfAlphaAppRunning() {
     return;
   }
 
-  const result = spawnSync(
-    "pgrep",
-    ["-fal", "/Applications/Synara\\.app/Contents/MacOS/Synara"],
-    { encoding: "utf8" },
-  );
+  const result = spawnSync("pgrep", ["-fal", "/Applications/Synara\\.app/Contents/MacOS/Synara"], {
+    encoding: "utf8",
+  });
   const output = typeof result.stdout === "string" ? result.stdout.trim() : "";
   if (!output) {
     return;

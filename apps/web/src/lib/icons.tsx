@@ -1,5 +1,5 @@
 import { type CSSProperties, type FC, type SVGProps } from "react";
-import { PiGitCommit, PiSquareSplitHorizontal, PiSquareSplitVertical } from "react-icons/pi";
+import { PiSquareSplitHorizontal, PiSquareSplitVertical } from "react-icons/pi";
 import { RiApps2Line } from "react-icons/ri";
 import { SiGithub } from "react-icons/si";
 import { VscMcp } from "react-icons/vsc";
@@ -28,7 +28,6 @@ import {
   IconChevronRight,
   IconChevronUp,
   IconCircleCheck,
-  IconCloudUpload,
   IconColumns2,
   IconDots,
   IconDownload,
@@ -39,9 +38,6 @@ import {
   IconFlask2,
   IconFolder,
   IconFolderOpen,
-  IconGitCompare,
-  IconGitFork,
-  IconGitPullRequest,
   IconEdit,
   IconInfoCircle,
   IconLayoutSidebarLeftCollapse,
@@ -135,10 +131,11 @@ export const ChevronUpIcon = adaptIcon(IconChevronUp);
 export const ChevronsUpDownIcon = adaptIcon(IconSelector);
 export const CircleAlertIcon = adaptIcon(IconAlertCircle);
 export const CircleCheckIcon = adaptIcon(IconCircleCheck);
-export const CloudUploadIcon = adaptIcon(IconCloudUpload);
+export const CloudUploadIcon = centralIconWrapper("cloud-upload");
+export const CloudSyncIcon = centralIconWrapper("cloud-sync");
 export const Columns2Icon = adaptIcon(IconColumns2);
 export const CopyIcon = centralIconWrapper("square-behind-square-6");
-export const DiffIcon = adaptIcon(IconGitCompare);
+export const DiffIcon = centralIconWrapper("difference-modified");
 export const DownloadIcon = adaptIcon(IconDownload);
 export const EllipsisIcon = adaptIcon(IconDots);
 export const ExternalLinkIcon = adaptIcon(IconExternalLink);
@@ -154,14 +151,15 @@ export const FlaskConicalIcon = adaptIcon(IconFlask2);
 export const FolderClosedIcon = adaptIcon(IconFolder);
 export const FolderIcon = adaptIcon(IconFolder);
 export const FolderOpenIcon = adaptIcon(IconFolderOpen);
-export const GitCommitIcon: LucideIcon = (props) => (
-  <PiGitCommit className={props.className} style={props.style} />
-);
-export const GitForkIcon = adaptIcon(IconGitFork);
+export const GitCommitIcon: LucideIcon = centralIconWrapper("commits");
+export const GitBranchIcon: LucideIcon = centralIconWrapper("branch");
+export const GitForkIcon = centralIconWrapper("fork");
+export const GitMergeIcon: LucideIcon = centralIconWrapper("merged");
+export const PushIcon: LucideIcon = centralIconWrapper("push");
 export const GitHubIcon: LucideIcon = (props) => (
   <SiGithub className={props.className} style={props.style} />
 );
-export const GitPullRequestIcon = adaptIcon(IconGitPullRequest);
+export const GitPullRequestIcon = centralIconWrapper("pull-request");
 export const GlobeIcon = adaptIcon(IconWorld);
 export const McpIcon: LucideIcon = (props) => (
   <VscMcp className={props.className} style={props.style} />
@@ -210,10 +208,7 @@ export const SquareSplitVertical: LucideIcon = (props) => (
 // react-icons/lu glyphs occupy more of the 24×24 viewBox than Tabler/Central icons at
 // the same Tailwind size — use `chromeLu` in sidebarGlyphs beside `chrome` controls.
 export const DisposableThreadIcon: LucideIcon = (props) => (
-  <LuMessageSquareDashed
-    className={cn("size-3 shrink-0", props.className)}
-    style={props.style}
-  />
+  <LuMessageSquareDashed className={cn("size-3 shrink-0", props.className)} style={props.style} />
 );
 export const TerminalIcon = adaptIcon(IconTerminal);
 export const TerminalSquare = adaptIcon(IconTerminal2);

@@ -721,10 +721,7 @@ function ChatMarkdown({
   );
 
   return (
-    <div
-      className={`chat-markdown w-full min-w-0 ${className} text-foreground`}
-      style={style}
-    >
+    <div className={`chat-markdown w-full min-w-0 ${className} text-foreground`} style={style}>
       <ReactMarkdown
         remarkPlugins={MARKDOWN_REMARK_PLUGINS}
         rehypePlugins={MARKDOWN_REHYPE_PLUGINS}

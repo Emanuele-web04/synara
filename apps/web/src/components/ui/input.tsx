@@ -18,7 +18,8 @@ const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
 ) {
   const inputClassName = cn(
     "font-system-ui h-full w-full min-w-0 rounded-[inherit] border-0 bg-transparent px-3 py-1.5 text-[length:var(--app-font-size-ui,12px)] leading-normal outline-none placeholder:text-muted-foreground/72 [transition:background-color_5000000s_ease-in-out_0s] sm:text-[length:var(--app-font-size-ui,12px)]",
-    size === "sm" && "px-2.5 py-1 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)]",
+    size === "sm" &&
+      "px-2.5 py-1 text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-sm,11px)]",
     size === "lg" && "px-3.5 py-2",
     props.type === "search" &&
       "[&::-webkit-search-cancel-button]:appearance-none [&::-webkit-search-decoration]:appearance-none [&::-webkit-search-results-button]:appearance-none [&::-webkit-search-results-decoration]:appearance-none",
@@ -32,8 +33,8 @@ const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
         cn(
           !unstyled &&
             "relative inline-flex w-full min-h-9 items-center rounded-md border border-border bg-background text-[length:var(--app-font-size-ui,12px)] text-foreground ring-ring/16 has-focus-visible:has-aria-invalid:border-destructive/50 has-focus-visible:has-aria-invalid:ring-destructive/12 has-aria-invalid:border-destructive/30 has-focus-visible:border-ring/70 has-autofill:bg-foreground/4 has-disabled:opacity-64 has-focus-visible:ring-2 sm:min-h-8 sm:text-[length:var(--app-font-size-ui,12px)] dark:bg-input/32 dark:has-autofill:bg-foreground/8 dark:has-aria-invalid:ring-destructive/24",
-            size === "sm" && "min-h-8 sm:min-h-7",
-            size === "lg" && "min-h-10 sm:min-h-9",
+          size === "sm" && "min-h-8 sm:min-h-7",
+          size === "lg" && "min-h-10 sm:min-h-9",
           className,
         ) || undefined
       }

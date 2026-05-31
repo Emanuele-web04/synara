@@ -47,12 +47,7 @@ import { ProviderOptionLabel } from "../components/ProviderIcon";
 import { Button } from "../components/ui/button";
 import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
 import { Input } from "../components/ui/input";
-import {
-  Select,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "../components/ui/select";
+import { Select, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Switch } from "../components/ui/switch";
 import { toastManager } from "../components/ui/toast";
 import { ThemePackEditor } from "../components/ThemePackEditor";
@@ -1308,198 +1303,196 @@ function SettingsRouteView() {
   const renderGeneralPanel = () => (
     <div className="space-y-6">
       <SettingsSection title="Core defaults">
-          <SettingsRow
-            title="Default provider"
-            description="Choose the provider used for new chats."
-            resetAction={
-              settings.defaultProvider !== defaults.defaultProvider ? (
-                <SettingResetButton
-                  label="default provider"
-                  onClick={() => updateSettings({ defaultProvider: defaults.defaultProvider })}
+        <SettingsRow
+          title="Default provider"
+          description="Choose the provider used for new chats."
+          resetAction={
+            settings.defaultProvider !== defaults.defaultProvider ? (
+              <SettingResetButton
+                label="default provider"
+                onClick={() => updateSettings({ defaultProvider: defaults.defaultProvider })}
+              />
+            ) : null
+          }
+          control={
+            <SettingsSelectControl
+              value={settings.defaultProvider}
+              onValueChange={(value) => {
+                if (!isProviderSelectOption(value)) return;
+                updateSettings({ defaultProvider: value });
+              }}
+              ariaLabel="Default provider"
+              valueContent={
+                <ProviderOptionLabel
+                  provider={settings.defaultProvider}
+                  label={PROVIDER_DISPLAY_NAMES[settings.defaultProvider]}
                 />
-              ) : null
-            }
-            control={
-              <SettingsSelectControl
-                value={settings.defaultProvider}
-                onValueChange={(value) => {
-                  if (!isProviderSelectOption(value)) return;
-                  updateSettings({ defaultProvider: value });
-                }}
-                ariaLabel="Default provider"
-                valueContent={
+              }
+            >
+              {PROVIDER_SELECT_OPTIONS.map((provider) => (
+                <SelectItem hideIndicator key={provider} value={provider}>
                   <ProviderOptionLabel
-                    provider={settings.defaultProvider}
-                    label={PROVIDER_DISPLAY_NAMES[settings.defaultProvider]}
+                    provider={provider}
+                    label={PROVIDER_DISPLAY_NAMES[provider]}
                   />
-                }
-              >
-                {PROVIDER_SELECT_OPTIONS.map((provider) => (
-                  <SelectItem hideIndicator key={provider} value={provider}>
-                    <ProviderOptionLabel
-                      provider={provider}
-                      label={PROVIDER_DISPLAY_NAMES[provider]}
-                    />
-                  </SelectItem>
-                ))}
-              </SettingsSelectControl>
-            }
-          />
+                </SelectItem>
+              ))}
+            </SettingsSelectControl>
+          }
+        />
 
-          <SettingsRow
-            title="New threads"
-            description="Pick the default workspace mode for newly created draft threads."
-            resetAction={
-              settings.defaultThreadEnvMode !== defaults.defaultThreadEnvMode ? (
-                <SettingResetButton
-                  label="new threads"
-                  onClick={() =>
-                    updateSettings({
-                      defaultThreadEnvMode: defaults.defaultThreadEnvMode,
-                    })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <SettingsSelectControl
-                value={settings.defaultThreadEnvMode}
-                onValueChange={(value) => {
-                  if (value !== "local" && value !== "worktree") return;
+        <SettingsRow
+          title="New threads"
+          description="Pick the default workspace mode for newly created draft threads."
+          resetAction={
+            settings.defaultThreadEnvMode !== defaults.defaultThreadEnvMode ? (
+              <SettingResetButton
+                label="new threads"
+                onClick={() =>
                   updateSettings({
-                    defaultThreadEnvMode: value,
-                  });
-                }}
-                ariaLabel="Default thread mode"
-                valueContent={
-                  settings.defaultThreadEnvMode === "worktree" ? "New worktree" : "Local"
+                    defaultThreadEnvMode: defaults.defaultThreadEnvMode,
+                  })
                 }
-              >
-                <SelectItem hideIndicator value="local">
-                  Local
-                </SelectItem>
-                <SelectItem hideIndicator value="worktree">
-                  New worktree
-                </SelectItem>
-              </SettingsSelectControl>
-            }
-          />
+              />
+            ) : null
+          }
+          control={
+            <SettingsSelectControl
+              value={settings.defaultThreadEnvMode}
+              onValueChange={(value) => {
+                if (value !== "local" && value !== "worktree") return;
+                updateSettings({
+                  defaultThreadEnvMode: value,
+                });
+              }}
+              ariaLabel="Default thread mode"
+              valueContent={settings.defaultThreadEnvMode === "worktree" ? "New worktree" : "Local"}
+            >
+              <SelectItem hideIndicator value="local">
+                Local
+              </SelectItem>
+              <SelectItem hideIndicator value="worktree">
+                New worktree
+              </SelectItem>
+            </SettingsSelectControl>
+          }
+        />
       </SettingsSection>
 
       <SettingsSection title="Sidebar organization">
-          <SettingsRow
-            title="Position"
-            description="Choose which side of the screen the sidebar appears on."
-            resetAction={
-              settings.sidebarSide !== defaults.sidebarSide ? (
-                <SettingResetButton
-                  label="sidebar position"
-                  onClick={() =>
-                    updateSettings({
-                      sidebarSide: defaults.sidebarSide,
-                    })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <SettingsSelectControl
-                value={settings.sidebarSide}
-                onValueChange={(value) => {
-                  if (value !== "left" && value !== "right") {
-                    return;
-                  }
-                  updateSettings({ sidebarSide: value });
-                }}
-                ariaLabel="Sidebar position"
-                valueContent={SIDEBAR_SIDE_LABELS[settings.sidebarSide]}
-              >
-                <SelectItem hideIndicator value="left">
-                  {SIDEBAR_SIDE_LABELS.left}
-                </SelectItem>
-                <SelectItem hideIndicator value="right">
-                  {SIDEBAR_SIDE_LABELS.right}
-                </SelectItem>
-              </SettingsSelectControl>
-            }
-          />
+        <SettingsRow
+          title="Position"
+          description="Choose which side of the screen the sidebar appears on."
+          resetAction={
+            settings.sidebarSide !== defaults.sidebarSide ? (
+              <SettingResetButton
+                label="sidebar position"
+                onClick={() =>
+                  updateSettings({
+                    sidebarSide: defaults.sidebarSide,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSelectControl
+              value={settings.sidebarSide}
+              onValueChange={(value) => {
+                if (value !== "left" && value !== "right") {
+                  return;
+                }
+                updateSettings({ sidebarSide: value });
+              }}
+              ariaLabel="Sidebar position"
+              valueContent={SIDEBAR_SIDE_LABELS[settings.sidebarSide]}
+            >
+              <SelectItem hideIndicator value="left">
+                {SIDEBAR_SIDE_LABELS.left}
+              </SelectItem>
+              <SelectItem hideIndicator value="right">
+                {SIDEBAR_SIDE_LABELS.right}
+              </SelectItem>
+            </SettingsSelectControl>
+          }
+        />
 
-          <SettingsRow
-            title="Project order"
-            description="Controls how projects are arranged in the main sidebar."
-            resetAction={
-              settings.sidebarProjectSortOrder !== defaults.sidebarProjectSortOrder ? (
-                <SettingResetButton
-                  label="project order"
-                  onClick={() =>
-                    updateSettings({
-                      sidebarProjectSortOrder: defaults.sidebarProjectSortOrder,
-                    })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <SettingsSelectControl
-                value={settings.sidebarProjectSortOrder}
-                onValueChange={(value) => {
-                  if (value !== "updated_at" && value !== "created_at" && value !== "manual") {
-                    return;
-                  }
-                  updateSettings({ sidebarProjectSortOrder: value });
-                }}
-                ariaLabel="Project sort order"
-                valueContent={SIDEBAR_PROJECT_SORT_ORDER_LABELS[settings.sidebarProjectSortOrder]}
-              >
-                <SelectItem hideIndicator value="updated_at">
-                  {SIDEBAR_PROJECT_SORT_ORDER_LABELS.updated_at}
-                </SelectItem>
-                <SelectItem hideIndicator value="created_at">
-                  {SIDEBAR_PROJECT_SORT_ORDER_LABELS.created_at}
-                </SelectItem>
-                <SelectItem hideIndicator value="manual">
-                  {SIDEBAR_PROJECT_SORT_ORDER_LABELS.manual}
-                </SelectItem>
-              </SettingsSelectControl>
-            }
-          />
+        <SettingsRow
+          title="Project order"
+          description="Controls how projects are arranged in the main sidebar."
+          resetAction={
+            settings.sidebarProjectSortOrder !== defaults.sidebarProjectSortOrder ? (
+              <SettingResetButton
+                label="project order"
+                onClick={() =>
+                  updateSettings({
+                    sidebarProjectSortOrder: defaults.sidebarProjectSortOrder,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSelectControl
+              value={settings.sidebarProjectSortOrder}
+              onValueChange={(value) => {
+                if (value !== "updated_at" && value !== "created_at" && value !== "manual") {
+                  return;
+                }
+                updateSettings({ sidebarProjectSortOrder: value });
+              }}
+              ariaLabel="Project sort order"
+              valueContent={SIDEBAR_PROJECT_SORT_ORDER_LABELS[settings.sidebarProjectSortOrder]}
+            >
+              <SelectItem hideIndicator value="updated_at">
+                {SIDEBAR_PROJECT_SORT_ORDER_LABELS.updated_at}
+              </SelectItem>
+              <SelectItem hideIndicator value="created_at">
+                {SIDEBAR_PROJECT_SORT_ORDER_LABELS.created_at}
+              </SelectItem>
+              <SelectItem hideIndicator value="manual">
+                {SIDEBAR_PROJECT_SORT_ORDER_LABELS.manual}
+              </SelectItem>
+            </SettingsSelectControl>
+          }
+        />
 
-          <SettingsRow
-            title="Thread order"
-            description="Controls how threads are arranged inside each project in the main sidebar."
-            resetAction={
-              settings.sidebarThreadSortOrder !== defaults.sidebarThreadSortOrder ? (
-                <SettingResetButton
-                  label="thread order"
-                  onClick={() =>
-                    updateSettings({
-                      sidebarThreadSortOrder: defaults.sidebarThreadSortOrder,
-                    })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <SettingsSelectControl
-                value={settings.sidebarThreadSortOrder}
-                onValueChange={(value) => {
-                  if (value !== "updated_at" && value !== "created_at") {
-                    return;
-                  }
-                  updateSettings({ sidebarThreadSortOrder: value });
-                }}
-                ariaLabel="Thread sort order"
-                valueContent={SIDEBAR_THREAD_SORT_ORDER_LABELS[settings.sidebarThreadSortOrder]}
-              >
-                <SelectItem hideIndicator value="updated_at">
-                  {SIDEBAR_THREAD_SORT_ORDER_LABELS.updated_at}
-                </SelectItem>
-                <SelectItem hideIndicator value="created_at">
-                  {SIDEBAR_THREAD_SORT_ORDER_LABELS.created_at}
-                </SelectItem>
-              </SettingsSelectControl>
-            }
-          />
+        <SettingsRow
+          title="Thread order"
+          description="Controls how threads are arranged inside each project in the main sidebar."
+          resetAction={
+            settings.sidebarThreadSortOrder !== defaults.sidebarThreadSortOrder ? (
+              <SettingResetButton
+                label="thread order"
+                onClick={() =>
+                  updateSettings({
+                    sidebarThreadSortOrder: defaults.sidebarThreadSortOrder,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSelectControl
+              value={settings.sidebarThreadSortOrder}
+              onValueChange={(value) => {
+                if (value !== "updated_at" && value !== "created_at") {
+                  return;
+                }
+                updateSettings({ sidebarThreadSortOrder: value });
+              }}
+              ariaLabel="Thread sort order"
+              valueContent={SIDEBAR_THREAD_SORT_ORDER_LABELS[settings.sidebarThreadSortOrder]}
+            >
+              <SelectItem hideIndicator value="updated_at">
+                {SIDEBAR_THREAD_SORT_ORDER_LABELS.updated_at}
+              </SelectItem>
+              <SelectItem hideIndicator value="created_at">
+                {SIDEBAR_THREAD_SORT_ORDER_LABELS.created_at}
+              </SelectItem>
+            </SettingsSelectControl>
+          }
+        />
       </SettingsSection>
     </div>
   );
@@ -1673,48 +1666,48 @@ function SettingsRouteView() {
       </section>
 
       <SettingsSection title="Time and reading">
-          <SettingsRow
-            title="Time format"
-            description="System default follows your browser or OS clock preference."
-            resetAction={
-              settings.timestampFormat !== defaults.timestampFormat ? (
-                <SettingResetButton
-                  label="time format"
-                  onClick={() =>
-                    updateSettings({
-                      timestampFormat: defaults.timestampFormat,
-                    })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <SettingsSelectControl
-                value={settings.timestampFormat}
-                onValueChange={(value) => {
-                  if (value !== "locale" && value !== "12-hour" && value !== "24-hour") {
-                    return;
-                  }
+        <SettingsRow
+          title="Time format"
+          description="System default follows your browser or OS clock preference."
+          resetAction={
+            settings.timestampFormat !== defaults.timestampFormat ? (
+              <SettingResetButton
+                label="time format"
+                onClick={() =>
                   updateSettings({
-                    timestampFormat: value,
-                  });
-                }}
-                ariaLabel="Timestamp format"
-                triggerClassName="w-full sm:w-40"
-                valueContent={TIMESTAMP_FORMAT_LABELS[settings.timestampFormat]}
-              >
-                <SelectItem hideIndicator value="locale">
-                  {TIMESTAMP_FORMAT_LABELS.locale}
-                </SelectItem>
-                <SelectItem hideIndicator value="12-hour">
-                  {TIMESTAMP_FORMAT_LABELS["12-hour"]}
-                </SelectItem>
-                <SelectItem hideIndicator value="24-hour">
-                  {TIMESTAMP_FORMAT_LABELS["24-hour"]}
-                </SelectItem>
-              </SettingsSelectControl>
-            }
-          />
+                    timestampFormat: defaults.timestampFormat,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSelectControl
+              value={settings.timestampFormat}
+              onValueChange={(value) => {
+                if (value !== "locale" && value !== "12-hour" && value !== "24-hour") {
+                  return;
+                }
+                updateSettings({
+                  timestampFormat: value,
+                });
+              }}
+              ariaLabel="Timestamp format"
+              triggerClassName="w-full sm:w-40"
+              valueContent={TIMESTAMP_FORMAT_LABELS[settings.timestampFormat]}
+            >
+              <SelectItem hideIndicator value="locale">
+                {TIMESTAMP_FORMAT_LABELS.locale}
+              </SelectItem>
+              <SelectItem hideIndicator value="12-hour">
+                {TIMESTAMP_FORMAT_LABELS["12-hour"]}
+              </SelectItem>
+              <SelectItem hideIndicator value="24-hour">
+                {TIMESTAMP_FORMAT_LABELS["24-hour"]}
+              </SelectItem>
+            </SettingsSelectControl>
+          }
+        />
       </SettingsSection>
     </div>
   );
@@ -1722,65 +1715,65 @@ function SettingsRouteView() {
   const renderNotificationsPanel = () => (
     <div className="space-y-6">
       <SettingsSection title="Activity alerts">
-          <SettingsRow
-            title="Activity toasts"
-            description="Show an in-app toast when a chat or managed terminal agent finishes or needs input."
-            resetAction={
-              settings.enableTaskCompletionToasts !== defaults.enableTaskCompletionToasts ? (
-                <SettingResetButton
-                  label="activity toasts"
-                  onClick={() =>
-                    updateSettings({
-                      enableTaskCompletionToasts: defaults.enableTaskCompletionToasts,
-                    })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <Switch
-                checked={settings.enableTaskCompletionToasts}
-                onCheckedChange={(checked) =>
-                  updateSettings({ enableTaskCompletionToasts: Boolean(checked) })
+        <SettingsRow
+          title="Activity toasts"
+          description="Show an in-app toast when a chat or managed terminal agent finishes or needs input."
+          resetAction={
+            settings.enableTaskCompletionToasts !== defaults.enableTaskCompletionToasts ? (
+              <SettingResetButton
+                label="activity toasts"
+                onClick={() =>
+                  updateSettings({
+                    enableTaskCompletionToasts: defaults.enableTaskCompletionToasts,
+                  })
                 }
-                aria-label="Activity toast notifications"
               />
-            }
-          />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.enableTaskCompletionToasts}
+              onCheckedChange={(checked) =>
+                updateSettings({ enableTaskCompletionToasts: Boolean(checked) })
+              }
+              aria-label="Activity toast notifications"
+            />
+          }
+        />
 
-          <SettingsRow
-            title="Desktop notifications"
-            description="Show an OS notification when a chat or managed terminal agent finishes or needs input while the app is in the background."
-            status={buildNotificationSettingsSupportText(browserNotificationPermission)}
-            resetAction={
-              settings.enableSystemTaskCompletionNotifications !==
-              defaults.enableSystemTaskCompletionNotifications ? (
-                <SettingResetButton
-                  label="desktop notifications"
-                  onClick={() =>
-                    updateSettings({
-                      enableSystemTaskCompletionNotifications:
-                        defaults.enableSystemTaskCompletionNotifications,
-                    })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <div className="flex w-full items-center gap-2 sm:w-auto sm:justify-end">
-                <Button size="xs" variant="outline" onClick={() => void sendTestNotification()}>
-                  Test
-                </Button>
-                <Switch
-                  checked={settings.enableSystemTaskCompletionNotifications}
-                  onCheckedChange={(checked) => {
-                    void setSystemNotificationsEnabled(Boolean(checked));
-                  }}
-                  aria-label="Desktop activity notifications"
-                />
-              </div>
-            }
-          />
+        <SettingsRow
+          title="Desktop notifications"
+          description="Show an OS notification when a chat or managed terminal agent finishes or needs input while the app is in the background."
+          status={buildNotificationSettingsSupportText(browserNotificationPermission)}
+          resetAction={
+            settings.enableSystemTaskCompletionNotifications !==
+            defaults.enableSystemTaskCompletionNotifications ? (
+              <SettingResetButton
+                label="desktop notifications"
+                onClick={() =>
+                  updateSettings({
+                    enableSystemTaskCompletionNotifications:
+                      defaults.enableSystemTaskCompletionNotifications,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <div className="flex w-full items-center gap-2 sm:w-auto sm:justify-end">
+              <Button size="xs" variant="outline" onClick={() => void sendTestNotification()}>
+                Test
+              </Button>
+              <Switch
+                checked={settings.enableSystemTaskCompletionNotifications}
+                onCheckedChange={(checked) => {
+                  void setSystemNotificationsEnabled(Boolean(checked));
+                }}
+                aria-label="Desktop activity notifications"
+              />
+            </div>
+          }
+        />
       </SettingsSection>
     </div>
   );
@@ -1788,147 +1781,147 @@ function SettingsRouteView() {
   const renderBehaviorPanel = () => (
     <div className="space-y-6">
       <SettingsSection title="Runtime behavior">
-          <SettingsRow
-            title="Assistant output"
-            description="Show token-by-token output while a response is in progress."
-            resetAction={
-              settings.enableAssistantStreaming !== defaults.enableAssistantStreaming ? (
-                <SettingResetButton
-                  label="assistant output"
-                  onClick={() =>
-                    updateSettings({
-                      enableAssistantStreaming: defaults.enableAssistantStreaming,
-                    })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <Switch
-                checked={settings.enableAssistantStreaming}
-                onCheckedChange={(checked) =>
+        <SettingsRow
+          title="Assistant output"
+          description="Show token-by-token output while a response is in progress."
+          resetAction={
+            settings.enableAssistantStreaming !== defaults.enableAssistantStreaming ? (
+              <SettingResetButton
+                label="assistant output"
+                onClick={() =>
                   updateSettings({
-                    enableAssistantStreaming: Boolean(checked),
+                    enableAssistantStreaming: defaults.enableAssistantStreaming,
                   })
                 }
-                aria-label="Stream assistant messages"
               />
-            }
-          />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.enableAssistantStreaming}
+              onCheckedChange={(checked) =>
+                updateSettings({
+                  enableAssistantStreaming: Boolean(checked),
+                })
+              }
+              aria-label="Stream assistant messages"
+            />
+          }
+        />
 
-          <SettingsRow
-            title="Diff line wrapping"
-            description="Set the default wrap state when the diff panel opens. The in-panel wrap toggle only affects the current diff session."
-            resetAction={
-              settings.diffWordWrap !== defaults.diffWordWrap ? (
-                <SettingResetButton
-                  label="diff line wrapping"
-                  onClick={() =>
-                    updateSettings({
-                      diffWordWrap: defaults.diffWordWrap,
-                    })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <Switch
-                checked={settings.diffWordWrap}
-                onCheckedChange={(checked) =>
+        <SettingsRow
+          title="Diff line wrapping"
+          description="Set the default wrap state when the diff panel opens. The in-panel wrap toggle only affects the current diff session."
+          resetAction={
+            settings.diffWordWrap !== defaults.diffWordWrap ? (
+              <SettingResetButton
+                label="diff line wrapping"
+                onClick={() =>
                   updateSettings({
-                    diffWordWrap: Boolean(checked),
+                    diffWordWrap: defaults.diffWordWrap,
                   })
                 }
-                aria-label="Wrap diff lines by default"
               />
-            }
-          />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.diffWordWrap}
+              onCheckedChange={(checked) =>
+                updateSettings({
+                  diffWordWrap: Boolean(checked),
+                })
+              }
+              aria-label="Wrap diff lines by default"
+            />
+          }
+        />
       </SettingsSection>
 
       <SettingsSection title="Safety confirmations">
-          <SettingsRow
-            title="Delete confirmation"
-            description="Ask before deleting a thread and its chat history."
-            resetAction={
-              settings.confirmThreadDelete !== defaults.confirmThreadDelete ? (
-                <SettingResetButton
-                  label="delete confirmation"
-                  onClick={() =>
-                    updateSettings({
-                      confirmThreadDelete: defaults.confirmThreadDelete,
-                    })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <Switch
-                checked={settings.confirmThreadDelete}
-                onCheckedChange={(checked) =>
+        <SettingsRow
+          title="Delete confirmation"
+          description="Ask before deleting a thread and its chat history."
+          resetAction={
+            settings.confirmThreadDelete !== defaults.confirmThreadDelete ? (
+              <SettingResetButton
+                label="delete confirmation"
+                onClick={() =>
                   updateSettings({
-                    confirmThreadDelete: Boolean(checked),
+                    confirmThreadDelete: defaults.confirmThreadDelete,
                   })
                 }
-                aria-label="Confirm thread deletion"
               />
-            }
-          />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.confirmThreadDelete}
+              onCheckedChange={(checked) =>
+                updateSettings({
+                  confirmThreadDelete: Boolean(checked),
+                })
+              }
+              aria-label="Confirm thread deletion"
+            />
+          }
+        />
 
-          <SettingsRow
-            title="Archive confirmation"
-            description="Ask before archiving a thread."
-            resetAction={
-              settings.confirmThreadArchive !== defaults.confirmThreadArchive ? (
-                <SettingResetButton
-                  label="archive confirmation"
-                  onClick={() =>
-                    updateSettings({
-                      confirmThreadArchive: defaults.confirmThreadArchive,
-                    })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <Switch
-                checked={settings.confirmThreadArchive}
-                onCheckedChange={(checked) =>
+        <SettingsRow
+          title="Archive confirmation"
+          description="Ask before archiving a thread."
+          resetAction={
+            settings.confirmThreadArchive !== defaults.confirmThreadArchive ? (
+              <SettingResetButton
+                label="archive confirmation"
+                onClick={() =>
                   updateSettings({
-                    confirmThreadArchive: Boolean(checked),
+                    confirmThreadArchive: defaults.confirmThreadArchive,
                   })
                 }
-                aria-label="Confirm thread archive"
               />
-            }
-          />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.confirmThreadArchive}
+              onCheckedChange={(checked) =>
+                updateSettings({
+                  confirmThreadArchive: Boolean(checked),
+                })
+              }
+              aria-label="Confirm thread archive"
+            />
+          }
+        />
 
-          <SettingsRow
-            title="Terminal close confirmation"
-            description="Ask before closing a terminal tab and clearing its history."
-            resetAction={
-              settings.confirmTerminalTabClose !== defaults.confirmTerminalTabClose ? (
-                <SettingResetButton
-                  label="terminal close confirmation"
-                  onClick={() =>
-                    updateSettings({
-                      confirmTerminalTabClose: defaults.confirmTerminalTabClose,
-                    })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <Switch
-                checked={settings.confirmTerminalTabClose}
-                onCheckedChange={(checked) =>
+        <SettingsRow
+          title="Terminal close confirmation"
+          description="Ask before closing a terminal tab and clearing its history."
+          resetAction={
+            settings.confirmTerminalTabClose !== defaults.confirmTerminalTabClose ? (
+              <SettingResetButton
+                label="terminal close confirmation"
+                onClick={() =>
                   updateSettings({
-                    confirmTerminalTabClose: Boolean(checked),
+                    confirmTerminalTabClose: defaults.confirmTerminalTabClose,
                   })
                 }
-                aria-label="Confirm terminal tab close"
               />
-            }
-          />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.confirmTerminalTabClose}
+              onCheckedChange={(checked) =>
+                updateSettings({
+                  confirmTerminalTabClose: Boolean(checked),
+                })
+              }
+              aria-label="Confirm terminal tab close"
+            />
+          }
+        />
       </SettingsSection>
     </div>
   );
@@ -1938,7 +1931,12 @@ function SettingsRouteView() {
       <SettingsSection title="Managed worktrees">
         <div className="space-y-4">
           {serverWorktreesQuery.isLoading ? (
-            <div className={cn(SETTINGS_EMPTY_STATE_CLASS_NAME, "px-4 py-6 text-sm text-muted-foreground")}>
+            <div
+              className={cn(
+                SETTINGS_EMPTY_STATE_CLASS_NAME,
+                "px-4 py-6 text-sm text-muted-foreground",
+              )}
+            >
               Loading managed worktrees...
             </div>
           ) : serverWorktreesQuery.isError ? (
@@ -1953,7 +1951,12 @@ function SettingsRouteView() {
                 : "Unable to load worktrees."}
             </div>
           ) : worktreesByWorkspaceRoot.length === 0 ? (
-            <div className={cn(SETTINGS_EMPTY_STATE_CLASS_NAME, "px-4 py-6 text-sm text-muted-foreground")}>
+            <div
+              className={cn(
+                SETTINGS_EMPTY_STATE_CLASS_NAME,
+                "px-4 py-6 text-sm text-muted-foreground",
+              )}
+            >
               No app-managed worktrees found yet.
             </div>
           ) : (
@@ -2070,12 +2073,7 @@ function SettingsRouteView() {
       <div className="space-y-6">
         {archivedGroups.length === 0 ? (
           <SettingsSection title="Archived threads">
-            <div
-              className={cn(
-                SETTINGS_EMPTY_STATE_CLASS_NAME,
-                "px-5 py-10 text-center",
-              )}
-            >
+            <div className={cn(SETTINGS_EMPTY_STATE_CLASS_NAME, "px-5 py-10 text-center")}>
               <div className="mx-auto mb-3 flex size-11 items-center justify-center rounded-full border border-border/70 bg-background/70 text-muted-foreground">
                 <ArchiveIcon className="size-5" />
               </div>
@@ -2144,190 +2142,194 @@ function SettingsRouteView() {
   const renderModelsPanel = () => (
     <div className="space-y-6">
       <SettingsSection title="Generation defaults">
-          <SettingsRow
-            title="Git writing model"
-            description="Used for generated commit messages, PR titles, and branch names."
-            resetAction={
-              isGitTextGenerationModelDirty ? (
-                <SettingResetButton
-                  label="git writing model"
-                  onClick={() =>
-                    updateSettings({
-                      textGenerationProvider: defaults.textGenerationProvider,
-                      textGenerationModel: defaults.textGenerationModel,
-                    })
-                  }
-                />
-              ) : null
-            }
-            control={
-              <SettingsSelectControl
-                value={currentGitTextGenerationValue}
-                onValueChange={(value) => {
-                  if (!value) return;
-                  const separatorIndex = value.indexOf(":");
-                  const provider = value.slice(0, separatorIndex) as ProviderKind;
-                  const model = value.slice(separatorIndex + 1);
-                  if (!provider || !model) return;
+        <SettingsRow
+          title="Git writing model"
+          description="Used for generated commit messages, PR titles, and branch names."
+          resetAction={
+            isGitTextGenerationModelDirty ? (
+              <SettingResetButton
+                label="git writing model"
+                onClick={() =>
                   updateSettings({
-                    textGenerationProvider: provider,
-                    textGenerationModel: model,
-                  });
-                }}
-                ariaLabel="Git text generation model"
-                triggerClassName="w-full sm:w-52"
-                valueContent={selectedGitTextGenerationModelLabel}
-              >
-                {gitTextGenerationModelOptions.map((option) => (
-                  <SelectItem
-                    hideIndicator
-                    key={`${option.provider}:${option.slug}`}
-                    value={`${option.provider}:${option.slug}`}
-                  >
-                    {PROVIDER_DISPLAY_NAMES[option.provider]} / {option.name}
-                  </SelectItem>
-                ))}
-              </SettingsSelectControl>
-            }
-          />
+                    textGenerationProvider: defaults.textGenerationProvider,
+                    textGenerationModel: defaults.textGenerationModel,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSelectControl
+              value={currentGitTextGenerationValue}
+              onValueChange={(value) => {
+                if (!value) return;
+                const separatorIndex = value.indexOf(":");
+                const provider = value.slice(0, separatorIndex) as ProviderKind;
+                const model = value.slice(separatorIndex + 1);
+                if (!provider || !model) return;
+                updateSettings({
+                  textGenerationProvider: provider,
+                  textGenerationModel: model,
+                });
+              }}
+              ariaLabel="Git text generation model"
+              triggerClassName="w-full sm:w-52"
+              valueContent={selectedGitTextGenerationModelLabel}
+            >
+              {gitTextGenerationModelOptions.map((option) => (
+                <SelectItem
+                  hideIndicator
+                  key={`${option.provider}:${option.slug}`}
+                  value={`${option.provider}:${option.slug}`}
+                >
+                  {PROVIDER_DISPLAY_NAMES[option.provider]} / {option.name}
+                </SelectItem>
+              ))}
+            </SettingsSelectControl>
+          }
+        />
       </SettingsSection>
 
       <SettingsSection title="Custom models">
-          <SettingsRow
-            title="Saved model slugs"
-            description="Add custom model slugs for supported providers."
-            resetAction={
-              totalCustomModels > 0 ? (
-                <SettingResetButton
-                  label="custom models"
-                  onClick={() => {
-                    updateSettings({
-                      customCodexModels: defaults.customCodexModels,
-                      customClaudeModels: defaults.customClaudeModels,
-                      customCursorModels: defaults.customCursorModels,
-                      customGeminiModels: defaults.customGeminiModels,
-                      customGrokModels: defaults.customGrokModels,
-                      customKiloModels: defaults.customKiloModels,
-                      customOpenCodeModels: defaults.customOpenCodeModels,
-                      customPiModels: defaults.customPiModels,
-                    });
-                    setCustomModelErrorByProvider({});
-                    setShowAllCustomModels(false);
-                  }}
-                />
-              ) : null
-            }
-          >
-            <div className={cn("mt-4 pt-4", SETTINGS_CARD_ROW_DIVIDER_CLASS_NAME)}>
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                <Select
-                  value={selectedCustomModelProvider}
-                  onValueChange={(value) => {
-                    if (
-                      value !== "codex" &&
-                      value !== "claudeAgent" &&
-                      value !== "cursor" &&
-                      value !== "gemini" &&
-                      value !== "grok" &&
-                      value !== "kilo" &&
-                      value !== "opencode" &&
-                      value !== "pi"
-                    ) {
-                      return;
-                    }
-                    setSelectedCustomModelProvider(value);
-                  }}
+        <SettingsRow
+          title="Saved model slugs"
+          description="Add custom model slugs for supported providers."
+          resetAction={
+            totalCustomModels > 0 ? (
+              <SettingResetButton
+                label="custom models"
+                onClick={() => {
+                  updateSettings({
+                    customCodexModels: defaults.customCodexModels,
+                    customClaudeModels: defaults.customClaudeModels,
+                    customCursorModels: defaults.customCursorModels,
+                    customGeminiModels: defaults.customGeminiModels,
+                    customGrokModels: defaults.customGrokModels,
+                    customKiloModels: defaults.customKiloModels,
+                    customOpenCodeModels: defaults.customOpenCodeModels,
+                    customPiModels: defaults.customPiModels,
+                  });
+                  setCustomModelErrorByProvider({});
+                  setShowAllCustomModels(false);
+                }}
+              />
+            ) : null
+          }
+        >
+          <div className={cn("mt-4 pt-4", SETTINGS_CARD_ROW_DIVIDER_CLASS_NAME)}>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <Select
+                value={selectedCustomModelProvider}
+                onValueChange={(value) => {
+                  if (
+                    value !== "codex" &&
+                    value !== "claudeAgent" &&
+                    value !== "cursor" &&
+                    value !== "gemini" &&
+                    value !== "grok" &&
+                    value !== "kilo" &&
+                    value !== "opencode" &&
+                    value !== "pi"
+                  ) {
+                    return;
+                  }
+                  setSelectedCustomModelProvider(value);
+                }}
+              >
+                <SelectTrigger
+                  size="sm"
+                  className="w-full sm:w-40"
+                  aria-label="Custom model provider"
                 >
-                  <SelectTrigger
-                    size="sm"
-                    className="w-full sm:w-40"
-                    aria-label="Custom model provider"
-                  >
-                    <SelectValue>{selectedCustomModelProviderSettings.title}</SelectValue>
-                  </SelectTrigger>
-                  <SettingsSelectPopup align="start">
-                    {MODEL_PROVIDER_SETTINGS.map((providerSettings) => (
-                      <SelectItem hideIndicator key={providerSettings.provider} value={providerSettings.provider}>
-                        {providerSettings.title}
-                      </SelectItem>
-                    ))}
-                  </SettingsSelectPopup>
-                </Select>
-                <Input
-                  id="custom-model-slug"
-                  value={selectedCustomModelInput}
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    setCustomModelInputByProvider((existing) => ({
+                  <SelectValue>{selectedCustomModelProviderSettings.title}</SelectValue>
+                </SelectTrigger>
+                <SettingsSelectPopup align="start">
+                  {MODEL_PROVIDER_SETTINGS.map((providerSettings) => (
+                    <SelectItem
+                      hideIndicator
+                      key={providerSettings.provider}
+                      value={providerSettings.provider}
+                    >
+                      {providerSettings.title}
+                    </SelectItem>
+                  ))}
+                </SettingsSelectPopup>
+              </Select>
+              <Input
+                id="custom-model-slug"
+                value={selectedCustomModelInput}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setCustomModelInputByProvider((existing) => ({
+                    ...existing,
+                    [selectedCustomModelProvider]: value,
+                  }));
+                  if (selectedCustomModelError) {
+                    setCustomModelErrorByProvider((existing) => ({
                       ...existing,
-                      [selectedCustomModelProvider]: value,
+                      [selectedCustomModelProvider]: null,
                     }));
-                    if (selectedCustomModelError) {
-                      setCustomModelErrorByProvider((existing) => ({
-                        ...existing,
-                        [selectedCustomModelProvider]: null,
-                      }));
-                    }
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key !== "Enter") return;
-                    event.preventDefault();
-                    addCustomModel(selectedCustomModelProvider);
-                  }}
-                  placeholder={selectedCustomModelProviderSettings.example}
-                  spellCheck={false}
-                />
-                <Button
-                  className="shrink-0"
-                  variant="outline"
-                  onClick={() => addCustomModel(selectedCustomModelProvider)}
-                >
-                  <PlusIcon className="size-3.5" />
-                  Add
-                </Button>
-              </div>
+                  }
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter") return;
+                  event.preventDefault();
+                  addCustomModel(selectedCustomModelProvider);
+                }}
+                placeholder={selectedCustomModelProviderSettings.example}
+                spellCheck={false}
+              />
+              <Button
+                className="shrink-0"
+                variant="outline"
+                onClick={() => addCustomModel(selectedCustomModelProvider)}
+              >
+                <PlusIcon className="size-3.5" />
+                Add
+              </Button>
+            </div>
 
-              {selectedCustomModelError ? (
-                <p className="mt-2 text-xs text-destructive">{selectedCustomModelError}</p>
-              ) : null}
+            {selectedCustomModelError ? (
+              <p className="mt-2 text-xs text-destructive">{selectedCustomModelError}</p>
+            ) : null}
 
-              {totalCustomModels > 0 ? (
-                <div className={cn("mt-3", SETTINGS_INSET_LIST_CLASS_NAME)}>
-                    {visibleCustomModelRows.map((row) => (
-                      <div
-                        key={row.key}
-                        className="group grid grid-cols-[minmax(5rem,6rem)_minmax(0,1fr)_auto] items-center gap-3 border-t border-[color:var(--color-border)] px-4 py-2 first:border-t-0"
-                      >
-                        <span className="truncate text-xs text-muted-foreground">
-                          {row.providerTitle}
-                        </span>
-                        <code className="min-w-0 truncate text-sm text-foreground">{row.slug}</code>
-                        <button
-                          type="button"
-                          className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100 hover:opacity-100"
-                          aria-label={`Remove ${row.slug}`}
-                          onClick={() => removeCustomModel(row.provider, row.slug)}
-                        >
-                          <XIcon className="size-3.5 text-muted-foreground hover:text-foreground" />
-                        </button>
-                      </div>
-                    ))}
-
-                  {savedCustomModelRows.length > 5 ? (
+            {totalCustomModels > 0 ? (
+              <div className={cn("mt-3", SETTINGS_INSET_LIST_CLASS_NAME)}>
+                {visibleCustomModelRows.map((row) => (
+                  <div
+                    key={row.key}
+                    className="group grid grid-cols-[minmax(5rem,6rem)_minmax(0,1fr)_auto] items-center gap-3 border-t border-[color:var(--color-border)] px-4 py-2 first:border-t-0"
+                  >
+                    <span className="truncate text-xs text-muted-foreground">
+                      {row.providerTitle}
+                    </span>
+                    <code className="min-w-0 truncate text-sm text-foreground">{row.slug}</code>
                     <button
                       type="button"
-                      className="mt-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
-                      onClick={() => setShowAllCustomModels((value) => !value)}
+                      className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100 hover:opacity-100"
+                      aria-label={`Remove ${row.slug}`}
+                      onClick={() => removeCustomModel(row.provider, row.slug)}
                     >
-                      {showAllCustomModels
-                        ? "Show less"
-                        : `Show more (${savedCustomModelRows.length - 5})`}
+                      <XIcon className="size-3.5 text-muted-foreground hover:text-foreground" />
                     </button>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
-          </SettingsRow>
+                  </div>
+                ))}
+
+                {savedCustomModelRows.length > 5 ? (
+                  <button
+                    type="button"
+                    className="mt-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                    onClick={() => setShowAllCustomModels((value) => !value)}
+                  >
+                    {showAllCustomModels
+                      ? "Show less"
+                      : `Show more (${savedCustomModelRows.length - 5})`}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        </SettingsRow>
       </SettingsSection>
     </div>
   );
@@ -2336,61 +2338,61 @@ function SettingsRouteView() {
     <div className="space-y-6">
       {renderProviderUpdatesSection()}
       <SettingsSection title="Provider picker">
-          <SettingsRow
-            title="Visible providers"
-            description="Drag providers into your preferred picker order and hide the ones you don't use. The provider you're currently using on a thread always stays visible."
-            status={
-              hiddenProviderCount > 0
-                ? `${hiddenProviderCount} provider${hiddenProviderCount === 1 ? "" : "s"} hidden`
-                : isProviderOrderDirty
-                  ? "Custom order"
-                  : "All providers visible"
-            }
-            resetAction={
-              hiddenProviderCount > 0 || isProviderOrderDirty ? (
-                <SettingResetButton
-                  label="provider picker"
-                  onClick={() =>
-                    updateSettings({
-                      hiddenProviders: defaults.hiddenProviders,
-                      providerOrder: defaults.providerOrder,
-                    })
-                  }
-                />
-              ) : null
-            }
+        <SettingsRow
+          title="Visible providers"
+          description="Drag providers into your preferred picker order and hide the ones you don't use. The provider you're currently using on a thread always stays visible."
+          status={
+            hiddenProviderCount > 0
+              ? `${hiddenProviderCount} provider${hiddenProviderCount === 1 ? "" : "s"} hidden`
+              : isProviderOrderDirty
+                ? "Custom order"
+                : "All providers visible"
+          }
+          resetAction={
+            hiddenProviderCount > 0 || isProviderOrderDirty ? (
+              <SettingResetButton
+                label="provider picker"
+                onClick={() =>
+                  updateSettings({
+                    hiddenProviders: defaults.hiddenProviders,
+                    providerOrder: defaults.providerOrder,
+                  })
+                }
+              />
+            ) : null
+          }
+        >
+          <DndContext
+            sensors={providerVisibilitySensors}
+            collisionDetection={closestCenter}
+            modifiers={[restrictToVerticalAxis]}
+            onDragEnd={handleProviderOrderDragEnd}
           >
-            <DndContext
-              sensors={providerVisibilitySensors}
-              collisionDetection={closestCenter}
-              modifiers={[restrictToVerticalAxis]}
-              onDragEnd={handleProviderOrderDragEnd}
+            <SortableContext
+              items={orderedProviderVisibilityOptions.map((option) => option.provider)}
+              strategy={verticalListSortingStrategy}
             >
-              <SortableContext
-                items={orderedProviderVisibilityOptions.map((option) => option.provider)}
-                strategy={verticalListSortingStrategy}
-              >
-                <div className="mt-4 space-y-2">
-                  {orderedProviderVisibilityOptions.map((option) => (
-                    <SortableProviderVisibilityRow
-                      key={option.provider}
-                      option={option}
-                      isHidden={hiddenProviderSet.has(option.provider)}
-                      onHiddenChange={(hidden) =>
-                        updateSettings({
-                          hiddenProviders: setProviderHidden(
-                            settings.hiddenProviders,
-                            option.provider,
-                            hidden,
-                          ),
-                        })
-                      }
-                    />
-                  ))}
-                </div>
-              </SortableContext>
-            </DndContext>
-          </SettingsRow>
+              <div className="mt-4 space-y-2">
+                {orderedProviderVisibilityOptions.map((option) => (
+                  <SortableProviderVisibilityRow
+                    key={option.provider}
+                    option={option}
+                    isHidden={hiddenProviderSet.has(option.provider)}
+                    onHiddenChange={(hidden) =>
+                      updateSettings({
+                        hiddenProviders: setProviderHidden(
+                          settings.hiddenProviders,
+                          option.provider,
+                          hidden,
+                        ),
+                      })
+                    }
+                  />
+                ))}
+              </div>
+            </SortableContext>
+          </DndContext>
+        </SettingsRow>
       </SettingsSection>
       {renderProviderInstallsSection()}
     </div>
@@ -2399,74 +2401,74 @@ function SettingsRouteView() {
   const renderProviderUpdatesSection = () => (
     <div ref={providerUpdatesRef} id="provider-updates">
       <SettingsSection title="Updates">
-          <SettingsRow
-            title="Provider updates"
-            description="Update installed provider tools that Synara can safely update."
-            status={
-              outdatedProviderCount > 0
-                ? `${outdatedProviderCount} update${outdatedProviderCount === 1 ? "" : "s"} available`
-                : "No provider updates detected"
-            }
-          >
-            {outdatedProviderStatuses.length > 0 ? (
-              <div className={cn("mt-4", SETTINGS_INSET_LIST_CLASS_NAME)}>
-                {outdatedProviderStatuses.map((providerStatus) => {
-                  const updateAdvisory = providerStatus.versionAdvisory;
-                  const updateState = providerStatus.updateState?.status;
-                  const isProviderUpdateActive =
-                    updateState === "queued" ||
-                    updateState === "running" ||
-                    updatingProviders.has(providerStatus.provider);
-                  const canUpdateProvider =
-                    updateAdvisory?.canUpdate === true && !isProviderUpdateActive;
-                  const updateLabel = providerUpdateStatusLabel(providerStatus);
+        <SettingsRow
+          title="Provider updates"
+          description="Update installed provider tools that Synara can safely update."
+          status={
+            outdatedProviderCount > 0
+              ? `${outdatedProviderCount} update${outdatedProviderCount === 1 ? "" : "s"} available`
+              : "No provider updates detected"
+          }
+        >
+          {outdatedProviderStatuses.length > 0 ? (
+            <div className={cn("mt-4", SETTINGS_INSET_LIST_CLASS_NAME)}>
+              {outdatedProviderStatuses.map((providerStatus) => {
+                const updateAdvisory = providerStatus.versionAdvisory;
+                const updateState = providerStatus.updateState?.status;
+                const isProviderUpdateActive =
+                  updateState === "queued" ||
+                  updateState === "running" ||
+                  updatingProviders.has(providerStatus.provider);
+                const canUpdateProvider =
+                  updateAdvisory?.canUpdate === true && !isProviderUpdateActive;
+                const updateLabel = providerUpdateStatusLabel(providerStatus);
 
-                  return (
-                    <div
-                      key={providerStatus.provider}
-                      className="flex min-h-11 items-center gap-3 border-t border-[color:var(--color-border)] px-3 py-2 first:border-t-0"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-medium text-foreground">
-                          {PROVIDER_DISPLAY_NAMES[providerStatus.provider]}
-                        </div>
-                        {updateLabel ? (
-                          <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
-                            {updateLabel}
-                          </div>
-                        ) : null}
+                return (
+                  <div
+                    key={providerStatus.provider}
+                    className="flex min-h-11 items-center gap-3 border-t border-[color:var(--color-border)] px-3 py-2 first:border-t-0"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-medium text-foreground">
+                        {PROVIDER_DISPLAY_NAMES[providerStatus.provider]}
                       </div>
-                      {updateAdvisory?.canUpdate ? (
-                        <Button
-                          type="button"
-                          size="xs"
-                          variant="outline"
-                          disabled={!canUpdateProvider}
-                          title={
-                            updateAdvisory.updateCommand
-                              ? `Run ${updateAdvisory.updateCommand}`
-                              : undefined
-                          }
-                          onClick={() => void runProviderUpdate(providerStatus.provider)}
-                        >
-                          {isProviderUpdateActive ? (
-                            <Loader2Icon className="size-3.5 animate-spin" />
-                          ) : (
-                            <DownloadIcon className="size-3.5" />
-                          )}
-                          {isProviderUpdateActive ? "Updating" : "Update"}
-                        </Button>
-                      ) : (
-                        <span className="shrink-0 text-[11px] text-muted-foreground">
-                          Manual update
-                        </span>
-                      )}
+                      {updateLabel ? (
+                        <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                          {updateLabel}
+                        </div>
+                      ) : null}
                     </div>
-                  );
-                })}
-              </div>
-            ) : null}
-          </SettingsRow>
+                    {updateAdvisory?.canUpdate ? (
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="outline"
+                        disabled={!canUpdateProvider}
+                        title={
+                          updateAdvisory.updateCommand
+                            ? `Run ${updateAdvisory.updateCommand}`
+                            : undefined
+                        }
+                        onClick={() => void runProviderUpdate(providerStatus.provider)}
+                      >
+                        {isProviderUpdateActive ? (
+                          <Loader2Icon className="size-3.5 animate-spin" />
+                        ) : (
+                          <DownloadIcon className="size-3.5" />
+                        )}
+                        {isProviderUpdateActive ? "Updating" : "Update"}
+                      </Button>
+                    ) : (
+                      <span className="shrink-0 text-[11px] text-muted-foreground">
+                        Manual update
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
+        </SettingsRow>
       </SettingsSection>
     </div>
   );
@@ -2474,407 +2476,405 @@ function SettingsRouteView() {
   const renderProviderInstallsSection = () => (
     <div ref={providerInstallsRef} id="provider-installs">
       <SettingsSection title="Provider tools">
-          <SettingsRow
-            title="Installed CLIs"
-            description="Review provider versions and update tools. Open a row only when you need binary overrides."
-            status={
-              outdatedProviderCount > 0
-                ? `${outdatedProviderCount} update${outdatedProviderCount === 1 ? "" : "s"} available`
-                : "No provider updates detected"
-            }
-            resetAction={
-              isInstallSettingsDirty ? (
-                <SettingResetButton
-                  label="provider tools"
-                  onClick={() => {
-                    updateSettings({
-                      claudeBinaryPath: defaults.claudeBinaryPath,
-                      codexBinaryPath: defaults.codexBinaryPath,
-                      codexHomePath: defaults.codexHomePath,
-                      cursorBinaryPath: defaults.cursorBinaryPath,
-                      cursorApiEndpoint: defaults.cursorApiEndpoint,
-                      geminiBinaryPath: defaults.geminiBinaryPath,
-                      grokBinaryPath: defaults.grokBinaryPath,
-                      kiloBinaryPath: defaults.kiloBinaryPath,
-                      kiloServerUrl: defaults.kiloServerUrl,
-                      kiloServerPassword: defaults.kiloServerPassword,
-                      openCodeBinaryPath: defaults.openCodeBinaryPath,
-                      openCodeServerUrl: defaults.openCodeServerUrl,
-                      openCodeServerPassword: defaults.openCodeServerPassword,
-                      piAgentDir: defaults.piAgentDir,
-                      piBinaryPath: defaults.piBinaryPath,
-                    });
-                    setOpenInstallProviders({
-                      codex: false,
-                      claudeAgent: false,
-                      cursor: false,
-                      gemini: false,
-                      grok: false,
-                      kilo: false,
-                      opencode: false,
-                      pi: false,
-                    });
-                  }}
-                />
-              ) : null
-            }
-          >
-            <div className="mt-4">
-              <div className={SETTINGS_INSET_LIST_CLASS_NAME}>
-                {INSTALL_PROVIDER_SETTINGS.map((providerSettings) => {
-                  const isOpen = openInstallProviders[providerSettings.provider];
-                  const isDirty =
-                    providerSettings.provider === "codex"
-                      ? settings.codexBinaryPath !== defaults.codexBinaryPath ||
-                        settings.codexHomePath !== defaults.codexHomePath
-                      : providerSettings.provider === "claudeAgent"
-                        ? settings.claudeBinaryPath !== defaults.claudeBinaryPath
-                        : providerSettings.provider === "cursor"
-                          ? settings.cursorBinaryPath !== defaults.cursorBinaryPath ||
-                            settings.cursorApiEndpoint !== defaults.cursorApiEndpoint
-                          : providerSettings.provider === "gemini"
-                            ? settings.geminiBinaryPath !== defaults.geminiBinaryPath
-                            : providerSettings.provider === "grok"
-                              ? settings.grokBinaryPath !== defaults.grokBinaryPath
-                              : providerSettings.provider === "kilo"
-                                ? settings.kiloBinaryPath !== defaults.kiloBinaryPath ||
-                                  settings.kiloServerUrl !== defaults.kiloServerUrl ||
-                                  settings.kiloServerPassword !== defaults.kiloServerPassword
-                                : providerSettings.provider === "pi"
-                                  ? settings.piBinaryPath !== defaults.piBinaryPath ||
-                                    settings.piAgentDir !== defaults.piAgentDir
-                                  : settings.openCodeBinaryPath !== defaults.openCodeBinaryPath ||
-                                    settings.openCodeServerUrl !== defaults.openCodeServerUrl ||
-                                    settings.openCodeServerPassword !==
-                                      defaults.openCodeServerPassword;
-                  const binaryPathValue =
-                    providerSettings.binaryPathKey === "claudeBinaryPath"
-                      ? claudeBinaryPath
-                      : providerSettings.binaryPathKey === "cursorBinaryPath"
-                        ? cursorBinaryPath
-                        : providerSettings.binaryPathKey === "geminiBinaryPath"
-                          ? geminiBinaryPath
-                          : providerSettings.binaryPathKey === "grokBinaryPath"
-                            ? grokBinaryPath
-                            : providerSettings.binaryPathKey === "kiloBinaryPath"
-                              ? kiloBinaryPath
-                              : providerSettings.binaryPathKey === "openCodeBinaryPath"
-                                ? openCodeBinaryPath
-                                : providerSettings.binaryPathKey === "piBinaryPath"
-                                  ? piBinaryPath
-                                  : codexBinaryPath;
-                  const providerStatus = providerStatusByProvider.get(providerSettings.provider);
-                  const providerUpdateLabel = providerStatus
-                    ? providerUpdateStatusLabel(providerStatus)
-                    : null;
-                  const updateAdvisory = providerStatus?.versionAdvisory;
-                  const providerUpdateState = providerStatus?.updateState?.status;
-                  const isProviderUpdateActive =
-                    providerUpdateState === "queued" ||
-                    providerUpdateState === "running" ||
-                    updatingProviders.has(providerSettings.provider);
-                  const canUpdateProvider =
-                    updateAdvisory?.status === "behind_latest" &&
-                    updateAdvisory.canUpdate &&
-                    !isProviderUpdateActive;
+        <SettingsRow
+          title="Installed CLIs"
+          description="Review provider versions and update tools. Open a row only when you need binary overrides."
+          status={
+            outdatedProviderCount > 0
+              ? `${outdatedProviderCount} update${outdatedProviderCount === 1 ? "" : "s"} available`
+              : "No provider updates detected"
+          }
+          resetAction={
+            isInstallSettingsDirty ? (
+              <SettingResetButton
+                label="provider tools"
+                onClick={() => {
+                  updateSettings({
+                    claudeBinaryPath: defaults.claudeBinaryPath,
+                    codexBinaryPath: defaults.codexBinaryPath,
+                    codexHomePath: defaults.codexHomePath,
+                    cursorBinaryPath: defaults.cursorBinaryPath,
+                    cursorApiEndpoint: defaults.cursorApiEndpoint,
+                    geminiBinaryPath: defaults.geminiBinaryPath,
+                    grokBinaryPath: defaults.grokBinaryPath,
+                    kiloBinaryPath: defaults.kiloBinaryPath,
+                    kiloServerUrl: defaults.kiloServerUrl,
+                    kiloServerPassword: defaults.kiloServerPassword,
+                    openCodeBinaryPath: defaults.openCodeBinaryPath,
+                    openCodeServerUrl: defaults.openCodeServerUrl,
+                    openCodeServerPassword: defaults.openCodeServerPassword,
+                    piAgentDir: defaults.piAgentDir,
+                    piBinaryPath: defaults.piBinaryPath,
+                  });
+                  setOpenInstallProviders({
+                    codex: false,
+                    claudeAgent: false,
+                    cursor: false,
+                    gemini: false,
+                    grok: false,
+                    kilo: false,
+                    opencode: false,
+                    pi: false,
+                  });
+                }}
+              />
+            ) : null
+          }
+        >
+          <div className="mt-4">
+            <div className={SETTINGS_INSET_LIST_CLASS_NAME}>
+              {INSTALL_PROVIDER_SETTINGS.map((providerSettings) => {
+                const isOpen = openInstallProviders[providerSettings.provider];
+                const isDirty =
+                  providerSettings.provider === "codex"
+                    ? settings.codexBinaryPath !== defaults.codexBinaryPath ||
+                      settings.codexHomePath !== defaults.codexHomePath
+                    : providerSettings.provider === "claudeAgent"
+                      ? settings.claudeBinaryPath !== defaults.claudeBinaryPath
+                      : providerSettings.provider === "cursor"
+                        ? settings.cursorBinaryPath !== defaults.cursorBinaryPath ||
+                          settings.cursorApiEndpoint !== defaults.cursorApiEndpoint
+                        : providerSettings.provider === "gemini"
+                          ? settings.geminiBinaryPath !== defaults.geminiBinaryPath
+                          : providerSettings.provider === "grok"
+                            ? settings.grokBinaryPath !== defaults.grokBinaryPath
+                            : providerSettings.provider === "kilo"
+                              ? settings.kiloBinaryPath !== defaults.kiloBinaryPath ||
+                                settings.kiloServerUrl !== defaults.kiloServerUrl ||
+                                settings.kiloServerPassword !== defaults.kiloServerPassword
+                              : providerSettings.provider === "pi"
+                                ? settings.piBinaryPath !== defaults.piBinaryPath ||
+                                  settings.piAgentDir !== defaults.piAgentDir
+                                : settings.openCodeBinaryPath !== defaults.openCodeBinaryPath ||
+                                  settings.openCodeServerUrl !== defaults.openCodeServerUrl ||
+                                  settings.openCodeServerPassword !==
+                                    defaults.openCodeServerPassword;
+                const binaryPathValue =
+                  providerSettings.binaryPathKey === "claudeBinaryPath"
+                    ? claudeBinaryPath
+                    : providerSettings.binaryPathKey === "cursorBinaryPath"
+                      ? cursorBinaryPath
+                      : providerSettings.binaryPathKey === "geminiBinaryPath"
+                        ? geminiBinaryPath
+                        : providerSettings.binaryPathKey === "grokBinaryPath"
+                          ? grokBinaryPath
+                          : providerSettings.binaryPathKey === "kiloBinaryPath"
+                            ? kiloBinaryPath
+                            : providerSettings.binaryPathKey === "openCodeBinaryPath"
+                              ? openCodeBinaryPath
+                              : providerSettings.binaryPathKey === "piBinaryPath"
+                                ? piBinaryPath
+                                : codexBinaryPath;
+                const providerStatus = providerStatusByProvider.get(providerSettings.provider);
+                const providerUpdateLabel = providerStatus
+                  ? providerUpdateStatusLabel(providerStatus)
+                  : null;
+                const updateAdvisory = providerStatus?.versionAdvisory;
+                const providerUpdateState = providerStatus?.updateState?.status;
+                const isProviderUpdateActive =
+                  providerUpdateState === "queued" ||
+                  providerUpdateState === "running" ||
+                  updatingProviders.has(providerSettings.provider);
+                const canUpdateProvider =
+                  updateAdvisory?.status === "behind_latest" &&
+                  updateAdvisory.canUpdate &&
+                  !isProviderUpdateActive;
 
-                  return (
-                    <Collapsible
-                      key={providerSettings.provider}
-                      open={isOpen}
-                      onOpenChange={(open) =>
-                        setOpenInstallProviders((existing) => ({
-                          ...existing,
-                          [providerSettings.provider]: open,
-                        }))
-                      }
-                    >
-                      <div className="border-t border-border/70 first:border-t-0">
-                        <div className="flex min-h-11 items-center gap-2 px-3 py-2">
-                          <button
-                            type="button"
-                            className="flex min-w-0 flex-1 items-center gap-2 text-left"
-                            onClick={() =>
-                              setOpenInstallProviders((existing) => ({
-                                ...existing,
-                                [providerSettings.provider]: !existing[providerSettings.provider],
-                              }))
-                            }
-                          >
-                            <span className="min-w-0 flex-1 text-sm font-medium text-foreground">
-                              {providerSettings.title}
+                return (
+                  <Collapsible
+                    key={providerSettings.provider}
+                    open={isOpen}
+                    onOpenChange={(open) =>
+                      setOpenInstallProviders((existing) => ({
+                        ...existing,
+                        [providerSettings.provider]: open,
+                      }))
+                    }
+                  >
+                    <div className="border-t border-border/70 first:border-t-0">
+                      <div className="flex min-h-11 items-center gap-2 px-3 py-2">
+                        <button
+                          type="button"
+                          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                          onClick={() =>
+                            setOpenInstallProviders((existing) => ({
+                              ...existing,
+                              [providerSettings.provider]: !existing[providerSettings.provider],
+                            }))
+                          }
+                        >
+                          <span className="min-w-0 flex-1 text-sm font-medium text-foreground">
+                            {providerSettings.title}
+                          </span>
+                          {isDirty ? (
+                            <span className="shrink-0 text-[11px] text-muted-foreground">
+                              Custom
                             </span>
-                            {isDirty ? (
-                              <span className="shrink-0 text-[11px] text-muted-foreground">
-                                Custom
-                              </span>
-                            ) : null}
-                            {providerUpdateLabel ? (
-                              <span
-                                className={cn(
-                                  "shrink-0 text-[11px]",
-                                  updateAdvisory?.status === "behind_latest"
-                                    ? "text-foreground"
-                                    : "text-muted-foreground",
-                                )}
-                              >
-                                {providerUpdateLabel}
-                              </span>
-                            ) : null}
-                            <ChevronDownIcon
-                              className={cn(
-                                "size-4 shrink-0 text-muted-foreground transition-transform",
-                                isOpen && "rotate-180",
-                              )}
-                            />
-                          </button>
-                          {updateAdvisory?.status === "behind_latest" &&
-                          updateAdvisory.canUpdate ? (
-                            <Button
-                              type="button"
-                              size="xs"
-                              variant="outline"
-                              disabled={!canUpdateProvider}
-                              title={
-                                updateAdvisory.updateCommand
-                                  ? `Run ${updateAdvisory.updateCommand}`
-                                  : undefined
-                              }
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                void runProviderUpdate(providerSettings.provider);
-                              }}
-                            >
-                              {isProviderUpdateActive ? (
-                                <Loader2Icon className="size-3.5 animate-spin" />
-                              ) : (
-                                <DownloadIcon className="size-3.5" />
-                              )}
-                              {isProviderUpdateActive ? "Updating" : "Update"}
-                            </Button>
                           ) : null}
-                        </div>
+                          {providerUpdateLabel ? (
+                            <span
+                              className={cn(
+                                "shrink-0 text-[11px]",
+                                updateAdvisory?.status === "behind_latest"
+                                  ? "text-foreground"
+                                  : "text-muted-foreground",
+                              )}
+                            >
+                              {providerUpdateLabel}
+                            </span>
+                          ) : null}
+                          <ChevronDownIcon
+                            className={cn(
+                              "size-4 shrink-0 text-muted-foreground transition-transform",
+                              isOpen && "rotate-180",
+                            )}
+                          />
+                        </button>
+                        {updateAdvisory?.status === "behind_latest" && updateAdvisory.canUpdate ? (
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="outline"
+                            disabled={!canUpdateProvider}
+                            title={
+                              updateAdvisory.updateCommand
+                                ? `Run ${updateAdvisory.updateCommand}`
+                                : undefined
+                            }
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void runProviderUpdate(providerSettings.provider);
+                            }}
+                          >
+                            {isProviderUpdateActive ? (
+                              <Loader2Icon className="size-3.5 animate-spin" />
+                            ) : (
+                              <DownloadIcon className="size-3.5" />
+                            )}
+                            {isProviderUpdateActive ? "Updating" : "Update"}
+                          </Button>
+                        ) : null}
+                      </div>
 
-                        <CollapsibleContent>
-                          <div className="border-t border-border/70 bg-muted/20 px-3 py-3">
-                            <div className="space-y-3">
-                              <ProviderDocsLinks docs={providerSettings.docs} />
-                              {updateAdvisory?.status === "behind_latest" ? (
-                                <div className="text-xs text-muted-foreground">
-                                  {updateAdvisory.canUpdate && updateAdvisory.updateCommand ? (
-                                    <>
-                                      <span>Command: </span>
-                                      <code className="font-mono">
-                                        {updateAdvisory.updateCommand}
-                                      </code>
-                                    </>
-                                  ) : (
-                                    "A newer version is available, but Synara could not identify a safe one-click update command for this installation."
-                                  )}
-                                </div>
-                              ) : null}
+                      <CollapsibleContent>
+                        <div className="border-t border-border/70 bg-muted/20 px-3 py-3">
+                          <div className="space-y-3">
+                            <ProviderDocsLinks docs={providerSettings.docs} />
+                            {updateAdvisory?.status === "behind_latest" ? (
+                              <div className="text-xs text-muted-foreground">
+                                {updateAdvisory.canUpdate && updateAdvisory.updateCommand ? (
+                                  <>
+                                    <span>Command: </span>
+                                    <code className="font-mono">
+                                      {updateAdvisory.updateCommand}
+                                    </code>
+                                  </>
+                                ) : (
+                                  "A newer version is available, but Synara could not identify a safe one-click update command for this installation."
+                                )}
+                              </div>
+                            ) : null}
 
+                            <label
+                              htmlFor={`provider-install-${providerSettings.binaryPathKey}`}
+                              className="block"
+                            >
+                              <span className="block text-xs font-medium text-foreground">
+                                {providerSettings.title} binary path
+                              </span>
+                              <Input
+                                id={`provider-install-${providerSettings.binaryPathKey}`}
+                                className="mt-1"
+                                value={binaryPathValue}
+                                onChange={(event) =>
+                                  updateSettings(
+                                    providerSettings.binaryPathKey === "claudeBinaryPath"
+                                      ? { claudeBinaryPath: event.target.value }
+                                      : providerSettings.binaryPathKey === "cursorBinaryPath"
+                                        ? { cursorBinaryPath: event.target.value }
+                                        : providerSettings.binaryPathKey === "geminiBinaryPath"
+                                          ? { geminiBinaryPath: event.target.value }
+                                          : providerSettings.binaryPathKey === "grokBinaryPath"
+                                            ? { grokBinaryPath: event.target.value }
+                                            : providerSettings.binaryPathKey === "kiloBinaryPath"
+                                              ? { kiloBinaryPath: event.target.value }
+                                              : providerSettings.binaryPathKey ===
+                                                  "openCodeBinaryPath"
+                                                ? { openCodeBinaryPath: event.target.value }
+                                                : providerSettings.binaryPathKey === "piBinaryPath"
+                                                  ? { piBinaryPath: event.target.value }
+                                                  : { codexBinaryPath: event.target.value },
+                                  )
+                                }
+                                placeholder={providerSettings.binaryPlaceholder}
+                                spellCheck={false}
+                              />
+                              <span className="mt-1 block text-xs text-muted-foreground">
+                                {providerSettings.binaryDescription}
+                              </span>
+                            </label>
+
+                            {providerSettings.homePathKey ? (
                               <label
-                                htmlFor={`provider-install-${providerSettings.binaryPathKey}`}
+                                htmlFor={`provider-install-${providerSettings.homePathKey}`}
                                 className="block"
                               >
                                 <span className="block text-xs font-medium text-foreground">
-                                  {providerSettings.title} binary path
+                                  CODEX_HOME path
                                 </span>
                                 <Input
-                                  id={`provider-install-${providerSettings.binaryPathKey}`}
+                                  id={`provider-install-${providerSettings.homePathKey}`}
                                   className="mt-1"
-                                  value={binaryPathValue}
+                                  value={codexHomePath}
                                   onChange={(event) =>
-                                    updateSettings(
-                                      providerSettings.binaryPathKey === "claudeBinaryPath"
-                                        ? { claudeBinaryPath: event.target.value }
-                                        : providerSettings.binaryPathKey === "cursorBinaryPath"
-                                          ? { cursorBinaryPath: event.target.value }
-                                          : providerSettings.binaryPathKey === "geminiBinaryPath"
-                                            ? { geminiBinaryPath: event.target.value }
-                                            : providerSettings.binaryPathKey === "grokBinaryPath"
-                                              ? { grokBinaryPath: event.target.value }
-                                              : providerSettings.binaryPathKey === "kiloBinaryPath"
-                                                ? { kiloBinaryPath: event.target.value }
-                                                : providerSettings.binaryPathKey ===
-                                                    "openCodeBinaryPath"
-                                                  ? { openCodeBinaryPath: event.target.value }
-                                                  : providerSettings.binaryPathKey ===
-                                                      "piBinaryPath"
-                                                    ? { piBinaryPath: event.target.value }
-                                                    : { codexBinaryPath: event.target.value },
-                                    )
+                                    updateSettings({
+                                      codexHomePath: event.target.value,
+                                    })
                                   }
-                                  placeholder={providerSettings.binaryPlaceholder}
+                                  placeholder={providerSettings.homePlaceholder}
                                   spellCheck={false}
                                 />
-                                <span className="mt-1 block text-xs text-muted-foreground">
-                                  {providerSettings.binaryDescription}
-                                </span>
+                                {providerSettings.homeDescription ? (
+                                  <span className="mt-1 block text-xs text-muted-foreground">
+                                    {providerSettings.homeDescription}
+                                  </span>
+                                ) : null}
                               </label>
+                            ) : null}
 
-                              {providerSettings.homePathKey ? (
-                                <label
-                                  htmlFor={`provider-install-${providerSettings.homePathKey}`}
-                                  className="block"
-                                >
-                                  <span className="block text-xs font-medium text-foreground">
-                                    CODEX_HOME path
+                            {providerSettings.agentDirKey ? (
+                              <label
+                                htmlFor={`provider-install-${providerSettings.agentDirKey}`}
+                                className="block"
+                              >
+                                <span className="block text-xs font-medium text-foreground">
+                                  Pi agent directory
+                                </span>
+                                <Input
+                                  id={`provider-install-${providerSettings.agentDirKey}`}
+                                  className="mt-1"
+                                  value={piAgentDir}
+                                  onChange={(event) =>
+                                    updateSettings({
+                                      piAgentDir: event.target.value,
+                                    })
+                                  }
+                                  placeholder={providerSettings.agentDirPlaceholder}
+                                  spellCheck={false}
+                                />
+                                {providerSettings.agentDirDescription ? (
+                                  <span className="mt-1 block text-xs text-muted-foreground">
+                                    {providerSettings.agentDirDescription}
                                   </span>
-                                  <Input
-                                    id={`provider-install-${providerSettings.homePathKey}`}
-                                    className="mt-1"
-                                    value={codexHomePath}
-                                    onChange={(event) =>
-                                      updateSettings({
-                                        codexHomePath: event.target.value,
-                                      })
-                                    }
-                                    placeholder={providerSettings.homePlaceholder}
-                                    spellCheck={false}
-                                  />
-                                  {providerSettings.homeDescription ? (
-                                    <span className="mt-1 block text-xs text-muted-foreground">
-                                      {providerSettings.homeDescription}
-                                    </span>
-                                  ) : null}
-                                </label>
-                              ) : null}
+                                ) : null}
+                              </label>
+                            ) : null}
 
-                              {providerSettings.agentDirKey ? (
-                                <label
-                                  htmlFor={`provider-install-${providerSettings.agentDirKey}`}
-                                  className="block"
-                                >
-                                  <span className="block text-xs font-medium text-foreground">
-                                    Pi agent directory
+                            {providerSettings.apiEndpointKey ? (
+                              <label
+                                htmlFor={`provider-install-${providerSettings.apiEndpointKey}`}
+                                className="block"
+                              >
+                                <span className="block text-xs font-medium text-foreground">
+                                  Cursor API endpoint
+                                </span>
+                                <Input
+                                  id={`provider-install-${providerSettings.apiEndpointKey}`}
+                                  className="mt-1"
+                                  value={cursorApiEndpoint}
+                                  onChange={(event) =>
+                                    updateSettings({
+                                      cursorApiEndpoint: event.target.value,
+                                    })
+                                  }
+                                  placeholder={providerSettings.apiEndpointPlaceholder}
+                                  spellCheck={false}
+                                />
+                                {providerSettings.apiEndpointDescription ? (
+                                  <span className="mt-1 block text-xs text-muted-foreground">
+                                    {providerSettings.apiEndpointDescription}
                                   </span>
-                                  <Input
-                                    id={`provider-install-${providerSettings.agentDirKey}`}
-                                    className="mt-1"
-                                    value={piAgentDir}
-                                    onChange={(event) =>
-                                      updateSettings({
-                                        piAgentDir: event.target.value,
-                                      })
-                                    }
-                                    placeholder={providerSettings.agentDirPlaceholder}
-                                    spellCheck={false}
-                                  />
-                                  {providerSettings.agentDirDescription ? (
-                                    <span className="mt-1 block text-xs text-muted-foreground">
-                                      {providerSettings.agentDirDescription}
-                                    </span>
-                                  ) : null}
-                                </label>
-                              ) : null}
+                                ) : null}
+                              </label>
+                            ) : null}
 
-                              {providerSettings.apiEndpointKey ? (
-                                <label
-                                  htmlFor={`provider-install-${providerSettings.apiEndpointKey}`}
-                                  className="block"
-                                >
-                                  <span className="block text-xs font-medium text-foreground">
-                                    Cursor API endpoint
-                                  </span>
-                                  <Input
-                                    id={`provider-install-${providerSettings.apiEndpointKey}`}
-                                    className="mt-1"
-                                    value={cursorApiEndpoint}
-                                    onChange={(event) =>
-                                      updateSettings({
-                                        cursorApiEndpoint: event.target.value,
-                                      })
-                                    }
-                                    placeholder={providerSettings.apiEndpointPlaceholder}
-                                    spellCheck={false}
-                                  />
-                                  {providerSettings.apiEndpointDescription ? (
-                                    <span className="mt-1 block text-xs text-muted-foreground">
-                                      {providerSettings.apiEndpointDescription}
-                                    </span>
-                                  ) : null}
-                                </label>
-                              ) : null}
-
-                              {providerSettings.serverUrlKey ? (
-                                <label
-                                  htmlFor={`provider-install-${providerSettings.serverUrlKey}`}
-                                  className="block"
-                                >
-                                  <span className="block text-xs font-medium text-foreground">
-                                    {providerSettings.title} server URL
-                                  </span>
-                                  <Input
-                                    id={`provider-install-${providerSettings.serverUrlKey}`}
-                                    className="mt-1"
-                                    value={
+                            {providerSettings.serverUrlKey ? (
+                              <label
+                                htmlFor={`provider-install-${providerSettings.serverUrlKey}`}
+                                className="block"
+                              >
+                                <span className="block text-xs font-medium text-foreground">
+                                  {providerSettings.title} server URL
+                                </span>
+                                <Input
+                                  id={`provider-install-${providerSettings.serverUrlKey}`}
+                                  className="mt-1"
+                                  value={
+                                    providerSettings.serverUrlKey === "kiloServerUrl"
+                                      ? kiloServerUrl
+                                      : openCodeServerUrl
+                                  }
+                                  onChange={(event) =>
+                                    updateSettings(
                                       providerSettings.serverUrlKey === "kiloServerUrl"
-                                        ? kiloServerUrl
-                                        : openCodeServerUrl
-                                    }
-                                    onChange={(event) =>
-                                      updateSettings(
-                                        providerSettings.serverUrlKey === "kiloServerUrl"
-                                          ? { kiloServerUrl: event.target.value }
-                                          : { openCodeServerUrl: event.target.value },
-                                      )
-                                    }
-                                    placeholder={providerSettings.serverUrlPlaceholder}
-                                    spellCheck={false}
-                                  />
-                                  {providerSettings.serverUrlDescription ? (
-                                    <span className="mt-1 block text-xs text-muted-foreground">
-                                      {providerSettings.serverUrlDescription}
-                                    </span>
-                                  ) : null}
-                                </label>
-                              ) : null}
-
-                              {providerSettings.serverPasswordKey ? (
-                                <label
-                                  htmlFor={`provider-install-${providerSettings.serverPasswordKey}`}
-                                  className="block"
-                                >
-                                  <span className="block text-xs font-medium text-foreground">
-                                    {providerSettings.title} server password
+                                        ? { kiloServerUrl: event.target.value }
+                                        : { openCodeServerUrl: event.target.value },
+                                    )
+                                  }
+                                  placeholder={providerSettings.serverUrlPlaceholder}
+                                  spellCheck={false}
+                                />
+                                {providerSettings.serverUrlDescription ? (
+                                  <span className="mt-1 block text-xs text-muted-foreground">
+                                    {providerSettings.serverUrlDescription}
                                   </span>
-                                  <Input
-                                    id={`provider-install-${providerSettings.serverPasswordKey}`}
-                                    className="mt-1"
-                                    value={
+                                ) : null}
+                              </label>
+                            ) : null}
+
+                            {providerSettings.serverPasswordKey ? (
+                              <label
+                                htmlFor={`provider-install-${providerSettings.serverPasswordKey}`}
+                                className="block"
+                              >
+                                <span className="block text-xs font-medium text-foreground">
+                                  {providerSettings.title} server password
+                                </span>
+                                <Input
+                                  id={`provider-install-${providerSettings.serverPasswordKey}`}
+                                  className="mt-1"
+                                  value={
+                                    providerSettings.serverPasswordKey === "kiloServerPassword"
+                                      ? kiloServerPassword
+                                      : openCodeServerPassword
+                                  }
+                                  onChange={(event) =>
+                                    updateSettings(
                                       providerSettings.serverPasswordKey === "kiloServerPassword"
-                                        ? kiloServerPassword
-                                        : openCodeServerPassword
-                                    }
-                                    onChange={(event) =>
-                                      updateSettings(
-                                        providerSettings.serverPasswordKey === "kiloServerPassword"
-                                          ? { kiloServerPassword: event.target.value }
-                                          : { openCodeServerPassword: event.target.value },
-                                      )
-                                    }
-                                    placeholder={providerSettings.serverPasswordPlaceholder}
-                                    spellCheck={false}
-                                  />
-                                  {providerSettings.serverPasswordDescription ? (
-                                    <span className="mt-1 block text-xs text-muted-foreground">
-                                      {providerSettings.serverPasswordDescription}
-                                    </span>
-                                  ) : null}
-                                </label>
-                              ) : null}
-                            </div>
+                                        ? { kiloServerPassword: event.target.value }
+                                        : { openCodeServerPassword: event.target.value },
+                                    )
+                                  }
+                                  placeholder={providerSettings.serverPasswordPlaceholder}
+                                  spellCheck={false}
+                                />
+                                {providerSettings.serverPasswordDescription ? (
+                                  <span className="mt-1 block text-xs text-muted-foreground">
+                                    {providerSettings.serverPasswordDescription}
+                                  </span>
+                                ) : null}
+                              </label>
+                            ) : null}
                           </div>
-                        </CollapsibleContent>
-                      </div>
-                    </Collapsible>
-                  );
-                })}
-              </div>
+                        </div>
+                      </CollapsibleContent>
+                    </div>
+                  </Collapsible>
+                );
+              })}
             </div>
-          </SettingsRow>
+          </div>
+        </SettingsRow>
       </SettingsSection>
     </div>
   );
@@ -2882,100 +2882,98 @@ function SettingsRouteView() {
   const renderAdvancedPanel = () => (
     <div className="space-y-6">
       <SettingsSection title="Developer tools">
-          <SettingsRow
-            title="Keybindings"
-            description="Open the persisted `keybindings.json` file to edit advanced bindings directly."
-            status={
-              <>
-                <span className="block break-all font-mono text-[11px] text-foreground">
-                  {keybindingsConfigPath ?? "Resolving keybindings path..."}
-                </span>
-                {openKeybindingsError ? (
-                  <span className="mt-1 block text-destructive">{openKeybindingsError}</span>
-                ) : (
-                  <span className="mt-1 block">Opens in your preferred editor.</span>
-                )}
-              </>
-            }
-            control={
-              <Button
-                size="xs"
-                variant="outline"
-                disabled={!keybindingsConfigPath || isOpeningKeybindings}
-                onClick={openKeybindingsFile}
-              >
-                {isOpeningKeybindings ? "Opening..." : "Open file"}
-              </Button>
-            }
-          />
+        <SettingsRow
+          title="Keybindings"
+          description="Open the persisted `keybindings.json` file to edit advanced bindings directly."
+          status={
+            <>
+              <span className="block break-all font-mono text-[11px] text-foreground">
+                {keybindingsConfigPath ?? "Resolving keybindings path..."}
+              </span>
+              {openKeybindingsError ? (
+                <span className="mt-1 block text-destructive">{openKeybindingsError}</span>
+              ) : (
+                <span className="mt-1 block">Opens in your preferred editor.</span>
+              )}
+            </>
+          }
+          control={
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={!keybindingsConfigPath || isOpeningKeybindings}
+              onClick={openKeybindingsFile}
+            >
+              {isOpeningKeybindings ? "Opening..." : "Open file"}
+            </Button>
+          }
+        />
 
-          <SettingsRow
-            title="Recovery tools"
-            description="Rebuild local project indexes without clearing existing chats when the local state gets out of sync."
-            status={
-              shouldOfferRecoveryTools
-                ? "Visible because projects exist but no chat history is currently available."
-                : "Shown automatically only when recovery actions are relevant."
-            }
-            control={
-              <Button
-                size="xs"
-                variant="outline"
-                disabled={!shouldOfferRecoveryTools || isRepairingLocalState}
-                onClick={() => void repairLocalState()}
+        <SettingsRow
+          title="Recovery tools"
+          description="Rebuild local project indexes without clearing existing chats when the local state gets out of sync."
+          status={
+            shouldOfferRecoveryTools
+              ? "Visible because projects exist but no chat history is currently available."
+              : "Shown automatically only when recovery actions are relevant."
+          }
+          control={
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={!shouldOfferRecoveryTools || isRepairingLocalState}
+              onClick={() => void repairLocalState()}
+            >
+              {isRepairingLocalState ? "Repairing..." : "Repair state"}
+            </Button>
+          }
+        >
+          {shouldOfferRecoveryTools ? (
+            <div className="mt-3 border-t border-border/70 pt-3">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between text-left"
+                onClick={() => setShowRecoveryTools((current) => !current)}
               >
-                {isRepairingLocalState ? "Repairing..." : "Repair state"}
-              </Button>
-            }
-          >
-            {shouldOfferRecoveryTools ? (
-              <div className="mt-3 border-t border-border/70 pt-3">
-                <button
-                  type="button"
-                  className="flex w-full items-center justify-between text-left"
-                  onClick={() => setShowRecoveryTools((current) => !current)}
+                <span className="text-xs font-medium text-muted-foreground">What this does</span>
+                <ChevronDownIcon
+                  className={cn(
+                    "size-4 shrink-0 text-muted-foreground transition-transform",
+                    showRecoveryTools && "rotate-180",
+                  )}
+                />
+              </button>
+              {showRecoveryTools ? (
+                <div
+                  className={cn(
+                    "mt-3 px-3 py-3 text-xs text-muted-foreground",
+                    SETTINGS_INSET_LIST_CLASS_NAME,
+                  )}
                 >
-                  <span className="text-xs font-medium text-muted-foreground">What this does</span>
-                  <ChevronDownIcon
-                    className={cn(
-                      "size-4 shrink-0 text-muted-foreground transition-transform",
-                      showRecoveryTools && "rotate-180",
-                    )}
-                  />
-                </button>
-                {showRecoveryTools ? (
-                  <div
-                    className={cn(
-                      "mt-3 px-3 py-3 text-xs text-muted-foreground",
-                      SETTINGS_INSET_LIST_CLASS_NAME,
-                    )}
-                  >
-                    Rebuilds local project indexes and refreshes project snapshots. Existing chats
-                    stay in place.
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-          </SettingsRow>
+                  Rebuilds local project indexes and refreshes project snapshots. Existing chats
+                  stay in place.
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </SettingsRow>
       </SettingsSection>
 
       <SettingsSection title="About">
-          <SettingsRow
-            title="Version"
-            description="Current application version."
-            control={
-              <code className="text-xs font-medium text-muted-foreground">{APP_VERSION}</code>
-            }
-          />
-          <SettingsRow
-            title="Release history"
-            description="A running log of every update, newest first. Same notes the post-update dialog shows, kept here so you can revisit them any time."
-            control={
-              <Button size="sm" variant="outline" onClick={() => setReleaseHistoryOpen(true)}>
-                View release history
-              </Button>
-            }
-          />
+        <SettingsRow
+          title="Version"
+          description="Current application version."
+          control={<code className="text-xs font-medium text-muted-foreground">{APP_VERSION}</code>}
+        />
+        <SettingsRow
+          title="Release history"
+          description="A running log of every update, newest first. Same notes the post-update dialog shows, kept here so you can revisit them any time."
+          control={
+            <Button size="sm" variant="outline" onClick={() => setReleaseHistoryOpen(true)}>
+              View release history
+            </Button>
+          }
+        />
       </SettingsSection>
     </div>
   );

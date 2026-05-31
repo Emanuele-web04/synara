@@ -66,10 +66,7 @@ function toastRootClassName(position: ToastPosition, compact: boolean): string {
 }
 
 function toastIconClassName(type: ToastObject<ThreadToastData>["type"]): string {
-  return cn(
-    NOTIFICATION_ICON_CLASS_NAME,
-    type === "loading" && "animate-spin opacity-90",
-  );
+  return cn(NOTIFICATION_ICON_CLASS_NAME, type === "loading" && "animate-spin opacity-90");
 }
 
 type ToastPosition =
@@ -289,17 +286,14 @@ function ToastSurface({
         compact
           ? "items-center gap-2 px-3 py-1.5 pr-1.5 text-[length:var(--app-font-size-ui-sm,11px)] leading-normal"
           : "items-start gap-2 px-3.5 py-3 pr-10 text-sm",
-        hideCollapsedContent &&
-          "not-data-expanded:pointer-events-none not-data-expanded:opacity-0",
+        hideCollapsedContent && "not-data-expanded:pointer-events-none not-data-expanded:opacity-0",
       )}
     >
       {Icon ? (
         <div
           className={cn(
             "shrink-0 [&_svg]:pointer-events-none [&_svg]:shrink-0",
-            compact
-              ? "[&>svg]:size-3.5"
-              : "[&>svg]:h-lh [&>svg]:w-4",
+            compact ? "[&>svg]:size-3.5" : "[&>svg]:h-lh [&>svg]:w-4",
           )}
           data-slot="toast-icon"
         >
@@ -307,7 +301,9 @@ function ToastSurface({
         </div>
       ) : null}
 
-      <div className={cn("min-w-0 flex-1", compact ? "flex items-center" : "flex flex-col gap-0.5")}>
+      <div
+        className={cn("min-w-0 flex-1", compact ? "flex items-center" : "flex flex-col gap-0.5")}
+      >
         <Toast.Title
           className={cn(
             "min-w-0 font-normal",

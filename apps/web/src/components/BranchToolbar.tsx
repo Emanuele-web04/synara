@@ -28,19 +28,16 @@ import {
   resolveEffectiveEnvMode,
 } from "./BranchToolbar.logic";
 import { BranchToolbarBranchSelector } from "./BranchToolbarBranchSelector";
-import { RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME, COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME } from "./chat/composerPickerStyles";
+import {
+  RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME,
+  COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
+} from "./chat/composerPickerStyles";
 import type { ContextWindowSnapshot } from "../lib/contextWindow";
 import { ProviderUsagePanelContent } from "./ProviderUsagePanelContent";
 import { Button } from "./ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "./ui/collapsible";
-import {
-  Menu,
-  MenuPopup,
-  MenuRadioGroup,
-  MenuRadioItem,
-  MenuTrigger,
-} from "./ui/menu";
+import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
 import type { ThreadWorkspacePatch } from "../types";
 
 function WorktreeGlyph({ className }: { className?: string }) {
@@ -298,10 +295,7 @@ export default function BranchToolbar({
 
   return (
     <div
-      className={cn(
-        "mx-auto flex w-full items-center justify-between px-3 pb-1.5 pt-1",
-        className,
-      )}
+      className={cn("mx-auto flex w-full items-center justify-between px-3 pb-1.5 pt-1", className)}
     >
       <div className="flex items-center gap-2">
         {showEnvPicker ? (

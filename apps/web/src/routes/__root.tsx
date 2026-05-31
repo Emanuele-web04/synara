@@ -59,6 +59,7 @@ import {
 import { providerQueryKeys } from "../lib/providerReactQuery";
 import { projectQueryKeys } from "../lib/projectReactQuery";
 import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
+import { dockTerminalThreadId } from "../lib/dockTerminalScope";
 import { TaskCompletionNotifications } from "../notifications/taskCompletion";
 import { useWorkspaceStore, workspaceThreadId } from "../workspaceStore";
 import {
@@ -204,10 +205,7 @@ function ProviderUpdateNotifications() {
     [serverConfigQuery.data?.providers],
   );
   const oneClickProviders = useMemo(
-    () =>
-      outdatedProviders.filter(
-        (provider) => !isProviderUpdateActive(provider),
-      ),
+    () => outdatedProviders.filter((provider) => !isProviderUpdateActive(provider)),
     [outdatedProviders],
   );
   const notificationKey = useMemo(
@@ -900,6 +898,12 @@ function EventRouter() {
           workspaceThreadId(workspace.id),
         ),
       });
+      // Right-dock terminals live under a synthetic scope derived from each active
+      // thread; retain those scopes so docked terminals are not pruned mid-session.
+      // Snapshot first: we mutate the set while iterating its prior membership.
+      for (const activeThreadId of Array.from(activeThreadIds)) {
+        activeThreadIds.add(dockTerminalThreadId(activeThreadId));
+      }
       removeOrphanedTerminalStates(activeThreadIds);
     };
 

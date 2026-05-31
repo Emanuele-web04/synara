@@ -673,8 +673,7 @@ export function buildThemeCssVariables(
   // Mirrors Codex Electron's [cmdk-root] dropdown shell: thin the dropdown-background
   // token by 5% in oklab over the existing backdrop blur. Light vs dark is already
   // handled by --color-background-control-opaque (white in light, dark control in dark).
-  const composerPickerMenuSurface =
-    "color-mix(in oklab, var(--popover) 70%, transparent)";
+  const composerPickerMenuSurface = "color-mix(in oklab, var(--popover) 70%, transparent)";
   const composerFocusBorder = buildComposerFocusBorder(
     pack,
     variant,
@@ -1017,7 +1016,7 @@ function buildDarkDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
     accentBackground: mixHex("#000000", theme.theme.accent, 0.2 + theme.contrast * 0.08),
     accentBackgroundActive: mixHex("#000000", theme.theme.accent, 0.22 + theme.contrast * 0.12),
     accentBackgroundHover: mixHex("#000000", theme.theme.accent, 0.21 + theme.contrast * 0.1),
-    border: formatRgba(theme.ink, 0.10 + theme.contrast * 0.04),
+    border: formatRgba(theme.ink, 0.1 + theme.contrast * 0.04),
     borderFocus: formatRgba(focusBase, 0.7 + theme.contrast * 0.1),
     borderHeavy: formatRgba(theme.ink, 0.16 + theme.contrast * 0.06),
     borderLight: formatRgba(theme.ink, 0.06 + theme.contrast * 0.02),

@@ -26,10 +26,7 @@ import { SettingsSelectPopup } from "./settings/SettingsPanelPrimitives";
 import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { type ChromeTheme, type ThemeMode, type ThemeVariant, useTheme } from "../hooks/useTheme";
 import { cn } from "../lib/utils";
-import {
-  SETTINGS_CARD_CLASS_NAME,
-  SETTINGS_CARD_ROW_CLASS_NAME,
-} from "../settingsPanelStyles";
+import { SETTINGS_CARD_CLASS_NAME, SETTINGS_CARD_ROW_CLASS_NAME } from "../settingsPanelStyles";
 import {
   CODE_THEME_OPTIONS,
   DEFAULT_THEME_STATE,
@@ -603,7 +600,12 @@ function ImportThemeDialog({
               </Button>
             }
           />
-          <Button type="button" size="sm" disabled={value.trim().length === 0} onClick={handleSubmit}>
+          <Button
+            type="button"
+            size="sm"
+            disabled={value.trim().length === 0}
+            onClick={handleSubmit}
+          >
             Import
           </Button>
         </DialogFooter>

@@ -12,8 +12,7 @@ export const SIDEBAR_ROW_PADDING_CLASS_NAME = "px-2 py-0.5";
 
 export const SIDEBAR_ROW_GAP_CLASS_NAME = "gap-2";
 
-export const SIDEBAR_ROW_TEXT_CLASS_NAME =
-  "text-[length:var(--app-font-size-ui,12px)] font-normal";
+export const SIDEBAR_ROW_TEXT_CLASS_NAME = "text-[length:var(--app-font-size-ui,12px)] font-normal";
 
 export const SIDEBAR_ROW_FOCUS_CLASS_NAME =
   "outline-hidden transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring";

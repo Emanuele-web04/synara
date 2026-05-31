@@ -71,7 +71,10 @@ import {
   normalizeChatFontSizePx,
   type TimestampFormat,
 } from "../../appSettings";
-import { CHAT_COLUMN_FRAME_CLASS_NAME } from "./composerPickerStyles";
+import {
+  CHAT_COLUMN_FRAME_CLASS_NAME,
+  CHAT_COLUMN_GUTTER_CLASS_NAME,
+} from "./composerPickerStyles";
 import { formatShortTimestamp } from "../../timestampFormat";
 import {
   buildInlineTerminalContextText,
@@ -580,7 +583,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     className={cn(
                       "w-max max-w-full min-w-0 self-end bg-[var(--app-user-message-background)]",
                       USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME,
-                      bubbleIsChipOnly ? "py-1 px-3.5" : USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
+                      bubbleIsChipOnly
+                        ? "py-1 px-3.5"
+                        : USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
                     )}
                   >
                     <UserMessageBody
@@ -747,8 +752,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               .filter((value): value is string => Boolean(value))
               .join(" • ")
           );
-          const hasCollapsedWork =
-            row.collapsedWorkEntries && row.collapsedWorkEntries.length > 0;
+          const hasCollapsedWork = row.collapsedWorkEntries && row.collapsedWorkEntries.length > 0;
           const isCollapsedWorkExpanded = hasCollapsedWork
             ? (expandedCollapsedWork[row.message.id] ?? false)
             : false;
@@ -790,9 +794,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                             workEntry={workEntry}
                             chatMetaFontSizePx={appTypographyScale.chatMetaPx}
                             textFontSizePx={normalizedChatFontSizePx}
-                            density={
-                              prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"
-                            }
+                            density={prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"}
                             {...(onOpenThread ? { onOpenThread } : {})}
                           />
                         ))}
@@ -908,7 +910,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       className={MESSAGE_HOVER_REVEAL_CLASS_NAME}
                     />
                   ) : null}
-                  <p className={cn("tabular-nums", MESSAGE_HOVER_REVEAL_CLASS_NAME)}>{assistantMeta}</p>
+                  <p className={cn("tabular-nums", MESSAGE_HOVER_REVEAL_CLASS_NAME)}>
+                    {assistantMeta}
+                  </p>
                 </div>
                 {(() => {
                   if (!turnSummary) return null;
@@ -1142,7 +1146,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onTouchStart={onMessagesTouchStart}
       onWheel={onMessagesWheel}
       data-chat-scroll-container="true"
-      className="h-full overflow-x-hidden overscroll-y-contain py-3 [scrollbar-gutter:stable] sm:py-4"
+      className={cn(
+        "h-full overflow-x-hidden overscroll-y-contain py-3 [scrollbar-gutter:stable] sm:py-4",
+        CHAT_COLUMN_GUTTER_CLASS_NAME,
+      )}
       {...(bottomContentInsetPx ? { style: { paddingBottom: bottomContentInsetPx } } : {})}
     />
   );

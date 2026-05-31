@@ -24,23 +24,23 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
   return (
     <div className={cn("pt-3", CHAT_COLUMN_GUTTER_CLASS_NAME)}>
       <div className={CHAT_COLUMN_FRAME_CLASS_NAME}>
-      <Alert variant="error">
-        <CircleAlertIcon />
-        <AlertDescription className="line-clamp-3" title={error}>
-          {error}
-        </AlertDescription>
-        {onDismiss && (
-          <AlertAction>
-            <IconButton
-              label="Dismiss error"
-              className="size-6 text-destructive/60 hover:text-destructive sm:size-6"
-              onClick={onDismiss}
-            >
-              <XIcon className="size-3.5" />
-            </IconButton>
-          </AlertAction>
-        )}
-      </Alert>
+        <Alert variant="error">
+          <CircleAlertIcon />
+          <AlertDescription className="line-clamp-3" title={error}>
+            {error}
+          </AlertDescription>
+          {onDismiss && (
+            <AlertAction>
+              <IconButton
+                label="Dismiss error"
+                className="size-6 text-destructive/60 hover:text-destructive sm:size-6"
+                onClick={onDismiss}
+              >
+                <XIcon className="size-3.5" />
+              </IconButton>
+            </AlertAction>
+          )}
+        </Alert>
       </div>
     </div>
   );

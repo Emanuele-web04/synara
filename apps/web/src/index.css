@@ -1061,16 +1061,24 @@ diffs-container {
 
 .composer-picker-menu--small [data-slot="menu-item"] > svg:not([class*="size-"]),
 .composer-picker-menu--small [data-slot="menu-radio-item"] > svg:not([class*="size-"]),
-.composer-picker-menu--small [data-slot="menu-sub-trigger"] > svg:not([class*="size-"]):first-of-type,
+.composer-picker-menu--small
+  [data-slot="menu-sub-trigger"]
+  > svg:not([class*="size-"]):first-of-type,
 .composer-picker-menu-wide--small [data-slot="menu-item"] > svg:not([class*="size-"]),
 .composer-picker-menu-wide--small [data-slot="menu-radio-item"] > svg:not([class*="size-"]),
-.composer-picker-menu-wide--small [data-slot="menu-sub-trigger"] > svg:not([class*="size-"]):first-of-type,
+.composer-picker-menu-wide--small
+  [data-slot="menu-sub-trigger"]
+  > svg:not([class*="size-"]):first-of-type,
 .composer-picker-menu--normal [data-slot="menu-item"] > svg:not([class*="size-"]),
 .composer-picker-menu--normal [data-slot="menu-radio-item"] > svg:not([class*="size-"]),
-.composer-picker-menu--normal [data-slot="menu-sub-trigger"] > svg:not([class*="size-"]):first-of-type,
+.composer-picker-menu--normal
+  [data-slot="menu-sub-trigger"]
+  > svg:not([class*="size-"]):first-of-type,
 .composer-picker-menu-wide--normal [data-slot="menu-item"] > svg:not([class*="size-"]),
 .composer-picker-menu-wide--normal [data-slot="menu-radio-item"] > svg:not([class*="size-"]),
-.composer-picker-menu-wide--normal [data-slot="menu-sub-trigger"] > svg:not([class*="size-"]):first-of-type {
+.composer-picker-menu-wide--normal
+  [data-slot="menu-sub-trigger"]
+  > svg:not([class*="size-"]):first-of-type {
   width: var(--picker-option-icon-size);
   height: var(--picker-option-icon-size);
 }

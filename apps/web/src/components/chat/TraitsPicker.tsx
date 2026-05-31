@@ -29,7 +29,10 @@ import {
   buildProviderOptionPatch,
   type ProviderOptions,
 } from "../../providerModelOptions";
-import { COMPOSER_PICKER_SECTION_LABEL_CLASS_NAME, COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME } from "./composerPickerStyles";
+import {
+  COMPOSER_PICKER_SECTION_LABEL_CLASS_NAME,
+  COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
+} from "./composerPickerStyles";
 import { ComposerPickerMenuPopup, ComposerPickerTooltipPopup } from "./ComposerPickerMenuPopup";
 import { getComposerTraitSelection, hasVisibleComposerTraitControls } from "./composerTraits";
 import { Tooltip, TooltipTrigger } from "../ui/tooltip";
@@ -208,7 +211,10 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
                 return option.description ? (
                   <Tooltip key={option.value}>
                     <TooltipTrigger render={item} />
-                    <ComposerPickerTooltipPopup side="right" className="max-w-80 whitespace-normal leading-tight">
+                    <ComposerPickerTooltipPopup
+                      side="right"
+                      className="max-w-80 whitespace-normal leading-tight"
+                    >
                       {option.description}
                     </ComposerPickerTooltipPopup>
                   </Tooltip>
@@ -274,9 +280,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
         <>
           <MenuDivider />
           <MenuGroup>
-            <div className={COMPOSER_PICKER_SECTION_LABEL_CLASS_NAME}>
-              Context Window
-            </div>
+            <div className={COMPOSER_PICKER_SECTION_LABEL_CLASS_NAME}>Context Window</div>
             <MenuRadioGroup
               value={contextWindow ?? defaultContextWindow ?? ""}
               onValueChange={(value) => {
@@ -339,7 +343,10 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
                 return agent.description ? (
                   <Tooltip key={agent.name}>
                     <TooltipTrigger render={item} />
-                    <ComposerPickerTooltipPopup side="right" className="max-w-80 whitespace-normal leading-tight">
+                    <ComposerPickerTooltipPopup
+                      side="right"
+                      className="max-w-80 whitespace-normal leading-tight"
+                    >
                       {agent.description}
                     </ComposerPickerTooltipPopup>
                   </Tooltip>

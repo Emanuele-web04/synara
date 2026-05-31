@@ -218,6 +218,18 @@ export const GitInitInput = Schema.Struct({
 });
 export type GitInitInput = typeof GitInitInput.Type;
 
+export const GitStageFilesInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  paths: Schema.Array(TrimmedNonEmptyStringSchema).check(Schema.isMinLength(1)),
+});
+export type GitStageFilesInput = typeof GitStageFilesInput.Type;
+
+export const GitUnstageFilesInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  paths: Schema.Array(TrimmedNonEmptyStringSchema).check(Schema.isMinLength(1)),
+});
+export type GitUnstageFilesInput = typeof GitUnstageFilesInput.Type;
+
 // RPC Results
 
 const GitStatusPr = Schema.Struct({
@@ -285,6 +297,15 @@ export const GitReadWorkingTreeDiffResult = Schema.Struct({
   patch: Schema.String,
 });
 export type GitReadWorkingTreeDiffResult = typeof GitReadWorkingTreeDiffResult.Type;
+
+// Stage/unstage are fire-and-forget index mutations; callers refetch status/diff.
+export const GitStageFilesResult = Schema.Struct({
+  ok: Schema.Boolean,
+});
+export type GitStageFilesResult = typeof GitStageFilesResult.Type;
+
+export const GitUnstageFilesResult = GitStageFilesResult;
+export type GitUnstageFilesResult = GitStageFilesResult;
 
 export const GitListBranchesResult = Schema.Struct({
   branches: Schema.Array(GitBranch),

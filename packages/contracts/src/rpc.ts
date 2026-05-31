@@ -28,6 +28,8 @@ import {
   GitRemoveWorktreeInput,
   GitResolvePullRequestResult,
   GitRunStackedActionInput,
+  GitStageFilesInput,
+  GitStageFilesResult,
   GitStashAndCheckoutInput,
   GitStashDropInput,
   GitStashInfoInput,
@@ -36,6 +38,8 @@ import {
   GitStatusResult,
   GitSummarizeDiffInput,
   GitSummarizeDiffResult,
+  GitUnstageFilesInput,
+  GitUnstageFilesResult,
 } from "./git";
 import { KeybindingRule } from "./keybindings";
 import {
@@ -359,6 +363,18 @@ export const WsGitInitRpc = Rpc.make(WS_METHODS.gitInit, {
   error: WsRpcError,
 });
 
+export const WsGitStageFilesRpc = Rpc.make(WS_METHODS.gitStageFiles, {
+  payload: GitStageFilesInput,
+  success: GitStageFilesResult,
+  error: WsRpcError,
+});
+
+export const WsGitUnstageFilesRpc = Rpc.make(WS_METHODS.gitUnstageFiles, {
+  payload: GitUnstageFilesInput,
+  success: GitUnstageFilesResult,
+  error: WsRpcError,
+});
+
 export const WsGitHandoffThreadRpc = Rpc.make(WS_METHODS.gitHandoffThread, {
   payload: GitHandoffThreadInput,
   success: GitHandoffThreadResult,
@@ -597,6 +613,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsGitStashInfoRpc,
   WsGitRemoveIndexLockRpc,
   WsGitInitRpc,
+  WsGitStageFilesRpc,
+  WsGitUnstageFilesRpc,
   WsGitHandoffThreadRpc,
   WsTerminalOpenRpc,
   WsTerminalWriteRpc,

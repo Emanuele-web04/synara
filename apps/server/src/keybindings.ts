@@ -502,9 +502,10 @@ function normalizeLegacyKeybindingEntry(entry: unknown): {
   return {
     entry: {
       ...entry,
-      command: LEGACY_KEYBINDING_COMMAND_ALIASES[
-        command as keyof typeof LEGACY_KEYBINDING_COMMAND_ALIASES
-      ],
+      command:
+        LEGACY_KEYBINDING_COMMAND_ALIASES[
+          command as keyof typeof LEGACY_KEYBINDING_COMMAND_ALIASES
+        ],
     },
     migrated: true,
   };

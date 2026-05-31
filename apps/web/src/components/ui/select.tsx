@@ -203,10 +203,7 @@ function SelectPopup({
                 fully to both edges even when the positioner reports a tight height. */}
             <div className={viewportClassName}>
               <SelectPrimitive.List
-                className={cn(
-                  listClassName,
-                  isComposerLikeSurface ? "relative z-1" : null,
-                )}
+                className={cn(listClassName, isComposerLikeSurface ? "relative z-1" : null)}
                 data-slot={isComposerLikeSurface ? "menu-popup-body" : "select-list"}
               >
                 {children}

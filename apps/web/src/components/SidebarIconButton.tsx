@@ -9,7 +9,13 @@
 //      button so size, hover tone, tooltip, and the optional menu-trigger element
 //      stay consistent in one place.
 
-import { cloneElement, type ButtonHTMLAttributes, type ComponentType, type ReactElement, type ReactNode } from "react";
+import {
+  cloneElement,
+  type ButtonHTMLAttributes,
+  type ComponentType,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { cn } from "~/lib/utils";
 import { type SidebarGlyphVariant, sidebarGlyphClass } from "./sidebarGlyphs";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";

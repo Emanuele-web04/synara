@@ -22,9 +22,24 @@ const PREVIEW_STAGES: PreviewStage[] = [
   { type: "loading", title: "Pushing..." },
   { type: "success", title: "Committed to codex/redesign" },
   { type: "success", title: "Pushed 3a1f2c to main" },
-  { type: "success", title: "Chat completed", description: "Fix auth flow — updated 3 files", hasAction: true },
-  { type: "warning", title: "Awaiting input", description: "Refactor DB layer — needs confirmation", hasAction: true },
-  { type: "error", title: "Action failed", description: "fatal: unable to access upstream remote", copyText: "fatal: unable to access upstream remote" },
+  {
+    type: "success",
+    title: "Chat completed",
+    description: "Fix auth flow — updated 3 files",
+    hasAction: true,
+  },
+  {
+    type: "warning",
+    title: "Awaiting input",
+    description: "Refactor DB layer — needs confirmation",
+    hasAction: true,
+  },
+  {
+    type: "error",
+    title: "Action failed",
+    description: "fatal: unable to access upstream remote",
+    copyText: "fatal: unable to access upstream remote",
+  },
   { type: "info", title: "Already up to date", description: "main is already synchronized." },
   { type: "warning", title: "Branch is behind upstream" },
 ];
@@ -58,9 +73,7 @@ export function useGitProgressToastPreview(enabled: boolean): void {
         ...PREVIEW_TOAST_DATA,
         ...(stage.copyText ? { copyText: stage.copyText } : {}),
       };
-      const actionProps = stage.hasAction
-        ? { children: "Open", onClick: () => {} }
-        : undefined;
+      const actionProps = stage.hasAction ? { children: "Open", onClick: () => {} } : undefined;
 
       if (toastIdRef.current) {
         toastManager.update(toastIdRef.current, {
@@ -96,7 +109,10 @@ export function useGitProgressToastPreview(enabled: boolean): void {
       stageStartedAtMsRef.current = Date.now();
 
       const nextStage = PREVIEW_STAGES[stageIndexRef.current]!;
-      const prevStage = PREVIEW_STAGES[(stageIndexRef.current - 1 + PREVIEW_STAGES.length) % PREVIEW_STAGES.length]!;
+      const prevStage =
+        PREVIEW_STAGES[
+          (stageIndexRef.current - 1 + PREVIEW_STAGES.length) % PREVIEW_STAGES.length
+        ]!;
       const layoutChanged =
         Boolean(nextStage.copyText) !== Boolean(prevStage.copyText) ||
         Boolean(nextStage.hasAction) !== Boolean(prevStage.hasAction);

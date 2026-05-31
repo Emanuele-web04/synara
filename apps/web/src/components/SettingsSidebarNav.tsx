@@ -74,7 +74,10 @@ export function SettingsSidebarNav(props: {
                         )}
                         onClick={() => props.onSelectSection(item.id)}
                       >
-                        <CentralIcon name={item.icon} className={SETTINGS_SIDEBAR_ICON_CLASS_NAME} />
+                        <CentralIcon
+                          name={item.icon}
+                          className={SETTINGS_SIDEBAR_ICON_CLASS_NAME}
+                        />
                         <span className={SETTINGS_SIDEBAR_ITEM_LABEL_CLASS_NAME}>{item.label}</span>
                       </button>
                     </li>

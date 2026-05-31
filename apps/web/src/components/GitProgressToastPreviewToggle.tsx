@@ -18,9 +18,7 @@ export function GitProgressToastPreviewToggle() {
       aria-pressed={enabled}
       className={cn(
         "h-8 flex-1 gap-2.5 rounded-lg px-2 text-[length:var(--app-font-size-ui,12px)] font-normal hover:bg-[var(--sidebar-accent)]",
-        enabled
-          ? "text-foreground"
-          : "text-muted-foreground/72 hover:text-muted-foreground/88",
+        enabled ? "text-foreground" : "text-muted-foreground/72 hover:text-muted-foreground/88",
       )}
       onClick={() => {
         setFeatureFlagEnabled("pin-git-progress-toast-preview", !enabled);

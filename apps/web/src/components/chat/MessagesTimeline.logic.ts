@@ -315,11 +315,7 @@ export function deriveMessagesTimelineRows(input: {
 function collapseCompletedTurnWork(rows: MessagesTimelineRow[]): void {
   for (let pass = rows.length - 1; pass >= 0; pass -= 1) {
     const row = rows[pass]!;
-    if (
-      row.kind !== "message" ||
-      row.message.role !== "assistant" ||
-      row.message.streaming
-    ) {
+    if (row.kind !== "message" || row.message.role !== "assistant" || row.message.streaming) {
       continue;
     }
 

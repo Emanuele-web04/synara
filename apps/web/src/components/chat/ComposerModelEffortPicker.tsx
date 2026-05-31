@@ -33,8 +33,15 @@ import {
 import { ShortcutKbd } from "../ui/shortcut-kbd";
 import { Tooltip, TooltipTrigger } from "../ui/tooltip";
 import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "../ProviderIcon";
-import { COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME, COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME } from "./composerPickerStyles";
-import { ComposerPickerMenuPopup, ComposerPickerMenuSubPopup, ComposerPickerTooltipPopup } from "./ComposerPickerMenuPopup";
+import {
+  COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
+  COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
+} from "./composerPickerStyles";
+import {
+  ComposerPickerMenuPopup,
+  ComposerPickerMenuSubPopup,
+  ComposerPickerTooltipPopup,
+} from "./ComposerPickerMenuPopup";
 import { COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME } from "./composerPickerStyles";
 import { getComposerTraitSelection, hasVisibleComposerTraitControls } from "./composerTraits";
 import {

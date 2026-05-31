@@ -139,7 +139,9 @@ function MenuCheckboxItem({
           COMPOSER_PICKER_MENU_OPTION_CLASS_NAME,
           "grid in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)] py-1 ps-2",
         ),
-        variant === "switch" ? "grid-cols-[1fr_auto] gap-4 pe-1.5" : "grid-cols-[1fr_auto] gap-3 px-2.5",
+        variant === "switch"
+          ? "grid-cols-[1fr_auto] gap-4 pe-1.5"
+          : "grid-cols-[1fr_auto] gap-3 px-2.5",
         className,
       )}
       data-slot="menu-checkbox-item"

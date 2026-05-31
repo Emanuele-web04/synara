@@ -2,10 +2,7 @@ import { memo, useRef, type RefObject } from "react";
 import { CheckIcon, CopyIcon } from "~/lib/icons";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { anchoredToastManager } from "../ui/toast";
-import {
-  MessageActionButton,
-  MESSAGE_ACTION_ICON_CLASS_NAME,
-} from "./MessageActionButton";
+import { MessageActionButton, MESSAGE_ACTION_ICON_CLASS_NAME } from "./MessageActionButton";
 
 const ANCHORED_TOAST_TIMEOUT_MS = 1000;
 

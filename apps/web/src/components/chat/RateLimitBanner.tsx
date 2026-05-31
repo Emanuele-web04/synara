@@ -77,21 +77,21 @@ export const RateLimitBanner = memo(function RateLimitBanner({
   return (
     <div className={cn("pt-3", CHAT_COLUMN_GUTTER_CLASS_NAME)}>
       <div className={CHAT_COLUMN_FRAME_CLASS_NAME}>
-      <Alert variant={isRejected ? "error" : "warning"}>
-        <CircleAlertIcon />
-        <AlertDescription>{message}</AlertDescription>
-        {onDismiss ? (
-          <AlertAction>
-            <IconButton
-              label="Dismiss rate limit status"
-              title="Dismiss rate limit status"
-              onClick={onDismiss}
-            >
-              <XIcon className="size-3.5" />
-            </IconButton>
-          </AlertAction>
-        ) : null}
-      </Alert>
+        <Alert variant={isRejected ? "error" : "warning"}>
+          <CircleAlertIcon />
+          <AlertDescription>{message}</AlertDescription>
+          {onDismiss ? (
+            <AlertAction>
+              <IconButton
+                label="Dismiss rate limit status"
+                title="Dismiss rate limit status"
+                onClick={onDismiss}
+              >
+                <XIcon className="size-3.5" />
+              </IconButton>
+            </AlertAction>
+          ) : null}
+        </Alert>
       </div>
     </div>
   );

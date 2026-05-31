@@ -11,11 +11,16 @@ import type {
 } from "@t3tools/contracts";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
-import { FiUploadCloud } from "react-icons/fi";
-import { GoGitBranch } from "react-icons/go";
-import { IoGitPullRequestOutline } from "react-icons/io5";
-import { PiCloudArrowUp } from "react-icons/pi";
-import { ChevronDownIcon, GitCommitIcon, InfoIcon, RefreshCwIcon } from "~/lib/icons";
+import {
+  ChevronDownIcon,
+  CloudSyncIcon,
+  CloudUploadIcon,
+  GitBranchIcon,
+  GitCommitIcon,
+  GitPullRequestIcon,
+  InfoIcon,
+  PushIcon,
+} from "~/lib/icons";
 import { Input } from "~/components/ui/input";
 import { GitHubIcon } from "./Icons";
 import {
@@ -38,8 +43,12 @@ import {
 import { getProviderStartOptions, useAppSettings } from "~/appSettings";
 import { Button } from "~/components/ui/button";
 import {
+  ChatHeaderSplitDivider,
+  ChatHeaderSplitGroup,
   CHAT_HEADER_CONTROL_CLASS_NAME,
   CHAT_HEADER_ICON_CONTROL_CLASS_NAME,
+  CHAT_HEADER_SPLIT_LEADING_CLASS_NAME,
+  CHAT_HEADER_SPLIT_TRAILING_CLASS_NAME,
 } from "./chat/chatHeaderControls";
 import { Checkbox } from "~/components/ui/checkbox";
 import {
@@ -241,31 +250,35 @@ const COMMIT_DIALOG_DESCRIPTION =
 
 // Keep the header quick action visually distinct from the generic push/menu icon.
 function CommitPushHeaderIcon({ className }: { className?: string }) {
-  return <FiUploadCloud className={className} />;
+  return <CloudUploadIcon className={className} />;
 }
 
+// Central icons render as masked spans (not <svg>), so size them explicitly here
+// rather than relying on parent `[&>svg]` selectors.
+const GIT_ACTION_ICON_CLASS = "size-3.5";
+
 function GitActionItemIcon({ icon }: { icon: GitActionIconName }) {
-  if (icon === "commit") return <GitCommitIcon />;
-  if (icon === "push") return <PiCloudArrowUp />;
-  if (icon === "pr") return <IoGitPullRequestOutline />;
-  return <GitHubIcon />;
+  if (icon === "commit") return <GitCommitIcon className={GIT_ACTION_ICON_CLASS} />;
+  if (icon === "push") return <PushIcon className={GIT_ACTION_ICON_CLASS} />;
+  if (icon === "pr") return <GitPullRequestIcon className={GIT_ACTION_ICON_CLASS} />;
+  return <GitHubIcon className={GIT_ACTION_ICON_CLASS} />;
 }
 
 function GitPickerItemIcon({ icon }: { icon: GitActionIconName | "sync" | "branch" }) {
-  if (icon === "branch") return <GoGitBranch />;
-  if (icon === "sync") return <RefreshCwIcon />;
-  if (icon === "pr") return <GitHubIcon />;
+  if (icon === "branch") return <GitBranchIcon className={GIT_ACTION_ICON_CLASS} />;
+  if (icon === "sync") return <CloudSyncIcon className={GIT_ACTION_ICON_CLASS} />;
+  if (icon === "pr") return <GitHubIcon className={GIT_ACTION_ICON_CLASS} />;
   return <GitActionItemIcon icon={icon} />;
 }
 
 function GitQuickActionIcon({ quickAction }: { quickAction: GitQuickAction }) {
   const iconClassName = "size-3.5";
   if (quickAction.kind === "open_pr") return <GitHubIcon className={iconClassName} />;
-  if (quickAction.kind === "run_pull") return <RefreshCwIcon className={iconClassName} />;
-  if (quickAction.kind === "create_branch") return <GoGitBranch className={iconClassName} />;
+  if (quickAction.kind === "run_pull") return <CloudSyncIcon className={iconClassName} />;
+  if (quickAction.kind === "create_branch") return <GitBranchIcon className={iconClassName} />;
   if (quickAction.kind === "run_action") {
     if (quickAction.action === "commit") return <GitCommitIcon className={iconClassName} />;
-    if (quickAction.action === "push") return <PiCloudArrowUp className={iconClassName} />;
+    if (quickAction.action === "push") return <PushIcon className={iconClassName} />;
     if (quickAction.action === "commit_push") {
       return <CommitPushHeaderIcon className={iconClassName} />;
     }
@@ -1220,7 +1233,7 @@ export default function GitActionsControl({
           {initMutation.isPending ? "Initializing..." : "Initialize Git"}
         </Button>
       ) : (
-        <div className="inline-flex items-stretch" role="group" aria-label="Git actions">
+        <ChatHeaderSplitGroup label="Git actions">
           {quickActionDisabledReason ? (
             <Popover>
               <PopoverTrigger
@@ -1233,7 +1246,8 @@ export default function GitActionsControl({
                       hideQuickActionLabel
                         ? CHAT_HEADER_ICON_CONTROL_CLASS_NAME
                         : CHAT_HEADER_CONTROL_CLASS_NAME,
-                      "cursor-not-allowed rounded-e-none border-e-0 opacity-64",
+                      CHAT_HEADER_SPLIT_LEADING_CLASS_NAME,
+                      "cursor-not-allowed opacity-64",
                     )}
                     size={hideQuickActionLabel ? "icon-xs" : "xs"}
                     variant="chrome-outline"
@@ -1258,7 +1272,7 @@ export default function GitActionsControl({
                 hideQuickActionLabel
                   ? CHAT_HEADER_ICON_CONTROL_CLASS_NAME
                   : CHAT_HEADER_CONTROL_CLASS_NAME,
-                "rounded-e-none border-e-0",
+                CHAT_HEADER_SPLIT_LEADING_CLASS_NAME,
               )}
               disabled={isGitActionRunning || quickAction.disabled}
               aria-label={quickAction.label}
@@ -1271,7 +1285,7 @@ export default function GitActionsControl({
               ) : null}
             </Button>
           )}
-          <div aria-hidden="true" className="w-px self-stretch bg-border" />
+          <ChatHeaderSplitDivider />
           <Menu
             onOpenChange={(open) => {
               if (open) void invalidateGitQueries(queryClient);
@@ -1283,7 +1297,10 @@ export default function GitActionsControl({
                   aria-label="Git action options"
                   size="icon-xs"
                   variant="chrome-outline"
-                  className={cn(CHAT_HEADER_ICON_CONTROL_CLASS_NAME, "rounded-s-none border-s-0")}
+                  className={cn(
+                    CHAT_HEADER_ICON_CONTROL_CLASS_NAME,
+                    CHAT_HEADER_SPLIT_TRAILING_CLASS_NAME,
+                  )}
                 />
               }
               disabled={isGitActionRunning}
@@ -1346,7 +1363,7 @@ export default function GitActionsControl({
               )}
             </ComposerPickerMenuPopup>
           </Menu>
-        </div>
+        </ChatHeaderSplitGroup>
       )}
 
       <Dialog

@@ -14,36 +14,40 @@ import {
 import { isGenericChatThreadTitle } from "@t3tools/shared/chatThreads";
 import { useQuery } from "@tanstack/react-query";
 import React, { memo, useEffect, useRef, useState } from "react";
-import { BsLayoutSplit, BsTerminal } from "react-icons/bs";
 import { FiGitBranch } from "react-icons/fi";
 import { HiMiniArrowsPointingOut } from "react-icons/hi2";
 import { TbExchange, TbLayoutSidebarRight } from "react-icons/tb";
 import type { ThreadPrimarySurface } from "../../types";
 import GitActionsControl from "../GitActionsControl";
-import { AppsIcon, ArrowRightIcon, GlobeIcon, HandoffIcon, PlusIcon, TerminalIcon, XIcon } from "~/lib/icons";
-import { CHAT_HEADER_CONTROL_CLASS_NAME, ChatHeaderButton, ChatHeaderIconButton } from "./chatHeaderControls";
+import { ArrowRightIcon, HandoffIcon, TerminalIcon, XIcon } from "~/lib/icons";
+import {
+  CHAT_HEADER_CONTROL_CLASS_NAME,
+  ChatHeaderButton,
+  ChatHeaderIconButton,
+} from "./chatHeaderControls";
 import { IconButton } from "../ui/icon-button";
 import { Badge } from "../ui/badge";
-import { Menu, MenuItem, MenuSeparator, MenuTrigger } from "../ui/menu";
+import { Menu, MenuItem, MenuTrigger } from "../ui/menu";
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
+import { OpenInPicker } from "./OpenInPicker";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { SidebarHeaderNavigationControls } from "../SidebarHeaderNavigationControls";
 import ProjectScriptsControl, { type NewProjectScriptInput } from "../ProjectScriptsControl";
 import { Toggle } from "../ui/toggle";
 import { useSidebar } from "../ui/sidebar";
-import { isElectron } from "~/env";
 import { cn } from "~/lib/utils";
-import { readNativeApi } from "~/nativeApi";
-import { resolveEditorIcon } from "../../editorMetadata";
-import { usePreferredEditor } from "../../editorPreferences";
 import { useIsDisposableThread } from "~/hooks/useIsDisposableThread";
 import { ProviderIcon } from "../ProviderIcon";
 import { gitWorkingTreeDiffQueryOptions } from "~/lib/gitReactQuery";
 import { summarizePatchStats } from "~/lib/diffRendering";
 import { useRepoDiffScopeStore } from "~/repoDiffScopeStore";
 
-/** Width (px) below which collapsible header controls fold into the ellipsis menu. */
-const HEADER_COMPACT_BREAKPOINT = 480;
+/**
+ * Width (px) below which collapsible header controls drop their text labels and
+ * fold into icon-only buttons. Measured on the header element itself, so it fires
+ * for any layout that narrows the chat column (split chat, right dock, small window).
+ */
+const HEADER_COMPACT_BREAKPOINT = 700;
 
 interface ChatHeaderProps {
   activeThreadId: ThreadId;
@@ -62,10 +66,6 @@ interface ChatHeaderProps {
   preferredScriptId: string | null;
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
-  terminalAvailable: boolean;
-  terminalOpen: boolean;
-  terminalToggleShortcutLabel: string | null;
-  browserToggleShortcutLabel: string | null;
   diffToggleShortcutLabel: string | null;
   handoffBadgeLabel: string | null;
   handoffActionLabel: string;
@@ -73,7 +73,6 @@ interface ChatHeaderProps {
   handoffActionTargetProviders: ReadonlyArray<ProviderKind>;
   handoffBadgeSourceProvider: ProviderKind | null;
   handoffBadgeTargetProvider: ProviderKind | null;
-  browserOpen: boolean;
   gitCwd: string | null;
   diffBadgeRefreshIntervalMs?: number | false;
   showGitActions?: boolean;
@@ -95,9 +94,7 @@ interface ChatHeaderProps {
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<void>;
   onUpdateProjectScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void>;
   onDeleteProjectScript: (scriptId: string) => Promise<void>;
-  onToggleTerminal: () => void;
   onToggleDiff: () => void;
-  onToggleBrowser: () => void;
   onCreateHandoff: (targetProvider: ProviderKind) => void;
   onNavigateToThread: (threadId: ThreadId) => void;
   onRenameThread: () => void;
@@ -130,10 +127,6 @@ export const ChatHeader = memo(function ChatHeader({
   preferredScriptId,
   keybindings,
   availableEditors,
-  terminalAvailable,
-  terminalOpen,
-  terminalToggleShortcutLabel,
-  browserToggleShortcutLabel,
   diffToggleShortcutLabel,
   handoffBadgeLabel,
   handoffActionLabel,
@@ -141,7 +134,6 @@ export const ChatHeader = memo(function ChatHeader({
   handoffActionTargetProviders,
   handoffBadgeSourceProvider,
   handoffBadgeTargetProvider,
-  browserOpen,
   gitCwd,
   diffBadgeRefreshIntervalMs = false,
   showGitActions = true,
@@ -155,9 +147,7 @@ export const ChatHeader = memo(function ChatHeader({
   onAddProjectScript,
   onUpdateProjectScript,
   onDeleteProjectScript,
-  onToggleTerminal,
   onToggleDiff,
-  onToggleBrowser,
   onCreateHandoff,
   onNavigateToThread,
   onRenameThread,
@@ -167,8 +157,6 @@ export const ChatHeader = memo(function ChatHeader({
   const headerRef = useRef<HTMLDivElement>(null);
   const [compact, setCompact] = useState(false);
   const [openAddActionNonce, setOpenAddActionNonce] = useState(0);
-  const [preferredEditor] = usePreferredEditor(availableEditors);
-  const EditorIcon = preferredEditor ? resolveEditorIcon(preferredEditor) : null;
   const repoDiffScope = useRepoDiffScopeStore((store) => store.scope);
   // Match the Diff panel source selector so the sidebar badge shows the selected scope.
   const { data: selectedRepoDiff = null } = useQuery(
@@ -184,8 +172,9 @@ export const ChatHeader = memo(function ChatHeader({
   const isDisposableThread = useIsDisposableThread(activeThreadId);
 
   const isSplitPane = surfaceMode === "split";
+  // Split-chat creation moved to a shortcut only; the header keeps just the inline
+  // "maximize" affordance for an already-split focused pane.
   const inlineChatLayoutAction = chatLayoutAction?.kind === "maximize" ? chatLayoutAction : null;
-  const menuChatLayoutAction = inlineChatLayoutAction ? null : chatLayoutAction;
   const threadIconKind = resolveChatHeaderThreadIconKind(activeThreadEntryPoint, activeThreadTitle);
   const showSidechatTitleChip = isSidechat && compact;
 
@@ -380,88 +369,35 @@ export const ChatHeader = memo(function ChatHeader({
           </Tooltip>
         ) : null}
 
-        {/* Panel toggles menu — editor, terminal, browser, split chat. */}
-        {!isDisposableThread &&
-        (terminalAvailable ||
-          activeProjectName ||
-          menuChatLayoutAction ||
-          changeThreadAction ||
-          isElectron) ? (
-          <Menu modal={false}>
-            <MenuTrigger
-              render={<ChatHeaderIconButton label="Panel toggles" />}
-            >
-              <AppsIcon className="size-3.5" />
-            </MenuTrigger>
-            <ComposerPickerMenuPopup align="end" side="bottom" className="w-50 min-w-50">
-              {activeProjectName ? (
-                <MenuItem
-                  onClick={() => {
-                    const api = readNativeApi();
-                    if (api && openInCwd && preferredEditor) {
-                      void api.shell.openInEditor(openInCwd, preferredEditor);
-                    }
-                  }}
-                  disabled={!preferredEditor || !openInCwd}
+        {/* Change thread stays as a standalone control (split/sidechat only). */}
+        {!isDisposableThread && changeThreadAction ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <ChatHeaderIconButton
+                  type="button"
+                  label={changeThreadAction.label}
+                  onClick={changeThreadAction.onClick}
                 >
-                  {EditorIcon ? (
-                    <EditorIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                  ) : null}
-                  <span>Open in editor</span>
-                </MenuItem>
-              ) : null}
-              <MenuItem onClick={onToggleTerminal} disabled={!terminalAvailable}>
-                <BsTerminal className="size-3.5 shrink-0" />
-                <span>{terminalOpen ? "Hide terminal" : "Show terminal"}</span>
-                {terminalToggleShortcutLabel && (
-                  <span className="ml-auto text-[11px] opacity-60">
-                    {terminalToggleShortcutLabel}
-                  </span>
-                )}
-              </MenuItem>
-              {isElectron ? (
-                <MenuItem onClick={onToggleBrowser}>
-                  <GlobeIcon className="size-3.5 shrink-0" />
-                  <span>{browserOpen ? "Hide browser" : "Show browser"}</span>
-                  {browserToggleShortcutLabel && (
-                    <span className="ml-auto text-[11px] opacity-60">
-                      {browserToggleShortcutLabel}
-                    </span>
-                  )}
-                </MenuItem>
-              ) : null}
-              {menuChatLayoutAction ? (
-                <MenuItem onClick={menuChatLayoutAction.onClick}>
-                  {menuChatLayoutAction.kind === "split" ? (
-                    <BsLayoutSplit className="size-3.5 shrink-0" />
-                  ) : (
-                    <HiMiniArrowsPointingOut className="size-3.5 shrink-0" />
-                  )}
-                  <span>{menuChatLayoutAction.label}</span>
-                  {menuChatLayoutAction.shortcutLabel && (
-                    <span className="ml-auto text-[11px] opacity-60">
-                      {menuChatLayoutAction.shortcutLabel}
-                    </span>
-                  )}
-                </MenuItem>
-              ) : null}
-              {changeThreadAction ? (
-                <MenuItem onClick={changeThreadAction.onClick}>
-                  <TbExchange className="size-3.5 shrink-0" />
-                  <span>{changeThreadAction.label}</span>
-                </MenuItem>
-              ) : null}
-              {activeProjectScripts ? (
-                <>
-                  <MenuSeparator className="mx-1" />
-                  <MenuItem onClick={() => setOpenAddActionNonce((current) => current + 1)}>
-                    <PlusIcon className="size-3.5 shrink-0" />
-                    <span>Add action</span>
-                  </MenuItem>
-                </>
-              ) : null}
-            </ComposerPickerMenuPopup>
-          </Menu>
+                  <TbExchange className="size-3.5" />
+                </ChatHeaderIconButton>
+              }
+            />
+            <TooltipPopup side="bottom">{changeThreadAction.label}</TooltipPopup>
+          </Tooltip>
+        ) : null}
+
+        {/* Open in editor: dedicated split-button with an editor switcher; the project
+            "Add action" entry lives at the bottom of that same menu. */}
+        {!isDisposableThread && activeProjectName ? (
+          <OpenInPicker
+            keybindings={keybindings}
+            availableEditors={availableEditors}
+            openInCwd={openInCwd}
+            {...(activeProjectScripts
+              ? { onAddAction: () => setOpenAddActionNonce((current) => current + 1) }
+              : {})}
+          />
         ) : null}
 
         {!isDisposableThread && activeProjectName && showGitActions ? (

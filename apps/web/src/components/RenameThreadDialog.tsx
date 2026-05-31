@@ -87,7 +87,12 @@ export function RenameThreadDialog({
           </form>
         </DialogPanel>
         <DialogFooter>
-          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)} disabled={isSaving}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => onOpenChange(false)}
+            disabled={isSaving}
+          >
             Cancel
           </Button>
           <Button size="sm" onClick={() => void handleSubmit()} disabled={!canSave}>

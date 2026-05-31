@@ -319,7 +319,10 @@ export default function ProjectScriptsControl({
                 <Button
                   size="icon-xs"
                   variant="outline"
-                  className={cn(headerButtonDarkBorderClassName, CHAT_HEADER_ICON_CONTROL_CLASS_NAME)}
+                  className={cn(
+                    headerButtonDarkBorderClassName,
+                    CHAT_HEADER_ICON_CONTROL_CLASS_NAME,
+                  )}
                   aria-label="Script actions"
                 />
               }
@@ -525,7 +528,9 @@ export default function ProjectScriptsControl({
             <AlertDialogDescription>This action cannot be undone.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogClose render={<Button variant="outline" size="sm" />}>Cancel</AlertDialogClose>
+            <AlertDialogClose render={<Button variant="outline" size="sm" />}>
+              Cancel
+            </AlertDialogClose>
             <Button variant="destructive" size="sm" onClick={confirmDeleteScript}>
               Delete action
             </Button>

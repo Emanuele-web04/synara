@@ -47,8 +47,14 @@ function ProviderModelRadioItem(
     onAfterSelection?: () => void;
   }>,
 ) {
-  const { provider, modelOption, favoriteProvider, isFavorite, onToggleFavorite, onAfterSelection } =
-    props;
+  const {
+    provider,
+    modelOption,
+    favoriteProvider,
+    isFavorite,
+    onToggleFavorite,
+    onAfterSelection,
+  } = props;
   const supportsFavorites = favoriteProvider !== null;
 
   return (
@@ -92,7 +98,12 @@ function ProviderModelRadioItem(
       }}
     >
       {supportsFavorites ? (
-        <span className={cn("block min-w-0 truncate", COMPOSER_PICKER_MODEL_ROW_LABEL_INDENT_CLASS_NAME)}>
+        <span
+          className={cn(
+            "block min-w-0 truncate",
+            COMPOSER_PICKER_MODEL_ROW_LABEL_INDENT_CLASS_NAME,
+          )}
+        >
           {modelOption.name}
         </span>
       ) : (
@@ -157,7 +168,10 @@ export const ProviderModelOptionGroupList = memo(function ProviderModelOptionGro
 
         if (group.label === null) {
           return (
-            <MenuGroup key={`${props.provider}:${group.key}`} className="flex flex-col gap-px px-0.5">
+            <MenuGroup
+              key={`${props.provider}:${group.key}`}
+              className="flex flex-col gap-px px-0.5"
+            >
               {groupItems}
             </MenuGroup>
           );

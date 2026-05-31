@@ -9,7 +9,10 @@ service_tier = "fast"
 
 # notify hook for Codex Computer Use removed 2026-05-22
 
-notify = ["/Users/emanueledipietro/.codex/computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient", "turn-ended"]
+notify = [
+  "/Users/emanueledipietro/.codex/computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient",
+  "turn-ended",
+]
 
 [mcp_servers.notion]
 url = "https://mcp.notion.com/mcp"

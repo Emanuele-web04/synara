@@ -28,6 +28,7 @@ import {
 } from "~/lib/icons";
 
 import { readNativeApi } from "~/nativeApi";
+import { PANEL_RESIZE_OVERLAY_SYNC_EVENT } from "~/lib/panelResize";
 import { cn } from "~/lib/utils";
 
 import {
@@ -67,7 +68,6 @@ const BROWSER_WEBVIEW_PARTITION = "persist:dpcode-browser";
 const BROWSER_BLANK_URL = "about:blank";
 const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
 const DPCODE_BROWSER_LABEL = "Synara browser";
-const PANEL_RESIZE_OVERLAY_SYNC_EVENT = "dpcode:panel-resize-overlay-sync";
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
 const NATIVE_BROWSER_OBSCURING_OVERLAY_SELECTOR = [
   "[data-slot='dialog-backdrop']",

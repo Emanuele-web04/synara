@@ -7,12 +7,10 @@
 export const SETTINGS_RADIUS_CLASS_NAME = "rounded-md";
 
 /** Same border token as Button `outline` / `chrome-outline` variants. */
-export const SETTINGS_CONTROL_BORDER_CLASS_NAME =
-  "border border-[color:var(--color-border)]";
+export const SETTINGS_CONTROL_BORDER_CLASS_NAME = "border border-[color:var(--color-border)]";
 
 /** Main settings shell — lets Electron translucent themes show through the route surface. */
-export const SETTINGS_PAGE_BACKGROUND_CLASS_NAME =
-  "app-settings-surface";
+export const SETTINGS_PAGE_BACKGROUND_CLASS_NAME = "app-settings-surface";
 
 /** Section label above a bordered card group. */
 export const SETTINGS_SECTION_LABEL_CLASS_NAME =
@@ -29,8 +27,7 @@ export const SETTINGS_CARD_CLASS_NAME = [
 export const SETTINGS_CARD_ROW_CLASS_NAME = "px-4 py-3.5";
 
 /** Divider between stacked rows inside one card. */
-export const SETTINGS_CARD_ROW_DIVIDER_CLASS_NAME =
-  "border-t border-[color:var(--color-border)]";
+export const SETTINGS_CARD_ROW_DIVIDER_CLASS_NAME = "border-t border-[color:var(--color-border)]";
 
 /** Nested list/table inside a row (provider installs, updates, etc.). */
 export const SETTINGS_INSET_LIST_CLASS_NAME = SETTINGS_CARD_CLASS_NAME;
