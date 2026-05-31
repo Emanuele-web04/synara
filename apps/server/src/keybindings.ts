@@ -481,6 +481,35 @@ function invalidEntryIssue(index: number, detail: string): ServerConfigIssue {
   };
 }
 
+const LEGACY_KEYBINDING_COMMAND_ALIASES = {
+  "thread.previous": "chat.visible.previous",
+  "thread.next": "chat.visible.next",
+} as const satisfies Record<string, KeybindingRule["command"]>;
+
+function normalizeLegacyKeybindingEntry(entry: unknown): {
+  readonly entry: unknown;
+  readonly migrated: boolean;
+} {
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+    return { entry, migrated: false };
+  }
+
+  const command = entry.command;
+  if (typeof command !== "string" || !(command in LEGACY_KEYBINDING_COMMAND_ALIASES)) {
+    return { entry, migrated: false };
+  }
+
+  return {
+    entry: {
+      ...entry,
+      command: LEGACY_KEYBINDING_COMMAND_ALIASES[
+        command as keyof typeof LEGACY_KEYBINDING_COMMAND_ALIASES
+      ],
+    },
+    migrated: true,
+  };
+}
+
 function mergeWithDefaultKeybindings(custom: ResolvedKeybindingsConfig): ResolvedKeybindingsConfig {
   if (custom.length === 0) {
     return [...DEFAULT_RESOLVED_KEYBINDINGS];
@@ -617,7 +646,8 @@ const makeKeybindings = Effect.gen(function* () {
 
     return yield* Effect.forEach(rawConfig, (entry) =>
       Effect.gen(function* () {
-        const decodedRule = Schema.decodeUnknownExit(KeybindingRule)(entry);
+        const normalized = normalizeLegacyKeybindingEntry(entry);
+        const decodedRule = Schema.decodeUnknownExit(KeybindingRule)(normalized.entry);
         if (decodedRule._tag === "Failure") {
           yield* Effect.logWarning("ignoring invalid keybinding entry", {
             path: keybindingsConfigPath,
@@ -644,11 +674,12 @@ const makeKeybindings = Effect.gen(function* () {
     {
       readonly keybindings: readonly KeybindingRule[];
       readonly issues: readonly ServerConfigIssue[];
+      readonly migratedLegacyCommandCount: number;
     },
     KeybindingsConfigError
   > {
     if (!(yield* readConfigExists)) {
-      return { keybindings: [], issues: [] };
+      return { keybindings: [], issues: [], migratedLegacyCommandCount: 0 };
     }
 
     const rawConfig = yield* readRawConfig;
@@ -658,13 +689,19 @@ const makeKeybindings = Effect.gen(function* () {
       return {
         keybindings: [],
         issues: [malformedConfigIssue(detail)],
+        migratedLegacyCommandCount: 0,
       };
     }
 
     const keybindings: KeybindingRule[] = [];
     const issues: ServerConfigIssue[] = [];
+    let migratedLegacyCommandCount = 0;
     for (const [index, entry] of decodedEntries.value.entries()) {
-      const decodedRule = Schema.decodeUnknownExit(KeybindingRule)(entry);
+      const normalized = normalizeLegacyKeybindingEntry(entry);
+      if (normalized.migrated) {
+        migratedLegacyCommandCount += 1;
+      }
+      const decodedRule = Schema.decodeUnknownExit(KeybindingRule)(normalized.entry);
       if (decodedRule._tag === "Failure") {
         const detail = Cause.pretty(decodedRule.cause);
         issues.push(invalidEntryIssue(index, detail));
@@ -692,7 +729,7 @@ const makeKeybindings = Effect.gen(function* () {
       keybindings.push(decodedRule.value);
     }
 
-    return { keybindings, issues };
+    return { keybindings, issues, migratedLegacyCommandCount };
   });
 
   const writeConfigAtomically = (rules: readonly KeybindingRule[]) => {
@@ -799,6 +836,9 @@ const makeKeybindings = Effect.gen(function* () {
         });
       }
       if (missingDefaults.length === 0) {
+        if (runtimeConfig.migratedLegacyCommandCount > 0) {
+          yield* writeConfigAtomically(customConfig);
+        }
         yield* Cache.invalidate(resolvedConfigCache, resolvedConfigCacheKey);
         return;
       }
@@ -825,6 +865,12 @@ const makeKeybindings = Effect.gen(function* () {
         });
       }
 
+      if (runtimeConfig.migratedLegacyCommandCount > 0) {
+        yield* Effect.logInfo("migrated legacy keybinding command ids", {
+          path: keybindingsConfigPath,
+          count: runtimeConfig.migratedLegacyCommandCount,
+        });
+      }
       yield* writeConfigAtomically(cappedConfig);
       yield* Cache.invalidate(resolvedConfigCache, resolvedConfigCacheKey);
     }),
