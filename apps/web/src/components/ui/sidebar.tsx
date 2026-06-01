@@ -1,9 +1,9 @@
 import { mergeProps } from "@base-ui/react/merge-props";
 import { useRender } from "@base-ui/react/use-render";
 import { cva, type VariantProps } from "class-variance-authority";
-import { FiSidebar } from "react-icons/fi";
 import * as React from "react";
 import { cn } from "~/lib/utils";
+import { CentralIcon } from "~/lib/central-icons";
 import { isElectron } from "~/env";
 import { useAppSettings } from "~/appSettings";
 import { Button } from "~/components/ui/button";
@@ -325,6 +325,9 @@ function Sidebar({
 
 function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<typeof Button>) {
   const { toggleSidebar } = useSidebar();
+  const { settings } = useAppSettings();
+  const sidebarIconName =
+    settings.sidebarSide === "right" ? "sidebar-hidden-right-wide" : "sidebar-hidden-left-wide";
 
   return (
     <Button
@@ -335,11 +338,11 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
         onClick?.(event);
         toggleSidebar();
       }}
-      size="icon"
+      size="icon-xs"
       variant="ghost"
       {...props}
     >
-      <FiSidebar className="size-4" />
+      <CentralIcon name={sidebarIconName} />
       <span className="sr-only">Toggle Sidebar</span>
     </Button>
   );

@@ -35,6 +35,7 @@ import { createProjectSelector, createThreadSelector } from "~/storeSelectors";
 import { Alert } from "../ui/alert";
 import { Button } from "../ui/button";
 import { IconButton } from "../ui/icon-button";
+import { DOCK_HEADER_ICON_BUTTON_CLASS } from "./chatHeaderControls";
 import { DiffStat } from "./DiffStatLabel";
 import { DockPaneHeader } from "./DockPaneHeader";
 import { FileDiffCard, FileDiffSurface } from "./FileDiffView";
@@ -315,6 +316,7 @@ export function GitPanel(props: {
             variant="ghost"
             label="Refresh changes"
             tooltip="Refresh changes"
+            className={DOCK_HEADER_ICON_BUTTON_CLASS}
             onClick={refresh}
           >
             <RefreshCwIcon className="size-3.5" />

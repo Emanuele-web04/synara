@@ -59,7 +59,7 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
         <div key={`dir:${node.path}`} className={CHANGED_FILE_ROW_SEPARATOR_CLASS}>
           <button
             type="button"
-            className="group flex w-full items-center gap-1.5 rounded-md py-1 pr-2 text-left hover:bg-[var(--color-token-list-hover-background)]"
+            className="group flex w-full items-center gap-1.5 rounded-md bg-transparent py-2 pr-2 text-left hover:bg-[var(--color-token-list-hover-background)] dark:bg-transparent dark:hover:bg-transparent"
             style={{ paddingLeft: `${leftPadding}px` }}
             onClick={() => toggleDirectory(node.path, depth === 0)}
           >
@@ -81,7 +81,7 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
             {hasNonZeroStat(node.stat) && (
               <span
                 className="font-system-ui ml-auto shrink-0 tabular-nums"
-                style={{ fontSize: "var(--app-font-size-chat-meta,10px)" }}
+                style={{ fontSize: "var(--app-font-size-chat,12px)" }}
               >
                 <DiffStatLabel additions={node.stat.additions} deletions={node.stat.deletions} />
               </span>
@@ -98,7 +98,7 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
       <div key={`file:${node.path}`} className={CHANGED_FILE_ROW_SEPARATOR_CLASS}>
         <button
           type="button"
-          className="group flex w-full items-center gap-1.5 rounded-md py-1 pr-2 text-left hover:bg-[var(--color-token-list-hover-background)]"
+          className="group flex w-full items-center gap-1.5 rounded-md bg-transparent py-2 pr-2 text-left hover:bg-[var(--color-token-list-hover-background)] dark:bg-transparent dark:hover:bg-transparent"
           style={{ paddingLeft: `${leftPadding}px` }}
           onClick={() => onOpenTurnDiff(turnId, node.path)}
         >
@@ -107,10 +107,10 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
             pathValue={node.path}
             kind="file"
             theme={resolvedTheme}
-            className="size-3.5 text-muted-foreground/70"
+            className="size-3.5 text-[var(--color-text-foreground)] opacity-70 dark:opacity-80"
           />
           <span
-            className="font-system-ui truncate text-muted-foreground/80 underline-offset-2 group-hover:text-foreground/90 group-hover:underline group-focus-visible:underline"
+            className="font-system-ui truncate text-[var(--color-text-foreground)] underline-offset-2 group-hover:underline group-focus-visible:underline"
             style={{ fontSize: "var(--app-font-size-chat,12px)" }}
           >
             {node.name}
@@ -118,7 +118,7 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
           {node.stat && (
             <span
               className="font-system-ui ml-auto shrink-0 tabular-nums"
-              style={{ fontSize: "var(--app-font-size-chat-meta,10px)" }}
+              style={{ fontSize: "var(--app-font-size-chat,12px)" }}
             >
               <DiffStatLabel additions={node.stat.additions} deletions={node.stat.deletions} />
             </span>

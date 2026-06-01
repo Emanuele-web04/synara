@@ -64,6 +64,7 @@ import { getProviderStartOptions, useAppSettings } from "../appSettings";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { formatShortTimestamp } from "../timestampFormat";
 import ChatMarkdown from "./ChatMarkdown";
+import { DOCK_HEADER_ICON_BUTTON_CLASS } from "./chat/chatHeaderControls";
 import { resolveDiffPanelThread } from "./DiffPanel.logic";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { Alert } from "./ui/alert";
@@ -727,13 +728,13 @@ export default function DiffPanel({
             variant="chrome"
             size="icon-xs"
             label="Close file view"
-            className="[-webkit-app-region:no-drag]"
+            className={cn(DOCK_HEADER_ICON_BUTTON_CLASS, "[-webkit-app-region:no-drag]")}
             onClick={(event) => {
               event.stopPropagation();
               onClosePanel();
             }}
           >
-            <XIcon />
+            <XIcon className="size-3.5" />
           </IconButton>
         ) : null}
       </div>

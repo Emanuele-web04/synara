@@ -38,6 +38,7 @@ import {
   type DiffPanelMode,
 } from "../components/DiffPanelShell";
 import { useComposerDraftStore } from "../composerDraftStore";
+import { useDockPaneRuntimeActivation } from "../hooks/useDockPaneRuntimeActivation";
 import {
   type ChatRightPanel,
   type DiffRouteSearch,
@@ -77,6 +78,7 @@ import {
   RIGHT_DOCK_ADD_MENU_KINDS,
   RIGHT_DOCK_PANE_META,
 } from "../components/chat/rightDockPaneMeta";
+import { type DockPaneRuntimeMode } from "../lib/dockPaneActivation";
 import {
   canComposerHandlePanelWidth,
   createPanelResizeOverlay,
@@ -1336,12 +1338,17 @@ function SingleChatSurface(props: {
   const setDockOpen = useRightDockStore((store) => store.setDockOpen);
   const updatePane = useRightDockStore((store) => store.updatePane);
   const lastAppliedRoutePanelSearchKeyRef = useRef<string | null>(null);
-  const hasNormalizedAutoRestoredBrowserPanelRef = useRef(false);
-  useEffect(() => {
-    hasNormalizedAutoRestoredBrowserPanelRef.current = false;
-  }, [props.threadId]);
 
   const activePane = resolveActivePane(dockState);
+  const {
+    activePaneRuntimeMode,
+    requestActivePaneLive: requestActiveDockPaneLive,
+    requestImmediateHydration: requestImmediateDockHydration,
+  } = useDockPaneRuntimeActivation({
+    threadId: props.threadId,
+    activePane,
+  });
+
   // Bridge the dock's active browser/diff pane back into the panelState shape the
   // chat shell still consumes (diff badge, toggle pressed state, transcript gating).
   const chatPanelState = useMemo<SplitViewPanePanelState>(
@@ -1359,20 +1366,23 @@ function SingleChatSurface(props: {
   );
 
   const handleToggleDiff = useCallback(() => {
+    requestImmediateDockHydration("diff");
     toggleSingletonPane(props.threadId, { kind: "diff" });
-  }, [props.threadId, toggleSingletonPane]);
+  }, [props.threadId, requestImmediateDockHydration, toggleSingletonPane]);
   const handleToggleBrowser = useCallback(() => {
+    requestImmediateDockHydration("browser");
     toggleSingletonPane(props.threadId, { kind: "browser" });
-  }, [props.threadId, toggleSingletonPane]);
+  }, [props.threadId, requestImmediateDockHydration, toggleSingletonPane]);
   const handleOpenTurnDiff = useCallback(
     (turnId: TurnId, filePath?: string) => {
+      requestImmediateDockHydration("diff");
       openPane(props.threadId, {
         kind: "diff",
         diffTurnId: turnId,
         diffFilePath: filePath ?? null,
       });
     },
-    [openPane, props.threadId],
+    [openPane, props.threadId, requestImmediateDockHydration],
   );
 
   const handleSplitSurface = useCallback(() => {
@@ -1427,8 +1437,10 @@ function SingleChatSurface(props: {
     }
 
     if (panelPatch.panel === "browser") {
+      requestImmediateDockHydration("browser");
       openPane(props.threadId, { kind: "browser" });
     } else if (panelPatch.panel === "diff") {
+      requestImmediateDockHydration("diff");
       openPane(props.threadId, {
         kind: "diff",
         diffTurnId: panelPatch.diffTurnId ?? null,
@@ -1443,7 +1455,14 @@ function SingleChatSurface(props: {
       replace: true,
       search: (previous) => stripDiffSearchParams(previous),
     });
-  }, [navigate, openPane, props.search, props.threadId, setDockOpen]);
+  }, [
+    navigate,
+    openPane,
+    props.search,
+    props.threadId,
+    requestImmediateDockHydration,
+    setDockOpen,
+  ]);
 
   useEffect(() => {
     const onMenuAction = window.desktopBridge?.onMenuAction;
@@ -1453,30 +1472,14 @@ function SingleChatSurface(props: {
 
     const unsubscribe = onMenuAction((action) => {
       if (action !== "toggle-browser") return;
+      requestImmediateDockHydration("browser");
       toggleSingletonPane(props.threadId, { kind: "browser" });
     });
 
     return () => {
       unsubscribe?.();
     };
-  }, [props.threadId, toggleSingletonPane]);
-
-  useEffect(() => {
-    if (hasNormalizedAutoRestoredBrowserPanelRef.current) {
-      return;
-    }
-
-    hasNormalizedAutoRestoredBrowserPanelRef.current = true;
-    if (props.search.panel === "browser") {
-      return;
-    }
-
-    // Reopening the native browser must be explicit (route search, user toggle, or
-    // browser-use request); collapse a persisted dock that would auto-show it.
-    if (dockState.open && resolveActivePane(dockState)?.kind === "browser") {
-      setDockOpen(props.threadId, false);
-    }
-  }, [dockState, props.search.panel, props.threadId, setDockOpen]);
+  }, [props.threadId, requestImmediateDockHydration, toggleSingletonPane]);
 
   useEffect(() => {
     const onOpenBrowserPanelRequest = window.desktopBridge?.browser.onBrowserUseOpenPanelRequest;
@@ -1485,13 +1488,14 @@ function SingleChatSurface(props: {
     }
 
     const unsubscribe = onOpenBrowserPanelRequest(() => {
+      requestImmediateDockHydration("browser");
       openPane(props.threadId, { kind: "browser" });
     });
 
     return () => {
       unsubscribe?.();
     };
-  }, [openPane, props.threadId]);
+  }, [openPane, props.threadId, requestImmediateDockHydration]);
 
   const excludedThreadIds = useMemo(
     () => new Set<ThreadIdType>([props.threadId]),
@@ -1536,6 +1540,7 @@ function SingleChatSurface(props: {
 
   const handleAddDockPane = useCallback(
     (kind: RightDockPaneKind) => {
+      requestImmediateDockHydration(kind);
       if (kind === "sidechat") {
         // Sidechat spawns a thread; reuse the composer's /side flow (correct model
         // selection) published via the registry instead of opening an empty pane.
@@ -1562,11 +1567,11 @@ function SingleChatSurface(props: {
       }
       openPane(props.threadId, { kind });
     },
-    [openPane, props.threadId],
+    [openPane, props.threadId, requestImmediateDockHydration],
   );
 
   const renderActivePane = useCallback(
-    (pane: RightDockPane): ReactNode => {
+    (pane: RightDockPane, context: { runtimeMode: DockPaneRuntimeMode }): ReactNode => {
       switch (pane.kind) {
         case "browser":
           return (
@@ -1574,6 +1579,8 @@ function SingleChatSurface(props: {
               mode="sidebar"
               threadId={props.threadId}
               onClosePanel={() => closePane(props.threadId, pane.id)}
+              runtimeMode={context.runtimeMode}
+              onRequestLive={requestActiveDockPaneLive}
             />
           );
         case "diff":
@@ -1596,6 +1603,9 @@ function SingleChatSurface(props: {
             />
           );
         case "terminal":
+          if (context.runtimeMode === "preview") {
+            return <PanelStateMessage>Terminal is sleeping. Restoring shortly.</PanelStateMessage>;
+          }
           return <DockTerminalPane hostThreadId={props.threadId} projectId={props.projectId} />;
         case "git":
           return (
@@ -1608,6 +1618,9 @@ function SingleChatSurface(props: {
         case "sidechat":
           if (!pane.threadId) {
             return <RightDockPanePlaceholder kind="sidechat" />;
+          }
+          if (context.runtimeMode === "preview") {
+            return <ChatMountSkeleton />;
           }
           return (
             <DeferredChatView
@@ -1627,7 +1640,15 @@ function SingleChatSurface(props: {
           return <RightDockPanePlaceholder kind={pane.kind} />;
       }
     },
-    [closePane, props.projectId, props.threadId, updatePane],
+    [closePane, props.projectId, props.threadId, requestActiveDockPaneLive, updatePane],
+  );
+
+  const handleSelectDockPane = useCallback(
+    (paneId: string) => {
+      requestImmediateDockHydration(dockState.panes.find((pane) => pane.id === paneId)?.kind);
+      setActivePane(props.threadId, paneId);
+    },
+    [dockState.panes, props.threadId, requestImmediateDockHydration, setActivePane],
   );
 
   return (
@@ -1668,8 +1689,10 @@ function SingleChatSurface(props: {
         storageKey={`${RIGHT_PANEL_SIDEBAR_WIDTH_STORAGE_KEY}:dock`}
         shouldAcceptWidth={shouldAcceptDockWidth}
         addMenuKinds={RIGHT_DOCK_ADD_MENU_KINDS}
+        motionKey={props.threadId}
+        activePaneRuntimeMode={activePaneRuntimeMode}
         {...(paneLabelOverrides ? { paneLabelOverrides } : {})}
-        onSelectPane={(paneId) => setActivePane(props.threadId, paneId)}
+        onSelectPane={handleSelectDockPane}
         onClosePane={(paneId) => closePane(props.threadId, paneId)}
         onCollapse={() => setDockOpen(props.threadId, false)}
         onOpenChange={(open) => setDockOpen(props.threadId, open)}

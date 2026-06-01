@@ -3,9 +3,10 @@
 // Layer: Chat right-dock UI
 // Depends on: ui/sidebar primitive, right-dock pane metadata, and a caller-provided pane renderer.
 
-import { type CSSProperties, type ReactNode } from "react";
+import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from "react";
 
 import { cn } from "~/lib/utils";
+import type { DockPaneRuntimeMode } from "~/lib/dockPaneActivation";
 import { PanelRightCloseIcon, PlusIcon, XIcon } from "~/lib/icons";
 import type {
   RightDockPane,
@@ -18,7 +19,10 @@ import { IconButton } from "../ui/icon-button";
 import { Menu, MenuItem, MenuTrigger } from "../ui/menu";
 import { Sidebar, SidebarProvider, SidebarRail } from "../ui/sidebar";
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
-import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chatHeaderControls";
+import {
+  CHAT_SURFACE_HEADER_HEIGHT_CLASS,
+  DOCK_HEADER_ICON_BUTTON_CLASS,
+} from "./chatHeaderControls";
 import { RIGHT_DOCK_PANE_META, resolveRightDockPaneLabel } from "./rightDockPaneMeta";
 
 interface RightDockProps {
@@ -34,7 +38,12 @@ interface RightDockProps {
   onCollapse: () => void;
   onOpenChange: (open: boolean) => void;
   onAddPane: (kind: RightDockPaneKind) => void;
-  renderActivePane: (pane: RightDockPane) => ReactNode;
+  motionKey?: string;
+  activePaneRuntimeMode?: DockPaneRuntimeMode;
+  renderActivePane: (
+    pane: RightDockPane,
+    context: { runtimeMode: DockPaneRuntimeMode },
+  ) => ReactNode;
 }
 
 function RightDockTab(props: {
@@ -84,6 +93,32 @@ function RightDockTab(props: {
 
 export function RightDock(props: RightDockProps) {
   const activePane = resolveActivePane(props.state);
+  const activePaneRuntimeMode = props.activePaneRuntimeMode ?? "live";
+  const [allowChromeMotion, setAllowChromeMotion] = useState(() => !props.state.open);
+  const [, forceMotionClassRefresh] = useState(0);
+  const previousMotionKeyRef = useRef(props.motionKey);
+  const motionKeyChanged = previousMotionKeyRef.current !== props.motionKey;
+  const shouldSuppressChromeMotion = !allowChromeMotion || motionKeyChanged;
+
+  useEffect(() => {
+    const hadMotionKeyChange = previousMotionKeyRef.current !== props.motionKey;
+    previousMotionKeyRef.current = props.motionKey;
+
+    if (!shouldSuppressChromeMotion) {
+      return;
+    }
+
+    if (!allowChromeMotion) {
+      setAllowChromeMotion(true);
+    }
+    if (hadMotionKeyChange && allowChromeMotion) {
+      forceMotionClassRefresh((version) => version + 1);
+    }
+  }, [allowChromeMotion, props.motionKey, shouldSuppressChromeMotion]);
+
+  const noChromeMotionClass = shouldSuppressChromeMotion
+    ? "transition-none! duration-0!"
+    : undefined;
 
   return (
     <SidebarProvider
@@ -96,7 +131,11 @@ export function RightDock(props: RightDockProps) {
       <Sidebar
         side="right"
         collapsible="offcanvas"
-        className="border-l border-sidebar-border bg-card text-foreground"
+        className={cn(
+          "border-l border-sidebar-border bg-card text-foreground",
+          noChromeMotionClass,
+        )}
+        {...(noChromeMotionClass ? { gapClassName: noChromeMotionClass } : {})}
         resizable={{
           minWidth: props.minWidth,
           shouldAcceptWidth: props.shouldAcceptWidth,
@@ -130,7 +169,7 @@ export function RightDock(props: RightDockProps) {
                     size="icon-xs"
                     aria-label="Add panel"
                     title="Add panel"
-                    className="size-6 shrink-0 [&_svg]:mx-0"
+                    className={DOCK_HEADER_ICON_BUTTON_CLASS}
                   />
                 }
               >
@@ -154,19 +193,23 @@ export function RightDock(props: RightDockProps) {
               label="Collapse panel"
               tooltip="Collapse panel"
               tooltipSide="bottom"
-              className="size-6 shrink-0"
+              className={DOCK_HEADER_ICON_BUTTON_CLASS}
               onClick={props.onCollapse}
             >
-              <PanelRightCloseIcon className="size-3.5" />
+              <PanelRightCloseIcon />
             </IconButton>
           </div>
           <div className="relative min-h-0 flex-1">
             {activePane ? (
               <div
                 className="flex h-full min-h-0 w-full"
-                data-native-browser-surface={activePane.kind === "browser" ? "true" : undefined}
+                data-native-browser-surface={
+                  activePane.kind === "browser" && activePaneRuntimeMode === "live"
+                    ? "true"
+                    : undefined
+                }
               >
-                {props.renderActivePane(activePane)}
+                {props.renderActivePane(activePane, { runtimeMode: activePaneRuntimeMode })}
               </div>
             ) : null}
           </div>

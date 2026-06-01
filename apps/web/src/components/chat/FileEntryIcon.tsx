@@ -1,9 +1,13 @@
-import { memo, useMemo, useState } from "react";
-import { getFileIconUrlForEntry } from "../../file-icons";
-import { FileIcon } from "~/lib/icons";
+import { memo } from "react";
+import { getFileIconName } from "../../file-icons";
+import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
 import { FolderClosed } from "../FolderClosed";
 
+// `theme` is retained on the props for call-site compatibility (it still drives
+// diff/theme behavior in the surrounding panels) but no longer affects icon
+// selection: Central icons are monochrome `currentColor` glyphs rendered via CSS
+// mask, so they inherit the surrounding text color on both light and dark.
 export const FileEntryIcon = memo(function FileEntryIcon(props: {
   pathValue: string;
   kind: "file" | "directory";
@@ -11,7 +15,7 @@ export const FileEntryIcon = memo(function FileEntryIcon(props: {
   className?: string;
 }) {
   // Match the look of the local filepath picker: directories always render the
-  // outlined FolderClosed glyph rather than an extra network fetch to Seti.
+  // outlined FolderClosed glyph.
   if (props.kind === "directory") {
     return (
       <FolderClosed className={cn("size-4 shrink-0 text-muted-foreground/70", props.className)} />
@@ -19,37 +23,9 @@ export const FileEntryIcon = memo(function FileEntryIcon(props: {
   }
 
   return (
-    <FileIconImage
-      pathValue={props.pathValue}
-      theme={props.theme}
-      className={props.className ?? ""}
-    />
-  );
-});
-
-const FileIconImage = memo(function FileIconImage(props: {
-  pathValue: string;
-  theme: "light" | "dark";
-  className: string;
-}) {
-  const [failedIconUrl, setFailedIconUrl] = useState<string | null>(null);
-  const iconUrl = useMemo(
-    () => getFileIconUrlForEntry(props.pathValue, "file", props.theme),
-    [props.pathValue, props.theme],
-  );
-
-  if (failedIconUrl === iconUrl) {
-    return <FileIcon className={cn("size-4 text-muted-foreground/80", props.className)} />;
-  }
-
-  return (
-    <img
-      src={iconUrl}
-      alt=""
-      aria-hidden="true"
+    <CentralIcon
+      name={getFileIconName(props.pathValue)}
       className={cn("size-4 shrink-0", props.className)}
-      loading="lazy"
-      onError={() => setFailedIconUrl(iconUrl)}
     />
   );
 });

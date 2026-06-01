@@ -27,8 +27,23 @@ export const CHAT_SURFACE_HEADER_HEIGHT_CLASS = "h-[46px]";
 /** Fixed control height + radius for every header toolbar control. */
 export const CHAT_HEADER_CONTROL_CLASS_NAME = "!h-7 shrink-0 rounded-lg";
 
+/** Muted icon tone for inactive header toggles (matches chrome icon buttons). */
+export const CHAT_HEADER_TOGGLE_CLASS_NAME = cn(
+  CHAT_HEADER_CONTROL_CLASS_NAME,
+  "border-0 text-[var(--color-text-foreground-secondary)] data-pressed:text-[var(--color-text-foreground)]",
+);
+
 /** Square footprint for icon-only header controls (height-matched, centered glyph). */
-export const CHAT_HEADER_ICON_CONTROL_CLASS_NAME = "!size-7 shrink-0 rounded-lg [&_svg]:mx-0";
+export const CHAT_HEADER_ICON_CONTROL_CLASS_NAME =
+  "!size-7 shrink-0 rounded-lg [&_svg,&_[data-slot=central-icon]]:mx-0";
+
+/**
+ * Square chrome icon-button footprint shared by every right-dock header — the tab
+ * strip controls (add/collapse) and each pane's title-bar actions (close/refresh/…).
+ * Aliases {@link CHAT_HEADER_ICON_CONTROL_CLASS_NAME} so dock header buttons stay the
+ * same 28px size as the chat header instead of drifting to 24px (icon-xs) per surface.
+ */
+export const DOCK_HEADER_ICON_BUTTON_CLASS = CHAT_HEADER_ICON_CONTROL_CLASS_NAME;
 
 /** Flatten the trailing edge of a split-button's leading control so it butts up
  *  against the shared divider (drops the end radius + the doubled end border). */

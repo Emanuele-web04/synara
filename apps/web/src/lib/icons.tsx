@@ -40,9 +40,6 @@ import {
   IconFolderOpen,
   IconEdit,
   IconInfoCircle,
-  IconLayoutSidebarLeftCollapse,
-  IconLayoutSidebarLeftExpand,
-  IconLayoutSidebarRightCollapse,
   IconLayoutDistributeHorizontal,
   IconListCheck,
   IconListDetails,
@@ -134,6 +131,7 @@ export const CircleCheckIcon = adaptIcon(IconCircleCheck);
 export const CloudUploadIcon = centralIconWrapper("cloud-upload");
 export const CloudSyncIcon = centralIconWrapper("cloud-sync");
 export const Columns2Icon = adaptIcon(IconColumns2);
+export const ChangesIcon = centralIconWrapper("changes");
 export const CopyIcon = centralIconWrapper("square-behind-square-6");
 export const DiffIcon = centralIconWrapper("difference-modified");
 export const DownloadIcon = adaptIcon(IconDownload);
@@ -178,9 +176,11 @@ export const Maximize2 = adaptIcon(IconMaximize);
 export const Minimize2 = adaptIcon(IconMinimize);
 export const MessageCircleIcon = adaptIcon(IconMessageCircle);
 export const MicIcon: LucideIcon = centralIconWrapper("microphone");
-export const PanelLeftCloseIcon = adaptIcon(IconLayoutSidebarLeftCollapse);
-export const PanelLeftIcon = adaptIcon(IconLayoutSidebarLeftExpand);
-export const PanelRightCloseIcon = adaptIcon(IconLayoutSidebarRightCollapse);
+export const SidebarHiddenLeftWideIcon = centralIconWrapper("sidebar-hidden-left-wide");
+export const SidebarHiddenRightWideIcon = centralIconWrapper("sidebar-hidden-right-wide");
+export const PanelLeftCloseIcon = SidebarHiddenLeftWideIcon;
+export const PanelLeftIcon = centralIconWrapper("sidebar-simple-left-wide");
+export const PanelRightCloseIcon = SidebarHiddenRightWideIcon;
 export const PinIcon: LucideIcon = centralIconWrapper("pin");
 export const PinnedFilledIcon = adaptIcon(IconPinnedFilled);
 export const PlayIcon = adaptIcon(IconPlayerPlay);

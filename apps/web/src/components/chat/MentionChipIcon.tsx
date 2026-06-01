@@ -1,6 +1,6 @@
 // FILE: MentionChipIcon.tsx
 // Purpose: Shared icon renderer for file/folder mention chips. Picks between
-//          the outlined folder glyph and the Seti file-type icon so the
+//          the outlined folder glyph and the Central file-type icon so the
 //          composer Lexical chip (DOM) and the sent-message chip (React)
 //          stay in sync.
 // Layer: UI shared component/helper
@@ -8,7 +8,8 @@
 
 import { memo } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { getFileIconUrlForEntry, inferEntryKindFromPath } from "~/file-icons";
+import { getFileIconName, inferEntryKindFromPath } from "~/file-icons";
+import { createCentralIconElement } from "~/lib/central-icons";
 import { FileIcon, PlugIcon } from "~/lib/icons";
 import { COMPOSER_INLINE_MENTION_CHIP_ICON_CLASS_NAME } from "../composerInlineChip";
 import { FolderClosed } from "../FolderClosed";
@@ -34,6 +35,8 @@ function createStaticIconSpan(svg: string): HTMLSpanElement {
   return span;
 }
 
+// `theme` is retained for call-site compatibility but no longer affects icon
+// selection (Central icons are theme-agnostic `currentColor` glyphs).
 export const MentionChipIcon = memo(function MentionChipIcon(props: {
   path: string;
   theme: "light" | "dark";
@@ -46,8 +49,8 @@ export const MentionChipIcon = memo(function MentionChipIcon(props: {
   if (kind === "directory") {
     return <FolderClosed className={COMPOSER_INLINE_MENTION_CHIP_ICON_CLASS_NAME} />;
   }
-  // Delegate file rendering to FileEntryIcon so we inherit the onError
-  // fallback that swaps to the Lucide FileIcon if the Seti asset is missing.
+  // Delegate file rendering to FileEntryIcon so both surfaces resolve the same
+  // Central icon (with the shared bracket fallback for unknown file types).
   return (
     <FileEntryIcon
       pathValue={props.path}
@@ -60,7 +63,6 @@ export const MentionChipIcon = memo(function MentionChipIcon(props: {
 
 export function createMentionChipIconElement(
   path: string,
-  theme: "light" | "dark",
   kind: MentionChipKind = "path",
 ): HTMLElement {
   if (kind === "plugin" || path.startsWith("plugin://")) {
@@ -69,18 +71,9 @@ export function createMentionChipIconElement(
   if (inferEntryKindFromPath(path) === "directory") {
     return createStaticIconSpan(FOLDER_CLOSED_ICON_SVG);
   }
-  const image = document.createElement("img");
-  image.alt = "";
-  image.ariaHidden = "true";
-  image.className = COMPOSER_INLINE_MENTION_CHIP_ICON_CLASS_NAME;
-  image.loading = "lazy";
-  image.src = getFileIconUrlForEntry(path, "file", theme);
-  image.addEventListener(
-    "error",
-    () => {
-      image.replaceWith(createStaticIconSpan(FILE_ICON_SVG));
-    },
-    { once: true },
+  const iconElement = createCentralIconElement(
+    getFileIconName(path),
+    COMPOSER_INLINE_MENTION_CHIP_ICON_CLASS_NAME,
   );
-  return image;
+  return iconElement ?? createStaticIconSpan(FILE_ICON_SVG);
 }

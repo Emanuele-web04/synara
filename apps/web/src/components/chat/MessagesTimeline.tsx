@@ -25,9 +25,9 @@ import ChatMarkdown from "../ChatMarkdown";
 import {
   BotIcon,
   CheckIcon,
+  ChangesIcon,
   CircleAlertIcon,
   EyeIcon,
-  FileIcon,
   GitHubIcon,
   GlobeIcon,
   HammerIcon,
@@ -101,7 +101,9 @@ import {
   USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
 } from "./chatTypography";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
+import { DisclosureRegion } from "../ui/DisclosureRegion";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
+import { disclosureContentClassName } from "~/lib/disclosureMotion";
 import { getAppTypographyScale } from "../../lib/appTypography";
 import {
   formatSubagentModelLabel,
@@ -776,16 +778,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       </span>
                       <DisclosureChevron
                         open={isCollapsedWorkExpanded}
-                        className="size-3.5 text-muted-foreground/55 transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
+                        className="text-muted-foreground/55"
                       />
                     </CollapsibleTrigger>
-                    <CollapsiblePanel className="duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none">
+                    <CollapsiblePanel>
                       <div
-                        className={cn(
-                          "mb-2.5 space-y-0.5 transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
-                          isCollapsedWorkExpanded
-                            ? "translate-y-0 opacity-100"
-                            : "-translate-y-1 opacity-0",
+                        className={disclosureContentClassName(
+                          isCollapsedWorkExpanded,
+                          "mb-2.5 space-y-0.5",
                         )}
                       >
                         {row.collapsedWorkEntries!.map((workEntry) => (
@@ -866,7 +866,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       <button
                         key={`inline-summary-edit:${row.message.id}:${file.path}`}
                         type="button"
-                        className="group flex w-full max-w-full items-baseline gap-1 px-0 py-[1px] text-left transition-opacity duration-150 hover:opacity-95"
+                        className="group flex w-full max-w-full items-baseline gap-1 px-0 py-1.5 text-left transition-opacity duration-150 hover:opacity-95"
                         title={file.path}
                         onClick={() => onOpenTurnDiff(turnSummary!.turnId, file.path)}
                       >
@@ -877,17 +877,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           Edited
                         </span>
                         <span
-                          className="font-system-ui max-w-[28rem] truncate underline-offset-2 group-hover:underline group-focus-visible:underline"
+                          className="font-system-ui max-w-[28rem] truncate text-[var(--color-text-foreground)] underline-offset-2 group-hover:underline group-focus-visible:underline"
                           style={{
                             fontSize: `${normalizedChatFontSizePx}px`,
-                            color: "var(--color-token-text-link-foreground)",
                           }}
                         >
                           {basename(file.path)}
                         </span>
                         {(file.additions ?? 0) + (file.deletions ?? 0) > 0 ? (
                           <span
-                            className="font-chat-code shrink-0 tabular-nums whitespace-nowrap"
+                            className="font-system-ui shrink-0 tabular-nums whitespace-nowrap"
                             style={{ fontSize: `${normalizedChatFontSizePx}px` }}
                           >
                             <DiffStatLabel
@@ -926,9 +925,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   const canUndo =
                     correspondingUserMessageId != null &&
                     revertTurnCountByUserMessageId.has(correspondingUserMessageId);
-                  const showExpandedFileDetails =
-                    fileChangesExpanded &&
-                    (!inlineFileChangeDetailsAlreadyVisible || checkpointFiles.length > 0);
                   const totalAdditions = checkpointFiles.reduce(
                     (sum, file) => sum + (file.additions ?? 0),
                     0,
@@ -942,18 +938,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       ? "Edited 1 file"
                       : `Edited ${checkpointFiles.length} files`;
                   return (
-                    <div className="mt-4 overflow-hidden rounded-[0.65rem] bg-[var(--app-user-message-background)]">
+                    <div className="mt-4 overflow-hidden rounded-[0.65rem] border border-[color:var(--color-border-light)]">
                       <div
                         className={cn(
-                          "flex items-center justify-between gap-3 px-3 py-1.5",
-                          showExpandedFileDetails &&
+                          "flex items-center justify-between gap-3 bg-[var(--app-user-message-background)] px-3 py-1.5",
+                          fileChangesExpanded &&
                             "border-b border-[color:var(--color-border-light)]",
                         )}
                       >
                         <div className="flex min-w-0 items-center gap-2.5">
-                          <span className="flex size-5 shrink-0 items-center justify-center rounded-md border border-[color:var(--color-border-light)] text-muted-foreground/70">
-                            <FileIcon className="size-3" />
-                          </span>
+                          <ChangesIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
                           <div className="min-w-0">
                             <div
                               className="truncate font-normal text-foreground/92"
@@ -964,7 +958,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                             {totalAdditions + totalDeletions > 0 ? (
                               <div
                                 className="font-system-ui tabular-nums"
-                                style={{ fontSize: `${appTypographyScale.chatMetaPx}px` }}
+                                style={{ fontSize: chatTypographyStyle.fontSize }}
                               >
                                 <DiffStatLabel
                                   additions={totalAdditions}
@@ -1016,57 +1010,54 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           </button>
                         </div>
                       </div>
-                      {showExpandedFileDetails ? (
-                        <div className="bg-[var(--app-user-message-background)]">
-                          {inlineFileChangeDetailsAlreadyVisible ? (
-                            <div className="px-3 py-2">
-                              <ChangedFilesTree
-                                turnId={turnSummary.turnId}
-                                files={checkpointFiles}
-                                allDirectoriesExpanded
-                                resolvedTheme={resolvedTheme}
-                                onOpenTurnDiff={onOpenTurnDiff}
+                      <DisclosureRegion open={fileChangesExpanded}>
+                        {inlineFileChangeDetailsAlreadyVisible ? (
+                          <div className="px-3 py-2">
+                            <ChangedFilesTree
+                              turnId={turnSummary.turnId}
+                              files={checkpointFiles}
+                              allDirectoriesExpanded
+                              resolvedTheme={resolvedTheme}
+                              onOpenTurnDiff={onOpenTurnDiff}
+                            />
+                          </div>
+                        ) : (
+                          checkpointFiles.map((file) => (
+                            <button
+                              key={file.path}
+                              type="button"
+                              className="group flex w-full items-center gap-2 border-t border-[color:var(--color-border-light)] bg-transparent px-3 py-2.5 text-left first:border-t-0 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] dark:bg-transparent dark:hover:bg-transparent"
+                              onClick={() => onOpenTurnDiff(turnSummary.turnId, file.path)}
+                            >
+                              <FileEntryIcon
+                                pathValue={file.path}
+                                kind="file"
+                                theme={resolvedTheme}
+                                className="size-4 shrink-0 text-[var(--color-text-foreground)] opacity-70 dark:opacity-80"
                               />
-                            </div>
-                          ) : (
-                            checkpointFiles.map((file) => (
-                              <button
-                                key={file.path}
-                                type="button"
-                                className="group flex w-full items-center gap-2 border-t border-[color:var(--color-border-light)] px-3 py-1 text-left first:border-t-0 transition-colors hover:bg-[var(--color-background-button-secondary-hover)]"
-                                onClick={() => onOpenTurnDiff(turnSummary.turnId, file.path)}
+                              <span
+                                className="font-system-ui truncate font-normal text-[var(--color-text-foreground)] underline-offset-2 group-hover:underline group-focus-visible:underline"
+                                style={{
+                                  fontSize: chatTypographyStyle.fontSize,
+                                }}
                               >
-                                <FileEntryIcon
-                                  pathValue={file.path}
-                                  kind="file"
-                                  theme={resolvedTheme}
-                                  className="size-4 shrink-0 opacity-50 dark:opacity-30"
-                                />
+                                {file.path}
+                              </span>
+                              {(file.additions ?? 0) + (file.deletions ?? 0) > 0 && (
                                 <span
-                                  className="font-system-ui truncate font-normal underline-offset-2 group-hover:underline group-focus-visible:underline"
-                                  style={{
-                                    fontSize: chatTypographyStyle.fontSize,
-                                    color: "var(--color-text-foreground)",
-                                  }}
+                                  className="font-system-ui ml-auto shrink-0 tabular-nums"
+                                  style={{ fontSize: chatTypographyStyle.fontSize }}
                                 >
-                                  {file.path}
+                                  <DiffStatLabel
+                                    additions={file.additions ?? 0}
+                                    deletions={file.deletions ?? 0}
+                                  />
                                 </span>
-                                {(file.additions ?? 0) + (file.deletions ?? 0) > 0 && (
-                                  <span
-                                    className="font-system-ui ml-auto shrink-0 tabular-nums"
-                                    style={{ fontSize: `${appTypographyScale.chatMetaPx}px` }}
-                                  >
-                                    <DiffStatLabel
-                                      additions={file.additions ?? 0}
-                                      deletions={file.deletions ?? 0}
-                                    />
-                                  </span>
-                                )}
-                              </button>
-                            ))
-                          )}
-                        </div>
-                      ) : null}
+                              )}
+                            </button>
+                          ))
+                        )}
+                      </DisclosureRegion>
                     </div>
                   );
                 })()}
@@ -2023,7 +2014,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                   "group flex w-full max-w-full items-baseline gap-1 text-left transition-opacity duration-150",
                   compact
                     ? "px-0 py-[1px] hover:opacity-95"
-                    : "rounded-md border border-border/45 bg-background/65 px-2 py-1 hover:bg-background/80",
+                    : "rounded-md border border-border/45 bg-background/65 px-2 py-2 hover:bg-background/80",
                   canOpenEditedDiff ? "cursor-pointer" : "cursor-default",
                 )}
                 title={changedFilePath}
@@ -2040,17 +2031,16 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                   Edited
                 </span>
                 <span
-                  className="font-system-ui max-w-[28rem] truncate underline-offset-2 group-hover:underline group-focus-visible:underline"
+                  className="font-system-ui max-w-[28rem] truncate text-[var(--color-text-foreground)] underline-offset-2 group-hover:underline group-focus-visible:underline"
                   style={{
                     fontSize: `${rowFontSizePx}px`,
-                    color: "var(--color-token-text-link-foreground)",
                   }}
                 >
                   {basename(changedFilePath)}
                 </span>
                 {changedFileStat ? (
                   <span
-                    className="font-chat-code shrink-0 tabular-nums whitespace-nowrap"
+                    className="font-system-ui shrink-0 tabular-nums whitespace-nowrap"
                     style={{ fontSize: `${rowFontSizePx}px` }}
                   >
                     <DiffStatLabel

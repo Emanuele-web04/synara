@@ -214,6 +214,11 @@ import { resolveRestorableThreadRoute, type LastThreadRoute } from "../chatRoute
 import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { cn } from "~/lib/utils";
+import {
+  disclosureContentClassName,
+  disclosureShellClassName,
+  DISCLOSURE_INNER_CLASS,
+} from "~/lib/disclosureMotion";
 import { getInitialBrowseQuery } from "~/lib/projectPaths";
 import {
   canCreateThreadHandoff,
@@ -4665,17 +4670,16 @@ export default function Sidebar() {
 
         <div
           className={cn(
-            "grid transition-[grid-template-rows,opacity] duration-220 ease-out",
+            disclosureShellClassName(project.expanded),
             SIDEBAR_NESTED_LIST_OFFSET_CLASS_NAME,
-            project.expanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
           )}
         >
-          <div className="min-h-0 overflow-hidden">
+          <div className={DISCLOSURE_INNER_CLASS}>
             <SidebarMenuSub
               className={cn(
-                "mx-0 my-0 w-full translate-x-0 border-l-0 px-0 py-0 transition-transform duration-220 ease-out",
+                "mx-0 my-0 w-full translate-x-0 border-l-0 px-0 py-0",
                 SIDEBAR_NESTED_LIST_GAP_CLASS_NAME,
-                project.expanded ? "translate-y-0" : "-translate-y-1 pointer-events-none",
+                disclosureContentClassName(project.expanded),
               )}
             >
               {visibleEntries.map((entry) =>
@@ -5729,18 +5733,10 @@ export default function Sidebar() {
               </SidebarSectionToolbar>
             </div>
 
-            <div
-              className={cn(
-                "grid pt-1 transition-[grid-template-rows,opacity] duration-220 ease-out",
-                chatSectionExpanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
-              )}
-            >
-              <div className="min-h-0 overflow-hidden">
+            <div className={cn(disclosureShellClassName(chatSectionExpanded), "pt-1")}>
+              <div className={DISCLOSURE_INNER_CLASS}>
                 <SidebarMenu
-                  className={cn(
-                    "gap-1 transition-transform duration-220 ease-out",
-                    chatSectionExpanded ? "translate-y-0" : "-translate-y-1 pointer-events-none",
-                  )}
+                  className={cn("gap-1", disclosureContentClassName(chatSectionExpanded))}
                 >
                   {visibleChatThreadRows.length > 0 ? (
                     renderedChatEntries.map((entry) => renderChatItem(entry.row))

@@ -4,6 +4,7 @@
 // Exports: DisclosureChevron
 
 import { ChevronRightIcon } from "~/lib/icons";
+import { disclosureChevronClassName } from "~/lib/disclosureMotion";
 import { cn } from "~/lib/utils";
 
 export function DisclosureChevron(props: { open: boolean; className?: string | undefined }) {
@@ -12,11 +13,7 @@ export function DisclosureChevron(props: { open: boolean; className?: string | u
   return (
     <ChevronRightIcon
       aria-hidden="true"
-      className={cn(
-        "size-3.5 shrink-0 text-muted-foreground transition-transform duration-150 ease-out",
-        open && "rotate-90",
-        className,
-      )}
+      className={cn(disclosureChevronClassName(open), className)}
     />
   );
 }

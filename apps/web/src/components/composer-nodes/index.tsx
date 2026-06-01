@@ -83,10 +83,6 @@ export type SerializedComposerTerminalContextNode = Spread<
 
 // ── Helper Functions ──────────────────────────────────────────────────
 
-function resolvedThemeFromDocument(): "light" | "dark" {
-  return document.documentElement.classList.contains("dark") ? "dark" : "light";
-}
-
 function renderMentionChipDom(
   container: HTMLElement,
   pathValue: string,
@@ -96,7 +92,7 @@ function renderMentionChipDom(
   container.style.setProperty("user-select", "none");
   container.style.setProperty("-webkit-user-select", "none");
 
-  const icon = createMentionChipIconElement(pathValue, resolvedThemeFromDocument(), kind);
+  const icon = createMentionChipIconElement(pathValue, kind);
 
   const label = document.createElement("span");
   label.className = COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME;

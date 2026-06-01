@@ -28,6 +28,7 @@ import {
 } from "~/lib/icons";
 
 import { readNativeApi } from "~/nativeApi";
+import type { DockPaneRuntimeMode } from "~/lib/dockPaneActivation";
 import { PANEL_RESIZE_OVERLAY_SYNC_EVENT } from "~/lib/panelResize";
 import { cn } from "~/lib/utils";
 
@@ -54,12 +55,15 @@ import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./Dif
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "./ui/menu";
+import { Skeleton } from "./ui/skeleton";
 import { toastManager } from "./ui/toast";
 
 interface BrowserPanelProps {
   mode: DiffPanelMode;
   threadId: ThreadId;
   onClosePanel: () => void;
+  runtimeMode?: DockPaneRuntimeMode;
+  onRequestLive?: () => void;
 }
 
 const BROWSER_BOUNDS_SYNC_BURST_FRAMES = 30;
@@ -297,8 +301,50 @@ function isBrowserPerfLoggingEnabled(): boolean {
   }
 }
 
-export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps) {
+// Keeps a restored browser pane visually occupied while the live webview hydrates.
+function BrowserRuntimePreview(props: { title: string; detail: string }) {
+  return (
+    <div
+      className="absolute inset-0 flex items-center justify-center bg-background/35 p-6"
+      role="status"
+      aria-live="polite"
+    >
+      <div className="w-full max-w-sm rounded-xl border border-border/60 bg-card/70 p-4 shadow-sm">
+        <div className="mb-4 flex items-center gap-3">
+          <Skeleton className="size-9 rounded-lg" />
+          <div className="min-w-0 flex-1 space-y-2">
+            <Skeleton className="h-3.5 w-2/3 rounded-full" />
+            <Skeleton className="h-2.5 w-full rounded-full" />
+          </div>
+        </div>
+        <div className="space-y-2">
+          <Skeleton className="h-20 w-full rounded-lg" />
+          <div className="grid grid-cols-3 gap-2">
+            <Skeleton className="h-8 rounded-md" />
+            <Skeleton className="h-8 rounded-md" />
+            <Skeleton className="h-8 rounded-md" />
+          </div>
+        </div>
+        <div className="mt-4 min-w-0 text-center">
+          <p className="text-xs font-medium text-foreground">Restoring browser</p>
+          <p className="mt-1 truncate text-[11px] text-muted-foreground" title={props.detail}>
+            {props.title}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function BrowserPanel({
+  mode,
+  threadId,
+  onClosePanel,
+  runtimeMode = "live",
+  onRequestLive,
+}: BrowserPanelProps) {
   const api = readNativeApi();
+  const isLiveRuntime = runtimeMode === "live";
   const threadBrowserState = useStore(useBrowserStateStore, selectThreadBrowserState(threadId));
   const recentHistory = useStore(useBrowserStateStore, selectThreadBrowserHistory(threadId));
   const upsertThreadState = useBrowserStateStore((store) => store.upsertThreadState);
@@ -343,6 +389,7 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
   const [isAddressFocused, setIsAddressFocused] = useState(false);
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  const runtimeReady = isLiveRuntime ? workspaceReady : true;
   const activeTab =
     threadBrowserState?.tabs.find((tab) => tab.id === threadBrowserState.activeTabId) ??
     threadBrowserState?.tabs[0] ??
@@ -354,7 +401,7 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
     threadLastError: threadBrowserState?.lastError,
     activeTabStatus,
     hasActiveTab: activeTab !== null,
-    workspaceReady,
+    workspaceReady: runtimeReady,
   });
   const browserAddressSuggestions = buildBrowserAddressSuggestions({
     query: addressValue,
@@ -363,7 +410,19 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
     recentHistory,
   });
   const showBrowserAddressSuggestions =
-    isAddressFocused && browserAddressSuggestions.length > 0 && workspaceReady;
+    isLiveRuntime && isAddressFocused && browserAddressSuggestions.length > 0 && runtimeReady;
+
+  const requestLiveRuntime = useCallback(() => {
+    onRequestLive?.();
+  }, [onRequestLive]);
+
+  const ensureLiveRuntime = useCallback(() => {
+    if (isLiveRuntime) {
+      return true;
+    }
+    requestLiveRuntime();
+    return false;
+  }, [isLiveRuntime, requestLiveRuntime]);
 
   const runBrowserAction = useCallback(async <T,>(action: () => Promise<T>): Promise<T | null> => {
     try {
@@ -377,17 +436,17 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
   }, []);
 
   useEffect(() => {
-    if (!api) {
+    if (!api || !isLiveRuntime) {
       return;
     }
 
     return api.browser.onState((state) => {
       upsertThreadState(state);
     });
-  }, [api, upsertThreadState]);
+  }, [api, isLiveRuntime, upsertThreadState]);
 
   useEffect(() => {
-    if (!api) {
+    if (!api || !isLiveRuntime) {
       return;
     }
 
@@ -411,7 +470,7 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
       cancelled = true;
       void api.browser.hide({ threadId });
     };
-  }, [api, runBrowserAction, threadId, upsertThreadState]);
+  }, [api, isLiveRuntime, runBrowserAction, threadId, upsertThreadState]);
 
   useEffect(() => {
     const activeTabId = activeTab?.id ?? null;
@@ -441,7 +500,7 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
   }, [activeTab]);
 
   useLayoutEffect(() => {
-    if (!api || !workspaceReady || !activeTab) {
+    if (!api || !isLiveRuntime || !workspaceReady || !activeTab) {
       return;
     }
 
@@ -510,7 +569,15 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
       webview.removeEventListener("dom-ready", attachVisibleWebview);
       webview.removeEventListener("did-start-loading", attachVisibleWebview);
     };
-  }, [activeTab, api, runBrowserAction, threadId, upsertThreadState, workspaceReady]);
+  }, [
+    activeTab,
+    api,
+    isLiveRuntime,
+    runBrowserAction,
+    threadId,
+    upsertThreadState,
+    workspaceReady,
+  ]);
 
   useEffect(() => {
     return () => {
@@ -532,7 +599,7 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
   }, [threadBrowserState?.tabs]);
 
   useEffect(() => {
-    if (!isBrowserPerfLoggingEnabled()) {
+    if (!isLiveRuntime || !isBrowserPerfLoggingEnabled()) {
       return;
     }
 
@@ -546,10 +613,10 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [threadId]);
+  }, [isLiveRuntime, threadId]);
 
   useLayoutEffect(() => {
-    if (!api) {
+    if (!api || !isLiveRuntime) {
       return;
     }
 
@@ -695,9 +762,12 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
       burstFramesRemainingRef.current = 0;
       burstStableFramesRef.current = 0;
     };
-  }, [api, threadId]);
+  }, [api, isLiveRuntime, threadId]);
 
   const onSubmitAddress = useCallback(() => {
+    if (!ensureLiveRuntime()) {
+      return;
+    }
     if (!api || !activeTab) {
       return;
     }
@@ -717,11 +787,22 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
         upsertThreadState(state);
       }
     });
-  }, [activeTab, addressValue, api, runBrowserAction, threadId, upsertThreadState]);
+  }, [
+    activeTab,
+    addressValue,
+    api,
+    ensureLiveRuntime,
+    runBrowserAction,
+    threadId,
+    upsertThreadState,
+  ]);
 
   const onChooseSuggestion = useCallback(
     (suggestion: BrowserAddressSuggestion) => {
       if (!api) {
+        return;
+      }
+      if (!ensureLiveRuntime()) {
         return;
       }
 
@@ -759,10 +840,13 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
         }
       });
     },
-    [activeTab, api, runBrowserAction, threadId, upsertThreadState],
+    [activeTab, api, ensureLiveRuntime, runBrowserAction, threadId, upsertThreadState],
   );
 
   const onCreateTab = useCallback(() => {
+    if (!ensureLiveRuntime()) {
+      return;
+    }
     if (!api) {
       return;
     }
@@ -775,9 +859,12 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
         addressInputRef.current?.select();
       });
     });
-  }, [api, runBrowserAction, threadId, upsertThreadState]);
+  }, [api, ensureLiveRuntime, runBrowserAction, threadId, upsertThreadState]);
 
   const onCaptureScreenshot = useCallback(() => {
+    if (!ensureLiveRuntime()) {
+      return;
+    }
     if (!api || !activeTab) {
       return;
     }
@@ -812,11 +899,15 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
     api,
     composerDraftAssistantSelectionCount,
     composerDraftImageCount,
+    ensureLiveRuntime,
     runBrowserAction,
     threadId,
   ]);
 
   const onCopyScreenshotToClipboard = useCallback(() => {
+    if (!ensureLiveRuntime()) {
+      return;
+    }
     if (!api || !activeTab) {
       return;
     }
@@ -847,10 +938,13 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
         title: "Browser screenshot copied",
       });
     });
-  }, [activeTab, api, runBrowserAction, threadId]);
+  }, [activeTab, api, ensureLiveRuntime, runBrowserAction, threadId]);
 
   const onCloseTab = useCallback(
     (tabId: string) => {
+      if (!ensureLiveRuntime()) {
+        return;
+      }
       if (!api) {
         return;
       }
@@ -864,7 +958,7 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
         }
       });
     },
-    [api, onClosePanel, runBrowserAction, threadId, upsertThreadState],
+    [api, ensureLiveRuntime, onClosePanel, runBrowserAction, threadId, upsertThreadState],
   );
 
   const header = (
@@ -879,6 +973,7 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
             className="size-7 shrink-0"
             disabled={!activeTab?.canGoBack}
             onClick={() => {
+              if (!ensureLiveRuntime()) return;
               if (!api || !activeTab) return;
               void runBrowserAction(() =>
                 api.browser.goBack({ threadId, tabId: activeTab.id }),
@@ -899,6 +994,7 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
             className="size-7 shrink-0"
             disabled={!activeTab?.canGoForward}
             onClick={() => {
+              if (!ensureLiveRuntime()) return;
               if (!api || !activeTab) return;
               void runBrowserAction(() =>
                 api.browser.goForward({ threadId, tabId: activeTab.id }),
@@ -919,6 +1015,7 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
             className="size-7 shrink-0"
             disabled={!activeTab}
             onClick={() => {
+              if (!ensureLiveRuntime()) return;
               if (!api || !activeTab) return;
               void runBrowserAction(() =>
                 api.browser.reload({ threadId, tabId: activeTab.id }),
@@ -948,6 +1045,9 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
             ref={addressInputRef}
             value={addressValue}
             onChange={(event) => {
+              if (!isLiveRuntime) {
+                requestLiveRuntime();
+              }
               const nextValue = event.target.value;
               isAddressEditingRef.current = true;
               setAddressValue(nextValue);
@@ -956,6 +1056,9 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
               }
             }}
             onFocus={() => {
+              if (!isLiveRuntime) {
+                requestLiveRuntime();
+              }
               isAddressEditingRef.current = true;
               setIsAddressFocused(true);
             }}
@@ -1037,6 +1140,7 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
             <MenuItem
               disabled={!activeTab}
               onClick={() => {
+                if (!ensureLiveRuntime()) return;
                 if (!api || !activeTab) return;
                 void api.shell.openExternal(activeTab.url);
               }}
@@ -1055,7 +1159,7 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
     </div>
   );
 
-  if (!api) {
+  if (!api && isLiveRuntime) {
     return (
       <DiffPanelShell mode={mode} header={header}>
         <DiffPanelLoadingState label="Browser is unavailable." />
@@ -1095,6 +1199,8 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
                     type="button"
                     className="min-w-0 flex-1 truncate text-left"
                     onClick={() => {
+                      if (!ensureLiveRuntime()) return;
+                      if (!api) return;
                       void runBrowserAction(() =>
                         api.browser.selectTab({ threadId, tabId: tab.id }),
                       ).then((state) => {
@@ -1138,12 +1244,19 @@ export function BrowserPanel({ mode, threadId, onClosePanel }: BrowserPanelProps
           ) : null}
         </div>
         <div className="relative min-h-0 flex-1 bg-transparent">
-          {!workspaceReady ? (
+          {!isLiveRuntime ? (
+            <BrowserRuntimePreview
+              title={activeTab?.title || "Browser is sleeping"}
+              detail={activeTab?.lastCommittedUrl ?? activeTab?.url ?? "Restoring cached browser"}
+            />
+          ) : !workspaceReady ? (
             <div className="absolute inset-0 z-10">
               <DiffPanelLoadingState label="Starting browser..." />
             </div>
           ) : null}
-          <div ref={browserViewportRef} className="absolute inset-0 bg-transparent" />
+          {isLiveRuntime ? (
+            <div ref={browserViewportRef} className="absolute inset-0 bg-transparent" />
+          ) : null}
         </div>
       </div>
     </DiffPanelShell>

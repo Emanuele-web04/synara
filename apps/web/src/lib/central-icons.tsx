@@ -1,7 +1,7 @@
 // FILE: central-icons.tsx
 // Purpose: Resolve and render Central icon SVGs shipped as static web assets.
 // Layer: web UI utility
-// Exports: CentralIcon, getCentralIconUrl
+// Exports: CentralIcon, getCentralIconUrl, createCentralIconElement
 // Depends on: Vite public asset serving and app className merging utilities.
 
 import { forwardRef, type CSSProperties, type HTMLAttributes } from "react";
@@ -27,6 +27,42 @@ export function getCentralIconUrl(name: string): string | null {
   return `${CENTRAL_ICON_BASE_PATH}/${encodeURIComponent(normalizedName)}${SVG_SUFFIX}`;
 }
 
+// Shared base classes so the React component and the imperative DOM helper stay
+// pixel-identical (single uniform fill tinted to the current text color).
+const CENTRAL_ICON_BASE_CLASS = "inline-block size-4 shrink-0 bg-current";
+export const CENTRAL_ICON_SLOT = "central-icon";
+
+// CSS-mask shorthand value that paints the icon as a solid `bg-current` fill.
+function centralIconMaskValue(iconUrl: string): string {
+  return `url("${iconUrl}") center / contain no-repeat`;
+}
+
+/** Mirror Button/Toggle `[&_svg:*]` child rules for masked Central icons. */
+export function extendButtonIconChildSelectors(className: string): string {
+  let result = className;
+
+  result = result.replace(
+    /\[&_svg:not\(\[class\*='opacity-'\]\)\]:([^\s"']+)/g,
+    (match, util) =>
+      `${match} [&_[data-slot=${CENTRAL_ICON_SLOT}]:not([class*='opacity-'])]:${util}`,
+  );
+
+  result = result.replace(
+    /((?:sm:|not-in-data-\[slot=input-group\]:)?\[&_svg:not\(\[class\*='size-'\]\)\]:[^\s"']+)/g,
+    (match) => {
+      const central = match.replace("[&_svg:not", `[&_[data-slot=${CENTRAL_ICON_SLOT}]:not`);
+      return `${match} ${central}`;
+    },
+  );
+
+  result = result.replace(
+    /\[&_svg\]:([a-z0-9\-/[\].]+)/g,
+    (match, util) => `[&_svg,&_[data-slot=${CENTRAL_ICON_SLOT}]]:${util}`,
+  );
+
+  return result;
+}
+
 export const CentralIcon = forwardRef<HTMLSpanElement, CentralIconProps>(function CentralIcon(
   { name, label, className, style, ...props },
   ref,
@@ -37,9 +73,10 @@ export const CentralIcon = forwardRef<HTMLSpanElement, CentralIconProps>(functio
     return null;
   }
 
+  const maskValue = centralIconMaskValue(iconUrl);
   const maskStyle = {
-    WebkitMask: `url("${iconUrl}") center / contain no-repeat`,
-    mask: `url("${iconUrl}") center / contain no-repeat`,
+    WebkitMask: maskValue,
+    mask: maskValue,
     ...style,
   } satisfies CSSProperties;
 
@@ -50,8 +87,28 @@ export const CentralIcon = forwardRef<HTMLSpanElement, CentralIconProps>(functio
       role={label ? "img" : undefined}
       aria-label={label}
       aria-hidden={label ? undefined : true}
-      className={cn("inline-block size-4 shrink-0 bg-current", className)}
+      data-slot={CENTRAL_ICON_SLOT}
+      className={cn(CENTRAL_ICON_BASE_CLASS, className)}
       style={maskStyle}
     />
   );
 });
+
+// Imperative twin of `CentralIcon` for non-React surfaces such as the Lexical
+// composer chips that build their DOM by hand. Returns null when the name is
+// invalid so callers can fall back to a static glyph.
+export function createCentralIconElement(name: string, className?: string): HTMLSpanElement | null {
+  const iconUrl = getCentralIconUrl(name);
+  if (!iconUrl) {
+    return null;
+  }
+
+  const span = document.createElement("span");
+  span.setAttribute("aria-hidden", "true");
+  span.dataset.slot = CENTRAL_ICON_SLOT;
+  span.className = cn(CENTRAL_ICON_BASE_CLASS, className);
+  const maskValue = centralIconMaskValue(iconUrl);
+  span.style.setProperty("-webkit-mask", maskValue);
+  span.style.setProperty("mask", maskValue);
+  return span;
+}

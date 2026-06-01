@@ -16,12 +16,12 @@ import { useQuery } from "@tanstack/react-query";
 import React, { memo, useEffect, useRef, useState } from "react";
 import { FiGitBranch } from "react-icons/fi";
 import { HiMiniArrowsPointingOut } from "react-icons/hi2";
-import { TbExchange, TbLayoutSidebarRight } from "react-icons/tb";
+import { TbExchange } from "react-icons/tb";
 import type { ThreadPrimarySurface } from "../../types";
 import GitActionsControl from "../GitActionsControl";
-import { ArrowRightIcon, HandoffIcon, TerminalIcon, XIcon } from "~/lib/icons";
+import { ArrowRightIcon, HandoffIcon, PanelRightCloseIcon, TerminalIcon, XIcon } from "~/lib/icons";
 import {
-  CHAT_HEADER_CONTROL_CLASS_NAME,
+  CHAT_HEADER_TOGGLE_CLASS_NAME,
   ChatHeaderButton,
   ChatHeaderIconButton,
 } from "./chatHeaderControls";
@@ -412,11 +412,10 @@ export const ChatHeader = memo(function ChatHeader({
             render={
               <Toggle
                 className={cn(
-                  CHAT_HEADER_CONTROL_CLASS_NAME,
-                  "border-0",
+                  CHAT_HEADER_TOGGLE_CLASS_NAME,
                   showDiffTotals
                     ? "gap-2 px-1.5 text-[length:var(--app-font-size-ui-sm,11px)]"
-                    : "!size-7 [&_svg]:mx-0",
+                    : "!size-7 [&_svg,&_[data-slot=central-icon]]:mx-0",
                 )}
                 pressed={diffOpen}
                 onPressedChange={onToggleDiff}
@@ -435,7 +434,7 @@ export const ChatHeader = memo(function ChatHeader({
                     </span>
                   </span>
                 ) : null}
-                <TbLayoutSidebarRight className="size-3.5" />
+                <PanelRightCloseIcon />
               </Toggle>
             }
           />
