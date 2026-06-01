@@ -993,8 +993,8 @@ diffs-container {
 
 .chat-composer-surface {
   background: var(--composer-surface);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: var(--app-composer-backdrop-filter, none);
+  -webkit-backdrop-filter: var(--app-composer-backdrop-filter, none);
 }
 
 .sidebar-segmented-picker {
