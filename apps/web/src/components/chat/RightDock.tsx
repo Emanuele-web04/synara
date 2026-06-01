@@ -23,6 +23,7 @@ import { Button } from "../ui/button";
 import { IconButton } from "../ui/icon-button";
 import { Menu, MenuItem, MenuTrigger } from "../ui/menu";
 import { Sidebar, SidebarProvider, SidebarRail } from "../ui/sidebar";
+import { CHAT_BACKGROUND_CLASS_NAME } from "./composerPickerStyles";
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
 import {
   CHAT_SURFACE_HEADER_HEIGHT_CLASS,
@@ -30,8 +31,9 @@ import {
   DOCK_HEADER_ICON_BUTTON_CLASS,
   DOCK_TAB_CHIP_CLASS_NAME,
   DOCK_TAB_CLOSE_GLYPH_CLASS_NAME,
-  DOCK_TAB_ICON_GLYPH_CLASS_NAME,
+  DOCK_TAB_ICON_HOVER_HIDE_CLASS_NAME,
   DOCK_TAB_ICON_SLOT_CLASS_NAME,
+  SurfaceChipIcon,
 } from "./chatHeaderControls";
 import { RIGHT_DOCK_PANE_META, resolveRightDockPaneLabel } from "./rightDockPaneMeta";
 
@@ -82,7 +84,7 @@ function RightDockTab(props: {
           props.onClose();
         }}
       >
-        <Icon className={DOCK_TAB_ICON_GLYPH_CLASS_NAME} />
+        <SurfaceChipIcon icon={Icon} className={DOCK_TAB_ICON_HOVER_HIDE_CLASS_NAME} />
         <CentralIcon name="cross-small" className={DOCK_TAB_CLOSE_GLYPH_CLASS_NAME} />
       </button>
       <button
@@ -148,9 +150,13 @@ export function RightDock(props: RightDockProps) {
     }
   }, [allowChromeMotion, props.motionKey, shouldSuppressChromeMotion]);
 
-  const noChromeMotionClass = shouldSuppressChromeMotion
+  // Smooth drawer-style easing for the open/close slide. `ease-linear` (the
+  // sidebar default) reads as stepped/janky on the wide dock; this curve front-
+  // loads motion and settles softly. Applied to both the width gap and the
+  // sliding container so they stay in lockstep.
+  const chromeMotionClass = shouldSuppressChromeMotion
     ? "transition-none! duration-0!"
-    : undefined;
+    : "duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]";
 
   return (
     <SidebarProvider
@@ -163,11 +169,9 @@ export function RightDock(props: RightDockProps) {
       <Sidebar
         side="right"
         collapsible="offcanvas"
-        className={cn(
-          "border-l border-sidebar-border bg-card text-foreground",
-          noChromeMotionClass,
-        )}
-        {...(noChromeMotionClass ? { gapClassName: noChromeMotionClass } : {})}
+        className={cn("border-l border-sidebar-border text-foreground", chromeMotionClass)}
+        innerClassName={CHAT_BACKGROUND_CLASS_NAME}
+        gapClassName={chromeMotionClass}
         resizable={{
           minWidth: props.minWidth,
           shouldAcceptWidth: props.shouldAcceptWidth,

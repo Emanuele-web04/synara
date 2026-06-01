@@ -24,7 +24,9 @@ function resolveTerminalSurfaceColors(): { background: string; foreground: strin
   probe.style.position = "fixed";
   probe.style.pointerEvents = "none";
   probe.style.opacity = "0";
-  probe.style.backgroundColor = "var(--background)";
+  // Match the chat view surface (CHAT_BACKGROUND_CLASS_NAME) rather than the
+  // sidebar/"under" surface that --background resolves to.
+  probe.style.backgroundColor = "var(--color-background-surface)";
   probe.style.color = "var(--foreground)";
   document.body.append(probe);
 

@@ -64,12 +64,15 @@ export interface RuntimeUsageControlsProps {
   activeContextWindowLabel?: string | null | undefined;
   pendingContextWindowLabel?: string | null | undefined;
   className?: string | undefined;
+  /** Icon-only trigger for tight layouts (compact footer / split chat). */
+  compact?: boolean | undefined;
 }
 
 export function RuntimeUsageControls({
   runtimeMode,
   onRuntimeModeChange,
   className,
+  compact = false,
 }: RuntimeUsageControlsProps) {
   return (
     <div
@@ -86,7 +89,8 @@ export function RuntimeUsageControls({
                 size="sm"
                 variant="chrome"
                 className={cn(
-                  "min-w-0 shrink-0 justify-start gap-1.5 whitespace-nowrap px-2 sm:px-2.5 [&_svg]:mx-0",
+                  "min-w-0 shrink-0 justify-start whitespace-nowrap [&_svg]:mx-0",
+                  compact ? "gap-0 px-1.5" : "gap-1.5 px-2 sm:px-2.5",
                   COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
                   runtimeMode === "full-access" && RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME,
                 )}
@@ -104,10 +108,10 @@ export function RuntimeUsageControls({
               ) : (
                 <HiOutlineHandRaised className="size-3.5 shrink-0" />
               )}
-              <span className="truncate">
+              <span className={cn("truncate", compact && "sr-only")}>
                 {runtimeMode === "full-access" ? "Full access" : "Default permissions"}
               </span>
-              <ChevronDownIcon className="size-3 shrink-0 opacity-70" />
+              {compact ? null : <ChevronDownIcon className="size-3 shrink-0 opacity-70" />}
             </span>
           </MenuTrigger>
           <MenuPopup align="start" side="top" className="min-w-44">

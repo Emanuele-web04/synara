@@ -10,6 +10,7 @@ import type { ActiveTaskListState } from "../../session-logic";
 import { BotIcon, CheckIcon, LoaderIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
+import { COMPOSER_SURFACE_BORDER_CLASS_NAME } from "./composerPickerStyles";
 
 interface ActiveTaskListCardProps {
   activeTaskList: ActiveTaskListState;
@@ -44,7 +45,10 @@ export const ActiveTaskListCard = memo(function ActiveTaskListCard({
   return (
     <div
       data-testid="active-task-list-card"
-      className="overflow-hidden rounded-t-2xl border border-b-0 border-[color:var(--color-border)] bg-[var(--composer-surface)]"
+      className={cn(
+        "overflow-hidden rounded-t-[1.2rem] border border-b-0 bg-[var(--composer-surface)]",
+        COMPOSER_SURFACE_BORDER_CLASS_NAME,
+      )}
     >
       <div className="flex items-center justify-between gap-2 px-2.5 py-2">
         <div className="flex min-w-0 items-center gap-1.5 text-[12px] text-muted-foreground/80">

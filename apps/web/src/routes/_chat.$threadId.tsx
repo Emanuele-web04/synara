@@ -116,8 +116,10 @@ import { cn } from "~/lib/utils";
 import { SidebarInset } from "~/components/ui/sidebar";
 
 const DiffPanel = lazy(() => import("../components/DiffPanel"));
-// Keep the inline diff visually near half of the chat area after the fixed left sidebar is counted.
-const DIFF_INLINE_DEFAULT_WIDTH = "clamp(28rem, calc(50vw - 8rem), 44rem)";
+// Open the dock as a true 50/50 split of the chat area: `50vw - 8rem` is half the
+// viewport minus half the fixed 16rem left sidebar, so the chat and dock match.
+// `max()` keeps a sane minimum on narrow screens but never caps the half-width.
+const DIFF_INLINE_DEFAULT_WIDTH = "max(28rem, calc(50vw - 8rem))";
 const SPLIT_PANE_PANEL_DEFAULT_WIDTH_PX = 22 * 16;
 const BROWSER_SPLIT_PANE_PANEL_DEFAULT_WIDTH_PX = 30 * 16;
 const SPLIT_PANE_CHAT_MIN_WIDTH = 20 * 16;
@@ -1712,7 +1714,7 @@ function SingleChatSurface(props: {
         state={dockState}
         minWidth={SINGLE_PANEL_MIN_WIDTH}
         defaultWidth={DIFF_INLINE_DEFAULT_WIDTH}
-        storageKey={`${RIGHT_PANEL_SIDEBAR_WIDTH_STORAGE_KEY}:dock`}
+        storageKey={`${RIGHT_PANEL_SIDEBAR_WIDTH_STORAGE_KEY}:dock:v2`}
         shouldAcceptWidth={shouldAcceptDockWidth}
         addMenuKinds={RIGHT_DOCK_ADD_MENU_KINDS}
         motionKey={props.threadId}

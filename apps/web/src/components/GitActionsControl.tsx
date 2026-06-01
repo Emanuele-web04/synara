@@ -46,6 +46,7 @@ import {
   ChatHeaderSplitGroup,
   CHAT_HEADER_CONTROL_CLASS_NAME,
   CHAT_HEADER_ICON_CONTROL_CLASS_NAME,
+  CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
   CHAT_HEADER_SPLIT_LEADING_CLASS_NAME,
   CHAT_HEADER_SPLIT_TRAILING_CLASS_NAME,
 } from "./chat/chatHeaderControls";
@@ -1226,7 +1227,7 @@ export default function GitActionsControl({
         <Button
           variant="chrome-outline"
           size="xs"
-          className={CHAT_HEADER_CONTROL_CLASS_NAME}
+          className={cn(CHAT_HEADER_CONTROL_CLASS_NAME, CHAT_HEADER_ICON_STRENGTH_CLASS_NAME)}
           disabled={initMutation.isPending}
           onClick={() => initMutation.mutate()}
         >
@@ -1246,6 +1247,7 @@ export default function GitActionsControl({
                       hideQuickActionLabel
                         ? CHAT_HEADER_ICON_CONTROL_CLASS_NAME
                         : CHAT_HEADER_CONTROL_CLASS_NAME,
+                      CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
                       CHAT_HEADER_SPLIT_LEADING_CLASS_NAME,
                       "cursor-not-allowed opacity-64",
                     )}
@@ -1272,6 +1274,7 @@ export default function GitActionsControl({
                 hideQuickActionLabel
                   ? CHAT_HEADER_ICON_CONTROL_CLASS_NAME
                   : CHAT_HEADER_CONTROL_CLASS_NAME,
+                CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
                 CHAT_HEADER_SPLIT_LEADING_CLASS_NAME,
               )}
               disabled={isGitActionRunning || quickAction.disabled}
@@ -1299,6 +1302,7 @@ export default function GitActionsControl({
                   variant="chrome-outline"
                   className={cn(
                     CHAT_HEADER_ICON_CONTROL_CLASS_NAME,
+                    CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
                     CHAT_HEADER_SPLIT_TRAILING_CLASS_NAME,
                   )}
                 />

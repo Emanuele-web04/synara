@@ -378,7 +378,7 @@ function TerminalViewport({
   }, [clearSelectionAction, showSelectionAction, terminalInstance]);
 
   return (
-    <div className="h-full min-h-0 w-full bg-background p-3">
+    <div className="h-full min-h-0 w-full bg-[var(--color-background-surface)] p-3">
       <div className="relative h-full min-h-0 w-full overflow-hidden">
         <TerminalSearch
           searchAddon={searchAddonInstance}
@@ -595,7 +595,7 @@ export default function ThreadTerminalDrawer({
   return (
     <aside
       className={cn(
-        "thread-terminal-drawer relative flex w-full min-w-0 flex-col overflow-hidden bg-background",
+        "thread-terminal-drawer relative flex w-full min-w-0 flex-col overflow-hidden bg-[var(--color-background-surface)]",
         isWorkspaceMode ? "h-full min-h-0" : "shrink-0 border-t border-border/70",
       )}
       style={isWorkspaceMode ? undefined : { height: `${drawerHeight}px` }}

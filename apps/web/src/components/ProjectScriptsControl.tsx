@@ -48,6 +48,7 @@ import { Button, headerButtonDarkBorderClassName } from "./ui/button";
 import {
   CHAT_HEADER_CONTROL_CLASS_NAME,
   CHAT_HEADER_ICON_CONTROL_CLASS_NAME,
+  CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
 } from "./chat/chatHeaderControls";
 import {
   Dialog,
@@ -303,7 +304,11 @@ export default function ProjectScriptsControl({
           <Button
             size="xs"
             variant="outline"
-            className={cn(headerButtonDarkBorderClassName, CHAT_HEADER_CONTROL_CLASS_NAME)}
+            className={cn(
+              headerButtonDarkBorderClassName,
+              CHAT_HEADER_CONTROL_CLASS_NAME,
+              CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
+            )}
             onClick={() => onRunScript(primaryScript)}
             title={`Run ${primaryScript.name}`}
           >
@@ -322,6 +327,7 @@ export default function ProjectScriptsControl({
                   className={cn(
                     headerButtonDarkBorderClassName,
                     CHAT_HEADER_ICON_CONTROL_CLASS_NAME,
+                    CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
                   )}
                   aria-label="Script actions"
                 />

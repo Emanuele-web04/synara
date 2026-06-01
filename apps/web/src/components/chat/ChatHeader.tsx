@@ -24,6 +24,7 @@ import {
   CHAT_HEADER_TOGGLE_CLASS_NAME,
   ChatHeaderButton,
   ChatHeaderIconButton,
+  SurfaceChipIcon,
 } from "./chatHeaderControls";
 import { IconButton } from "../ui/icon-button";
 import { Badge } from "../ui/badge";
@@ -413,9 +414,7 @@ export const ChatHeader = memo(function ChatHeader({
               <Toggle
                 className={cn(
                   CHAT_HEADER_TOGGLE_CLASS_NAME,
-                  showDiffTotals
-                    ? "gap-2 px-1.5 text-[length:var(--app-font-size-ui-sm,11px)]"
-                    : "!size-7 [&_svg,&_[data-slot=central-icon]]:mx-0",
+                  showDiffTotals ? null : "!size-7 [&_svg,&_[data-slot=central-icon]]:mx-0",
                 )}
                 pressed={diffOpen}
                 onPressedChange={onToggleDiff}
@@ -434,7 +433,7 @@ export const ChatHeader = memo(function ChatHeader({
                     </span>
                   </span>
                 ) : null}
-                <PanelRightCloseIcon />
+                <SurfaceChipIcon icon={PanelRightCloseIcon} />
               </Toggle>
             }
           />

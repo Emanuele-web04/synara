@@ -203,6 +203,7 @@ import {
   resolveThreadRowClassName,
   resolveThreadRowTrailingReserveClass,
   resolveThreadStatusPill,
+  type ThreadStatusPill,
   isDuplicateProjectCreateError,
   type SidebarDerivedProjectData,
   shouldShowDebugFeatureFlagsMenu,
@@ -379,6 +380,38 @@ function WorktreeBadgeGlyph({ className }: { className?: string }) {
   );
 }
 
+// Trailing status indicator shown in the timestamp slot: spinner while working,
+// check when completed, otherwise a colored status dot. Replaces the relative
+// timestamp whenever the thread has an active/unseen status.
+function ThreadStatusTrailingGlyph({ threadStatus }: { threadStatus: ThreadStatusPill }) {
+  if (threadStatus.label === "Completed") {
+    return (
+      <HiOutlineCheckCircle
+        aria-hidden="true"
+        className={cn("size-3.5 shrink-0", threadStatus.colorClass)}
+      />
+    );
+  }
+  if (threadStatus.pulse) {
+    return <ThreadRunningSpinner />;
+  }
+  return (
+    <span
+      aria-hidden="true"
+      className={cn("size-1.5 shrink-0 rounded-full", threadStatus.dotClass)}
+    />
+  );
+}
+
+// Right-aligned slot wrapper that matches the timestamp width and fades out on
+// row hover/focus so the trailing hover actions can take over.
+function threadStatusSlotClassName(isSubagentThread: boolean): string {
+  return cn(
+    "mr-1 flex shrink-0 items-center justify-end transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
+    isSubagentThread ? "w-[1.2rem]" : "w-[1.625rem]",
+  );
+}
+
 function resolveWorktreeBadgeLabel(
   thread: Pick<Thread, "envMode" | "worktreePath">,
 ): string | null {
@@ -404,11 +437,16 @@ function resolveThreadRowMetaChips(input: {
     "forkSourceThreadId" | "sidechatSourceThreadId" | "envMode" | "worktreePath" | "handoff"
   >;
   includeHandoffBadge: boolean;
+  /**
+   * When the leading provider avatar already renders the source → target handoff
+   * pair, the trailing handoff chip is a redundant double icon and is dropped.
+   */
+  handoffShownInAvatar?: boolean;
 }): ThreadMetaChip[] {
   const chips: ThreadMetaChip[] = [];
 
   const handoffBadgeLabel = resolveThreadHandoffBadgeLabel(input.thread);
-  if (input.includeHandoffBadge && handoffBadgeLabel) {
+  if (input.includeHandoffBadge && !input.handoffShownInAvatar && handoffBadgeLabel) {
     chips.push({
       id: "handoff",
       tooltip: handoffBadgeLabel,
@@ -3968,6 +4006,10 @@ export default function Sidebar() {
     const rightMetaChips = resolveThreadRowMetaChips({
       thread,
       includeHandoffBadge: true,
+      handoffShownInAvatar:
+        threadEntryPoint !== "terminal" &&
+        !isGenericChatThreadTitle(thread.title) &&
+        Boolean(thread.handoff?.sourceProvider),
     });
     const threadStatus = resolveThreadStatusForSidebar(thread);
     const isSubagentThread = Boolean(thread.parentThreadId);
@@ -4035,14 +4077,6 @@ export default function Sidebar() {
                 toggleThreadPinned(thread.id);
               }}
             />
-            {threadStatus?.label === "Completed" ? (
-              <HiOutlineCheckCircle
-                aria-hidden="true"
-                className={cn(sidebarGlyphClass("chrome"), threadStatus.colorClass)}
-              />
-            ) : threadStatus?.pulse ? (
-              <ThreadRunningSpinner presentation="inline" />
-            ) : null}
           </div>
           {threadEntryPoint === "terminal" ? (
             <SidebarGlyph icon={TerminalIcon} variant="chrome" className="text-teal-600/85" />
@@ -4115,9 +4149,15 @@ export default function Sidebar() {
                 </KbdGroup>
               ) : null}
               {!isPendingArchiveConfirmation && !threadJumpLabel ? (
-                <span className={pinnedTimestampClassName}>
-                  {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
-                </span>
+                threadStatus ? (
+                  <span className={threadStatusSlotClassName(isSubagentThread)}>
+                    <ThreadStatusTrailingGlyph threadStatus={threadStatus} />
+                  </span>
+                ) : (
+                  <span className={pinnedTimestampClassName}>
+                    {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
+                  </span>
+                )
               ) : null}
               {renderThreadHoverActions({
                 threadId: thread.id,
@@ -4161,6 +4201,10 @@ export default function Sidebar() {
     const rightMetaChips = resolveThreadRowMetaChips({
       thread,
       includeHandoffBadge: !isDisposableThread,
+      handoffShownInAvatar:
+        threadEntryPoint !== "terminal" &&
+        !isGenericChatThreadTitle(thread.title) &&
+        Boolean(thread.handoff?.sourceProvider),
     });
     const isSubagentThread = Boolean(thread.parentThreadId);
     const leadingPrStatus =
@@ -4232,36 +4276,6 @@ export default function Sidebar() {
             toggleThreadPinned(thread.id);
           }}
         />
-        {threadStatus &&
-          (threadStatus.label === "Completed" ? (
-            <HiOutlineCheckCircle
-              aria-hidden="true"
-              className={cn(
-                "pointer-events-none absolute top-1/2 z-10 size-4 -translate-y-1/2 transition-opacity",
-                // Shift onto the avatar when the merge glyph occupies the far-left slot.
-                leadingPrStatus ? "left-8" : "left-2",
-                threadStatus.colorClass,
-                "opacity-100 group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
-              )}
-            />
-          ) : threadStatus.pulse ? (
-            <ThreadRunningSpinner
-              presentation="overlay"
-              className={cn(
-                leadingPrStatus ? "left-8" : "left-2.5",
-                "opacity-100 group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
-              )}
-            />
-          ) : (
-            <span
-              className={cn(
-                "pointer-events-none absolute top-1/2 z-10 h-1.5 w-1.5 -translate-y-1/2 rounded-full transition-opacity",
-                leadingPrStatus ? "left-8" : "left-3",
-                threadStatus.dotClass,
-                "opacity-100 group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
-              )}
-            />
-          ))}
         <SidebarMenuSubButton
           render={<div role="button" tabIndex={0} />}
           data-thread-entry-point={threadEntryPoint}
@@ -4476,9 +4490,15 @@ export default function Sidebar() {
                 </KbdGroup>
               ) : null}
               {!isPendingArchiveConfirmation && !threadJumpLabel ? (
-                <span className={trailingTimestampClassName}>
-                  {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
-                </span>
+                threadStatus ? (
+                  <span className={threadStatusSlotClassName(isSubagentThread)}>
+                    <ThreadStatusTrailingGlyph threadStatus={threadStatus} />
+                  </span>
+                ) : (
+                  <span className={trailingTimestampClassName}>
+                    {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
+                  </span>
+                )
               ) : null}
               {renderThreadHoverActions({
                 threadId: thread.id,

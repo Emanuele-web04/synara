@@ -318,6 +318,7 @@ import { ComposerVoiceButton } from "./chat/ComposerVoiceButton";
 import { ComposerVoiceRecorderBar } from "./chat/ComposerVoiceRecorderBar";
 import { ComposerReferenceAttachments } from "./chat/ComposerReferenceAttachments";
 import { ComposerSuggestions } from "./chat/ComposerSuggestions";
+import { DisclosureRegion } from "./ui/DisclosureRegion";
 import { TranscriptSelectionActionLayer } from "./chat/TranscriptSelectionActionLayer";
 import { ActiveTaskListCard } from "./chat/ActiveTaskListCard";
 import { useTranscriptAssistantSelectionAction } from "./chat/useTranscriptAssistantSelectionAction";
@@ -326,6 +327,7 @@ import {
   COMPOSER_INPUT_SHELL_CLASS_NAME,
   COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME,
   COMPOSER_INPUT_SURFACE_CLASS_NAME,
+  COMPOSER_SURFACE_BORDER_CLASS_NAME,
   COMPOSER_COLUMN_FRAME_CLASS_NAME,
   COMPOSER_EDITOR_PADDING_CLASS_NAME,
   COMPOSER_FOOTER_APPROVAL_ROW_CLASS_NAME,
@@ -3010,11 +3012,13 @@ export default function ChatView({
       focusComposer();
     });
   }, [focusComposer]);
+  // Context gate is intentionally prompt-independent so the suggestion list stays
+  // mounted while the user types — that lets us animate it closed instead of an
+  // abrupt unmount (which jolted the centered composer).
   const shouldPrepareComposerSuggestions =
     isLocalDraftThread &&
     isCenteredEmptyLanding &&
     draftThread?.entryPoint !== "terminal" &&
-    prompt.trim().length === 0 &&
     composerImages.length === 0 &&
     composerAssistantSelections.length === 0 &&
     composerTerminalContexts.length === 0 &&
@@ -3047,8 +3051,11 @@ export default function ChatView({
     projectSuggestionSourceThreads,
     shouldPrepareComposerSuggestions,
   ]);
+  // Keep the list rendered whenever the context is eligible; the open/closed
+  // state (driven by an empty prompt) animates it in and out smoothly.
   const showComposerSuggestions =
     shouldPrepareComposerSuggestions && composerSuggestions.length > 0;
+  const composerSuggestionsOpen = showComposerSuggestions && prompt.trim().length === 0;
   const onSelectComposerSuggestion = useCallback(
     (suggestion: ComposerSuggestion) => {
       const nextPrompt = suggestion.prompt;
@@ -7534,10 +7541,17 @@ export default function ChatView({
   // Composer layout keeps the task list and footer actions in one render path so
   // follow-up prompts and normal chat mode stay visually in sync.
   const taskListAboveComposer = Boolean(activeTaskList && !planSidebarOpen);
+  // When a task card or queued rows sit flush above the composer, the whole stack
+  // must read as one continuous rounded surface: the composer drops its top radius
+  // and the topmost row owns the rounded top so they don't look like separate chips.
+  const composerHasStackedHeader = taskListAboveComposer || queuedComposerTurns.length > 0;
   const renderActiveTaskListCard = () =>
     activeTaskList && !planSidebarOpen ? (
       <div className="pointer-events-none w-full">
-        <div ref={activeTaskListCardRef} className="pointer-events-auto mx-auto w-11/12">
+        <div
+          ref={activeTaskListCardRef}
+          className={cn("pointer-events-auto", COMPOSER_COLUMN_FRAME_CLASS_NAME)}
+        >
           <ActiveTaskListCard
             activeTaskList={activeTaskList}
             backgroundTaskCount={activeBackgroundTasks?.activeCount ?? 0}
@@ -7561,15 +7575,16 @@ export default function ChatView({
       >
         <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
           {queuedComposerTurns.length > 0 ? (
-            <div className="mx-auto flex w-11/12 flex-col">
+            <div className="flex w-full flex-col">
               {queuedComposerTurns.map((queuedTurn, queuedTurnIndex) => (
                 <div
                   key={queuedTurn.id}
                   data-testid="queued-follow-up-row"
                   className={cn(
-                    "chat-composer-surface flex items-center gap-2 border border-b-0 border-[color:var(--color-border)] px-2.5 py-2 text-[12px]",
+                    "chat-composer-surface flex items-center gap-2 border border-b-0 px-2.5 py-2 text-[12px]",
+                    COMPOSER_SURFACE_BORDER_CLASS_NAME,
                     queuedTurnIndex === 0 && !taskListAboveComposer
-                      ? "rounded-t-2xl"
+                      ? "rounded-t-[1.2rem]"
                       : "rounded-none",
                   )}
                 >
@@ -7592,6 +7607,7 @@ export default function ChatView({
           <div
             className={cn(
               COMPOSER_INPUT_SHELL_CLASS_NAME,
+              composerHasStackedHeader && "!rounded-t-none",
               composerProviderState.composerFrameClassName,
             )}
             onDragEnter={onComposerDragEnter}
@@ -7602,19 +7618,30 @@ export default function ChatView({
             <div
               className={cn(
                 COMPOSER_INPUT_SURFACE_CLASS_NAME,
+                composerHasStackedHeader && "!rounded-t-none",
                 isDragOverComposer ? "!bg-[var(--color-background-control)]" : "",
                 composerProviderState.composerSurfaceClassName,
               )}
             >
               {activePendingApproval ? (
-                <div className={COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME}>
+                <div
+                  className={cn(
+                    COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME,
+                    composerHasStackedHeader && "!rounded-t-none",
+                  )}
+                >
                   <ComposerPendingApprovalPanel
                     approval={activePendingApproval}
                     pendingCount={pendingApprovals.length}
                   />
                 </div>
               ) : pendingUserInputs.length > 0 ? (
-                <div className={COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME}>
+                <div
+                  className={cn(
+                    COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME,
+                    composerHasStackedHeader && "!rounded-t-none",
+                  )}
+                >
                   <ComposerPendingUserInputPanel
                     pendingUserInputs={pendingUserInputs}
                     respondingRequestIds={respondingUserInputRequestIds}
@@ -7625,7 +7652,12 @@ export default function ChatView({
                   />
                 </div>
               ) : showPlanFollowUpPrompt && activeProposedPlan ? (
-                <div className={COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME}>
+                <div
+                  className={cn(
+                    COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME,
+                    composerHasStackedHeader && "!rounded-t-none",
+                  )}
+                >
                   <ComposerPlanFollowUpBanner
                     key={activeProposedPlan.id}
                     planTitle={proposedPlanTitle(activeProposedPlan.planMarkdown) ?? null}
@@ -7752,7 +7784,11 @@ export default function ChatView({
 
                     {!isVoiceRecording && !isVoiceTranscribing ? (
                       <>
-                        <RuntimeUsageControls {...runtimeUsageControlsProps} className="shrink-0" />
+                        <RuntimeUsageControls
+                          {...runtimeUsageControlsProps}
+                          compact={isComposerFooterCompact}
+                          className="shrink-0"
+                        />
 
                         {interactionMode === "plan" ? (
                           <Button
@@ -8192,11 +8228,16 @@ export default function ChatView({
                     </div>
                   ) : null}
                   {showComposerSuggestions ? (
-                    <ComposerSuggestions
-                      className={cn("mt-5", COMPOSER_COLUMN_FRAME_CLASS_NAME)}
-                      suggestions={composerSuggestions}
-                      onSelectSuggestion={onSelectComposerSuggestion}
-                    />
+                    <DisclosureRegion
+                      open={composerSuggestionsOpen}
+                      className={COMPOSER_COLUMN_FRAME_CLASS_NAME}
+                      contentClassName="pt-5"
+                    >
+                      <ComposerSuggestions
+                        suggestions={composerSuggestions}
+                        onSelectSuggestion={onSelectComposerSuggestion}
+                      />
+                    </DisclosureRegion>
                   ) : null}
                 </div>
               </div>

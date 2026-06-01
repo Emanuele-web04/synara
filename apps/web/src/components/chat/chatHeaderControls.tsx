@@ -13,6 +13,7 @@
 
 import { forwardRef, type ComponentProps, type ReactNode } from "react";
 
+import type { LucideIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
 import { Button } from "../ui/button";
@@ -23,6 +24,16 @@ import { Button } from "../ui/button";
  * bottom borders line up across the vertical pane divider.
  */
 export const CHAT_SURFACE_HEADER_HEIGHT_CLASS = "h-[46px]";
+
+/**
+ * Force header control glyphs to full-strength foreground. The base Button caps
+ * SVGs at `opacity-80` and the `chrome` variant tints them with the muted
+ * `foreground-secondary` color, which together read as washed-out gray icons in
+ * the toolbar. Header buttons want crisp, solid icons, so we override both the
+ * icon opacity and the inherited `currentColor` here.
+ */
+export const CHAT_HEADER_ICON_STRENGTH_CLASS_NAME =
+  "text-[var(--color-text-foreground)] [&_svg]:!opacity-100";
 
 /** Fixed control height + radius for every header toolbar control. */
 export const CHAT_HEADER_CONTROL_CLASS_NAME = "!h-7 shrink-0 rounded-lg";
@@ -39,20 +50,44 @@ export const CHAT_SURFACE_CONTROL_ACTIVE_CLASS_NAME =
 export const CHAT_SURFACE_CONTROL_HOVER_CLASS_NAME =
   "hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]";
 
-/** Muted icon tone for inactive header toggles (matches chrome icon buttons). */
-export const CHAT_HEADER_TOGGLE_CLASS_NAME = cn(
+/**
+ * Shared flat "chip" skin for the header diff toggle and the right-dock tabs so
+ * the two read as the exact same control: 28px tall, lg radius, no border, ui-sm
+ * muted text that brightens + fills on hover, with a smooth color transition.
+ * The active (pressed/selected) background is layered on per call site because
+ * the mechanism differs (Toggle `data-pressed` vs the dock tab's `active` flag),
+ * but both resolve to `--color-background-button-secondary`.
+ */
+export const CHAT_SURFACE_CHIP_CLASS_NAME = cn(
   CHAT_HEADER_CONTROL_CLASS_NAME,
-  "border-0",
+  "gap-1.5 border-0 px-2 text-[length:var(--app-font-size-ui-sm,11px)] font-normal transition-colors",
   CHAT_SURFACE_CONTROL_IDLE_TEXT_CLASS_NAME,
+  CHAT_SURFACE_CONTROL_HOVER_CLASS_NAME,
+);
+
+/**
+ * Icon treatment shared by every chip glyph (the header diff toggle + the dock
+ * tabs) so size and muted strength stay identical. Color rides `currentColor`,
+ * which both chips drive to `--color-text-foreground-secondary` at rest, so the
+ * tint is inherited from the chip instead of redeclared per call site.
+ */
+export const CHAT_SURFACE_CHIP_ICON_CLASS_NAME = "size-3.5 shrink-0 opacity-70";
+
+/** Renders any chip glyph with the shared {@link CHAT_SURFACE_CHIP_ICON_CLASS_NAME} treatment. */
+export function SurfaceChipIcon({ icon: Icon, className }: { icon: LucideIcon; className?: string }) {
+  return <Icon aria-hidden className={cn(CHAT_SURFACE_CHIP_ICON_CLASS_NAME, className)} />;
+}
+
+/** Header diff toggle — shared chip skin + Toggle's pressed text treatment. */
+export const CHAT_HEADER_TOGGLE_CLASS_NAME = cn(
+  CHAT_SURFACE_CHIP_CLASS_NAME,
   "data-pressed:text-[var(--color-text-foreground)]",
 );
 
-/** Flat dock tab chip — same radius, height, and classic background as header panel toggles. */
+/** Flat dock tab chip — identical chrome to the header diff toggle. */
 export const DOCK_TAB_CHIP_CLASS_NAME = cn(
-  CHAT_HEADER_CONTROL_CLASS_NAME,
-  "inline-flex min-w-0 items-center gap-1.5 border-0 bg-transparent px-2 text-[length:var(--app-font-size-ui-sm,11px)] font-normal transition-colors",
-  CHAT_SURFACE_CONTROL_IDLE_TEXT_CLASS_NAME,
-  CHAT_SURFACE_CONTROL_HOVER_CLASS_NAME,
+  CHAT_SURFACE_CHIP_CLASS_NAME,
+  "inline-flex min-w-0 items-center",
 );
 
 /** Icon slot for dock tabs — bare larger icon at rest; on hover a circular disc + X appears.
@@ -61,9 +96,10 @@ export const DOCK_TAB_CHIP_CLASS_NAME = cn(
 export const DOCK_TAB_ICON_SLOT_CLASS_NAME =
   "relative flex size-4 shrink-0 items-center justify-center rounded-full bg-transparent text-[var(--color-text-foreground-secondary)] transition-colors group-hover/dock-tab:bg-[var(--color-background-button-secondary-hover)] group-focus-within/dock-tab:bg-[var(--color-background-button-secondary-hover)] hover:bg-[var(--color-background-button-secondary)] hover:text-[var(--color-text-foreground)]";
 
-/** Resting glyph: full-size tab icon, no disc, slightly muted until hovered. */
-export const DOCK_TAB_ICON_GLYPH_CLASS_NAME =
-  "size-3.5 shrink-0 opacity-55 transition-opacity group-hover/dock-tab:opacity-0 group-focus-within/dock-tab:opacity-0";
+/** Dock-only extra: fade the resting glyph out so the hover X can swap in.
+ *  Layered on top of {@link SurfaceChipIcon}'s shared size/strength. */
+export const DOCK_TAB_ICON_HOVER_HIDE_CLASS_NAME =
+  "transition-opacity group-hover/dock-tab:opacity-0 group-focus-within/dock-tab:opacity-0";
 
 /** Hover glyph: thicker X centered inside the disc. */
 export const DOCK_TAB_CLOSE_GLYPH_CLASS_NAME =
@@ -139,7 +175,11 @@ export const ChatHeaderButton = forwardRef<HTMLButtonElement, ChatHeaderButtonBa
         ref={ref}
         size="xs"
         variant={chatHeaderControlVariant(tone)}
-        className={cn(CHAT_HEADER_CONTROL_CLASS_NAME, className)}
+        className={cn(
+          CHAT_HEADER_CONTROL_CLASS_NAME,
+          CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
+          className,
+        )}
       />
     );
   },
@@ -167,7 +207,11 @@ export const ChatHeaderIconButton = forwardRef<HTMLButtonElement, ChatHeaderIcon
         aria-label={label}
         size="icon-xs"
         variant={chatHeaderControlVariant(tone)}
-        className={cn(CHAT_HEADER_ICON_CONTROL_CLASS_NAME, className)}
+        className={cn(
+          CHAT_HEADER_ICON_CONTROL_CLASS_NAME,
+          CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
+          className,
+        )}
       >
         {children}
       </Button>

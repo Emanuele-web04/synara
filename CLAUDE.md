@@ -9,7 +9,9 @@
 
 ## Project Snapshot
 
-Synara is a minimal web GUI for using coding agents like Codex and Claude.
+Synara is a minimal web GUI for using coding agents. It is multi-provider: `ProviderKind` currently spans 8 providers — Codex, Claude (`claudeAgent`), Cursor, Gemini, Grok, Kilo, OpenCode, and Pi. Each provider has its own model options and capabilities (reasoning effort, thinking budget/level, context window, fast mode), defined in `packages/contracts` and resolved in `packages/shared/src/model.ts`.
+
+Codex was the first integration and remains the most fleshed-out reference (see the Codex App Server section), but Synara is not Codex-only.
 
 This repository is a VERY EARLY WIP. Proposing sweeping changes that improve long-term maintainability is encouraged.
 
@@ -34,7 +36,7 @@ Long term maintainability is a core priority. If you add new functionality, firs
 
 ## Codex App Server (Important)
 
-Synara is currently Codex-first. The server starts `codex app-server` (JSON-RPC over stdio) per provider session, then streams structured events to the browser through WebSocket push messages.
+Codex was the first provider integration and is the most complete reference for how a provider session works end to end. For Codex sessions, the server starts `codex app-server` (JSON-RPC over stdio) per session, then streams structured events to the browser through WebSocket push messages. Other providers follow the same dispatch/event-projection shape but plug in their own runtimes.
 
 How we use it in this codebase:
 

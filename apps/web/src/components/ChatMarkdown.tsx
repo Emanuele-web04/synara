@@ -29,6 +29,9 @@ import { openInPreferredEditor } from "../editorPreferences";
 import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
 import { fnv1a32 } from "../lib/diffRendering";
+import { dedentCode, parseCodeFenceInfo, type CodeFenceInfo } from "../lib/codeFence";
+import { getFileIconName } from "../file-icons";
+import { CentralIcon } from "~/lib/central-icons";
 import { isLocalImageMarkdownSrc } from "../lib/localImageUrls";
 import { LRUCache } from "../lib/lruCache";
 import { useTheme } from "../hooks/useTheme";
@@ -439,11 +442,12 @@ function protectLiteralMarkdownDollars(value: string): string {
   return result;
 }
 
-function extractFenceLanguage(className: string | undefined): string {
+// Returns the raw fence info string (the token after ```), e.g. "ts" or the
+// Cursor reference form "173:186:packages/shared/src/model.ts". Parsing into a
+// highlighter language + file metadata is handled by `parseCodeFenceInfo`.
+function extractRawFenceInfo(className: string | undefined): string {
   const match = className?.match(CODE_FENCE_LANGUAGE_REGEX);
-  const raw = match?.[1] ?? "text";
-  // Shiki doesn't bundle a gitignore grammar; ini is a close match (#685)
-  return raw === "gitignore" ? "ini" : raw;
+  return match?.[1] ?? "text";
 }
 
 function nodeToPlainText(node: ReactNode): string {
@@ -510,13 +514,35 @@ function getHighlighterPromise(language: string): Promise<DiffsHighlighter> {
   return promise;
 }
 
+function CodeBlockHeaderTitle({ fence }: { fence: CodeFenceInfo }) {
+  if (fence.isFileReference && fence.fileName) {
+    return (
+      <span className="chat-markdown-codeblock__file" title={fence.filePath ?? fence.fileName}>
+        <CentralIcon
+          name={getFileIconName(fence.filePath ?? fence.fileName)}
+          className="chat-markdown-codeblock__file-icon"
+        />
+        <span className="chat-markdown-codeblock__file-name">{fence.fileName}</span>
+        {fence.directory ? (
+          <span className="chat-markdown-codeblock__file-dir">{fence.directory}</span>
+        ) : null}
+        {fence.lineRange ? (
+          <span className="chat-markdown-codeblock__file-lines">{fence.lineRange}</span>
+        ) : null}
+      </span>
+    );
+  }
+
+  return <span className="chat-markdown-codeblock__lang">{fence.language}</span>;
+}
+
 function MarkdownCodeBlock({
   code,
-  language,
+  fence,
   children,
 }: {
   code: string;
-  language: string;
+  fence: CodeFenceInfo;
   children: ReactNode;
 }) {
   const [copied, setCopied] = useState(false);
@@ -551,7 +577,7 @@ function MarkdownCodeBlock({
   return (
     <div className="chat-markdown-codeblock" data-wrap={wrap ? "true" : "false"}>
       <div className="chat-markdown-codeblock__header">
-        <span className="chat-markdown-codeblock__lang">{language}</span>
+        <CodeBlockHeaderTitle fence={fence} />
         <div className="chat-markdown-codeblock__actions">
           <IconButton
             className="chat-markdown-codeblock__action"
@@ -583,19 +609,18 @@ function MarkdownCodeBlock({
 }
 
 interface SuspenseShikiCodeBlockProps {
-  className: string | undefined;
+  language: string;
   code: string;
   themeName: DiffThemeName;
   isStreaming: boolean;
 }
 
 function SuspenseShikiCodeBlock({
-  className,
+  language,
   code,
   themeName,
   isStreaming,
 }: SuspenseShikiCodeBlockProps) {
-  const language = extractFenceLanguage(className);
   const cacheKey = createHighlightCacheKey(code, language, themeName);
   const cachedHighlightedHtml = !isStreaming ? highlightedCodeCache.get(cacheKey) : null;
 
@@ -685,15 +710,16 @@ function ChatMarkdown({
           return <pre {...props}>{children}</pre>;
         }
 
-        const language = extractFenceLanguage(codeBlock.className);
+        const fence = parseCodeFenceInfo(extractRawFenceInfo(codeBlock.className));
+        const code = dedentCode(codeBlock.code);
 
         return (
-          <MarkdownCodeBlock code={codeBlock.code} language={language}>
+          <MarkdownCodeBlock code={code} fence={fence}>
             <CodeHighlightErrorBoundary fallback={<pre {...props}>{children}</pre>}>
               <Suspense fallback={<pre {...props}>{children}</pre>}>
                 <SuspenseShikiCodeBlock
-                  className={codeBlock.className}
-                  code={codeBlock.code}
+                  language={fence.language}
+                  code={code}
                   themeName={diffThemeName}
                   isStreaming={isStreaming}
                 />

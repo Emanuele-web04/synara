@@ -163,11 +163,19 @@ const MODEL_NAME_BY_SLUG = new Map(
     .map((option) => [option.slug.toLowerCase(), option.name] as const),
 );
 
-function humanizeUnknownModelSlug(slug: string): string {
-  if (!slug.toLowerCase().startsWith("gpt-")) return slug;
-  const [, version, ...rest] = slug.split("-");
-  if (rest.length === 0) return `GPT-${version}`;
-  return `GPT-${version} ${rest.map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join(" ")}`;
+// Turns a raw model slug into a readable label when no built-in name exists.
+// GPT slugs keep their canonical "GPT-x" casing; provider-scoped custom ids
+// ("vendor/model") stay verbatim; everything else is title-cased on -/_ .
+export function humanizeModelSlug(slug: string): string {
+  if (slug.toLowerCase().startsWith("gpt-")) {
+    const [, version, ...rest] = slug.split("-");
+    if (rest.length === 0) return `GPT-${version}`;
+    return `GPT-${version} ${rest.map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join(" ")}`;
+  }
+  if (slug.includes("/")) {
+    return slug;
+  }
+  return slug.replace(/[-_]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 export function formatModelDisplayName(model: string | null | undefined): string | undefined {
@@ -176,7 +184,7 @@ export function formatModelDisplayName(model: string | null | undefined): string
     return undefined;
   }
 
-  return MODEL_NAME_BY_SLUG.get(normalized.toLowerCase()) ?? humanizeUnknownModelSlug(normalized);
+  return MODEL_NAME_BY_SLUG.get(normalized.toLowerCase()) ?? humanizeModelSlug(normalized);
 }
 
 export function getGeminiThinkingSelectionValue(

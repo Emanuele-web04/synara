@@ -632,6 +632,48 @@ label:has(> select#reasoning-effort) select {
   user-select: none;
 }
 
+.chat-markdown .chat-markdown-codeblock__file {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  user-select: none;
+}
+
+.chat-markdown .chat-markdown-codeblock__file-icon {
+  width: 0.85rem;
+  height: 0.85rem;
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+}
+
+.chat-markdown .chat-markdown-codeblock__file-name {
+  flex-shrink: 0;
+  font-family: var(--font-chat-code-family);
+  font-weight: 500;
+  color: var(--foreground);
+  white-space: nowrap;
+}
+
+.chat-markdown .chat-markdown-codeblock__file-dir {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-chat-code-family);
+  color: var(--muted-foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-markdown .chat-markdown-codeblock__file-lines {
+  flex-shrink: 0;
+  padding-left: 0.125rem;
+  font-family: var(--font-chat-code-family);
+  font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--muted-foreground) 80%, transparent);
+}
+
 .chat-markdown .chat-markdown-codeblock__actions {
   display: inline-flex;
   flex-shrink: 0;
@@ -960,15 +1002,22 @@ diffs-container {
   -webkit-backdrop-filter: none !important;
 }
 
+/* Light mode: the active segment matches the composer input fill so the two
+   selected surfaces read identically. Dark keeps the secondary-hover token. */
 .sidebar-segmented-picker [data-sidebar-segmented-active="true"] {
-  background: var(--color-background-button-secondary-hover) !important;
-  background-color: var(--color-background-button-secondary-hover) !important;
+  background: var(--composer-surface) !important;
+  background-color: var(--composer-surface) !important;
   background-image: none !important;
   box-shadow: none !important;
   opacity: 1 !important;
   filter: none !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
+}
+
+.dark .sidebar-segmented-picker [data-sidebar-segmented-active="true"] {
+  background: var(--color-background-button-secondary-hover) !important;
+  background-color: var(--color-background-button-secondary-hover) !important;
 }
 
 .sidebar-segmented-picker [data-sidebar-segmented-active="true"]::before,
@@ -1153,6 +1202,9 @@ diffs-container {
 }
 
 .ultrathink-frame {
+  /* The composer shell no longer reserves a 1px ring; the rainbow border needs
+     it so the surface sits inset and the gradient shows around the edge. */
+  padding: 1px;
   --ultrathink-spectrum: linear-gradient(
     120deg,
     #ff6b6b 0%,

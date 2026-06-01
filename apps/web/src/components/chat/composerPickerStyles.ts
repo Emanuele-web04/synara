@@ -64,8 +64,11 @@ export const CHAT_COLUMN_FRAME_CLASS_NAME = "mx-auto w-full min-w-0 max-w-[42rem
 /** Max width for the composer shell only; outer wrappers stay full width for shadow bleed. */
 export const COMPOSER_COLUMN_FRAME_CLASS_NAME = CHAT_COLUMN_FRAME_CLASS_NAME;
 
+/** Opaque base behind the composer shell: the composer overlaps the scrolling
+ *  transcript (`-mt-5`), so without a solid backing the frosted surface would let
+ *  transcript text bleed through its top edge. Match the chat surface to stay seamless. */
 export const COMPOSER_INPUT_SHELL_CLASS_NAME =
-  "group rounded-[1.2rem] p-px transition-colors duration-200";
+  "group rounded-[1.2rem] bg-[var(--color-background-surface)] transition-colors duration-200";
 
 /** Defined composer border: the heaviest border token nudged a bit darker with foreground. */
 export const COMPOSER_SURFACE_BORDER_CLASS_NAME =
