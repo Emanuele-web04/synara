@@ -949,7 +949,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       <button
                         key={`inline-summary-edit:${row.message.id}:${file.path}`}
                         type="button"
-                        className="group flex w-full max-w-full items-baseline gap-1 px-0 py-1.5 text-left transition-opacity duration-150 hover:opacity-95"
+                        className="group/file-row flex w-full max-w-full items-baseline gap-1 px-0 py-1.5 text-left transition-opacity duration-150 hover:opacity-95"
                         title={file.path}
                         onClick={() => onOpenTurnDiff(turnSummary!.turnId, file.path)}
                       >
@@ -960,7 +960,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           Edited
                         </span>
                         <span
-                          className="font-system-ui max-w-[28rem] truncate text-[var(--color-text-foreground)] underline-offset-2 group-hover:underline group-focus-visible:underline"
+                          className="font-system-ui max-w-[28rem] truncate text-[var(--color-text-foreground)] underline-offset-2 group-hover/file-row:underline group-focus-visible/file-row:underline"
                           style={{
                             fontSize: `${normalizedChatFontSizePx}px`,
                           }}
@@ -1113,7 +1113,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                             <button
                               key={file.path}
                               type="button"
-                              className="group flex w-full items-center gap-2 border-t border-[color:var(--color-border-light)] bg-transparent px-3 py-2.5 text-left first:border-t-0 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] dark:bg-transparent dark:hover:bg-transparent"
+                              className="group/file-row flex w-full items-center gap-2 border-t border-[color:var(--color-border-light)] bg-transparent px-3 py-2.5 text-left first:border-t-0 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] dark:bg-transparent dark:hover:bg-transparent"
                               onClick={() => onOpenTurnDiff(turnSummary.turnId, file.path)}
                             >
                               <FileEntryIcon
@@ -1123,7 +1123,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                                 className="size-4 shrink-0 text-[var(--color-text-foreground)] opacity-70 dark:opacity-80"
                               />
                               <span
-                                className="font-system-ui truncate font-normal text-[var(--color-text-foreground)] underline-offset-2 group-hover:underline group-focus-visible:underline"
+                                className="font-system-ui truncate font-normal text-[var(--color-text-foreground)] underline-offset-2 group-hover/file-row:underline group-focus-visible/file-row:underline"
                                 style={{
                                   fontSize: chatTypographyStyle.fontSize,
                                 }}
@@ -2088,7 +2088,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                 type="button"
                 data-file-change-row="true"
                 className={cn(
-                  "group flex w-full max-w-full items-baseline gap-1 text-left transition-opacity duration-150",
+                  "group/file-row flex w-full max-w-full items-baseline gap-1 text-left transition-opacity duration-150",
                   compact
                     ? "px-0 py-[1px] hover:opacity-95"
                     : "rounded-md border border-border/45 bg-background/65 px-2 py-2 hover:bg-background/80",
@@ -2108,7 +2108,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                   Edited
                 </span>
                 <span
-                  className="font-system-ui max-w-[28rem] truncate text-[var(--color-text-foreground)] underline-offset-2 group-hover:underline group-focus-visible:underline"
+                  className="font-system-ui max-w-[28rem] truncate text-[var(--color-text-foreground)] underline-offset-2 group-hover/file-row:underline group-focus-visible/file-row:underline"
                   style={{
                     fontSize: `${rowFontSizePx}px`,
                   }}

@@ -256,7 +256,9 @@ function ToastCloseButton({
     <Toast.Close
       aria-label="Dismiss toast"
       className={cn(
-        "inline-flex shrink-0 items-center justify-center rounded-full text-white/65 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/35",
+        // pointer-events-auto keeps the X clickable even when a stacked/collapsed
+        // toast still gates its content with pointer-events-none.
+        "pointer-events-auto z-10 inline-flex shrink-0 items-center justify-center rounded-full text-white/65 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/35",
         compact ? "size-5" : "absolute top-2 right-2 size-6",
       )}
       data-slot="toast-close"
