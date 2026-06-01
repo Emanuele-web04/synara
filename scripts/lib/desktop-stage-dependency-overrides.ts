@@ -3,7 +3,7 @@
 // Layer: Release/build script support
 
 export const DESKTOP_STAGE_DEPENDENCY_OVERRIDES = {
-  "@pierre/theme": "0.0.22",
+  "@pierre/theme": "1.0.3",
   diff: "8.0.3",
   "hast-util-to-html": "9.0.5",
   lru_map: "0.4.1",

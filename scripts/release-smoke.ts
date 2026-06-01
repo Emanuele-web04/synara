@@ -103,6 +103,19 @@ function verifyDesktopStageProductionInstall(targetRoot: string): void {
     cwd: stageInstallRoot,
     stdio: "inherit",
   });
+
+  const diffsPackageJson = JSON.parse(
+    readFileSync(resolve(stageInstallRoot, "node_modules/@pierre/diffs/package.json"), "utf8"),
+  ) as { dependencies?: Record<string, string> };
+  const themePackageJson = JSON.parse(
+    readFileSync(resolve(stageInstallRoot, "node_modules/@pierre/theme/package.json"), "utf8"),
+  ) as { version?: string };
+  const expectedThemeVersion = diffsPackageJson.dependencies?.["@pierre/theme"];
+  if (!expectedThemeVersion || themePackageJson.version !== expectedThemeVersion) {
+    throw new Error(
+      `Expected @pierre/theme ${expectedThemeVersion ?? "<missing>"} for @pierre/diffs, got ${themePackageJson.version ?? "<missing>"}.`,
+    );
+  }
 }
 
 const tempRoot = mkdtempSync(join(tmpdir(), "t3-release-smoke-"));
