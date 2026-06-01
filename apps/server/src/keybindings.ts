@@ -494,7 +494,7 @@ function normalizeLegacyKeybindingEntry(entry: unknown): {
     return { entry, migrated: false };
   }
 
-  const command = entry.command;
+  const command = (entry as { command?: unknown }).command;
   if (typeof command !== "string" || !(command in LEGACY_KEYBINDING_COMMAND_ALIASES)) {
     return { entry, migrated: false };
   }

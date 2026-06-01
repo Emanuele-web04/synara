@@ -7,6 +7,7 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
   FolderIcon,
+  GitMergedSimpleIcon,
   GitPullRequestIcon,
   DisposableThreadIcon,
   type LucideIcon,
@@ -293,14 +294,6 @@ const DebugFeatureFlagsMenu = import.meta.env.DEV
       })),
     )
   : null;
-const GitProgressToastPreviewToggle = import.meta.env.DEV
-  ? lazy(() =>
-      import("./GitProgressToastPreviewToggle").then((module) => ({
-        default: module.GitProgressToastPreviewToggle,
-      })),
-    )
-  : null;
-
 const PROJECT_CONTEXT_MENU_FOLDER_ICON = renderToStaticMarkup(<HiOutlineFolderOpen />);
 const PROJECT_CONTEXT_MENU_EDIT_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4Z"/></svg>';
@@ -653,6 +646,7 @@ interface TerminalStatusIndicator {
 interface PrStatusIndicator {
   label: "PR open" | "PR closed" | "PR merged";
   colorClass: string;
+  icon: LucideIcon;
   tooltip: string;
   url: string;
 }
@@ -700,7 +694,7 @@ function ThreadPrStatusBadge({
               onOpen(event, prStatus.url);
             }}
           >
-            <SidebarGlyph icon={GitPullRequestIcon} variant="meta" />
+            <SidebarGlyph icon={prStatus.icon} variant="meta" />
           </button>
         }
       />
@@ -744,7 +738,9 @@ function prStatusIndicator(pr: ThreadPr): PrStatusIndicator | null {
   if (pr.state === "open") {
     return {
       label: "PR open",
-      colorClass: "text-emerald-600 dark:text-emerald-300/90",
+      // Match the diff "+" green so an opened PR reads as the same positive signal.
+      colorClass: "text-[var(--color-decoration-added)]",
+      icon: GitPullRequestIcon,
       tooltip: `#${pr.number} PR open: ${pr.title}`,
       url: pr.url,
     };
@@ -753,6 +749,7 @@ function prStatusIndicator(pr: ThreadPr): PrStatusIndicator | null {
     return {
       label: "PR closed",
       colorClass: "text-zinc-500 dark:text-zinc-400/80",
+      icon: GitPullRequestIcon,
       tooltip: `#${pr.number} PR closed: ${pr.title}`,
       url: pr.url,
     };
@@ -760,7 +757,8 @@ function prStatusIndicator(pr: ThreadPr): PrStatusIndicator | null {
   if (pr.state === "merged") {
     return {
       label: "PR merged",
-      colorClass: "text-violet-600 dark:text-violet-300/90",
+      colorClass: "text-violet-500 dark:text-violet-400",
+      icon: GitMergedSimpleIcon,
       tooltip: `#${pr.number} PR merged: ${pr.title}`,
       url: pr.url,
     };
@@ -4221,7 +4219,7 @@ export default function Sidebar() {
               "opacity-100 group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
             )}
           >
-            <SidebarGlyph icon={GitPullRequestIcon} variant="meta" className="size-3.5" />
+            <SidebarGlyph icon={leadingPrStatus.icon} variant="meta" className="size-3.5" />
           </span>
         ) : null}
         <ThreadPinToggleButton
@@ -5775,11 +5773,6 @@ export default function Sidebar() {
         <SidebarMenu>
           <SidebarMenuItem>
             <div className="flex flex-col gap-1">
-              {GitProgressToastPreviewToggle && !isOnSettings ? (
-                <Suspense fallback={null}>
-                  <GitProgressToastPreviewToggle />
-                </Suspense>
-              ) : null}
               {DebugFeatureFlagsMenu && showDebugFeatureFlagsMenu && !isOnSettings ? (
                 <Suspense fallback={null}>
                   <DebugFeatureFlagsMenu />

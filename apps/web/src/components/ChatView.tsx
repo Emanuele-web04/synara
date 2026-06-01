@@ -8170,7 +8170,7 @@ export default function ChatView({
                       CHAT_COLUMN_FRAME_CLASS_NAME,
                     )}
                   >
-                    <SynaraLogo aria-label="Synara logo" className="size-10" draggable={false} />
+                    <SynaraLogo aria-label="Synara logo" className="size-10" />
                     <h2 className="text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]">
                       {isEmptyChatLanding ? (
                         "What should we work on?"

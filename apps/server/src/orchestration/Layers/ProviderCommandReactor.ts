@@ -930,7 +930,7 @@ const make = Effect.gen(function* () {
           : boundaryMessageText;
     const normalizedInput = toNonEmptyProviderInput(
       normalizeSkillMentionTextForProvider({
-        provider: selectedProvider,
+        provider: selectedProvider as ProviderKind,
         messageText: providerInput,
         ...(input.skills !== undefined ? { skills: input.skills } : {}),
       }),

@@ -44,7 +44,7 @@ function MenuPopup({
   side?: MenuPrimitive.Positioner.Props["side"];
   anchor?: MenuPrimitive.Positioner.Props["anchor"];
   surface?: "default" | "composer";
-  pickerSize?: "small" | "normal";
+  pickerSize?: "small" | "normal" | undefined;
 }) {
   const popupSurfaceClassName =
     surface === "composer"
