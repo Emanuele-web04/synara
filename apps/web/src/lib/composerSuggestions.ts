@@ -19,7 +19,7 @@ interface DeriveComposerSuggestionsInput {
   threads: readonly Thread[];
 }
 
-const MAX_SUGGESTIONS = 5;
+const MAX_SUGGESTIONS = 3;
 const MIN_SUGGESTIONS = 3;
 const MAX_PROMPT_LINES = 6;
 const MAX_TOPIC_LENGTH = 72;

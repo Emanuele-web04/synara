@@ -92,7 +92,7 @@ describe("deriveComposerSuggestions", () => {
       ],
     });
 
-    expect(suggestions).toHaveLength(5);
+    expect(suggestions).toHaveLength(3);
     expect(suggestions[0]?.label).toContain("Sidebar suggestions polish");
     expect(suggestions[1]?.label).toContain("Composer resize bug");
     expect(suggestions.map((suggestion) => suggestion.label).join("\n")).not.toContain(
@@ -111,7 +111,7 @@ describe("deriveComposerSuggestions", () => {
     });
 
     expect(suggestions.length).toBeGreaterThanOrEqual(3);
-    expect(suggestions.length).toBeLessThanOrEqual(5);
+    expect(suggestions.length).toBeLessThanOrEqual(3);
     expect(suggestions.every((suggestion) => suggestion.label.includes("Desktop App"))).toBe(true);
   });
 

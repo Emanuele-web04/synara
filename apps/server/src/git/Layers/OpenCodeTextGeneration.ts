@@ -37,7 +37,8 @@ import {
   buildDiffSummaryPrompt,
   buildPrContentPrompt,
   buildThreadTitlePrompt,
-  extractJsonObject,
+  decodeStructuredTextGenerationOutput,
+  type RawTextFallback,
   sanitizeCommitSubject,
   sanitizeDiffSummary,
   sanitizePrTitle,
@@ -291,6 +292,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
       readonly cwd: string;
       readonly prompt: string;
       readonly outputSchemaJson: S;
+      readonly rawTextFallback?: RawTextFallback;
       readonly modelSelection: OpenCodeCompatibleModelSelection;
       readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;
       readonly providerOptions?: ProviderStartOptions;
@@ -404,19 +406,13 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
               releaseSharedServer,
             );
 
-      return yield* Schema.decodeEffect(Schema.fromJsonString(input.outputSchemaJson))(
-        extractJsonObject(rawOutput),
-      ).pipe(
-        Effect.catchTag("SchemaError", (cause) =>
-          Effect.fail(
-            new TextGenerationError({
-              operation: input.operation,
-              detail: "OpenCode returned invalid structured output.",
-              cause,
-            }),
-          ),
-        ),
-      );
+      return yield* decodeStructuredTextGenerationOutput({
+        schema: input.outputSchemaJson,
+        raw: rawOutput,
+        operation: input.operation,
+        providerLabel: config.displayName,
+        ...(input.rawTextFallback ? { rawTextFallback: input.rawTextFallback } : {}),
+      });
     });
 
     const generateCommitMessage: TextGenerationShape["generateCommitMessage"] = Effect.fn(
@@ -498,7 +494,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
         });
       }
 
-      const { prompt, outputSchemaJson } = buildDiffSummaryPrompt({
+      const { prompt, outputSchemaJson, rawTextFallback } = buildDiffSummaryPrompt({
         patch: input.patch,
       });
       const generated = yield* runOpenCodeJson({
@@ -506,6 +502,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
         cwd: input.cwd,
         prompt,
         outputSchemaJson,
+        rawTextFallback,
         modelSelection,
         ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
       });
@@ -526,7 +523,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
         });
       }
 
-      const { prompt, outputSchemaJson } = buildBranchNamePrompt({
+      const { prompt, outputSchemaJson, rawTextFallback } = buildBranchNamePrompt({
         message: input.message,
         ...(input.attachments ? { attachments: input.attachments } : {}),
       });
@@ -535,6 +532,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
         cwd: input.cwd,
         prompt,
         outputSchemaJson,
+        rawTextFallback,
         modelSelection,
         ...(input.attachments ? { attachments: input.attachments } : {}),
         ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
@@ -556,7 +554,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
         });
       }
 
-      const { prompt, outputSchemaJson } = buildThreadTitlePrompt({
+      const { prompt, outputSchemaJson, rawTextFallback } = buildThreadTitlePrompt({
         message: input.message,
         ...(input.attachments ? { attachments: input.attachments } : {}),
       });
@@ -565,6 +563,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
         cwd: input.cwd,
         prompt,
         outputSchemaJson,
+        rawTextFallback,
         modelSelection,
         ...(input.attachments ? { attachments: input.attachments } : {}),
         ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),

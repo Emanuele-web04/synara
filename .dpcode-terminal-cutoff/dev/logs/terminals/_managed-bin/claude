@@ -1,5 +1,0 @@
-#!/bin/sh
-# Managed claude wrapper injected by t3code terminal sessions.
-printf '\033]0;%s\007' 'Claude Code'
-export T3CODE_TERMINAL_CLI_KIND='claude'
-exec '/Applications/cmux.app/Contents/Resources/bin/claude' --settings '/Users/emanueledipietro/.codex/worktrees/8980/t3code/.dpcode-terminal-cutoff/dev/logs/terminals/_managed-bin/claude-settings.json' "$@"

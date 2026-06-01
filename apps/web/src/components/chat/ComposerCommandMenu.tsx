@@ -438,7 +438,9 @@ function commandMenuItemGlyph(item: ComposerCommandItem, theme: "light" | "dark"
           pathValue={item.path}
           kind={item.pathKind}
           theme={theme}
-          className={item.pathKind === "directory" ? cls : COMPOSER_COMMAND_ITEM_FILE_ICON_CLASSNAME}
+          className={
+            item.pathKind === "directory" ? cls : COMPOSER_COMMAND_ITEM_FILE_ICON_CLASSNAME
+          }
         />
       );
     case "local-root":

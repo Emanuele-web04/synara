@@ -22,11 +22,14 @@ import {
   buildDiffSummaryPrompt,
   buildPrContentPrompt,
   buildThreadTitlePrompt,
-  extractJsonObject,
+  decodeStructuredTextGenerationOutput,
+  type RawTextFallback,
   sanitizeCommitSubject,
   sanitizeDiffSummary,
   sanitizePrTitle,
 } from "../textGenerationShared.ts";
+
+const CURSOR_TEXT_GENERATION_LABEL = "Cursor Agent";
 
 const CURSOR_TIMEOUT_MS = 180_000;
 
@@ -92,6 +95,7 @@ const makeCursorTextGeneration = Effect.gen(function* () {
     cwd,
     prompt,
     outputSchemaJson,
+    rawTextFallback,
     modelSelection,
     providerOptions,
   }: {
@@ -99,6 +103,7 @@ const makeCursorTextGeneration = Effect.gen(function* () {
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
+    rawTextFallback?: RawTextFallback;
     modelSelection: CursorModelSelection;
     providerOptions?: ProviderStartOptions;
   }): Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]> =>
@@ -175,19 +180,13 @@ const makeCursorTextGeneration = Effect.gen(function* () {
         });
       }
 
-      return yield* Schema.decodeEffect(Schema.fromJsonString(outputSchemaJson))(
-        extractJsonObject(rawResult),
-      ).pipe(
-        Effect.catchTag("SchemaError", (cause) =>
-          Effect.fail(
-            new TextGenerationError({
-              operation,
-              detail: "Cursor Agent returned invalid structured output.",
-              cause,
-            }),
-          ),
-        ),
-      );
+      return yield* decodeStructuredTextGenerationOutput({
+        schema: outputSchemaJson,
+        raw: rawResult,
+        operation,
+        providerLabel: CURSOR_TEXT_GENERATION_LABEL,
+        ...(rawTextFallback ? { rawTextFallback } : {}),
+      });
     }).pipe(
       Effect.mapError((cause) =>
         isTextGenerationError(cause)
@@ -276,7 +275,7 @@ const makeCursorTextGeneration = Effect.gen(function* () {
       });
     }
 
-    const { prompt, outputSchemaJson } = buildDiffSummaryPrompt({
+    const { prompt, outputSchemaJson, rawTextFallback } = buildDiffSummaryPrompt({
       patch: input.patch,
     });
     const generated = yield* runCursorJson({
@@ -284,6 +283,7 @@ const makeCursorTextGeneration = Effect.gen(function* () {
       cwd: input.cwd,
       prompt,
       outputSchemaJson,
+      rawTextFallback,
       modelSelection,
       ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
     });
@@ -304,7 +304,7 @@ const makeCursorTextGeneration = Effect.gen(function* () {
       });
     }
 
-    const { prompt, outputSchemaJson } = buildBranchNamePrompt({
+    const { prompt, outputSchemaJson, rawTextFallback } = buildBranchNamePrompt({
       message: input.message,
       ...(input.attachments ? { attachments: input.attachments } : {}),
     });
@@ -313,6 +313,7 @@ const makeCursorTextGeneration = Effect.gen(function* () {
       cwd: input.cwd,
       prompt,
       outputSchemaJson,
+      rawTextFallback,
       modelSelection,
       ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
     });
@@ -333,7 +334,7 @@ const makeCursorTextGeneration = Effect.gen(function* () {
       });
     }
 
-    const { prompt, outputSchemaJson } = buildThreadTitlePrompt({
+    const { prompt, outputSchemaJson, rawTextFallback } = buildThreadTitlePrompt({
       message: input.message,
       ...(input.attachments ? { attachments: input.attachments } : {}),
     });
@@ -342,6 +343,7 @@ const makeCursorTextGeneration = Effect.gen(function* () {
       cwd: input.cwd,
       prompt,
       outputSchemaJson,
+      rawTextFallback,
       modelSelection,
       ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
     });

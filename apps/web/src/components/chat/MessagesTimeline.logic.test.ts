@@ -318,8 +318,16 @@ describe("buildTurnDiffSummaryByAssistantMessageId", () => {
       turnDiffSummaries: [makeSummary({ turnId: "turn-1" }), makeSummary({ turnId: "turn-2" })],
       messages: [
         { id: MessageId.makeUnsafe("u-1"), role: "user", turnId: null },
-        { id: MessageId.makeUnsafe("a-turn-1"), role: "assistant", turnId: TurnId.makeUnsafe("turn-1") },
-        { id: MessageId.makeUnsafe("a-turn-2"), role: "assistant", turnId: TurnId.makeUnsafe("turn-2") },
+        {
+          id: MessageId.makeUnsafe("a-turn-1"),
+          role: "assistant",
+          turnId: TurnId.makeUnsafe("turn-1"),
+        },
+        {
+          id: MessageId.makeUnsafe("a-turn-2"),
+          role: "assistant",
+          turnId: TurnId.makeUnsafe("turn-2"),
+        },
       ],
     });
 
@@ -390,9 +398,17 @@ describe("buildTurnDiffSummaryByAssistantMessageId", () => {
       turnDiffSummaries: [makeSummary({ turnId: "turn-1" }), makeSummary({ turnId: "turn-2" })],
       messages: [
         { id: MessageId.makeUnsafe("u-1"), role: "user", turnId: null },
-        { id: MessageId.makeUnsafe("a-turn-1"), role: "assistant", turnId: TurnId.makeUnsafe("turn-1") },
+        {
+          id: MessageId.makeUnsafe("a-turn-1"),
+          role: "assistant",
+          turnId: TurnId.makeUnsafe("turn-1"),
+        },
         { id: MessageId.makeUnsafe("u-2"), role: "user", turnId: null },
-        { id: MessageId.makeUnsafe("a-turn-2"), role: "assistant", turnId: TurnId.makeUnsafe("turn-2") },
+        {
+          id: MessageId.makeUnsafe("a-turn-2"),
+          role: "assistant",
+          turnId: TurnId.makeUnsafe("turn-2"),
+        },
       ],
     });
 
@@ -409,7 +425,11 @@ describe("buildTurnDiffSummaryByAssistantMessageId", () => {
     const result = buildTurnDiffSummaryByAssistantMessageId({
       turnDiffSummaries: [makeSummary({ turnId: "turn-files-changed" })],
       messages: [
-        { id: MessageId.makeUnsafe("a-unrelated"), role: "assistant", turnId: TurnId.makeUnsafe("turn-no-changes") },
+        {
+          id: MessageId.makeUnsafe("a-unrelated"),
+          role: "assistant",
+          turnId: TurnId.makeUnsafe("turn-no-changes"),
+        },
       ],
     });
 
@@ -429,8 +449,16 @@ describe("buildTurnDiffSummaryByAssistantMessageId", () => {
     const result = buildTurnDiffSummaryByAssistantMessageId({
       turnDiffSummaries: [makeSummary({ turnId: "turn-1" })],
       messages: [
-        { id: MessageId.makeUnsafe("a-turn-1-first"), role: "assistant", turnId: TurnId.makeUnsafe("turn-1") },
-        { id: MessageId.makeUnsafe("a-turn-1-last"), role: "assistant", turnId: TurnId.makeUnsafe("turn-1") },
+        {
+          id: MessageId.makeUnsafe("a-turn-1-first"),
+          role: "assistant",
+          turnId: TurnId.makeUnsafe("turn-1"),
+        },
+        {
+          id: MessageId.makeUnsafe("a-turn-1-last"),
+          role: "assistant",
+          turnId: TurnId.makeUnsafe("turn-1"),
+        },
       ],
     });
 
@@ -444,7 +472,9 @@ describe("buildTurnDiffSummaryByAssistantMessageId", () => {
   it("returns an empty map when there are no summaries", () => {
     const result = buildTurnDiffSummaryByAssistantMessageId({
       turnDiffSummaries: [],
-      messages: [{ id: MessageId.makeUnsafe("a-1"), role: "assistant", turnId: TurnId.makeUnsafe("turn-1") }],
+      messages: [
+        { id: MessageId.makeUnsafe("a-1"), role: "assistant", turnId: TurnId.makeUnsafe("turn-1") },
+      ],
     });
 
     expect(result.size).toBe(0);

@@ -30,7 +30,10 @@ import {
   CommandList,
   CommandSeparator,
 } from "../ui/command";
-import { COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME, COMPOSER_PICKER_MENU_POPUP_BODY_CLASS_NAME } from "./composerPickerStyles";
+import {
+  COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME,
+  COMPOSER_PICKER_MENU_POPUP_BODY_CLASS_NAME,
+} from "./composerPickerStyles";
 
 type EntriesByPath = Record<string, readonly ProjectFileSystemEntry[] | undefined>;
 
