@@ -6,8 +6,13 @@
 import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from "react";
 
 import { cn } from "~/lib/utils";
-import type { DockPaneRuntimeMode } from "~/lib/dockPaneActivation";
-import { PanelRightCloseIcon, PlusIcon, XIcon } from "~/lib/icons";
+import {
+  type DockPaneRuntimeMode,
+  EMPTY_PANE_ID_SET,
+  reconcileKeepMountedPaneIds,
+} from "~/lib/dockPaneActivation";
+import { PanelRightCloseIcon, PlusIcon } from "~/lib/icons";
+import { CentralIcon } from "~/lib/central-icons";
 import type {
   RightDockPane,
   RightDockPaneKind,
@@ -21,7 +26,12 @@ import { Sidebar, SidebarProvider, SidebarRail } from "../ui/sidebar";
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
 import {
   CHAT_SURFACE_HEADER_HEIGHT_CLASS,
+  CHAT_SURFACE_CONTROL_ACTIVE_CLASS_NAME,
   DOCK_HEADER_ICON_BUTTON_CLASS,
+  DOCK_TAB_CHIP_CLASS_NAME,
+  DOCK_TAB_CLOSE_GLYPH_CLASS_NAME,
+  DOCK_TAB_ICON_GLYPH_CLASS_NAME,
+  DOCK_TAB_ICON_SLOT_CLASS_NAME,
 } from "./chatHeaderControls";
 import { RIGHT_DOCK_PANE_META, resolveRightDockPaneLabel } from "./rightDockPaneMeta";
 
@@ -40,9 +50,9 @@ interface RightDockProps {
   onAddPane: (kind: RightDockPaneKind) => void;
   motionKey?: string;
   activePaneRuntimeMode?: DockPaneRuntimeMode;
-  renderActivePane: (
+  renderPane: (
     pane: RightDockPane,
-    context: { runtimeMode: DockPaneRuntimeMode },
+    context: { runtimeMode: DockPaneRuntimeMode; isActive: boolean },
   ) => ReactNode;
 }
 
@@ -57,43 +67,65 @@ function RightDockTab(props: {
   return (
     <div
       className={cn(
-        "group/dock-tab relative flex min-w-0 shrink-0 items-center gap-1.5 rounded-md py-1 pl-2 pr-1 text-xs transition-colors",
-        props.active
-          ? "bg-secondary text-secondary-foreground"
-          : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground",
+        "group/dock-tab",
+        DOCK_TAB_CHIP_CLASS_NAME,
+        props.active && CHAT_SURFACE_CONTROL_ACTIVE_CLASS_NAME,
       )}
     >
       <button
         type="button"
-        className="flex min-w-0 items-center gap-1.5"
-        onClick={props.onSelect}
-        title={props.label}
-        aria-pressed={props.active}
-      >
-        <Icon className="size-3.5 shrink-0" />
-        <span className="max-w-[10rem] truncate">{props.label}</span>
-      </button>
-      <IconButton
-        variant="ghost"
-        size="icon-xs"
-        label={`Close ${props.label}`}
-        tooltip={`Close ${props.label}`}
-        tooltipSide="bottom"
-        className="size-4 rounded [&_svg]:size-3"
+        className={DOCK_TAB_ICON_SLOT_CLASS_NAME}
+        aria-label={`Close ${props.label}`}
+        title={`Close ${props.label}`}
         onClick={(event) => {
           event.stopPropagation();
           props.onClose();
         }}
       >
-        <XIcon />
-      </IconButton>
+        <Icon className={DOCK_TAB_ICON_GLYPH_CLASS_NAME} />
+        <CentralIcon name="cross-small" className={DOCK_TAB_CLOSE_GLYPH_CLASS_NAME} />
+      </button>
+      <button
+        type="button"
+        className="min-w-0 max-w-[10rem] truncate"
+        title={props.label}
+        aria-pressed={props.active}
+        onClick={props.onSelect}
+      >
+        {props.label}
+      </button>
     </div>
   );
+}
+
+// Persist which keep-mounted panes (e.g. terminals) have been activated so they
+// stay in the DOM while another tab is selected, pruned to live panes so closed
+// panes drop out and the set never leaks across thread switches. The set is
+// reconciled during render on purpose: when a kept pane stops being active it
+// must remain in the rendered list on that same render, otherwise it would
+// unmount for a frame and lose the very runtime keep-mount is protecting.
+function useKeepMountedPaneIds(
+  panes: readonly RightDockPane[],
+  activePane: RightDockPane | null,
+): ReadonlySet<string> {
+  const ref = useRef<ReadonlySet<string>>(EMPTY_PANE_ID_SET);
+  ref.current = reconcileKeepMountedPaneIds({
+    previous: ref.current,
+    panes,
+    activePaneId: activePane?.id ?? null,
+    activePaneKind: activePane?.kind ?? null,
+  });
+  return ref.current;
 }
 
 export function RightDock(props: RightDockProps) {
   const activePane = resolveActivePane(props.state);
   const activePaneRuntimeMode = props.activePaneRuntimeMode ?? "live";
+
+  const keepMountedPaneIds = useKeepMountedPaneIds(props.state.panes, activePane);
+  const renderedPanes = props.state.panes.filter(
+    (pane) => pane.id === activePane?.id || keepMountedPaneIds.has(pane.id),
+  );
   const [allowChromeMotion, setAllowChromeMotion] = useState(() => !props.state.open);
   const [, forceMotionClassRefresh] = useState(0);
   const previousMotionKeyRef = useRef(props.motionKey);
@@ -200,18 +232,30 @@ export function RightDock(props: RightDockProps) {
             </IconButton>
           </div>
           <div className="relative min-h-0 flex-1">
-            {activePane ? (
-              <div
-                className="flex h-full min-h-0 w-full"
-                data-native-browser-surface={
-                  activePane.kind === "browser" && activePaneRuntimeMode === "live"
-                    ? "true"
-                    : undefined
-                }
-              >
-                {props.renderActivePane(activePane, { runtimeMode: activePaneRuntimeMode })}
-              </div>
-            ) : null}
+            {renderedPanes.map((pane) => {
+              const isActive = pane.id === activePane?.id;
+              // Keep-mounted panes that are not the active tab are already
+              // hydrated, so they render live (just hidden); the active pane uses
+              // the deferred-aware runtime mode from the activation hook.
+              const runtimeMode: DockPaneRuntimeMode = isActive ? activePaneRuntimeMode : "live";
+              return (
+                <div
+                  key={pane.id}
+                  className={cn(
+                    "absolute inset-0 flex min-h-0 w-full",
+                    isActive ? undefined : "invisible pointer-events-none",
+                  )}
+                  aria-hidden={isActive ? undefined : true}
+                  data-native-browser-surface={
+                    pane.kind === "browser" && isActive && runtimeMode === "live"
+                      ? "true"
+                      : undefined
+                  }
+                >
+                  {props.renderPane(pane, { runtimeMode, isActive })}
+                </div>
+              );
+            })}
           </div>
         </div>
         <SidebarRail />

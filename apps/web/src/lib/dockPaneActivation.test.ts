@@ -5,6 +5,8 @@ import {
   DOCK_PANE_DEFERRED_HYDRATION_FRAMES,
   dockPaneActivationKey,
   isDeferredRuntimePaneKind,
+  isKeepMountedPaneKind,
+  reconcileKeepMountedPaneIds,
   resolveDockPaneRuntimeMode,
 } from "./dockPaneActivation";
 
@@ -56,5 +58,71 @@ describe("dockPaneActivation", () => {
 
   it("uses two frames for restored heavy-pane hydration", () => {
     expect(DOCK_PANE_DEFERRED_HYDRATION_FRAMES).toBe(2);
+  });
+
+  it("keeps only the terminal pane mounted across tab switches", () => {
+    expect(isKeepMountedPaneKind("terminal")).toBe(true);
+    expect(isKeepMountedPaneKind("browser")).toBe(false);
+    expect(isKeepMountedPaneKind("sidechat")).toBe(false);
+    expect(isKeepMountedPaneKind("diff")).toBe(false);
+    expect(isKeepMountedPaneKind("git")).toBe(false);
+  });
+
+  describe("reconcileKeepMountedPaneIds", () => {
+    const panes = [
+      { id: "term", kind: "terminal" as const },
+      { id: "diff", kind: "diff" as const },
+    ];
+
+    it("adds the active pane only when it is a keep-mounted kind", () => {
+      expect([
+        ...reconcileKeepMountedPaneIds({
+          previous: new Set(),
+          panes,
+          activePaneId: "term",
+          activePaneKind: "terminal",
+        }),
+      ]).toEqual(["term"]);
+
+      expect([
+        ...reconcileKeepMountedPaneIds({
+          previous: new Set(),
+          panes,
+          activePaneId: "diff",
+          activePaneKind: "diff",
+        }),
+      ]).toEqual([]);
+    });
+
+    it("retains a previously mounted terminal after another tab becomes active", () => {
+      const result = reconcileKeepMountedPaneIds({
+        previous: new Set(["term"]),
+        panes,
+        activePaneId: "diff",
+        activePaneKind: "diff",
+      });
+      expect(result.has("term")).toBe(true);
+    });
+
+    it("drops kept ids that no longer exist (closed pane or thread switch)", () => {
+      const result = reconcileKeepMountedPaneIds({
+        previous: new Set(["term", "stale"]),
+        panes: [{ id: "diff", kind: "diff" as const }],
+        activePaneId: "diff",
+        activePaneKind: "diff",
+      });
+      expect(result.has("term")).toBe(false);
+      expect(result.has("stale")).toBe(false);
+    });
+
+    it("ignores an active id that is not in the live pane list", () => {
+      const result = reconcileKeepMountedPaneIds({
+        previous: new Set(),
+        panes,
+        activePaneId: "ghost",
+        activePaneKind: "terminal",
+      });
+      expect(result.size).toBe(0);
+    });
   });
 });

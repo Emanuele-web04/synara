@@ -89,6 +89,7 @@ import { toastManager } from "../components/ui/toast";
 import { useStore } from "../store";
 import {
   createAllThreadsSelector,
+  createSidebarThreadSummariesSelector,
   createThreadExistsSelector,
   createThreadProjectIdSelector,
 } from "../storeSelectors";
@@ -260,7 +261,7 @@ function SplitPaneEmbeddedPanel(props: {
       resizeOverlay.addEventListener("pointerup", onPointerUp);
       resizeOverlay.addEventListener("pointercancel", onPointerUp);
     },
-    [minPanelWidth, panelWidth, shouldAcceptEmbeddedWidth, storageKey],
+    [minPanelWidth, shouldAcceptEmbeddedWidth, storageKey],
   );
 
   if (!props.panelOpen || !props.threadId) {
@@ -1502,13 +1503,17 @@ function SingleChatSurface(props: {
     [props.threadId],
   );
 
-  const allThreads = useStore(useMemo(() => createAllThreadsSelector(), []));
+  // Sidechat tab labels only need thread titles, so subscribe to the coarse
+  // sidebar-summary selector (turn-level changes) instead of the full thread
+  // selector, which re-emits on every streaming token of any thread and would
+  // otherwise re-render the entire chat surface + right dock + active pane.
+  const threadSummaries = useStore(useMemo(() => createSidebarThreadSummariesSelector(), []));
   const paneLabelOverrides = useMemo(() => {
     const hasSidechatPane = dockState.panes.some((pane) => pane.kind === "sidechat");
     if (!hasSidechatPane) {
       return undefined;
     }
-    const titleByThreadId = new Map(allThreads.map((thread) => [thread.id, thread.title]));
+    const titleByThreadId = new Map(threadSummaries.map((summary) => [summary.id, summary.title]));
     const overrides: Record<string, string | undefined> = {};
     for (const pane of dockState.panes) {
       if (pane.kind === "sidechat" && pane.threadId) {
@@ -1516,7 +1521,7 @@ function SingleChatSurface(props: {
       }
     }
     return overrides;
-  }, [allThreads, dockState.panes]);
+  }, [threadSummaries, dockState.panes]);
 
   const shouldAcceptDockWidth = useCallback(
     ({ nextWidth, wrapper }: { nextWidth: number; wrapper: HTMLElement }) => {
@@ -1570,8 +1575,11 @@ function SingleChatSurface(props: {
     [openPane, props.threadId, requestImmediateDockHydration],
   );
 
-  const renderActivePane = useCallback(
-    (pane: RightDockPane, context: { runtimeMode: DockPaneRuntimeMode }): ReactNode => {
+  const renderDockPane = useCallback(
+    (
+      pane: RightDockPane,
+      context: { runtimeMode: DockPaneRuntimeMode; isActive: boolean },
+    ): ReactNode => {
       switch (pane.kind) {
         case "browser":
           return (
@@ -1606,7 +1614,18 @@ function SingleChatSurface(props: {
           if (context.runtimeMode === "preview") {
             return <PanelStateMessage>Terminal is sleeping. Restoring shortly.</PanelStateMessage>;
           }
-          return <DockTerminalPane hostThreadId={props.threadId} projectId={props.projectId} />;
+          // Kept mounted across tab switches; visibility toggles the xterm runtime
+          // instead of detaching/reattaching it (avoids the open-lag + fit flicker).
+          // Also sleep it while the dock is collapsed: a closed dock keeps the pane
+          // mounted (offcanvas is CSS-only), so without this the off-screen terminal
+          // would keep WebGL + resize observers alive for nothing.
+          return (
+            <DockTerminalPane
+              hostThreadId={props.threadId}
+              projectId={props.projectId}
+              isActive={context.isActive && dockState.open}
+            />
+          );
         case "git":
           return (
             <GitPanel
@@ -1640,7 +1659,14 @@ function SingleChatSurface(props: {
           return <RightDockPanePlaceholder kind={pane.kind} />;
       }
     },
-    [closePane, props.projectId, props.threadId, requestActiveDockPaneLive, updatePane],
+    [
+      closePane,
+      dockState.open,
+      props.projectId,
+      props.threadId,
+      requestActiveDockPaneLive,
+      updatePane,
+    ],
   );
 
   const handleSelectDockPane = useCallback(
@@ -1697,7 +1723,7 @@ function SingleChatSurface(props: {
         onCollapse={() => setDockOpen(props.threadId, false)}
         onOpenChange={(open) => setDockOpen(props.threadId, open)}
         onAddPane={handleAddDockPane}
-        renderActivePane={renderActivePane}
+        renderPane={renderDockPane}
       />
     </div>
   );

@@ -18,7 +18,13 @@ import { useStore } from "~/store";
 import { createProjectSelector, createThreadSelector } from "~/storeSelectors";
 import ThreadTerminalDrawer from "../ThreadTerminalDrawer";
 
-export function DockTerminalPane(props: { hostThreadId: ThreadId; projectId: ProjectId | null }) {
+export function DockTerminalPane(props: {
+  hostThreadId: ThreadId;
+  projectId: ProjectId | null;
+  // When false the pane stays mounted but hidden (another dock tab is active),
+  // so the xterm runtime sleeps its visual work without detaching its DOM.
+  isActive?: boolean;
+}) {
   const scopeId = useMemo(() => dockTerminalThreadId(props.hostThreadId), [props.hostThreadId]);
   const thread = useStore(
     useMemo(() => createThreadSelector(props.hostThreadId), [props.hostThreadId]),
@@ -69,7 +75,7 @@ export function DockTerminalPane(props: { hostThreadId: ThreadId; projectId: Pro
       runtimeEnv={runtimeEnv}
       height={terminalState.terminalHeight}
       presentationMode="workspace"
-      isVisible
+      isVisible={props.isActive ?? true}
       terminalIds={terminalState.terminalIds}
       terminalLabelsById={terminalState.terminalLabelsById}
       terminalTitleOverridesById={terminalState.terminalTitleOverridesById}

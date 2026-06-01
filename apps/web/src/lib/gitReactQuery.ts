@@ -9,9 +9,13 @@ import { ensureNativeApi } from "../nativeApi";
 import { buildPatchCacheKey } from "./diffRendering";
 
 const GIT_STATUS_STALE_TIME_MS = 30_000;
-const GIT_STATUS_REFETCH_INTERVAL_MS = 60_000;
+// Freshness is driven primarily by event-based invalidation (turn lifecycle +
+// file-change domain events in __root.tsx) plus refetchOnWindowFocus/reconnect.
+// The periodic timers are only a safety net for out-of-band edits while the tab
+// stays focused, so they run at a relaxed cadence instead of every minute.
+const GIT_STATUS_REFETCH_INTERVAL_MS = 300_000;
 const GIT_BRANCHES_STALE_TIME_MS = 15_000;
-const GIT_BRANCHES_REFETCH_INTERVAL_MS = 60_000;
+const GIT_BRANCHES_REFETCH_INTERVAL_MS = 300_000;
 const GIT_DIFF_SUMMARY_GC_TIME_MS = 30 * 60_000;
 const GIT_WORKING_TREE_DIFF_STALE_TIME_MS = 5_000;
 export const GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS = 4_000;

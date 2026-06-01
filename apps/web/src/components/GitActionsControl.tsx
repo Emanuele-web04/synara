@@ -291,7 +291,7 @@ function GitQuickActionIcon({ quickAction }: { quickAction: GitQuickAction }) {
 function GitPickerMenuRow({ item }: { item: GitPickerMenuItem }) {
   return (
     <MenuItem disabled={item.disabled} onClick={item.onSelect}>
-      <span className="shrink-0 [&>svg]:size-3.5">
+      <span className="inline-flex shrink-0 items-center [&>svg]:size-3.5">
         <GitPickerItemIcon icon={item.icon} />
       </span>
       <span>{item.label}</span>

@@ -21,7 +21,6 @@ import {
   COMPOSER_PICKER_MODEL_GROUP_HEADER_CLASS_NAME,
   COMPOSER_PICKER_MODEL_ROW_LABEL_INDENT_CLASS_NAME,
   COMPOSER_PICKER_RADIUS_CLASS_NAME,
-  COMPOSER_PICKER_SECTION_LABEL_CLASS_NAME,
 } from "./composerPickerStyles";
 
 type FavoriteModelProvider = "cursor" | "kilo" | "opencode" | "pi";
@@ -196,9 +195,7 @@ export const ProviderModelOptionGroupList = memo(function ProviderModelOptionGro
 
         return (
           <MenuGroup key={`${props.provider}:${group.key}`} className="flex flex-col gap-px px-0.5">
-            <MenuGroupLabel className={COMPOSER_PICKER_SECTION_LABEL_CLASS_NAME}>
-              {group.label}
-            </MenuGroupLabel>
+            <MenuGroupLabel>{group.label}</MenuGroupLabel>
             {groupItems}
           </MenuGroup>
         );

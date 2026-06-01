@@ -153,7 +153,7 @@ export const GitCommitIcon: LucideIcon = centralIconWrapper("commits");
 export const GitBranchIcon: LucideIcon = centralIconWrapper("branch");
 export const GitForkIcon = centralIconWrapper("fork");
 export const GitMergeIcon: LucideIcon = centralIconWrapper("merged");
-export const PushIcon: LucideIcon = centralIconWrapper("push");
+export const PushIcon: LucideIcon = centralIconWrapper("cloud-simple-upload");
 export const GitHubIcon: LucideIcon = (props) => (
   <SiGithub className={props.className} style={props.style} />
 );

@@ -8193,7 +8193,7 @@ export default function ChatView({
                   ) : null}
                   {showComposerSuggestions ? (
                     <ComposerSuggestions
-                      className={cn("mt-8", COMPOSER_COLUMN_FRAME_CLASS_NAME)}
+                      className={cn("mt-5", COMPOSER_COLUMN_FRAME_CLASS_NAME)}
                       suggestions={composerSuggestions}
                       onSelectSuggestion={onSelectComposerSuggestion}
                     />

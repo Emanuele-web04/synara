@@ -2,10 +2,11 @@ import { ProviderInteractionMode, RuntimeMode } from "@t3tools/contracts";
 import { memo, type ReactNode } from "react";
 import { EllipsisIcon, ListTodoIcon } from "~/lib/icons";
 import { Button } from "../ui/button";
-import { COMPOSER_PICKER_SECTION_LABEL_CLASS_NAME } from "./composerPickerStyles";
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
 import {
   Menu,
+  MenuGroup,
+  MenuGroupLabel,
   MenuItem,
   MenuRadioGroup,
   MenuRadioItem,
@@ -44,17 +45,19 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
             <MenuDivider />
           </>
         ) : null}
-        <div className={COMPOSER_PICKER_SECTION_LABEL_CLASS_NAME}>Mode</div>
-        <MenuRadioGroup
-          value={props.interactionMode}
-          onValueChange={(value) => {
-            if (!value || value === props.interactionMode) return;
-            props.onToggleInteractionMode();
-          }}
-        >
-          <MenuRadioItem value="default">Build</MenuRadioItem>
-          <MenuRadioItem value="plan">Plan</MenuRadioItem>
-        </MenuRadioGroup>
+        <MenuGroup>
+          <MenuGroupLabel>Mode</MenuGroupLabel>
+          <MenuRadioGroup
+            value={props.interactionMode}
+            onValueChange={(value) => {
+              if (!value || value === props.interactionMode) return;
+              props.onToggleInteractionMode();
+            }}
+          >
+            <MenuRadioItem value="default">Build</MenuRadioItem>
+            <MenuRadioItem value="plan">Plan</MenuRadioItem>
+          </MenuRadioGroup>
+        </MenuGroup>
         {props.activePlan ? (
           <>
             <MenuDivider />

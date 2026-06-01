@@ -18,6 +18,7 @@ import { Button } from "../ui/button";
 import {
   Menu,
   MenuGroup,
+  MenuGroupLabel,
   MenuRadioGroup,
   MenuRadioItem,
   MenuSeparator as MenuDivider,
@@ -29,10 +30,7 @@ import {
   buildProviderOptionPatch,
   type ProviderOptions,
 } from "../../providerModelOptions";
-import {
-  COMPOSER_PICKER_SECTION_LABEL_CLASS_NAME,
-  COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
-} from "./composerPickerStyles";
+import { COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME } from "./composerPickerStyles";
 import { ComposerPickerMenuPopup, ComposerPickerTooltipPopup } from "./ComposerPickerMenuPopup";
 import { getComposerTraitSelection, hasVisibleComposerTraitControls } from "./composerTraits";
 import { Tooltip, TooltipTrigger } from "../ui/tooltip";
@@ -187,9 +185,9 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
       {effortLevels.length > 0 ? (
         <>
           <MenuGroup>
-            <div className={COMPOSER_PICKER_SECTION_LABEL_CLASS_NAME}>
+            <MenuGroupLabel>
               {provider === "kilo" || provider === "opencode" ? "Variant" : "Effort"}
-            </div>
+            </MenuGroupLabel>
             {ultrathinkPromptControlled ? (
               <div className="px-2 pb-1.5 text-muted-foreground/80 text-xs">
                 Remove Ultrathink from the prompt to change effort.
@@ -227,7 +225,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
         </>
       ) : thinkingEnabled !== null ? (
         <MenuGroup>
-          <div className={COMPOSER_PICKER_SECTION_LABEL_CLASS_NAME}>Thinking</div>
+          <MenuGroupLabel>Thinking</MenuGroupLabel>
           <MenuRadioGroup
             value={thinkingEnabled ? "on" : "off"}
             onValueChange={(value) => {
@@ -253,7 +251,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
         <>
           {hasPriorFastModeSection ? <MenuDivider /> : null}
           <MenuGroup>
-            <div className={COMPOSER_PICKER_SECTION_LABEL_CLASS_NAME}>Fast Mode</div>
+            <MenuGroupLabel>Fast Mode</MenuGroupLabel>
             <MenuRadioGroup
               value={fastModeEnabled ? "on" : "off"}
               onValueChange={(value) => {
@@ -280,7 +278,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
         <>
           <MenuDivider />
           <MenuGroup>
-            <div className={COMPOSER_PICKER_SECTION_LABEL_CLASS_NAME}>Context Window</div>
+            <MenuGroupLabel>Context Window</MenuGroupLabel>
             <MenuRadioGroup
               value={contextWindow ?? defaultContextWindow ?? ""}
               onValueChange={(value) => {
@@ -311,9 +309,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
         <>
           {hasVisibleControls ? <MenuDivider /> : null}
           <MenuGroup>
-            <div className={COMPOSER_PICKER_SECTION_LABEL_CLASS_NAME}>
-              {provider === "kilo" ? "Mode" : "Agent"}
-            </div>
+            <MenuGroupLabel>{provider === "kilo" ? "Mode" : "Agent"}</MenuGroupLabel>
             <MenuRadioGroup
               value={selectedAgent ?? defaultAgent ?? ""}
               onValueChange={(value) => {

@@ -7,7 +7,7 @@ export { COMPOSER_PICKER_SIZE, type ComposerPickerSize } from "./composerPickerS
 
 /** Soft, dispersed outer shadow for the composer input shell and floating pickers. */
 export const COMPOSER_SURFACE_SHADOW_CLASS_NAME =
-  "shadow-[0_4px_18px_-6px_color-mix(in_srgb,var(--foreground)_10%,transparent)] dark:shadow-[0_6px_24px_-10px_rgba(0,0,0,0.42)]";
+  "shadow-[0_4px_18px_-6px_color-mix(in_srgb,var(--foreground)_7%,transparent)] dark:shadow-[0_6px_24px_-10px_rgba(0,0,0,0.30)]";
 
 // Uses the UI-sm token so picker labels sit slightly below the editor text size.
 // The sm: override is required to beat the Button component's base responsive text classes.
@@ -45,8 +45,10 @@ export const COMPOSER_PICKER_MODEL_ROW_LABEL_INDENT_CLASS_NAME = "pl-[1.125rem]"
 /** Muted accent text for effort labels and empty-landing folder names. */
 export const COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME = "text-muted-foreground/45";
 
-/** Section headers inside composer picker menus (Effort, Thinking, Speed, etc.). */
-export const COMPOSER_PICKER_SECTION_LABEL_CLASS_NAME = `px-2 py-[var(--picker-section-py,0.375rem)] font-normal text-xs ${COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME}`;
+// NOTE: Composer picker section headers (Effort, Thinking, Mode, …) now render
+// through the shared `MenuGroupLabel` primitive (../ui/menu) so they stay in
+// sync with dropdown group labels like "Git actions". Picker padding is still
+// tuned via the `--picker-section-py` token on `[data-slot="menu-label"]`.
 
 export const COMPOSER_MAX_WIDTH_CLASS_NAME = "max-w-[42rem]";
 /** Main chat column background — matches the theme Background setting exactly. */
@@ -65,12 +67,12 @@ export const COMPOSER_COLUMN_FRAME_CLASS_NAME = CHAT_COLUMN_FRAME_CLASS_NAME;
 export const COMPOSER_INPUT_SHELL_CLASS_NAME =
   "group rounded-[1.2rem] p-px transition-colors duration-200";
 
-/** Light mode: stronger border for the composer shell; dark banner keeps the softer mix. */
+/** Defined composer border: the heaviest border token nudged a bit darker with foreground. */
 export const COMPOSER_SURFACE_BORDER_CLASS_NAME =
-  "border-[color:var(--color-border-heavy)] dark:border-[color:color-mix(in_srgb,var(--color-border-light)_45%,var(--color-border)_55%)]";
+  "border-[color:color-mix(in_srgb,var(--color-border-heavy)_93%,var(--foreground)_7%)]";
 
-/** Shared border + shadow chrome for the composer shell and its floating pickers. */
-export const COMPOSER_SURFACE_CHROME_CLASS_NAME = `border ${COMPOSER_SURFACE_BORDER_CLASS_NAME} ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} dark:border-transparent`;
+/** Border + shadow chrome for the composer shell: 1px defined border in both modes. */
+export const COMPOSER_SURFACE_CHROME_CLASS_NAME = `border ${COMPOSER_SURFACE_BORDER_CLASS_NAME} ${COMPOSER_SURFACE_SHADOW_CLASS_NAME}`;
 
 export const COMPOSER_INPUT_SURFACE_CLASS_NAME = `chat-composer-surface rounded-[1.2rem] ${COMPOSER_SURFACE_CHROME_CLASS_NAME} transition-colors duration-200`;
 
