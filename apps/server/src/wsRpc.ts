@@ -534,6 +534,22 @@ export const makeWsRpcLayer = () =>
             git.initRepo(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
             "Failed to initialize repository",
           ),
+        [WS_METHODS.gitStageFiles]: (input) =>
+          rpcEffect(
+            git.stageFiles(input.cwd, input.paths).pipe(
+              Effect.tap(() => refreshGitStatus(input.cwd)),
+              Effect.as({ ok: true }),
+            ),
+            "Failed to stage files",
+          ),
+        [WS_METHODS.gitUnstageFiles]: (input) =>
+          rpcEffect(
+            git.unstageFiles(input.cwd, input.paths).pipe(
+              Effect.tap(() => refreshGitStatus(input.cwd)),
+              Effect.as({ ok: true }),
+            ),
+            "Failed to unstage files",
+          ),
         [WS_METHODS.gitHandoffThread]: (input) =>
           rpcEffect(
             gitManager.handoffThread(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),

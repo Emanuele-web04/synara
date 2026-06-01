@@ -41,7 +41,7 @@ export function providerIconToneClassName(
     return "text-muted-foreground/70";
   }
   if (provider === "codex") {
-    return tone === "header" ? "text-muted-foreground/75" : "text-muted-foreground/60";
+    return tone === "header" ? "text-muted-foreground/85" : "text-foreground";
   }
   return "text-foreground";
 }
@@ -71,5 +71,24 @@ export function ProviderIcon({
       {...svgProps}
       className={cn(providerIconToneClassName(provider, tone), className)}
     />
+  );
+}
+
+export function ProviderOptionLabel({
+  provider,
+  label,
+  className,
+  iconClassName,
+}: {
+  provider: ProviderKind;
+  label: ReactNode;
+  className?: string;
+  iconClassName?: string;
+}) {
+  return (
+    <span className={cn("flex min-w-0 items-center gap-2", className)}>
+      <ProviderIcon provider={provider} className={cn("size-3.5", iconClassName)} />
+      <span className="min-w-0 truncate">{label}</span>
+    </span>
   );
 }

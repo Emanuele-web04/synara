@@ -4,7 +4,7 @@
 // Depends on: Desktop packaging policy and electron-builder config shape.
 
 export const MICROPHONE_USAGE_DESCRIPTION =
-  "DP Code needs microphone access so you can record voice notes and transcribe them into the chat composer.";
+  "Synara needs microphone access so you can record voice notes and transcribe them into the chat composer.";
 export const MAC_ENTITLEMENTS_PATH = "apps/desktop/resources/entitlements.mac.plist";
 export const MAC_INHERITED_ENTITLEMENTS_PATH =
   "apps/desktop/resources/entitlements.mac.inherit.plist";
@@ -62,12 +62,12 @@ export function createDesktopPlatformBuildConfig(
     return {
       linux: {
         target: [input.target],
-        executableName: "dpcode",
+        executableName: "synara",
         icon: "icon.png",
         category: "Development",
         desktop: {
           entry: {
-            StartupWMClass: "dpcode",
+            StartupWMClass: "synara",
           },
         },
       },

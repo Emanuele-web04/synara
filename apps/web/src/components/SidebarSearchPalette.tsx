@@ -8,9 +8,9 @@ import {
   CheckIcon,
   DeviceLaptopIcon,
   MoonIcon,
+  NewThreadIcon,
   SearchIcon,
   SettingsIcon,
-  SquarePenIcon,
   SunIcon,
 } from "~/lib/icons";
 import { type FilesystemBrowseResult, type ProviderKind } from "@t3tools/contracts";
@@ -117,7 +117,7 @@ type IconComponent = ComponentType<{ className?: string }>;
 
 const ACTION_ICONS: Record<string, IconComponent> = {
   "new-chat": BsChat,
-  "new-thread": SquarePenIcon,
+  "new-thread": NewThreadIcon,
   "add-project": FolderClosed,
   "import-thread": LuArrowDownToLine,
   settings: SettingsIcon,

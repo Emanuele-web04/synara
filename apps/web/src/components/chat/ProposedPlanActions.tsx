@@ -7,9 +7,8 @@ import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { ArrowDownIcon, ArrowUpIcon, CopyIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
-import { Button } from "../ui/button";
+import { IconButton } from "../ui/icon-button";
 import { toastManager } from "../ui/toast";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 type PlanActionVariant = "outline" | "ghost";
 
@@ -172,22 +171,16 @@ function PlanActionButton({
   children: ReactNode;
 }) {
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            aria-label={label}
-            className={cn("shrink-0", className)}
-            disabled={busy}
-            size="icon-xs"
-            variant={variant}
-            onClick={onClick}
-          />
-        }
-      >
-        {children}
-      </TooltipTrigger>
-      <TooltipPopup>{label}</TooltipPopup>
-    </Tooltip>
+    <IconButton
+      label={label}
+      tooltip={label}
+      className={cn("shrink-0", className)}
+      disabled={busy}
+      size="icon-xs"
+      variant={variant}
+      onClick={onClick}
+    >
+      {children}
+    </IconButton>
   );
 }

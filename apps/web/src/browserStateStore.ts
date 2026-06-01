@@ -13,6 +13,12 @@ const BROWSER_STATE_STORAGE_KEY = "dpcode:browser-state:v1";
 const BROWSER_HISTORY_LIMIT = 12;
 const EMPTY_BROWSER_HISTORY: BrowserHistoryEntry[] = [];
 
+interface StringStorage {
+  getItem: (name: string) => string | null;
+  setItem: (name: string, value: string) => void;
+  removeItem: (name: string) => void;
+}
+
 export interface BrowserHistoryEntry {
   url: string;
   title: string;
@@ -74,6 +80,31 @@ function sameBrowserHistoryEntries(
     );
   });
 }
+
+export function createDedupedBrowserStateStorage(
+  resolveStorage: () => StringStorage,
+): StringStorage {
+  const lastWrittenValueByName = new Map<string, string>();
+
+  return {
+    getItem: (name) => resolveStorage().getItem(name),
+    setItem: (name, value) => {
+      const previousValue = lastWrittenValueByName.get(name) ?? resolveStorage().getItem(name);
+      if (previousValue === value) {
+        lastWrittenValueByName.set(name, value);
+        return;
+      }
+      lastWrittenValueByName.set(name, value);
+      resolveStorage().setItem(name, value);
+    },
+    removeItem: (name) => {
+      lastWrittenValueByName.delete(name);
+      resolveStorage().removeItem(name);
+    },
+  };
+}
+
+const browserStateStorage = createDedupedBrowserStateStorage(() => localStorage);
 
 export const useBrowserStateStore = create<BrowserStateStore>()(
   persist(
@@ -137,7 +168,7 @@ export const useBrowserStateStore = create<BrowserStateStore>()(
     }),
     {
       name: BROWSER_STATE_STORAGE_KEY,
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => browserStateStorage),
       partialize: (state) => ({
         recentHistoryByThreadId: state.recentHistoryByThreadId,
       }),

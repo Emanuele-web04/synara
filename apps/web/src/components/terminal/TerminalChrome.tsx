@@ -2,6 +2,11 @@
 // Purpose: Reusable terminal chrome primitives for tab bars, sidebars, and toolbar actions.
 // Layer: Terminal presentation components
 // Depends on: terminal visual identities plus shared popover/button styling.
+//
+// Note: raw <button> usage in this file is intentional. These are tab-strip and
+// list-row affordances (activate tab, close tab, terminal row, group header)
+// rather than generic action buttons, so they live outside the shadcn Button
+// taxonomy. When/if we introduce a shared Tabs primitive, these can migrate.
 
 import type { ReactNode } from "react";
 
@@ -73,18 +78,18 @@ export function TerminalChromeActions(props: {
 }) {
   const itemClassName =
     props.variant === "workspace"
-      ? "inline-flex h-full items-center bg-background px-2 text-foreground/90 transition-colors hover:bg-[var(--sidebar-accent)]"
+      ? "inline-flex h-full items-center bg-[var(--color-background-surface)] px-2 text-foreground/90 transition-colors hover:bg-[var(--sidebar-accent)]"
       : props.variant === "sidebar"
-        ? "inline-flex h-full items-center bg-background px-1 text-foreground/90 transition-colors hover:bg-[var(--sidebar-accent)]"
-        : "bg-background p-1 text-foreground/90 transition-colors hover:bg-[var(--sidebar-accent)]";
+        ? "inline-flex h-full items-center bg-[var(--color-background-surface)] px-1 text-foreground/90 transition-colors hover:bg-[var(--sidebar-accent)]"
+        : "bg-[var(--color-background-surface)] p-1 text-foreground/90 transition-colors hover:bg-[var(--sidebar-accent)]";
 
   return (
     <div
       className={cn(
         "inline-flex items-center",
         props.variant === "compact"
-          ? "overflow-hidden border border-border/80 bg-background shadow-sm"
-          : "h-full items-stretch border border-border/70 bg-background shadow-sm",
+          ? "overflow-hidden border border-border/80 bg-[var(--color-background-surface)] shadow-sm"
+          : "h-full items-stretch border border-border/70 bg-[var(--color-background-surface)] shadow-sm",
       )}
     >
       {props.actions.map((action, index) => {
@@ -123,7 +128,7 @@ export function TerminalWorkspaceTabBar(props: {
   onCloseGroup: (groupId: string) => void;
 }) {
   return (
-    <div className="flex min-w-0 items-stretch justify-between bg-background">
+    <div className="flex min-w-0 items-stretch justify-between bg-[var(--color-background-surface)]">
       <div className="flex min-w-0 items-stretch overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {props.terminalGroups.map((terminalGroup) => {
           const isActive = terminalGroup.id === props.activeGroupId;
@@ -147,7 +152,7 @@ export function TerminalWorkspaceTabBar(props: {
               className={cn(
                 "group relative flex h-8 shrink-0 items-center gap-2 border-r border-border/70 px-2.5 transition-colors first:border-l first:border-l-border/70",
                 isActive
-                  ? "shadow-[inset_0_1px_0_var(--color-text-foreground)] bg-background text-foreground"
+                  ? "shadow-[inset_0_1px_0_var(--color-text-foreground)] bg-[var(--color-background-surface)] text-foreground"
                   : "border-b border-border/70 bg-transparent text-muted-foreground hover:bg-[var(--sidebar-accent)] hover:text-foreground",
               )}
             >
@@ -214,7 +219,7 @@ export function TerminalSidebar(props: {
   onCloseTerminal: (terminalId: string) => void;
 }) {
   return (
-    <aside className="flex w-36 min-w-36 flex-col border border-border/70 bg-background">
+    <aside className="flex w-36 min-w-36 flex-col border border-border/70 bg-[var(--color-background-surface)]">
       <div className="flex h-[22px] items-stretch justify-end border-b border-border/70">
         <TerminalChromeActions actions={props.actions} variant="sidebar" />
       </div>
@@ -234,7 +239,7 @@ export function TerminalSidebar(props: {
                   type="button"
                   className={`flex w-full items-center px-1 py-0.5 text-[10px] uppercase tracking-[0.08em] ${
                     isGroupActive
-                      ? "bg-[var(--sidebar-accent)] text-foreground"
+                      ? "bg-[var(--sidebar-accent-active)] text-foreground"
                       : "text-muted-foreground hover:bg-[var(--sidebar-accent)] hover:text-foreground"
                   }`}
                   onClick={() => props.onActiveTerminalChange(groupActiveTerminalId)}
@@ -260,7 +265,7 @@ export function TerminalSidebar(props: {
                       key={terminalId}
                       className={`group flex items-center gap-1 px-1 py-0.5 text-[11px] ${
                         isActive
-                          ? "bg-[var(--sidebar-accent)] text-foreground"
+                          ? "bg-[var(--sidebar-accent-active)] text-foreground"
                           : "text-muted-foreground hover:bg-[var(--sidebar-accent)] hover:text-foreground"
                       }`}
                     >

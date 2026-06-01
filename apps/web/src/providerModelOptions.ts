@@ -1,4 +1,8 @@
-import { formatModelDisplayName, geminiModelOptionsFromEffortValue } from "@t3tools/shared/model";
+import {
+  formatModelDisplayName,
+  geminiModelOptionsFromEffortValue,
+  humanizeModelSlug,
+} from "@t3tools/shared/model";
 import type {
   ClaudeModelOptions,
   ClaudeModelSelection,
@@ -35,10 +39,6 @@ export interface ProviderModelOptionGroup {
   options: ProviderModelOption[];
 }
 
-function humanizeModelIdentifier(value: string): string {
-  return value.replace(/[-_/]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
-}
-
 function modelOptionKey(option: Pick<ProviderModelOption, "slug">): string {
   return option.slug.trim().toLowerCase();
 }
@@ -57,10 +57,7 @@ export function formatProviderModelOptionName(input: {
     const modelIdentifier = trimmedSlug.includes("/")
       ? trimmedSlug.slice(trimmedSlug.lastIndexOf("/") + 1)
       : trimmedSlug;
-    const sharedDisplayName = formatModelDisplayName(modelIdentifier);
-    return sharedDisplayName && sharedDisplayName !== modelIdentifier
-      ? sharedDisplayName
-      : humanizeModelIdentifier(modelIdentifier);
+    return formatModelDisplayName(modelIdentifier) ?? humanizeModelSlug(modelIdentifier);
   }
 
   return formatModelDisplayName(trimmedSlug) ?? trimmedSlug;
@@ -146,6 +143,28 @@ export function groupProviderModelOptionsWithFavorites(input: {
     },
     ...groupedOptions,
   ];
+}
+
+/** Long grouped model lists collapse provider sections to keep submenus scannable. */
+export const COLLAPSIBLE_MODEL_GROUP_THRESHOLD = 3;
+
+export function shouldUseCollapsibleModelGroups(groupCount: number, isSearching: boolean): boolean {
+  return groupCount >= COLLAPSIBLE_MODEL_GROUP_THRESHOLD && !isSearching;
+}
+
+export function resolveModelGroupDefaultOpen(input: {
+  groupKey: string;
+  options: ReadonlyArray<ProviderModelOption>;
+  activeModel: string;
+  groupCount: number;
+}): boolean {
+  if (input.groupCount < COLLAPSIBLE_MODEL_GROUP_THRESHOLD) {
+    return true;
+  }
+  if (input.groupKey === "__favorites__") {
+    return true;
+  }
+  return input.options.some((option) => option.slug === input.activeModel);
 }
 
 export function buildNextProviderOptions(

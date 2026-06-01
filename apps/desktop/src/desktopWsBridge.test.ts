@@ -1,5 +1,5 @@
 // FILE: desktopWsBridge.test.ts
-// Purpose: Verifies desktop WebSocket URL resolution prefers DP Code env names with legacy fallback.
+// Purpose: Verifies desktop WebSocket URL resolution prefers DPCODE env names with legacy fallback.
 
 import { describe, expect, it } from "vitest";
 

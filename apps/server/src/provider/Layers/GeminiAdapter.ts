@@ -1878,7 +1878,7 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
         protocolVersion: 1,
         clientInfo: {
           name: "dpcode",
-          title: "DP Code",
+          title: "Synara",
           version: "0.1.0",
         },
         clientCapabilities: {

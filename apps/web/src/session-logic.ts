@@ -65,7 +65,7 @@ export interface WorkLogEntry {
   subagentAction?: WorkLogSubagentAction;
 }
 
-export const WORK_LOG_PRESENTATION_VERSION = 5;
+export const WORK_LOG_PRESENTATION_VERSION = 6;
 
 export interface WorkLogSubagent {
   threadId: string;
@@ -669,6 +669,7 @@ export function deriveWorkLogEntries(
     )
     .filter((activity) => !isCollabAgentToolActivity(activity))
     .filter((activity) => activity.kind !== "task.started" && activity.kind !== "task.completed")
+    .filter((activity) => !isQuietTurnLifecycleActivity(activity))
     .filter((activity) => activity.kind !== "account.rate-limits.updated")
     .filter(
       (activity) =>
@@ -687,6 +688,14 @@ export function deriveWorkLogEntries(
       ...entry
     }) => entry,
   );
+}
+
+function isQuietTurnLifecycleActivity(activity: OrchestrationThreadActivity): boolean {
+  if (activity.kind !== "turn.completed" && activity.kind !== "turn.aborted") {
+    return false;
+  }
+  // Provider lifecycle rows close internal state; assistant/result text is rendered from messages.
+  return activity.tone !== "error";
 }
 
 function isUninformativeCommandStartActivity(activity: OrchestrationThreadActivity): boolean {

@@ -2556,6 +2556,30 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         ),
       );
 
+    const stageFiles: GitCoreShape["stageFiles"] = (cwd, paths) =>
+      runGit("GitCore.stageFiles", cwd, ["add", "--", ...paths]);
+
+    const unstageFiles: GitCoreShape["unstageFiles"] = (cwd, paths) =>
+      Effect.gen(function* () {
+        // `git reset` resolves against HEAD, which does not exist before the first
+        // commit. Fall back to `git rm --cached` so newly staged files can still be
+        // unstaged in a freshly initialized repository.
+        const headExists = yield* executeGit(
+          "GitCore.unstageFiles.headExists",
+          cwd,
+          ["rev-parse", "--verify", "HEAD"],
+          { allowNonZeroExit: true },
+        ).pipe(Effect.map((result) => result.code === 0));
+
+        yield* runGit(
+          "GitCore.unstageFiles",
+          cwd,
+          headExists
+            ? ["reset", "-q", "HEAD", "--", ...paths]
+            : ["rm", "--cached", "-q", "--", ...paths],
+        );
+      });
+
     return {
       execute,
       status,
@@ -2588,6 +2612,8 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       removeIndexLock,
       initRepo,
       listLocalBranchNames,
+      stageFiles,
+      unstageFiles,
     } satisfies GitCoreShape;
   });
 

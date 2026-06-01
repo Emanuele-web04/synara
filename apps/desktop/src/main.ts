@@ -116,8 +116,8 @@ const STATE_DIR = Path.join(BASE_DIR, "userdata");
 const DESKTOP_SCHEME = "t3";
 const ROOT_DIR = Path.resolve(__dirname, "../../..");
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
-const APP_DISPLAY_NAME = isDevelopment ? "DP Code (Dev)" : "DP Code (Alpha)";
-const APP_USER_MODEL_ID = isDevelopment ? "com.t3tools.dpcode.dev" : "com.t3tools.dpcode";
+const APP_DISPLAY_NAME = isDevelopment ? "Synara (Dev)" : "Synara";
+const APP_USER_MODEL_ID = isDevelopment ? "com.t3tools.synara.dev" : "com.t3tools.synara";
 const COMMIT_HASH_PATTERN = /^[0-9a-f]{7,40}$/i;
 const COMMIT_HASH_DISPLAY_LENGTH = 12;
 const LOG_DIR = Path.join(STATE_DIR, "logs");
@@ -138,7 +138,7 @@ const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
 const DESKTOP_MENU_ZOOM_FACTOR_STEP = 1.1;
 const DESKTOP_MENU_MIN_ZOOM_FACTOR = 0.25;
 const DESKTOP_MENU_MAX_ZOOM_FACTOR = 5;
-const DPCODE_BROWSER_LABEL = "DPCODE browser";
+const DPCODE_BROWSER_LABEL = "Synara browser";
 const browserPerfLoggingEnabled =
   process.env.DPCODE_BROWSER_PERF === "1" || process.env.T3CODE_BROWSER_PERF === "1";
 
@@ -687,7 +687,7 @@ function handleFatalStartupError(stage: string, error: unknown): void {
   console.error(`[desktop] fatal startup error (${stage})`, error);
   if (!isQuitting) {
     isQuitting = true;
-    dialog.showErrorBox("DP Code failed to start", `Stage: ${stage}\n${message}${detail}`);
+    dialog.showErrorBox("Synara failed to start", `Stage: ${stage}\n${message}${detail}`);
   }
   stopBackend();
   restoreStdIoCapture?.();
@@ -813,7 +813,7 @@ async function checkForUpdatesFromMenu(): Promise<void> {
     void dialog.showMessageBox({
       type: "info",
       title: "You're up to date!",
-      message: `DP Code ${updateState.currentVersion} is currently the newest version available.`,
+      message: `Synara ${updateState.currentVersion} is currently the newest version available.`,
       buttons: ["OK"],
     });
   } else if (updateState.status === "error") {
@@ -976,9 +976,9 @@ function resolveNotificationIconPath(): string | null {
     return null;
   }
   if (process.platform === "win32") {
-    return resolveResourcePath("dpcode.png") ?? resolveIconPath("ico");
+    return resolveResourcePath("synara.png") ?? resolveIconPath("ico");
   }
-  return resolveResourcePath("dpcode.png") ?? resolveIconPath("png");
+  return resolveResourcePath("synara.png") ?? resolveIconPath("png");
 }
 
 // Keep the app badge aligned with desktop notifications that arrive off-focus.
@@ -1066,13 +1066,8 @@ function showDesktopNotification(input: {
  * Resolve the Electron userData directory path.
  *
  * Electron derives the default userData path from `productName` in
- * package.json, which currently produces directories with spaces and
- * parentheses (e.g. `~/.config/DP Code (Alpha)` on Linux). This is
- * unfriendly for shell usage and violates Linux naming conventions.
- *
- * We override it to a clean lowercase DP Code name. Legacy T3 Code/early
- * DP Code Chromium profiles are intentionally left in place so both apps can
- * coexist without sharing renderer storage.
+ * package.json. We override it to a clean lowercase Synara name while seeding
+ * from legacy app profiles when needed.
  */
 function resolveUserDataPath(): string {
   const appDataBase = resolveDesktopAppDataBase();
@@ -1082,12 +1077,12 @@ function resolveUserDataPath(): string {
     legacyPaths: resolveLegacyDesktopUserDataPaths({ appDataBase, isDevelopment }),
   });
   if (seedResult.status === "seeded") {
-    console.info("[desktop] Seeded DP Code Electron profile from legacy profile", {
+    console.info("[desktop] Seeded Synara Electron profile from legacy profile", {
       sourcePath: seedResult.sourcePath,
       targetPath: seedResult.targetPath,
     });
   } else if (seedResult.status === "seed-failed") {
-    console.warn("[desktop] Failed to seed DP Code Electron profile from legacy profile", {
+    console.warn("[desktop] Failed to seed Synara Electron profile from legacy profile", {
       sourcePath: seedResult.sourcePath,
       targetPath: seedResult.targetPath,
       error: seedResult.error,
@@ -1927,7 +1922,7 @@ function registerIpcHandlers(): void {
   registerDesktopVoiceTranscriptionHandler();
   startBrowserPerformanceLogging();
   void ensureBrowserUsePipeServer().catch((error) => {
-    console.warn("[DPCODE browser] Failed to start browser-use native pipe", error);
+    console.warn("[Synara browser] Failed to start browser-use native pipe", error);
   });
 
   registerBrowserIpcHandlers(ipcMain, browserManager);
@@ -1953,7 +1948,10 @@ function createWindow(): BrowserWindow {
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 16, y: 18 },
     vibrancy: "under-window",
-    visualEffectState: "active",
+    // "followWindow" lets macOS drop vibrancy blending to inactive when the
+    // window is backgrounded, so WindowServer stops continuously recompositing
+    // it. "active" forced full-cost blending even when the app was unfocused.
+    visualEffectState: "followWindow",
     backgroundColor: "#00000000",
     webPreferences: {
       preload: Path.join(__dirname, "preload.js"),
@@ -1961,6 +1959,8 @@ function createWindow(): BrowserWindow {
       nodeIntegration: false,
       sandbox: true,
       webviewTag: true,
+      // Let Chromium throttle renderer timers/rAF when the window is hidden.
+      backgroundThrottling: true,
     },
   });
   browserManager.setWindow(window);

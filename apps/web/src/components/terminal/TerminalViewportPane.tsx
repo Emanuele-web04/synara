@@ -2,11 +2,16 @@
 // Purpose: Renders the active terminal pane tree with nested splits and pane-local tab strips.
 // Layer: Terminal presentation components
 // Depends on: caller-provided viewport renderer so xterm lifecycle can stay external.
+//
+// Note: pane-tab activate and close buttons are intentionally raw <button>; they
+// are tab-strip affordances, not shadcn Buttons. See TerminalChrome.tsx for the
+// same rationale.
 
 import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 
 import type { ResolvedTerminalVisualIdentity } from "@t3tools/shared/terminalThreads";
 
+import { IconButton } from "~/components/ui/icon-button";
 import {
   Maximize2,
   Minimize2,
@@ -79,21 +84,22 @@ function PaneActionButton(props: {
   className?: string | undefined;
 }) {
   return (
-    <button
-      type="button"
+    <IconButton
       className={cn(
-        "inline-flex h-7 w-7 items-center justify-center bg-background text-foreground/80 transition-colors hover:bg-[var(--sidebar-accent)] hover:text-foreground",
+        "size-7 rounded-none border-transparent bg-[var(--color-background-surface)] text-foreground/80 shadow-none hover:bg-[var(--sidebar-accent)] hover:text-foreground sm:size-7",
         props.className,
       )}
       onClick={(event) => {
         event.stopPropagation();
         props.onClick();
       }}
-      aria-label={props.label}
+      label={props.label}
       title={props.label}
+      size="icon-xs"
+      variant="ghost"
     >
       {props.children}
-    </button>
+    </IconButton>
   );
 }
 
@@ -129,14 +135,14 @@ export default function TerminalViewportPane({
       return (
         <div
           key={node.paneId}
-          className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background"
+          className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-[var(--color-background-surface)]"
           onMouseDown={() => {
             if (!isFocusedPane) {
               onActiveTerminalChange(activePaneTerminalId);
             }
           }}
         >
-          <div className="flex h-8 min-h-8 items-stretch bg-background">
+          <div className="flex h-8 min-h-8 items-stretch bg-[var(--color-background-surface)]">
             <div className="flex min-w-0 flex-1 items-stretch overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               {node.terminalIds.map((terminalId, index) => {
                 const visualIdentity = terminalVisualIdentityById.get(terminalId);
@@ -150,9 +156,9 @@ export default function TerminalViewportPane({
                       "group/tab relative flex h-full shrink-0 items-stretch border-r border-border/70",
                       index === 0 ? "border-l-0" : "",
                       isActiveTab && isFocusedPane
-                        ? "shadow-[inset_0_1px_0_var(--color-text-foreground)] bg-background text-foreground"
+                        ? "shadow-[inset_0_1px_0_var(--color-text-foreground)] bg-[var(--color-background-surface)] text-foreground"
                         : isActiveTab
-                          ? "shadow-[inset_0_1px_0_color-mix(in_srgb,var(--color-text-foreground)_35%,transparent)] bg-background text-foreground"
+                          ? "shadow-[inset_0_1px_0_color-mix(in_srgb,var(--color-text-foreground)_35%,transparent)] bg-[var(--color-background-surface)] text-foreground"
                           : "border-b border-border/70 bg-muted/25 text-muted-foreground hover:bg-[var(--sidebar-accent)] hover:text-foreground",
                     )}
                   >
@@ -260,7 +266,7 @@ export default function TerminalViewportPane({
             </div>
           </div>
 
-          <div className="relative min-h-0 min-w-0 flex-1 bg-background">
+          <div className="relative min-h-0 min-w-0 flex-1 bg-[var(--color-background-surface)]">
             {node.terminalIds.map((terminalId) => {
               const isActiveTab = terminalId === activePaneTerminalId;
               return (
@@ -336,7 +342,7 @@ export default function TerminalViewportPane({
       <div
         key={node.id}
         className={cn(
-          "flex h-full min-h-0 min-w-0 gap-0 overflow-hidden bg-background",
+          "flex h-full min-h-0 min-w-0 gap-0 overflow-hidden bg-[var(--color-background-surface)]",
           node.direction === "horizontal" ? "flex-row" : "flex-col",
         )}
       >
@@ -374,6 +380,8 @@ export default function TerminalViewportPane({
   };
 
   return (
-    <div className="h-full min-h-0 min-w-0 overflow-hidden bg-background">{renderNode(layout)}</div>
+    <div className="h-full min-h-0 min-w-0 overflow-hidden bg-[var(--color-background-surface)]">
+      {renderNode(layout)}
+    </div>
   );
 }

@@ -25,6 +25,7 @@ import ChatMarkdown from "../ChatMarkdown";
 import {
   BotIcon,
   CheckIcon,
+  ChangesIcon,
   CircleAlertIcon,
   EyeIcon,
   GitHubIcon,
@@ -33,6 +34,7 @@ import {
   type LucideIcon,
   McpIcon,
   QueueArrow,
+  SkillCubeIcon,
   SquarePenIcon,
   TerminalIcon,
   Undo2Icon,
@@ -41,15 +43,17 @@ import {
 import { Button } from "../ui/button";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
+import { ChangedFilesTree } from "./ChangedFilesTree";
 import { DiffStatLabel } from "./DiffStatLabel";
 import { FileEntryIcon } from "./FileEntryIcon";
 import { MentionChipIcon } from "./MentionChipIcon";
-import { MessageActionButton } from "./MessageActionButton";
+import { MessageActionButton, MESSAGE_ACTION_ICON_CLASS_NAME } from "./MessageActionButton";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { AssistantSelectionsSummaryChip } from "./AssistantSelectionsSummaryChip";
 import {
   computeStableMessagesTimelineRows,
   deriveMessagesTimelineRows,
+  MAX_VISIBLE_WORK_LOG_ENTRIES,
   type MessagesTimelineRow,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
@@ -68,6 +72,10 @@ import {
   normalizeChatFontSizePx,
   type TimestampFormat,
 } from "../../appSettings";
+import {
+  CHAT_COLUMN_FRAME_CLASS_NAME,
+  CHAT_COLUMN_GUTTER_CLASS_NAME,
+} from "./composerPickerStyles";
 import { formatShortTimestamp } from "../../timestampFormat";
 import {
   buildInlineTerminalContextText,
@@ -77,17 +85,27 @@ import {
 import { splitPromptIntoDisplaySegments } from "~/composer-editor-mentions";
 import {
   COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME,
+  COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME,
   COMPOSER_INLINE_AGENT_CHIP_CLASS_NAME,
   COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME,
   COMPOSER_INLINE_MENTION_CHIP_CLASS_NAME,
   COMPOSER_INLINE_SKILL_CHIP_CLASS_NAME,
-  COMPOSER_INLINE_SKILL_CHIP_ICON_CLASS_NAME,
-  COMPOSER_INLINE_SKILL_CHIP_ICON_SVG,
+  COMPOSER_INLINE_SKILL_CHIP_ICON_NAME,
   formatComposerSkillChipLabel,
 } from "../composerInlineChip";
 import { basenameOfPath } from "../../file-icons";
-import { getChatTranscriptTextStyle } from "./chatTypography";
+import { CentralIcon } from "../../lib/central-icons";
+import {
+  getChatMessageFooterTextStyle,
+  getChatTranscriptTextStyle,
+  getChatTranscriptUserMessageTextStyle,
+  USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME,
+  USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
+} from "./chatTypography";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
+import { DisclosureRegion } from "../ui/DisclosureRegion";
+import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
+import { disclosureContentClassName } from "~/lib/disclosureMotion";
 import { getAppTypographyScale } from "../../lib/appTypography";
 import {
   formatSubagentModelLabel,
@@ -98,34 +116,12 @@ import {
 import { RiRobot3Line } from "react-icons/ri";
 import { deriveUserMessagePreviewState } from "./userMessagePreview";
 
-const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
 const MAX_VISIBLE_INLINE_TOOL_ENTRIES = 4;
-
-const SkillCubeIcon: LucideIcon = (props) => (
-  <svg {...props} viewBox="0 0 24 24" fill="none">
-    <path
-      d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-    <path
-      d="m3.3 7 8.7 5 8.7-5"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-    <path
-      d="M12 22V12"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-  </svg>
-);
+// The composer overlaps the transcript by design, so the list needs extra tail
+// space beyond the overlap to keep final cards from sitting flush against it.
+const MIN_BOTTOM_CONTENT_INSET_PX = 64;
+const MESSAGE_HOVER_REVEAL_CLASS_NAME =
+  "opacity-0 transition-opacity pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto";
 
 const AgentTaskIcon: LucideIcon = (props) => (
   <RiRobot3Line className={props.className} style={props.style} />
@@ -263,6 +259,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     () => getChatTranscriptTextStyle(normalizedChatFontSizePx),
     [normalizedChatFontSizePx],
   );
+  const userMessageTypographyStyle = useMemo(
+    () => getChatTranscriptUserMessageTextStyle(normalizedChatFontSizePx),
+    [normalizedChatFontSizePx],
+  );
+  const chatMessageFooterStyle = useMemo(
+    () => getChatMessageFooterTextStyle(normalizedChatFontSizePx),
+    [normalizedChatFontSizePx],
+  );
   const [localExpandedWorkGroups, setLocalExpandedWorkGroups] = useState<Record<string, boolean>>(
     {},
   );
@@ -280,6 +284,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     },
     [onToggleWorkGroup],
   );
+  const [expandedCollapsedWork, setExpandedCollapsedWork] = useState<Record<string, boolean>>({});
+  const setCollapsedWorkExpanded = useCallback((messageId: string, open: boolean) => {
+    setExpandedCollapsedWork((current) => ({
+      ...current,
+      [messageId]: open,
+    }));
+  }, []);
   const [expandedFileChangesByTurnId, setExpandedFileChangesByTurnId] = useState<
     Record<string, boolean>
   >({});
@@ -292,6 +303,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const timelineExtraData = useMemo(
     () => ({
       editingUserMessageId,
+      expandedCollapsedWork,
       expandedFileChangesByTurnId,
       expandedUserMessagesById,
       expandedWorkGroupsState,
@@ -299,6 +311,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     }),
     [
       editingUserMessageId,
+      expandedCollapsedWork,
       expandedFileChangesByTurnId,
       expandedUserMessagesById,
       expandedWorkGroupsState,
@@ -307,6 +320,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   );
   const fallbackListRef = useRef<LegendListRef | null>(null);
   const resolvedListRef = listRef ?? fallbackListRef;
+  const bottomSpacerHeightPx = Math.max(bottomContentInsetPx ?? 0, MIN_BOTTOM_CONTENT_INSET_PX);
+  const listFooter = useMemo(
+    () => <div aria-hidden="true" style={{ height: bottomSpacerHeightPx }} />,
+    [bottomSpacerHeightPx],
+  );
 
   const rawRows = useMemo(
     () =>
@@ -334,6 +352,41 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     ],
   );
   const rows = useStableRows(rawRows);
+  const tailContentRowId = useMemo(() => {
+    for (let index = rows.length - 1; index >= 0; index -= 1) {
+      const row = rows[index]!;
+      if (row.kind !== "working") return row.id;
+    }
+    return null;
+  }, [rows]);
+  const tailScrollFrameRef = useRef<number | null>(null);
+  const tailScrollTimeoutsRef = useRef<number[]>([]);
+  const clearTailExpansionScrollTimers = useCallback(() => {
+    if (tailScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(tailScrollFrameRef.current);
+      tailScrollFrameRef.current = null;
+    }
+    for (const timeoutId of tailScrollTimeoutsRef.current) {
+      window.clearTimeout(timeoutId);
+    }
+    tailScrollTimeoutsRef.current = [];
+  }, []);
+  const scrollTailExpansionToEnd = useCallback(() => {
+    clearTailExpansionScrollTimers();
+    const scrollToEnd = () => {
+      void resolvedListRef.current?.scrollToEnd?.({ animated: false });
+    };
+    tailScrollFrameRef.current = window.requestAnimationFrame(() => {
+      tailScrollFrameRef.current = null;
+      scrollToEnd();
+    });
+    for (const delay of [80, 180, 260]) {
+      const timeoutId = window.setTimeout(scrollToEnd, delay);
+      tailScrollTimeoutsRef.current.push(timeoutId);
+    }
+  }, [clearTailExpansionScrollTimers, resolvedListRef]);
+  useEffect(() => clearTailExpansionScrollTimers, [clearTailExpansionScrollTimers]);
+  const ignoreTimelineImageLoad = useCallback(() => {}, []);
   const latestEditableUserMessageId = useMemo(() => {
     const messages = rows.flatMap((row) => (row.kind === "message" ? [row.message] : []));
     const editTarget = resolveLatestTailUserMessageEditTarget({
@@ -355,7 +408,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     }
     return map;
   }, [rows]);
-  const onTimelineImageLoad = useCallback(() => {}, []);
   const previousRowCountRef = useRef(rows.length);
   useEffect(() => {
     const previousRowCount = previousRowCountRef.current;
@@ -418,6 +470,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const renderRowContent = (row: MessagesTimelineRow) => (
     <div
       className={cn(
+        CHAT_COLUMN_FRAME_CLASS_NAME,
+        "px-1",
         row.kind === "work" || (row.kind === "message" && row.message.role === "assistant")
           ? "pb-2"
           : "pb-4",
@@ -448,7 +502,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     key={`work-row:${workEntry.id}`}
                     workEntry={workEntry}
                     chatMetaFontSizePx={appTypographyScale.chatMetaPx}
-                    textFontSizePx={appTypographyScale.uiSmPx}
+                    textFontSizePx={normalizedChatFontSizePx}
                     density={prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"}
                     {...(onOpenThread ? { onOpenThread } : {})}
                   />
@@ -523,6 +577,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             row.message.id === latestEditableUserMessageId &&
             displayedUserMessage.copyText.trim().length > 0;
           const hasLeadingMedia = renderedAssistantSelections.length > 0 || userImages.length > 0;
+          const isTailContentRow = row.id === tailContentRowId;
           return (
             <div className="flex w-full justify-end">
               <div
@@ -554,7 +609,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         image={image}
                         userImages={userImages}
                         onImageExpand={onImageExpand}
-                        onTimelineImageLoad={onTimelineImageLoad}
+                        onTimelineImageLoad={
+                          isTailContentRow ? scrollTailExpansionToEnd : ignoreTimelineImageLoad
+                        }
                         resolvedTheme={resolvedTheme}
                       />
                     ))}
@@ -565,21 +622,24 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     key={row.message.id}
                     initialValue={displayedUserMessage.copyText}
                     disabled={isSubmittingThisEdit || isRevertingCheckpoint}
-                    chatTypographyStyle={chatTypographyStyle}
+                    chatTypographyStyle={userMessageTypographyStyle}
                     onCancel={cancelUserMessageEdit}
                     onSubmit={(text) => void submitUserMessageEdit(row.message.id, text)}
                   />
                 ) : showUserText ? (
                   <div
                     className={cn(
-                      "w-max max-w-full min-w-0 self-end rounded-lg bg-secondary px-3.5",
-                      bubbleIsChipOnly ? "py-1" : "pt-[5.5px] pb-[7px]",
+                      "w-max max-w-full min-w-0 self-end bg-[var(--app-user-message-background)]",
+                      USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME,
+                      bubbleIsChipOnly
+                        ? "py-1 px-3.5"
+                        : USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
                     )}
                   >
                     <UserMessageBody
                       text={userMessagePreview.text}
                       terminalContexts={terminalContexts}
-                      chatTypographyStyle={chatTypographyStyle}
+                      chatTypographyStyle={userMessageTypographyStyle}
                       resolvedTheme={resolvedTheme}
                     />
                     {userMessagePreview.collapsible && (
@@ -601,10 +661,19 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   </div>
                 ) : null}
                 {!isEditingThisMessage && (
-                  <div className="flex items-center justify-end gap-1.5 pr-0.5">
-                    <div className="flex items-center gap-1 opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover:opacity-100">
+                  <div
+                    className="flex items-center justify-end gap-2 pr-0.5 font-system-ui font-normal text-muted-foreground/45"
+                    style={chatMessageFooterStyle}
+                  >
+                    <p className={cn("tabular-nums", MESSAGE_HOVER_REVEAL_CLASS_NAME)}>
+                      {formatShortTimestamp(row.message.createdAt, timestampFormat)}
+                    </p>
+                    <div className="flex items-center gap-2">
                       {displayedUserMessage.copyText && (
-                        <MessageCopyButton text={displayedUserMessage.copyText} />
+                        <MessageCopyButton
+                          text={displayedUserMessage.copyText}
+                          className={MESSAGE_HOVER_REVEAL_CLASS_NAME}
+                        />
                       )}
                       {showEditUserMessage && (
                         <MessageActionButton
@@ -614,29 +683,21 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           className="disabled:text-muted-foreground/35"
                           onClick={() => startUserMessageEdit(row.message.id)}
                         >
-                          <SquarePenIcon className="size-3.5" />
+                          <SquarePenIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
                         </MessageActionButton>
                       )}
-                      <MessageActionButton
-                        label="Revert to this message"
-                        tooltip={
-                          canRevertAgentWork
-                            ? "Revert to this message"
-                            : "Undo becomes available after a reply is checkpointed"
-                        }
-                        disabled={!canRevertAgentWork || isRevertingCheckpoint || isWorking}
-                        className="disabled:text-muted-foreground/35"
-                        onClick={() => onRevertUserMessage(row.message.id)}
-                      >
-                        <Undo2Icon className="size-3.5" />
-                      </MessageActionButton>
+                      {canRevertAgentWork ? (
+                        <MessageActionButton
+                          label="Revert to this message"
+                          tooltip="Revert to this message"
+                          disabled={isRevertingCheckpoint || isWorking}
+                          className="disabled:text-muted-foreground/35"
+                          onClick={() => onRevertUserMessage(row.message.id)}
+                        >
+                          <Undo2Icon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
+                        </MessageActionButton>
+                      ) : null}
                     </div>
-                    <p
-                      className="font-system-ui text-right tabular-nums text-muted-foreground/45"
-                      style={{ fontSize: `${appTypographyScale.uiTimestampPx}px` }}
-                    >
-                      {formatShortTimestamp(row.message.createdAt, timestampFormat)}
-                    </p>
                   </div>
                 )}
               </div>
@@ -648,9 +709,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         row.message.role === "assistant" &&
         (() => {
           const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
-          const inlineToolEntries = hasOnlyToolToneEntries(row.inlineWorkEntries)
-            ? row.inlineWorkEntries
-            : [];
+          const inlineWorkEntries = row.inlineWorkEntries ?? [];
+          const inlineToolEntries = inlineWorkEntries.filter((entry) => entry.tone === "tool");
+          const inlineStatusEntries = inlineWorkEntries.filter((entry) => entry.tone !== "tool");
           const inlineToolGroupId =
             inlineToolEntries.length > 0 ? (row.inlineWorkGroupId ?? null) : null;
           const inlineToolExpanded =
@@ -665,9 +726,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 : inlineToolEntries.slice(0, MAX_VISIBLE_INLINE_TOOL_ENTRIES);
           const hiddenInlineToolCount = inlineToolEntries.length - visibleInlineToolEntries.length;
           const inlineWorkSummary =
-            inlineToolEntries.length > 0
-              ? null
-              : formatInlineWorkSummary(row.inlineWorkEntries ?? []);
+            inlineToolEntries.length > 0 ? null : formatInlineWorkSummary(inlineStatusEntries);
           const assistantCopyState = resolveAssistantMessageCopyState({
             text: row.message.text ?? null,
             showCopyButton: row.showAssistantCopyButton,
@@ -699,6 +758,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             hasGenericInlineFileChangeEntry && (turnSummary?.files.length ?? 0) > 0
               ? turnSummary!.files
               : [];
+          const inlineFileChangeDetailsAlreadyVisible =
+            inlineEditedFilesFromTurnSummary.length > 0 ||
+            visibleRenderableInlineToolEntries.some(
+              (workEntry) =>
+                isFileChangeWorkEntry(workEntry) && (workEntry.changedFiles?.length ?? 0) > 0,
+            );
           const assistantMeta = row.message.streaming ? (
             nowIso ? (
               [
@@ -733,8 +798,81 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               .filter((value): value is string => Boolean(value))
               .join(" • ")
           );
+          const collapsedTurnItems = row.collapsedTurnItems;
+          const hasCollapsedWork = Boolean(collapsedTurnItems && collapsedTurnItems.length > 0);
+          const isCollapsedWorkExpanded = hasCollapsedWork
+            ? (expandedCollapsedWork[row.message.id] ?? false)
+            : false;
+          const isTailContentRow = row.id === tailContentRowId;
           return (
             <>
+              {hasCollapsedWork && (
+                <div className="mb-3">
+                  <Collapsible
+                    className="group/collapsed-work"
+                    open={isCollapsedWorkExpanded}
+                    onOpenChange={(open) => {
+                      setCollapsedWorkExpanded(row.message.id, open);
+                      if (open && isTailContentRow) {
+                        scrollTailExpansionToEnd();
+                      }
+                    }}
+                  >
+                    <CollapsibleTrigger
+                      data-scroll-anchor-ignore={isTailContentRow ? true : undefined}
+                      className="inline-flex items-center gap-1 pb-2 text-left text-muted-foreground/70 transition-colors duration-200 hover:text-muted-foreground/90"
+                      style={{ fontSize: chatTypographyStyle.fontSize }}
+                    >
+                      <span>
+                        {row.collapsedWorkElapsed
+                          ? `Worked for ${row.collapsedWorkElapsed}`
+                          : "Details"}
+                      </span>
+                      <DisclosureChevron
+                        open={isCollapsedWorkExpanded}
+                        className="text-muted-foreground/55"
+                      />
+                    </CollapsibleTrigger>
+                    <CollapsiblePanel>
+                      <div
+                        className={disclosureContentClassName(
+                          isCollapsedWorkExpanded,
+                          "mb-2.5 space-y-1.5",
+                        )}
+                      >
+                        {collapsedTurnItems!.map((item) =>
+                          item.kind === "work" ? (
+                            <SimpleWorkEntryRow
+                              key={`collapsed-work:${row.message.id}:${item.id}`}
+                              workEntry={item.entry}
+                              chatMetaFontSizePx={appTypographyScale.chatMetaPx}
+                              textFontSizePx={normalizedChatFontSizePx}
+                              density={
+                                prefersCompactWorkEntryRow(item.entry) ? "compact" : "default"
+                              }
+                              {...(onOpenThread ? { onOpenThread } : {})}
+                            />
+                          ) : (
+                            <div
+                              key={`collapsed-narration:${row.message.id}:${item.id}`}
+                              className="text-muted-foreground/80"
+                            >
+                              <ChatMarkdown
+                                text={item.message.text}
+                                cwd={markdownCwd}
+                                isStreaming={false}
+                                style={chatTypographyStyle}
+                                onImageExpand={onImageExpand}
+                              />
+                            </div>
+                          ),
+                        )}
+                      </div>
+                    </CollapsiblePanel>
+                  </Collapsible>
+                  <div className="h-px w-full bg-border" />
+                </div>
+              )}
               {row.showCompletionDivider && (
                 <div className="my-3 flex items-center gap-3">
                   <span className="h-px flex-1 bg-border" />
@@ -747,7 +885,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   <span className="h-px flex-1 bg-border" />
                 </div>
               )}
-              <div className="min-w-0 px-1 py-0.5">
+              <div className="group min-w-0 py-0.5">
                 <div data-assistant-message-id={row.message.id}>
                   <ChatMarkdown
                     text={messageText}
@@ -757,7 +895,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     onImageExpand={onImageExpand}
                   />
                 </div>
-                {visibleRenderableInlineToolEntries.length > 0 && (
+                {!hasCollapsedWork && visibleRenderableInlineToolEntries.length > 0 && (
                   <div className="mt-2.5">
                     <div className="space-y-px">
                       {visibleRenderableInlineToolEntries.map((workEntry) => (
@@ -791,13 +929,27 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       )}
                   </div>
                 )}
+                {!hasCollapsedWork && inlineStatusEntries.length > 0 && (
+                  <div className="mt-2 space-y-0.5">
+                    {inlineStatusEntries.map((workEntry) => (
+                      <SimpleWorkEntryRow
+                        key={`inline-status-row:${row.message.id}:${workEntry.id}`}
+                        workEntry={workEntry}
+                        chatMetaFontSizePx={appTypographyScale.chatMetaPx}
+                        textFontSizePx={normalizedChatFontSizePx}
+                        density={prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"}
+                        {...(onOpenThread ? { onOpenThread } : {})}
+                      />
+                    ))}
+                  </div>
+                )}
                 {inlineEditedFilesFromTurnSummary.length > 0 && (
                   <div className="mt-2 space-y-0.5">
                     {inlineEditedFilesFromTurnSummary.map((file) => (
                       <button
                         key={`inline-summary-edit:${row.message.id}:${file.path}`}
                         type="button"
-                        className="group flex w-full max-w-full items-baseline gap-1 px-0 py-[1px] text-left transition-opacity duration-150 hover:opacity-95"
+                        className="group/file-row flex w-full max-w-full items-baseline gap-1 px-0 py-1.5 text-left transition-opacity duration-150 hover:opacity-95"
                         title={file.path}
                         onClick={() => onOpenTurnDiff(turnSummary!.turnId, file.path)}
                       >
@@ -808,17 +960,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           Edited
                         </span>
                         <span
-                          className="font-system-ui max-w-[28rem] truncate underline-offset-2 group-hover:underline group-focus-visible:underline"
+                          className="font-system-ui max-w-[28rem] truncate text-[var(--color-text-foreground)] underline-offset-2 group-hover/file-row:underline group-focus-visible/file-row:underline"
                           style={{
                             fontSize: `${normalizedChatFontSizePx}px`,
-                            color: "var(--color-token-text-link-foreground)",
                           }}
                         >
                           {basename(file.path)}
                         </span>
                         {(file.additions ?? 0) + (file.deletions ?? 0) > 0 ? (
                           <span
-                            className="font-chat-code shrink-0 tabular-nums whitespace-nowrap"
+                            className="font-system-ui shrink-0 tabular-nums whitespace-nowrap"
                             style={{ fontSize: `${normalizedChatFontSizePx}px` }}
                           >
                             <DiffStatLabel
@@ -831,6 +982,20 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     ))}
                   </div>
                 )}
+                <div
+                  className="mt-0.5 flex items-center gap-2 font-system-ui font-normal text-muted-foreground/45"
+                  style={chatMessageFooterStyle}
+                >
+                  {assistantCopyState.visible ? (
+                    <MessageCopyButton
+                      text={assistantCopyState.text ?? ""}
+                      className={MESSAGE_HOVER_REVEAL_CLASS_NAME}
+                    />
+                  ) : null}
+                  <p className={cn("tabular-nums", MESSAGE_HOVER_REVEAL_CLASS_NAME)}>
+                    {assistantMeta}
+                  </p>
+                </div>
                 {(() => {
                   if (!turnSummary) return null;
                   const checkpointFiles = turnSummary.files;
@@ -843,18 +1008,69 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   const canUndo =
                     correspondingUserMessageId != null &&
                     revertTurnCountByUserMessageId.has(correspondingUserMessageId);
+                  const totalAdditions = checkpointFiles.reduce(
+                    (sum, file) => sum + (file.additions ?? 0),
+                    0,
+                  );
+                  const totalDeletions = checkpointFiles.reduce(
+                    (sum, file) => sum + (file.deletions ?? 0),
+                    0,
+                  );
+                  const editedFilesLabel =
+                    checkpointFiles.length === 1
+                      ? "Edited 1 file"
+                      : `Edited ${checkpointFiles.length} files`;
                   return (
-                    <div className="mt-5 overflow-hidden rounded-xl border border-[color:var(--color-border-light)] bg-[var(--composer-surface)]">
-                      <div className="flex items-center justify-between gap-2 border-b border-[color:var(--color-border-light)] px-3 py-2">
-                        <span
-                          className="truncate font-normal text-foreground/92"
-                          style={{ fontSize: chatTypographyStyle.fontSize }}
-                        >
-                          {checkpointFiles.length === 1
-                            ? "1 File changed"
-                            : `${checkpointFiles.length} Files changed`}
-                        </span>
-                        <div className="flex items-center gap-4">
+                    <div className="mt-4 overflow-hidden rounded-[0.65rem] border border-[color:var(--color-border-light)]">
+                      <div
+                        className={cn(
+                          "flex items-center justify-between gap-3 bg-[var(--app-user-message-background)] px-3 py-1.5",
+                          fileChangesExpanded &&
+                            "border-b border-[color:var(--color-border-light)]",
+                        )}
+                      >
+                        <div className="flex min-w-0 items-center gap-2.5">
+                          <ChangesIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
+                          <div className="min-w-0">
+                            <div
+                              className="truncate font-normal text-foreground/92"
+                              style={{ fontSize: chatTypographyStyle.fontSize }}
+                            >
+                              {editedFilesLabel}
+                            </div>
+                            {totalAdditions + totalDeletions > 0 ? (
+                              <div
+                                className="font-system-ui tabular-nums"
+                                style={{ fontSize: chatTypographyStyle.fontSize }}
+                              >
+                                <DiffStatLabel
+                                  additions={totalAdditions}
+                                  deletions={totalDeletions}
+                                />
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          {canUndo && (
+                            <button
+                              type="button"
+                              className="flex items-center gap-1 text-muted-foreground transition-colors hover:text-foreground"
+                              style={{ fontSize: chatTypographyStyle.fontSize }}
+                              onClick={() => onRevertUserMessage(correspondingUserMessageId)}
+                            >
+                              Undo
+                              <Undo2Icon className="size-3" />
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className="rounded-md border border-[color:var(--color-border-light)] px-2.5 py-0.5 text-foreground/90 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground"
+                            style={{ fontSize: chatTypographyStyle.fontSize }}
+                            onClick={() => onOpenTurnDiff(turnSummary.turnId)}
+                          >
+                            Review
+                          </button>
                           <button
                             type="button"
                             className="inline-flex items-center justify-center rounded-md p-1 text-muted-foreground/70 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground/80"
@@ -867,47 +1083,49 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                             onClick={(event) => {
                               event.preventDefault();
                               event.stopPropagation();
+                              if (!fileChangesExpanded && isTailContentRow) {
+                                scrollTailExpansionToEnd();
+                              }
                               toggleFileChangesExpanded(turnSummary.turnId);
                             }}
+                            data-scroll-anchor-ignore={isTailContentRow ? true : undefined}
                           >
                             <DisclosureChevron
                               open={fileChangesExpanded}
                               className="dark:text-muted-foreground/50"
                             />
                           </button>
-                          {canUndo && (
-                            <button
-                              type="button"
-                              className="flex items-center gap-1 text-muted-foreground transition-colors hover:text-foreground"
-                              style={{ fontSize: chatTypographyStyle.fontSize }}
-                              onClick={() => onRevertUserMessage(correspondingUserMessageId)}
-                            >
-                              Undo
-                              <Undo2Icon className="size-3" />
-                            </button>
-                          )}
                         </div>
                       </div>
-                      {fileChangesExpanded && (
-                        <div className="bg-[var(--composer-surface)]">
-                          {checkpointFiles.map((file) => (
+                      <DisclosureRegion open={fileChangesExpanded}>
+                        {inlineFileChangeDetailsAlreadyVisible ? (
+                          <div className="px-3 py-2">
+                            <ChangedFilesTree
+                              turnId={turnSummary.turnId}
+                              files={checkpointFiles}
+                              allDirectoriesExpanded
+                              resolvedTheme={resolvedTheme}
+                              onOpenTurnDiff={onOpenTurnDiff}
+                            />
+                          </div>
+                        ) : (
+                          checkpointFiles.map((file) => (
                             <button
                               key={file.path}
                               type="button"
-                              className="group flex w-full items-center gap-2 border-t border-[color:var(--color-border-light)] px-3 py-1.5 text-left first:border-t-0 transition-colors hover:bg-[var(--color-background-button-secondary-hover)]"
+                              className="group/file-row flex w-full items-center gap-2 border-t border-[color:var(--color-border-light)] bg-transparent px-3 py-2.5 text-left first:border-t-0 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] dark:bg-transparent dark:hover:bg-transparent"
                               onClick={() => onOpenTurnDiff(turnSummary.turnId, file.path)}
                             >
                               <FileEntryIcon
                                 pathValue={file.path}
                                 kind="file"
                                 theme={resolvedTheme}
-                                className="size-4 shrink-0 opacity-50 dark:opacity-30"
+                                className="size-4 shrink-0 text-[var(--color-text-foreground)] opacity-70 dark:opacity-80"
                               />
                               <span
-                                className="font-system-ui truncate font-normal underline-offset-2 group-hover:underline group-focus-visible:underline"
+                                className="font-system-ui truncate font-normal text-[var(--color-text-foreground)] underline-offset-2 group-hover/file-row:underline group-focus-visible/file-row:underline"
                                 style={{
                                   fontSize: chatTypographyStyle.fontSize,
-                                  color: "var(--color-text-foreground)",
                                 }}
                               >
                                 {file.path}
@@ -915,7 +1133,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                               {(file.additions ?? 0) + (file.deletions ?? 0) > 0 && (
                                 <span
                                   className="font-system-ui ml-auto shrink-0 tabular-nums"
-                                  style={{ fontSize: `${appTypographyScale.chatMetaPx}px` }}
+                                  style={{ fontSize: chatTypographyStyle.fontSize }}
                                 >
                                   <DiffStatLabel
                                     additions={file.additions ?? 0}
@@ -924,37 +1142,19 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                                 </span>
                               )}
                             </button>
-                          ))}
-                        </div>
-                      )}
+                          ))
+                        )}
+                      </DisclosureRegion>
                     </div>
                   );
                 })()}
-                <div className="mt-0.5 flex items-center gap-2">
-                  <p
-                    className="font-system-ui tabular-nums text-muted-foreground/45"
-                    style={{ fontSize: `${appTypographyScale.uiTimestampPx}px` }}
-                  >
-                    {assistantMeta}
-                  </p>
-                  {assistantCopyState.visible ? (
-                    <div className="flex items-center opacity-0 transition-opacity duration-200 group-hover/assistant:opacity-100 focus-within:opacity-100">
-                      <MessageCopyButton
-                        text={assistantCopyState.text ?? ""}
-                        size="icon-xs"
-                        variant="outline"
-                        className="border-border/50 bg-background/35 text-muted-foreground/45 shadow-none hover:border-border/70 hover:bg-background/55 hover:text-muted-foreground/70"
-                      />
-                    </div>
-                  ) : null}
-                </div>
               </div>
             </>
           );
         })()}
 
       {row.kind === "proposed-plan" && (
-        <div className="min-w-0 px-1 py-0.5">
+        <div className="min-w-0 py-0.5">
           <ProposedPlanCard
             planMarkdown={row.proposedPlan.planMarkdown}
             cwd={markdownCwd}
@@ -966,28 +1166,21 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
       {row.kind === "working" && (
         <div
-          className="flex items-center gap-1 pt-1 pl-1 text-muted-foreground/70 font-system-ui"
-          style={{ fontSize: `${appTypographyScale.uiSmPx}px` }}
+          className="pt-0.5 text-muted-foreground/70 font-system-ui"
+          style={{ fontSize: `${appTypographyScale.chatPx}px` }}
         >
-          <span>
-            {row.createdAt ? (
-              <>
-                Working for{" "}
-                {nowIso ? (
-                  (formatWorkingTimer(row.createdAt, nowIso) ?? "0s")
-                ) : (
-                  <WorkingTimer createdAt={row.createdAt} />
-                )}
-              </>
-            ) : (
-              "Working..."
-            )}
-          </span>
-          <span className="inline-flex items-center gap-1">
-            <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse" />
-            <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse [animation-delay:200ms]" />
-            <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse [animation-delay:400ms]" />
-          </span>
+          {row.createdAt ? (
+            <>
+              Working for{" "}
+              {nowIso ? (
+                (formatWorkingTimer(row.createdAt, nowIso) ?? "0s")
+              ) : (
+                <WorkingTimer createdAt={row.createdAt} />
+              )}
+            </>
+          ) : (
+            "Working..."
+          )}
         </div>
       )}
     </div>
@@ -1011,14 +1204,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       ref={resolvedListRef}
       data={rows}
       keyExtractor={(row) => row.id}
-      renderItem={({ item }) => (
-        <div
-          data-timeline-root="true"
-          className="mx-auto w-full min-w-0 max-w-3xl overflow-x-hidden"
-        >
-          {renderRowContent(item)}
-        </div>
-      )}
+      renderItem={({ item }) => renderRowContent(item)}
       estimatedItemSize={90}
       // LegendList caches rendered rows, so every local expansion map that changes row content
       // has to be surfaced through extraData.
@@ -1038,8 +1224,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onTouchStart={onMessagesTouchStart}
       onWheel={onMessagesWheel}
       data-chat-scroll-container="true"
-      className="h-full overflow-x-hidden overscroll-y-contain px-3 py-3 sm:px-5 sm:py-4"
-      {...(bottomContentInsetPx ? { style: { paddingBottom: bottomContentInsetPx } } : {})}
+      ListFooterComponent={listFooter}
+      className={cn(
+        "h-full overflow-x-hidden overscroll-y-contain py-3 [scrollbar-gutter:stable] sm:py-4",
+        CHAT_COLUMN_GUTTER_CLASS_NAME,
+      )}
     />
   );
 });
@@ -1168,15 +1357,6 @@ function formatInlineWorkSummary(_groupedEntries: TimelineWorkEntry[]): string |
   return null;
 }
 
-function hasOnlyToolToneEntries<T extends { tone: TimelineWorkEntry["tone"] }>(
-  entries: ReadonlyArray<T> | undefined,
-): entries is ReadonlyArray<T> {
-  if (!entries || entries.length === 0) {
-    return false;
-  }
-  return entries.every((entry) => entry.tone === "tool");
-}
-
 const UserMessageTerminalContextInlineLabel = memo(
   function UserMessageTerminalContextInlineLabel(props: { context: ParsedTerminalContextEntry }) {
     const tooltipText =
@@ -1193,10 +1373,9 @@ const UserMessageInlineSkillChip = memo(function UserMessageInlineSkillChip(prop
 }) {
   return (
     <span className={COMPOSER_INLINE_SKILL_CHIP_CLASS_NAME}>
-      <span
-        aria-hidden="true"
-        className={COMPOSER_INLINE_SKILL_CHIP_ICON_CLASS_NAME}
-        dangerouslySetInnerHTML={{ __html: COMPOSER_INLINE_SKILL_CHIP_ICON_SVG }}
+      <CentralIcon
+        name={COMPOSER_INLINE_SKILL_CHIP_ICON_NAME}
+        className={COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME}
       />
       <span className={COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME}>
         {formatComposerSkillChipLabel(props.skillName)}
@@ -1361,7 +1540,11 @@ const UserMessageEditForm = memo(function UserMessageEditForm(props: {
 
   return (
     <form
-      className="w-full rounded-lg bg-secondary px-3.5 pt-[5.5px] pb-[7px]"
+      className={cn(
+        "w-full bg-[var(--app-user-message-background)]",
+        USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME,
+        USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
+      )}
       onSubmit={(event) => {
         event.preventDefault();
         if (canSubmit) {
@@ -1461,7 +1644,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
 
         return (
           <div
-            className="inline-block max-w-full min-w-0 wrap-break-word whitespace-pre-wrap font-system-ui text-foreground"
+            className="block max-w-full min-w-0 wrap-break-word whitespace-pre-wrap font-system-ui text-foreground"
             style={props.chatTypographyStyle}
           >
             {inlineNodes}
@@ -1498,7 +1681,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
 
     return (
       <div
-        className="inline-block max-w-full min-w-0 wrap-break-word whitespace-pre-wrap font-system-ui text-foreground"
+        className="block max-w-full min-w-0 wrap-break-word whitespace-pre-wrap font-system-ui text-foreground"
         style={props.chatTypographyStyle}
       >
         {inlineNodes}
@@ -1527,7 +1710,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
 
   return (
     <div
-      className="inline-block max-w-full min-w-0 whitespace-pre-wrap break-words font-system-ui text-foreground"
+      className="block max-w-full min-w-0 whitespace-pre-wrap break-words font-system-ui text-foreground"
       style={props.chatTypographyStyle}
     >
       {renderUserMessageInlineText(props.text, "user-message-inline", props.resolvedTheme)}
@@ -1905,10 +2088,10 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                 type="button"
                 data-file-change-row="true"
                 className={cn(
-                  "group flex w-full max-w-full items-baseline gap-1 text-left transition-opacity duration-150",
+                  "group/file-row flex w-full max-w-full items-baseline gap-1 text-left transition-opacity duration-150",
                   compact
                     ? "px-0 py-[1px] hover:opacity-95"
-                    : "rounded-md border border-border/45 bg-background/65 px-2 py-1 hover:bg-background/80",
+                    : "rounded-md border border-border/45 bg-background/65 px-2 py-2 hover:bg-background/80",
                   canOpenEditedDiff ? "cursor-pointer" : "cursor-default",
                 )}
                 title={changedFilePath}
@@ -1925,17 +2108,16 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                   Edited
                 </span>
                 <span
-                  className="font-system-ui max-w-[28rem] truncate underline-offset-2 group-hover:underline group-focus-visible:underline"
+                  className="font-system-ui max-w-[28rem] truncate text-[var(--color-text-foreground)] underline-offset-2 group-hover/file-row:underline group-focus-visible/file-row:underline"
                   style={{
                     fontSize: `${rowFontSizePx}px`,
-                    color: "var(--color-token-text-link-foreground)",
                   }}
                 >
                   {basename(changedFilePath)}
                 </span>
                 {changedFileStat ? (
                   <span
-                    className="font-chat-code shrink-0 tabular-nums whitespace-nowrap"
+                    className="font-system-ui shrink-0 tabular-nums whitespace-nowrap"
                     style={{ fontSize: `${rowFontSizePx}px` }}
                   >
                     <DiffStatLabel

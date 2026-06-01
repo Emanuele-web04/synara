@@ -1,9 +1,9 @@
 import { mergeProps } from "@base-ui/react/merge-props";
 import { useRender } from "@base-ui/react/use-render";
 import { cva, type VariantProps } from "class-variance-authority";
-import { FiSidebar } from "react-icons/fi";
 import * as React from "react";
 import { cn } from "~/lib/utils";
+import { CentralIcon } from "~/lib/central-icons";
 import { isElectron } from "~/env";
 import { useAppSettings } from "~/appSettings";
 import { Button } from "~/components/ui/button";
@@ -325,6 +325,9 @@ function Sidebar({
 
 function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<typeof Button>) {
   const { toggleSidebar } = useSidebar();
+  const { settings } = useAppSettings();
+  const sidebarIconName =
+    settings.sidebarSide === "right" ? "sidebar-hidden-right-wide" : "sidebar-hidden-left-wide";
 
   return (
     <Button
@@ -335,11 +338,11 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
         onClick?.(event);
         toggleSidebar();
       }}
-      size="icon"
+      size="icon-xs"
       variant="ghost"
       {...props}
     >
-      <FiSidebar className="size-4" />
+      <CentralIcon name={sidebarIconName} />
       <span className="sr-only">Toggle Sidebar</span>
     </Button>
   );
@@ -640,7 +643,14 @@ function SidebarRail({
   );
 }
 
-function SidebarInset({ className, children, ...props }: React.ComponentProps<"main">) {
+function SidebarInset({
+  className,
+  children,
+  surfaceClassName,
+  ...props
+}: React.ComponentProps<"main"> & {
+  surfaceClassName?: string;
+}) {
   return (
     <main
       className={cn(
@@ -659,7 +669,10 @@ function SidebarInset({ className, children, ...props }: React.ComponentProps<"m
       {/* Inner surface lives inside the content-box so rounded corners
           and bg are visible even when padding offsets the sidebar area. */}
       <div
-        className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-inherit"
+        className={cn(
+          "flex min-h-0 min-w-0 flex-1 flex-col text-inherit",
+          surfaceClassName ?? "bg-background",
+        )}
         data-slot="sidebar-inset-surface"
       >
         {children}
@@ -714,7 +727,7 @@ function SidebarSeparator({ className, ...props }: React.ComponentProps<typeof S
 
 function SidebarContent({ className, ...props }: React.ComponentProps<"div">) {
   return (
-    <ScrollArea hideScrollbars scrollFade className="h-auto min-h-0 flex-1">
+    <ScrollArea hideScrollbars className="h-auto min-h-0 flex-1">
       <div
         className={cn(
           "flex w-full min-w-0 flex-col gap-2 group-data-[collapsible=icon]:overflow-hidden",

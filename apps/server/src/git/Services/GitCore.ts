@@ -343,6 +343,22 @@ export interface GitCoreShape {
    * List local branch names (short format).
    */
   readonly listLocalBranchNames: (cwd: string) => Effect.Effect<string[], GitCommandError>;
+
+  /**
+   * Stage the provided paths into the index (`git add`).
+   */
+  readonly stageFiles: (
+    cwd: string,
+    paths: readonly string[],
+  ) => Effect.Effect<void, GitCommandError>;
+
+  /**
+   * Unstage the provided paths from the index, handling the pre-initial-commit case.
+   */
+  readonly unstageFiles: (
+    cwd: string,
+    paths: readonly string[],
+  ) => Effect.Effect<void, GitCommandError>;
 }
 
 /**

@@ -36,6 +36,8 @@ import type {
   GitResolvePullRequestResult,
   GitRunStackedActionInput,
   GitRunStackedActionResult,
+  GitStageFilesInput,
+  GitStageFilesResult,
   GitStashAndCheckoutInput,
   GitStashDropInput,
   GitStashInfoInput,
@@ -44,6 +46,8 @@ import type {
   GitStatusResult,
   GitSummarizeDiffInput,
   GitSummarizeDiffResult,
+  GitUnstageFilesInput,
+  GitUnstageFilesResult,
 } from "./git";
 import type {
   ProjectListDirectoriesInput,
@@ -359,6 +363,8 @@ export interface NativeApi {
     stashInfo: (input: GitStashInfoInput) => Promise<GitStashInfoResult>;
     removeIndexLock: (input: GitRemoveIndexLockInput) => Promise<void>;
     init: (input: GitInitInput) => Promise<void>;
+    stageFiles: (input: GitStageFilesInput) => Promise<GitStageFilesResult>;
+    unstageFiles: (input: GitUnstageFilesInput) => Promise<GitUnstageFilesResult>;
     handoffThread: (input: GitHandoffThreadInput) => Promise<GitHandoffThreadResult>;
     resolvePullRequest: (input: GitPullRequestRefInput) => Promise<GitResolvePullRequestResult>;
     preparePullRequestThread: (

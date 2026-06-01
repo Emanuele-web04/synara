@@ -1281,7 +1281,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             type: "runtime.warning",
             payload: {
               message:
-                "Pi extensions are loaded, but DP Code does not yet support Pi extension UI APIs. Non-UI extension behavior should work, but extensions that call ctx.ui.* for prompts, widgets, confirmations, or status updates may not behave correctly.",
+                "Pi extensions are loaded, but Synara does not yet support Pi extension UI APIs. Non-UI extension behavior should work, but extensions that call ctx.ui.* for prompts, widgets, confirmations, or status updates may not behave correctly.",
               detail: {
                 extensionCount: loadedExtensions.length,
                 extensions: extensionNames,
@@ -1536,7 +1536,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         new ProviderAdapterRequestError({
           provider: PROVIDER,
           method,
-          detail: `Pi does not expose DP Code approval/user-input requests for thread ${threadId}.`,
+          detail: `Pi does not expose Synara approval/user-input requests for thread ${threadId}.`,
         }),
       );
 

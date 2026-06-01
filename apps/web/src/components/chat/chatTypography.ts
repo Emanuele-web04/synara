@@ -6,11 +6,28 @@
 import type { CSSProperties } from "react";
 import { DEFAULT_CHAT_FONT_SIZE_PX, normalizeChatFontSizePx } from "../../appSettings";
 
+export const USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME = "rounded-[var(--radius-user-message)]";
+export const USER_MESSAGE_BUBBLE_SHELL_PADDING_CLASS_NAME = "py-[8px]";
+export const USER_MESSAGE_BUBBLE_SHELL_HORIZONTAL_PADDING_CLASS_NAME = "px-3.5";
+export const USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME = [
+  USER_MESSAGE_BUBBLE_SHELL_HORIZONTAL_PADDING_CLASS_NAME,
+  USER_MESSAGE_BUBBLE_SHELL_PADDING_CLASS_NAME,
+].join(" ");
+
 const CHAT_TRANSCRIPT_USER_CHAR_WIDTH_RATIO = 0.48;
 const CHAT_TRANSCRIPT_ASSISTANT_CHAR_WIDTH_RATIO = 0.52;
+const CHAT_TRANSCRIPT_USER_MESSAGE_LINE_HEIGHT_OFFSET_PX = 4;
 
 export function getChatTranscriptLineHeightPx(chatFontSizePx = DEFAULT_CHAT_FONT_SIZE_PX): number {
   return normalizeChatFontSizePx(chatFontSizePx) + 8;
+}
+
+export function getChatTranscriptUserMessageLineHeightPx(
+  chatFontSizePx = DEFAULT_CHAT_FONT_SIZE_PX,
+): number {
+  return (
+    normalizeChatFontSizePx(chatFontSizePx) + CHAT_TRANSCRIPT_USER_MESSAGE_LINE_HEIGHT_OFFSET_PX
+  );
 }
 
 export function getChatTranscriptUserCharWidthPx(
@@ -32,5 +49,26 @@ export function getChatTranscriptTextStyle(
   return {
     fontSize: `${normalizedChatFontSizePx}px`,
     lineHeight: `${getChatTranscriptLineHeightPx(normalizedChatFontSizePx)}px`,
+  };
+}
+
+export function getChatTranscriptUserMessageTextStyle(
+  chatFontSizePx = DEFAULT_CHAT_FONT_SIZE_PX,
+): CSSProperties {
+  const normalizedChatFontSizePx = normalizeChatFontSizePx(chatFontSizePx);
+  return {
+    fontSize: `${normalizedChatFontSizePx}px`,
+    lineHeight: `${getChatTranscriptUserMessageLineHeightPx(normalizedChatFontSizePx)}px`,
+  };
+}
+
+export function getChatMessageFooterTextStyle(
+  chatFontSizePx = DEFAULT_CHAT_FONT_SIZE_PX,
+): CSSProperties {
+  const normalizedChatFontSizePx = normalizeChatFontSizePx(chatFontSizePx);
+  const footerFontSizePx = Math.max(8, normalizedChatFontSizePx - 2);
+  return {
+    fontSize: `${footerFontSizePx}px`,
+    lineHeight: `${getChatTranscriptLineHeightPx(footerFontSizePx)}px`,
   };
 }

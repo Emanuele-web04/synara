@@ -2,6 +2,7 @@
 
 import { Collapsible as CollapsiblePrimitive } from "@base-ui/react/collapsible";
 
+import { DISCLOSURE_COLLAPSIBLE_PANEL_CLASS } from "~/lib/disclosureMotion";
 import { cn } from "~/lib/utils";
 
 function Collapsible({ ...props }: CollapsiblePrimitive.Root.Props) {
@@ -21,10 +22,7 @@ function CollapsibleTrigger({ className, ...props }: CollapsiblePrimitive.Trigge
 function CollapsiblePanel({ className, ...props }: CollapsiblePrimitive.Panel.Props) {
   return (
     <CollapsiblePrimitive.Panel
-      className={cn(
-        "h-(--collapsible-panel-height) overflow-hidden transition-[height] duration-200 data-ending-style:h-0 data-starting-style:h-0 data-open:data-ending-style:[height:var(--collapsible-panel-height)]",
-        className,
-      )}
+      className={cn(DISCLOSURE_COLLAPSIBLE_PANEL_CLASS, className)}
       data-slot="collapsible-panel"
       {...props}
     />

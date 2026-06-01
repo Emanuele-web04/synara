@@ -33,6 +33,7 @@ export interface TerminalSessionState {
   status: TerminalSessionStatus;
   pid: number | null;
   history: string;
+  historyByteLength: number;
   historyLineBreakCount: number;
   historyEndsWithNewline: boolean;
   pendingHistoryControlSequence: string;
@@ -55,7 +56,7 @@ export interface TerminalSessionState {
   pendingInputBuffer: string;
   /** Buffered output chunks awaiting flush (output batching). */
   pendingOutputChunks: string[];
-  /** Total code-unit length of buffered output chunks. */
+  /** Total UTF-8 byte length of buffered output chunks. */
   pendingOutputLength: number;
   /** Timer handle for the next scheduled output flush. */
   outputFlushTimer: ReturnType<typeof setTimeout> | null;

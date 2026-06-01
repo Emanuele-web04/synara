@@ -4,7 +4,9 @@
 // Layer: Web chat presentation component
 // Exports: GeneratedMarkdownImage
 // Notes: Pure UI; image URL building lives in `~/lib/localImageUrls`. No data
-//        fetching here so the component stays trivially testable.
+//        fetching here so the component stays trivially testable. The image
+//        frame uses raw <button> because it wires into class-based stylesheet
+//        selectors (`chat-generated-image__*`) rather than shadcn Button.
 
 import { type MouseEvent, useCallback, useEffect, useMemo, useState } from "react";
 

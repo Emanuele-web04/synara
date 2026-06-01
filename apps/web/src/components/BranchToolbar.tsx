@@ -4,9 +4,8 @@
 import type { ThreadId, RuntimeMode } from "@t3tools/contracts";
 import { LuSplit } from "react-icons/lu";
 import { ChevronDownIcon, ChevronRightIcon, HandoffIcon } from "~/lib/icons";
-import { FiThumbsUp } from "react-icons/fi";
 import { HiOutlineHandRaised } from "react-icons/hi2";
-import { PiLaptop } from "react-icons/pi";
+import { CentralIcon } from "~/lib/central-icons";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useAppSettings } from "~/appSettings";
 
@@ -28,11 +27,16 @@ import {
   resolveEffectiveEnvMode,
 } from "./BranchToolbar.logic";
 import { BranchToolbarBranchSelector } from "./BranchToolbarBranchSelector";
-import { ContextWindowMeter } from "./chat/ContextWindowMeter";
+import {
+  RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME,
+  COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
+} from "./chat/composerPickerStyles";
 import type { ContextWindowSnapshot } from "../lib/contextWindow";
 import { ProviderUsagePanelContent } from "./ProviderUsagePanelContent";
+import { Button } from "./ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "./ui/collapsible";
+import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
 import type { ThreadWorkspacePatch } from "../types";
 
 function WorktreeGlyph({ className }: { className?: string }) {
@@ -44,17 +48,11 @@ interface BranchToolbarProps {
   className?: string;
   onEnvModeChange: (mode: EnvMode) => void;
   envLocked: boolean;
-  runtimeMode?: RuntimeMode;
-  onRuntimeModeChange?: (mode: RuntimeMode) => void;
   onHandoffToWorktree?: () => void;
   onHandoffToLocal?: () => void;
   handoffBusy?: boolean;
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
-  contextWindow?: ContextWindowSnapshot | null;
-  cumulativeCostUsd?: number | null;
-  activeContextWindowLabel?: string | null;
-  pendingContextWindowLabel?: string | null;
 }
 
 export interface RuntimeUsageControlsProps {
@@ -65,16 +63,15 @@ export interface RuntimeUsageControlsProps {
   activeContextWindowLabel?: string | null | undefined;
   pendingContextWindowLabel?: string | null | undefined;
   className?: string | undefined;
+  /** Icon-only trigger for tight layouts (compact footer / split chat). */
+  compact?: boolean | undefined;
 }
 
 export function RuntimeUsageControls({
   runtimeMode,
   onRuntimeModeChange,
-  contextWindow,
-  cumulativeCostUsd,
-  activeContextWindowLabel,
-  pendingContextWindowLabel,
   className,
+  compact = false,
 }: RuntimeUsageControlsProps) {
   return (
     <div
@@ -84,39 +81,70 @@ export function RuntimeUsageControls({
       )}
     >
       {runtimeMode && onRuntimeModeChange ? (
-        <button
-          type="button"
-          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[length:var(--app-font-size-ui-xs,10px)] font-normal transition-colors hover:text-[var(--color-text-foreground)]"
-          onClick={() =>
-            onRuntimeModeChange(runtimeMode === "full-access" ? "approval-required" : "full-access")
-          }
-          title={
-            runtimeMode === "full-access"
-              ? "Full access — click to require approvals"
-              : "Ask every action"
-          }
-        >
-          {runtimeMode === "full-access" ? (
-            <FiThumbsUp className="size-3 shrink-0" />
-          ) : (
-            <HiOutlineHandRaised className="size-3 shrink-0" />
-          )}
-          <span className="leading-none">
-            {runtimeMode === "full-access" ? "Full access" : "Default permissions"}
-          </span>
-        </button>
-      ) : null}
-      {contextWindow ? (
-        <ContextWindowMeter
-          usage={contextWindow}
-          {...(cumulativeCostUsd != null ? { cumulativeCostUsd } : {})}
-          {...(activeContextWindowLabel !== undefined
-            ? { activeWindowLabel: activeContextWindowLabel }
-            : {})}
-          {...(pendingContextWindowLabel !== undefined
-            ? { pendingWindowLabel: pendingContextWindowLabel }
-            : {})}
-        />
+        <Menu>
+          <MenuTrigger
+            render={
+              <Button
+                size="sm"
+                variant="chrome"
+                className={cn(
+                  "min-w-0 shrink-0 justify-start whitespace-nowrap [&_svg]:mx-0",
+                  compact ? "gap-0 px-1.5" : "gap-1.5 px-2 sm:px-2.5",
+                  COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
+                  runtimeMode === "full-access" && RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME,
+                )}
+                title={
+                  runtimeMode === "full-access"
+                    ? "Full access — click to change permissions"
+                    : "Default permissions — click to change permissions"
+                }
+              />
+            }
+          >
+            <span className="inline-flex items-center gap-1.5">
+              {runtimeMode === "full-access" ? (
+                <CentralIcon name="shield-access" className="size-3.5 shrink-0" />
+              ) : (
+                <HiOutlineHandRaised className="size-3.5 shrink-0" />
+              )}
+              <span className={cn("truncate", compact && "sr-only")}>
+                {runtimeMode === "full-access" ? "Full access" : "Default permissions"}
+              </span>
+              {compact ? null : <ChevronDownIcon className="size-3 shrink-0 opacity-70" />}
+            </span>
+          </MenuTrigger>
+          <MenuPopup align="start" side="top" className="min-w-44">
+            <MenuRadioGroup
+              value={runtimeMode}
+              onValueChange={(value) => {
+                if (
+                  !value ||
+                  (value !== "full-access" && value !== "approval-required") ||
+                  value === runtimeMode
+                ) {
+                  return;
+                }
+                onRuntimeModeChange(value);
+              }}
+            >
+              <MenuRadioItem
+                value="full-access"
+                className="data-checked:text-[var(--runtime-full-access-accent)]"
+              >
+                <span className="inline-flex items-center gap-2">
+                  <CentralIcon name="shield-access" className="size-4 shrink-0" />
+                  Full access
+                </span>
+              </MenuRadioItem>
+              <MenuRadioItem value="approval-required">
+                <span className="inline-flex items-center gap-2">
+                  <HiOutlineHandRaised className="size-4 shrink-0" />
+                  Default permissions
+                </span>
+              </MenuRadioItem>
+            </MenuRadioGroup>
+          </MenuPopup>
+        </Menu>
       ) : null}
     </div>
   );
@@ -127,17 +155,11 @@ export default function BranchToolbar({
   className,
   onEnvModeChange,
   envLocked,
-  runtimeMode,
-  onRuntimeModeChange,
   onHandoffToWorktree,
   onHandoffToLocal,
   handoffBusy = false,
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
-  contextWindow,
-  cumulativeCostUsd,
-  activeContextWindowLabel,
-  pendingContextWindowLabel,
 }: BranchToolbarProps) {
   const setThreadWorkspaceAction = useStore((store) => store.setThreadWorkspace);
   const draftThread = useComposerDraftStore((store) => store.getDraftThread(threadId));
@@ -276,17 +298,14 @@ export default function BranchToolbar({
 
   return (
     <div
-      className={cn(
-        "mx-auto flex w-full max-w-3xl items-center justify-between px-3 pb-3 pt-1",
-        className,
-      )}
+      className={cn("mx-auto flex w-full items-center justify-between px-3 pb-1.5 pt-1", className)}
     >
       <div className="flex items-center gap-2">
         {showEnvPicker ? (
           <Popover open={envPickerOpen} onOpenChange={setEnvPickerOpen}>
             <PopoverTrigger className="inline-flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)]">
               {environmentPresentation.mode === "local" ? (
-                <PiLaptop className="size-3.5" />
+                <CentralIcon name="macbook" className="size-3.5" />
               ) : (
                 <WorktreeGlyph className="size-3.5" />
               )}
@@ -305,7 +324,10 @@ export default function BranchToolbar({
                 </p>
                 {environmentPresentation.mode === "local" ? (
                   <div className="flex w-full items-center gap-2 px-3 py-1.5 text-sm">
-                    <PiLaptop className="size-4 text-[var(--color-text-foreground-secondary)]" />
+                    <CentralIcon
+                      name="macbook"
+                      className="size-4 text-[var(--color-text-foreground-secondary)]"
+                    />
                     <span>{environmentPresentation.localOptionLabel}</span>
                     <svg
                       className="ml-auto size-4 text-[var(--color-text-foreground)]"
@@ -328,7 +350,10 @@ export default function BranchToolbar({
                       onEnvModeChange("local");
                     }}
                   >
-                    <PiLaptop className="size-4 text-[var(--color-text-foreground-secondary)]" />
+                    <CentralIcon
+                      name="macbook"
+                      className="size-4 text-[var(--color-text-foreground-secondary)]"
+                    />
                     <span>{environmentPresentation.localOptionLabel}</span>
                   </button>
                 )}
@@ -451,15 +476,6 @@ export default function BranchToolbar({
           {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}
         />
       </div>
-
-      <RuntimeUsageControls
-        runtimeMode={runtimeMode}
-        onRuntimeModeChange={onRuntimeModeChange}
-        contextWindow={contextWindow}
-        cumulativeCostUsd={cumulativeCostUsd}
-        activeContextWindowLabel={activeContextWindowLabel}
-        pendingContextWindowLabel={pendingContextWindowLabel}
-      />
     </div>
   );
 }

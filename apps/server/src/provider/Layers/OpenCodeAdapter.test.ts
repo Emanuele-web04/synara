@@ -1096,7 +1096,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         variant: "fast",
       },
       agent: "build",
-      title: "DP Code thread-model-pin",
+      title: "Synara thread-model-pin",
     });
   });
 
@@ -1537,7 +1537,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     expect(runtime.promptCalls[0]?.parts).toEqual([
       {
         type: "text",
-        text: expect.stringContaining("DP Code plan mode is active."),
+        text: expect.stringContaining("Synara plan mode is active."),
       },
     ]);
     expect(result.map((event) => event.type)).toEqual([
@@ -1734,7 +1734,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
               id: "part-default-plan",
               messageID: "assistant-message-default-plan",
               type: "text",
-              text: "<proposed_plan>\n# Not a DP Code plan\n</proposed_plan>",
+              text: "<proposed_plan>\n# Not a Synara plan\n</proposed_plan>",
               time: {
                 start: 1,
                 end: 2,
@@ -1769,7 +1769,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       type: "item.completed",
       payload: {
         itemType: "assistant_message",
-        detail: "<proposed_plan>\n# Not a DP Code plan\n</proposed_plan>",
+        detail: "<proposed_plan>\n# Not a Synara plan\n</proposed_plan>",
       },
     });
   });

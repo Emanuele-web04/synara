@@ -46,7 +46,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "provider-picker-readiness",
         title: "Provider choices wait for real readiness",
         description:
-          "The provider picker no longer treats unknown provider status as usable. Providers stay in a checking state until DP Code has confirmed that the local runtime is available and authenticated.",
+          "The provider picker no longer treats unknown provider status as usable. Providers stay in a checking state until Synara has confirmed that the local runtime is available and authenticated.",
       },
       {
         id: "desktop-shutdown-recovery",
@@ -74,7 +74,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
     features: [
       {
         id: "grok-provider-headline",
-        title: "Grok joins DP Code",
+        title: "Grok joins Synara",
         description:
           "Pick Grok as a first-class coding provider with ACP-backed sessions, model selection, approval handling, resume support, provider health checks, settings, icons, and handoff wired through the same app surfaces as the rest of your agents.",
       },
@@ -154,7 +154,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "kilo-code-provider",
         title: "Kilo Code joins the provider lineup",
         description:
-          "DP Code can now launch and monitor Kilo Code sessions alongside Codex, Claude, Cursor, OpenCode, and Gemini, with health checks, settings, mentions, handoff, and model compatibility wired through the app.",
+          "Synara can now launch and monitor Kilo Code sessions alongside Codex, Claude, Cursor, OpenCode, and Gemini, with health checks, settings, mentions, handoff, and model compatibility wired through the app.",
       },
       {
         id: "provider-ordering",
@@ -184,7 +184,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "opencode-latest-events",
         title: "OpenCode sessions understand the latest event stream",
         description:
-          "DP Code now tracks the newer OpenCode SDK session events, keeps titles fresher, and has much deeper coverage around OpenCode startup, output, and recovery flows.",
+          "Synara now tracks the newer OpenCode SDK session events, keeps titles fresher, and has much deeper coverage around OpenCode startup, output, and recovery flows.",
       },
       {
         id: "turn-recovery-stability",
@@ -226,7 +226,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "secure-local-image-route",
         title: "Generated images use a safer local route",
         description:
-          "DP Code now serves generated files through a dedicated local-image endpoint with MIME checks, workspace-aware path resolution, and Codex generated_images allowlists for both the normal home and desktop overlay home.",
+          "Synara now serves generated files through a dedicated local-image endpoint with MIME checks, workspace-aware path resolution, and Codex generated_images allowlists for both the normal home and desktop overlay home.",
       },
       {
         id: "provider-favorites",
@@ -254,9 +254,9 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
     features: [
       {
         id: "cursor-provider",
-        title: "Cursor is now a first-class DP Code provider",
+        title: "Cursor is now a first-class Synara provider",
         description:
-          "Run Cursor CLI sessions directly from DP Code with ACP-backed startup, model discovery, existing-chat resume, handoff, and provider health checks alongside Codex and OpenCode.",
+          "Run Cursor CLI sessions directly from Synara with ACP-backed startup, model discovery, existing-chat resume, handoff, and provider health checks alongside Codex and OpenCode.",
       },
       {
         id: "effect-acp-runtime",
@@ -304,7 +304,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "git-commit-push-action",
         title: "Git gained commit and push",
         description:
-          "The Git actions menu can now commit current work and push it from DP Code, keeping the common release and handoff flow closer to the chat.",
+          "The Git actions menu can now commit current work and push it from Synara, keeping the common release and handoff flow closer to the chat.",
       },
       {
         id: "task-and-approval-polish",
@@ -346,13 +346,13 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "git-branch-pr-flow",
         title: "Git flows are smoother",
         description:
-          "The Git menu now includes branch creation with DP Code-style names, and PR creation can recover from GitHub duplicate-PR responses by reusing the existing open pull request.",
+          "The Git menu now includes branch creation with Synara-style names, and PR creation can recover from GitHub duplicate-PR responses by reusing the existing open pull request.",
       },
       {
         id: "legacy-import-recovery",
         title: "Legacy T3 imports heal themselves",
         description:
-          "A new migration reconciles older imported T3 Code databases whose migration history skipped DP Code schema changes, preventing missing-column crashes after import.",
+          "A new migration reconciles older imported T3 Code databases whose migration history skipped Synara schema changes, preventing missing-column crashes after import.",
       },
       {
         id: "runtime-idle-cleanup",
@@ -394,7 +394,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "opencode-task-events",
         title: "OpenCode tasks show live progress",
         description:
-          "OpenCode todo events now flow into DP Code as active task updates, with a compact banner option for keeping current work visible without taking over the chat.",
+          "OpenCode todo events now flow into Synara as active task updates, with a compact banner option for keeping current work visible without taking over the chat.",
       },
       {
         id: "opencode-model-favourites",
@@ -406,7 +406,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "opencode-context-usage",
         title: "OpenCode context usage is tracked",
         description:
-          "OpenCode sessions now report context usage more consistently, giving DP Code better runtime visibility as conversations grow.",
+          "OpenCode sessions now report context usage more consistently, giving Synara better runtime visibility as conversations grow.",
       },
       {
         id: "production-debug-flags",
@@ -424,7 +424,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "cursor-provider",
         title: "Cursor CLI support landed",
         description:
-          "Cursor is now available as a provider, with ACP sessions, model discovery, existing chats, handoff, shortcuts, and git text generation wired into DP Code.",
+          "Cursor is now available as a provider, with ACP sessions, model discovery, existing chats, handoff, shortcuts, and git text generation wired into Synara.",
       },
       {
         id: "chatgpt-voice-transcription",
@@ -454,7 +454,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "toast-feature-flags",
         title: "Toast behavior can be feature-flagged",
         description:
-          "Toast notifications picked up feature-flag wiring, giving DP Code a safer way to roll notification changes forward or back.",
+          "Toast notifications picked up feature-flag wiring, giving Synara a safer way to roll notification changes forward or back.",
       },
       {
         id: "desktop-bridge-reconnects",
@@ -472,7 +472,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "branch-switch-recovery",
         title: "Branch switching is much safer",
         description:
-          "DP Code now handles messy branch switches with clearer recovery actions, recreated stashes, unpublished branch publishing, and stronger checks around conflicts and local work.",
+          "Synara now handles messy branch switches with clearer recovery actions, recreated stashes, unpublished branch publishing, and stronger checks around conflicts and local work.",
       },
       {
         id: "plan-mode-proposals",
@@ -484,7 +484,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "desktop-navigation-controls",
         title: "Desktop navigation controls landed",
         description:
-          "The desktop app now has app-level back and forward navigation controls, making it easier to move around DP Code without losing your place.",
+          "The desktop app now has app-level back and forward navigation controls, making it easier to move around Synara without losing your place.",
       },
       {
         id: "sidebar-sort-stability",
@@ -508,7 +508,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "gpt-5-5-available",
         title: "GPT-5.5 is available",
         description:
-          "GPT-5.5 is now in the model picker with the right default reasoning behavior, so you can move new Codex sessions onto the latest model directly from DP Code.",
+          "GPT-5.5 is now in the model picker with the right default reasoning behavior, so you can move new Codex sessions onto the latest model directly from Synara.",
       },
       {
         id: "opencode-provider",
@@ -562,7 +562,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "desktop-boot-splash-screen",
         title: "🚀 Desktop startup feels clearer",
         description:
-          "DP Code now shows a proper splash screen while the desktop backend spins up, so launch feels intentional instead of looking briefly stalled.",
+          "Synara now shows a proper splash screen while the desktop backend spins up, so launch feels intentional instead of looking briefly stalled.",
       },
       {
         id: "provider-capability-and-theme-polish",
@@ -586,7 +586,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "theme-pack-editor",
         title: "🎨 Theme packs are editable",
         description:
-          "The new theme pack editor lets you tune UI colors directly in DP Code, with shared theme tokens keeping the sidebar, composer, transcript, and controls in sync.",
+          "The new theme pack editor lets you tune UI colors directly in Synara, with shared theme tokens keeping the sidebar, composer, transcript, and controls in sync.",
       },
       {
         id: "sidebar-notifications",
@@ -664,7 +664,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "update-check-timeout-recovery",
         title: "🛟 No more stuck checking state",
         description:
-          "If the updater never answers, DP Code now times out and recovers instead of hanging on a permanent Checking status.",
+          "If the updater never answers, Synara now times out and recovers instead of hanging on a permanent Checking status.",
       },
     ],
   },
@@ -682,7 +682,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "custom-provider-binaries",
         title: "🛠️ Custom binary paths for every provider",
         description:
-          "Point DP Code at your own Codex, Claude, or Gemini binary when your setup lives outside the default install path.",
+          "Point Synara at your own Codex, Claude, or Gemini binary when your setup lives outside the default install path.",
       },
       {
         id: "assistant-selections-as-context",

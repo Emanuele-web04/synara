@@ -1,5 +1,5 @@
 // FILE: codexProcessEnv.ts
-// Purpose: Builds the exact environment used when DP Code launches Codex subprocesses.
+// Purpose: Builds the exact environment used when Synara launches Codex subprocesses.
 // Layer: Server runtime utility
 // Exports: Codex process env builder and browser-plugin overlay helpers.
 // Depends on: Codex home path helpers, shared Codex config parsing, login-shell env reader.

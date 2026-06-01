@@ -13,6 +13,7 @@ import {
   getChatTranscriptAssistantCharWidthPx,
   getChatTranscriptLineHeightPx,
   getChatTranscriptUserCharWidthPx,
+  getChatTranscriptUserMessageLineHeightPx,
 } from "./chat/chatTypography";
 
 const ASSISTANT_CHARS_PER_LINE_FALLBACK = 72;
@@ -285,6 +286,7 @@ export function estimateTimelineMessageHeight(
 
   if (message.role === "user") {
     const charsPerLine = estimateCharsPerLineForUser(layout.timelineWidthPx, chatFontSizePx);
+    const lineHeightPx = getChatTranscriptUserMessageLineHeightPx(chatFontSizePx);
     const displayedUserMessage = deriveDisplayedUserMessageState(message.text, {
       hideImageOnlyBootstrapPrompt: (message.attachments?.length ?? 0) > 0,
     });

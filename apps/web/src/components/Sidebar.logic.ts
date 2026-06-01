@@ -6,6 +6,12 @@ import type { KeybindingCommand, ProjectId, ThreadId } from "@t3tools/contracts"
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "../appSettings";
 import type { ChatMessage, Project, SidebarThreadSummary, Thread } from "../types";
 import { cn } from "../lib/utils";
+import {
+  SIDEBAR_ROW_ACTIVE_CLASS_NAME,
+  SIDEBAR_ROW_HOVER_CLASS_NAME,
+  SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
+  SIDEBAR_THREAD_ROW_BASE_CLASS_NAME,
+} from "../sidebarRowStyles";
 import { isDuplicateProjectCreateError } from "../lib/projectCreateRecovery";
 import { workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
 import {
@@ -199,39 +205,42 @@ export function pruneExpandedProjectThreadListsForCollapsedProjects<
   return changed ? nextExpandedProjectThreadListCwds : expandedProjectThreadListCwds;
 }
 
+/**
+ * Trailing padding that protects the title from the absolutely-positioned
+ * meta-chip + timestamp / hover-action cluster. Sized to the actual number of
+ * meta chips so rows without fork/worktree/handoff badges let the title use the
+ * freed width instead of truncating against permanently-reserved empty space.
+ *
+ * Literal class strings are required so Tailwind's JIT scanner emits them.
+ */
+export function resolveThreadRowTrailingReserveClass(metaChipCount: number): string {
+  if (metaChipCount <= 0) return "pr-[2.75rem]";
+  if (metaChipCount === 1) return "pr-[3.75rem]";
+  if (metaChipCount === 2) return "pr-[4.25rem]";
+  return "pr-[4.75rem]";
+}
+
 export function resolveThreadRowClassName(input: {
   isActive: boolean;
   isSelected: boolean;
 }): string {
-  // Reserve room for the absolute fork/worktree/timestamp cluster so long titles truncate cleanly.
-  const baseClassName =
-    "h-8 w-full translate-x-0 cursor-pointer justify-start rounded-md pr-[4.25rem] pl-8 text-left text-[13px] select-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring";
+  // Trailing reserve for the absolute cluster is applied separately by callers
+  // via resolveThreadRowTrailingReserveClass so it can flex with the chip count.
+  const baseClassName = SIDEBAR_THREAD_ROW_BASE_CLASS_NAME;
 
   if (input.isSelected && input.isActive) {
-    return cn(
-      baseClassName,
-      "bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)] hover:bg-[var(--color-background-button-secondary)] hover:text-[var(--color-text-foreground)]",
-    );
+    return cn(baseClassName, SIDEBAR_ROW_ACTIVE_CLASS_NAME);
   }
 
   if (input.isSelected) {
-    return cn(
-      baseClassName,
-      "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)] hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)]",
-    );
+    return cn(baseClassName, SIDEBAR_ROW_ACTIVE_CLASS_NAME);
   }
 
   if (input.isActive) {
-    return cn(
-      baseClassName,
-      "bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)] hover:bg-[var(--color-background-button-secondary)] hover:text-[var(--color-text-foreground)]",
-    );
+    return cn(baseClassName, SIDEBAR_ROW_ACTIVE_CLASS_NAME);
   }
 
-  return cn(
-    baseClassName,
-    "text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary)] hover:text-[var(--color-text-foreground)]",
-  );
+  return cn(baseClassName, SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME);
 }
 
 export function resolveThreadStatusPill(input: {

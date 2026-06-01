@@ -3,24 +3,19 @@
 // Layer: Workspace route surface
 
 import { Plus, SettingsIcon } from "~/lib/icons";
-import { type TerminalCliKind } from "@t3tools/shared/terminalThreads";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-import { readNativeApi } from "~/nativeApi";
-import { useAppSettings } from "~/appSettings";
 import { Button } from "~/components/ui/button";
 import { SidebarInset } from "~/components/ui/sidebar";
 import { SidebarHeaderNavigationControls } from "~/components/SidebarHeaderNavigationControls";
 import { useDesktopTopBarTrafficLightGutterClassName } from "~/hooks/useDesktopTopBarGutter";
+import { useTerminalSurfaceController } from "~/hooks/useTerminalSurfaceController";
 import { cn } from "~/lib/utils";
-import {
-  confirmTerminalTabClose,
-  resolveTerminalCloseTitle,
-} from "~/lib/terminalCloseConfirmation";
 import { resolveTerminalNewAction } from "~/lib/terminalNewAction";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
-import { selectThreadTerminalState, useTerminalStateStore } from "~/terminalStateStore";
+import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
+import { CHAT_BACKGROUND_CLASS_NAME } from "./chat/composerPickerStyles";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import WorkspaceSettingsSheet from "./WorkspaceSettingsSheet";
 import { onServerWelcome } from "~/wsNativeApi";
@@ -30,17 +25,9 @@ import {
   ensureTerminalIdsForPreset,
   type WorkspaceLayoutPresetId,
 } from "~/workspaceTerminalLayoutPresets";
-import { terminalRuntimeRegistry } from "./terminal/terminalRuntimeRegistry";
-
-function randomTerminalId(): string {
-  if (typeof crypto.randomUUID === "function") {
-    return `terminal-${crypto.randomUUID()}`;
-  }
-  return `terminal-${Math.random().toString(36).slice(2, 10)}`;
-}
+import { randomTerminalId } from "./terminal/terminalSession";
 
 export default function WorkspaceView({ workspaceId }: { workspaceId: string }) {
-  const { settings } = useAppSettings();
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const workspace = useWorkspaceStore((state) =>
     state.workspacePages.find((entry) => entry.id === workspaceId),
@@ -52,27 +39,28 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
   const setWorkspaceHomeDir = useWorkspaceStore((state) => state.setHomeDir);
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const threadId = useMemo(() => workspaceThreadId(workspaceId), [workspaceId]);
-  const terminalState = useTerminalStateStore((state) =>
-    selectThreadTerminalState(state.terminalStateByThreadId, threadId),
-  );
-  const openTerminalThreadPage = useTerminalStateStore((state) => state.openTerminalThreadPage);
-  const setTerminalHeight = useTerminalStateStore((state) => state.setTerminalHeight);
-  const setTerminalMetadata = useTerminalStateStore((state) => state.setTerminalMetadata);
-  const splitTerminalRight = useTerminalStateStore((state) => state.splitTerminalRight);
-  const splitTerminalDown = useTerminalStateStore((state) => state.splitTerminalDown);
-  const newTerminal = useTerminalStateStore((state) => state.newTerminal);
-  const newTerminalTab = useTerminalStateStore((state) => state.newTerminalTab);
-  const setActiveTerminal = useTerminalStateStore((state) => state.setActiveTerminal);
-  const closeTerminalState = useTerminalStateStore((state) => state.closeTerminal);
-  const closeTerminalGroup = useTerminalStateStore((state) => state.closeTerminalGroup);
-  const resizeTerminalSplit = useTerminalStateStore((state) => state.resizeTerminalSplit);
-  const setTerminalActivity = useTerminalStateStore((state) => state.setTerminalActivity);
-  const applyWorkspaceLayoutPreset = useTerminalStateStore(
-    (state) => state.applyWorkspaceLayoutPreset,
-  );
+  const terminal = useTerminalSurfaceController(threadId);
+  const {
+    terminalState,
+    focusRequestId,
+    bumpFocusRequest,
+    openTerminalThreadPage,
+    applyWorkspaceLayoutPreset,
+    newTerminalGroup,
+    splitRight,
+    splitDown,
+    createTerminalTab,
+    moveTerminalToNewGroup,
+    activateTerminal,
+    closeTerminal,
+    closeTerminalGroup,
+    setTerminalHeight,
+    resizeTerminalSplit,
+    setTerminalMetadata,
+    setTerminalActivity,
+  } = terminal;
   const bootstrappedWorkspaceRef = useRef(false);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
-  const [focusRequestId, setFocusRequestId] = useState(0);
   const [renaming, setRenaming] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [draftTitle, setDraftTitle] = useState(workspace?.title ?? "Workspace");
@@ -153,10 +141,11 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
       );
       applyWorkspaceLayoutPreset(threadId, presetId, nextTerminalIds);
       openTerminalThreadPage(threadId, { terminalOnly: true });
-      setFocusRequestId((value) => value + 1);
+      bumpFocusRequest();
     },
     [
       applyWorkspaceLayoutPreset,
+      bumpFocusRequest,
       openTerminalThreadPage,
       terminalState.terminalIds,
       threadId,
@@ -177,10 +166,11 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
       );
       applyWorkspaceLayoutPreset(threadId, presetId, nextTerminalIds);
       openTerminalThreadPage(threadId, { terminalOnly: true });
-      setFocusRequestId((value) => value + 1);
+      bumpFocusRequest();
     },
     [
       applyWorkspaceLayoutPreset,
+      bumpFocusRequest,
       openTerminalThreadPage,
       setWorkspaceLayoutPreset,
       terminalState.terminalIds,
@@ -194,31 +184,9 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
       restoreTerminalWorkspace();
       return;
     }
-    const terminalId = randomTerminalId();
-    newTerminal(threadId, terminalId);
-    setFocusRequestId((value) => value + 1);
-  }, [newTerminal, restoreTerminalWorkspace, terminalState.terminalOpen, threadId]);
+    newTerminalGroup();
+  }, [newTerminalGroup, restoreTerminalWorkspace, terminalState.terminalOpen]);
 
-  const splitWorkspaceTerminalRight = useCallback(() => {
-    const terminalId = randomTerminalId();
-    splitTerminalRight(threadId, terminalId);
-    setFocusRequestId((value) => value + 1);
-  }, [splitTerminalRight, threadId]);
-
-  const splitWorkspaceTerminalDown = useCallback(() => {
-    const terminalId = randomTerminalId();
-    splitTerminalDown(threadId, terminalId);
-    setFocusRequestId((value) => value + 1);
-  }, [splitTerminalDown, threadId]);
-
-  const createWorkspaceTerminalTab = useCallback(
-    (targetTerminalId: string) => {
-      const terminalId = randomTerminalId();
-      newTerminalTab(threadId, targetTerminalId, terminalId);
-      setFocusRequestId((value) => value + 1);
-    },
-    [newTerminalTab, threadId],
-  );
   const createWorkspaceTerminalFromShortcut = useCallback(() => {
     const action = resolveTerminalNewAction({
       terminalOpen: terminalState.terminalOpen,
@@ -232,31 +200,15 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
       return;
     }
 
-    createWorkspaceTerminalTab(action.targetTerminalId);
+    createTerminalTab(action.targetTerminalId);
   }, [
+    createTerminalTab,
     createWorkspaceTerminal,
-    createWorkspaceTerminalTab,
     terminalState.activeTerminalGroupId,
     terminalState.activeTerminalId,
     terminalState.terminalGroups,
     terminalState.terminalOpen,
   ]);
-
-  const moveTerminalToNewGroup = useCallback(
-    (terminalId: string) => {
-      newTerminal(threadId, terminalId);
-      setFocusRequestId((value) => value + 1);
-    },
-    [newTerminal, threadId],
-  );
-
-  const activateTerminal = useCallback(
-    (terminalId: string) => {
-      setActiveTerminal(threadId, terminalId);
-      setFocusRequestId((value) => value + 1);
-    },
-    [setActiveTerminal, threadId],
-  );
 
   useEffect(() => {
     const onMenuAction = window.desktopBridge?.onMenuAction;
@@ -274,49 +226,6 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
     };
   }, [createWorkspaceTerminalFromShortcut]);
 
-  const closeTerminal = useCallback(
-    async (terminalId: string) => {
-      const api = readNativeApi();
-      const confirmed = await confirmTerminalTabClose({
-        api,
-        enabled: settings.confirmTerminalTabClose,
-        terminalTitle: resolveTerminalCloseTitle({
-          terminalId,
-          terminalLabelsById: terminalState.terminalLabelsById,
-          terminalTitleOverridesById: terminalState.terminalTitleOverridesById,
-        }),
-      });
-      if (!confirmed) {
-        return;
-      }
-      terminalRuntimeRegistry.disposeTerminal(threadId, terminalId);
-      const fallbackExitWrite = () =>
-        api?.terminal.write({ threadId, terminalId, data: "exit\n" }).catch(() => undefined);
-
-      if (api && "close" in api.terminal && typeof api.terminal.close === "function") {
-        void api.terminal
-          .close({
-            threadId,
-            terminalId,
-            deleteHistory: true,
-          })
-          .catch(() => fallbackExitWrite());
-      } else {
-        void fallbackExitWrite();
-      }
-
-      closeTerminalState(threadId, terminalId);
-      setFocusRequestId((value) => value + 1);
-    },
-    [
-      closeTerminalState,
-      settings.confirmTerminalTabClose,
-      terminalState.terminalLabelsById,
-      terminalState.terminalTitleOverridesById,
-      threadId,
-    ],
-  );
-
   const terminalDrawerProps = useMemo(
     () => ({
       threadId,
@@ -332,45 +241,26 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
       terminalGroups: terminalState.terminalGroups,
       activeTerminalGroupId: terminalState.activeTerminalGroupId,
       focusRequestId,
-      onSplitTerminal: splitWorkspaceTerminalRight,
-      onSplitTerminalDown: splitWorkspaceTerminalDown,
+      onSplitTerminal: splitRight,
+      onSplitTerminalDown: splitDown,
       onNewTerminal: createWorkspaceTerminal,
-      onNewTerminalTab: createWorkspaceTerminalTab,
+      onNewTerminalTab: createTerminalTab,
       onMoveTerminalToGroup: moveTerminalToNewGroup,
       onActiveTerminalChange: activateTerminal,
       onCloseTerminal: closeTerminal,
-      onCloseTerminalGroup: (groupId: string) => {
-        closeTerminalGroup(threadId, groupId);
-      },
-      onHeightChange: (height: number) => {
-        setTerminalHeight(threadId, height);
-      },
-      onResizeTerminalSplit: (groupId: string, splitId: string, weights: number[]) => {
-        resizeTerminalSplit(threadId, groupId, splitId, weights);
-      },
-      onTerminalMetadataChange: (
-        terminalId: string,
-        metadata: { cliKind: TerminalCliKind | null; label: string },
-      ) => {
-        setTerminalMetadata(threadId, terminalId, metadata);
-      },
-      onTerminalActivityChange: (
-        terminalId: string,
-        activity: {
-          hasRunningSubprocess: boolean;
-          agentState: "running" | "attention" | "review" | null;
-        },
-      ) => {
-        setTerminalActivity(threadId, terminalId, activity);
-      },
+      onCloseTerminalGroup: closeTerminalGroup,
+      onHeightChange: setTerminalHeight,
+      onResizeTerminalSplit: resizeTerminalSplit,
+      onTerminalMetadataChange: setTerminalMetadata,
+      onTerminalActivityChange: setTerminalActivity,
       onAddTerminalContext: () => {},
     }),
     [
       activateTerminal,
       closeTerminal,
       closeTerminalGroup,
+      createTerminalTab,
       createWorkspaceTerminal,
-      createWorkspaceTerminalTab,
       focusRequestId,
       homeDir,
       moveTerminalToNewGroup,
@@ -378,8 +268,8 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
       setTerminalActivity,
       setTerminalHeight,
       setTerminalMetadata,
-      splitWorkspaceTerminalDown,
-      splitWorkspaceTerminalRight,
+      splitDown,
+      splitRight,
       terminalState.activeTerminalGroupId,
       terminalState.activeTerminalId,
       terminalState.terminalAttentionStatesById,
@@ -395,15 +285,23 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
   );
 
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground">
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
+    <SidebarInset
+      className="h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground"
+      surfaceClassName={CHAT_BACKGROUND_CLASS_NAME}
+    >
+      <div
+        className={cn(
+          "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
+          CHAT_BACKGROUND_CLASS_NAME,
+        )}
+      >
         <header
           className={cn(
             "border-b border-border px-3 sm:px-5",
             desktopTopBarTrafficLightGutterClassName,
           )}
         >
-          <div className="flex h-[52px] items-center gap-2 sm:gap-3">
+          <div className={cn("flex items-center gap-2 sm:gap-3", CHAT_SURFACE_HEADER_HEIGHT_CLASS)}>
             <SidebarHeaderNavigationControls />
             <div className="flex min-w-0 flex-1 items-center gap-2">
               {renaming ? (

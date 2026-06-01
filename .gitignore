@@ -15,6 +15,7 @@ release/
 .t3
 /.dpcode/electron-dev
 /.dpcode/backups
+/.dpcode-*/
 .idea/
 apps/web/.playwright
 apps/web/playwright-report

@@ -120,7 +120,7 @@ export default function WorkspaceSettingsSheet(props: {
                     className={cn(
                       "group rounded-2xl border p-3 text-left transition-colors",
                       isSelected
-                        ? "border-[color:var(--color-border)] bg-[var(--sidebar-accent)] shadow-sm"
+                        ? "border-[color:var(--color-border)] bg-[var(--sidebar-accent-active)] shadow-sm"
                         : "border-[color:var(--color-border-light)] bg-card/50 hover:border-[color:var(--color-border)] hover:bg-[var(--sidebar-accent)]",
                     )}
                     aria-pressed={isSelected}

@@ -30,6 +30,10 @@ import {
   CommandList,
   CommandSeparator,
 } from "../ui/command";
+import {
+  COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME,
+  COMPOSER_PICKER_MENU_POPUP_BODY_CLASS_NAME,
+} from "./composerPickerStyles";
 
 type EntriesByPath = Record<string, readonly ProjectFileSystemEntry[] | undefined>;
 
@@ -391,8 +395,8 @@ export const ComposerLocalDirectoryMenu = memo(function ComposerLocalDirectoryMe
 
   return (
     <Command autoHighlight={false} mode="none">
-      <div className="chat-composer-surface relative overflow-hidden rounded-xl border border-[color:var(--color-border-light)] bg-[var(--color-background-surface-under)]">
-        <div className="flex items-center gap-2 border-b px-2 py-1.5">
+      <div className={COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME}>
+        <div className="flex items-center gap-2 border-b border-border px-2 py-1.5">
           {parent ? (
             <button
               type="button"
@@ -420,8 +424,12 @@ export const ComposerLocalDirectoryMenu = memo(function ComposerLocalDirectoryMe
             </button>
           ) : null}
         </div>
-        <div ref={listRef}>
-          <CommandList className="max-h-72 py-0.5">
+        <div
+          ref={listRef}
+          className={cn(COMPOSER_PICKER_MENU_POPUP_BODY_CLASS_NAME, "max-h-72")}
+          data-slot="menu-popup-body"
+        >
+          <CommandList className="py-0.5">
             {currentFolderRow ? (
               <CommandGroup>
                 <UseCurrentFolderRow
