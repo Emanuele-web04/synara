@@ -9,6 +9,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { DESKTOP_STAGE_DEPENDENCY_OVERRIDES } from "./lib/desktop-stage-dependency-overrides.ts";
+
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const workspaceFiles = [
@@ -81,6 +83,28 @@ function assertContains(haystack: string, needle: string, message: string): void
   }
 }
 
+function writeJsonFile(path: string, value: unknown): void {
+  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function verifyDesktopStageProductionInstall(targetRoot: string): void {
+  const stageInstallRoot = resolve(targetRoot, "desktop-stage-install");
+  mkdirSync(stageInstallRoot, { recursive: true });
+
+  writeJsonFile(resolve(stageInstallRoot, "package.json"), {
+    private: true,
+    dependencies: {
+      "@pierre/diffs": "^1.1.0-beta.16",
+    },
+    overrides: DESKTOP_STAGE_DEPENDENCY_OVERRIDES,
+  });
+
+  execFileSync("bun", ["install", "--production"], {
+    cwd: stageInstallRoot,
+    stdio: "inherit",
+  });
+}
+
 const tempRoot = mkdtempSync(join(tmpdir(), "t3-release-smoke-"));
 
 try {
@@ -133,6 +157,8 @@ try {
     "Synara-9.9.9-smoke.0-x64.zip",
     "Merged manifest is missing the x64 asset.",
   );
+
+  verifyDesktopStageProductionInstall(tempRoot);
 
   console.log("Release smoke checks passed.");
 } finally {

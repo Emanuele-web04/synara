@@ -13,6 +13,7 @@ import desktopPackageJson from "../apps/desktop/package.json" with { type: "json
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
+import { DESKTOP_STAGE_DEPENDENCY_OVERRIDES } from "./lib/desktop-stage-dependency-overrides.ts";
 import { createDesktopPlatformBuildConfig } from "./lib/desktop-platform-build-config.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 
@@ -738,7 +739,10 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     devDependencies: {
       electron: electronVersion,
     },
-    overrides: resolvedOverrides,
+    overrides: {
+      ...DESKTOP_STAGE_DEPENDENCY_OVERRIDES,
+      ...resolvedOverrides,
+    },
   };
 
   const stagePackageJsonString = yield* encodeJsonString(stagePackageJson);
