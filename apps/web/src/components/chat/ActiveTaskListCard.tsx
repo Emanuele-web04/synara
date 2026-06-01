@@ -46,7 +46,7 @@ export const ActiveTaskListCard = memo(function ActiveTaskListCard({
     <div
       data-testid="active-task-list-card"
       className={cn(
-        "overflow-hidden rounded-t-[1.2rem] border border-b-0 bg-[var(--composer-surface)]",
+        "overflow-hidden rounded-t-[1.1rem] border border-b-0 bg-[var(--composer-surface)]",
         COMPOSER_SURFACE_BORDER_CLASS_NAME,
       )}
     >

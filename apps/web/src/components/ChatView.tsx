@@ -7590,7 +7590,7 @@ export default function ChatView({
                     "chat-composer-surface flex items-center gap-2 border border-b-0 px-2.5 py-2 text-[12px]",
                     COMPOSER_SURFACE_BORDER_CLASS_NAME,
                     queuedTurnIndex === 0 && !taskListAboveComposer
-                      ? "rounded-t-[1.2rem]"
+                      ? "rounded-t-[1.1rem]"
                       : "rounded-none",
                   )}
                 >
