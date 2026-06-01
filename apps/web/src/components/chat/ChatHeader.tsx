@@ -433,7 +433,7 @@ export const ChatHeader = memo(function ChatHeader({
                     </span>
                   </span>
                 ) : null}
-                <SurfaceChipIcon icon={PanelRightCloseIcon} />
+                <SurfaceChipIcon icon={PanelRightCloseIcon} className="size-4" />
               </Toggle>
             }
           />

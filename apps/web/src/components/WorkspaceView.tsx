@@ -15,6 +15,7 @@ import { cn } from "~/lib/utils";
 import { resolveTerminalNewAction } from "~/lib/terminalNewAction";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
+import { CHAT_BACKGROUND_CLASS_NAME } from "./chat/composerPickerStyles";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import WorkspaceSettingsSheet from "./WorkspaceSettingsSheet";
 import { onServerWelcome } from "~/wsNativeApi";
@@ -284,8 +285,16 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
   );
 
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground">
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
+    <SidebarInset
+      className="h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground"
+      surfaceClassName={CHAT_BACKGROUND_CLASS_NAME}
+    >
+      <div
+        className={cn(
+          "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
+          CHAT_BACKGROUND_CLASS_NAME,
+        )}
+      >
         <header
           className={cn(
             "border-b border-border px-3 sm:px-5",
