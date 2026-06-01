@@ -3107,30 +3107,6 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             break;
           }
 
-          case "session.idle": {
-            if (turnId) {
-              if (yield* deferPrematureIdleCompletion(context, turnId, event)) {
-                break;
-              }
-              const totalCostUsd = context.latestTurnCostUsd;
-              clearActiveTurnState(context);
-              updateProviderSession(context, { status: "ready" }, { clearActiveTurnId: true });
-              yield* emit({
-                ...buildEventBase({
-                  threadId: context.session.threadId,
-                  turnId,
-                  raw: event,
-                }),
-                type: "turn.completed",
-                payload: {
-                  state: "completed",
-                  ...(totalCostUsd !== undefined ? { totalCostUsd } : {}),
-                },
-              });
-            }
-            break;
-          }
-
           case "session.compacted": {
             yield* emitContextCompacted(context, { turnId, raw: event });
             break;

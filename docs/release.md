@@ -59,11 +59,11 @@ Checklist:
    - build web + server
    - run `bun publish --access public`
 
-## DP Code notes
+## Synara notes
 
-- `DP Code` keeps the same release architecture as upstream `T3Code`, but publishes desktop artifacts under the DP branding.
+- `Synara` keeps the same release architecture as upstream `T3Code`, but publishes desktop artifacts under the Synara branding.
 - The desktop updater expects the GitHub Release in this repository to include the generated updater metadata files, not just the installers.
-- The published release title should read `DP Code vX.Y.Z`.
+- The published release title should read `Synara vX.Y.Z`.
 - By default, the first-party desktop release path does not require CLI publish or post-release version-bump automation.
 - Optional jobs stay disabled unless repository variables enable them:
   - `DPCODE_PUBLISH_CLI=1`

@@ -1967,6 +1967,7 @@ export default function Sidebar() {
       recoverProjectThreadFromServer,
       openExistingProjectFromSnapshot,
       setProjectExpanded,
+      syncServerShellSnapshot,
     ],
   );
 

@@ -34,7 +34,7 @@ describe("estimateTimelineMessageHeight", () => {
         text: "hello",
         attachments: [{ id: "1", type: "image" }],
       }),
-    ).toBe(181);
+    ).toBe(177);
 
     expect(
       estimateTimelineMessageHeight({
@@ -45,10 +45,10 @@ describe("estimateTimelineMessageHeight", () => {
           { id: "2", type: "image" },
         ],
       }),
-    ).toBe(181);
+    ).toBe(177);
   });
 
-  it("adds a second attachment row for three or four user attachments", () => {
+  it("keeps up to four user image attachments on one row", () => {
     expect(
       estimateTimelineMessageHeight({
         role: "user",
@@ -59,7 +59,7 @@ describe("estimateTimelineMessageHeight", () => {
           { id: "3", type: "image" },
         ],
       }),
-    ).toBe(181);
+    ).toBe(177);
 
     expect(
       estimateTimelineMessageHeight({
@@ -72,7 +72,23 @@ describe("estimateTimelineMessageHeight", () => {
           { id: "4", type: "image" },
         ],
       }),
-    ).toBe(181);
+    ).toBe(177);
+  });
+
+  it("adds a second attachment row for five user image attachments", () => {
+    expect(
+      estimateTimelineMessageHeight({
+        role: "user",
+        text: "hello",
+        attachments: [
+          { id: "1", type: "image" },
+          { id: "2", type: "image" },
+          { id: "3", type: "image" },
+          { id: "4", type: "image" },
+          { id: "5", type: "image" },
+        ],
+      }),
+    ).toBe(245);
   });
 
   it("caps long user message estimates to the collapsed preview", () => {
@@ -81,7 +97,7 @@ describe("estimateTimelineMessageHeight", () => {
         role: "user",
         text: "a".repeat(56 * 120),
       }),
-    ).toBe(337);
+    ).toBe(293);
   });
 
   it("counts explicit newlines for user message estimates", () => {
@@ -90,7 +106,7 @@ describe("estimateTimelineMessageHeight", () => {
         role: "user",
         text: "first\nsecond\nthird",
       }),
-    ).toBe(157);
+    ).toBe(145);
   });
 
   it("adds terminal context chrome without counting the hidden block as message text", () => {
@@ -128,8 +144,8 @@ describe("estimateTimelineMessageHeight", () => {
       text: "a".repeat(52),
     };
 
-    expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 320 })).toBe(137);
-    expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 768 })).toBe(117);
+    expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 320 })).toBe(129);
+    expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 768 })).toBe(113);
   });
 
   it("does not clamp user wrapping too aggressively on very narrow layouts", () => {
@@ -138,8 +154,8 @@ describe("estimateTimelineMessageHeight", () => {
       text: "a".repeat(20),
     };
 
-    expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 100 })).toBe(157);
-    expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 320 })).toBe(117);
+    expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 100 })).toBe(145);
+    expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 320 })).toBe(113);
   });
 
   it("uses narrower width to increase assistant line wrapping", () => {

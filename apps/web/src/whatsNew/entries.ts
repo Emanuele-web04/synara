@@ -22,13 +22,37 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.0.51",
+    date: "Jun 1",
+    features: [
+      {
+        id: "synara-rebrand",
+        title: "Synara has a new name and logo",
+        description:
+          "The app now carries the Synara identity across the desktop shell, web UI, marketing pages, favicons, installers, and release artifacts.",
+      },
+      {
+        id: "redesigned-workspace",
+        title: "A cleaner workspace UI",
+        description:
+          "The chat, sidebar, settings, composer, picker surfaces, toast system, and dock panels were refreshed so daily coding sessions feel calmer and easier to scan.",
+      },
+      {
+        id: "git-terminal-polish",
+        title: "Git and terminal flows are more capable",
+        description:
+          "The release adds a richer Git panel, docked terminal panes, terminal activity tracking, capped terminal history, and more predictable subprocess status updates.",
+      },
+    ],
+  },
+  {
     version: "0.0.50",
     date: "May 28",
     features: [
       {
         id: "claude-opus-4-8",
         title: "Claude Opus 4.8 is available",
-        description: "DP Code now includes Claude Opus 4.8 in the Claude model picker.",
+        description: "Synara now includes Claude Opus 4.8 in the Claude model picker.",
       },
     ],
   },
