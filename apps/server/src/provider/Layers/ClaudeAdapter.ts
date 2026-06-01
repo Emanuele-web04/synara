@@ -291,11 +291,14 @@ function normalizeClaudeStreamMessages(cause: Cause.Cause<Error>): ReadonlyArray
 
 function getEffectiveClaudeCodeEffort(
   effort: ClaudeCodeEffort | null | undefined,
-): Exclude<ClaudeCodeEffort, "ultrathink"> | null {
+): Exclude<ClaudeCodeEffort, "ultrathink" | "ultracode"> | null {
   if (!effort) {
     return null;
   }
-  return effort === "ultrathink" ? null : effort;
+  if (effort === "ultrathink") {
+    return null;
+  }
+  return effort === "ultracode" ? "xhigh" : effort;
 }
 
 function isClaudeInterruptedMessage(message: string): boolean {
@@ -3192,12 +3195,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             ? modelSelection.options.thinking
             : undefined;
         const effectiveEffort = getEffectiveClaudeCodeEffort(effort);
+        const ultracode = effort === "ultracode" && hasEffortLevel(caps, "xhigh");
         const permissionMode =
           toPermissionMode(providerOptions?.permissionMode) ??
           (input.runtimeMode === "full-access" ? "bypassPermissions" : undefined);
         const settings = {
           ...(typeof thinking === "boolean" ? { alwaysThinkingEnabled: thinking } : {}),
           ...(fastMode ? { fastMode: true } : {}),
+          ...(ultracode ? { ultracode: true } : {}),
         };
         const claudeSubagents = buildClaudeSdkSubagents();
 
@@ -3360,6 +3365,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 ? { maxThinkingTokens: providerOptions.maxThinkingTokens }
                 : {}),
               ...(fastMode ? { fastMode: true } : {}),
+              ...(ultracode ? { ultracode: true } : {}),
             },
           },
           providerRefs: {},
