@@ -250,7 +250,7 @@ function ToastCloseButton({
   onClose,
 }: {
   compact?: boolean;
-  onClose?: () => void;
+  onClose?: (() => void) | undefined;
 }) {
   return (
     <Toast.Close
@@ -517,8 +517,8 @@ function AnchoredToasts() {
                     tooltipStyle
                       ? "rounded-md border bg-popover text-popover-foreground text-xs shadow-md/5 before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-md)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] dark:before:shadow-[0_-1px_--theme(--color-white/6%)]"
                       : compact
-                        ? COMPACT_TOAST_ROOT_CLASS
-                        : EXPANDED_TOAST_ROOT_CLASS,
+                        ? COMPACT_NOTIFICATION_SURFACE_CLASS_NAME
+                        : EXPANDED_NOTIFICATION_SURFACE_CLASS_NAME,
                   )}
                   data-slot="toast-popup"
                   toast={toast}

@@ -71,8 +71,9 @@ export const COMPOSER_INPUT_SHELL_CLASS_NAME =
 export const COMPOSER_SURFACE_BORDER_CLASS_NAME =
   "border-[color:color-mix(in_srgb,var(--color-border-heavy)_93%,var(--foreground)_7%)]";
 
-/** Border + shadow chrome for the composer shell: 1px defined border in both modes. */
-export const COMPOSER_SURFACE_CHROME_CLASS_NAME = `border ${COMPOSER_SURFACE_BORDER_CLASS_NAME} ${COMPOSER_SURFACE_SHADOW_CLASS_NAME}`;
+/** Border + shadow chrome for the composer shell: 1px defined border in light mode only;
+ *  dark mode drops the border and leans on the shadow for separation. */
+export const COMPOSER_SURFACE_CHROME_CLASS_NAME = `border ${COMPOSER_SURFACE_BORDER_CLASS_NAME} ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} dark:border-transparent`;
 
 export const COMPOSER_INPUT_SURFACE_CLASS_NAME = `chat-composer-surface rounded-[1.2rem] ${COMPOSER_SURFACE_CHROME_CLASS_NAME} transition-colors duration-200`;
 
