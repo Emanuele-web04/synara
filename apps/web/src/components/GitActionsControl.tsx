@@ -14,11 +14,10 @@ import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } fro
 import {
   ChevronDownIcon,
   CloudSyncIcon,
-  CloudUploadIcon,
   GitBranchIcon,
   GitCommitIcon,
-  GitPullRequestIcon,
   InfoIcon,
+  type LucideIcon,
   PushIcon,
 } from "~/lib/icons";
 import { Input } from "~/components/ui/input";
@@ -248,51 +247,52 @@ const COMMIT_DIALOG_TITLE = "Commit changes";
 const COMMIT_DIALOG_DESCRIPTION =
   "Review and confirm your commit. Leave the message blank to auto-generate one.";
 
-// Keep the header quick action visually distinct from the generic push/menu icon.
-function CommitPushHeaderIcon({ className }: { className?: string }) {
-  return <CloudUploadIcon className={className} />;
-}
-
 // Central icons render as masked spans (not <svg>), so size them explicitly here
 // rather than relying on parent `[&>svg]` selectors.
 const GIT_ACTION_ICON_CLASS = "size-3.5";
 
-function GitActionItemIcon({ icon }: { icon: GitActionIconName }) {
-  if (icon === "commit") return <GitCommitIcon className={GIT_ACTION_ICON_CLASS} />;
-  if (icon === "push") return <PushIcon className={GIT_ACTION_ICON_CLASS} />;
-  if (icon === "pr") return <GitPullRequestIcon className={GIT_ACTION_ICON_CLASS} />;
-  return <GitHubIcon className={GIT_ACTION_ICON_CLASS} />;
+/** Semantic name → glyph for every git affordance. Single source of truth shared by
+ *  the header quick action and the dropdown picker rows so the same action always
+ *  renders the same icon (e.g. push-family → the cloud PushIcon, PR → GitHub mark). */
+type GitGlyphName = GitActionIconName | "sync" | "branch";
+
+const GIT_ACTION_GLYPH: Record<GitGlyphName, LucideIcon> = {
+  commit: GitCommitIcon,
+  push: PushIcon,
+  pr: GitHubIcon,
+  sync: CloudSyncIcon,
+  branch: GitBranchIcon,
+};
+
+function GitActionGlyph({ name, className }: { name: GitGlyphName; className?: string }) {
+  const Glyph = GIT_ACTION_GLYPH[name];
+  return <Glyph className={className ?? GIT_ACTION_ICON_CLASS} />;
 }
 
-function GitPickerItemIcon({ icon }: { icon: GitActionIconName | "sync" | "branch" }) {
-  if (icon === "branch") return <GitBranchIcon className={GIT_ACTION_ICON_CLASS} />;
-  if (icon === "sync") return <CloudSyncIcon className={GIT_ACTION_ICON_CLASS} />;
-  if (icon === "pr") return <GitHubIcon className={GIT_ACTION_ICON_CLASS} />;
-  return <GitActionItemIcon icon={icon} />;
+// Map a header quick action onto its shared glyph name; null falls back to a hint icon.
+// Every push-family action collapses to "push" so the button matches the picker rows.
+function resolveGitQuickActionGlyph(quickAction: GitQuickAction): GitGlyphName | null {
+  if (quickAction.kind === "open_pr") return "pr";
+  if (quickAction.kind === "run_pull") return "sync";
+  if (quickAction.kind === "create_branch") return "branch";
+  if (quickAction.kind === "run_action") {
+    return quickAction.action === "commit" ? "commit" : "push";
+  }
+  if (quickAction.label === "Commit") return "commit";
+  return null;
 }
 
 function GitQuickActionIcon({ quickAction }: { quickAction: GitQuickAction }) {
-  const iconClassName = "size-3.5";
-  if (quickAction.kind === "open_pr") return <GitHubIcon className={iconClassName} />;
-  if (quickAction.kind === "run_pull") return <CloudSyncIcon className={iconClassName} />;
-  if (quickAction.kind === "create_branch") return <GitBranchIcon className={iconClassName} />;
-  if (quickAction.kind === "run_action") {
-    if (quickAction.action === "commit") return <GitCommitIcon className={iconClassName} />;
-    if (quickAction.action === "push") return <PushIcon className={iconClassName} />;
-    if (quickAction.action === "commit_push") {
-      return <CommitPushHeaderIcon className={iconClassName} />;
-    }
-    return <GitHubIcon className={iconClassName} />;
-  }
-  if (quickAction.label === "Commit") return <GitCommitIcon className={iconClassName} />;
-  return <InfoIcon className={iconClassName} />;
+  const name = resolveGitQuickActionGlyph(quickAction);
+  if (name) return <GitActionGlyph name={name} />;
+  return <InfoIcon className={GIT_ACTION_ICON_CLASS} />;
 }
 
 function GitPickerMenuRow({ item }: { item: GitPickerMenuItem }) {
   return (
     <MenuItem disabled={item.disabled} onClick={item.onSelect}>
       <span className="inline-flex shrink-0 items-center [&>svg]:size-3.5">
-        <GitPickerItemIcon icon={item.icon} />
+        <GitActionGlyph name={item.icon} />
       </span>
       <span>{item.label}</span>
     </MenuItem>

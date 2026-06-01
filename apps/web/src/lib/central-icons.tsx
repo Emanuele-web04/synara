@@ -13,7 +13,7 @@ const CENTRAL_ICON_NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
 export type CentralIconProps = Omit<HTMLAttributes<HTMLSpanElement>, "children"> & {
   name: string;
-  label?: string;
+  label?: string | undefined;
 };
 
 // Builds a public asset URL from the icon basename without allowing path traversal.

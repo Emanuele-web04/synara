@@ -13,7 +13,7 @@ type InputProps = Omit<ComponentPropsWithoutRef<typeof InputPrimitive>, "size"> 
 
 // Forward refs so the browser address bar can autofocus and select reliably.
 const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
-  { className, size = "default", unstyled = false, nativeInput = false, ...props },
+  { className, size = "default", unstyled = false, nativeInput = false, style, ...props },
   ref,
 ) {
   const inputClassName = cn(
@@ -47,6 +47,7 @@ const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
           data-slot="input"
           size={typeof size === "number" ? size : undefined}
           ref={ref}
+          style={typeof style === "function" ? undefined : style}
           {...props}
         />
       ) : (
@@ -55,6 +56,7 @@ const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
           data-slot="input"
           size={typeof size === "number" ? size : undefined}
           ref={ref}
+          style={style}
           {...props}
         />
       )}

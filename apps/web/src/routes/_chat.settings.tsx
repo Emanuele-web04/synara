@@ -462,7 +462,12 @@ function SettingsSelectControl({
   children: ReactNode;
 }) {
   return (
-    <Select value={value} onValueChange={onValueChange}>
+    <Select
+      value={value}
+      onValueChange={(next) => {
+        if (next !== null) onValueChange(next);
+      }}
+    >
       <SelectTrigger className={triggerClassName} aria-label={ariaLabel}>
         <SelectValue>{valueContent}</SelectValue>
       </SelectTrigger>
