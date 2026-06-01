@@ -697,8 +697,10 @@ export function buildThemeCssVariables(
     "--app-user-message-background": chatCodeSurface,
     "--app-sidebar-backdrop-filter":
       material === "translucent" ? "blur(8px) saturate(135%)" : "none",
-    "--app-settings-backdrop-filter":
-      material === "translucent" ? "blur(8px) saturate(135%)" : "none",
+    // Settings mirrors the chat surface (opaque --color-background-surface) so every
+    // settings element reads as outline-only. With an opaque page there is nothing to
+    // frost, so we skip the backdrop blur (and its compositing cost) entirely.
+    "--app-settings-backdrop-filter": "none",
     "--app-sidebar-shadow":
       material === "translucent"
         ? variant === "dark"
@@ -713,12 +715,9 @@ export function buildThemeCssVariables(
           ? `color-mix(in srgb, ${sidebarSurfaceUnder} 72%, transparent)`
           : `color-mix(in srgb, ${sidebarSurfaceUnder} 64%, transparent)`
         : sidebarSurfaceUnder,
-    "--app-settings-surface":
-      material === "translucent"
-        ? variant === "dark"
-          ? `color-mix(in srgb, ${settingsSurface} 72%, transparent)`
-          : `color-mix(in srgb, ${settingsSurface} 64%, transparent)`
-        : settingsSurface,
+    // Always opaque so the settings page background matches the chat surface exactly,
+    // regardless of window material.
+    "--app-settings-surface": settingsSurface,
     "--background": readCodexVariable("--color-background-surface-under"),
     "--border": readCodexVariable("--color-border"),
     "--card": readCodexVariable("--color-background-panel"),

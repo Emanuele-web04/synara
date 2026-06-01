@@ -713,34 +713,6 @@ function toThreadPr(
   };
 }
 
-function ThreadPrStatusBadge({
-  prStatus,
-  onOpen,
-}: {
-  prStatus: PrStatusIndicator;
-  onOpen: (event: React.MouseEvent<HTMLElement>, prUrl: string) => void;
-}) {
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <button
-            type="button"
-            aria-label={prStatus.tooltip}
-            className={`inline-flex items-center justify-center ${prStatus.colorClass} cursor-pointer rounded-sm outline-hidden focus-visible:ring-1 focus-visible:ring-ring`}
-            onClick={(event) => {
-              onOpen(event, prStatus.url);
-            }}
-          >
-            <SidebarGlyph icon={prStatus.icon} variant="meta" />
-          </button>
-        }
-      />
-      <TooltipPopup side="top">{prStatus.tooltip}</TooltipPopup>
-    </Tooltip>
-  );
-}
-
 function terminalStatusFromThreadState(input: {
   runningTerminalIds: string[];
   terminalAttentionStatesById: Record<string, "attention" | "review">;
@@ -802,6 +774,38 @@ function prStatusIndicator(pr: ThreadPr): PrStatusIndicator | null {
     };
   }
   return null;
+}
+
+function ThreadPrStatusBadge({
+  prStatus,
+  onOpen,
+  className,
+}: {
+  prStatus: PrStatusIndicator;
+  onOpen: (event: MouseEvent<HTMLElement>, prUrl: string) => void;
+  className?: string;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            aria-label={prStatus.tooltip}
+            className={cn(
+              "inline-flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-sm outline-hidden transition-colors focus-visible:ring-1 focus-visible:ring-ring",
+              prStatus.colorClass,
+              className,
+            )}
+            onClick={(event) => onOpen(event, prStatus.url)}
+          >
+            <SidebarGlyph icon={prStatus.icon} variant="meta" className="size-3.5" />
+          </button>
+        }
+      />
+      <TooltipPopup side="top">{prStatus.tooltip}</TooltipPopup>
+    </Tooltip>
+  );
 }
 
 type SortableProjectHandleProps = Pick<
@@ -1438,6 +1442,27 @@ export default function Sidebar() {
     },
     [pinnedThreadIdSet, setThreadPinned],
   );
+  const openPrLink = useCallback((event: MouseEvent<HTMLElement>, prUrl: string) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const api = readNativeApi();
+    if (!api) {
+      toastManager.add({
+        type: "error",
+        title: "Link opening is unavailable.",
+      });
+      return;
+    }
+
+    void api.shell.openExternal(prUrl).catch((error) => {
+      toastManager.add({
+        type: "error",
+        title: "Unable to open PR link",
+        description: error instanceof Error ? error.message : "An error occurred.",
+      });
+    });
+  }, []);
   const projectCwdById = useMemo(
     () => new Map(projects.map((project) => [project.id, project.cwd] as const)),
     [projects],
@@ -1465,28 +1490,6 @@ export default function Sidebar() {
       }),
     [terminalStateByThreadId, workspacePages],
   );
-  const openPrLink = useCallback((event: React.MouseEvent<HTMLElement>, prUrl: string) => {
-    event.preventDefault();
-    event.stopPropagation();
-
-    const api = readNativeApi();
-    if (!api) {
-      toastManager.add({
-        type: "error",
-        title: "Link opening is unavailable.",
-      });
-      return;
-    }
-
-    void api.shell.openExternal(prUrl).catch((error) => {
-      toastManager.add({
-        type: "error",
-        title: "Unable to open PR link",
-        description: error instanceof Error ? error.message : "An error occurred.",
-      });
-    });
-  }, []);
-
   const focusMostRecentThreadForProject = useCallback(
     (projectId: ProjectId) => {
       const latestThread = sortThreadsForSidebar(
@@ -3953,6 +3956,7 @@ export default function Sidebar() {
   function renderThreadHoverActions(input: {
     threadId: ThreadId;
     toneClassName: string;
+    pinned: boolean;
     compact?: boolean;
   }) {
     const compact = input.compact === true;
@@ -3984,9 +3988,21 @@ export default function Sidebar() {
             <span>Confirm</span>
           </button>
         ) : (
-          renderThreadArchiveAction(input.threadId, input.toneClassName, {
-            compact,
-          })
+          <div className="pointer-events-auto inline-flex items-center gap-1">
+            <ThreadPinToggleButton
+              pinned={input.pinned}
+              presentation="inline"
+              toneClassName={input.toneClassName}
+              onToggle={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                toggleThreadPinned(input.threadId);
+              }}
+            />
+            {renderThreadArchiveAction(input.threadId, input.toneClassName, {
+              compact,
+            })}
+          </div>
         )}
       </SidebarRowHoverActions>
     );
@@ -4024,12 +4040,22 @@ export default function Sidebar() {
       visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
     const showThreadProviderAvatar = !isGenericChatThreadTitle(thread.title);
     const showThreadIdentityGlyph = threadEntryPoint === "terminal" || showThreadProviderAvatar;
+    const secondaryMetaClass = isActive
+      ? "text-foreground/54 dark:text-foreground/64"
+      : "text-muted-foreground/38";
     const pinnedTimestampClassName = isSubagentThread
       ? "mr-1 w-[1.2rem] text-right text-[10px] leading-none tabular-nums text-muted-foreground/26 transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0"
       : "mr-1 w-[1.625rem] text-right text-[length:var(--app-font-size-ui-meta,11px)] leading-none tabular-nums text-muted-foreground/38 transition-opacity group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0";
 
     return (
       <div key={thread.id} className="group/thread-row relative w-full opacity-85">
+        {leadingPrStatus ? (
+          <ThreadPrStatusBadge
+            prStatus={leadingPrStatus}
+            onOpen={openPrLink}
+            className="absolute left-1.5 top-1/2 z-20 size-5 -translate-y-1/2"
+          />
+        ) : null}
         <div
           role="button"
           tabIndex={0}
@@ -4037,9 +4063,10 @@ export default function Sidebar() {
           className={cn(
             SIDEBAR_HEADER_ROW_CLASS_NAME,
             "grid w-full items-center gap-x-1.5 transition-colors",
+            leadingPrStatus && "pl-8",
             showThreadIdentityGlyph
-              ? "grid-cols-[auto_auto_minmax(0,1fr)_auto_3.5rem]"
-              : "grid-cols-[auto_minmax(0,1fr)_auto_3.5rem]",
+              ? "grid-cols-[auto_minmax(0,1fr)_auto_3.5rem]"
+              : "grid-cols-[minmax(0,1fr)_auto_3.5rem]",
             isActive
               ? SIDEBAR_ROW_ACTIVE_CLASS_NAME
               : cn(SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME),
@@ -4066,18 +4093,6 @@ export default function Sidebar() {
             });
           }}
         >
-          <div className="flex shrink-0 items-center gap-1.5">
-            <ThreadPinToggleButton
-              pinned
-              presentation="inline"
-              toneClassName="text-muted-foreground/50"
-              onToggle={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                toggleThreadPinned(thread.id);
-              }}
-            />
-          </div>
           {threadEntryPoint === "terminal" ? (
             <SidebarGlyph icon={TerminalIcon} variant="chrome" className="text-teal-600/85" />
           ) : showThreadProviderAvatar ? (
@@ -4090,9 +4105,6 @@ export default function Sidebar() {
             />
           ) : null}
           <div className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
-            {leadingPrStatus ? (
-              <ThreadPrStatusBadge prStatus={leadingPrStatus} onOpen={openPrLink} />
-            ) : null}
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -4162,6 +4174,7 @@ export default function Sidebar() {
               {renderThreadHoverActions({
                 threadId: thread.id,
                 toneClassName: "text-muted-foreground/42",
+                pinned: true,
                 compact: isSubagentThread,
               })}
             </div>
@@ -4253,29 +4266,12 @@ export default function Sidebar() {
         data-thread-item
       >
         {leadingPrStatus ? (
-          <span
-            aria-label={leadingPrStatus.tooltip}
-            className={cn(
-              // Idle far-left slot shows the merge/PR status glyph. On row hover/focus
-              // it fades out and the pin overlay (z-30, same left-1.5 anchor) takes over.
-              "pointer-events-none absolute left-1.5 top-1/2 z-20 inline-flex size-5 -translate-y-1/2 items-center justify-center transition-opacity",
-              leadingPrStatus.colorClass,
-              "opacity-100 group-hover/thread-row:opacity-0 group-focus-within/thread-row:opacity-0",
-            )}
-          >
-            <SidebarGlyph icon={leadingPrStatus.icon} variant="meta" className="size-3.5" />
-          </span>
+          <ThreadPrStatusBadge
+            prStatus={leadingPrStatus}
+            onOpen={openPrLink}
+            className="absolute left-1.5 top-1/2 z-20 size-5 -translate-y-1/2"
+          />
         ) : null}
-        <ThreadPinToggleButton
-          pinned={isPinned}
-          presentation="overlay"
-          toneClassName={secondaryMetaClass}
-          onToggle={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            toggleThreadPinned(thread.id);
-          }}
-        />
         <SidebarMenuSubButton
           render={<div role="button" tabIndex={0} />}
           data-thread-entry-point={threadEntryPoint}
@@ -4286,6 +4282,7 @@ export default function Sidebar() {
               isActive,
               isSelected,
             }),
+            leadingPrStatus && "pl-8",
             isSubagentThread
               ? "pr-7.5"
               : resolveThreadRowTrailingReserveClass(showCompactMeta ? rightMetaChips.length : 0),
@@ -4503,6 +4500,7 @@ export default function Sidebar() {
               {renderThreadHoverActions({
                 threadId: thread.id,
                 toneClassName: secondaryMetaClass,
+                pinned: isPinned,
                 compact: isSubagentThread,
               })}
             </div>

@@ -401,10 +401,14 @@ input {
   -webkit-app-region: no-drag;
 }
 
-/* Scrollbar styling */
+/* Scrollbar styling.
+   The 2px transparent border + `background-clip: padding-box` insets the thumb so
+   it floats with a small gap from the track edges instead of hugging them. Use
+   `background-color` (never the `background` shorthand) on the thumb so the clip
+   value is preserved across the hover/dark overrides. */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 10px;
+  height: 10px;
 }
 
 ::-webkit-scrollbar-track {
@@ -412,20 +416,22 @@ input {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.15);
-  border-radius: 3px;
+  background-color: rgba(0, 0, 0, 0.1);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: 999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.25);
+  background-color: rgba(0, 0, 0, 0.18);
 }
 
 .dark ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
+  background-color: rgba(255, 255, 255, 0.07);
 }
 
 .dark ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.18);
+  background-color: rgba(255, 255, 255, 0.14);
 }
 
 .turn-chip-strip {
@@ -438,18 +444,19 @@ input {
   display: none;
 }
 
-/* Terminal drawer scrollbar parity with chat */
+/* Terminal drawer scrollbar parity with chat: inset the slider so it floats with
+   a small gap from the edge instead of hugging it. */
 .thread-terminal-drawer .xterm .xterm-scrollable-element > .scrollbar.vertical {
-  width: 6px !important;
+  width: 10px !important;
 }
 
 .thread-terminal-drawer .xterm .xterm-scrollable-element > .scrollbar > .slider {
-  border-radius: 3px;
+  border-radius: 999px;
 }
 
 .thread-terminal-drawer .xterm .xterm-scrollable-element > .scrollbar.vertical > .slider {
   width: 6px !important;
-  left: 0 !important;
+  left: 2px !important;
 }
 
 /* Reasoning select -- clickable label surface */
@@ -580,10 +587,6 @@ label:has(> select#reasoning-effort) select {
   display: inline-block;
   min-width: max-content;
   padding: 0 0.05rem;
-}
-
-.chat-markdown .katex-display::-webkit-scrollbar {
-  height: 6px;
 }
 
 .chat-markdown pre {
@@ -1167,20 +1170,22 @@ diffs-container {
 /* Thin scrollbar for long model-provider lists inside picker submenus. */
 .composer-picker-scroll {
   scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--foreground) 18%, transparent) transparent;
+  scrollbar-color: color-mix(in srgb, var(--foreground) 13%, transparent) transparent;
 }
 
 .composer-picker-scroll::-webkit-scrollbar {
-  width: 6px;
+  width: 10px;
 }
 
 .composer-picker-scroll::-webkit-scrollbar-thumb {
   border-radius: 999px;
-  background: color-mix(in srgb, var(--foreground) 16%, transparent);
+  background-color: color-mix(in srgb, var(--foreground) 12%, transparent);
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 
 .composer-picker-scroll::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in srgb, var(--foreground) 28%, transparent);
+  background-color: color-mix(in srgb, var(--foreground) 22%, transparent);
 }
 
 @keyframes ultrathink-rainbow {

@@ -28,14 +28,14 @@ import {
 } from "~/lib/terminalContext";
 import { formatComposerMentionToken } from "~/lib/composerMentions";
 import { basenameOfPath } from "~/file-icons";
+import { createCentralIconElement } from "~/lib/central-icons";
 import {
-  COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME,
-  COMPOSER_INLINE_MENTION_CHIP_CLASS_NAME,
-  COMPOSER_INLINE_SKILL_CHIP_ICON_SVG,
-  COMPOSER_INLINE_SKILL_CHIP_CLASS_NAME,
-  COMPOSER_INLINE_SKILL_CHIP_ICON_CLASS_NAME,
+  COMPOSER_EDITOR_INLINE_CHIP_CLASS_NAME,
   COMPOSER_INLINE_AGENT_CHIP_CLASS_NAME,
   COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME,
+  COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME,
+  COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME,
+  COMPOSER_INLINE_SKILL_CHIP_ICON_NAME,
   formatComposerSkillChipLabel,
 } from "../composerInlineChip";
 import { ComposerPendingTerminalContextChip } from "../chat/ComposerPendingTerminalContexts";
@@ -92,7 +92,11 @@ function renderMentionChipDom(
   container.style.setProperty("user-select", "none");
   container.style.setProperty("-webkit-user-select", "none");
 
-  const icon = createMentionChipIconElement(pathValue, kind);
+  const icon = createMentionChipIconElement(
+    pathValue,
+    kind,
+    COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME,
+  );
 
   const label = document.createElement("span");
   label.className = COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME;
@@ -106,16 +110,20 @@ function renderSkillChipDom(container: HTMLElement, name: string): void {
   container.style.setProperty("user-select", "none");
   container.style.setProperty("-webkit-user-select", "none");
 
-  const icon = document.createElement("span");
-  icon.ariaHidden = "true";
-  icon.className = COMPOSER_INLINE_SKILL_CHIP_ICON_CLASS_NAME;
-  icon.innerHTML = COMPOSER_INLINE_SKILL_CHIP_ICON_SVG;
+  const icon = createCentralIconElement(
+    COMPOSER_INLINE_SKILL_CHIP_ICON_NAME,
+    COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME,
+  );
 
   const label = document.createElement("span");
   label.className = COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME;
   label.textContent = formatComposerSkillChipLabel(name);
 
-  container.append(icon, label);
+  if (icon) {
+    container.append(icon, label);
+  } else {
+    container.append(label);
+  }
 }
 
 const AGENT_ROBOT_ICON_SVG = renderToStaticMarkup(
@@ -192,7 +200,7 @@ export class ComposerMentionNode extends TextNode {
 
   override createDOM(_config: EditorConfig): HTMLElement {
     const dom = document.createElement("span");
-    dom.className = COMPOSER_INLINE_MENTION_CHIP_CLASS_NAME;
+    dom.className = COMPOSER_EDITOR_INLINE_CHIP_CLASS_NAME;
     dom.contentEditable = "false";
     dom.setAttribute("spellcheck", "false");
     renderMentionChipDom(dom, this.__path, this.__kind);
@@ -274,7 +282,7 @@ export class ComposerSkillNode extends TextNode {
 
   override createDOM(_config: EditorConfig): HTMLElement {
     const dom = document.createElement("span");
-    dom.className = COMPOSER_INLINE_SKILL_CHIP_CLASS_NAME;
+    dom.className = COMPOSER_EDITOR_INLINE_CHIP_CLASS_NAME;
     dom.contentEditable = "false";
     dom.setAttribute("spellcheck", "false");
     renderSkillChipDom(dom, this.__skillName);

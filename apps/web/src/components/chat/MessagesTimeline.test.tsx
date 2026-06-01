@@ -626,7 +626,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Terminal 1 lines 1-5");
-    expect(markup).toContain("tabler-icon-terminal");
+    expect(markup).toContain("/central-icons-reversed/console.svg");
     expect(markup).toContain("yoo what&#x27;s ");
   });
 
@@ -723,7 +723,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Check Code");
-    expect(markup).toContain("bg-[var(--info)]/10");
+    expect(markup).toContain("text-[var(--info-foreground)]");
     expect(markup).not.toContain("$check-code</div>");
   });
 
@@ -768,7 +768,8 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("@spark");
-    expect(markup).toContain("inline-flex max-w-full select-none items-center gap-1 rounded-md");
+    expect(markup).toContain("inline-flex max-w-full select-none items-center gap-1 mx-0.5");
+    expect(markup).toContain("rounded-md px-1.5 py-0.5");
     expect(markup).toContain("(check the UI)");
     expect(markup).not.toContain("@spark(check the UI)</div>");
   });
@@ -975,7 +976,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain('data-timeline-row-kind="work"');
   });
 
-  it("shows the first four inline tool calls and collapses the remainder", async () => {
+  it("collapses every completed-turn tool call behind a single Worked-for toggle", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -1082,11 +1083,13 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Tool 1");
-    expect(markup).toContain("Tool 4");
-    expect(markup).toContain("+2 more tool calls");
+    expect(markup).toContain("Worked for");
+    expect(markup).toContain(">done</p>");
+    // Completed turns fold all tool work behind the single collapsed disclosure,
+    // which stays unmounted until expanded, so no inline tool rows leak out.
+    expect(markup).not.toContain("+2 more tool calls");
+    expect(markup).not.toContain("Tool 1");
     expect(markup).not.toContain("Tool 5");
-    expect(markup).not.toContain("Tool calls");
   });
 
   it("highlights the action word on Cursor-style inline tool rows", async () => {
@@ -1094,9 +1097,9 @@ describe("MessagesTimeline", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
+        isWorking
+        activeTurnInProgress
+        activeTurnStartedAt="2026-05-09T16:31:20.000Z"
         timelineEntries={[
           {
             id: "entry-cursor-search",
@@ -1326,8 +1329,12 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Tool 1");
-    expect(markup).toContain("Tool 2");
+    expect(markup).toContain("Worked for");
+    expect(markup).toContain(">done</p>");
+    // Trailing work folds into the terminal reply's collapsed disclosure rather
+    // than leaving a detached work row at the end of the transcript.
+    expect(markup).not.toContain("Tool 1");
+    expect(markup).not.toContain("Tool 2");
     expect(markup).not.toContain('data-timeline-row-kind="work"');
   });
 
@@ -1336,9 +1343,9 @@ describe("MessagesTimeline", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         hasMessages
-        isWorking={false}
-        activeTurnInProgress={false}
-        activeTurnStartedAt={null}
+        isWorking
+        activeTurnInProgress
+        activeTurnStartedAt="2026-03-17T19:12:28.000Z"
         timelineEntries={[
           {
             id: "entry-inline-tools-expanded",
@@ -1848,7 +1855,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-inline-tool-icon="mcp"');
   });
 
-  it("renders every changed file in the same inline file-change tool call", async () => {
+  it("anchors the changed-files summary at the end of a collapsed file-change turn", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const assistantMessageId = MessageId.makeUnsafe("message-assistant-inline-multi-edit");
     const markup = renderToStaticMarkup(
@@ -1929,9 +1936,12 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("MessagesTimeline.test.tsx");
-    expect(markup).toContain("MessagesTimeline.tsx");
-    expect(markup.match(/Edited/g)?.length).toBe(2);
+    // The tool work collapses, but the changed-files summary stays anchored at
+    // the end of the turn with every file from the turn diff.
+    expect(markup).toContain("Worked for");
+    expect(markup).toContain("Edited 2 files");
+    expect(markup).toContain("apps/web/src/components/chat/MessagesTimeline.test.tsx");
+    expect(markup).toContain("apps/web/src/components/chat/MessagesTimeline.tsx");
     expect(markup).toContain("+1");
     expect(markup).toContain("-1");
     expect(markup).toContain("+2");

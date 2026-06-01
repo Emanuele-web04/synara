@@ -1948,7 +1948,10 @@ function createWindow(): BrowserWindow {
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 16, y: 18 },
     vibrancy: "under-window",
-    visualEffectState: "active",
+    // "followWindow" lets macOS drop vibrancy blending to inactive when the
+    // window is backgrounded, so WindowServer stops continuously recompositing
+    // it. "active" forced full-cost blending even when the app was unfocused.
+    visualEffectState: "followWindow",
     backgroundColor: "#00000000",
     webPreferences: {
       preload: Path.join(__dirname, "preload.js"),
@@ -1956,6 +1959,8 @@ function createWindow(): BrowserWindow {
       nodeIntegration: false,
       sandbox: true,
       webviewTag: true,
+      // Let Chromium throttle renderer timers/rAF when the window is hidden.
+      backgroundThrottling: true,
     },
   });
   browserManager.setWindow(window);

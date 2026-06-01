@@ -4,21 +4,23 @@
 // Exports: border, surface, card, row, and inset list class names
 
 /** Shared corner radius for settings cards, controls, and select popups. */
-export const SETTINGS_RADIUS_CLASS_NAME = "rounded-md";
+export const SETTINGS_RADIUS_CLASS_NAME = "rounded-xl";
 
 /** Same border token as Button `outline` / `chrome-outline` variants. */
 export const SETTINGS_CONTROL_BORDER_CLASS_NAME = "border border-[color:var(--color-border)]";
 
-/** Main settings shell — lets Electron translucent themes show through the route surface. */
+/** Main settings shell — opaque and matched to the chat surface (see `--app-settings-surface`),
+ *  so cards/rows read as outline-only on the same background as the chat. */
 export const SETTINGS_PAGE_BACKGROUND_CLASS_NAME = "app-settings-surface";
 
 /** Section label above a bordered card group. */
 export const SETTINGS_SECTION_LABEL_CLASS_NAME =
   "px-1 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground";
 
-/** Grouped settings card: theme surface fill + button border, no shadow. */
+/** Grouped settings card: transparent so it shares the page (chat) surface and reads
+ *  as outline-only — just the button border, no fill, no shadow. */
 export const SETTINGS_CARD_CLASS_NAME = [
-  "overflow-hidden bg-[var(--color-background-surface)]",
+  "overflow-hidden bg-transparent",
   SETTINGS_CONTROL_BORDER_CLASS_NAME,
   SETTINGS_RADIUS_CLASS_NAME,
 ].join(" ");
@@ -34,7 +36,7 @@ export const SETTINGS_INSET_LIST_CLASS_NAME = SETTINGS_CARD_CLASS_NAME;
 
 /** Empty / placeholder blocks. */
 export const SETTINGS_EMPTY_STATE_CLASS_NAME = [
-  "bg-[var(--color-background-surface)]",
+  "bg-transparent",
   SETTINGS_CONTROL_BORDER_CLASS_NAME,
   SETTINGS_RADIUS_CLASS_NAME,
   "border-dashed",

@@ -5,9 +5,7 @@
 // Layer: Chat composer UI primitive
 // Exports: QueuedComposerActions
 
-import { PiArrowBendDownRight } from "react-icons/pi";
-
-import { EllipsisIcon, Trash2 } from "~/lib/icons";
+import { EllipsisIcon, SteerIcon, Trash2 } from "~/lib/icons";
 
 import type { QueuedComposerTurn } from "../../composerDraftStore";
 
@@ -31,7 +29,7 @@ function QueuedComposerActions({
   return (
     <div className="flex shrink-0 items-center gap-0">
       <Button variant="subtle" size="chip" onClick={() => void onSteer(queuedTurn)}>
-        <PiArrowBendDownRight />
+        <SteerIcon />
         <span>Steer</span>
       </Button>
       <IconButton

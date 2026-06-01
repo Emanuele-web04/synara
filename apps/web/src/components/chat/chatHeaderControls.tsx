@@ -74,7 +74,13 @@ export const CHAT_SURFACE_CHIP_CLASS_NAME = cn(
 export const CHAT_SURFACE_CHIP_ICON_CLASS_NAME = "size-3.5 shrink-0 opacity-70";
 
 /** Renders any chip glyph with the shared {@link CHAT_SURFACE_CHIP_ICON_CLASS_NAME} treatment. */
-export function SurfaceChipIcon({ icon: Icon, className }: { icon: LucideIcon; className?: string }) {
+export function SurfaceChipIcon({
+  icon: Icon,
+  className,
+}: {
+  icon: LucideIcon;
+  className?: string;
+}) {
   return <Icon aria-hidden className={cn(CHAT_SURFACE_CHIP_ICON_CLASS_NAME, className)} />;
 }
 

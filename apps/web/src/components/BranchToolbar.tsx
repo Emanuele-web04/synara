@@ -6,7 +6,6 @@ import { LuSplit } from "react-icons/lu";
 import { ChevronDownIcon, ChevronRightIcon, HandoffIcon } from "~/lib/icons";
 import { HiOutlineHandRaised } from "react-icons/hi2";
 import { CentralIcon } from "~/lib/central-icons";
-import { PiLaptop } from "react-icons/pi";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useAppSettings } from "~/appSettings";
 
@@ -306,7 +305,7 @@ export default function BranchToolbar({
           <Popover open={envPickerOpen} onOpenChange={setEnvPickerOpen}>
             <PopoverTrigger className="inline-flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)]">
               {environmentPresentation.mode === "local" ? (
-                <PiLaptop className="size-3.5" />
+                <CentralIcon name="macbook" className="size-3.5" />
               ) : (
                 <WorktreeGlyph className="size-3.5" />
               )}
@@ -325,7 +324,10 @@ export default function BranchToolbar({
                 </p>
                 {environmentPresentation.mode === "local" ? (
                   <div className="flex w-full items-center gap-2 px-3 py-1.5 text-sm">
-                    <PiLaptop className="size-4 text-[var(--color-text-foreground-secondary)]" />
+                    <CentralIcon
+                      name="macbook"
+                      className="size-4 text-[var(--color-text-foreground-secondary)]"
+                    />
                     <span>{environmentPresentation.localOptionLabel}</span>
                     <svg
                       className="ml-auto size-4 text-[var(--color-text-foreground)]"
@@ -348,7 +350,10 @@ export default function BranchToolbar({
                       onEnvModeChange("local");
                     }}
                   >
-                    <PiLaptop className="size-4 text-[var(--color-text-foreground-secondary)]" />
+                    <CentralIcon
+                      name="macbook"
+                      className="size-4 text-[var(--color-text-foreground-secondary)]"
+                    />
                     <span>{environmentPresentation.localOptionLabel}</span>
                   </button>
                 )}

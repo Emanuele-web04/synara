@@ -7,7 +7,7 @@ import type { GitBranch, GitStashInfoResult, GitStatusResult, NativeApi } from "
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronDownIcon, PlusIcon } from "~/lib/icons";
-import { GoGitBranch } from "react-icons/go";
+import { CentralIcon } from "~/lib/central-icons";
 import {
   type CSSProperties,
   useCallback,
@@ -820,7 +820,7 @@ export function BranchToolbarBranchSelector({
         className="inline-flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)] disabled:cursor-not-allowed disabled:opacity-50"
         disabled={(branchesQuery.isLoading && branches.length === 0) || isBranchActionPending}
       >
-        <GoGitBranch className="size-3 shrink-0" />
+        <CentralIcon name="branch" className="size-3.5 shrink-0" />
         <span className="max-w-[240px] truncate">{triggerLabel}</span>
         <ChevronDownIcon className="size-3 opacity-60" />
       </ComboboxTrigger>

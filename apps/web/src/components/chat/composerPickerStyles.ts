@@ -34,7 +34,7 @@ export const COMPOSER_PICKER_MODEL_LIST_MAX_HEIGHT_CLASS_NAME =
 export const COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME = "composer-picker-scroll";
 
 /** Shared corner radius for picker panels and option hover/selection rows. */
-export const COMPOSER_PICKER_RADIUS_CLASS_NAME = "rounded-[0.6rem]";
+export const COMPOSER_PICKER_RADIUS_CLASS_NAME = "rounded-[0.8rem]";
 
 /** Collapsible section headers inside model provider lists. */
 export const COMPOSER_PICKER_MODEL_GROUP_HEADER_CLASS_NAME = `grid w-full grid-cols-[0.75rem_minmax(0,1fr)_2.5rem] items-center gap-x-1.5 ${COMPOSER_PICKER_RADIUS_CLASS_NAME} px-2 py-1 text-left text-[10px] font-medium uppercase tracking-[0.06em] text-muted-foreground/80 outline-none transition-colors hover:bg-[color-mix(in_srgb,var(--foreground)_4%,transparent)] focus-visible:ring-0`;
@@ -89,13 +89,16 @@ export const APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME =
   "relative overflow-hidden border border-border bg-popover/70 text-popover-foreground before:pointer-events-none before:absolute before:inset-0 before:-z-1 before:rounded-[inherit] before:backdrop-blur-2xl before:backdrop-saturate-150";
 
 /** Default floating popup shell (dropdown menus, selects, popovers). */
-export const APP_TRANSLUCENT_POPUP_SURFACE_CLASS_NAME = `${APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME} rounded-xl shadow-xl`;
+export const APP_TRANSLUCENT_POPUP_SURFACE_CLASS_NAME = `${APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME} rounded-2xl shadow-xl`;
 
 /** Frosted backdrop layer inside composer picker dropdown panels. @deprecated Use APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME instead. */
 export const COMPOSER_PICKER_MENU_BACKDROP_CLASS_NAME = "composer-picker-menu-surface";
 
+/** Shared border, radius, and shadow for composer-attached popup panels. */
+export const COMPOSER_PICKER_MENU_SURFACE_CHROME_CLASS_NAME = `border border-border ${COMPOSER_PICKER_RADIUS_CLASS_NAME} ${COMPOSER_SURFACE_SHADOW_CLASS_NAME}`;
+
 /** Visual shell for composer picker dropdown panels (menus attached to the composer). */
-export const COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME = `${APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME} ${COMPOSER_PICKER_RADIUS_CLASS_NAME} ${COMPOSER_SURFACE_SHADOW_CLASS_NAME}`;
+export const COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME = `${APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME} ${COMPOSER_PICKER_MENU_SURFACE_CHROME_CLASS_NAME}`;
 
 /** Frosted backdrop layer inside open picker panels (composer menus + settings selects). */
 export const COMPOSER_PICKER_MENU_POPUP_BACKDROP_LAYER_CLASS_NAME = `${COMPOSER_PICKER_MENU_BACKDROP_CLASS_NAME} pointer-events-none absolute inset-0 rounded-[inherit]`;
@@ -115,6 +118,23 @@ export const COMPOSER_PICKER_SELECT_OPTION_CLASS_NAME = `${COMPOSER_PICKER_MENU_
 
 /** Same chrome as picker menus, for composer-attached tooltips. */
 export const COMPOSER_PICKER_TOOLTIP_SURFACE_CLASS_NAME = `${COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME} font-normal text-[var(--color-text-foreground)]`;
+
+/** Opaque floating panel for the slash/mention command menu and @local browser.
+ *  Picker border/radius/shadow, but a solid fill: the menu floats over the
+ *  transcript, so frosted bg-popover/70 would let chat content bleed through. */
+export const COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME = `relative overflow-hidden bg-popover text-popover-foreground ${COMPOSER_PICKER_MENU_SURFACE_CHROME_CLASS_NAME}`;
+
+/** Anchors the command menu above the composer editor without shifting layout. */
+export const COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME =
+  "pointer-events-auto absolute inset-x-0 bottom-full z-20 mb-2 overflow-visible px-1 pt-1.5";
+
+/** Default command menu row — transparent until hover or keyboard highlight. */
+export const COMPOSER_COMMAND_MENU_ITEM_CLASS_NAME =
+  "flex cursor-pointer select-none items-center gap-2 rounded-full px-2.5 py-1 transition-colors hover:bg-[var(--color-background-elevated-secondary-opaque)] data-highlighted:bg-[var(--color-background-elevated-secondary-opaque)]";
+
+/** Active command menu row — keyboard-selected pill fill. */
+export const COMPOSER_COMMAND_MENU_ITEM_ACTIVE_CLASS_NAME =
+  "bg-[var(--color-background-elevated-secondary-opaque)] text-[var(--color-text-foreground)]";
 
 export const COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME = `rounded-t-[calc(1.2rem_-_1px)] border-b ${COMPOSER_SURFACE_BORDER_CLASS_NAME} bg-[var(--color-background-elevated-secondary)]`;
 

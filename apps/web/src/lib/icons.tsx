@@ -66,8 +66,6 @@ import {
   IconStar,
   IconStarFilled,
   IconSun,
-  IconTerminal,
-  IconTerminal2,
   IconTextWrap,
   IconTool,
   IconTrash,
@@ -107,10 +105,12 @@ export const AppsIcon: LucideIcon = (props) => (
   <RiApps2Line className={props.className} style={props.style} />
 );
 export const QueueArrow: LucideIcon = centralIconWrapper("reading-list");
+export const SteerIcon: LucideIcon = centralIconWrapper("arrow-corner-down-right");
 export const ComposerSendArrowIcon: LucideIcon = centralIconWrapper("arrow-up");
 export const HandoffIcon: LucideIcon = centralIconWrapper("arrow-left-right");
-export const SkillCubeIcon: LucideIcon = centralIconWrapper("box-2");
+export const SkillCubeIcon: LucideIcon = centralIconWrapper("building-blocks");
 export const NewThreadIcon: LucideIcon = centralIconWrapper("compose-pencil");
+export const EraserIcon: LucideIcon = centralIconWrapper("eraser");
 export const ArrowLeftIcon = adaptIcon(IconArrowLeft);
 export const BellIcon = adaptIcon(IconBell);
 export const ArrowRightIcon = adaptIcon(IconArrowRight);
@@ -211,9 +211,9 @@ export const SquareSplitVertical: LucideIcon = (props) => (
 export const DisposableThreadIcon: LucideIcon = (props) => (
   <LuMessageSquareDashed className={cn("size-3 shrink-0", props.className)} style={props.style} />
 );
-export const TerminalIcon = adaptIcon(IconTerminal);
-export const TerminalSquare = adaptIcon(IconTerminal2);
-export const TerminalSquareIcon = adaptIcon(IconTerminal2);
+export const TerminalIcon = centralIconWrapper("console");
+export const TerminalSquare = centralIconWrapper("console");
+export const TerminalSquareIcon = centralIconWrapper("console");
 export const TextWrapIcon = adaptIcon(IconTextWrap);
 export const Trash2 = adaptIcon(IconTrash);
 export const TriangleAlertIcon = adaptIcon(IconAlertTriangle);

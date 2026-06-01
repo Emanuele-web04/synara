@@ -47,6 +47,13 @@ import { ProviderOptionLabel } from "../components/ProviderIcon";
 import { Button } from "../components/ui/button";
 import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
 import { Input } from "../components/ui/input";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "../components/ui/input-group";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../components/ui/menu";
 import { Select, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Switch } from "../components/ui/switch";
 import { toastManager } from "../components/ui/toast";
@@ -237,7 +244,7 @@ function SortableProviderVisibilityRow(props: {
         transition,
       }}
       className={cn(
-        "flex items-center justify-between gap-3 rounded-md border border-[color:var(--color-border)] bg-[var(--color-background-surface)] px-3 py-2.5",
+        "flex items-center justify-between gap-3 rounded-xl border border-[color:var(--color-border)] bg-transparent px-3 py-2.5",
         isDragging && "z-10 opacity-80 shadow-lg",
       )}
     >
@@ -245,7 +252,7 @@ function SortableProviderVisibilityRow(props: {
         <button
           type="button"
           ref={setActivatorNodeRef}
-          className="inline-flex size-6 shrink-0 cursor-grab touch-none items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-foreground active:cursor-grabbing"
+          className="inline-flex size-6 shrink-0 cursor-grab touch-none items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-foreground active:cursor-grabbing"
           aria-label={`Reorder ${props.option.title}`}
           {...attributes}
           {...listeners}
@@ -431,7 +438,7 @@ function SettingResetButton({ label, onClick }: { label: string; onClick: () => 
             size="icon-xs"
             variant="ghost"
             aria-label={`Reset ${label} to default`}
-            className="size-5 rounded-md p-0 text-muted-foreground hover:text-foreground"
+            className="size-5 rounded-xl p-0 text-muted-foreground hover:text-foreground"
             onClick={(event) => {
               event.stopPropagation();
               onClick();
@@ -476,6 +483,74 @@ function SettingsSelectControl({
   );
 }
 
+type FontPreset = { label: string; value: string };
+
+const UI_FONT_PRESETS: readonly FontPreset[] = [
+  { label: "System default", value: "" },
+  { label: "System UI", value: "system-ui" },
+  { label: "Inter", value: "Inter" },
+  { label: "Helvetica Neue", value: "Helvetica Neue" },
+  { label: "Arial", value: "Arial" },
+  { label: "Roboto", value: "Roboto" },
+  { label: "Segoe UI", value: "Segoe UI" },
+];
+
+const CODE_FONT_PRESETS: readonly FontPreset[] = [
+  { label: "System default", value: "" },
+  { label: "JetBrains Mono", value: "JetBrains Mono" },
+  { label: "Fira Code", value: "Fira Code" },
+  { label: "SF Mono", value: "SF Mono" },
+  { label: "Menlo", value: "Menlo" },
+  { label: "Monaco", value: "Monaco" },
+  { label: "Consolas", value: "Consolas" },
+  { label: "Source Code Pro", value: "Source Code Pro" },
+];
+
+/** Free-text font field with the standard input chrome plus a chevron menu of common
+ *  presets, matching the other settings dropdowns while still allowing custom families. */
+function SettingsFontControl({
+  value,
+  onValueChange,
+  presets,
+  placeholder,
+  ariaLabel,
+}: {
+  value: string;
+  onValueChange: (value: string) => void;
+  presets: readonly FontPreset[];
+  placeholder: string;
+  ariaLabel: string;
+}) {
+  return (
+    <InputGroup className="w-full sm:w-48">
+      <InputGroupInput
+        value={value}
+        onChange={(event) => onValueChange(event.target.value)}
+        placeholder={placeholder}
+        spellCheck={false}
+        aria-label={ariaLabel}
+      />
+      <InputGroupAddon align="inline-end">
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            aria-label={`${ariaLabel} presets`}
+            className="inline-flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:text-foreground"
+          >
+            <ChevronDownIcon className="size-3.5" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-44">
+            {presets.map((preset) => (
+              <DropdownMenuItem key={preset.label} onClick={() => onValueChange(preset.value)}>
+                {preset.label}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </InputGroupAddon>
+    </InputGroup>
+  );
+}
+
 function isProviderSelectOption(value: string): value is ProviderKind {
   return PROVIDER_SELECT_OPTIONS.includes(value as ProviderKind);
 }
@@ -492,7 +567,7 @@ function ProviderDocsLinks({ docs }: { docs: InstallProviderSettings["docs"] }) 
               href={doc.href}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex h-7 items-center gap-1.5 rounded-md border border-[color:var(--color-border)] bg-transparent px-2.5 text-xs text-muted-foreground transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-foreground"
+              className="inline-flex h-7 items-center gap-1.5 rounded-xl border border-[color:var(--color-border)] bg-transparent px-2.5 text-xs text-muted-foreground transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-foreground"
             >
               <span>{doc.label}</span>
               <ExternalLinkIcon className="size-3" />
@@ -823,6 +898,9 @@ function SettingsRouteView() {
       ? ["Assistant output"]
       : []),
     ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
+    ...(settings.enableComposerSuggestions !== defaults.enableComposerSuggestions
+      ? ["Prompt suggestions"]
+      : []),
     ...(settings.confirmThreadDelete !== defaults.confirmThreadDelete
       ? ["Delete confirmation"]
       : []),
@@ -1565,13 +1643,12 @@ function SettingsRouteView() {
               ) : null
             }
             control={
-              <Input
-                className="w-full text-right sm:w-48"
+              <SettingsFontControl
                 value={settings.uiFontFamily}
-                onChange={(event) => updateSettings({ uiFontFamily: event.target.value })}
-                placeholder="-apple-system, BlinkM…"
-                spellCheck={false}
-                aria-label="Custom UI font family"
+                onValueChange={(value) => updateSettings({ uiFontFamily: value })}
+                presets={UI_FONT_PRESETS}
+                placeholder="System default"
+                ariaLabel="Custom UI font family"
               />
             }
           />
@@ -1590,13 +1667,12 @@ function SettingsRouteView() {
               ) : null
             }
             control={
-              <Input
-                className="w-full text-right sm:w-48"
+              <SettingsFontControl
                 value={settings.chatCodeFontFamily}
-                onChange={(event) => updateSettings({ chatCodeFontFamily: event.target.value })}
-                placeholder={'"JetBrains Mono"'}
-                spellCheck={false}
-                aria-label="Custom chat code font family"
+                onValueChange={(value) => updateSettings({ chatCodeFontFamily: value })}
+                presets={CODE_FONT_PRESETS}
+                placeholder="System default"
+                ariaLabel="Custom chat code font family"
               />
             }
           />
@@ -1838,6 +1914,34 @@ function SettingsRouteView() {
                 })
               }
               aria-label="Wrap diff lines by default"
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Prompt suggestions"
+          description="Show suggested prompts under the composer when starting a new thread."
+          resetAction={
+            settings.enableComposerSuggestions !== defaults.enableComposerSuggestions ? (
+              <SettingResetButton
+                label="prompt suggestions"
+                onClick={() =>
+                  updateSettings({
+                    enableComposerSuggestions: defaults.enableComposerSuggestions,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.enableComposerSuggestions}
+              onCheckedChange={(checked) =>
+                updateSettings({
+                  enableComposerSuggestions: Boolean(checked),
+                })
+              }
+              aria-label="Show composer prompt suggestions"
             />
           }
         />

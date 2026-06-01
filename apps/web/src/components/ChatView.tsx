@@ -324,6 +324,7 @@ import { ActiveTaskListCard } from "./chat/ActiveTaskListCard";
 import { useTranscriptAssistantSelectionAction } from "./chat/useTranscriptAssistantSelectionAction";
 import { getComposerProviderState } from "./chat/composerProviderRegistry";
 import {
+  COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME,
   COMPOSER_INPUT_SHELL_CLASS_NAME,
   COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME,
   COMPOSER_INPUT_SURFACE_CLASS_NAME,
@@ -2280,17 +2281,21 @@ export default function ChatView({
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
     useTurnDiffSummaries(activeThread);
   const turnDiffSummaryByAssistantMessageId = useMemo(() => {
-    const assistantMessages: { id: MessageId; turnId: TurnId | null }[] = [];
+    const messagesForDiffAnchoring: {
+      id: MessageId;
+      role: "user" | "assistant" | "system";
+      turnId: TurnId | null;
+    }[] = [];
     for (const message of timelineMessages) {
-      if (message.role !== "assistant") continue;
-      assistantMessages.push({
+      messagesForDiffAnchoring.push({
         id: message.id,
+        role: message.role,
         turnId: message.turnId ?? null,
       });
     }
     return buildTurnDiffSummaryByAssistantMessageId({
       turnDiffSummaries,
-      assistantMessages,
+      messages: messagesForDiffAnchoring,
     });
   }, [turnDiffSummaries, timelineMessages]);
   const revertTurnCountByUserMessageId = useMemo(() => {
@@ -3016,6 +3021,7 @@ export default function ChatView({
   // mounted while the user types — that lets us animate it closed instead of an
   // abrupt unmount (which jolted the centered composer).
   const shouldPrepareComposerSuggestions =
+    settings.enableComposerSuggestions &&
     isLocalDraftThread &&
     isCenteredEmptyLanding &&
     draftThread?.entryPoint !== "terminal" &&
@@ -7609,6 +7615,7 @@ export default function ChatView({
               COMPOSER_INPUT_SHELL_CLASS_NAME,
               composerHasStackedHeader && "!rounded-t-none",
               composerProviderState.composerFrameClassName,
+              composerMenuOpen && !isComposerApprovalState && "overflow-visible",
             )}
             onDragEnter={onComposerDragEnter}
             onDragOver={onComposerDragOver}
@@ -7621,6 +7628,7 @@ export default function ChatView({
                 composerHasStackedHeader && "!rounded-t-none",
                 isDragOverComposer ? "!bg-[var(--color-background-control)]" : "",
                 composerProviderState.composerSurfaceClassName,
+                composerMenuOpen && !isComposerApprovalState && "overflow-visible",
               )}
             >
               {activePendingApproval ? (
@@ -7664,9 +7672,14 @@ export default function ChatView({
                   />
                 </div>
               ) : null}
-              <div className={cn(COMPOSER_EDITOR_PADDING_CLASS_NAME)}>
-                {composerMenuOpen && !isComposerApprovalState && (
-                  <div className="absolute inset-x-0 bottom-full z-20 mb-2 px-1">
+              <div
+                className={cn(
+                  COMPOSER_EDITOR_PADDING_CLASS_NAME,
+                  composerMenuOpen && !isComposerApprovalState && "overflow-visible",
+                )}
+              >
+                {composerMenuOpen && !isComposerApprovalState ? (
+                  <div className={COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME}>
                     {isLocalFolderBrowserOpen ? (
                       <ComposerLocalDirectoryMenu
                         mentionQuery={mentionTriggerQuery}
@@ -7694,8 +7707,7 @@ export default function ChatView({
                       />
                     )}
                   </div>
-                )}
-
+                ) : null}
                 {!isComposerApprovalState &&
                   pendingUserInputs.length === 0 &&
                   (composerAssistantSelections.length > 0 || composerImages.length > 0) && (
@@ -8199,7 +8211,11 @@ export default function ChatView({
                   CHAT_COLUMN_GUTTER_CLASS_NAME,
                 )}
               >
-                <div className="flex w-full flex-col justify-center">
+                {/* Anchor the logo, heading, and composer at the vertical center and
+                    let the suggestion list overlay below via absolute positioning, so
+                    toggling it open/closed never changes this block's height and the
+                    composer stays put (no re-center / resize while typing). */}
+                <div className="relative flex w-full flex-col justify-center">
                   <div
                     className={cn(
                       "flex flex-col items-center gap-4 px-6 pb-5 text-center select-none",
@@ -8228,16 +8244,18 @@ export default function ChatView({
                     </div>
                   ) : null}
                   {showComposerSuggestions ? (
-                    <DisclosureRegion
-                      open={composerSuggestionsOpen}
-                      className={COMPOSER_COLUMN_FRAME_CLASS_NAME}
-                      contentClassName="pt-5"
-                    >
-                      <ComposerSuggestions
-                        suggestions={composerSuggestions}
-                        onSelectSuggestion={onSelectComposerSuggestion}
-                      />
-                    </DisclosureRegion>
+                    <div className="absolute inset-x-0 top-full">
+                      <DisclosureRegion
+                        open={composerSuggestionsOpen}
+                        className={COMPOSER_COLUMN_FRAME_CLASS_NAME}
+                        contentClassName="pt-5"
+                      >
+                        <ComposerSuggestions
+                          suggestions={composerSuggestions}
+                          onSelectSuggestion={onSelectComposerSuggestion}
+                        />
+                      </DisclosureRegion>
+                    </div>
                   ) : null}
                 </div>
               </div>

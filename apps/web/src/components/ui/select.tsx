@@ -77,7 +77,7 @@ function SelectButton({ className, size, variant, render, children, ...props }: 
         )}
       </>
     ),
-    className: cn(selectTriggerVariants({ size, variant }), "min-w-none", className),
+    className: cn(selectTriggerVariants({ size, variant }), "min-w-0", className),
     "data-slot": "select-button",
     type: typeValue,
   };
@@ -150,7 +150,7 @@ function SelectPopup({
         surface === "settings"
           ? cn(
               APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME,
-              "rounded-md",
+              "rounded-lg",
               COMPOSER_SURFACE_SHADOW_CLASS_NAME,
             )
           : COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME,
@@ -171,6 +171,10 @@ function SelectPopup({
         "max-h-[min(var(--available-height),28rem)] overflow-y-auto overscroll-contain p-1",
         className,
       );
+  const scrollArrowSurfaceClassName =
+    surface === "settings"
+      ? "before:from-[var(--app-settings-surface)]"
+      : "before:from-[var(--composer-surface)]";
 
   return (
     <SelectPopupSurfaceContext.Provider value={surface}>
@@ -194,7 +198,10 @@ function SelectPopup({
             {...props}
           >
             <SelectPrimitive.ScrollUpArrow
-              className="top-0 z-50 flex h-6 w-full cursor-default items-center justify-center before:pointer-events-none before:absolute before:inset-x-px before:top-px before:h-[200%] before:rounded-t-[calc(var(--radius-lg)-1px)] before:bg-linear-to-b before:from-50% before:from-[var(--composer-surface)]"
+              className={cn(
+                "top-0 z-50 flex h-6 w-full cursor-default items-center justify-center before:pointer-events-none before:absolute before:inset-x-px before:top-px before:h-[200%] before:rounded-t-[calc(var(--radius-lg)-1px)] before:bg-linear-to-b before:from-50%",
+                scrollArrowSurfaceClassName,
+              )}
               data-slot="select-scroll-up-arrow"
             >
               <ChevronUpIcon className="relative size-4.5 sm:size-4" />
@@ -210,7 +217,10 @@ function SelectPopup({
               </SelectPrimitive.List>
             </div>
             <SelectPrimitive.ScrollDownArrow
-              className="bottom-0 z-50 flex h-6 w-full cursor-default items-center justify-center before:pointer-events-none before:absolute before:inset-x-px before:bottom-px before:h-[200%] before:rounded-b-[calc(var(--radius-lg)-1px)] before:bg-linear-to-t before:from-50% before:from-[var(--composer-surface)]"
+              className={cn(
+                "bottom-0 z-50 flex h-6 w-full cursor-default items-center justify-center before:pointer-events-none before:absolute before:inset-x-px before:bottom-px before:h-[200%] before:rounded-b-[calc(var(--radius-lg)-1px)] before:bg-linear-to-t before:from-50%",
+                scrollArrowSurfaceClassName,
+              )}
               data-slot="select-scroll-down-arrow"
             >
               <ChevronDownIcon className="relative size-4.5 sm:size-4" />

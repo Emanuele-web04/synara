@@ -485,7 +485,7 @@ function FontInput({
       onBlur={() => setDraft(null)}
       spellCheck={false}
       aria-label={ariaLabel}
-      className={cn("h-8 min-w-44 rounded-md px-3 text-right", mono && "font-chat-code")}
+      className={cn("w-56", mono && "font-chat-code")}
     />
   );
 }
