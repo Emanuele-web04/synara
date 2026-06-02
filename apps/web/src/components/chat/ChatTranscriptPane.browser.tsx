@@ -85,8 +85,6 @@ function TranscriptPerfHarness(props: { onTranscriptRender: () => void }) {
           activeTurnInProgress={false}
           activeTurnStartedAt={null}
           chatFontSizePx={15}
-          completionDividerBeforeEntryId={null}
-          completionSummary={null}
           emptyStateProjectName={undefined}
           expandedWorkGroups={EMPTY_WORK_GROUPS}
           hasMessages
@@ -169,8 +167,6 @@ describe("ChatTranscriptPane", () => {
         activeTurnInProgress={false}
         activeTurnStartedAt={null}
         chatFontSizePx={15}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         emptyStateProjectName={undefined}
         hasMessages
         isRevertingCheckpoint={false}

@@ -90,8 +90,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -135,8 +133,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -179,8 +175,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -242,8 +236,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -304,8 +296,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -352,8 +342,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:32.000Z"
         expandedWorkGroups={{}}
@@ -403,8 +391,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -463,8 +449,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -507,8 +491,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -555,8 +537,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -607,8 +587,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -659,8 +637,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -704,8 +680,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -749,8 +723,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -795,8 +767,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -838,8 +808,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -895,8 +863,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -953,8 +919,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:31.000Z"
         expandedWorkGroups={{}}
@@ -1065,8 +1029,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -1129,8 +1091,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-05-09T16:31:25.000Z"
         expandedWorkGroups={{}}
@@ -1241,8 +1201,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -1311,8 +1269,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:31.000Z"
         expandedWorkGroups={{}}
@@ -1416,8 +1372,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{ "entry-inline-tools-expanded": true }}
@@ -1475,8 +1429,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={
           new Map([
             [
@@ -1545,8 +1497,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -1598,8 +1548,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-05-09T10:07:00.000Z"
         expandedWorkGroups={{}}
@@ -1646,8 +1594,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -1693,8 +1639,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -1740,8 +1684,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -1787,8 +1729,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -1833,8 +1773,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={new Map()}
         nowIso="2026-03-17T19:12:30.000Z"
         expandedWorkGroups={{}}
@@ -1895,8 +1833,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={
           new Map([
             [
@@ -1983,8 +1919,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={
           new Map([
             [
@@ -2058,8 +1992,6 @@ describe("MessagesTimeline", () => {
             },
           },
         ]}
-        completionDividerBeforeEntryId={null}
-        completionSummary={null}
         turnDiffSummaryByAssistantMessageId={
           new Map([
             [
