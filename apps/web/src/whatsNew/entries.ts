@@ -26,22 +26,40 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
     date: "Jun 3",
     features: [
       {
-        id: "synara-rebrand",
-        title: "Synara has a new name and logo",
+        id: "synara-home-migration",
+        title: "Synara is now the default home",
         description:
-          "The app now carries the Synara identity across the desktop shell, web UI, marketing pages, favicons, installers, and release artifacts.",
+          "The app now starts from `~/.synara`, carries the Synara environment variables through the desktop and server runtime, and safely imports existing `~/.dpcode` or `~/.t3` data on first launch.",
       },
       {
-        id: "redesigned-workspace",
-        title: "A cleaner workspace UI",
+        id: "desktop-platform-polish",
+        title: "Desktop startup feels more native",
         description:
-          "The chat, sidebar, settings, composer, picker surfaces, toast system, and dock panels were refreshed so daily coding sessions feel calmer and easier to scan.",
+          "Windows now hydrates the desktop environment from the registry so provider CLIs are found reliably, macOS keeps Liquid Glass styling only where it belongs, and older Macs get a rounded dock icon without breaking Tahoe.",
       },
       {
-        id: "git-terminal-polish",
-        title: "Git and terminal flows are more capable",
+        id: "dock-state-recovery",
+        title: "Right dock and saved UI state are sturdier",
         description:
-          "The release adds a richer Git panel, docked terminal panes, terminal activity tracking, capped terminal history, and more predictable subprocess status updates.",
+          "Recovered browser, dock, sidechat, split-view, and panel state is now validated before use, preventing stale or corrupted localStorage from crashing the workspace.",
+      },
+      {
+        id: "composer-picker-refresh",
+        title: "Composer pickers are cleaner",
+        description:
+          "The traits picker and shared menu styling were refreshed with a tighter layout, clearer selection states, and a calmer feel across model and composer controls.",
+      },
+      {
+        id: "provider-runtime-fixes",
+        title: "Provider runtime noise is reduced",
+        description:
+          "Claude thinking-token telemetry no longer floods the timeline, provider task warnings are deduplicated more carefully, and Codex home overlays avoid stale SQLite sidecar files during startup.",
+      },
+      {
+        id: "daily-polish",
+        title: "Small workflow details got sharper",
+        description:
+          "Context meter labels, edit actions, completion separators, Git controls, diff routing, desktop update retry state, and shortcut handling all picked up focused fixes for smoother day-to-day sessions.",
       },
     ],
   },
