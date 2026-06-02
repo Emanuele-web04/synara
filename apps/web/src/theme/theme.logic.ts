@@ -655,13 +655,19 @@ export function resolveThemeVariant(mode: ThemeMode, systemDark: boolean): Theme
 export function buildThemeCssVariables(
   pack: ThemePack,
   variant: ThemeVariant,
-  options?: { electron?: boolean },
+  options?: { electron?: boolean; isMac?: boolean },
 ): ThemeCssVariableBuild {
   const resolvedTokens = buildResolvedThemeTokens(pack, variant);
   const codexVariables = resolvedTokens.codexVariables;
   const readCodexVariable = (name: string) => getRequiredVariable(codexVariables, name);
+  // The translucent shell relies on macOS window vibrancy as its backing
+  // material. Windows/Linux have no equivalent, so a translucent shell there
+  // leaves the transparent body and backdrop-filter surfaces bleeding through
+  // and (on fractional DPI) rendering blurry. Restrict translucency to macOS.
   const material: WindowMaterial =
-    options?.electron === true && !pack.theme.opaqueWindows ? "translucent" : "opaque";
+    options?.electron === true && options?.isMac === true && !pack.theme.opaqueWindows
+      ? "translucent"
+      : "opaque";
   const warningColor = variant === "dark" ? "#f5b44a" : "#d97706";
   const sidebarSurfaceUnder = readCodexVariable("--color-background-surface-under");
   const sidebarRaisedSurface = readCodexVariable("--color-background-elevated-primary");
@@ -691,7 +697,12 @@ export function buildThemeCssVariables(
         ? "transparent"
         : readCodexVariable("--color-background-surface-under"),
     "--app-composer-focus-border": composerFocusBorder,
-    "--app-composer-picker-backdrop-filter": "blur(32px)",
+    // Frosted blur only when the shell is translucent (macOS). On an opaque
+    // shell these promote the surface to a GPU layer that Chromium rasterizes at
+    // the wrong scale on fractional DPI (Windows), so text reads blurry until a
+    // repaint. Keep them "none" off macOS.
+    "--app-composer-backdrop-filter": material === "translucent" ? "blur(16px)" : "none",
+    "--app-composer-picker-backdrop-filter": material === "translucent" ? "blur(32px)" : "none",
     "--app-composer-picker-surface": composerPickerMenuSurface,
     "--app-chat-code-surface": chatCodeSurface,
     "--app-user-message-background": chatCodeSurface,
