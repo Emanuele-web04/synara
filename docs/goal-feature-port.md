@@ -47,14 +47,15 @@ divergence from Codex canon and is intentionally _not_ part of v1.)
 
 `OrchestrationMessageSource` gains `"goal-continuation"` (alongside
 `native | handoff-import | fork-import`). `ThreadTurnStartCommand` gains optional
-`inputSource`; the decider stamps it onto `thread.message-sent.source`. This lets the web
-hide/dim messages with `source === "goal-continuation"` (mirroring pi's `display:false`);
-hiding them in the timeline is a follow-up — the field is in place.
+`inputSource`; the decider stamps it onto `thread.message-sent.source`. The web hides
+`goal-continuation` user messages from the timeline (mirroring pi's `display:false`) —
+only the agent's responses to them are shown (`isHiddenGoalContinuationMessage` in
+`MessagesTimeline.logic`).
 
 ## Web surface
 
 - `/goal <objective>` (with optional `--budget <n>`) plus `/goal status|pause|resume|clear|
-  complete`, registered in `composerSlashCommands` and dispatched from
+complete`, registered in `composerSlashCommands` and dispatched from
   `useComposerSlashCommands`. Offered to non-Claude providers (Claude ships a native
   `/goal`). Creating a goal auto-starts the first turn (pi-goal parity).
 - `GoalIndicator` composer chip shows the live goal's lifecycle status and turn count.
