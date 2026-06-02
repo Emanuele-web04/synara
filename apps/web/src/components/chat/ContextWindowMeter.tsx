@@ -30,7 +30,7 @@ export function ContextWindowMeter(props: {
             className="group inline-flex shrink-0 items-center justify-center rounded-full p-0.5 transition-opacity hover:opacity-80"
             aria-label={display.ariaLabel}
           >
-            <span className="relative flex h-3.5 w-3.5 items-center justify-center">
+            <span className="relative flex h-4 w-4 items-center justify-center">
               <svg
                 viewBox="0 0 16 16"
                 className="-rotate-90 absolute inset-0 h-full w-full transform-gpu"
@@ -42,7 +42,7 @@ export function ContextWindowMeter(props: {
                   r={radius}
                   fill="none"
                   stroke="currentColor"
-                  strokeWidth="1.5"
+                  strokeWidth="2"
                   className="text-muted-foreground/25 dark:text-muted-foreground/40"
                 />
                 <circle
@@ -51,7 +51,7 @@ export function ContextWindowMeter(props: {
                   r={radius}
                   fill="none"
                   stroke="currentColor"
-                  strokeWidth="1.5"
+                  strokeWidth="2"
                   strokeLinecap="round"
                   strokeDasharray={circumference}
                   strokeDashoffset={dashOffset}

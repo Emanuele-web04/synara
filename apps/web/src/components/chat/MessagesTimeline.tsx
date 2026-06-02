@@ -33,6 +33,7 @@ import {
   HammerIcon,
   type LucideIcon,
   McpIcon,
+  NewThreadIcon,
   QueueArrow,
   SkillCubeIcon,
   SquarePenIcon,
@@ -675,7 +676,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           className="disabled:text-muted-foreground/35"
                           onClick={() => startUserMessageEdit(row.message.id)}
                         >
-                          <SquarePenIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
+                          <NewThreadIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
                         </MessageActionButton>
                       )}
                       {canRevertAgentWork ? (
