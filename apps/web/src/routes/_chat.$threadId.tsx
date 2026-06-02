@@ -76,7 +76,7 @@ import { GitPanel } from "../components/chat/GitPanel";
 import { PanelStateMessage } from "../components/chat/PanelStateMessage";
 import {
   RIGHT_DOCK_ADD_MENU_KINDS,
-  RIGHT_DOCK_PANE_META,
+  getRightDockPaneMeta,
 } from "../components/chat/rightDockPaneMeta";
 import { type DockPaneRuntimeMode } from "../lib/dockPaneActivation";
 import {
@@ -1311,7 +1311,7 @@ function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: Thre
 }
 
 function RightDockPanePlaceholder(props: { kind: RightDockPaneKind }) {
-  const { label } = RIGHT_DOCK_PANE_META[props.kind];
+  const { label } = getRightDockPaneMeta(props.kind);
   return <PanelStateMessage>{label} panel is coming soon.</PanelStateMessage>;
 }
 

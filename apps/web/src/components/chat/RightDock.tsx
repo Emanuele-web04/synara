@@ -35,7 +35,7 @@ import {
   DOCK_TAB_ICON_SLOT_CLASS_NAME,
   SurfaceChipIcon,
 } from "./chatHeaderControls";
-import { RIGHT_DOCK_PANE_META, resolveRightDockPaneLabel } from "./rightDockPaneMeta";
+import { getRightDockPaneMeta, resolveRightDockPaneLabel } from "./rightDockPaneMeta";
 
 interface RightDockProps {
   state: RightDockThreadState;
@@ -65,7 +65,7 @@ function RightDockTab(props: {
   onSelect: () => void;
   onClose: () => void;
 }) {
-  const { Icon } = RIGHT_DOCK_PANE_META[props.pane.kind];
+  const { Icon } = getRightDockPaneMeta(props.pane.kind);
   return (
     <div
       className={cn(
@@ -214,7 +214,7 @@ export function RightDock(props: RightDockProps) {
               </MenuTrigger>
               <ComposerPickerMenuPopup align="end" side="bottom" className="w-44 min-w-44">
                 {props.addMenuKinds.map((kind) => {
-                  const { Icon, label } = RIGHT_DOCK_PANE_META[kind];
+                  const { Icon, label } = getRightDockPaneMeta(kind);
                   return (
                     <MenuItem key={kind} onClick={() => props.onAddPane(kind)}>
                       <Icon className="size-3.5 shrink-0" />

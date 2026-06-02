@@ -12,13 +12,13 @@ import { readSidebarUiState } from "../components/Sidebar.uiState";
 import { resolveRestorableThreadRoute } from "../chatRouteRestore";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useSplitViewStore } from "../splitViewStore";
-import { useStore } from "../store";
+import { EMPTY_THREAD_IDS, useStore } from "../store";
 
 function ChatIndexRouteView() {
   const { handleNewChat } = useHandleNewChat();
   const navigate = useNavigate();
   const threadsHydrated = useStore((store) => store.threadsHydrated);
-  const threadIds = useStore((state) => state.threadIds ?? []);
+  const threadIds = useStore((state) => state.threadIds ?? EMPTY_THREAD_IDS);
   const splitViewsHydrated = useSplitViewStore((state) => state.hasHydrated);
   const splitViewsById = useSplitViewStore((state) => state.splitViewsById);
   const splitViewIds = useMemo(

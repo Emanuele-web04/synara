@@ -5,7 +5,14 @@
 
 import type { ThreadId, TurnId } from "@t3tools/contracts";
 
-export type RightDockPaneKind = "browser" | "diff" | "terminal" | "sidechat" | "git";
+// Single source of truth for the dock pane kinds. The union type, the runtime
+// validator, the per-kind metadata map, and the add-menu order are all derived
+// from this list so they can never drift apart.
+export const RIGHT_DOCK_PANE_KINDS = ["browser", "diff", "terminal", "sidechat", "git"] as const;
+
+export type RightDockPaneKind = (typeof RIGHT_DOCK_PANE_KINDS)[number];
+
+const RIGHT_DOCK_PANE_KIND_SET: ReadonlySet<string> = new Set(RIGHT_DOCK_PANE_KINDS);
 
 export interface RightDockPane {
   id: string;
@@ -24,13 +31,11 @@ export interface RightDockThreadState {
 }
 
 // Kinds that can only ever have one instance per host thread. Sidechat is the
-// only kind that allows multiple concurrent panes (one per embedded thread).
-export const SINGLETON_PANE_KINDS: ReadonlySet<RightDockPaneKind> = new Set<RightDockPaneKind>([
-  "browser",
-  "diff",
-  "git",
-  "terminal",
-]);
+// only kind that allows multiple concurrent panes (one per embedded thread), so
+// the singleton set is derived as "every kind except sidechat".
+export const SINGLETON_PANE_KINDS: ReadonlySet<RightDockPaneKind> = new Set(
+  RIGHT_DOCK_PANE_KINDS.filter((kind) => kind !== "sidechat"),
+);
 
 export function isSingletonPaneKind(kind: RightDockPaneKind): boolean {
   return SINGLETON_PANE_KINDS.has(kind);
@@ -42,6 +47,69 @@ export function createDefaultRightDockState(): RightDockThreadState {
     panes: [],
     activePaneId: null,
   };
+}
+
+export function isRightDockPaneKind(value: unknown): value is RightDockPaneKind {
+  return typeof value === "string" && RIGHT_DOCK_PANE_KIND_SET.has(value);
+}
+
+// Persisted dock state predates the current pane-kind union, so a stale entry
+// (e.g. a kind that was renamed or removed) can crash the dock during render.
+// Drop any pane we no longer understand and keep the active tab pointing at a
+// surviving pane.
+function sanitizePersistedPane(value: unknown): RightDockPane | null {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.id !== "string" || !isRightDockPaneKind(candidate.kind)) {
+    return null;
+  }
+  return {
+    id: candidate.id,
+    kind: candidate.kind,
+    threadId: typeof candidate.threadId === "string" ? (candidate.threadId as ThreadId) : null,
+    diffTurnId: typeof candidate.diffTurnId === "string" ? (candidate.diffTurnId as TurnId) : null,
+    diffFilePath: typeof candidate.diffFilePath === "string" ? candidate.diffFilePath : null,
+  };
+}
+
+export function sanitizeRightDockThreadState(value: unknown): RightDockThreadState {
+  if (typeof value !== "object" || value === null) {
+    return createDefaultRightDockState();
+  }
+  const candidate = value as Record<string, unknown>;
+  const panes = Array.isArray(candidate.panes)
+    ? candidate.panes
+        .map(sanitizePersistedPane)
+        .filter((pane): pane is RightDockPane => pane !== null)
+    : [];
+  const activePaneId =
+    typeof candidate.activePaneId === "string" &&
+    panes.some((pane) => pane.id === candidate.activePaneId)
+      ? candidate.activePaneId
+      : (panes[0]?.id ?? null);
+  return {
+    open: panes.length > 0 && candidate.open === true,
+    panes,
+    activePaneId,
+  };
+}
+
+export function sanitizeRightDockStateByThreadId(
+  value: unknown,
+): Record<string, RightDockThreadState> {
+  if (typeof value !== "object" || value === null) {
+    return {};
+  }
+  const result: Record<string, RightDockThreadState> = {};
+  for (const [threadId, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (raw === undefined) {
+      continue;
+    }
+    result[threadId] = sanitizeRightDockThreadState(raw);
+  }
+  return result;
 }
 
 export interface OpenPaneInput {

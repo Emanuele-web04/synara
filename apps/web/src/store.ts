@@ -92,7 +92,12 @@ const LEGACY_PERSISTED_STATE_KEYS = [
 ] as const;
 const MAX_THREAD_MESSAGES = 2_000;
 const MAX_THREAD_ACTIVITIES = 500;
-const EMPTY_THREAD_IDS: ThreadId[] = [];
+// Stable empty reference for `threadIds` fallbacks. Consumers must read through
+// this (never an inline `?? []`) so `useSyncExternalStore` selectors keep a
+// stable snapshot and cannot trigger an infinite re-render (React error #185).
+// Frozen so a consumer can never accidentally mutate the shared empty array.
+export const EMPTY_THREAD_IDS: ThreadId[] = [];
+Object.freeze(EMPTY_THREAD_IDS);
 const EMPTY_THREAD_SHELL_BY_ID: Record<ThreadId, ThreadShell> = {};
 const EMPTY_THREAD_SESSION_BY_ID: Record<ThreadId, ThreadSession | null> = {};
 const EMPTY_THREAD_TURN_STATE_BY_ID: Record<ThreadId, ThreadTurnState> = {};
