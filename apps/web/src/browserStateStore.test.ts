@@ -1,7 +1,11 @@
 import { ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
-import { createDedupedBrowserStateStorage, selectThreadBrowserHistory } from "./browserStateStore";
+import {
+  createDedupedBrowserStateStorage,
+  sanitizeRecentHistoryByThreadId,
+  selectThreadBrowserHistory,
+} from "./browserStateStore";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-1");
 
@@ -67,5 +71,41 @@ describe("createDedupedBrowserStateStorage", () => {
     storage.setItem("browser", "same");
 
     expect(writes).toEqual(["same", "same"]);
+  });
+});
+
+describe("sanitizeRecentHistoryByThreadId", () => {
+  it("returns an empty record for non-object input", () => {
+    expect(sanitizeRecentHistoryByThreadId(null)).toEqual({});
+    expect(sanitizeRecentHistoryByThreadId("nope")).toEqual({});
+    expect(sanitizeRecentHistoryByThreadId([1, 2, 3])).toEqual({});
+  });
+
+  it("drops malformed entries and keeps only well-formed history", () => {
+    const result = sanitizeRecentHistoryByThreadId({
+      "thread-1": [
+        { url: "https://a.com", title: "A", tabId: "t1" },
+        { url: "https://b.com", title: "B" },
+        null,
+        { url: 5, title: "C", tabId: "t3" },
+      ],
+      "thread-2": "not-an-array",
+    });
+
+    expect(result).toEqual({
+      "thread-1": [{ url: "https://a.com", title: "A", tabId: "t1" }],
+    });
+  });
+
+  it("caps each thread's history at the storage limit", () => {
+    const entries = Array.from({ length: 30 }, (_, index) => ({
+      url: `https://example.com/${index}`,
+      title: `Page ${index}`,
+      tabId: `tab-${index}`,
+    }));
+
+    const result = sanitizeRecentHistoryByThreadId({ "thread-1": entries });
+
+    expect(result["thread-1"]).toHaveLength(12);
   });
 });

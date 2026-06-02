@@ -2,6 +2,7 @@ import { ThreadId, TurnId } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createDefaultSingleChatPanelState,
+  sanitizePanelStateByThreadId,
   selectSingleChatPanelState,
   useSingleChatPanelStore,
 } from "./singleChatPanelStore";
@@ -60,5 +61,50 @@ describe("singleChatPanelStore", () => {
     expect(selector(useSingleChatPanelStore.getState())).toBe(
       selector(useSingleChatPanelStore.getState()),
     );
+  });
+});
+
+describe("sanitizePanelStateByThreadId", () => {
+  it("returns an empty record for non-object input", () => {
+    expect(sanitizePanelStateByThreadId(undefined)).toEqual({});
+    expect(sanitizePanelStateByThreadId([{ panel: "diff" }])).toEqual({});
+  });
+
+  it("keeps valid entries and coerces unknown panel kinds to defaults", () => {
+    const result = sanitizePanelStateByThreadId({
+      "thread-a": {
+        panel: "diff",
+        diffTurnId: "turn-1",
+        diffFilePath: "src/a.ts",
+        hasOpenedPanel: true,
+        lastOpenPanel: "diff",
+      },
+      "thread-b": {
+        panel: "mystery",
+        diffTurnId: 42,
+        diffFilePath: null,
+        hasOpenedPanel: "yes",
+        lastOpenPanel: "also-bogus",
+      },
+    });
+
+    expect(result["thread-a"]).toEqual({
+      panel: "diff",
+      diffTurnId: "turn-1",
+      diffFilePath: "src/a.ts",
+      hasOpenedPanel: true,
+      lastOpenPanel: "diff",
+    });
+    expect(result["thread-b"]).toEqual({
+      panel: null,
+      diffTurnId: null,
+      diffFilePath: null,
+      hasOpenedPanel: false,
+      lastOpenPanel: "browser",
+    });
+  });
+
+  it("drops entries that are not objects", () => {
+    expect(sanitizePanelStateByThreadId({ "thread-a": "nope", "thread-b": null })).toEqual({});
   });
 });

@@ -4,6 +4,7 @@
 // Exports: dock pane types, default-state factory, and immutable open/close/activate helpers.
 
 import type { ThreadId, TurnId } from "@t3tools/contracts";
+import { isPlainObject, sanitizeStringKeyedRecord } from "./persistedRecord";
 
 // Single source of truth for the dock pane kinds. The union type, the runtime
 // validator, the per-kind metadata map, and the add-menu order are all derived
@@ -58,10 +59,10 @@ export function isRightDockPaneKind(value: unknown): value is RightDockPaneKind 
 // Drop any pane we no longer understand and keep the active tab pointing at a
 // surviving pane.
 function sanitizePersistedPane(value: unknown): RightDockPane | null {
-  if (typeof value !== "object" || value === null) {
+  if (!isPlainObject(value)) {
     return null;
   }
-  const candidate = value as Record<string, unknown>;
+  const candidate = value;
   if (typeof candidate.id !== "string" || !isRightDockPaneKind(candidate.kind)) {
     return null;
   }
@@ -75,10 +76,10 @@ function sanitizePersistedPane(value: unknown): RightDockPane | null {
 }
 
 export function sanitizeRightDockThreadState(value: unknown): RightDockThreadState {
-  if (typeof value !== "object" || value === null) {
+  if (!isPlainObject(value)) {
     return createDefaultRightDockState();
   }
-  const candidate = value as Record<string, unknown>;
+  const candidate = value;
   const panes = Array.isArray(candidate.panes)
     ? candidate.panes
         .map(sanitizePersistedPane)
@@ -99,17 +100,9 @@ export function sanitizeRightDockThreadState(value: unknown): RightDockThreadSta
 export function sanitizeRightDockStateByThreadId(
   value: unknown,
 ): Record<string, RightDockThreadState> {
-  if (typeof value !== "object" || value === null) {
-    return {};
-  }
-  const result: Record<string, RightDockThreadState> = {};
-  for (const [threadId, raw] of Object.entries(value as Record<string, unknown>)) {
-    if (raw === undefined) {
-      continue;
-    }
-    result[threadId] = sanitizeRightDockThreadState(raw);
-  }
-  return result;
+  return sanitizeStringKeyedRecord(value, (raw) =>
+    raw === undefined ? null : sanitizeRightDockThreadState(raw),
+  );
 }
 
 export interface OpenPaneInput {

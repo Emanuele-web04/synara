@@ -8,6 +8,7 @@
 import type { ThreadBrowserState, ThreadId } from "@t3tools/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
+import { isPlainObject, sanitizeStringKeyedRecord } from "./persistedRecord";
 
 const BROWSER_STATE_STORAGE_KEY = "synara:browser-state:v1";
 const BROWSER_HISTORY_LIMIT = 12;
@@ -78,6 +79,33 @@ function sameBrowserHistoryEntries(
       entry.title === nextEntry.title &&
       entry.tabId === nextEntry.tabId
     );
+  });
+}
+
+function sanitizeBrowserHistoryEntry(rawEntry: unknown): BrowserHistoryEntry | null {
+  if (!isPlainObject(rawEntry)) {
+    return null;
+  }
+  const { url, title, tabId } = rawEntry;
+  if (typeof url !== "string" || typeof title !== "string" || typeof tabId !== "string") {
+    return null;
+  }
+  return { url, title, tabId };
+}
+
+// Drops malformed persisted history so a corrupt entry can never reach the
+// upsert path (which dereferences `entry.url`) or render as a broken tab.
+export function sanitizeRecentHistoryByThreadId(
+  value: unknown,
+): Record<string, BrowserHistoryEntry[]> {
+  return sanitizeStringKeyedRecord(value, (rawEntries) => {
+    if (!Array.isArray(rawEntries)) {
+      return null;
+    }
+    return rawEntries
+      .map(sanitizeBrowserHistoryEntry)
+      .filter((entry): entry is BrowserHistoryEntry => entry !== null)
+      .slice(0, BROWSER_HISTORY_LIMIT);
   });
 }
 
@@ -171,6 +199,12 @@ export const useBrowserStateStore = create<BrowserStateStore>()(
       storage: createJSONStorage(() => browserStateStorage),
       partialize: (state) => ({
         recentHistoryByThreadId: state.recentHistoryByThreadId,
+      }),
+      merge: (persisted, current) => ({
+        ...current,
+        recentHistoryByThreadId: sanitizeRecentHistoryByThreadId(
+          (persisted as { recentHistoryByThreadId?: unknown } | undefined)?.recentHistoryByThreadId,
+        ),
       }),
     },
   ),
