@@ -10,6 +10,8 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -40,7 +42,9 @@ export function resolveCodexBrowserUsePipePath(
 ): string {
   const env = input.env ?? process.env;
   const configured =
-    env.DPCODE_BROWSER_USE_PIPE_PATH?.trim() || env.T3CODE_BROWSER_USE_PIPE_PATH?.trim();
+    env.SYNARA_BROWSER_USE_PIPE_PATH?.trim() ||
+    env.DPCODE_BROWSER_USE_PIPE_PATH?.trim() ||
+    env.T3CODE_BROWSER_USE_PIPE_PATH?.trim();
   if (configured) {
     return configured;
   }
@@ -94,6 +98,39 @@ export function disableDpCodeBrowserPluginInCodexConfig(config: string): string 
   return output.join("\n");
 }
 
+function ensureCodexOverlaySymlink(input: {
+  readonly entryName: string;
+  readonly sourcePath: string;
+  readonly targetPath: string;
+  readonly type: "dir" | "file";
+}): void {
+  let targetStat: ReturnType<typeof lstatSync> | undefined;
+  try {
+    targetStat = lstatSync(input.targetPath);
+  } catch {
+    targetStat = undefined;
+  }
+
+  if (targetStat) {
+    if (targetStat.isSymbolicLink() && readlinkSync(input.targetPath) === input.sourcePath) {
+      return;
+    }
+
+    if (
+      targetStat.isSymbolicLink() ||
+      /^.+\.sqlite(?:-(?:wal|shm|journal))?$/.test(input.entryName)
+    ) {
+      // SQLite files must stay generation-matched; mixed DB/WAL/SHM/journal files
+      // make Codex fail during initialize. Other real overlay data is preserved.
+      rmSync(input.targetPath, { recursive: true, force: true });
+    } else {
+      return;
+    }
+  }
+
+  symlinkSync(input.sourcePath, input.targetPath, input.type);
+}
+
 function prepareDpCodeCodexHomeOverlay(input: {
   readonly env: NodeJS.ProcessEnv;
   readonly homePath?: string;
@@ -113,11 +150,13 @@ function prepareDpCodeCodexHomeOverlay(input: {
       }
       const sourcePath = path.join(sourceHomePath, entry);
       const targetPath = path.join(overlayHomePath, entry);
-      if (existsSync(targetPath)) {
-        continue;
-      }
       const stat = lstatSync(sourcePath);
-      symlinkSync(sourcePath, targetPath, stat.isDirectory() ? "dir" : "file");
+      ensureCodexOverlaySymlink({
+        entryName: entry,
+        sourcePath,
+        targetPath,
+        type: stat.isDirectory() ? "dir" : "file",
+      });
     }
   } catch {
     // If the source home is partially missing, Codex can still start with the

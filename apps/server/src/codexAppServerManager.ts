@@ -91,6 +91,12 @@ type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 type CodexTurnSandboxPolicy = {
   readonly type: "readOnly" | "workspaceWrite" | "dangerFullAccess";
 };
+type CodexSessionApprovalOverride = {
+  readonly approvalPolicy: "never";
+  readonly sandboxPolicy: {
+    readonly type: "dangerFullAccess";
+  };
+};
 
 interface CodexSessionContext {
   session: ProviderSession;
@@ -100,6 +106,7 @@ interface CodexSessionContext {
   pending: Map<PendingRequestKey, PendingRequest>;
   pendingApprovals: Map<ApprovalRequestId, PendingApprovalRequest>;
   pendingUserInputs: Map<ApprovalRequestId, PendingUserInputRequest>;
+  sessionApprovalOverride?: CodexSessionApprovalOverride;
   collabReceiverTurns: Map<string, TurnId>;
   collabReceiverParents: Map<string, string>;
   reviewTurnIds: Set<TurnId>;
@@ -490,8 +497,25 @@ function mapCodexRuntimeModeToTurnOverrides(runtimeMode: RuntimeMode): {
   }
 }
 
+const CODEX_ALWAYS_ALLOW_SESSION_TURN_OVERRIDES: CodexSessionApprovalOverride = {
+  approvalPolicy: "never",
+  sandboxPolicy: { type: "dangerFullAccess" },
+};
+
+// Synara re-sends turn-level Codex permission overrides, so keep "always allow"
+// as live session state instead of relying on one native approval reply.
+function resolveCodexTurnOverrides(context: CodexSessionContext): {
+  readonly approvalPolicy: CodexApprovalPolicy;
+  readonly sandboxPolicy: CodexTurnSandboxPolicy;
+} {
+  return (
+    context.sessionApprovalOverride ??
+    mapCodexRuntimeModeToTurnOverrides(context.session.runtimeMode)
+  );
+}
+
 export function ensureIsolatedScratchWorkspace(threadId: ThreadId): string {
-  const workspaceRoot = path.join(tmpdir(), "dpcode-codex-workspaces");
+  const workspaceRoot = path.join(tmpdir(), "synara-codex-workspaces");
   const workspaceDir = path.join(workspaceRoot, String(threadId));
   mkdirSync(workspaceDir, { recursive: true });
   return workspaceDir;
@@ -546,7 +570,7 @@ export function normalizeCodexModelSlug(
 export function buildCodexInitializeParams() {
   return {
     clientInfo: {
-      name: "t3code_desktop",
+      name: "synara_desktop",
       title: "Synara Desktop",
       version: "0.1.0",
     },
@@ -962,7 +986,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     } = {
       threadId: providerThreadId,
       input: turnInput,
-      ...mapCodexRuntimeModeToTurnOverrides(context.session.runtimeMode),
+      ...resolveCodexTurnOverrides(context),
     };
     const normalizedModel = resolveCodexModelForAccount(
       normalizeCodexModelSlug(input.model ?? context.session.model),
@@ -1500,18 +1524,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
   }
 
-  async respondToRequest(
-    threadId: ThreadId,
-    requestId: ApprovalRequestId,
+  private resolveApprovalRequest(
+    context: CodexSessionContext,
+    pendingRequest: PendingApprovalRequest,
     decision: ProviderApprovalDecision,
-  ): Promise<void> {
-    const context = this.requireSession(threadId);
-    const pendingRequest = context.pendingApprovals.get(requestId);
-    if (!pendingRequest) {
-      throw new Error(`Unknown pending approval request: ${requestId}`);
-    }
-
-    context.pendingApprovals.delete(requestId);
+  ): void {
     this.writeMessage(context, {
       id: pendingRequest.jsonRpcId,
       result: {
@@ -1536,6 +1553,35 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         decision,
       },
     });
+  }
+
+  private resolveRemainingSessionApprovalRequests(context: CodexSessionContext): void {
+    const remainingRequests = Array.from(context.pendingApprovals.values());
+    context.pendingApprovals.clear();
+    for (const pendingRequest of remainingRequests) {
+      this.resolveApprovalRequest(context, pendingRequest, "acceptForSession");
+    }
+  }
+
+  async respondToRequest(
+    threadId: ThreadId,
+    requestId: ApprovalRequestId,
+    decision: ProviderApprovalDecision,
+  ): Promise<void> {
+    const context = this.requireSession(threadId);
+    const pendingRequest = context.pendingApprovals.get(requestId);
+    if (!pendingRequest) {
+      throw new Error(`Unknown pending approval request: ${requestId}`);
+    }
+
+    context.pendingApprovals.delete(requestId);
+    if (decision === "acceptForSession") {
+      context.sessionApprovalOverride = CODEX_ALWAYS_ALLOW_SESSION_TURN_OVERRIDES;
+    }
+    this.resolveApprovalRequest(context, pendingRequest, decision);
+    if (decision === "acceptForSession") {
+      this.resolveRemainingSessionApprovalRequests(context);
+    }
   }
 
   async respondToUserInput(
@@ -2322,6 +2368,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ...(rawRoute.turnId ? { turnId: rawRoute.turnId } : {}),
         ...(rawRoute.itemId ? { itemId: rawRoute.itemId } : {}),
       };
+      if (context.sessionApprovalOverride) {
+        this.resolveApprovalRequest(context, pendingRequest, "acceptForSession");
+        return;
+      }
       context.pendingApprovals.set(requestId, pendingRequest);
     }
 

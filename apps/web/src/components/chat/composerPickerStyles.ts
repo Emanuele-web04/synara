@@ -68,7 +68,7 @@ export const COMPOSER_COLUMN_FRAME_CLASS_NAME = CHAT_COLUMN_FRAME_CLASS_NAME;
  *  transcript (`-mt-5`), so without a solid backing the frosted surface would let
  *  transcript text bleed through its top edge. Match the chat surface to stay seamless. */
 export const COMPOSER_INPUT_SHELL_CLASS_NAME =
-  "group rounded-[1.1rem] bg-[var(--color-background-surface)] transition-colors duration-200";
+  "group rounded-[1.2rem] bg-[var(--color-background-surface)] transition-colors duration-200";
 
 /** Defined composer border: the heaviest border token nudged a bit darker with foreground. */
 export const COMPOSER_SURFACE_BORDER_CLASS_NAME =
@@ -78,7 +78,7 @@ export const COMPOSER_SURFACE_BORDER_CLASS_NAME =
  *  dark mode drops the border and leans on the shadow for separation. */
 export const COMPOSER_SURFACE_CHROME_CLASS_NAME = `border ${COMPOSER_SURFACE_BORDER_CLASS_NAME} ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} dark:border-transparent`;
 
-export const COMPOSER_INPUT_SURFACE_CLASS_NAME = `chat-composer-surface rounded-[1.1rem] ${COMPOSER_SURFACE_CHROME_CLASS_NAME} transition-colors duration-200`;
+export const COMPOSER_INPUT_SURFACE_CLASS_NAME = `chat-composer-surface rounded-[1.2rem] ${COMPOSER_SURFACE_CHROME_CLASS_NAME} transition-colors duration-200`;
 
 /** Active segment fill in the sidebar Threads/Workspace picker. */
 export const SIDEBAR_SEGMENTED_PICKER_ACTIVE_CLASS_NAME =
@@ -136,7 +136,7 @@ export const COMPOSER_COMMAND_MENU_ITEM_CLASS_NAME =
 export const COMPOSER_COMMAND_MENU_ITEM_ACTIVE_CLASS_NAME =
   "bg-[var(--color-background-elevated-secondary-opaque)] text-[var(--color-text-foreground)]";
 
-export const COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME = `rounded-t-[calc(1.1rem_-_1px)] border-b ${COMPOSER_SURFACE_BORDER_CLASS_NAME} bg-[var(--color-background-elevated-secondary)]`;
+export const COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME = `rounded-t-[calc(1.2rem_-_1px)] border-b ${COMPOSER_SURFACE_BORDER_CLASS_NAME} bg-[var(--color-background-elevated-secondary)]`;
 
 export const RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME =
   "text-[var(--runtime-full-access-accent)] hover:opacity-85";

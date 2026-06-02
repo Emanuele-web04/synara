@@ -61,10 +61,10 @@ describe("resolveAllowedLocalImageFile", () => {
     }
   });
 
-  it("allows images written to the DPCODE_HOME codex-home-overlay generated_images root", async () => {
+  it("allows images written to the SYNARA_HOME codex-home-overlay generated_images root", async () => {
     // Codex app-server is launched with CODEX_HOME pointing at a Synara overlay
     // directory (see resolveDpCodeCodexHomeOverlayPath). Generated images therefore
-    // live under <DPCODE_HOME>/codex-home-overlay/generated_images/<thread>/<call>.png,
+    // live under <SYNARA_HOME>/codex-home-overlay/generated_images/<thread>/<call>.png,
     // which sits outside both the user's `~/.codex` source home and any workspace
     // root. The allowlist must still serve them.
     //
@@ -73,9 +73,9 @@ describe("resolveAllowedLocalImageFile", () => {
     // way only the overlay candidate can satisfy the allowlist.
     const fakeRoot = path.join(process.cwd(), `.test-codex-overlay-${process.pid}-${Date.now()}`);
     const sourceHome = path.join(fakeRoot, "source", ".codex");
-    const dpcodeHome = path.join(fakeRoot, "dpcode", "runtime");
+    const synaraHome = path.join(fakeRoot, "synara", "runtime");
     const overlayImageDir = path.join(
-      dpcodeHome,
+      synaraHome,
       "codex-home-overlay",
       "generated_images",
       "thread-overlay",
@@ -84,8 +84,8 @@ describe("resolveAllowedLocalImageFile", () => {
     mkdirSync(overlayImageDir, { recursive: true });
     writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
 
-    const previousDpcodeHome = process.env.DPCODE_HOME;
-    process.env.DPCODE_HOME = dpcodeHome;
+    const previousSynaraHome = process.env.SYNARA_HOME;
+    process.env.SYNARA_HOME = synaraHome;
     try {
       const result = await resolveAllowedLocalImageFile({
         requestedPath: imagePath,
@@ -95,10 +95,10 @@ describe("resolveAllowedLocalImageFile", () => {
 
       assert.equal(result?.path, realpathSync(imagePath));
     } finally {
-      if (previousDpcodeHome === undefined) {
-        delete process.env.DPCODE_HOME;
+      if (previousSynaraHome === undefined) {
+        delete process.env.SYNARA_HOME;
       } else {
-        process.env.DPCODE_HOME = previousDpcodeHome;
+        process.env.SYNARA_HOME = previousSynaraHome;
       }
       rmSync(fakeRoot, { recursive: true, force: true });
     }

@@ -1,6 +1,6 @@
 /**
  * FILE: homeMigration.test.ts
- * Purpose: Verifies first-run import and resume behavior for the ~/.t3 -> ~/.dpcode migration.
+ * Purpose: Verifies first-run import and resume behavior into the ~/.synara home.
  * Layer: Server startup tests
  * Depends on: deriveServerPaths, node:sqlite fixtures, and the migration marker contract
  */
@@ -15,10 +15,11 @@ import { Effect, FileSystem } from "effect";
 
 import { deriveServerPaths } from "./config";
 import {
-  DPCODE_HOME_DIRNAME,
+  LEGACY_DPCODE_HOME_DIRNAME,
   getLegacyImportMarkerPath,
   LEGACY_T3_HOME_DIRNAME,
   migrateLegacyHomeIfNeeded,
+  SYNARA_HOME_DIRNAME,
 } from "./homeMigration";
 
 // Creates the minimal sqlite state the migration needs to prove DB contents moved correctly.
@@ -53,16 +54,90 @@ const readMarker = (markerPath: string) =>
   };
 
 it.layer(NodeServices.layer)("homeMigration", (it) => {
+  it.effect("imports legacy dpcode userdata into the Synara default home", () =>
+    Effect.gen(function* () {
+      const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "synara-home-migration-"));
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => fs.rmSync(tempHome, { recursive: true, force: true })),
+      );
+
+      const legacyBaseDir = path.join(tempHome, LEGACY_DPCODE_HOME_DIRNAME);
+      const targetBaseDir = path.join(tempHome, SYNARA_HOME_DIRNAME);
+      const legacyPaths = yield* deriveServerPaths(legacyBaseDir, undefined);
+      const targetPaths = yield* deriveServerPaths(targetBaseDir, undefined);
+
+      fs.mkdirSync(path.dirname(legacyPaths.dbPath), { recursive: true });
+      createProjectDb(legacyPaths.dbPath, "DP Code project");
+
+      const result = yield* migrateLegacyHomeIfNeeded({
+        baseDir: targetBaseDir,
+        homeDir: tempHome,
+        devUrl: undefined,
+      });
+
+      assert.deepStrictEqual(result, {
+        status: "migrated",
+        reason: "migrated",
+        importedArtifacts: ["database"],
+      });
+      assert.equal(readProjectTitle(targetPaths.dbPath), "DP Code project");
+      assert.isTrue(fs.existsSync(legacyPaths.dbPath));
+    }),
+  );
+
+  it.effect("fills missing dpcode artifacts from older t3 state", () =>
+    Effect.gen(function* () {
+      const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "synara-home-migration-"));
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => fs.rmSync(tempHome, { recursive: true, force: true })),
+      );
+
+      const dpcodeBaseDir = path.join(tempHome, LEGACY_DPCODE_HOME_DIRNAME);
+      const t3BaseDir = path.join(tempHome, LEGACY_T3_HOME_DIRNAME);
+      const targetBaseDir = path.join(tempHome, SYNARA_HOME_DIRNAME);
+      const dpcodePaths = yield* deriveServerPaths(dpcodeBaseDir, undefined);
+      const t3Paths = yield* deriveServerPaths(t3BaseDir, undefined);
+      const targetPaths = yield* deriveServerPaths(targetBaseDir, undefined);
+
+      fs.mkdirSync(path.dirname(dpcodePaths.anonymousIdPath), { recursive: true });
+      fs.writeFileSync(dpcodePaths.anonymousIdPath, "dpcode-anon-id");
+      fs.mkdirSync(path.dirname(t3Paths.keybindingsConfigPath), { recursive: true });
+      fs.writeFileSync(
+        t3Paths.keybindingsConfigPath,
+        '[{"key":"mod+k","command":"sidebar.search"}]\n',
+      );
+      createProjectDb(t3Paths.dbPath, "T3 project");
+
+      const result = yield* migrateLegacyHomeIfNeeded({
+        baseDir: targetBaseDir,
+        homeDir: tempHome,
+        devUrl: undefined,
+      });
+
+      assert.deepStrictEqual(result, {
+        status: "migrated",
+        reason: "migrated",
+        importedArtifacts: ["database", "keybindings", "anonymousId"],
+      });
+      assert.equal(readProjectTitle(targetPaths.dbPath), "T3 project");
+      assert.equal(fs.readFileSync(targetPaths.anonymousIdPath, "utf8"), "dpcode-anon-id");
+      assert.equal(
+        fs.readFileSync(targetPaths.keybindingsConfigPath, "utf8").trim(),
+        '[{"key":"mod+k","command":"sidebar.search"}]',
+      );
+    }),
+  );
+
   it.effect("imports legacy userdata into the new default home", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
-      const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "dpcode-home-migration-"));
+      const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "synara-home-migration-"));
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => fs.rmSync(tempHome, { recursive: true, force: true })),
       );
 
       const legacyBaseDir = path.join(tempHome, LEGACY_T3_HOME_DIRNAME);
-      const targetBaseDir = path.join(tempHome, DPCODE_HOME_DIRNAME);
+      const targetBaseDir = path.join(tempHome, SYNARA_HOME_DIRNAME);
       const legacyPaths = yield* deriveServerPaths(legacyBaseDir, undefined);
       const targetPaths = yield* deriveServerPaths(targetBaseDir, undefined);
 
@@ -106,13 +181,13 @@ it.layer(NodeServices.layer)("homeMigration", (it) => {
 
   it.effect("preserves target logs while importing legacy state", () =>
     Effect.gen(function* () {
-      const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "dpcode-home-migration-"));
+      const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "synara-home-migration-"));
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => fs.rmSync(tempHome, { recursive: true, force: true })),
       );
 
       const legacyBaseDir = path.join(tempHome, LEGACY_T3_HOME_DIRNAME);
-      const targetBaseDir = path.join(tempHome, DPCODE_HOME_DIRNAME);
+      const targetBaseDir = path.join(tempHome, SYNARA_HOME_DIRNAME);
       const legacyPaths = yield* deriveServerPaths(legacyBaseDir, undefined);
       const targetPaths = yield* deriveServerPaths(targetBaseDir, undefined);
 
@@ -139,13 +214,13 @@ it.layer(NodeServices.layer)("homeMigration", (it) => {
 
   it.effect("skips the import when the target home already owns state", () =>
     Effect.gen(function* () {
-      const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "dpcode-home-migration-"));
+      const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "synara-home-migration-"));
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => fs.rmSync(tempHome, { recursive: true, force: true })),
       );
 
       const legacyBaseDir = path.join(tempHome, LEGACY_T3_HOME_DIRNAME);
-      const targetBaseDir = path.join(tempHome, DPCODE_HOME_DIRNAME);
+      const targetBaseDir = path.join(tempHome, SYNARA_HOME_DIRNAME);
       const legacyPaths = yield* deriveServerPaths(legacyBaseDir, undefined);
       const targetPaths = yield* deriveServerPaths(targetBaseDir, undefined);
 
@@ -171,13 +246,13 @@ it.layer(NodeServices.layer)("homeMigration", (it) => {
 
   it.effect("resumes an interrupted migration instead of skipping partially imported state", () =>
     Effect.gen(function* () {
-      const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "dpcode-home-migration-"));
+      const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "synara-home-migration-"));
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => fs.rmSync(tempHome, { recursive: true, force: true })),
       );
 
       const legacyBaseDir = path.join(tempHome, LEGACY_T3_HOME_DIRNAME);
-      const targetBaseDir = path.join(tempHome, DPCODE_HOME_DIRNAME);
+      const targetBaseDir = path.join(tempHome, SYNARA_HOME_DIRNAME);
       const legacyPaths = yield* deriveServerPaths(legacyBaseDir, undefined);
       const targetPaths = yield* deriveServerPaths(targetBaseDir, undefined);
       const markerPath = yield* getLegacyImportMarkerPath(targetPaths.stateDir);
@@ -236,13 +311,13 @@ it.layer(NodeServices.layer)("homeMigration", (it) => {
 
   it.effect("imports legacy dev state when a dev URL is active", () =>
     Effect.gen(function* () {
-      const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "dpcode-home-migration-"));
+      const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "synara-home-migration-"));
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => fs.rmSync(tempHome, { recursive: true, force: true })),
       );
 
       const legacyBaseDir = path.join(tempHome, LEGACY_T3_HOME_DIRNAME);
-      const targetBaseDir = path.join(tempHome, DPCODE_HOME_DIRNAME);
+      const targetBaseDir = path.join(tempHome, SYNARA_HOME_DIRNAME);
       const devUrl = new URL("http://127.0.0.1:5173");
       const legacyPaths = yield* deriveServerPaths(legacyBaseDir, devUrl);
       const targetPaths = yield* deriveServerPaths(targetBaseDir, devUrl);

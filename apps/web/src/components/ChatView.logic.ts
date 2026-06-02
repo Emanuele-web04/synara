@@ -3,12 +3,14 @@ import {
   ThreadId,
   type ModelSelection,
   type ModelSlug,
+  type ProviderApprovalDecision,
   type ProviderKind,
+  type RuntimeMode,
   type ServerProviderAuthStatus,
   type ThreadId as ThreadIdType,
 } from "@t3tools/contracts";
 import { normalizeModelSlug } from "@t3tools/shared/model";
-import { buildDpcodeBranchName } from "@t3tools/shared/git";
+import { buildSynaraBranchName } from "@t3tools/shared/git";
 import { isGenericChatThreadTitle } from "@t3tools/shared/chatThreads";
 import { isGenericTerminalThreadTitle } from "@t3tools/shared/terminalThreads";
 import {
@@ -33,11 +35,30 @@ import { hasLiveTurnTailWork, type WorkLogEntry } from "../session-logic";
 import { localSubagentThreadId } from "./ChatView.selectors";
 import type { ProviderModelOption } from "../providerModelOptions";
 
-export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "dpcode:last-invoked-script-by-project";
-export const DISMISSED_PROVIDER_HEALTH_BANNERS_KEY = "dpcode:dismissed-provider-health-banners";
+export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "synara:last-invoked-script-by-project";
+export const DISMISSED_PROVIDER_HEALTH_BANNERS_KEY = "synara:dismissed-provider-health-banners";
 
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);
 export const DismissedProviderHealthBannersSchema = Schema.Array(Schema.String);
+
+const ALWAYS_ALLOW_RUNTIME_MODE: RuntimeMode = "full-access";
+
+/**
+ * "Always allow" (acceptForSession) only auto-approves the live provider turn.
+ * Because the client is the source of truth for runtime mode (it sends it with
+ * every turn), the choice must also flip the thread to full-access so it survives
+ * idle-stop and runtime restarts instead of reverting to approval-required on the
+ * next turn. Returns the runtime mode to persist, or null when nothing changes.
+ */
+export function resolveRuntimeModeAfterApprovalDecision(
+  currentRuntimeMode: RuntimeMode,
+  decision: ProviderApprovalDecision,
+): RuntimeMode | null {
+  if (decision === "acceptForSession" && currentRuntimeMode !== ALWAYS_ALLOW_RUNTIME_MODE) {
+    return ALWAYS_ALLOW_RUNTIME_MODE;
+  }
+  return null;
+}
 
 export function buildLocalDraftThread(
   threadId: ThreadId,
@@ -394,7 +415,7 @@ export function buildSuggestedWorktreeName(input: {
   associatedWorktreeBranch?: string | null;
   title?: string | null;
 }): string {
-  return buildDpcodeBranchName(input.associatedWorktreeBranch ?? input.title);
+  return buildSynaraBranchName(input.associatedWorktreeBranch ?? input.title);
 }
 
 export function cloneComposerImageForRetry(

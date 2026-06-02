@@ -227,6 +227,41 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }).pipe(Effect.provide(makeKeybindingsLayer())),
   );
 
+  it.effect("migrates legacy command palette keybindings without startup issues", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      yield* fs.writeFileString(
+        keybindingsConfigPath,
+        JSON.stringify([{ key: "mod+shift+p", command: "commandPalette.toggle" }]),
+      );
+
+      const configState = yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        return yield* keybindings.loadConfigState;
+      });
+
+      assert.deepEqual(configState.issues, []);
+      assert.isTrue(
+        configState.keybindings.some(
+          (entry) => entry.command === "sidebar.search" && entry.shortcut.key === "p",
+        ),
+      );
+
+      yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        yield* keybindings.syncDefaultKeybindingsOnStartup;
+      });
+
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      assert.isTrue(
+        persisted.some(
+          (entry) => entry.key === "mod+shift+p" && entry.command === "sidebar.search",
+        ),
+      );
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
   it.effect(
     "upserts missing default keybindings on startup without overriding existing command rules",
     () =>

@@ -100,7 +100,7 @@ export function seedDesktopUserDataProfileFromLegacy(input: {
       });
     }
     FS.writeFileSync(
-      Path.join(input.targetPath, "dpcode-profile-seed.json"),
+      Path.join(input.targetPath, "synara-profile-seed.json"),
       `${JSON.stringify(
         {
           sourcePath,

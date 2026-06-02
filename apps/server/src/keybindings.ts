@@ -482,6 +482,7 @@ function invalidEntryIssue(index: number, detail: string): ServerConfigIssue {
 }
 
 const LEGACY_KEYBINDING_COMMAND_ALIASES = {
+  "commandPalette.toggle": "sidebar.search",
   "thread.previous": "chat.visible.previous",
   "thread.next": "chat.visible.next",
 } as const satisfies Record<string, KeybindingRule["command"]>;

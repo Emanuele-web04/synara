@@ -299,7 +299,6 @@ function ChatRouteGlobalShortcuts() {
 
       const command = resolveShortcutCommand(event, keybindings, { context: shortcutContext });
       if (command === "sidebar.toggle") {
-        if (!isElectron) return;
         event.preventDefault();
         event.stopPropagation();
         toggleSidebar();
@@ -470,7 +469,6 @@ function ChatRouteGlobalShortcuts() {
         terminalOpen,
         terminalWorkspaceOpen,
       }}
-      isElectron={isElectron}
     />
   );
 }

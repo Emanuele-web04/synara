@@ -63,7 +63,7 @@ const GEMINI_ACP_PROMPT_TIMEOUT_MS = 30 * 60_000;
 const GEMINI_TMP_DIR = path.join(os.homedir(), ".gemini", "tmp");
 const GEMINI_CHAT_DIR_NAME = "chats";
 const GEMINI_SESSION_FILE_PREFIX = "session-";
-const DPCODE_GEMINI_SETTINGS_DIR = path.join(os.tmpdir(), "dpcode", "gemini");
+const SYNARA_GEMINI_SETTINGS_DIR = path.join(os.tmpdir(), "synara", "gemini");
 const GEMINI_3_THINKING_LEVELS: ReadonlyArray<GeminiThinkingLevel> = ["HIGH", "LOW"];
 const GEMINI_2_5_THINKING_BUDGETS: ReadonlyArray<GeminiThinkingBudget> = [-1, 512, 0];
 
@@ -737,12 +737,12 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
     }
 
     const systemSettingsPath = path.join(
-      DPCODE_GEMINI_SETTINGS_DIR,
+      SYNARA_GEMINI_SETTINGS_DIR,
       `${input.threadId}-${crypto.randomUUID()}.json`,
     );
     yield* Effect.tryPromise({
       try: async () => {
-        await fs.mkdir(DPCODE_GEMINI_SETTINGS_DIR, { recursive: true });
+        await fs.mkdir(SYNARA_GEMINI_SETTINGS_DIR, { recursive: true });
         await fs.writeFile(
           systemSettingsPath,
           JSON.stringify(
@@ -1877,7 +1877,7 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
       yield* sendRequest(context, "initialize", {
         protocolVersion: 1,
         clientInfo: {
-          name: "dpcode",
+          name: "synara",
           title: "Synara",
           version: "0.1.0",
         },

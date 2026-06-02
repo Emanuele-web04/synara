@@ -383,7 +383,7 @@ export const probeGeminiCapabilities = (input: {
         sendRequest(1, "initialize", {
           protocolVersion: 1,
           clientInfo: {
-            name: "dpcode",
+            name: "synara",
             title: "Synara",
             version: "0.1.0",
           },

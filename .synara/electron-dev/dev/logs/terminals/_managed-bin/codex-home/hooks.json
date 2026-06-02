@@ -1,0 +1,24 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/emanueledipietro/Developer/Testing/t3code/.synara/electron-dev/dev/logs/terminals/_managed-bin/notify-hook.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/emanueledipietro/Developer/Testing/t3code/.synara/electron-dev/dev/logs/terminals/_managed-bin/notify-hook.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

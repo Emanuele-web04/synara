@@ -1,0 +1,18 @@
+{
+  "provider": "opencode",
+  "status": "ready",
+  "available": true,
+  "authStatus": "unknown",
+  "version": "1.15.13",
+  "checkedAt": "2026-06-02T17:22:02.622Z",
+  "message": "OpenCode CLI is installed. Configure provider credentials inside OpenCode as needed.",
+  "versionAdvisory": {
+    "status": "current",
+    "currentVersion": "1.15.13",
+    "latestVersion": "1.15.13",
+    "updateCommand": "brew upgrade anomalyco/tap/opencode",
+    "canUpdate": true,
+    "checkedAt": "2026-06-02T17:22:08.657Z",
+    "message": null
+  }
+}

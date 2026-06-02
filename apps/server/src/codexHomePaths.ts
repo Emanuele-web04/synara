@@ -35,8 +35,8 @@ export function resolveDpCodeCodexHomeOverlayPath(
   env: NodeJS.ProcessEnv,
   sourceHomePath: string,
 ): string {
-  const runtimeHome = env.DPCODE_HOME?.trim() || env.T3CODE_HOME?.trim();
-  const overlayRoot = runtimeHome || path.join(path.dirname(sourceHomePath), ".dpcode", "runtime");
+  const runtimeHome = env.SYNARA_HOME?.trim() || env.DPCODE_HOME?.trim() || env.T3CODE_HOME?.trim();
+  const overlayRoot = runtimeHome || path.join(path.dirname(sourceHomePath), ".synara", "runtime");
   return path.join(overlayRoot, DPCODE_CODEX_HOME_OVERLAY_DIR);
 }
 

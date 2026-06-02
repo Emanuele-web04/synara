@@ -107,7 +107,9 @@ const CliEnvConfig = Config.all({
   ),
   port: Config.port("T3CODE_PORT").pipe(Config.option, Config.map(Option.getOrUndefined)),
   host: Config.string("T3CODE_HOST").pipe(Config.option, Config.map(Option.getOrUndefined)),
+  synaraHome: Config.string("SYNARA_HOME").pipe(Config.option, Config.map(Option.getOrUndefined)),
   t3Home: Config.string("T3CODE_HOME").pipe(Config.option, Config.map(Option.getOrUndefined)),
+  dpcodeHome: Config.string("DPCODE_HOME").pipe(Config.option, Config.map(Option.getOrUndefined)),
   devUrl: Config.url("VITE_DEV_SERVER_URL").pipe(Config.option, Config.map(Option.getOrUndefined)),
   noBrowser: Config.boolean("T3CODE_NO_BROWSER").pipe(
     Config.option,
@@ -163,8 +165,10 @@ const ServerConfigLive = (input: CliInput) =>
       });
 
       const devUrl = Option.getOrElse(input.devUrl, () => env.devUrl);
-      const baseDir = yield* resolveBaseDir(Option.getOrUndefined(input.t3Home) ?? env.t3Home);
-      // Import legacy ~/.t3 state before runtime paths are derived under ~/.dpcode.
+      const configuredHome =
+        Option.getOrUndefined(input.t3Home) ?? env.synaraHome ?? env.t3Home ?? env.dpcodeHome;
+      const baseDir = yield* resolveBaseDir(configuredHome);
+      // Import legacy state before runtime paths are derived under ~/.synara.
       yield* migrateLegacyHomeIfNeeded({
         baseDir,
         homeDir: OS.homedir(),
@@ -173,7 +177,7 @@ const ServerConfigLive = (input: CliInput) =>
         Effect.mapError(
           (cause) =>
             new StartupError({
-              message: "Failed to migrate legacy T3 home directory",
+              message: "Failed to migrate legacy Synara home directory",
               cause,
             }),
         ),
@@ -342,7 +346,7 @@ const hostFlag = Flag.string("host").pipe(
   Flag.optional,
 );
 const t3HomeFlag = Flag.string("home-dir").pipe(
-  Flag.withDescription("Base directory for all Synara data (equivalent to T3CODE_HOME)."),
+  Flag.withDescription("Base directory for all Synara data (equivalent to SYNARA_HOME)."),
   Flag.optional,
 );
 const devUrlFlag = Flag.string("dev-url").pipe(

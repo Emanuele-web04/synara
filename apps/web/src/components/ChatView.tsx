@@ -372,6 +372,7 @@ import {
   type LocalDispatchSnapshot,
   PullRequestDialogState,
   readFileAsDataUrl,
+  resolveRuntimeModeAfterApprovalDecision,
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
 } from "./ChatView.logic";
@@ -3057,14 +3058,20 @@ export default function ChatView({
     projectSuggestionSourceThreads,
     shouldPrepareComposerSuggestions,
   ]);
-  // Keep the list rendered whenever the context is eligible; the open/closed
-  // state (driven by an empty prompt) animates it in and out smoothly.
+  // Suggestions stay open for the whole eligible empty-landing context, even
+  // while the user types, so they remain a persistent pick list rather than a
+  // transient empty-prompt hint.
   const showComposerSuggestions =
     shouldPrepareComposerSuggestions && composerSuggestions.length > 0;
-  const composerSuggestionsOpen = showComposerSuggestions && prompt.trim().length === 0;
+  const composerSuggestionsOpen = showComposerSuggestions;
   const onSelectComposerSuggestion = useCallback(
     (suggestion: ComposerSuggestion) => {
-      const nextPrompt = suggestion.prompt;
+      // Append the picked prompt as a quoted block instead of replacing the
+      // composer, so clicking accumulates onto whatever is already typed.
+      const quotedPrompt = `"${suggestion.prompt}"`;
+      const current = promptRef.current;
+      const separator = current.length === 0 ? "" : /\s$/.test(current) ? "" : " ";
+      const nextPrompt = `${current}${separator}${quotedPrompt}`;
       promptRef.current = nextPrompt;
       setPrompt(nextPrompt);
       setComposerCursor(collapseExpandedComposerCursor(nextPrompt, nextPrompt.length));
@@ -3406,6 +3413,13 @@ export default function ChatView({
       return;
     }
     if (terminalState.workspaceLayout === "both" && terminalState.workspaceActiveTab === "chat") {
+      // Going terminal-only hides the chat/terminal switcher, leaving chat-backed
+      // threads with no mouse path back to chat. For those, collapse the workspace
+      // to the normal chat + terminal-drawer layout instead of stranding the user.
+      if (terminalState.entryPoint === "chat") {
+        collapseTerminalWorkspace();
+        return;
+      }
       storeCloseWorkspaceChat(activeThreadId);
       return;
     }
@@ -3413,8 +3427,10 @@ export default function ChatView({
   }, [
     activeThreadId,
     closeTerminal,
+    collapseTerminalWorkspace,
     storeCloseWorkspaceChat,
     terminalState.activeTerminalId,
+    terminalState.entryPoint,
     terminalState.workspaceActiveTab,
     terminalState.workspaceLayout,
     terminalWorkspaceOpen,
@@ -4100,6 +4116,13 @@ export default function ChatView({
     const composerForm = composerFormRef.current;
     if (!composerForm) return;
     const measureComposerFormWidth = () => composerForm.clientWidth;
+    const syncComposerFooterLayout = () => {
+      const composerFormWidth = measureComposerFormWidth();
+      const nextCompact = shouldUseCompactComposerFooter(composerFormWidth, {
+        hasWideActions: composerFooterHasWideActions,
+      });
+      setIsComposerFooterCompact((previous) => (previous === nextCompact ? previous : nextCompact));
+    };
 
     const measuredHeight = Math.ceil(composerForm.getBoundingClientRect().height);
     composerFormHeightRef.current = measuredHeight;
@@ -4108,21 +4131,14 @@ export default function ChatView({
         current === measuredHeight ? current : measuredHeight,
       );
     }
-    setIsComposerFooterCompact(
-      shouldUseCompactComposerFooter(measureComposerFormWidth(), {
-        hasWideActions: composerFooterHasWideActions,
-      }),
-    );
+    syncComposerFooterLayout();
     if (typeof ResizeObserver === "undefined") return;
 
     const observer = new ResizeObserver((entries) => {
       const [entry] = entries;
       if (!entry) return;
 
-      const nextCompact = shouldUseCompactComposerFooter(measureComposerFormWidth(), {
-        hasWideActions: composerFooterHasWideActions,
-      });
-      setIsComposerFooterCompact((previous) => (previous === nextCompact ? previous : nextCompact));
+      syncComposerFooterLayout();
 
       const nextHeight = entry.contentRect.height;
       const previousHeight = composerFormHeightRef.current;
@@ -5903,6 +5919,13 @@ export default function ChatView({
       setRespondingRequestIds((existing) =>
         existing.includes(requestId) ? existing : [...existing, requestId],
       );
+      // Durably persist "always allow" client-side so the next turn (after an
+      // idle-stop or runtime restart) keeps full-access instead of asking again.
+      // The server's session override only covers the current live turn.
+      const durableRuntimeMode = resolveRuntimeModeAfterApprovalDecision(runtimeMode, decision);
+      if (durableRuntimeMode) {
+        setComposerDraftRuntimeMode(activeThreadId, durableRuntimeMode);
+      }
       await api.orchestration
         .dispatchCommand({
           type: "thread.approval.respond",
@@ -5920,7 +5943,7 @@ export default function ChatView({
         });
       setRespondingRequestIds((existing) => existing.filter((id) => id !== requestId));
     },
-    [activeThreadId, setStoreThreadError],
+    [activeThreadId, runtimeMode, setComposerDraftRuntimeMode, setStoreThreadError],
   );
 
   const onRespondToUserInput = useCallback(
@@ -7769,6 +7792,7 @@ export default function ChatView({
                 <div
                   data-chat-composer-footer="true"
                   className={cn(
+                    "@container",
                     COMPOSER_FOOTER_ROW_CLASS_NAME,
                     isComposerFooterCompact
                       ? "gap-1.5"
@@ -7798,7 +7822,6 @@ export default function ChatView({
                       <>
                         <RuntimeUsageControls
                           {...runtimeUsageControlsProps}
-                          compact={isComposerFooterCompact}
                           className="shrink-0"
                         />
 
@@ -8211,11 +8234,12 @@ export default function ChatView({
                   CHAT_COLUMN_GUTTER_CLASS_NAME,
                 )}
               >
-                {/* Anchor the logo, heading, and composer at the vertical center and
-                    let the suggestion list overlay below via absolute positioning, so
-                    toggling it open/closed never changes this block's height and the
-                    composer stays put (no re-center / resize while typing). */}
-                <div className="relative flex w-full flex-col justify-center">
+                {/* Center the heading, composer, and suggestion list together as a
+                    single group: the suggestions live in normal flow so the whole
+                    block (composer + suggestions) stays vertically centered in the
+                    view instead of the composer being centered with the list hanging
+                    below it. */}
+                <div className="flex w-full flex-col justify-center">
                   <div
                     className={cn(
                       "flex flex-col items-center gap-4 px-6 pb-5 text-center select-none",
@@ -8244,18 +8268,16 @@ export default function ChatView({
                     </div>
                   ) : null}
                   {showComposerSuggestions ? (
-                    <div className="absolute inset-x-0 top-full">
-                      <DisclosureRegion
-                        open={composerSuggestionsOpen}
-                        className={COMPOSER_COLUMN_FRAME_CLASS_NAME}
-                        contentClassName="pt-5"
-                      >
-                        <ComposerSuggestions
-                          suggestions={composerSuggestions}
-                          onSelectSuggestion={onSelectComposerSuggestion}
-                        />
-                      </DisclosureRegion>
-                    </div>
+                    <DisclosureRegion
+                      open={composerSuggestionsOpen}
+                      className={COMPOSER_COLUMN_FRAME_CLASS_NAME}
+                      contentClassName="pt-5"
+                    >
+                      <ComposerSuggestions
+                        suggestions={composerSuggestions}
+                        onSelectSuggestion={onSelectComposerSuggestion}
+                      />
+                    </DisclosureRegion>
                   ) : null}
                 </div>
               </div>

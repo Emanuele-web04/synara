@@ -28,7 +28,7 @@ export {
 
 export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
 export const SIDEBAR_THREAD_PREWARM_LIMIT = 10;
-export const DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY = "dpcode:show-debug-feature-flags-menu";
+export const DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY = "synara:show-debug-feature-flags-menu";
 export type SidebarNewThreadEnvMode = "local" | "worktree";
 type SidebarProject = {
   id: string;
@@ -408,6 +408,13 @@ export async function recoverExistingAddProjectTarget(input: {
 export function describeAddProjectError(message: string): string | null {
   if (isDuplicateProjectCreateError(message)) {
     return "This usually means the folder is already linked to an existing project. On Windows, the same folder can arrive with a different path format, so it looks new even when it is not.";
+  }
+
+  if (
+    message.startsWith("Failed to create project directory: /") ||
+    message.startsWith("Project directory does not exist: /")
+  ) {
+    return "This is an absolute path from the filesystem root. If the folder is in your home directory, use ~/Developer/... or the full /Users/<name>/Developer/... path.";
   }
 
   return null;

@@ -1,0 +1,17 @@
+{
+  "provider": "codex",
+  "status": "ready",
+  "available": true,
+  "authStatus": "authenticated",
+  "version": "0.136.0",
+  "checkedAt": "2026-06-02T17:22:02.615Z",
+  "versionAdvisory": {
+    "status": "current",
+    "currentVersion": "0.136.0",
+    "latestVersion": "0.136.0",
+    "updateCommand": "npm install -g @openai/codex@latest",
+    "canUpdate": true,
+    "checkedAt": "2026-06-02T17:22:09.007Z",
+    "message": null
+  }
+}

@@ -1,5 +1,5 @@
 // FILE: desktopWsBridge.test.ts
-// Purpose: Verifies desktop WebSocket URL resolution prefers DPCODE env names with legacy fallback.
+// Purpose: Verifies desktop WebSocket URL resolution prefers Synara env names with legacy fallback.
 
 import { describe, expect, it } from "vitest";
 
@@ -17,7 +17,17 @@ describe("desktopWsBridge", () => {
     expect(normalizeDesktopWsUrl(null)).toBeNull();
   });
 
-  it("prefers DPCODE_DESKTOP_WS_URL over legacy T3CODE_DESKTOP_WS_URL", () => {
+  it("prefers SYNARA_DESKTOP_WS_URL over legacy desktop URL env names", () => {
+    expect(
+      resolveDesktopWsUrlFromEnv({
+        SYNARA_DESKTOP_WS_URL: "ws://127.0.0.1:6000/?token=synara",
+        DPCODE_DESKTOP_WS_URL: "ws://127.0.0.1:5000/?token=dp",
+        T3CODE_DESKTOP_WS_URL: "ws://127.0.0.1:3773/?token=legacy",
+      } as NodeJS.ProcessEnv),
+    ).toBe("ws://127.0.0.1:6000/?token=synara");
+  });
+
+  it("falls back to DPCODE_DESKTOP_WS_URL for older launchers", () => {
     expect(
       resolveDesktopWsUrlFromEnv({
         DPCODE_DESKTOP_WS_URL: "ws://127.0.0.1:5000/?token=dp",

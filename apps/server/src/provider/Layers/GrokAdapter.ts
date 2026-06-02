@@ -88,7 +88,8 @@ const GROK_RESUME_VERSION = 1 as const;
 const GROK_MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
 const GROK_ACP_TRANSPORT_DEBUG_MARKER = "grok-acp-meta-stripper-v2";
 const GROK_ACP_LOG_PAYLOAD_LIMIT = 4_000;
-const GROK_ACP_DEBUG_ENV = "DPCODE_GROK_ACP_DEBUG";
+const GROK_ACP_DEBUG_ENV = "SYNARA_GROK_ACP_DEBUG";
+const DPCODE_GROK_ACP_DEBUG_ENV = "DPCODE_GROK_ACP_DEBUG";
 const LEGACY_GROK_ACP_DEBUG_ENV = "DP_GROK_ACP_DEBUG";
 const GROK_RESUME_REPLAY_QUIET_MS = 350;
 const GROK_RESUME_REPLAY_MAX_WAIT_MS = 3_000;
@@ -135,7 +136,11 @@ function summarizeGrokAcpRequestPayload(method: string, payload: unknown): unkno
 }
 
 function isGrokAcpDebugEnabled(): boolean {
-  return process.env[GROK_ACP_DEBUG_ENV] === "1" || process.env[LEGACY_GROK_ACP_DEBUG_ENV] === "1";
+  return (
+    process.env[GROK_ACP_DEBUG_ENV] === "1" ||
+    process.env[DPCODE_GROK_ACP_DEBUG_ENV] === "1" ||
+    process.env[LEGACY_GROK_ACP_DEBUG_ENV] === "1"
+  );
 }
 
 function mapGrokModelDiscoveryError(cause: unknown): ProviderAdapterRequestError {

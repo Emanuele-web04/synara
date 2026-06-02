@@ -64,6 +64,7 @@ import {
   SettingsSection,
   SettingsSelectPopup,
 } from "../components/settings/SettingsPanelPrimitives";
+import { SidebarHeaderNavigationControls } from "../components/SidebarHeaderNavigationControls";
 import { SidebarInset } from "../components/ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
@@ -1173,7 +1174,7 @@ function SettingsRouteView() {
       return;
     }
 
-    const notification = new Notification(title, { body, tag: "dpcode:test-notification" });
+    const notification = new Notification(title, { body, tag: "synara:test-notification" });
     notification.addEventListener("click", () => {
       window.focus();
     });
@@ -3125,25 +3126,31 @@ function SettingsRouteView() {
               desktopTopBarTrafficLightGutterClassName,
             )}
           >
-            <div className="mb-8 flex items-start justify-between gap-4">
-              <div className="min-w-0">
-                <h1 className="text-[1.75rem] font-semibold tracking-tight text-foreground">
-                  {activeSectionItem.label}
-                </h1>
-                <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
-                  {activeSectionItem.description}
-                </p>
+            <div className="mb-8 flex items-start gap-3">
+              {/* Companion sidebar trigger so settings is reachable-and-exitable even when
+                  the sidebar is collapsed (web/mobile have no global Back arrow). Renders
+                  nothing while the sidebar is open, matching the other route headers. */}
+              <SidebarHeaderNavigationControls />
+              <div className="flex min-w-0 flex-1 items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <h1 className="text-[1.75rem] font-semibold tracking-tight text-foreground">
+                    {activeSectionItem.label}
+                  </h1>
+                  <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+                    {activeSectionItem.description}
+                  </p>
+                </div>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  className="shrink-0"
+                  disabled={changedSettingLabels.length === 0}
+                  onClick={() => void restoreDefaults()}
+                >
+                  <RotateCcwIcon className="size-3.5" />
+                  Restore defaults
+                </Button>
               </div>
-              <Button
-                size="xs"
-                variant="outline"
-                className="shrink-0"
-                disabled={changedSettingLabels.length === 0}
-                onClick={() => void restoreDefaults()}
-              >
-                <RotateCcwIcon className="size-3.5" />
-                Restore defaults
-              </Button>
             </div>
 
             {renderActivePanel()}

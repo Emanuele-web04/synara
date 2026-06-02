@@ -36,7 +36,6 @@ interface BuildShortcutSheetSectionsOptions {
   projectScripts: ReadonlyArray<ProjectScript>;
   platform: string;
   context: ShortcutSheetContext;
-  isElectron: boolean;
 }
 
 interface ShortcutDefinition {
@@ -228,20 +227,18 @@ export function buildShortcutSheetSections(
     ),
   ];
 
-  if (options.isElectron) {
-    const sidebarToggle = definitionToEntry(
-      {
-        command: "sidebar.toggle",
-        label: "Toggle sidebar",
-        description: "Collapse or reveal the desktop sidebar shell.",
-      },
-      options.keybindings,
-      options.platform,
-      options.context,
-    );
-    if (sidebarToggle) {
-      currentEntries.splice(1, 0, sidebarToggle);
-    }
+  const sidebarToggle = definitionToEntry(
+    {
+      command: "sidebar.toggle",
+      label: "Toggle sidebar",
+      description: "Collapse or reveal the sidebar shell.",
+    },
+    options.keybindings,
+    options.platform,
+    options.context,
+  );
+  if (sidebarToggle) {
+    currentEntries.splice(1, 0, sidebarToggle);
   }
 
   const currentNavigationEntries = options.context.terminalWorkspaceOpen

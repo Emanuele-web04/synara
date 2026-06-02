@@ -16,7 +16,7 @@ export const SETTINGS_SECTION_IDS = [
 ] as const;
 
 export type SettingsSectionId = (typeof SETTINGS_SECTION_IDS)[number];
-export type SettingsNavGroupId = "app" | "dpcode";
+export type SettingsNavGroupId = "app" | "synara";
 
 export type SettingsNavItem = {
   id: SettingsSectionId;
@@ -33,7 +33,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
   label: string;
 }> = [
   { id: "app", label: "App" },
-  { id: "dpcode", label: "Synara" },
+  { id: "synara", label: "Synara" },
 ] as const;
 
 export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
@@ -87,7 +87,7 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
   },
   {
     id: "models",
-    group: "dpcode",
+    group: "synara",
     label: "Models",
     description: "Git writing defaults and custom model slugs.",
     icon: "brain",
@@ -95,7 +95,7 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
   },
   {
     id: "providers",
-    group: "dpcode",
+    group: "synara",
     label: "Providers",
     description: "Choose visible providers, review CLI installs, and update provider tools.",
     icon: "plugin-1",
@@ -103,7 +103,7 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
   },
   {
     id: "advanced",
-    group: "dpcode",
+    group: "synara",
     label: "Advanced",
     description: "Keybindings, recovery, and version info.",
     icon: "toolbox",

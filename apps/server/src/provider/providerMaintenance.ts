@@ -284,11 +284,7 @@ function makeHomebrewProviderMaintenanceCapabilities(
   return makeProviderMaintenanceCapabilities({
     provider: definition.provider,
     packageName: null,
-    latestVersionSource: definition.latestVersionSource ?? {
-      kind: "homebrew",
-      name: definition.homebrew.name,
-      homebrewKind: definition.homebrew.kind,
-    },
+    latestVersionSource: resolveLatestVersionSourceForInstallSource(definition, "homebrew"),
     updateExecutable: "brew",
     updateArgs:
       definition.homebrew.kind === "cask"
@@ -296,6 +292,23 @@ function makeHomebrewProviderMaintenanceCapabilities(
         : ["upgrade", definition.homebrew.name],
     updateLockKey: "homebrew",
   });
+}
+
+function resolveLatestVersionSourceForInstallSource(
+  definition: PackageManagedProviderMaintenanceDefinition,
+  installSource: ProviderInstallSource,
+): ProviderLatestVersionSource {
+  if (definition.latestVersionSource) {
+    return definition.latestVersionSource;
+  }
+  if (installSource === "homebrew" && definition.homebrew) {
+    return {
+      kind: "homebrew",
+      name: definition.homebrew.name,
+      homebrewKind: definition.homebrew.kind,
+    };
+  }
+  return { kind: "npm", name: definition.npmPackageName };
 }
 
 function makeNativeProviderMaintenanceCapabilities(
@@ -310,15 +323,9 @@ function makeNativeProviderMaintenanceCapabilities(
   return makeProviderMaintenanceCapabilities({
     provider: definition.provider,
     packageName: installSource === "homebrew" ? null : definition.npmPackageName,
-    latestVersionSource:
-      definition.latestVersionSource ??
-      (installSource === "homebrew" && definition.homebrew
-        ? {
-            kind: "homebrew",
-            name: definition.homebrew.name,
-            homebrewKind: definition.homebrew.kind,
-          }
-        : { kind: "npm", name: definition.npmPackageName }),
+    // Prefer explicit upstream metadata for channels like third-party Homebrew taps,
+    // then fall back to the package manager channel when its public API is usable.
+    latestVersionSource: resolveLatestVersionSourceForInstallSource(definition, installSource),
     updateExecutable: executable ?? definition.nativeUpdate.executable,
     updateArgs: definition.nativeUpdate.args(installSource),
     updateLockKey: definition.nativeUpdate.lockKey,

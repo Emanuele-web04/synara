@@ -27,7 +27,7 @@ import {
 import { ensureNativeApi } from "./nativeApi";
 import { serverQueryKeys, serverSettingsQueryOptions } from "./lib/serverReactQuery";
 
-const APP_SETTINGS_STORAGE_KEY = "dpcode:app-settings:v1";
+const APP_SETTINGS_STORAGE_KEY = "synara:app-settings:v1";
 const SERVER_SETTINGS_MIGRATION_STORAGE_KEY = "t3code:server-settings-migrated:v1";
 const MAX_CUSTOM_MODEL_COUNT = 32;
 export const MAX_CUSTOM_MODEL_LENGTH = 256;

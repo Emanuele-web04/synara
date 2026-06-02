@@ -76,8 +76,9 @@ type ThreadUserInputResponseRequestedEvent = Extract<
   { type: "thread.user-input-response-requested" }
 >;
 
-const PERSISTED_STATE_KEY = "dpcode:renderer-state:v8";
+const PERSISTED_STATE_KEY = "synara:renderer-state:v8";
 const LEGACY_PERSISTED_STATE_KEYS = [
+  "dpcode:renderer-state:v8",
   "t3code:renderer-state:v8",
   "t3code:renderer-state:v7",
   "t3code:renderer-state:v6",

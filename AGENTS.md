@@ -45,8 +45,8 @@ Long term maintainability is a core priority. If you add new functionality, firs
 ## Local Dev Instance Isolation
 
 - Never start the default `bun run dev` while another Synara instance is running unless the user explicitly wants shared ports/state.
-- Use an isolated home dir and non-default ports when running alongside the user's own Synara instance, for example: `env -u T3CODE_AUTH_TOKEN T3CODE_PORT_OFFSET=3158 T3CODE_NO_BROWSER=1 bun run dev -- --home-dir ./.dpcode-pr84 --port 58090`.
-- Always dry-run first when avoiding conflicts: `env -u T3CODE_AUTH_TOKEN T3CODE_PORT_OFFSET=3158 bun run dev -- --home-dir ./.dpcode-pr84 --port 58090 --dry-run`.
+- Use an isolated home dir and non-default ports when running alongside the user's own Synara instance, for example: `env -u T3CODE_AUTH_TOKEN T3CODE_PORT_OFFSET=3158 T3CODE_NO_BROWSER=1 bun run dev -- --home-dir ./.synara-pr84 --port 58090`.
+- Always dry-run first when avoiding conflicts: `env -u T3CODE_AUTH_TOKEN T3CODE_PORT_OFFSET=3158 bun run dev -- --home-dir ./.synara-pr84 --port 58090 --dry-run`.
 - Unset `T3CODE_AUTH_TOKEN` for browser dev instances unless the web app is also configured to connect with that token. If auth is accidentally inherited, the browser WebSocket can be rejected and the UI will show no threads even though SQLite has projects/threads.
 - Check both server and web ports with `lsof -nP -iTCP:<port> -sTCP:LISTEN`. A desktop app can bind `127.0.0.1:<port>` while the dev server binds IPv6 `*:<port>`, and `localhost` may still hit the wrong process.
 - If the UI shows no threads, verify the server path before changing SQL: inspect the isolated `state.sqlite`, then probe `orchestration.getSnapshot` over WebSocket. A healthy snapshot with projects/threads means the issue is client connection/hydration, not empty history.

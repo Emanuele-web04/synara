@@ -12,6 +12,7 @@ import {
   isVoiceAuthExpiredMessage,
   resolveActiveThreadTitle,
   resolveCommittedProviderModel,
+  resolveRuntimeModeAfterApprovalDecision,
   sanitizeVoiceErrorMessage,
   buildExpiredTerminalContextToastCopy,
   shouldAutoDeleteTerminalThreadOnLastClose,
@@ -606,5 +607,22 @@ describe("shouldAutoDeleteTerminalThreadOnLastClose", () => {
         },
       }),
     ).toBe(false);
+  });
+});
+
+describe("resolveRuntimeModeAfterApprovalDecision", () => {
+  it("switches approval-required threads to full-access on acceptForSession", () => {
+    expect(resolveRuntimeModeAfterApprovalDecision("approval-required", "acceptForSession")).toBe(
+      "full-access",
+    );
+  });
+
+  it("does not change a thread already in full-access", () => {
+    expect(resolveRuntimeModeAfterApprovalDecision("full-access", "acceptForSession")).toBeNull();
+  });
+
+  it("leaves runtime mode untouched for one-off accept and decline decisions", () => {
+    expect(resolveRuntimeModeAfterApprovalDecision("approval-required", "accept")).toBeNull();
+    expect(resolveRuntimeModeAfterApprovalDecision("approval-required", "decline")).toBeNull();
   });
 });

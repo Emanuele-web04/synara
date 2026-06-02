@@ -12,7 +12,7 @@ const COMPOSER_COMPACT_MIN_LEFT_CONTROLS_WIDTH_PX = 208;
 // Broadcast when the resize overlay is added/removed so embedded surfaces (e.g.
 // BrowserPanel's native webview) can re-sync their bounds. Shared so the event
 // name has a single source of truth across the chat route and BrowserPanel.
-export const PANEL_RESIZE_OVERLAY_SYNC_EVENT = "dpcode:panel-resize-overlay-sync";
+export const PANEL_RESIZE_OVERLAY_SYNC_EVENT = "synara:panel-resize-overlay-sync";
 
 // Probe whether the composer can render at `nextWidth` without overflowing its
 // viewport or violating its minimum control width. Applies the width, measures,

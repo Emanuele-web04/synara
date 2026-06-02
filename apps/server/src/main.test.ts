@@ -67,7 +67,7 @@ const testLayer = Layer.mergeAll(
 const runCli = (
   args: ReadonlyArray<string>,
   env: Record<string, string> = {
-    T3CODE_HOME: "/tmp/t3-test-home",
+    SYNARA_HOME: "/tmp/synara-test-home",
     T3CODE_NO_BROWSER: "true",
   },
 ) => {
@@ -76,7 +76,7 @@ const runCli = (
       ConfigProvider.layer(
         ConfigProvider.fromEnv({
           env: {
-            T3CODE_HOME: "/tmp/t3-test-home",
+            SYNARA_HOME: "/tmp/synara-test-home",
             T3CODE_NO_BROWSER: "true",
             ...env,
           },
@@ -145,7 +145,7 @@ it.layer(testLayer)("server CLI command", (it) => {
         T3CODE_MODE: "desktop",
         T3CODE_PORT: "4999",
         T3CODE_HOST: "100.88.10.4",
-        T3CODE_HOME: "/tmp/t3-env-home",
+        SYNARA_HOME: "/tmp/synara-env-home",
         VITE_DEV_SERVER_URL: "http://localhost:5173",
         T3CODE_NO_BROWSER: "true",
         T3CODE_AUTH_TOKEN: "env-token",
@@ -155,8 +155,8 @@ it.layer(testLayer)("server CLI command", (it) => {
       assert.equal(resolvedConfig?.mode, "desktop");
       assert.equal(resolvedConfig?.port, 4999);
       assert.equal(resolvedConfig?.host, "100.88.10.4");
-      assert.equal(resolvedConfig?.baseDir, "/tmp/t3-env-home");
-      assert.equal(resolvedConfig?.stateDir, "/tmp/t3-env-home/dev");
+      assert.equal(resolvedConfig?.baseDir, "/tmp/synara-env-home");
+      assert.equal(resolvedConfig?.stateDir, "/tmp/synara-env-home/dev");
       assert.equal(resolvedConfig?.devUrl?.toString(), "http://localhost:5173/");
       assert.equal(resolvedConfig?.noBrowser, true);
       assert.equal(resolvedConfig?.authToken, "env-token");

@@ -1,6 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ApprovalRequestId, ThreadId } from "@t3tools/contracts";
@@ -162,6 +170,88 @@ function createPendingUserInputHarness() {
     .mockImplementation(() => {});
 
   return { manager, context, requireSession, writeMessage, emitEvent };
+}
+
+function createPendingApprovalHarness(
+  runtimeMode: "approval-required" | "full-access" = "approval-required",
+) {
+  const manager = new CodexAppServerManager();
+  const context = {
+    session: {
+      provider: "codex",
+      status: "ready",
+      threadId: "thread_1",
+      runtimeMode,
+      model: "gpt-5.3-codex",
+      activeTurnId: undefined as string | undefined,
+      resumeCursor: { threadId: "thread_1" },
+      createdAt: "2026-02-10T00:00:00.000Z",
+      updatedAt: "2026-02-10T00:00:00.000Z",
+    },
+    account: {
+      type: "unknown",
+      planType: null,
+      sparkEnabled: true,
+    },
+    pendingApprovals: new Map([
+      [
+        ApprovalRequestId.makeUnsafe("req-approval-1"),
+        {
+          requestId: ApprovalRequestId.makeUnsafe("req-approval-1"),
+          jsonRpcId: 42,
+          method: "item/commandExecution/requestApproval" as const,
+          requestKind: "command" as const,
+          threadId: asThreadId("thread_1"),
+        },
+      ],
+    ]),
+    pendingUserInputs: new Map(),
+    sessionApprovalOverride: undefined as
+      | undefined
+      | {
+          approvalPolicy: "never";
+          sandboxPolicy: { type: "dangerFullAccess" };
+        },
+    collabReceiverTurns: new Map(),
+    collabReceiverParents: new Map(),
+    reviewTurnIds: new Set<string>(),
+  };
+
+  const requireSession = vi
+    .spyOn(
+      manager as unknown as { requireSession: (sessionId: string) => unknown },
+      "requireSession",
+    )
+    .mockReturnValue(context);
+  const writeMessage = vi
+    .spyOn(manager as unknown as { writeMessage: (...args: unknown[]) => void }, "writeMessage")
+    .mockImplementation(() => {});
+  const emitEvent = vi
+    .spyOn(manager as unknown as { emitEvent: (...args: unknown[]) => void }, "emitEvent")
+    .mockImplementation(() => {});
+  const sendRequest = vi
+    .spyOn(
+      manager as unknown as { sendRequest: (...args: unknown[]) => Promise<unknown> },
+      "sendRequest",
+    )
+    .mockResolvedValue({
+      turn: {
+        id: "turn_1",
+      },
+    });
+  const updateSession = vi
+    .spyOn(manager as unknown as { updateSession: (...args: unknown[]) => void }, "updateSession")
+    .mockImplementation(() => {});
+
+  return {
+    manager,
+    context,
+    requireSession,
+    writeMessage,
+    emitEvent,
+    sendRequest,
+    updateSession,
+  };
 }
 
 function createCollabNotificationHarness() {
@@ -338,7 +428,7 @@ describe("buildCodexProcessEnv", () => {
   it("allows the configured desktop browser-use socket in the Codex sandbox", () => {
     const env = buildCodexProcessEnv({
       env: {
-        DPCODE_BROWSER_USE_PIPE_PATH: "/tmp/codex-browser-use/dpcode.sock",
+        SYNARA_BROWSER_USE_PIPE_PATH: "/tmp/codex-browser-use/synara.sock",
         NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS: "/tmp/existing.sock",
         DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0",
       },
@@ -346,7 +436,7 @@ describe("buildCodexProcessEnv", () => {
     });
 
     expect(env.NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS).toBe(
-      "/tmp/existing.sock,/tmp/codex-browser-use/dpcode.sock",
+      "/tmp/existing.sock,/tmp/codex-browser-use/synara.sock",
     );
   });
 
@@ -376,7 +466,7 @@ describe("buildCodexProcessEnv", () => {
       );
 
       const env = buildCodexProcessEnv({
-        env: { DPCODE_HOME: runtimeHome },
+        env: { SYNARA_HOME: runtimeHome },
         homePath: tempDir,
         platform: "darwin",
       });
@@ -389,6 +479,64 @@ describe("buildCodexProcessEnv", () => {
       expect(readFileSync(path.join(codexHome, "config.toml"), "utf8")).toContain(
         '[plugins."dpcode-browser@local"]\nenabled = false',
       );
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("repairs stale real files in Synara's Codex home overlay", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "t3-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "t3-runtime-home-"));
+    try {
+      const sourceMemoryPath = path.join(tempDir, "memories_1.sqlite");
+      writeFileSync(path.join(tempDir, "config.toml"), 'model = "gpt-5.5"', "utf8");
+      writeFileSync(sourceMemoryPath, "fresh-source-db", "utf8");
+
+      const overlayHome = path.join(runtimeHome, "codex-home-overlay");
+      const overlayMemoryPath = path.join(overlayHome, "memories_1.sqlite");
+      mkdirSync(overlayHome, { recursive: true });
+      writeFileSync(overlayMemoryPath, "stale-overlay-db", "utf8");
+
+      const env = buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome },
+        homePath: tempDir,
+        platform: "darwin",
+      });
+
+      expect(env.CODEX_HOME).toBe(overlayHome);
+      expect(lstatSync(overlayMemoryPath).isSymbolicLink()).toBe(true);
+      expect(readlinkSync(overlayMemoryPath)).toBe(sourceMemoryPath);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves real generated image directories in Synara's Codex home overlay", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "t3-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "t3-runtime-home-"));
+    try {
+      writeFileSync(path.join(tempDir, "config.toml"), 'model = "gpt-5.5"', "utf8");
+      const sourceGeneratedImagesDir = path.join(tempDir, "generated_images");
+      mkdirSync(sourceGeneratedImagesDir, { recursive: true });
+      writeFileSync(path.join(sourceGeneratedImagesDir, "source.png"), "source-image", "utf8");
+
+      const overlayHome = path.join(runtimeHome, "codex-home-overlay");
+      const overlayGeneratedImagesDir = path.join(overlayHome, "generated_images");
+      mkdirSync(overlayGeneratedImagesDir, { recursive: true });
+      const overlayImagePath = path.join(overlayGeneratedImagesDir, "overlay.png");
+      writeFileSync(overlayImagePath, "overlay-image", "utf8");
+
+      const env = buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome },
+        homePath: tempDir,
+        platform: "darwin",
+      });
+
+      expect(env.CODEX_HOME).toBe(overlayHome);
+      expect(lstatSync(overlayGeneratedImagesDir).isDirectory()).toBe(true);
+      expect(readFileSync(overlayImagePath, "utf8")).toBe("overlay-image");
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
       rmSync(runtimeHome, { recursive: true, force: true });
@@ -525,7 +673,7 @@ describe("startSession", () => {
   it("enables Codex experimental api capabilities during initialize", () => {
     expect(buildCodexInitializeParams()).toEqual({
       clientInfo: {
-        name: "t3code_desktop",
+        name: "synara_desktop",
         title: "Synara Desktop",
         version: "0.1.0",
       },
@@ -537,7 +685,7 @@ describe("startSession", () => {
 
   it("uses an isolated scratch workspace path when no cwd is provided", () => {
     const cwd = ensureIsolatedScratchWorkspace(asThreadId("thread-1"));
-    expect(cwd).toContain(`${path.sep}dpcode-codex-workspaces${path.sep}thread-1`);
+    expect(cwd).toContain(`${path.sep}synara-codex-workspaces${path.sep}thread-1`);
   });
 
   it("fails fast with an upgrade message when codex is below the minimum supported version", async () => {
@@ -1844,6 +1992,108 @@ describe("thread checkpoint control", () => {
 
     resolveRequest?.();
     await compactPromise;
+  });
+});
+
+describe("respondToRequest", () => {
+  it("keeps acceptForSession active for later Codex turns", async () => {
+    const { manager, context, requireSession, writeMessage, emitEvent, sendRequest } =
+      createPendingApprovalHarness();
+
+    await manager.respondToRequest(
+      asThreadId("thread_1"),
+      ApprovalRequestId.makeUnsafe("req-approval-1"),
+      "acceptForSession",
+    );
+
+    expect(requireSession).toHaveBeenCalledWith("thread_1");
+    expect(writeMessage).toHaveBeenCalledWith(context, {
+      id: 42,
+      result: {
+        decision: "acceptForSession",
+      },
+    });
+    expect(context.sessionApprovalOverride).toEqual(fullAccessTurnOverrides);
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "item/requestApproval/decision",
+        requestKind: "command",
+        payload: {
+          requestId: "req-approval-1",
+          requestKind: "command",
+          decision: "acceptForSession",
+        },
+      }),
+    );
+
+    await manager.sendTurn({
+      threadId: asThreadId("thread_1"),
+      input: "Continue without asking again",
+    });
+
+    expect(sendRequest).toHaveBeenLastCalledWith(context, "turn/start", {
+      threadId: "thread_1",
+      ...fullAccessTurnOverrides,
+      input: [
+        {
+          type: "text",
+          text: "Continue without asking again",
+          text_elements: [],
+        },
+      ],
+      model: "gpt-5.3-codex",
+    });
+  });
+
+  it("auto-resolves later approval requests during an always-allowed Codex session", async () => {
+    const { manager, context, writeMessage, emitEvent } = createPendingApprovalHarness();
+
+    await manager.respondToRequest(
+      asThreadId("thread_1"),
+      ApprovalRequestId.makeUnsafe("req-approval-1"),
+      "acceptForSession",
+    );
+    writeMessage.mockClear();
+    emitEvent.mockClear();
+
+    (
+      manager as unknown as {
+        handleServerRequest: (context: unknown, request: Record<string, unknown>) => void;
+      }
+    ).handleServerRequest(context, {
+      jsonrpc: "2.0",
+      id: 99,
+      method: "item/fileChange/requestApproval",
+      params: {
+        turnId: "turn_2",
+        itemId: "item_file_change",
+        path: "apps/web/src/components/chat/ComposerPendingApprovalActions.tsx",
+      },
+    });
+
+    expect(context.pendingApprovals.size).toBe(0);
+    expect(writeMessage).toHaveBeenCalledWith(context, {
+      id: 99,
+      result: {
+        decision: "acceptForSession",
+      },
+    });
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "notification",
+        method: "item/requestApproval/decision",
+        turnId: "turn_2",
+        itemId: "item_file_change",
+        requestKind: "file-change",
+        payload: expect.objectContaining({
+          requestKind: "file-change",
+          decision: "acceptForSession",
+        }),
+      }),
+    );
+    expect(
+      emitEvent.mock.calls.some(([event]) => (event as { kind?: string }).kind === "request"),
+    ).toBe(false);
   });
 });
 

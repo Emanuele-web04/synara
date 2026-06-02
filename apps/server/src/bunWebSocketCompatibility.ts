@@ -16,7 +16,7 @@ type CloseEventTarget = {
   removeEventListener: (type: string, listener: RawListener, options?: ListenerOptions) => void;
 };
 
-const PATCHED = Symbol.for("dpcode.bunWebSocketCloseEventPatched");
+const PATCHED = Symbol.for("synara.bunWebSocketCloseEventPatched");
 
 function isBunRuntime() {
   return typeof (globalThis as { Bun?: unknown }).Bun !== "undefined";

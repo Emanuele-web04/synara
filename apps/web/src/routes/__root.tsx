@@ -32,7 +32,6 @@ import { Button, dialogActionButtonClassName } from "../components/ui/button";
 import { AnchoredToastProvider, ToastProvider, toastManager } from "../components/ui/toast";
 import { useGitProgressToastPreview } from "../components/useGitProgressToastPreview";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
-import { isElectron } from "../env";
 import { useFeatureFlags } from "../featureFlags";
 import { useFocusedChatContext } from "../focusedChatContext";
 import { isTerminalFocused } from "../lib/terminalFocus";
@@ -241,6 +240,7 @@ function ProviderUpdateNotifications() {
         if (activeToastRef.current?.toastId === toastId) {
           activeToastRef.current = null;
         }
+        toastManager.close(toastId);
       };
 
       toastManager.update(toastId, {
@@ -380,6 +380,7 @@ function ProviderUpdateNotifications() {
       if (activeToastRef.current?.toastId === toastId) {
         activeToastRef.current = null;
       }
+      toastManager.close(toastId);
     };
     toastId = toastManager.add({
       type: "warning",
@@ -462,7 +463,6 @@ function GlobalShortcutsDialog() {
         terminalOpen,
         terminalWorkspaceOpen,
       }}
-      isElectron={isElectron}
     />
   );
 }

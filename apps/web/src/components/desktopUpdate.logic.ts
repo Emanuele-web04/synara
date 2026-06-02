@@ -20,10 +20,16 @@ export function resolveDesktopUpdateButtonAction(
     return "install";
   }
   if (state.status === "error") {
-    if (state.errorContext === "install" && state.downloadedVersion) {
+    if (
+      state.downloadedVersion &&
+      (state.errorContext === "install" || state.errorContext === null)
+    ) {
       return "install";
     }
-    if (state.errorContext === "download" && state.availableVersion) {
+    if (
+      state.availableVersion &&
+      (state.errorContext === "download" || state.errorContext === null)
+    ) {
       return "download";
     }
   }

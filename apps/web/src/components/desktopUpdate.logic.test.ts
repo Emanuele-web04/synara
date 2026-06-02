@@ -77,6 +77,31 @@ describe("desktop update button state", () => {
     expect(getDesktopUpdateButtonTooltip(state)).toContain("Click to retry");
   });
 
+  it("keeps update errors with known versions actionable even when context is missing", () => {
+    expect(
+      resolveDesktopUpdateButtonAction({
+        ...baseState,
+        status: "error",
+        availableVersion: "1.1.0",
+        downloadedVersion: "1.1.0",
+        message: "native updater failed",
+        errorContext: null,
+        canRetry: true,
+      }),
+    ).toBe("install");
+
+    expect(
+      resolveDesktopUpdateButtonAction({
+        ...baseState,
+        status: "error",
+        availableVersion: "1.1.0",
+        message: "native updater failed",
+        errorContext: null,
+        canRetry: true,
+      }),
+    ).toBe("download");
+  });
+
   it("hides the button for non-actionable check errors", () => {
     const state: DesktopUpdateState = {
       ...baseState,

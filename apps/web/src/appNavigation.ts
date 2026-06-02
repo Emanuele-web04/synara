@@ -80,6 +80,8 @@ export interface AppNavigationState {
 
 // Flushes TanStack's queued URL writes before asking native history to move.
 // This keeps rapid back/forward clicks aligned with the latest in-memory route.
+// Callers gate this on `canGoBack` so Back stays disabled (like Forward) when
+// there is no previous entry, rather than silently no-oping.
 export function goBackInAppHistory(history: RouterHistory = appHistory): void {
   history.flush();
   history.back();

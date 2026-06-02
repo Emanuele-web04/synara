@@ -9,15 +9,17 @@ function WorkspaceIndexRouteView() {
   const redirectedRef = useRef(false);
 
   useEffect(() => {
-    if (!workspaceId || redirectedRef.current) {
+    if (redirectedRef.current) {
       return;
     }
     redirectedRef.current = true;
-    void navigate({
-      to: "/workspace/$workspaceId",
-      params: { workspaceId },
-      replace: true,
-    });
+    // Always leave this index route: into the first workspace when one exists,
+    // otherwise home (so a direct load can never strand on a blank pane).
+    void navigate(
+      workspaceId
+        ? { to: "/workspace/$workspaceId", params: { workspaceId }, replace: true }
+        : { to: "/", replace: true },
+    );
   }, [navigate, workspaceId]);
 
   return null;

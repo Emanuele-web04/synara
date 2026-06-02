@@ -306,6 +306,8 @@ const PROJECT_CONTEXT_MENU_ARCHIVE_ICON = renderToStaticMarkup(<HiOutlineArchive
 const PROJECT_CONTEXT_MENU_DELETE_THREADS_ICON = renderToStaticMarkup(<Trash2 />);
 
 type DebugFeatureFlagsWindow = Window & {
+  synaraShowFeatureFlags?: () => void;
+  synaraHideFeatureFlags?: () => void;
   dpcodeShowFeatureFlags?: () => void;
   dpcodeHideFeatureFlags?: () => void;
 };
@@ -1199,6 +1201,8 @@ export default function Sidebar() {
       updateVisibility();
     };
 
+    debugWindow.synaraShowFeatureFlags = showFeatureFlags;
+    debugWindow.synaraHideFeatureFlags = hideFeatureFlags;
     debugWindow.dpcodeShowFeatureFlags = showFeatureFlags;
     debugWindow.dpcodeHideFeatureFlags = hideFeatureFlags;
     window.addEventListener("storage", updateVisibility);
@@ -1206,6 +1210,12 @@ export default function Sidebar() {
 
     return () => {
       window.removeEventListener("storage", updateVisibility);
+      if (debugWindow.synaraShowFeatureFlags === showFeatureFlags) {
+        delete debugWindow.synaraShowFeatureFlags;
+      }
+      if (debugWindow.synaraHideFeatureFlags === hideFeatureFlags) {
+        delete debugWindow.synaraHideFeatureFlags;
+      }
       if (debugWindow.dpcodeShowFeatureFlags === showFeatureFlags) {
         delete debugWindow.dpcodeShowFeatureFlags;
       }

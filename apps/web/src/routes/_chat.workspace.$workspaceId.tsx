@@ -13,14 +13,20 @@ function WorkspaceRouteView() {
   const fallbackWorkspaceId = useWorkspaceStore((state) => state.workspacePages[0]?.id ?? null);
 
   useEffect(() => {
-    if (workspace || !fallbackWorkspaceId) {
+    if (workspace) {
       return;
     }
-    void navigate({
-      to: "/workspace/$workspaceId",
-      params: { workspaceId: fallbackWorkspaceId },
-      replace: true,
-    });
+    // Unknown/stale workspace id: fall back to the first workspace, or home when
+    // none exist, instead of leaving a blank pane with no exit affordance.
+    void navigate(
+      fallbackWorkspaceId
+        ? {
+            to: "/workspace/$workspaceId",
+            params: { workspaceId: fallbackWorkspaceId },
+            replace: true,
+          }
+        : { to: "/", replace: true },
+    );
   }, [fallbackWorkspaceId, navigate, workspace]);
 
   if (!workspace) {

@@ -1,0 +1,552 @@
+model = "gpt-5.5"
+model_reasoning_effort = "xhigh"
+personality = "friendly"
+plan_mode_reasoning_effort = "high"
+approval_policy = "never"
+approvals_reviewer = "user"
+sandbox_mode = "danger-full-access"
+service_tier = "fast"
+
+# notify hook for Codex Computer Use removed 2026-05-22
+
+notify = ["/Users/emanueledipietro/.codex/computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient", "turn-ended"]
+
+[mcp_servers.notion]
+url = "https://mcp.notion.com/mcp"
+enabled = false
+
+[mcp_servers.playwright]
+command = "npx"
+args = ["@playwright/mcp@latest"]
+enabled = false
+
+[mcp_servers.openaiDeveloperDocs]
+url = "https://developers.openai.com/mcp"
+
+[mcp_servers.node_repl]
+args = []
+command = "/Applications/Codex.app/Contents/Resources/node_repl"
+startup_timeout_sec = 120
+
+[mcp_servers.node_repl.env]
+NODE_REPL_NATIVE_PIPE_CONNECT_TIMEOUT_MS = "1000"
+NODE_REPL_NODE_MODULE_DIRS = ""
+NODE_REPL_NODE_PATH = "/Applications/Codex.app/Contents/Resources/node"
+NODE_REPL_TRUSTED_CODE_PATHS = "/Users/emanueledipietro/.codex"
+CODEX_HOME = "/Users/emanueledipietro/.codex"
+NODE_REPL_TRUSTED_BROWSER_CLIENT_SHA256S = "0b0d41e7a14a4903d2f95b0b3f427ed796b12c8edca2fa392a03df43997075ae"
+BROWSER_USE_AVAILABLE_BACKENDS = "iab"
+NODE_REPL_INSTRUCTIONS_USE_CASE_BROWSER = "Control the in-app browser in conjunction with the Browser Plugin."
+BROWSER_USE_CODEX_APP_BUILD_FLAVOR = "prod"
+CODEX_CLI_PATH = "/Applications/Codex.app/Contents/Resources/codex"
+
+[projects."/Users/emanueledipietro/Developer/link-manager"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Developer/Testing/dpcode"]
+trust_level = "trusted"
+
+[projects."/"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Developer/Remodex"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Developer/phodex-website"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Developer/Testing/remotion-test/remodex"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Developer/Testing/t3code"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Developer/jarvis"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Developer/Testing"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Developer/Testing/openusage"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/tmp/superset"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Developer/Testing/t3code-fork"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Developer/solotype"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Developer/dpcode-website"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Developer/Testing/clap"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Developer/CodexMobile copy"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Developer/Testing/Rankapp"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Downloads"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-04-19-computer-use-plugin-computer-use-local"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-04-19-you-have-to-look-for-codex"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Developer/CodexMobile"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-04-19-computer-use-apri-whatsapp-e-scrivi"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-04-19-computer-use-apri-whatsapp-e-scrivi-2"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-04-19-computer-use-plugin-computer-use-local-2"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-04-19-computer-use-plugin-computer-use-local-3"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-04-19-notes-plugin-computer-use-local-open"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-04-21-files-mentioned-by-the-user-cleanshot"]
+trust_level = "trusted"
+
+[projects."/private/tmp/dpcode-codex-workspaces/f44ab0bb-834e-404a-824f-e8e7bf3654a8"]
+trust_level = "trusted"
+
+[projects."/private/tmp/dpcode-codex-workspaces/0ffc4bf2-4b8e-441b-ac98-930114ae1420"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-04-22-files-mentioned-by-the-user-cleanshot"]
+trust_level = "trusted"
+
+[projects."/private/tmp/dpcode-codex-workspaces/1b157c3b-fe49-49e2-a20d-e88649e97cff"]
+trust_level = "trusted"
+
+[projects."/private/tmp/dpcode-codex-workspaces/a763baa7-0620-40e6-9461-b10ddbef1071"]
+trust_level = "trusted"
+
+[projects."/private/tmp/dpcode-codex-workspaces/6ae3c9d7-4b71-40c1-99c4-7b05e9ce406c"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-04-22-computer-use-plugin-computer-use-local"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-04-22-computer-use-plugin-computer-use-local-2"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-04-22-kill-all-devs-electron-bun"]
+trust_level = "trusted"
+
+[projects."/private/var/folders/2w/k9_x4nl96nncp4v49vzdbt0m0000gn/T/dpcode-codex-workspaces/2a8084e3-e0bf-4b25-86a5-4c6c6b258fe1"]
+trust_level = "trusted"
+
+[projects."/private/tmp/dpcode-codex-workspaces/f5b04b87-0fb1-4462-b44d-88dd447f9a87"]
+trust_level = "trusted"
+
+[projects."/private/var/folders/2w/k9_x4nl96nncp4v49vzdbt0m0000gn/T/dpcode-codex-workspaces/b679311a-1faf-4d1a-af8d-2bae52386d73"]
+trust_level = "trusted"
+
+[projects."/private/tmp/dpcode-codex-workspaces/905c55c4-5dc4-470c-92ec-089c2e6c5634"]
+trust_level = "trusted"
+
+[projects."/private/var/folders/2w/k9_x4nl96nncp4v49vzdbt0m0000gn/T/dpcode-codex-workspaces/82cde9f6-3a7b-4fcd-96a2-9ac5be30f78e"]
+trust_level = "trusted"
+
+[projects."/private/tmp/dpcode-codex-workspaces/85dc97d4-2b42-4bc7-b515-198a997d16c3"]
+trust_level = "trusted"
+
+[projects."/private/var/folders/2w/k9_x4nl96nncp4v49vzdbt0m0000gn/T/dpcode-codex-workspaces/3f71a072-04b5-44ab-98fd-193dfa920383"]
+trust_level = "trusted"
+
+[projects."/private/var/folders/2w/k9_x4nl96nncp4v49vzdbt0m0000gn/T/dpcode-codex-workspaces/937a49f8-c022-4a94-b723-80bf466049ae"]
+trust_level = "trusted"
+
+[projects."/private/tmp/dpcode-codex-workspaces/b4dbeac2-4105-4145-9734-2a09fd968401"]
+trust_level = "trusted"
+
+[projects."/private/tmp/dpcode-codex-workspaces/32552c81-8788-4c52-b62f-26d976d082a3"]
+trust_level = "trusted"
+
+[projects."/private/tmp/dpcode-codex-workspaces/d16d9b8a-f3f2-44e1-93f4-687e05d93ba2"]
+trust_level = "trusted"
+
+[projects."/private/tmp/dpcode-codex-workspaces/648a3e79-847c-41bf-8dcb-c459e56e5bd8"]
+trust_level = "trusted"
+
+[projects."/private/tmp/dpcode-codex-workspaces/09e65288-b3b8-44f3-8861-03ae14523657"]
+trust_level = "trusted"
+
+[projects."/private/tmp/dpcode-codex-workspaces/dfc2360f-9fac-45b1-8e02-e0257704127b"]
+trust_level = "trusted"
+
+[projects."/private/tmp/dpcode-codex-workspaces/1a3fd01c-04f8-4c1f-8012-a64fc3dbeabe"]
+trust_level = "trusted"
+
+[projects."/private/tmp/dpcode-codex-workspaces/c9dd25e9-7bc1-42b5-bfcf-5275c23276fe"]
+trust_level = "trusted"
+
+[projects."/private/tmp/dpcode-codex-workspaces/96b2d8d9-6f39-4da4-b6ab-de8c642148c9"]
+trust_level = "trusted"
+
+[projects."/private/tmp/dpcode-codex-workspaces/e9a374b9-511d-4aea-a834-85f92c87438c"]
+trust_level = "trusted"
+
+[projects."/private/var/folders/2w/k9_x4nl96nncp4v49vzdbt0m0000gn/T/dpcode-codex-workspaces/85ecdc06-700c-4c32-9163-982d2b5d8e23"]
+trust_level = "trusted"
+
+[projects."/private/tmp/dpcode-codex-workspaces/45441110-853a-4b8e-972d-5c51eee56407"]
+trust_level = "trusted"
+
+[projects."/private/tmp/dpcode-codex-workspaces/30e25b10-d3e0-4f7a-85f7-203a86265d7a"]
+trust_level = "trusted"
+
+[projects."/private/tmp/dpcode-codex-workspaces/e788235e-349d-44d4-a528-0a27d5cca37b"]
+trust_level = "trusted"
+
+[projects."/private/tmp/dpcode-codex-workspaces/b4c56fd7-2560-4843-9cae-06e00b10e1bc"]
+trust_level = "trusted"
+
+[projects."/private/tmp/dpcode-codex-workspaces/2acc1652-3e4a-4289-b2d9-1ea1fd27521c"]
+trust_level = "trusted"
+
+[projects."/private/tmp/dpcode-codex-workspaces/e7952cc6-50f7-459b-8d22-260f3369247c"]
+trust_level = "trusted"
+
+[projects."/private/tmp/dpcode-codex-workspaces/6e96b8b3-cd45-4174-add8-0dd2773918e7"]
+trust_level = "trusted"
+
+[projects."/private/tmp/dpcode-codex-workspaces/c98c126f-c4b7-4f9f-b66f-0e9e5d82b985"]
+trust_level = "trusted"
+
+[projects."/private/tmp/dpcode-codex-workspaces/a469810a-321d-4eeb-902d-bcf30015d369"]
+trust_level = "trusted"
+
+[projects."/private/var/folders/2w/k9_x4nl96nncp4v49vzdbt0m0000gn/T/dpcode-codex-workspaces/f750a6d6-fe9a-46cd-9925-52fac07956d2"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Developer/revenuecat"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/tmp/litter"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Developer/dpcode-promo"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-04-30/what-have-i-been-doing-very"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-02/hatch-pet-users-emanueledipietro-codex-skills"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-03/hatch-pet-users-emanueledipietro-codex-skills"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-03/hatch-pet-users-emanueledipietro-codex-skills-2"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-03/hatch-pet-users-emanueledipietro-codex-skills-3"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-03/npx-codex-pets-add-sam-i"]
+trust_level = "trusted"
+
+[projects."/private/var/folders/2w/k9_x4nl96nncp4v49vzdbt0m0000gn/T/dpcode-codex-workspaces/79218635-b9c0-40ed-9de9-001806eb98fb"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-03/hatch-pet-users-emanueledipietro-codex-skills-4"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-03/hatch-pet-users-emanueledipietro-codex-skills-5"]
+trust_level = "trusted"
+
+[projects."/private/tmp/dpcode-codex-workspaces/683c21f9-675e-459b-a373-32bfac05e4bb"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-05/is-there-a-way-i-can"]
+trust_level = "trusted"
+
+[projects."/private/var/folders/2w/k9_x4nl96nncp4v49vzdbt0m0000gn/T/dpcode-codex-workspaces/1c87c86f-729a-4102-9a6b-126659fd1586"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Developer/Testing/rem-launch"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-10/files-mentioned-by-the-user-cleanshot"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-10/codex-worktrees-1026-remodex-4bf799fd-3"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-13/how-can-i-copy-ssh-key"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-13/read-this-and-give-me-an"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-13/https-x-com-claudedevs-status-2054610152817619388"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-13/can-you-remove-anything-regarded-raycast"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-15/files-mentioned-by-the-user-active"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-15/add-this-to-the-documents-claude"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-15/https-x-com-elonmusk-status-2055277918633562153"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-17/allora-nella-schermata-della-sidebar-voglio"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-18/files-mentioned-by-the-user-cleanshot"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-18/files-mentioned-by-the-user-cleanshot-2"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Developer/Testing/textual"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-19/mi-fai-un-cwd-di-dove"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-19/hi"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-20/files-mentioned-by-the-user-telegram"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-20/ssh-root-api-phodex-app-how"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-21/files-mentioned-by-the-user-cleanshot"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-24/look-through-my-recent-codex-sessions"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-25/hi-there"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-25/files-mentioned-by-the-user-rc"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-27/add-this-skill-skill-creator-users"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-27/builtwithcodex-users-emanueledipietro-codex-skills-builtwithcodex"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Developer/emanueledipietro"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-28/from-gmail-plugin-gmail-openai-curated"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-29/developer-newprofilepic-newprofilepic-21-21-51"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-05-30/files-mentioned-by-the-user-pasted"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-06-01/allora-devi-controllare-un-attimo-tutte"]
+trust_level = "trusted"
+
+[projects."/Users/emanueledipietro/Documents/Codex/2026-06-02/i-d-like-to-create-an"]
+trust_level = "trusted"
+
+[[skills.config]]
+path = "/Users/emanueledipietro/.codex/skills/stripe-integration/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/Users/emanueledipietro/.codex/skills/.system/skill-installer/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/Users/emanueledipietro/.codex/skills/content-research-writer/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/Users/emanueledipietro/.codex/skills/md-recap/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/Users/emanueledipietro/.codex/skills/.system/slides/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/Users/emanueledipietro/.codex/skills/.system/spreadsheets/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/Users/emanueledipietro/.codex/skills/frontend-design/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "/Users/emanueledipietro/.codex/skills/pdf/SKILL.md"
+enabled = false
+
+[features]
+multi_agent = true
+js_repl = false
+goals = true
+
+[plugins."github@openai-curated"]
+enabled = true
+
+[plugins."build-ios-apps@openai-curated"]
+enabled = true
+
+[tui]
+theme = "dark-neon"
+
+[tui.model_availability_nux]
+"gpt-5.5" = 4
+
+[notice]
+hide_rate_limit_model_nudge = true
+fast_default_opt_out = true
+
+[notice.model_migrations]
+"gpt-5.3-codex" = "gpt-5.4"
+
+[apps.connector_68df038e0ba48191908c8434991bbac2]
+enabled = false
+
+[marketplaces.openai-bundled]
+last_updated = "2026-06-01T18:13:12Z"
+source_type = "local"
+source = "/Users/emanueledipietro/.codex/.tmp/bundled-marketplaces/openai-bundled"
+
+[marketplaces.openai-primary-runtime]
+last_updated = "2026-06-01T18:14:31Z"
+source_type = "local"
+source = "/Users/emanueledipietro/.cache/codex-runtimes/codex-primary-runtime/plugins/openai-primary-runtime"
+
+[marketplaces.openai-bundled-beta]
+last_updated = "2026-05-15T17:26:54Z"
+source_type = "local"
+source = "/Users/emanueledipietro/.codex/.tmp/bundled-marketplaces/openai-bundled-beta"
+
+[hooks.state]
+
+[hooks.state."/Users/emanueledipietro/.codex/hooks.json:session_start:0:0"]
+enabled = false
+trusted_hash = "sha256:932b4fc26567655263e482b0d90e97617ee1c6af1cf90c42eb12d11f6bf44816"
+
+[hooks.state."/Users/emanueledipietro/.codex/hooks.json:stop:0:0"]
+enabled = false
+trusted_hash = "sha256:c796105af15864dd79f19251f0832920cadbfab837a3d8f80202ed4bfb883c5b"
+
+[hooks.state."/Users/emanueledipietro/.codex/hooks.json:user_prompt_submit:0:0"]
+enabled = false
+trusted_hash = "sha256:7ba89c11231ce0c6523c3d0d1ff7ed54d1f7477e903bfafcc9eda2ce84956e4c"
+
+[desktop]
+appearanceTheme = "system"
+appearanceLightCodeThemeId = "absolutely"
+appearanceDarkCodeThemeId = "vercel"
+sansFontSize = 13
+codeFontSize = 13
+useFontSmoothing = true
+usePointerCursors = false
+reduced-motion-preference = "system"
+followUpQueueMode = "queue"
+reviewDelivery = "detached"
+preventSleepWhileRunning = true
+keepRemoteControlAwakeWhilePluggedIn = true
+git-create-pull-request-as-draft = true
+git-show-sidebar-pr-icons = true
+notifications-turn-mode = "always"
+selected-avatar-id = "custom:icarus"
+conversationDetailMode = "STEPS_COMMANDS"
+appearanceDiffMarkerStyle = "color"
+default-service-tier = "priority"
+
+[desktop.appearanceLightChromeTheme]
+accent = "#cc7d5e"
+contrast = 30
+ink = "#2d2d2b"
+opaqueWindows = false
+surface = "#f9f9f7"
+
+[desktop.appearanceLightChromeTheme.fonts]
+code = "JetBrains Mono"
+ui = "Geist, Inter"
+
+[desktop.appearanceLightChromeTheme.semanticColors]
+diffAdded = "#00c853"
+diffRemoved = "#ff5f38"
+skill = "#cc7d5e"
+
+[desktop.appearanceDarkChromeTheme]
+accent = "#006efe"
+contrast = 50
+ink = "#ededed"
+opaqueWindows = true
+surface = "#000000"
+
+[desktop.appearanceDarkChromeTheme.fonts]
+code = "JetBrains Mono"
+ui = "Geist, Inter"
+
+[desktop.appearanceDarkChromeTheme.semanticColors]
+diffAdded = "#00ad3a"
+diffRemoved = "#f13342"
+skill = "#9540d5"
+
+[desktop.open-in-target-preferences]
+global = "vscode"
+
+[desktop.open-in-target-preferences.perPath]
+"/Users/emanueledipietro/Developer/CodexMobile" = "vscode"
+"/Users/emanueledipietro/Developer/link-manager" = "cursor"
+
+[plugins."remotion@openai-curated"]
+enabled = true
+
+[plugins."documents@openai-primary-runtime"]
+enabled = true
+
+[plugins."spreadsheets@openai-primary-runtime"]
+enabled = true
+
+[plugins."presentations@openai-primary-runtime"]
+enabled = true
+
+[plugins."codex-security@openai-curated"]
+enabled = true
+
+[plugins."browser-use@openai-bundled-beta"]
+enabled = true
+
+[plugins."figma@openai-curated"]
+enabled = true
+
+[plugins."gmail@openai-curated"]
+enabled = true
+
+[plugins."browser@openai-bundled"]
+enabled = true
+
+[plugins."dpcode-browser@local"]
+enabled = false

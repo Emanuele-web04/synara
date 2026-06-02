@@ -85,7 +85,7 @@ export function resolveCodexGeneratedImagesRoot(homePath?: string): string {
 /**
  * All generated-images directories the local-image route should treat as
  * legitimate. Includes both the source `~/.codex/generated_images` and the
- * overlay `<DPCODE_HOME>/codex-home-overlay/generated_images` so we serve
+ * overlay `<SYNARA_HOME>/codex-home-overlay/generated_images` so we serve
  * images regardless of which home Codex wrote them under.
  */
 export function resolveCodexGeneratedImagesRoots(homePath?: string): readonly string[] {

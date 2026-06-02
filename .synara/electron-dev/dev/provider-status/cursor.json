@@ -1,0 +1,18 @@
+{
+  "provider": "cursor",
+  "status": "ready",
+  "available": true,
+  "authStatus": "unknown",
+  "version": "2026.06.02-8c11d9f",
+  "checkedAt": "2026-06-02T17:22:02.620Z",
+  "message": "Cursor Agent CLI is installed. Sign in with Cursor if a session prompts for authentication.",
+  "versionAdvisory": {
+    "status": "unknown",
+    "currentVersion": "2026.06.02-8c11d9f",
+    "latestVersion": null,
+    "updateCommand": "cursor-agent update",
+    "canUpdate": true,
+    "checkedAt": "2026-06-02T17:22:08.527Z",
+    "message": null
+  }
+}

@@ -90,9 +90,13 @@ describe("providerMaintenance", () => {
       args: ["upgrade", "--method", "pnpm"],
       lockKey: "opencode-native",
     });
+    assert.deepStrictEqual(capabilities.latestVersionSource, {
+      kind: "npm",
+      name: "opencode-ai",
+    });
   });
 
-  it("uses Homebrew directly for tapped OpenCode installs", () => {
+  it("uses Homebrew updates but keeps npm latest metadata for tapped OpenCode installs", () => {
     const capabilities = resolvePackageManagedProviderMaintenance(OPENCODE_DEFINITION, {
       binaryPath: "opencode",
       realCommandPath: "/opt/homebrew/Cellar/opencode/1.14.46/bin/opencode",

@@ -1,0 +1,19 @@
+{
+  "provider": "claudeAgent",
+  "status": "ready",
+  "available": true,
+  "authStatus": "authenticated",
+  "version": "2.1.160",
+  "authType": "pro",
+  "authLabel": "Claude Pro Subscription",
+  "checkedAt": "2026-06-02T17:22:02.619Z",
+  "versionAdvisory": {
+    "status": "current",
+    "currentVersion": "2.1.160",
+    "latestVersion": "2.1.160",
+    "updateCommand": "claude update",
+    "canUpdate": true,
+    "checkedAt": "2026-06-02T17:22:09.007Z",
+    "message": null
+  }
+}

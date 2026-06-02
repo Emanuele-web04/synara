@@ -262,7 +262,7 @@ describe("store pure functions", () => {
       makeState(initialThread),
       makeReadModel(
         makeReadModelThread({
-          branch: "dpcode/abc123ef",
+          branch: "synara/abc123ef",
           updatedAt: "2026-02-27T00:05:00.000Z",
         }),
       ),
@@ -279,7 +279,7 @@ describe("store pure functions", () => {
     );
 
     const next = setThreadWorkspace(state, ThreadId.makeUnsafe("thread-1"), {
-      branch: "dpcode/abc123ef",
+      branch: "synara/abc123ef",
     });
 
     expect(next.threads[0]?.branch).toBe("feature/semantic-branch");
@@ -2895,7 +2895,7 @@ describe("store read model sync", () => {
       freshStore.useStore.getState().renameProjectLocally(projectId, "dpcode");
 
       expect(setItem).toHaveBeenCalled();
-      expect(JSON.parse(storage.get("dpcode:renderer-state:v8") ?? "{}")).toMatchObject({
+      expect(JSON.parse(storage.get("synara:renderer-state:v8") ?? "{}")).toMatchObject({
         projectNamesByCwd: {
           "/tmp/project": "dpcode",
         },

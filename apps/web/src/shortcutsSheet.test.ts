@@ -40,7 +40,6 @@ describe("buildShortcutSheetSections", () => {
         terminalOpen: false,
         terminalWorkspaceOpen: false,
       },
-      isElectron: true,
     });
 
     expect(sections[0]?.entries.some((entry) => entry.id === "shortcuts.show")).toBe(true);
@@ -63,7 +62,6 @@ describe("buildShortcutSheetSections", () => {
         terminalOpen: true,
         terminalWorkspaceOpen: true,
       },
-      isElectron: false,
     });
 
     expect(
@@ -101,7 +99,6 @@ describe("buildShortcutSheetSections", () => {
         terminalOpen: false,
         terminalWorkspaceOpen: false,
       },
-      isElectron: false,
     });
 
     expect(
@@ -109,5 +106,32 @@ describe("buildShortcutSheetSections", () => {
         (entry) => entry.label === "New chat" && entry.shortcutLabel === "⌥⌘N",
       ),
     ).toBe(true);
+  });
+
+  it("lists the sidebar toggle regardless of platform", () => {
+    const sections = buildShortcutSheetSections({
+      keybindings: [
+        {
+          command: "sidebar.toggle",
+          shortcut: {
+            key: "b",
+            modKey: true,
+            metaKey: false,
+            ctrlKey: false,
+            shiftKey: false,
+            altKey: false,
+          },
+        },
+      ],
+      projectScripts: [],
+      platform: "Linux",
+      context: {
+        terminalFocus: false,
+        terminalOpen: false,
+        terminalWorkspaceOpen: false,
+      },
+    });
+
+    expect(sections[0]?.entries.some((entry) => entry.id === "sidebar.toggle")).toBe(true);
   });
 });

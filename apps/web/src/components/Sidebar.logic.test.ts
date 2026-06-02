@@ -273,8 +273,14 @@ describe("add-project error helpers", () => {
     ).toContain("already linked to an existing project");
   });
 
+  it("explains root-absolute add-project paths that probably missed the home directory", () => {
+    expect(
+      describeAddProjectError("Failed to create project directory: /Developer/Testing/t3code"),
+    ).toContain("/Users/<name>/Developer");
+  });
+
   it("returns no explanation for unrelated add-project errors", () => {
-    expect(describeAddProjectError("Project directory does not exist: C:\\Labs\\influenzo")).toBe(
+    expect(describeAddProjectError("Project path is not a directory: C:\\Labs\\influenzo")).toBe(
       null,
     );
   });

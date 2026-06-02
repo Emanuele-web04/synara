@@ -44,11 +44,6 @@ const ProductionMacIconSource = Effect.zipWith(
   Effect.service(Path.Path),
   (repoRoot, path) => path.join(repoRoot, BRAND_ASSET_PATHS.productionMacIconPng),
 );
-const ProductionMacLegacyIconSource = Effect.zipWith(
-  RepoRoot,
-  Effect.service(Path.Path),
-  (repoRoot, path) => path.join(repoRoot, BRAND_ASSET_PATHS.productionMacLegacyIconPng),
-);
 const ProductionLinuxIconSource = Effect.zipWith(
   RepoRoot,
   Effect.service(Path.Path),
@@ -359,12 +354,6 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
         message: `Production macOS icon source is missing at ${modernIconSource}`,
       });
     }
-    const legacyIconSource = yield* ProductionMacLegacyIconSource;
-    if (!(yield* fs.exists(legacyIconSource))) {
-      return yield* new BuildScriptError({
-        message: `Production legacy macOS icon source is missing at ${legacyIconSource}`,
-      });
-    }
     const composerIconSource = yield* ProductionMacIconComposerSource;
     const hasComposerIcon = yield* fs.exists(composerIconSource);
 
@@ -382,7 +371,7 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
       })`sips -z 512 512 ${modernIconSource} --out ${iconPngPath}`,
     );
 
-    yield* generateMacIconSet(legacyIconSource, iconIcnsPath, tmpRoot, path, verbose);
+    yield* generateMacIconSet(modernIconSource, iconIcnsPath, tmpRoot, path, verbose);
 
     if (hasComposerIcon) {
       // Replace any repo-local placeholder so the staged build always reflects the authored Icon Composer asset.

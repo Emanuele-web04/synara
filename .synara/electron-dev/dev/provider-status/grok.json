@@ -1,0 +1,18 @@
+{
+  "provider": "grok",
+  "status": "ready",
+  "available": true,
+  "authStatus": "unknown",
+  "version": "0.2.11",
+  "checkedAt": "2026-06-02T17:22:02.621Z",
+  "message": "Grok CLI is installed. Run `grok` to authenticate locally, or set XAI_API_KEY before starting a session.",
+  "versionAdvisory": {
+    "status": "unknown",
+    "currentVersion": "0.2.11",
+    "latestVersion": null,
+    "updateCommand": null,
+    "canUpdate": false,
+    "checkedAt": "2026-06-02T17:22:08.527Z",
+    "message": null
+  }
+}

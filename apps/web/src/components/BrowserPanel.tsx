@@ -68,10 +68,10 @@ interface BrowserPanelProps {
 
 const BROWSER_BOUNDS_SYNC_BURST_FRAMES = 30;
 const BROWSER_BOUNDS_SYNC_STABLE_FRAME_TARGET = 2;
-const BROWSER_WEBVIEW_PARTITION = "persist:dpcode-browser";
+const BROWSER_WEBVIEW_PARTITION = "persist:synara-browser";
 const BROWSER_BLANK_URL = "about:blank";
 const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
-const DPCODE_BROWSER_LABEL = "Synara browser";
+const SYNARA_BROWSER_LABEL = "Synara browser";
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
 const NATIVE_BROWSER_OBSCURING_OVERLAY_SELECTOR = [
   "[data-slot='dialog-backdrop']",
@@ -293,6 +293,7 @@ function isBrowserPerfLoggingEnabled(): boolean {
 
   try {
     return (
+      window.localStorage.getItem("synara:browser-perf") === "1" ||
       window.localStorage.getItem("dpcode:browser-perf") === "1" ||
       window.localStorage.getItem("t3code:browser-perf") === "1"
     );
@@ -604,7 +605,7 @@ export function BrowserPanel({
     }
 
     const intervalId = window.setInterval(() => {
-      console.info(`[${DPCODE_BROWSER_LABEL} panel perf]`, {
+      console.info(`[${SYNARA_BROWSER_LABEL} panel perf]`, {
         threadId,
         ...perfCountersRef.current,
       });

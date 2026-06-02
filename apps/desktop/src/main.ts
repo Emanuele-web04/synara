@@ -76,7 +76,8 @@ import { BROWSER_IPC_CHANNELS, registerBrowserIpcHandlers, sendBrowserState } fr
 import {
   BrowserUsePipeServer,
   DPCODE_BROWSER_USE_PIPE_ENV,
-  DPCODE_BROWSER_USE_PIPE_PATH,
+  SYNARA_BROWSER_USE_PIPE_ENV,
+  SYNARA_BROWSER_USE_PIPE_PATH,
   T3CODE_BROWSER_USE_PIPE_ENV,
 } from "./browserUsePipeServer";
 import {
@@ -109,9 +110,10 @@ const UPDATE_INSTALL_CHANNEL = "desktop:update-install";
 const NOTIFICATIONS_IS_SUPPORTED_CHANNEL = "desktop:notifications-is-supported";
 const NOTIFICATIONS_SHOW_CHANNEL = "desktop:notifications-show";
 const BASE_DIR =
+  process.env.SYNARA_HOME?.trim() ||
   process.env.DPCODE_HOME?.trim() ||
   process.env.T3CODE_HOME?.trim() ||
-  Path.join(OS.homedir(), ".dpcode");
+  Path.join(OS.homedir(), ".synara");
 const STATE_DIR = Path.join(BASE_DIR, "userdata");
 const DESKTOP_SCHEME = "t3";
 const ROOT_DIR = Path.resolve(__dirname, "../../..");
@@ -138,9 +140,11 @@ const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
 const DESKTOP_MENU_ZOOM_FACTOR_STEP = 1.1;
 const DESKTOP_MENU_MIN_ZOOM_FACTOR = 0.25;
 const DESKTOP_MENU_MAX_ZOOM_FACTOR = 5;
-const DPCODE_BROWSER_LABEL = "Synara browser";
+const SYNARA_BROWSER_LABEL = "Synara browser";
 const browserPerfLoggingEnabled =
-  process.env.DPCODE_BROWSER_PERF === "1" || process.env.T3CODE_BROWSER_PERF === "1";
+  process.env.SYNARA_BROWSER_PERF === "1" ||
+  process.env.DPCODE_BROWSER_PERF === "1" ||
+  process.env.T3CODE_BROWSER_PERF === "1";
 
 type DesktopUpdateErrorContext = DesktopUpdateState["errorContext"];
 
@@ -195,7 +199,7 @@ function startBrowserPerformanceLogging(): void {
         name: metric.name,
       }));
 
-    console.info(`[${DPCODE_BROWSER_LABEL} perf]`, {
+    console.info(`[${SYNARA_BROWSER_LABEL} perf]`, {
       ...snapshot.counters,
       trackedProcessIds: snapshot.trackedProcessIds,
       processes: processMetrics,
@@ -350,6 +354,7 @@ async function reserveBackendEndpoint(reason: string): Promise<void> {
   );
   backendHttpUrl = `http://127.0.0.1:${backendPort}`;
   backendWsUrl = `ws://127.0.0.1:${backendPort}/?token=${encodeURIComponent(backendAuthToken)}`;
+  process.env.SYNARA_DESKTOP_WS_URL = backendWsUrl;
   process.env.DPCODE_DESKTOP_WS_URL = backendWsUrl;
   process.env.T3CODE_DESKTOP_WS_URL = backendWsUrl;
   writeDesktopLogHeader(`${reason} resolved backend endpoint port=${backendPort}`);
@@ -526,9 +531,19 @@ let updateBackgroundBlurTimer: ReturnType<typeof setTimeout> | null = null;
 let updateCheckTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
 
 function resolveUpdaterErrorContext(): DesktopUpdateErrorContext {
+  if (isUpdaterInstallPreparing || isUpdaterQuitAndInstallInFlight) return "install";
   if (updateDownloadInFlight) return "download";
   if (updateCheckInFlight) return "check";
   return updateState.errorContext;
+}
+
+function clearUpdaterInstallInFlightAfterError(): void {
+  if (!isUpdaterInstallPreparing && !isUpdaterQuitAndInstallInFlight) {
+    return;
+  }
+  isUpdaterInstallPreparing = false;
+  isUpdaterQuitAndInstallInFlight = false;
+  isQuitting = false;
 }
 
 protocol.registerSchemesAsPrivileged([
@@ -1106,6 +1121,31 @@ function configureAppIdentity(): void {
   }
 }
 
+// macOS 26 (Darwin 25+, "Tahoe") masks the full-bleed bundle icon into a clean squircle
+// on its own, so we leave it completely untouched there. Older macOS does NOT round app
+// icons, so the same square bundle icon would look square in the dock. Only on those
+// older versions do we override the dock tile with a pre-rounded literal image (drawn
+// as-is, no system styling). Baking transparent rounded corners into the bundle icon is
+// not an option because that transparency is exactly what triggers Tahoe's Liquid Glass.
+function applyLegacyMacDockIcon(): void {
+  if (process.platform !== "darwin" || !app.dock) {
+    return;
+  }
+  const darwinMajor = Number.parseInt(OS.release().split(".")[0] ?? "", 10);
+  if (!Number.isFinite(darwinMajor) || darwinMajor >= 25) {
+    return;
+  }
+  const iconPath = resolveResourcePath("dock-icon.png");
+  if (!iconPath) {
+    return;
+  }
+  const image = nativeImage.createFromPath(iconPath);
+  if (image.isEmpty()) {
+    return;
+  }
+  app.dock.setIcon(image);
+}
+
 function clearUpdatePollTimer(): void {
   if (updateStartupTimer) {
     clearTimeout(updateStartupTimer);
@@ -1385,13 +1425,15 @@ function configureAutoUpdater(): void {
   autoUpdater.on("error", (error) => {
     clearUpdateCheckTimeoutTimer();
     const message = formatErrorMessage(error);
+    const errorContext = resolveUpdaterErrorContext();
+    clearUpdaterInstallInFlightAfterError();
     if (!updateCheckInFlight && !updateDownloadInFlight) {
       setUpdateState({
         status: "error",
         message,
         checkedAt: new Date().toISOString(),
         downloadPercent: null,
-        errorContext: resolveUpdaterErrorContext(),
+        errorContext,
         canRetry: updateState.availableVersion !== null || updateState.downloadedVersion !== null,
       });
     }
@@ -1437,13 +1479,15 @@ function backendEnv(): NodeJS.ProcessEnv {
     DPCODE_PORT: String(backendPort),
     DPCODE_HOME: BASE_DIR,
     DPCODE_AUTH_TOKEN: backendAuthToken,
-    [DPCODE_BROWSER_USE_PIPE_ENV]: DPCODE_BROWSER_USE_PIPE_PATH,
+    [DPCODE_BROWSER_USE_PIPE_ENV]: SYNARA_BROWSER_USE_PIPE_PATH,
+    [SYNARA_BROWSER_USE_PIPE_ENV]: SYNARA_BROWSER_USE_PIPE_PATH,
     T3CODE_MODE: "desktop",
     T3CODE_NO_BROWSER: "1",
     T3CODE_PORT: String(backendPort),
     T3CODE_HOME: BASE_DIR,
     T3CODE_AUTH_TOKEN: backendAuthToken,
-    [T3CODE_BROWSER_USE_PIPE_ENV]: DPCODE_BROWSER_USE_PIPE_PATH,
+    SYNARA_HOME: BASE_DIR,
+    [T3CODE_BROWSER_USE_PIPE_ENV]: SYNARA_BROWSER_USE_PIPE_PATH,
   };
 }
 
@@ -2163,6 +2207,7 @@ if (hasSingleInstanceLock) {
     .then(() => {
       writeDesktopLogHeader("app ready");
       configureAppIdentity();
+      applyLegacyMacDockIcon();
       configureMediaPermissions();
       configureApplicationMenu();
       registerDesktopProtocol();

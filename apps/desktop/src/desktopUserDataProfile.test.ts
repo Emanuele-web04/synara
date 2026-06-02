@@ -37,7 +37,7 @@ describe("desktopUserDataProfile", () => {
     ).toBe("/tmp/xdg");
   });
 
-  it("seeds local persistent renderer data into the new DP profile once", () => {
+  it("seeds local persistent renderer data into the new Synara profile once", () => {
     const tempDir = FS.mkdtempSync(Path.join(OS.tmpdir(), "synara-userdata-profile-"));
     try {
       const legacyPath = Path.join(tempDir, "t3code-dev");

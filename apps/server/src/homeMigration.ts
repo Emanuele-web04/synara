@@ -1,17 +1,18 @@
 /**
  * FILE: homeMigration.ts
- * Purpose: Imports legacy ~/.t3 state into the new ~/.dpcode home on first startup.
+ * Purpose: Imports legacy ~/.dpcode or ~/.t3 state into the new ~/.synara home on first startup.
  * Layer: Startup utility
  * Depends on: config path derivation, Effect filesystem/path services, and sqlite snapshots
  */
 import { Data, Effect, FileSystem, Path } from "effect";
 
-import { deriveServerPaths } from "./config";
+import { deriveServerPaths, type ServerDerivedPaths } from "./config";
 
-export const DPCODE_HOME_DIRNAME = ".dpcode";
+export const SYNARA_HOME_DIRNAME = ".synara";
+export const LEGACY_DPCODE_HOME_DIRNAME = ".dpcode";
 export const LEGACY_T3_HOME_DIRNAME = ".t3";
 const MIGRATIONS_DIRNAME = "migrations";
-const LEGACY_IMPORT_MARKER_BASENAME = "import-from-t3-v1.json";
+const LEGACY_IMPORT_MARKER_BASENAME = "import-from-legacy-home-v2.json";
 
 export class HomeMigrationError extends Data.TaggedError("HomeMigrationError")<{
   readonly message: string;
@@ -53,6 +54,14 @@ interface MigrationMarker {
 }
 
 const IMPORTABLE_ARTIFACTS = ["database", "keybindings", "attachments", "anonymousId"] as const;
+const LEGACY_HOME_DIRNAMES = [LEGACY_DPCODE_HOME_DIRNAME, LEGACY_T3_HOME_DIRNAME] as const;
+type ImportableArtifact = (typeof IMPORTABLE_ARTIFACTS)[number];
+type LegacyHomeSnapshot = {
+  readonly dirname: (typeof LEGACY_HOME_DIRNAMES)[number];
+  readonly baseDir: string;
+  readonly paths: ServerDerivedPaths;
+  readonly artifacts: Record<ImportableArtifact, boolean>;
+};
 
 interface SnapshotSqliteDatabase {
   readonly exec: (sql: string) => unknown;
@@ -202,7 +211,7 @@ const cleanUpStagingDir = (stagingBaseDir: string) =>
 export const migrateLegacyHomeIfNeeded = Effect.fn(function* (input: LegacyHomeMigrationInput) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const canonicalTargetBaseDir = path.resolve(path.join(input.homeDir, DPCODE_HOME_DIRNAME));
+  const canonicalTargetBaseDir = path.resolve(path.join(input.homeDir, SYNARA_HOME_DIRNAME));
   if (path.resolve(input.baseDir) !== canonicalTargetBaseDir) {
     return {
       status: "skipped",
@@ -211,22 +220,7 @@ export const migrateLegacyHomeIfNeeded = Effect.fn(function* (input: LegacyHomeM
     };
   }
 
-  const legacyBaseDir = path.resolve(path.join(input.homeDir, LEGACY_T3_HOME_DIRNAME));
-  if (!(yield* fs.exists(legacyBaseDir))) {
-    return {
-      status: "skipped",
-      reason: "legacy-home-missing",
-      importedArtifacts: [],
-    };
-  }
-
-  const [sourcePaths, targetPaths] = yield* Effect.all(
-    [
-      deriveServerPaths(legacyBaseDir, input.devUrl),
-      deriveServerPaths(canonicalTargetBaseDir, input.devUrl),
-    ],
-    { concurrency: "unbounded" },
-  );
+  const targetPaths = yield* deriveServerPaths(canonicalTargetBaseDir, input.devUrl);
   const markerPath = yield* getLegacyImportMarkerPath(targetPaths.stateDir);
   const marker: MigrationMarker | undefined = yield* readMigrationMarker(markerPath);
   if (marker?.status === "completed") {
@@ -237,14 +231,53 @@ export const migrateLegacyHomeIfNeeded = Effect.fn(function* (input: LegacyHomeM
     };
   }
 
-  const sourceArtifacts = {
-    database: yield* fs.exists(sourcePaths.dbPath),
-    keybindings: yield* fs.exists(sourcePaths.keybindingsConfigPath),
-    attachments: yield* directoryHasEntries(sourcePaths.attachmentsDir),
-    anonymousId: yield* fs.exists(sourcePaths.anonymousIdPath),
-  } satisfies Record<(typeof IMPORTABLE_ARTIFACTS)[number], boolean>;
+  const legacyHomes: LegacyHomeSnapshot[] = [];
+  let sawLegacyHome = false;
 
-  const importedArtifacts = IMPORTABLE_ARTIFACTS.filter((artifact) => sourceArtifacts[artifact]);
+  for (const dirname of LEGACY_HOME_DIRNAMES) {
+    const legacyBaseDir = path.resolve(path.join(input.homeDir, dirname));
+    if (!(yield* fs.exists(legacyBaseDir))) {
+      continue;
+    }
+    sawLegacyHome = true;
+    const sourcePaths = yield* deriveServerPaths(legacyBaseDir, input.devUrl);
+    const sourceArtifacts = {
+      database: yield* fs.exists(sourcePaths.dbPath),
+      keybindings: yield* fs.exists(sourcePaths.keybindingsConfigPath),
+      attachments: yield* directoryHasEntries(sourcePaths.attachmentsDir),
+      anonymousId: yield* fs.exists(sourcePaths.anonymousIdPath),
+    } satisfies Record<ImportableArtifact, boolean>;
+    if (IMPORTABLE_ARTIFACTS.some((artifact) => sourceArtifacts[artifact])) {
+      legacyHomes.push({
+        dirname,
+        baseDir: legacyBaseDir,
+        paths: sourcePaths,
+        artifacts: sourceArtifacts,
+      });
+    }
+  }
+
+  if (legacyHomes.length === 0) {
+    return {
+      status: "skipped",
+      reason: sawLegacyHome ? "legacy-state-missing" : "legacy-home-missing",
+      importedArtifacts: [],
+    };
+  }
+
+  // Resolve each artifact independently so a partial ~/.dpcode home does not
+  // block importing older but still valuable ~/.t3 state.
+  const sourceByArtifact = new Map<ImportableArtifact, LegacyHomeSnapshot>();
+  for (const artifact of IMPORTABLE_ARTIFACTS) {
+    const source = legacyHomes.find((legacyHome) => legacyHome.artifacts[artifact]);
+    if (source) {
+      sourceByArtifact.set(artifact, source);
+    }
+  }
+
+  const importedArtifacts = IMPORTABLE_ARTIFACTS.filter((artifact) =>
+    sourceByArtifact.has(artifact),
+  );
   if (importedArtifacts.length === 0) {
     return {
       status: "skipped",
@@ -258,7 +291,7 @@ export const migrateLegacyHomeIfNeeded = Effect.fn(function* (input: LegacyHomeM
     keybindings: yield* fs.exists(targetPaths.keybindingsConfigPath),
     attachments: yield* directoryHasEntries(targetPaths.attachmentsDir),
     anonymousId: yield* fs.exists(targetPaths.anonymousIdPath),
-  } satisfies Record<(typeof IMPORTABLE_ARTIFACTS)[number], boolean>;
+  } satisfies Record<ImportableArtifact, boolean>;
 
   const targetAlreadyInitialized = IMPORTABLE_ARTIFACTS.some(
     (artifact) => targetArtifacts[artifact],
@@ -273,47 +306,78 @@ export const migrateLegacyHomeIfNeeded = Effect.fn(function* (input: LegacyHomeM
 
   const stagingBaseDir = path.join(
     input.homeDir,
-    `.${DPCODE_HOME_DIRNAME.slice(1)}-migration-${process.pid}-${Date.now()}`,
+    `.${SYNARA_HOME_DIRNAME.slice(1)}-migration-${process.pid}-${Date.now()}`,
   );
   const stagingPaths = yield* deriveServerPaths(stagingBaseDir, input.devUrl);
   yield* fs.makeDirectory(stagingPaths.stateDir, { recursive: true });
 
   const migrateEffect = Effect.gen(function* () {
     const migrationStartedAt = marker?.startedAt ?? new Date().toISOString();
+    const usedLegacyHomes = legacyHomes.filter((legacyHome) =>
+      importedArtifacts.some((artifact) => sourceByArtifact.get(artifact) === legacyHome),
+    );
+    const [primaryLegacyHome] = usedLegacyHomes;
+    if (!primaryLegacyHome) {
+      return yield* new HomeMigrationError({
+        message: "No legacy home was selected for import.",
+      });
+    }
+    const sourceDisplayName =
+      usedLegacyHomes.length === 1
+        ? `~/${primaryLegacyHome.dirname}`
+        : `legacy homes (${usedLegacyHomes
+            .map((legacyHome) => `~/${legacyHome.dirname}`)
+            .join(", ")})`;
+    const targetDisplayName = `~/${SYNARA_HOME_DIRNAME}`;
 
     // Persist the in-progress marker before moving any live artifact so retries can resume safely.
     yield* writeMigrationMarker(markerPath, {
       status: "in-progress",
-      sourceBaseDir: legacyBaseDir,
+      sourceBaseDir: primaryLegacyHome.baseDir,
       targetBaseDir: canonicalTargetBaseDir,
-      sourceStateDir: sourcePaths.stateDir,
+      sourceStateDir: primaryLegacyHome.paths.stateDir,
       targetStateDir: targetPaths.stateDir,
       importedArtifacts,
       startedAt: migrationStartedAt,
       migratedAt: marker?.migratedAt ?? migrationStartedAt,
       notes: [
-        "Legacy ~/.t3 data is being imported into ~/.dpcode.",
+        `Legacy ${sourceDisplayName} data is being imported into ${targetDisplayName}.`,
         "If startup stops midway, the next launch resumes this import instead of starting from scratch.",
       ],
     });
 
     const pendingArtifacts = new Set(
       IMPORTABLE_ARTIFACTS.filter(
-        (artifact) => sourceArtifacts[artifact] && !targetArtifacts[artifact],
+        (artifact) => sourceByArtifact.has(artifact) && !targetArtifacts[artifact],
       ),
     );
 
     if (pendingArtifacts.has("database")) {
-      yield* snapshotSqliteDatabase(sourcePaths.dbPath, stagingPaths.dbPath);
+      const source = sourceByArtifact.get("database");
+      if (source) {
+        yield* snapshotSqliteDatabase(source.paths.dbPath, stagingPaths.dbPath);
+      }
     }
     if (pendingArtifacts.has("keybindings")) {
-      yield* stageFileCopy(sourcePaths.keybindingsConfigPath, stagingPaths.keybindingsConfigPath);
+      const source = sourceByArtifact.get("keybindings");
+      if (source) {
+        yield* stageFileCopy(
+          source.paths.keybindingsConfigPath,
+          stagingPaths.keybindingsConfigPath,
+        );
+      }
     }
     if (pendingArtifacts.has("attachments")) {
-      yield* fs.copy(sourcePaths.attachmentsDir, stagingPaths.attachmentsDir);
+      const source = sourceByArtifact.get("attachments");
+      if (source) {
+        yield* fs.copy(source.paths.attachmentsDir, stagingPaths.attachmentsDir);
+      }
     }
     if (pendingArtifacts.has("anonymousId")) {
-      yield* stageFileCopy(sourcePaths.anonymousIdPath, stagingPaths.anonymousIdPath);
+      const source = sourceByArtifact.get("anonymousId");
+      if (source) {
+        yield* stageFileCopy(source.paths.anonymousIdPath, stagingPaths.anonymousIdPath);
+      }
     }
 
     // Merge imported state into the new home without touching any target logs already created.
@@ -336,22 +400,24 @@ export const migrateLegacyHomeIfNeeded = Effect.fn(function* (input: LegacyHomeM
 
     yield* writeMigrationMarker(markerPath, {
       status: "completed",
-      sourceBaseDir: legacyBaseDir,
+      sourceBaseDir: primaryLegacyHome.baseDir,
       targetBaseDir: canonicalTargetBaseDir,
-      sourceStateDir: sourcePaths.stateDir,
+      sourceStateDir: primaryLegacyHome.paths.stateDir,
       targetStateDir: targetPaths.stateDir,
       importedArtifacts,
       startedAt: migrationStartedAt,
       migratedAt: new Date().toISOString(),
       notes: [
-        "Legacy ~/.t3 data was imported into ~/.dpcode.",
+        `Legacy ${sourceDisplayName} data was imported into ${targetDisplayName}.`,
         "Existing legacy worktree directories were left in place and are still referenced by absolute path.",
       ],
     });
 
-    yield* Effect.logInfo("imported legacy T3 state into Synara home", {
-      sourceStateDir: sourcePaths.stateDir,
+    yield* Effect.logInfo("imported legacy state into Synara home", {
+      sourceStateDir: primaryLegacyHome.paths.stateDir,
       targetStateDir: targetPaths.stateDir,
+      sourceHomeDirname: primaryLegacyHome.dirname,
+      sourceHomeDirnames: usedLegacyHomes.map((legacyHome) => legacyHome.dirname),
       importedArtifacts,
     });
 
@@ -368,7 +434,7 @@ export const migrateLegacyHomeIfNeeded = Effect.fn(function* (input: LegacyHomeM
       error instanceof HomeMigrationError
         ? error
         : new HomeMigrationError({
-            message: "Failed to import legacy ~/.t3 state into ~/.dpcode.",
+            message: "Failed to import legacy state into ~/.synara.",
             cause: error,
           }),
     ),

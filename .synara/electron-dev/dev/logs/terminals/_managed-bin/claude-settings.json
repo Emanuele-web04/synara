@@ -1,0 +1,68 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/emanueledipietro/Developer/Testing/t3code/.synara/electron-dev/dev/logs/terminals/_managed-bin/notify-hook.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/emanueledipietro/Developer/Testing/t3code/.synara/electron-dev/dev/logs/terminals/_managed-bin/notify-hook.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/emanueledipietro/Developer/Testing/t3code/.synara/electron-dev/dev/logs/terminals/_managed-bin/notify-hook.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/emanueledipietro/Developer/Testing/t3code/.synara/electron-dev/dev/logs/terminals/_managed-bin/notify-hook.sh"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/emanueledipietro/Developer/Testing/t3code/.synara/electron-dev/dev/logs/terminals/_managed-bin/notify-hook.sh"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/emanueledipietro/Developer/Testing/t3code/.synara/electron-dev/dev/logs/terminals/_managed-bin/notify-hook.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

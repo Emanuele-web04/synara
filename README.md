@@ -13,7 +13,7 @@ This project started as a clone of [T3Code](https://github.com/pingdotgg/t3code)
 
 You can also just install the desktop app. It's cooler.
 
-Install the [desktop app from the Releases page](https://github.com/Emanuele-web04/dpcode/releases)
+Install the [desktop app from the Releases page](https://github.com/Emanuele-web04/Synara/releases)
 
 ## Some notes
 

@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   WORKTREE_BRANCH_PREFIX,
-  buildDpcodeBranchName,
+  buildSynaraBranchName,
   buildTemporaryWorktreeBranchName,
   isTemporaryWorktreeBranch,
-  resolveUniqueDpcodeBranchName,
+  resolveUniqueSynaraBranchName,
   resolveThreadBranchRegressionGuard,
 } from "./git";
 
@@ -17,6 +17,11 @@ describe("isTemporaryWorktreeBranch", () => {
   it("matches generated temporary worktree branches", () => {
     expect(isTemporaryWorktreeBranch(`${WORKTREE_BRANCH_PREFIX}/deadbeef`)).toBe(true);
     expect(isTemporaryWorktreeBranch(` ${WORKTREE_BRANCH_PREFIX}/DEADBEEF `)).toBe(true);
+  });
+
+  it("keeps recognizing legacy temporary worktree branches", () => {
+    expect(isTemporaryWorktreeBranch("dpcode/deadbeef")).toBe(true);
+    expect(isTemporaryWorktreeBranch("t3code/deadbeef")).toBe(true);
   });
 
   it("rejects semantic branch names", () => {
@@ -54,35 +59,38 @@ describe("resolveThreadBranchRegressionGuard", () => {
   });
 });
 
-describe("buildDpcodeBranchName", () => {
-  it("uses dpcode as the branch namespace", () => {
-    expect(buildDpcodeBranchName("fix toast copy")).toBe("dpcode/fix-toast-copy");
+describe("buildSynaraBranchName", () => {
+  it("uses synara as the branch namespace", () => {
+    expect(buildSynaraBranchName("fix toast copy")).toBe("synara/fix-toast-copy");
   });
 
-  it("keeps non-dpcode namespaces inside the dpcode branch", () => {
-    expect(buildDpcodeBranchName("feature/refine-toolbar-actions")).toBe(
-      "dpcode/feature/refine-toolbar-actions",
+  it("keeps non-Synara namespaces inside the Synara branch", () => {
+    expect(buildSynaraBranchName("feature/refine-toolbar-actions")).toBe(
+      "synara/feature/refine-toolbar-actions",
     );
   });
 
-  it("normalizes legacy dpcode-style prefixes before rebuilding the branch", () => {
-    expect(buildDpcodeBranchName("t3code/refine toolbar actions")).toBe(
-      "dpcode/refine-toolbar-actions",
+  it("normalizes legacy prefixes before rebuilding the branch", () => {
+    expect(buildSynaraBranchName("t3code/refine toolbar actions")).toBe(
+      "synara/refine-toolbar-actions",
+    );
+    expect(buildSynaraBranchName("dpcode/refine toolbar actions")).toBe(
+      "synara/refine-toolbar-actions",
     );
   });
 
-  it("falls back to dpcode/update when no preferred name is provided", () => {
-    expect(buildDpcodeBranchName()).toBe("dpcode/update");
+  it("falls back to synara/update when no preferred name is provided", () => {
+    expect(buildSynaraBranchName()).toBe("synara/update");
   });
 });
 
-describe("resolveUniqueDpcodeBranchName", () => {
-  it("increments suffix when the dpcode branch already exists", () => {
+describe("resolveUniqueSynaraBranchName", () => {
+  it("increments suffix when the Synara branch already exists", () => {
     expect(
-      resolveUniqueDpcodeBranchName(
-        ["main", "dpcode/fix-toast-copy", "dpcode/fix-toast-copy-2"],
+      resolveUniqueSynaraBranchName(
+        ["main", "synara/fix-toast-copy", "synara/fix-toast-copy-2"],
         "fix toast copy",
       ),
-    ).toBe("dpcode/fix-toast-copy-3");
+    ).toBe("synara/fix-toast-copy-3");
   });
 });
