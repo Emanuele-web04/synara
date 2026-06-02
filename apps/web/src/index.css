@@ -1047,12 +1047,12 @@ diffs-container {
   --picker-option-px: 0.5rem;
   --picker-option-py: 0.0625rem;
   --picker-option-gap: 0.5rem;
-  --picker-option-icon-size: 0.75rem;
+  --picker-option-icon-size: 1.125rem;
   --picker-section-py: 0.375rem;
   --picker-separator-my: 0.25rem;
   --picker-separator-mx: 0.5rem;
   --picker-sub-chevron-ms: auto;
-  --picker-sub-chevron-size: 0.75rem;
+  --picker-sub-chevron-size: 1rem;
   --picker-sub-chevron-opacity: 0.8;
 }
 

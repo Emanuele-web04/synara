@@ -11,7 +11,7 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { applyClaudePromptEffortPrefix } from "@t3tools/shared/model";
-import { memo, useCallback, useState } from "react";
+import { memo, useCallback, useState, type ReactNode } from "react";
 import { IoFlash } from "react-icons/io5";
 import { ChevronDownIcon } from "~/lib/icons";
 import { Button } from "../ui/button";
@@ -71,6 +71,71 @@ function findAgentLabel(
   return agent?.displayName ?? value;
 }
 
+interface TraitRadioOption {
+  value: string;
+  label: string;
+  isDefault?: boolean;
+  description?: string | null;
+}
+
+// Shared layout for one composer trait section: a labeled radio group whose rows
+// optionally show a "(default)" suffix and a right-side description tooltip.
+// `onSelectionComplete` runs on every row click (not just on value change) so
+// re-selecting the already-active option still closes the menu — a radio group's
+// `onValueChange` does not fire when the value is unchanged.
+function TraitRadioSection({
+  label,
+  note,
+  value,
+  options,
+  disabled,
+  onValueChange,
+  onSelectionComplete,
+}: {
+  label: string;
+  note?: ReactNode;
+  value: string;
+  options: ReadonlyArray<TraitRadioOption>;
+  disabled?: boolean;
+  onValueChange: (value: string) => void;
+  onSelectionComplete?: (() => void) | undefined;
+}) {
+  return (
+    <MenuGroup>
+      <MenuGroupLabel>{label}</MenuGroupLabel>
+      {note}
+      <MenuRadioGroup value={value} onValueChange={onValueChange}>
+        {options.map((option) => {
+          const item = (
+            <MenuRadioItem
+              key={option.value}
+              value={option.value}
+              {...(disabled ? { disabled: true } : {})}
+              onClick={() => onSelectionComplete?.()}
+            >
+              {option.label}
+              {option.isDefault ? " (default)" : ""}
+            </MenuRadioItem>
+          );
+          return option.description ? (
+            <Tooltip key={option.value}>
+              <TooltipTrigger render={item} />
+              <ComposerPickerTooltipPopup
+                side="right"
+                className="max-w-80 whitespace-normal leading-tight"
+              >
+                {option.description}
+              </ComposerPickerTooltipPopup>
+            </Tooltip>
+          ) : (
+            item
+          );
+        })}
+      </MenuRadioGroup>
+    </MenuGroup>
+  );
+}
+
 export interface TraitsMenuContentProps {
   provider: ProviderKind;
   threadId: ThreadId;
@@ -125,6 +190,21 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   const hasPriorFastModeSection =
     effortLevels.length > 0 || thinkingEnabled !== null || contextWindowOptions.length > 1;
 
+  // Single home for committing a trait change: merge the patch into the provider
+  // options, persist it as sticky, and close the menu. Every section funnels here.
+  const commitTrait = useCallback(
+    (patch: Record<string, unknown>) => {
+      setProviderModelOptions(
+        threadId,
+        provider,
+        buildNextProviderOptions(provider, modelOptions, patch),
+        { ...(model !== undefined ? { model } : {}), persistSticky: true },
+      );
+      onSelectionComplete?.();
+    },
+    [threadId, provider, modelOptions, model, setProviderModelOptions, onSelectionComplete],
+  );
+
   const handleEffortChange = useCallback(
     (value: string) => {
       if (ultrathinkPromptControlled) return;
@@ -151,28 +231,18 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
               : provider === "gemini"
                 ? "thinkingLevel"
                 : "reasoningEffort");
-      const nextModelOptionsPatch = buildProviderOptionPatch(provider, optionId, nextOption.value);
-      setProviderModelOptions(
-        threadId,
-        provider,
-        buildNextProviderOptions(provider, modelOptions, nextModelOptionsPatch),
-        { ...(model !== undefined ? { model } : {}), persistSticky: true },
-      );
-      onSelectionComplete?.();
+      commitTrait(buildProviderOptionPatch(provider, optionId, nextOption.value));
     },
     [
       ultrathinkPromptControlled,
-      modelOptions,
-      onPromptChange,
-      onSelectionComplete,
-      threadId,
-      setProviderModelOptions,
       effortLevels,
       prompt,
       promptInjectedValues,
-      model,
       provider,
       primarySelectDescriptor?.id,
+      onPromptChange,
+      onSelectionComplete,
+      commitTrait,
     ],
   );
 
@@ -183,175 +253,87 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   return (
     <>
       {effortLevels.length > 0 ? (
-        <>
-          <MenuGroup>
-            <MenuGroupLabel>
-              {provider === "kilo" || provider === "opencode" ? "Variant" : "Effort"}
-            </MenuGroupLabel>
-            {ultrathinkPromptControlled ? (
+        <TraitRadioSection
+          label={provider === "kilo" || provider === "opencode" ? "Variant" : "Effort"}
+          note={
+            ultrathinkPromptControlled ? (
               <div className="px-2 pb-1.5 text-muted-foreground/80 text-xs">
                 Remove Ultrathink from the prompt to change effort.
               </div>
-            ) : null}
-            <MenuRadioGroup value={effort ?? ""} onValueChange={handleEffortChange}>
-              {effortLevels.map((option) => {
-                const item = (
-                  <MenuRadioItem
-                    key={option.value}
-                    value={option.value}
-                    disabled={ultrathinkPromptControlled}
-                    onClick={() => onSelectionComplete?.()}
-                  >
-                    {option.label}
-                    {option.value === defaultEffort ? " (default)" : ""}
-                  </MenuRadioItem>
-                );
-                return option.description ? (
-                  <Tooltip key={option.value}>
-                    <TooltipTrigger render={item} />
-                    <ComposerPickerTooltipPopup
-                      side="right"
-                      className="max-w-80 whitespace-normal leading-tight"
-                    >
-                      {option.description}
-                    </ComposerPickerTooltipPopup>
-                  </Tooltip>
-                ) : (
-                  item
-                );
-              })}
-            </MenuRadioGroup>
-          </MenuGroup>
-        </>
+            ) : undefined
+          }
+          value={effort ?? ""}
+          disabled={ultrathinkPromptControlled}
+          options={effortLevels.map((option) => ({
+            value: option.value,
+            label: option.label,
+            isDefault: option.value === defaultEffort,
+            description: option.description ?? null,
+          }))}
+          onValueChange={handleEffortChange}
+          onSelectionComplete={onSelectionComplete}
+        />
       ) : thinkingEnabled !== null ? (
-        <MenuGroup>
-          <MenuGroupLabel>Thinking</MenuGroupLabel>
-          <MenuRadioGroup
-            value={thinkingEnabled ? "on" : "off"}
-            onValueChange={(value) => {
-              setProviderModelOptions(
-                threadId,
-                provider,
-                buildNextProviderOptions(provider, modelOptions, { thinking: value === "on" }),
-                { ...(model !== undefined ? { model } : {}), persistSticky: true },
-              );
-              onSelectionComplete?.();
-            }}
-          >
-            <MenuRadioItem value="on" onClick={() => onSelectionComplete?.()}>
-              On (default)
-            </MenuRadioItem>
-            <MenuRadioItem value="off" onClick={() => onSelectionComplete?.()}>
-              Off
-            </MenuRadioItem>
-          </MenuRadioGroup>
-        </MenuGroup>
+        <TraitRadioSection
+          label="Thinking"
+          value={thinkingEnabled ? "on" : "off"}
+          options={[
+            { value: "on", label: "On (default)" },
+            { value: "off", label: "Off" },
+          ]}
+          onValueChange={(value) => commitTrait({ thinking: value === "on" })}
+          onSelectionComplete={onSelectionComplete}
+        />
       ) : null}
       {includeFastMode && supportsFastModeControl ? (
         <>
           {hasPriorFastModeSection ? <MenuDivider /> : null}
-          <MenuGroup>
-            <MenuGroupLabel>Fast Mode</MenuGroupLabel>
-            <MenuRadioGroup
-              value={fastModeEnabled ? "on" : "off"}
-              onValueChange={(value) => {
-                setProviderModelOptions(
-                  threadId,
-                  provider,
-                  buildNextProviderOptions(provider, modelOptions, { fastMode: value === "on" }),
-                  { ...(model !== undefined ? { model } : {}), persistSticky: true },
-                );
-                onSelectionComplete?.();
-              }}
-            >
-              <MenuRadioItem value="off" onClick={() => onSelectionComplete?.()}>
-                Default
-              </MenuRadioItem>
-              <MenuRadioItem value="on" onClick={() => onSelectionComplete?.()}>
-                Fast
-              </MenuRadioItem>
-            </MenuRadioGroup>
-          </MenuGroup>
+          <TraitRadioSection
+            label="Fast Mode"
+            value={fastModeEnabled ? "on" : "off"}
+            options={[
+              { value: "off", label: "Default" },
+              { value: "on", label: "Fast" },
+            ]}
+            onValueChange={(value) => commitTrait({ fastMode: value === "on" })}
+            onSelectionComplete={onSelectionComplete}
+          />
         </>
       ) : null}
       {contextWindowOptions.length > 1 ? (
         <>
           <MenuDivider />
-          <MenuGroup>
-            <MenuGroupLabel>Context Window</MenuGroupLabel>
-            <MenuRadioGroup
-              value={contextWindow ?? defaultContextWindow ?? ""}
-              onValueChange={(value) => {
-                setProviderModelOptions(
-                  threadId,
-                  provider,
-                  buildNextProviderOptions(provider, modelOptions, { contextWindow: value }),
-                  { ...(model !== undefined ? { model } : {}), persistSticky: true },
-                );
-                onSelectionComplete?.();
-              }}
-            >
-              {contextWindowOptions.map((option) => (
-                <MenuRadioItem
-                  key={option.value}
-                  value={option.value}
-                  onClick={() => onSelectionComplete?.()}
-                >
-                  {option.label}
-                  {option.value === defaultContextWindow ? " (default)" : ""}
-                </MenuRadioItem>
-              ))}
-            </MenuRadioGroup>
-          </MenuGroup>
+          <TraitRadioSection
+            label="Context Window"
+            value={contextWindow ?? defaultContextWindow ?? ""}
+            options={contextWindowOptions.map((option) => ({
+              value: option.value,
+              label: option.label,
+              isDefault: option.value === defaultContextWindow,
+            }))}
+            onValueChange={(value) => commitTrait({ contextWindow: value })}
+            onSelectionComplete={onSelectionComplete}
+          />
         </>
       ) : null}
       {hasAgentControls ? (
         <>
           {hasVisibleControls ? <MenuDivider /> : null}
-          <MenuGroup>
-            <MenuGroupLabel>{provider === "kilo" ? "Mode" : "Agent"}</MenuGroupLabel>
-            <MenuRadioGroup
-              value={selectedAgent ?? defaultAgent ?? ""}
-              onValueChange={(value) => {
-                if (!value || !defaultAgent) return;
-                setProviderModelOptions(
-                  threadId,
-                  provider,
-                  buildNextProviderOptions(provider, modelOptions, {
-                    agent: value === defaultAgent ? undefined : value,
-                  }),
-                  { ...(model !== undefined ? { model } : {}), persistSticky: true },
-                );
-                onSelectionComplete?.();
-              }}
-            >
-              {agentOptions.map((agent) => {
-                const item = (
-                  <MenuRadioItem
-                    key={agent.name}
-                    value={agent.name}
-                    onClick={() => onSelectionComplete?.()}
-                  >
-                    {agent.displayName}
-                    {agent.name === defaultAgent ? " (default)" : ""}
-                  </MenuRadioItem>
-                );
-                return agent.description ? (
-                  <Tooltip key={agent.name}>
-                    <TooltipTrigger render={item} />
-                    <ComposerPickerTooltipPopup
-                      side="right"
-                      className="max-w-80 whitespace-normal leading-tight"
-                    >
-                      {agent.description}
-                    </ComposerPickerTooltipPopup>
-                  </Tooltip>
-                ) : (
-                  item
-                );
-              })}
-            </MenuRadioGroup>
-          </MenuGroup>
+          <TraitRadioSection
+            label={provider === "kilo" ? "Mode" : "Agent"}
+            value={selectedAgent ?? defaultAgent ?? ""}
+            options={agentOptions.map((agent) => ({
+              value: agent.name,
+              label: agent.displayName,
+              isDefault: agent.name === defaultAgent,
+              description: agent.description ?? null,
+            }))}
+            onValueChange={(value) => {
+              if (!value || !defaultAgent) return;
+              commitTrait({ agent: value === defaultAgent ? undefined : value });
+            }}
+            onSelectionComplete={onSelectionComplete}
+          />
         </>
       ) : null}
     </>

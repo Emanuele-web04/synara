@@ -115,9 +115,9 @@ function MenuItem({
         className,
       )}
       data-inset={inset}
-      data-slot="menu-item"
       data-variant={variant}
       {...props}
+      data-slot="menu-item"
     />
   );
 }
@@ -144,8 +144,8 @@ function MenuCheckboxItem({
           : "grid-cols-[1fr_auto] gap-3 px-2.5",
         className,
       )}
-      data-slot="menu-checkbox-item"
       {...props}
+      data-slot="menu-checkbox-item"
     >
       {variant === "switch" ? (
         <>
@@ -208,8 +208,8 @@ function MenuRadioItem({
         ),
         className,
       )}
-      data-slot="menu-radio-item"
       {...props}
+      data-slot="menu-radio-item"
     >
       {preserveChildLayout ? (
         <>
@@ -327,8 +327,8 @@ function MenuSubTrigger({
         className,
       )}
       data-inset={inset}
-      data-slot="menu-sub-trigger"
       {...props}
+      data-slot="menu-sub-trigger"
     >
       {children}
       <ChevronRightIcon className="-me-0.5 shrink-0" />

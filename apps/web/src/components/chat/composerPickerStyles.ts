@@ -33,8 +33,11 @@ export const COMPOSER_PICKER_MODEL_LIST_MAX_HEIGHT_CLASS_NAME =
 /** Scroll chrome for long model-provider lists. */
 export const COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME = "composer-picker-scroll";
 
-/** Shared corner radius for picker panels and option hover/selection rows. */
-export const COMPOSER_PICKER_RADIUS_CLASS_NAME = "rounded-[0.8rem]";
+/** Corner radius for picker panel chrome and panel-level surfaces. */
+export const COMPOSER_PICKER_RADIUS_CLASS_NAME = "rounded-[0.65rem]";
+
+/** Tighter corner radius for option rows / selection pills inside picker panels. */
+export const COMPOSER_PICKER_OPTION_RADIUS_CLASS_NAME = "rounded-[0.5rem]";
 
 /** Collapsible section headers inside model provider lists. */
 export const COMPOSER_PICKER_MODEL_GROUP_HEADER_CLASS_NAME = `grid w-full grid-cols-[0.75rem_minmax(0,1fr)_2.5rem] items-center gap-x-1.5 ${COMPOSER_PICKER_RADIUS_CLASS_NAME} px-2 py-1 text-left text-[10px] font-medium uppercase tracking-[0.06em] text-muted-foreground/80 outline-none transition-colors hover:bg-[color-mix(in_srgb,var(--foreground)_4%,transparent)] focus-visible:ring-0`;
@@ -111,7 +114,7 @@ export const COMPOSER_PICKER_MENU_POPUP_VIEWPORT_CLASS_NAME =
   "relative min-w-(--anchor-width) max-h-[min(var(--available-height),28rem)]";
 
 /** Option row shared by composer menus and composer-surface select popups. Sizing via picker size CSS vars. */
-export const COMPOSER_PICKER_MENU_OPTION_CLASS_NAME = `[&>svg]:-mx-0.5 flex cursor-default select-none items-center ${COMPOSER_PICKER_RADIUS_CLASS_NAME} text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-foreground)] outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 [&>svg:not([class*='opacity-'])]:opacity-80 [&>svg]:pointer-events-none [&>svg]:shrink-0`;
+export const COMPOSER_PICKER_MENU_OPTION_CLASS_NAME = `[&>svg]:-mx-0.5 flex cursor-default select-none items-center ${COMPOSER_PICKER_OPTION_RADIUS_CLASS_NAME} text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-foreground)] outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 [&>svg:not([class*='opacity-'])]:opacity-80 [&>svg]:pointer-events-none [&>svg]:shrink-0`;
 
 /** Same as menu options, adapted for select item grid layout. */
 export const COMPOSER_PICKER_SELECT_OPTION_CLASS_NAME = `${COMPOSER_PICKER_MENU_OPTION_CLASS_NAME} grid in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)]`;
